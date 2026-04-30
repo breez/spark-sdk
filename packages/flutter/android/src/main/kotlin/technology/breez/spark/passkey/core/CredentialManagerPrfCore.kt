@@ -15,6 +15,8 @@ import androidx.credentials.exceptions.CreateCredentialException
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
+import androidx.credentials.exceptions.domerrors.InvalidStateError
+import androidx.credentials.exceptions.publickeycredential.CreatePublicKeyCredentialDomException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -81,6 +83,21 @@ public object CredentialManagerPrfCore {
      * retry the assertion. Switches to `Dispatchers.Main` internally so
      * callers may invoke from any coroutine context.
      *
+     * @param allowCredentialIds When non-empty, restricts assertion to one
+     *   of the listed credential IDs. The Credential Manager refuses any
+     *   other credential for this RP. Use this to bind sign-in to a
+     *   specific passkey the caller has registered, instead of letting
+     *   the platform pick any sibling credential that happens to share
+     *   the RP. Critical for deterministic seed derivation when multiple
+     *   credentials might exist for the same RP.
+     * @param onAssertionCredentialId Optional callback invoked with the
+     *   credential ID of every successful assertion. Hosts can use this
+     *   to record which credential was used and populate
+     *   [allowCredentialIds] / `excludeCredentialIds` on subsequent
+     *   requests, e.g. migrating users whose passkey predates the host's
+     *   own credential-ID tracking. Best-effort: failures inside the
+     *   callback do not block the seed return.
+     *
      * @throws CredentialManagerPrfCoreException for every handled error;
      *   wrappers should catch and remap by [CredentialManagerPrfCoreException.kind].
      */
@@ -92,17 +109,26 @@ public object CredentialManagerPrfCore {
         userName: String,
         userDisplayName: String,
         autoRegister: Boolean = true,
+        allowCredentialIds: List<ByteArray> = emptyList(),
+        onAssertionCredentialId: ((ByteArray) -> Unit)? = null,
     ): ByteArray = withContext(Dispatchers.Main) {
         try {
             try {
-                getAssertionWithPrf(activity, salt, rpId)
+                getAssertionWithPrf(activity, salt, rpId, allowCredentialIds, onAssertionCredentialId)
             } catch (e: NoCredentialException) {
                 if (!autoRegister) {
                     throw CredentialManagerPrfCoreException(Kind.CredentialNotFound, e.message)
                 }
                 @Suppress("UNUSED_VARIABLE")
                 val ignored = registerCredential(activity, rpId, rpName, userName, userDisplayName)
-                getAssertionWithPrf(activity, salt, rpId)
+                // Retry with the same allowCredentialIds. If the caller
+                // supplied a non-empty list and the existing credential was
+                // genuinely missing (e.g. user deleted it from Settings),
+                // the just-registered ID won't be in the list and the
+                // retry will fail with CredentialNotFound. Hosts handle
+                // that as a deletion-recovery signal: clear the registry
+                // and route to onboarding. Mirrors iOS behavior.
+                getAssertionWithPrf(activity, salt, rpId, allowCredentialIds, onAssertionCredentialId)
             }
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
@@ -328,6 +354,8 @@ public object CredentialManagerPrfCore {
         activity: Activity,
         salt: String,
         rpId: String,
+        allowCredentialIds: List<ByteArray> = emptyList(),
+        onAssertionCredentialId: ((ByteArray) -> Unit)? = null,
     ): ByteArray {
         val credentialManager = CredentialManager.create(activity)
 
@@ -344,7 +372,21 @@ public object CredentialManagerPrfCore {
         val requestJson = JSONObject().apply {
             put("challenge", challenge)
             put("rpId", rpId)
-            put("allowCredentials", JSONArray())
+            // When non-empty, constrains assertion to one of the listed
+            // credential IDs. Without this, the platform picks any
+            // credential matching the RP, which produces non-deterministic
+            // seeds when multiple credentials exist for the same RP.
+            put("allowCredentials", JSONArray().apply {
+                for (credId in allowCredentialIds) {
+                    put(JSONObject().apply {
+                        put("type", "public-key")
+                        put("id", Base64.encodeToString(
+                            credId,
+                            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                        ))
+                    })
+                }
+            })
             put("userVerification", "required")
             put("extensions", JSONObject().apply {
                 put("prf", JSONObject().apply {
@@ -367,6 +409,26 @@ public object CredentialManagerPrfCore {
         )
 
         val responseJson = JSONObject(authResponseJson)
+
+        // Surface the asserted credential ID before the PRF result so
+        // hosts can record it (synced storage, server-side allowlist).
+        // Failures inside the callback must not block seed return: the
+        // assertion already succeeded.
+        if (onAssertionCredentialId != null) {
+            val rawIdEncoded = responseJson.optString("rawId", "")
+            if (rawIdEncoded.isNotEmpty()) {
+                try {
+                    val rawId = Base64.decode(
+                        rawIdEncoded,
+                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                    )
+                    onAssertionCredentialId(rawId)
+                } catch (_: Exception) {
+                    // Best-effort: malformed rawId is non-fatal here.
+                }
+            }
+        }
+
         val extensions = responseJson.optJSONObject("clientExtensionResults")
             ?: throw CredentialManagerPrfCoreException(Kind.PrfNotSupported)
         val prf = extensions.optJSONObject("prf")
@@ -480,6 +542,26 @@ public object CredentialManagerPrfCore {
 
         is NoCredentialException ->
             CredentialManagerPrfCoreException(Kind.CredentialNotFound)
+
+        // Surface the platform's duplicate-prevention check as a typed
+        // kind so callers can route the user to the sign-in path instead
+        // of treating it as a generic registration failure. Credential
+        // Manager wraps WebAuthn DOM errors in CreatePublicKeyCredential
+        // DomException with the spec-level error in `domError`. Must be
+        // matched before the generic CreateCredentialException case
+        // since it's a subclass.
+        is CreatePublicKeyCredentialDomException ->
+            if (domError is InvalidStateError) {
+                CredentialManagerPrfCoreException(
+                    Kind.CredentialAlreadyExists,
+                    message ?: "Credential already registered for this RP",
+                )
+            } else {
+                CredentialManagerPrfCoreException(
+                    Kind.AuthenticationFailed,
+                    "${type}: ${message ?: toString()}",
+                )
+            }
 
         is GetCredentialException ->
             CredentialManagerPrfCoreException(

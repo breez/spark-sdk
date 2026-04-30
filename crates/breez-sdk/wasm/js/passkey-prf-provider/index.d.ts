@@ -9,6 +9,17 @@ export type DomainAssociation =
     | { kind: 'Skipped'; reason: string };
 
 /**
+ * Thrown when `createPasskey` asks the platform to register a new
+ * passkey but it refuses because an entry in `excludeCredentialIds`
+ * matches a credential already on the device. Hosts should route the
+ * user to the sign-in path instead of treating this as a generic
+ * registration failure.
+ */
+export declare class PasskeyAlreadyExistsError extends Error {
+    constructor(message?: string);
+}
+
+/**
  * Options for constructing a PasskeyProvider.
  */
 export interface PasskeyProviderOptions {
@@ -53,6 +64,19 @@ export interface PasskeyProviderOptions {
      * @default true
      */
     autoRegister?: boolean;
+
+    /**
+     * When non-empty, restricts assertion (sign-in) to one of the listed
+     * credential IDs. The browser refuses any other credential for this
+     * RP, even if it matches the RP. Use this to bind sign-in to a
+     * specific passkey the caller has registered, instead of letting
+     * the browser pick any sibling credential that happens to share the
+     * RP. Critical for deterministic seed derivation when multiple
+     * credentials might exist for the same RP. When empty (default),
+     * the browser picks any credential matching the RP.
+     * @default []
+     */
+    allowCredentialIds?: Uint8Array[];
 }
 
 /**
@@ -79,6 +103,34 @@ export declare class PasskeyProvider {
     constructor(options?: PasskeyProviderOptions);
 
     /**
+     * List of base64 credential IDs to constrain assertion to. Mirrors
+     * the `allowCredentialIds` constructor option but is also settable
+     * at runtime so callers can re-target sign-in to a refreshed list
+     * (e.g. after a synced-storage hydrate) without reconstructing the
+     * provider. Empty list (default) lets the platform pick any
+     * credential matching the RP.
+     */
+    allowCredentialIds: Uint8Array[];
+
+    /**
+     * Optional callback fired with the credential ID returned by every
+     * successful WebAuthn assertion (sign-in path). Hosts can set this
+     * to record which credential was just used so they can populate
+     * `excludeCredentialIds` and `allowCredentialIds` on subsequent
+     * requests.
+     *
+     * Useful for migrating users whose passkey predates the host's own
+     * credential-ID tracking: the first successful sign-in surfaces
+     * the credential ID, after which the host's records are correct
+     * and the platform-level "already exists" check can fire on
+     * future create attempts.
+     *
+     * Set before calling `derivePrfSeed`. Not invoked on registration
+     * (see `createPasskey`'s return value for that).
+     */
+    onAssertionCredentialId?: (credentialId: Uint8Array) => void;
+
+    /**
      * Derive a 32-byte seed from passkey PRF with the given salt.
      *
      * Authenticates the user via a platform passkey and evaluates the PRF extension.
@@ -101,6 +153,8 @@ export declare class PasskeyProvider {
      *   Pass previously created credential IDs to prevent the authenticator
      *   from creating a duplicate on the same device.
      * @returns The credential ID of the newly created passkey.
+     * @throws {PasskeyAlreadyExistsError} If an entry in `excludeCredentialIds`
+     *   matches a credential already on the device.
      * @throws If the user cancels or PRF is not supported by the authenticator.
      */
     createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<Uint8Array>;

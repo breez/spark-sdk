@@ -54,6 +54,14 @@ import technology.breez.spark.passkey.core.DomainAssociationResult
  *   assertion. When `false`, [derivePrfSeed] throws
  *   [PasskeyPrfException.CredentialNotFound] instead, letting the caller
  *   control registration separately via [createPasskey].
+ * @param allowCredentialIds When non-empty, restricts assertion (sign-in)
+ *   to one of the listed credential IDs. The platform refuses any other
+ *   credential for this RP. Use this to bind sign-in to a specific
+ *   passkey the caller has registered, instead of letting the platform
+ *   pick any sibling credential that happens to share the RP. Critical
+ *   for deterministic seed derivation when multiple credentials might
+ *   exist for the same RP. When empty (default), the platform picks any
+ *   credential matching the RP.
  */
 public class PasskeyProvider(
     private val activityProvider: () -> Activity,
@@ -62,10 +70,29 @@ public class PasskeyProvider(
     userName: String? = null,
     userDisplayName: String? = null,
     private val autoRegister: Boolean = true,
+    private val allowCredentialIds: List<ByteArray> = emptyList(),
 ) : PrfProvider {
 
     private val userName: String = userName ?: rpName
     private val userDisplayName: String = userDisplayName ?: (userName ?: rpName)
+
+    /**
+     * Optional callback fired with the credential ID returned by every
+     * successful WebAuthn assertion (sign-in path). Hosts can set this
+     * to record which credential was just used so they can populate
+     * `excludeCredentialIds` and [allowCredentialIds] on subsequent
+     * requests.
+     *
+     * Useful for migrating users whose passkey predates the host's own
+     * credential-ID tracking: the first successful sign-in surfaces the
+     * credential ID, after which the host's records are correct and the
+     * platform-level "already exists" check can fire on future create
+     * attempts.
+     *
+     * Set before calling [derivePrfSeed]. Not invoked on registration
+     * (see [createPasskey]'s return value for that).
+     */
+    public var onAssertionCredentialId: ((ByteArray) -> Unit)? = null
 
     override suspend fun derivePrfSeed(salt: String): ByteArray {
         try {
@@ -77,6 +104,8 @@ public class PasskeyProvider(
                 userName = userName,
                 userDisplayName = userDisplayName,
                 autoRegister = autoRegister,
+                allowCredentialIds = allowCredentialIds,
+                onAssertionCredentialId = onAssertionCredentialId,
             )
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPasskeyPrfException()
