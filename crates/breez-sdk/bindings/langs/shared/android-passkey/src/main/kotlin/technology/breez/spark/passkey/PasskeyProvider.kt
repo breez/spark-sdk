@@ -175,6 +175,8 @@ public class PasskeyProvider(
                 PasskeyPrfException.PrfEvaluationFailed(message ?: "")
             CredentialManagerPrfCore.Kind.Configuration ->
                 PasskeyPrfException.Configuration(message ?: "")
+            CredentialManagerPrfCore.Kind.CredentialAlreadyExists ->
+                PasskeyPrfException.CredentialAlreadyExists(message ?: "")
             CredentialManagerPrfCore.Kind.Generic ->
                 PasskeyPrfException.Generic(message ?: "")
         }

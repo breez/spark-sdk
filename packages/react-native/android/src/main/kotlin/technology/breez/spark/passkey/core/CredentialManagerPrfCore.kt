@@ -526,6 +526,14 @@ public object CredentialManagerPrfCore {
         PrfEvaluationFailed,
         /** Platform or app configuration error (e.g. missing assetlinks.json, misconfigured RP ID). */
         Configuration,
+        /**
+         * Credential registration was refused because a credential matching
+         * one of the IDs in `excludeCredentialIds` is already on the
+         * authenticator. Surfaces the platform's duplicate-prevention check
+         * as a typed kind so callers can route the user to the sign-in
+         * path instead of treating it as a generic registration failure.
+         */
+        CredentialAlreadyExists,
         /** Any other unexpected error — message contains the details. */
         Generic,
     }
