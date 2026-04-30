@@ -311,3 +311,145 @@ async fn test_02_htlc_refund(
     info!("=== Test test_02_htlc_refund PASSED ===");
     Ok(())
 }
+
+/// Test 3: Reconciliation detects a stale pending HTLC that failed on the server
+/// A payment stored as Pending at an older sync offset never transitions to Failed
+/// because the offset-based sync skips it on subsequent syncs.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_03_reconcile_stale_pending_payment(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_03_reconcile_stale_pending_payment ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+
+    ensure_funded(&mut alice, 200).await?;
+
+    // Step 1: Alice sends a Spark HTLC with a 60-second expiry.
+    // 60 seconds is long enough such that the offset advances past it,
+    // yet short enough to fail well before the 120s test timeout.
+    let (_, payment_hash) = generate_preimage_hash_pair();
+
+    let bob_spark_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark_address,
+            amount: Some(5),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: Some(SendPaymentOptions::SparkAddress {
+                htlc_options: Some(SparkHtlcOptions {
+                    payment_hash: payment_hash.clone(),
+                    expiry_duration_secs: 60,
+                }),
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!("Alice sent HTLC (75s expiry) — payment is Pending at position N");
+
+    // Step 2: Alice sends a regular (non-HTLC) Spark to advance the sync offset past the
+    // HTLC's position. Once the auto-sync processes both transfers, the stored
+    // offset will be N+1, making the HTLC invisible to subsequent offset-based syncs.
+    let bob_spark_address2 = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    let prepare2 = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark_address2,
+            amount: Some(5),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare2,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+
+    wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
+
+    info!("Alice sent regular Spark (position N+1) — offset will advance past HTLC");
+
+    // Step 3: Explicit sync to commit the advanced offset. After this the HTLC is
+    // invisible to the offset-based sync (which starts from N+1 onwards).
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+
+    let pending = alice
+        .sdk
+        .list_payments(ListPaymentsRequest {
+            status_filter: Some(vec![PaymentStatus::Pending]),
+            ..Default::default()
+        })
+        .await?
+        .payments;
+    assert!(
+        pending.iter().any(|p| p.payment_type == PaymentType::Send),
+        "HTLC should still be Pending locally after the offset advances past it"
+    );
+
+    // Step 4: Wait for the paymentFailed event emitted by reconciliation.
+    info!("Waiting for paymentFailed event from reconciliation (up to 120s)...");
+    let failed_payment =
+        wait_for_payment_failed_event(&mut alice.events, PaymentType::Send, 120).await?;
+
+    assert_eq!(failed_payment.status, PaymentStatus::Failed);
+    assert_eq!(failed_payment.amount, 5);
+
+    info!(
+        "Received paymentFailed event for payment {}",
+        failed_payment.id
+    );
+
+    // Step 5: Confirm local storage reflects the new status
+    let failed_payments = alice
+        .sdk
+        .list_payments(ListPaymentsRequest {
+            status_filter: Some(vec![PaymentStatus::Failed]),
+            ..Default::default()
+        })
+        .await?
+        .payments;
+
+    assert!(
+        failed_payments
+            .iter()
+            .any(|p| p.payment_type == PaymentType::Send && p.amount == 5),
+        "HTLC payment should be Failed in local storage"
+    );
+
+    info!("=== Test test_03_reconcile_stale_pending_payment PASSED ===");
+    Ok(())
+}

@@ -1,13 +1,14 @@
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
 use spark_wallet::{
     ListTokenTransactionsRequest, ListTransfersRequest, Order, PagingFilter, SparkWallet,
+    TransferId,
 };
 use tracing::{error, info};
 
 use crate::{
     EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
-    persist::{CachedSyncInfo, ObjectCacheRepository},
+    persist::{CachedSyncInfo, ObjectCacheRepository, StorageListPaymentsRequest},
     utils::{payments::get_payment_and_emit_event, token::token_transaction_to_payments},
 };
 
@@ -141,7 +142,90 @@ impl SparkSyncService {
             next_filter = transfers_response.next;
         }
 
+        // Re-check all locally-stored pending payments to catch status transitions
+        // that occurred before our current offset window (e.g. pending → failed).
+        self.reconcile_pending_payments(initial_sync_complete).await;
+
         Ok(())
+    }
+
+    /// Re-fetches all locally-stored pending payments from the server and updates
+    /// any whose status has changed. This catches cases where a payment transitioned to
+    /// failed/completed before the current sync offset window began.
+    /// Skip payments younger than 1 minute to avoid unnecessary server load.
+    async fn reconcile_pending_payments(&self, initial_sync_complete: bool) {
+        let now = u64::from(breez_sdk_common::utils::now());
+        let pending_payments = match self
+            .storage
+            .list_payments(StorageListPaymentsRequest {
+                status_filter: Some(vec![PaymentStatus::Pending]),
+                to_timestamp: Some(now.saturating_sub(60)),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                error!("Failed to list pending payments for reconciliation: {e:?}");
+                return;
+            }
+        };
+
+        let transfer_ids: Vec<TransferId> = pending_payments
+            .iter()
+            .filter_map(|p| TransferId::from_str(&p.id).ok())
+            .collect();
+        if transfer_ids.is_empty() {
+            return;
+        }
+
+        info!(
+            "Reconciling {} locally-pending bitcoin payments against server",
+            transfer_ids.len()
+        );
+        let transfers_response = match self
+            .spark_wallet
+            .list_transfers(ListTransfersRequest {
+                transfer_ids,
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Failed to fetch pending payments for reconciliation: {e:?}");
+                return;
+            }
+        };
+
+        for transfer in &transfers_response.items {
+            let payment = match Payment::try_from(transfer.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    error!("Failed to convert transfer to payment during reconciliation: {e:?}");
+                    continue;
+                }
+            };
+
+            if payment.status == PaymentStatus::Pending {
+                continue;
+            }
+
+            info!(
+                "Reconciliation: payment {} status changed from Pending to {:?}",
+                payment.id, payment.status
+            );
+
+            if let Err(e) = self.storage.insert_payment(payment.clone()).await {
+                error!("Failed to update payment status during reconciliation: {e:?}");
+                continue;
+            }
+
+            if initial_sync_complete {
+                get_payment_and_emit_event(&self.storage, &self.event_emitter, payment.clone())
+                    .await;
+            }
+        }
     }
 
     async fn apply_payment_metadata(&self, payment: &Payment) -> Result<(), SdkError> {
