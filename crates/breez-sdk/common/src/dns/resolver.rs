@@ -35,7 +35,7 @@ impl DnsResolver for Resolver {
         // Build the DNSSEC proof by querying the resolver
         let (proof, _ttl) = build_txt_proof_async(self.resolver_addr, &name)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to build DNSSEC proof: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to build DNSSEC proof: {e}"))?;
 
         verify_proof_and_extract_txt(&proof, &name)
     }

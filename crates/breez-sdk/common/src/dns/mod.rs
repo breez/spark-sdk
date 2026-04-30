@@ -44,8 +44,8 @@ fn verify_proof_and_extract_txt(proof: &[u8], name: &Name) -> Result<Vec<String>
     let rrs = parse_rr_stream(proof).map_err(|()| anyhow::anyhow!("Failed to parse DNS proof"))?;
 
     // Verify the DNSSEC chain
-    let verified = verify_rr_stream(&rrs)
-        .map_err(|e| anyhow::anyhow!("DNSSEC verification failed: {e:?}"))?;
+    let verified =
+        verify_rr_stream(&rrs).map_err(|e| anyhow::anyhow!("DNSSEC verification failed: {e:?}"))?;
 
     // Check that the proof is currently valid
     let now = SystemTime::now()
