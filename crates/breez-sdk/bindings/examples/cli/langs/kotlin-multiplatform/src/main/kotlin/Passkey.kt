@@ -89,6 +89,9 @@ class FilePrfProvider(dataDir: String) : PrfProvider {
         return mac.doFinal(salt.toByteArray(Charsets.UTF_8))
     }
 
+    override suspend fun derivePrfSeeds(salts: List<String>): List<ByteArray> =
+        salts.map { derivePrfSeed(it) }
+
     override suspend fun isPrfAvailable(): Boolean {
         return true
     }
@@ -106,6 +109,10 @@ class FilePrfProvider(dataDir: String) : PrfProvider {
  */
 class NotYetSupportedProvider(private val name: String) : PrfProvider {
     override suspend fun derivePrfSeed(salt: String): ByteArray {
+        throw UnsupportedOperationException("$name passkey provider is not yet supported in the Kotlin CLI")
+    }
+
+    override suspend fun derivePrfSeeds(salts: List<String>): List<ByteArray> {
         throw UnsupportedOperationException("$name passkey provider is not yet supported in the Kotlin CLI")
     }
 

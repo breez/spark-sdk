@@ -164,6 +164,83 @@ impl Passkey {
         })
     }
 
+    /// Single-prompt setup: derive the Nostr identity and the wallet
+    /// seed for `label` in one PRF ceremony, prime the Nostr identity
+    /// cache, and ensure the label is published to Nostr.
+    ///
+    /// On platforms whose [`PrfProvider`] implements the dual-salt fast
+    /// path ([`PrfProvider::derive_prf_seeds`]), this collapses the
+    /// typical onboarding pattern of `store_label + get_wallet` (and the
+    /// sign-in pattern of `list_labels + get_wallet` for known labels)
+    /// into a single user prompt. On platforms that fall back to the
+    /// loop default, the prompt count matches the legacy `store_label +
+    /// get_wallet` sequence.
+    ///
+    /// The Nostr identity is cached after this call, so subsequent
+    /// [`Self::list_labels`] / [`Self::store_label`] calls on the same
+    /// `Passkey` instance do not require additional PRF interactions.
+    ///
+    /// For multi-label flows where the caller doesn't know the label
+    /// up front, use [`Self::list_labels`] then [`Self::get_wallet`]
+    /// instead.
+    ///
+    /// # Arguments
+    /// * `label` - A user-chosen label. Defaults to [`DEFAULT_LABEL`]
+    ///   when `None`.
+    pub async fn setup_wallet(&self, label: Option<String>) -> Result<Wallet, PasskeyError> {
+        let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_string());
+        validate_label(&label)?;
+
+        // Derive both seeds in (ideally) a single PRF ceremony. The
+        // default trait impl loops, so this returns Ok with N derivations
+        // even on platforms without dual-salt support; built-in
+        // PasskeyProviders override with the WebAuthn PRF dual-salt fast
+        // path to deliver the single-prompt UX.
+        let seeds = self
+            .prf_provider
+            .derive_prf_seeds(vec![ACCOUNT_MASTER_SALT.to_string(), label.clone()])
+            .await?;
+
+        // Defensive bounds check: the contract is "one output per input,
+        // in order". A malformed implementation could return fewer (or
+        // more); fail loudly rather than silently mis-deriving.
+        if seeds.len() != 2 {
+            return Err(PasskeyError::PrfError(PasskeyPrfError::Generic(format!(
+                "derive_prf_seeds returned {} outputs, expected 2",
+                seeds.len()
+            ))));
+        }
+
+        let account_master = &seeds[0];
+        let root_key = &seeds[1];
+
+        // Prime the Nostr identity cache. `set` returns Err if the cell
+        // was already populated by a prior call, which is acceptable:
+        // the existing keys are deterministic from the same passkey, so
+        // overwriting would be a no-op anyway. We ignore that error.
+        let nostr_keys = derive_nostr_keypair(account_master)?;
+        let _ = self.nostr_keys.set(nostr_keys.clone());
+
+        // Publish the label to Nostr (idempotent: skip if it already
+        // exists for this identity).
+        let exists = self
+            .nostr_client
+            .label_exists(&nostr_keys, &label)
+            .await?;
+        if !exists {
+            self.nostr_client.publish_label(&nostr_keys, &label).await?;
+        }
+
+        let mnemonic = prf_to_mnemonic(root_key)?;
+        Ok(Wallet {
+            seed: Seed::Mnemonic {
+                mnemonic,
+                passphrase: None,
+            },
+            label,
+        })
+    }
+
     /// List all labels published to Nostr for this passkey's identity.
     ///
     /// Queries Nostr relays for all labels associated with the Nostr identity
