@@ -143,6 +143,30 @@ export declare class PasskeyProvider {
     derivePrfSeed(salt: string): Promise<Uint8Array>;
 
     /**
+     * Derive multiple 32-byte PRF outputs in as few user prompts as the
+     * authenticator supports. The WebAuthn PRF extension allows two
+     * salts per assertion (`prf.eval.first` + `prf.eval.second`),
+     * collapsing two derivations into a single ceremony on browsers
+     * that honor the spec.
+     *
+     * Salt count semantics:
+     * - 0 salts: returns empty without prompting.
+     * - 1 salt: equivalent to `derivePrfSeed`.
+     * - 2 salts: 1 ceremony where supported, 2 otherwise.
+     * - 3+ salts: pairs are batched. Trailing odd salt uses single-salt.
+     *
+     * Authenticators that silently drop the second salt fall back to a
+     * sequential single-salt assertion for the affected salt(s); worst
+     * case prompt count matches looping `derivePrfSeed`.
+     *
+     * Output ordering matches input ordering.
+     *
+     * @param salts - Salt strings in caller order.
+     * @returns One 32-byte output per salt, in input order.
+     */
+    derivePrfSeeds(salts: string[]): Promise<Uint8Array[]>;
+
+    /**
      * Create a new passkey with PRF support.
      *
      * Only registers the credential, no seed derivation. Triggers exactly

@@ -112,6 +112,36 @@ public class PasskeyProvider(
         }
     }
 
+    /**
+     * Bulk PRF derivation backed by [CredentialManagerPrfCore.deriveSeedsOrRegister].
+     *
+     * Uses the WebAuthn PRF dual-salt fast path on authenticators that
+     * honor `prf.eval.second` (Google Password Manager on recent
+     * versions). Falls back to sequential single-salt assertions on
+     * authenticators that silently drop the second salt; the verdict
+     * is cached per process so the first failed attempt is not paid
+     * twice.
+     *
+     * Output ordering matches input ordering.
+     */
+    override suspend fun derivePrfSeeds(salts: List<String>): List<ByteArray> {
+        try {
+            return CredentialManagerPrfCore.deriveSeedsOrRegister(
+                activity = activityProvider(),
+                salts = salts,
+                rpId = rpId,
+                rpName = rpName,
+                userName = userName,
+                userDisplayName = userDisplayName,
+                autoRegister = autoRegister,
+                allowCredentialIds = allowCredentialIds,
+                onAssertionCredentialId = onAssertionCredentialId,
+            )
+        } catch (e: CredentialManagerPrfCoreException) {
+            throw e.toPasskeyPrfException()
+        }
+    }
+
     override suspend fun isPrfAvailable(): Boolean =
         CredentialManagerPrfCore.isPrfAvailable()
 

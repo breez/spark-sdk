@@ -70,6 +70,21 @@ impl Passkey {
         Ok(self.inner.get_wallet(label).await?.into())
     }
 
+    /// Single-prompt setup: derive the Nostr identity AND the wallet
+    /// seed for `label` in one PRF ceremony, prime the Nostr identity
+    /// cache, and publish the label to Nostr (idempotent).
+    ///
+    /// Replaces the legacy `storeLabel(label) + getWallet(label)`
+    /// two-call sequence with a single bulk PRF derivation: 1 prompt
+    /// where the authenticator supports `prf.eval.first` +
+    /// `prf.eval.second`, falling back to 2 prompts otherwise.
+    ///
+    /// @param label - Optional label string (defaults to "Default")
+    #[wasm_bindgen(js_name = "setupWallet")]
+    pub async fn setup_wallet(&self, label: Option<String>) -> WasmResult<Wallet> {
+        Ok(self.inner.setup_wallet(label).await?.into())
+    }
+
     /// List all labels published to Nostr for this passkey's identity.
     ///
     /// Requires 1 PRF call (for Nostr identity derivation).

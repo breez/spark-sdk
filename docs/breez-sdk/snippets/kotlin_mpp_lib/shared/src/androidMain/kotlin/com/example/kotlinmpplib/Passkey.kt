@@ -13,6 +13,14 @@ class CustomPrfProvider : PrfProvider {
         TODO("Implement using WebAuthn or native passkey APIs")
     }
 
+    override suspend fun derivePrfSeeds(salts: List<String>): List<ByteArray> {
+        // Default loop fallback: one ceremony per salt. Override with the
+        // platform's dual-salt fast path (e.g. WebAuthn `prf.eval.first` +
+        // `prf.eval.second`) to collapse two derivations into a single
+        // user prompt where the authenticator supports it.
+        return salts.map { derivePrfSeed(it) }
+    }
+
     override suspend fun isPrfAvailable(): Boolean {
         // Check if PRF-capable passkey exists
         TODO("Check platform passkey availability")

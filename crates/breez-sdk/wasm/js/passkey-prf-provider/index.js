@@ -140,6 +140,64 @@ export class PasskeyProvider {
     }
 
     /**
+     * Derive multiple 32-byte PRF outputs in as few user prompts as the
+     * authenticator supports. The WebAuthn PRF extension allows two
+     * salts per assertion (`prf.eval.first` + `prf.eval.second`),
+     * collapsing two derivations into a single ceremony on browsers
+     * that honor the spec.
+     *
+     * Salt count semantics:
+     * - 0 salts: returns empty without prompting.
+     * - 1 salt: equivalent to `derivePrfSeed`.
+     * - 2 salts: 1 ceremony where supported, 2 otherwise.
+     * - 3+ salts: pairs are batched. Trailing odd salt uses single-salt.
+     *
+     * Output ordering matches input ordering.
+     *
+     * Authenticators that silently drop the second salt (some
+     * third-party password managers) are detected by the missing
+     * `results.second` field; the call falls back to a sequential
+     * single-salt assertion for the affected salt(s). Worst case is
+     * the same prompt count as looping `derivePrfSeed`.
+     *
+     * @param {string[]} salts - Salt strings in caller order.
+     * @returns {Promise<Uint8Array[]>} One 32-byte output per salt, in
+     *   input order.
+     * @throws {Error} If authentication fails, PRF is not supported, or
+     *   the user cancels.
+     */
+    async derivePrfSeeds(salts) {
+        if (!Array.isArray(salts) || salts.length === 0) {
+            return [];
+        }
+        if (salts.length === 1) {
+            return [await this.derivePrfSeed(salts[0])];
+        }
+
+        const out = [];
+        let idx = 0;
+        while (idx < salts.length) {
+            if (idx + 1 < salts.length) {
+                const pair = await this._tryDualSaltAssertion(salts[idx], salts[idx + 1]);
+                out.push(pair[0]);
+                if (pair[1] != null) {
+                    out.push(pair[1]);
+                    idx += 2;
+                    continue;
+                }
+                // Authenticator dropped the second salt. Single-salt
+                // fallback for the missing one.
+                out.push(await this.derivePrfSeed(salts[idx + 1]));
+                idx += 2;
+            } else {
+                out.push(await this.derivePrfSeed(salts[idx]));
+                idx += 1;
+            }
+        }
+        return out;
+    }
+
+    /**
      * Create a new passkey with PRF support.
      *
      * Only registers the credential — no seed derivation. Triggers exactly
@@ -313,6 +371,100 @@ export class PasskeyProvider {
         }
 
         return new Uint8Array(extensionResults.prf.results.first);
+    }
+
+    /**
+     * Run a dual-salt PRF assertion. Returns a tuple
+     * `[firstResult, secondResult|null]`. `secondResult` is null when
+     * the authenticator silently drops `prf.eval.second` (the caller
+     * is expected to fall back to a single-salt assertion in that
+     * case).
+     *
+     * Mirrors the structure of `_getAssertionWithPrf` but with two
+     * eval inputs and two outputs. Auto-register on missing-credential
+     * is preserved, identical to the single-salt path.
+     *
+     * @param {string} salt1
+     * @param {string} salt2
+     * @returns {Promise<[Uint8Array, Uint8Array|null]>}
+     * @private
+     */
+    async _tryDualSaltAssertion(salt1, salt2) {
+        const salt1Bytes = new TextEncoder().encode(salt1);
+        const salt2Bytes = new TextEncoder().encode(salt2);
+
+        try {
+            return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes);
+        } catch (error) {
+            if (this.autoRegister && this._isNoCredentialError(error)) {
+                await this._registerCredential();
+                return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes);
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Inner dual-salt assertion (no auto-register). Reads both
+     * `results.first` and `results.second` from the PRF extension
+     * output.
+     *
+     * @param {Uint8Array} salt1Bytes
+     * @param {Uint8Array} salt2Bytes
+     * @returns {Promise<[Uint8Array, Uint8Array|null]>}
+     * @private
+     */
+    async _getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes) {
+        const allowCredentials = (this.allowCredentialIds || []).map((id) => ({
+            type: 'public-key',
+            id,
+        }));
+
+        const options = {
+            publicKey: {
+                challenge: randomBytes(32),
+                rpId: this.rpId,
+                allowCredentials,
+                userVerification: 'required',
+                extensions: {
+                    prf: {
+                        eval: {
+                            first: salt1Bytes,
+                            second: salt2Bytes,
+                        },
+                    },
+                },
+            },
+        };
+
+        let credential;
+        try {
+            credential = await navigator.credentials.get(options);
+        } catch (error) {
+            throw this._mapError(error);
+        }
+
+        if (!credential) {
+            throw new Error('Credential not found');
+        }
+
+        if (typeof this.onAssertionCredentialId === 'function') {
+            try {
+                this.onAssertionCredentialId(new Uint8Array(credential.rawId));
+            } catch {
+                // best-effort
+            }
+        }
+
+        const extensionResults = credential.getClientExtensionResults();
+        if (!extensionResults.prf || !extensionResults.prf.results || !extensionResults.prf.results.first) {
+            throw new Error('PRF not supported by authenticator');
+        }
+
+        const first = new Uint8Array(extensionResults.prf.results.first);
+        const secondBuf = extensionResults.prf.results.second;
+        const second = secondBuf ? new Uint8Array(secondBuf) : null;
+        return [first, second];
     }
 
     /**
