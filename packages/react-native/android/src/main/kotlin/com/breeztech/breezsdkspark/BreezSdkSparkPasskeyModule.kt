@@ -147,6 +147,7 @@ class BreezSdkSparkPasskeyModule(
             CredentialManagerPrfCore.Kind.CredentialNotFound -> "ERR_NO_CREDENTIAL"
             CredentialManagerPrfCore.Kind.PrfNotSupported -> "ERR_PRF_NOT_SUPPORTED"
             CredentialManagerPrfCore.Kind.Configuration -> "ERR_CONFIGURATION"
+            CredentialManagerPrfCore.Kind.CredentialAlreadyExists -> "ERR_CREDENTIAL_ALREADY_EXISTS"
             else -> "ERR_PASSKEY"
         }
 
@@ -158,6 +159,7 @@ class BreezSdkSparkPasskeyModule(
             CredentialManagerPrfCore.Kind.AuthenticationFailed -> "Passkey authentication failed"
             CredentialManagerPrfCore.Kind.PrfEvaluationFailed -> "PRF evaluation failed"
             CredentialManagerPrfCore.Kind.Configuration -> "Platform or app configuration error"
+            CredentialManagerPrfCore.Kind.CredentialAlreadyExists -> "A passkey for this app already exists on this device"
             CredentialManagerPrfCore.Kind.Generic -> "Passkey operation failed"
         }
 
