@@ -206,7 +206,10 @@ impl TreeStore for WasmTreeStore {
 
         let balance = if let Some(n) = result.as_f64() {
             n as u64
-        } else if let Ok(big) = result.clone().dyn_into::<wasm_bindgen_futures::js_sys::BigInt>() {
+        } else if let Ok(big) = result
+            .clone()
+            .dyn_into::<wasm_bindgen_futures::js_sys::BigInt>()
+        {
             u64::try_from(big)
                 .map_err(|e| TreeServiceError::Generic(format!("BigInt overflow: {e:?}")))?
         } else {
@@ -321,6 +324,7 @@ impl TreeStore for WasmTreeStore {
         exact_only: bool,
         purpose: ReservationPurpose,
     ) -> Result<ReserveResult, TreeServiceError> {
+        let total_start = Instant::now();
         let target_js = match target_amounts {
             Some(t) => {
                 let wasm_target: WasmTargetAmounts = t.into();
@@ -342,6 +346,18 @@ impl TreeStore for WasmTreeStore {
         if matches!(&reserve_result, ReserveResult::Success(_)) {
             self.notify_balance_change();
         }
+        let outcome = match &reserve_result {
+            ReserveResult::Success(r) => format!("success(leaves={})", r.leaves.len()),
+            ReserveResult::WaitForPending { .. } => "waitForPending".to_string(),
+            ReserveResult::InsufficientFunds => "insufficientFunds".to_string(),
+        };
+        info!(
+            "WasmTreeStore::try_reserve_leaves: {} (exact_only={}, purpose={:?}, took {:?})",
+            outcome,
+            exact_only,
+            purpose,
+            total_start.elapsed()
+        );
         Ok(reserve_result)
     }
 

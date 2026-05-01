@@ -404,59 +404,98 @@ class PostgresTreeStore {
     try {
       return await this._withWriteTransaction(async (client) => {
         const targetAmount = targetAmounts ? this._totalSats(targetAmounts) : 0;
+        const maxTarget = this._maxTargetForPrefilter(targetAmounts);
 
-        // Get available leaves
-        const availableResult = await client.query(`
-          SELECT data
+        // True total available, computed server-side over ALL eligible leaves.
+        // Required for the WaitForPending decision below — must NOT be derived
+        // from the prefiltered set since the prefilter may exclude big leaves.
+        const totalResult = await client.query(`
+          SELECT COALESCE(SUM((data->>'value')::bigint), 0)::bigint AS total
           FROM tree_leaves
           WHERE status = 'Available'
             AND is_missing_from_operators = FALSE
             AND reservation_id IS NULL
         `);
+        const available = Number(totalResult.rows[0].total);
 
-        const availableLeaves = availableResult.rows.map((r) => r.data);
-        const available = availableLeaves.reduce((sum, l) => sum + l.value, 0);
+        // Slim projection: only (id, value) for leaves the selection might use.
+        // Includes all leaves with value <= maxTarget (covers exact-match + the
+        // small-leaf accumulators for the minimum-amount path) plus the single
+        // smallest leaf with value > maxTarget (covers the minimum-amount
+        // fallback case where one larger leaf is sufficient).
+        const slimResult = await client.query(`
+          SELECT id, (data->>'value')::bigint AS value
+          FROM tree_leaves
+          WHERE status = 'Available'
+            AND is_missing_from_operators = FALSE
+            AND reservation_id IS NULL
+            AND (
+              (data->>'value')::bigint <= $1
+              OR id = (
+                SELECT id FROM tree_leaves
+                WHERE status = 'Available'
+                  AND is_missing_from_operators = FALSE
+                  AND reservation_id IS NULL
+                  AND (data->>'value')::bigint > $1
+                ORDER BY (data->>'value')::bigint
+                LIMIT 1
+              )
+            )
+        `, [maxTarget]);
+
+        const slimLeaves = slimResult.rows.map((r) => ({
+          id: r.id,
+          value: Number(r.value),
+        }));
 
         // Calculate pending balance
         const pending = await this._calculatePendingBalance(client);
 
-        // Try exact selection first
-        const selected = this._selectLeavesByTargetAmounts(availableLeaves, targetAmounts);
+        // Try exact selection on slim leaves — selection only reads .id/.value
+        const selected = this._selectLeavesByTargetAmounts(slimLeaves, targetAmounts);
 
         if (selected !== null) {
           if (selected.length === 0) {
             throw new TreeStoreError("NonReservableLeaves");
           }
 
+          const fullLeaves = await this._fetchFullLeavesByIds(
+            client,
+            selected.map((l) => l.id)
+          );
           const reservationId = this._generateId();
-          await this._createReservation(client, reservationId, selected, purpose, 0);
+          await this._createReservation(client, reservationId, fullLeaves, purpose, 0);
 
           return {
             type: "success",
             reservation: {
               id: reservationId,
-              leaves: selected,
+              leaves: fullLeaves,
             },
           };
         }
 
         if (!exactOnly) {
-          // Try minimum amount selection
-          const minSelected = this._selectLeavesByMinimumAmount(availableLeaves, targetAmount);
+          // Try minimum amount selection on the slim set
+          const minSelected = this._selectLeavesByMinimumAmount(slimLeaves, targetAmount);
           if (minSelected !== null) {
-            const reservedAmount = minSelected.reduce((sum, l) => sum + l.value, 0);
+            const fullLeaves = await this._fetchFullLeavesByIds(
+              client,
+              minSelected.map((l) => l.id)
+            );
+            const reservedAmount = fullLeaves.reduce((sum, l) => sum + l.value, 0);
             const pendingChange = reservedAmount > targetAmount && targetAmount > 0
               ? reservedAmount - targetAmount
               : 0;
 
             const reservationId = this._generateId();
-            await this._createReservation(client, reservationId, minSelected, purpose, pendingChange);
+            await this._createReservation(client, reservationId, fullLeaves, purpose, pendingChange);
 
             return {
               type: "success",
               reservation: {
                 id: reservationId,
-                leaves: minSelected,
+                leaves: fullLeaves,
               },
             };
           }
@@ -481,6 +520,34 @@ class PostgresTreeStore {
         error
       );
     }
+  }
+
+  /**
+   * Largest single value the selection algorithm could possibly need.
+   * For an unbounded target we have to return all leaves (no prefilter).
+   */
+  _maxTargetForPrefilter(targetAmounts) {
+    if (!targetAmounts) return Number.MAX_SAFE_INTEGER;
+    if (targetAmounts.type === "amountAndFee") {
+      return Math.max(targetAmounts.amountSats, targetAmounts.feeSats || 0);
+    }
+    if (targetAmounts.type === "exactDenominations") {
+      return targetAmounts.denominations.reduce((m, v) => Math.max(m, v), 0);
+    }
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  /**
+   * Pull the full `data` JSON for the leaves the selection algorithm picked.
+   * Typically this is 1-3 rows even when the prefiltered set was thousands.
+   */
+  async _fetchFullLeavesByIds(client, ids) {
+    if (!ids || ids.length === 0) return [];
+    const result = await client.query(
+      "SELECT data FROM tree_leaves WHERE id = ANY($1)",
+      [ids]
+    );
+    return result.rows.map((r) => r.data);
   }
 
   /**

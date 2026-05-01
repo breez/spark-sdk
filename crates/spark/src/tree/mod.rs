@@ -400,17 +400,37 @@ impl TargetAmounts {
     }
 }
 
-pub struct TargetLeaves {
-    pub amount_leaves: Vec<TreeNode>,
-    pub fee_leaves: Option<Vec<TreeNode>>,
+pub struct TargetLeaves<L = TreeNode> {
+    pub amount_leaves: Vec<L>,
+    pub fee_leaves: Option<Vec<L>>,
 }
 
-impl TargetLeaves {
-    pub fn new(amount_leaves: Vec<TreeNode>, fee_leaves: Option<Vec<TreeNode>>) -> Self {
+impl<L> TargetLeaves<L> {
+    pub fn new(amount_leaves: Vec<L>, fee_leaves: Option<Vec<L>>) -> Self {
         Self {
             amount_leaves,
             fee_leaves,
         }
+    }
+}
+
+/// Minimal "leaf-shaped" interface used by the selection algorithms in
+/// [`select_helper`]. Implementing this for a slim `(id, value)` projection
+/// lets storage backends (e.g. `PostgresTreeStore`) run the same selection
+/// without first deserializing every leaf's full `data` JSON.
+pub trait LeafLike: Clone {
+    type Id: Eq;
+    fn leaf_id(&self) -> &Self::Id;
+    fn leaf_value(&self) -> u64;
+}
+
+impl LeafLike for TreeNode {
+    type Id = TreeNodeId;
+    fn leaf_id(&self) -> &Self::Id {
+        &self.id
+    }
+    fn leaf_value(&self) -> u64 {
+        self.value
     }
 }
 

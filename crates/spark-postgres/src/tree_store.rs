@@ -4,15 +4,15 @@
 //! suitable for server-side or multi-instance deployments where
 //! in-memory storage is insufficient.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use platform_utils::time::SystemTime;
+use platform_utils::time::{Instant, SystemTime};
 
 use deadpool_postgres::Pool;
 use macros::async_trait;
 use spark_wallet::{
-    Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
+    LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
     TargetAmounts, TreeNode, TreeNodeStatus, TreeServiceError, TreeStore,
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
@@ -27,6 +27,24 @@ use crate::pool::create_pool;
 
 /// Name of the schema migrations table for `PostgresTreeStore`.
 const TREE_MIGRATIONS_TABLE: &str = "tree_schema_migrations";
+
+/// Lightweight `(id, value)` pair used by `try_reserve_leaves` to run the
+/// selection algorithm without pulling each leaf's full `data` JSON.
+#[derive(Clone)]
+struct SlimLeaf {
+    id: String,
+    value: u64,
+}
+
+impl LeafLike for SlimLeaf {
+    type Id = String;
+    fn leaf_id(&self) -> &Self::Id {
+        &self.id
+    }
+    fn leaf_value(&self) -> u64 {
+        self.value
+    }
+}
 
 /// Advisory lock key for serializing tree store write operations.
 /// This prevents deadlocks by ensuring only one write transaction runs at a time.
@@ -389,7 +407,9 @@ impl TreeStore for PostgresTreeStore {
         exact_only: bool,
         purpose: ReservationPurpose,
     ) -> Result<ReserveResult, TreeServiceError> {
+        let total_start = Instant::now();
         let target_amount = target_amounts.map_or(0, TargetAmounts::total_sats);
+        let max_target = Self::slim_max_target(target_amounts);
         let reservation_id = Uuid::now_v7().to_string();
 
         let mut client = self.pool.get().await.map_err(map_err)?;
@@ -398,11 +418,13 @@ impl TreeStore for PostgresTreeStore {
         // Acquire advisory lock to prevent deadlocks with concurrent operations
         Self::acquire_write_lock(&tx).await?;
 
-        // Get available leaves (advisory lock provides serialization, no row locking needed)
-        let rows = tx
-            .query(
+        // True total available across ALL eligible leaves — required for the
+        // WaitForPending decision. Must NOT be derived from the prefiltered
+        // slim set since the prefilter excludes big leaves.
+        let total_row = tx
+            .query_one(
                 r"
-                SELECT data
+                SELECT COALESCE(SUM((data->>'value')::bigint), 0)::bigint AS total
                 FROM tree_leaves
                 WHERE status = 'Available'
                   AND is_missing_from_operators = FALSE
@@ -412,48 +434,72 @@ impl TreeStore for PostgresTreeStore {
             )
             .await
             .map_err(map_err)?;
+        let available: u64 = u64::try_from(total_row.get::<_, i64>("total")).unwrap_or(0);
 
-        let available_leaves: Vec<TreeNode> = rows
+        // Slim projection of selection candidates: id + value only.
+        // Includes all leaves with value <= max_target (covers exact-match +
+        // minimum-amount accumulators) plus the smallest leaf with value >
+        // max_target (covers the minimum-amount fallback case where one larger
+        // leaf is sufficient).
+        let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
+        let slim_rows = tx
+            .query(
+                r"
+                SELECT id, (data->>'value')::bigint AS value
+                FROM tree_leaves
+                WHERE status = 'Available'
+                  AND is_missing_from_operators = FALSE
+                  AND reservation_id IS NULL
+                  AND (
+                    (data->>'value')::bigint <= $1
+                    OR id = (
+                      SELECT id FROM tree_leaves
+                      WHERE status = 'Available'
+                        AND is_missing_from_operators = FALSE
+                        AND reservation_id IS NULL
+                        AND (data->>'value')::bigint > $1
+                      ORDER BY (data->>'value')::bigint
+                      LIMIT 1
+                    )
+                  )
+                ",
+                &[&max_target_signed],
+            )
+            .await
+            .map_err(map_err)?;
+
+        let slim: Vec<SlimLeaf> = slim_rows
             .iter()
-            .map(|r| Self::deserialize_node(r.get("data")))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|r| {
+                let value = u64::try_from(r.get::<_, i64>("value")).unwrap_or(0);
+                SlimLeaf {
+                    id: r.get("id"),
+                    value,
+                }
+            })
+            .collect();
 
-        tracing::trace!(
-            "PostgresTreeStore::try_reserve_leaves: found {} available leaves",
-            available_leaves.len()
-        );
-        for leaf in &available_leaves {
-            tracing::trace!(
-                "PostgresTreeStore::try_reserve_leaves: available leaf {} owner={:?} value={}",
-                leaf.id,
-                leaf.owner_identity_public_key,
-                leaf.value
-            );
-        }
-
-        let available: u64 = available_leaves.iter().map(|l| l.value).sum();
         // Calculate pending balance within the same transaction for consistency
         let pending = Self::calculate_pending_balance(&tx).await?;
 
-        // Try exact selection first
-        let selected = select_leaves_by_target_amounts(&available_leaves, target_amounts);
+        // Try exact selection on the slim set — uses the same generic
+        // `select_helper` algorithm as the in-memory store.
+        let selected_exact = select_leaves_by_target_amounts(&slim, target_amounts);
 
-        match selected {
+        let result = match selected_exact {
             Ok(target_leaves) => {
-                let selected_leaves = [
-                    target_leaves.amount_leaves,
-                    target_leaves.fee_leaves.unwrap_or_default(),
-                ]
-                .concat();
-
-                // Reject empty reservations (matches in-memory behavior)
-                if selected_leaves.is_empty() {
+                let selected_ids: Vec<String> = target_leaves
+                    .amount_leaves
+                    .iter()
+                    .chain(target_leaves.fee_leaves.iter().flatten())
+                    .map(|l| l.id.clone())
+                    .collect();
+                if selected_ids.is_empty() {
                     return Err(TreeServiceError::NonReservableLeaves);
                 }
-
+                let selected_leaves = Self::resolve_full_leaves(&tx, &selected_ids).await?;
                 self.create_reservation(&tx, &reservation_id, &selected_leaves, purpose, 0)
                     .await?;
-
                 tx.commit().await.map_err(map_err)?;
                 self.notify_balance_change();
                 Ok(ReserveResult::Success(LeavesReservation::new(
@@ -462,10 +508,9 @@ impl TreeStore for PostgresTreeStore {
                 )))
             }
             Err(_) if !exact_only => {
-                // Try minimum amount selection
-                if let Ok(Some(selected_leaves)) =
-                    select_leaves_by_minimum_amount(&available_leaves, target_amount)
-                {
+                if let Ok(Some(min_slim)) = select_leaves_by_minimum_amount(&slim, target_amount) {
+                    let min_ids: Vec<String> = min_slim.iter().map(|l| l.id.clone()).collect();
+                    let selected_leaves = Self::resolve_full_leaves(&tx, &min_ids).await?;
                     let reserved_amount: u64 = selected_leaves.iter().map(|l| l.value).sum();
                     let pending_change = if reserved_amount > target_amount && target_amount > 0 {
                         reserved_amount - target_amount
@@ -481,17 +526,13 @@ impl TreeStore for PostgresTreeStore {
                         pending_change,
                     )
                     .await?;
-
                     tx.commit().await.map_err(map_err)?;
                     self.notify_balance_change();
-                    return Ok(ReserveResult::Success(LeavesReservation::new(
+                    Ok(ReserveResult::Success(LeavesReservation::new(
                         selected_leaves,
                         reservation_id,
-                    )));
-                }
-
-                // No suitable leaves found
-                if available + pending >= target_amount {
+                    )))
+                } else if available + pending >= target_amount {
                     Ok(ReserveResult::WaitForPending {
                         needed: target_amount,
                         available,
@@ -512,7 +553,23 @@ impl TreeStore for PostgresTreeStore {
                     Ok(ReserveResult::InsufficientFunds)
                 }
             }
-        }
+        };
+
+        let outcome = match &result {
+            Ok(ReserveResult::Success(r)) => format!("success(leaves={})", r.leaves.len()),
+            Ok(ReserveResult::WaitForPending { .. }) => "waitForPending".to_string(),
+            Ok(ReserveResult::InsufficientFunds) => "insufficientFunds".to_string(),
+            Err(e) => format!("err({e:?})"),
+        };
+        info!(
+            "PostgresTreeStore::try_reserve_leaves: {} (slim_candidates={}, max_target={}, exact_only={}, took {:?})",
+            outcome,
+            slim.len(),
+            max_target,
+            exact_only,
+            total_start.elapsed()
+        );
+        result
     }
 
     async fn now(&self) -> Result<SystemTime, TreeServiceError> {
@@ -864,6 +921,56 @@ impl PostgresTreeStore {
         }
 
         Ok(())
+    }
+
+    /// Largest single leaf value the selection algorithm could possibly need.
+    /// Used to bound the slim projection in `try_reserve_leaves`. For an
+    /// unbounded request we have to keep all leaves available.
+    fn slim_max_target(target_amounts: Option<&TargetAmounts>) -> u64 {
+        match target_amounts {
+            Some(TargetAmounts::AmountAndFee {
+                amount_sats,
+                fee_sats,
+            }) => std::cmp::max(*amount_sats, fee_sats.unwrap_or(0)),
+            Some(TargetAmounts::ExactDenominations { denominations }) => {
+                denominations.iter().copied().max().unwrap_or(0)
+            }
+            None => u64::MAX,
+        }
+    }
+
+    /// Pull the full `TreeNode` JSON only for the leaves the slim selection
+    /// picked, preserving the algorithm's selection order. Typically 1-3 rows
+    /// even when the slim candidate set was thousands.
+    async fn resolve_full_leaves(
+        tx: &tokio_postgres::Transaction<'_>,
+        ids: &[String],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = tx
+            .query(
+                "SELECT id, data FROM tree_leaves WHERE id = ANY($1)",
+                &[&ids],
+            )
+            .await
+            .map_err(map_err)?;
+        let mut by_id: HashMap<String, TreeNode> = HashMap::with_capacity(rows.len());
+        for r in &rows {
+            let id: String = r.get("id");
+            let node = Self::deserialize_node(r.get("data"))?;
+            by_id.insert(id, node);
+        }
+        let ordered: Vec<TreeNode> = ids.iter().filter_map(|id| by_id.remove(id)).collect();
+        if ordered.len() != ids.len() {
+            return Err(TreeServiceError::Generic(format!(
+                "Could not resolve full data for all selected leaves (wanted {}, got {})",
+                ids.len(),
+                ordered.len()
+            )));
+        }
+        Ok(ordered)
     }
 
     /// Acquires an exclusive advisory lock for write operations.
