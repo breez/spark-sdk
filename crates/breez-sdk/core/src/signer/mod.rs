@@ -44,6 +44,13 @@ pub trait BreezSigner: Send + Sync {
         path: &DerivationPath,
     ) -> Result<secp256k1::schnorr::Signature, SdkError>;
 
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: &spark_wallet::SecretSource,
+        hash: &[u8],
+        tap_tweak: Option<bitcoin::taproot::TapNodeHash>,
+    ) -> Result<secp256k1::schnorr::Signature, SdkError>;
+
     async fn derive_public_key(
         &self,
         path: &DerivationPath,
@@ -122,9 +129,17 @@ mod default_external;
 pub mod external;
 pub mod external_types;
 
+// CPFP signer for unilateral exit
+pub mod cpfp;
+pub mod single_key_signer;
+
 // Re-export only the external signer trait and types
 pub use external::ExternalSigner;
 pub use external_types::*;
+
+// Re-export CPFP signer trait and default implementation
+pub use cpfp::CpfpSigner;
+pub use single_key_signer::{SingleKeySigner, single_key_cpfp_signer};
 
 // Internal-only exports (used by adapter and builder)
 pub(crate) use adapter::ExternalSignerAdapter;

@@ -8,6 +8,7 @@ mod lnurl;
 mod payments;
 mod sync;
 mod sync_coordinator;
+mod unilateral_exit;
 
 pub(crate) use sync_coordinator::SyncCoordinator;
 

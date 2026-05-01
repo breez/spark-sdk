@@ -263,6 +263,20 @@ impl DefaultSigner {
             .map_err(|e| JsValue::from_str(&format!("{e:?}")))
     }
 
+    #[wasm_bindgen(js_name = "signHashSchnorrWithTweak")]
+    pub async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: ExternalSecretSource,
+        hash: Vec<u8>,
+        tap_merkle_root: Option<Vec<u8>>,
+    ) -> Result<SchnorrSignatureBytes, JsValue> {
+        self.inner
+            .sign_hash_schnorr_with_tweak(secret.into(), hash, tap_merkle_root)
+            .await
+            .map(|sig| sig.into())
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
+
     #[wasm_bindgen(js_name = "generateRandomSigningCommitment")]
     pub async fn generate_random_signing_commitment(
         &self,
@@ -465,6 +479,17 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
         path: String,
     ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
         self.inner.sign_hash_schnorr(hash, path).await
+    }
+
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: core_types::ExternalSecretSource,
+        hash: Vec<u8>,
+        tap_merkle_root: Option<Vec<u8>>,
+    ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
+        self.inner
+            .sign_hash_schnorr_with_tweak(secret, hash, tap_merkle_root)
+            .await
     }
 
     async fn generate_random_signing_commitment(
@@ -674,6 +699,28 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
         let promise = self
             .inner
             .sign_hash_schnorr(hash, path)
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
+        let wasm_sig: SchnorrSignatureBytes =
+            serde_wasm_bindgen::from_value(result).map_err(|e| {
+                SignerError::Generic(format!("Failed to deserialize schnorr signature: {}", e))
+            })?;
+        Ok(wasm_sig.into())
+    }
+
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: core_types::ExternalSecretSource,
+        hash: Vec<u8>,
+        tap_merkle_root: Option<Vec<u8>>,
+    ) -> Result<core_types::SchnorrSignatureBytes, SignerError> {
+        let wasm_secret: ExternalSecretSource = secret.into();
+        let promise = self
+            .inner
+            .sign_hash_schnorr_with_tweak(wasm_secret, hash, tap_merkle_root.unwrap_or_default())
             .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
         let future = JsFuture::from(promise);
         let result = future
@@ -1013,6 +1060,14 @@ extern "C" {
         path: String,
     ) -> Result<Promise, JsValue>;
 
+    #[wasm_bindgen(structural, method, js_name = "signHashSchnorrWithTweak", catch)]
+    pub fn sign_hash_schnorr_with_tweak(
+        this: &JsExternalSigner,
+        secret: ExternalSecretSource,
+        hash: Vec<u8>,
+        tap_merkle_root: Vec<u8>,
+    ) -> Result<Promise, JsValue>;
+
     #[wasm_bindgen(structural, method, js_name = "generateFrostSigningCommitments", catch)]
     pub fn generate_random_signing_commitment(this: &JsExternalSigner) -> Result<Promise, JsValue>;
 
@@ -1086,4 +1141,82 @@ extern "C" {
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
+}
+
+// --- CpfpSigner bridge ---
+
+#[wasm_bindgen(typescript_custom_section)]
+const CPFP_SIGNER_INTERFACE: &'static str = r#"export interface CpfpSigner {
+    signPsbt(psbtBytes: Uint8Array): Promise<Uint8Array>;
+}"#;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "CpfpSigner")]
+    pub type JsCpfpSigner;
+
+    #[wasm_bindgen(structural, method, js_name = "signPsbt", catch)]
+    pub fn sign_psbt(this: &JsCpfpSigner, psbt_bytes: Vec<u8>) -> Result<Promise, JsValue>;
+}
+
+pub struct WasmCpfpSigner {
+    inner: JsCpfpSigner,
+}
+
+unsafe impl Send for WasmCpfpSigner {}
+unsafe impl Sync for WasmCpfpSigner {}
+
+impl WasmCpfpSigner {
+    pub fn new(inner: JsCpfpSigner) -> Self {
+        Self { inner }
+    }
+}
+
+#[macros::async_trait]
+impl breez_sdk_spark::signer::CpfpSigner for WasmCpfpSigner {
+    async fn sign_psbt(
+        &self,
+        psbt_bytes: Vec<u8>,
+    ) -> Result<Vec<u8>, breez_sdk_spark::SignerError> {
+        let promise = self
+            .inner
+            .sign_psbt(psbt_bytes)
+            .map_err(|e| breez_sdk_spark::SignerError::Generic(format!("JS error: {e:?}")))?;
+        let future = wasm_bindgen_futures::JsFuture::from(promise);
+        let result = future
+            .await
+            .map_err(|e| breez_sdk_spark::SignerError::Generic(format!("JS error: {e:?}")))?;
+        let bytes: Vec<u8> = serde_wasm_bindgen::from_value(result).map_err(|e| {
+            breez_sdk_spark::SignerError::Generic(format!("Failed to deserialize signed PSBT: {e}"))
+        })?;
+        Ok(bytes)
+    }
+}
+
+/// A CPFP signer returned by `singleKeyCpfpSigner`.
+/// Matches the `CpfpSigner` TypeScript interface shape so it can be passed to
+/// `prepareUnilateralExit`.
+#[wasm_bindgen]
+pub struct DefaultCpfpSigner {
+    pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::CpfpSigner>,
+}
+
+unsafe impl Send for DefaultCpfpSigner {}
+unsafe impl Sync for DefaultCpfpSigner {}
+
+impl DefaultCpfpSigner {
+    pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::CpfpSigner>) -> Self {
+        Self { inner }
+    }
+}
+
+#[wasm_bindgen]
+impl DefaultCpfpSigner {
+    #[wasm_bindgen(js_name = "signPsbt")]
+    pub async fn sign_psbt(&self, psbt_bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        self.inner
+            .sign_psbt(psbt_bytes)
+            .await
+            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
+    }
 }

@@ -6,6 +6,7 @@ use crate::signer::external_types::{
 };
 use crate::signer::{BreezSigner, ExternalSigner};
 use bitcoin::bip32::DerivationPath;
+use bitcoin::hashes::Hash as _;
 use bitcoin::secp256k1;
 use std::sync::Arc;
 
@@ -148,6 +149,28 @@ impl BreezSigner for ExternalSignerAdapter {
             .await
             .map_err(|e| SdkError::Signer(format!("External signer hmac_sha256 failed: {e}")))?;
         hash_bytes.to_hmac()
+    }
+
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: &spark_wallet::SecretSource,
+        hash: &[u8],
+        tap_tweak: Option<bitcoin::taproot::TapNodeHash>,
+    ) -> Result<secp256k1::schnorr::Signature, SdkError> {
+        let secret_ext = ExternalSecretSource::from_secret_source(secret)?;
+        let tap_merkle_root = tap_tweak.map(|h| h.to_byte_array().to_vec());
+        let sig_bytes = self
+            .external
+            .sign_hash_schnorr_with_tweak(secret_ext, hash.to_vec(), tap_merkle_root)
+            .await
+            .map_err(|e| {
+                SdkError::Signer(format!(
+                    "External signer sign_hash_schnorr_with_tweak failed: {e}"
+                ))
+            })?;
+        sig_bytes
+            .to_signature()
+            .map_err(|e| SdkError::Signer(e.to_string()))
     }
 
     async fn generate_random_signing_commitment(

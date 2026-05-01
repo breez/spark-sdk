@@ -20,8 +20,8 @@ use tracing::info;
 
 use crate::fixtures::{log::TracingConsumer, setup::FixtureId};
 
-const BITCOIND_VERSION: &str = "v28.0";
-const BITCOIND_DOCKER_IMAGE: &str = "lncm/bitcoind";
+const BITCOIND_IMAGE: &str = "spark-itest-bitcoind";
+const BITCOIND_TAG: &str = "29.0";
 const REGTEST_RPC_USER: &str = "rpcuser";
 const REGTEST_RPC_PASSWORD: &str = "rpcpassword";
 const REGTEST_RPC_PORT: u16 = 8332;
@@ -51,12 +51,12 @@ impl BitcoindFixture {
     pub async fn new(fixture_id: &FixtureId) -> anyhow::Result<Self> {
         // Define bitcoind container with command line arguments
         let container_name = format!("bitcoind-{fixture_id}");
-        let container = GenericImage::new(BITCOIND_DOCKER_IMAGE, BITCOIND_VERSION)
+        let container = GenericImage::new(BITCOIND_IMAGE, BITCOIND_TAG)
             .with_exposed_port(ContainerPort::Tcp(REGTEST_RPC_PORT))
             .with_exposed_port(ContainerPort::Tcp(ZMQPUBRAWBLOCK_RPC_PORT))
-            .with_wait_for(WaitFor::Log(LogWaitStrategy::stdout(
-                "init message: Done loading",
-            )))
+            .with_wait_for(WaitFor::Log(
+                LogWaitStrategy::stdout("init message: Done loading").with_times(1),
+            ))
             .with_network(fixture_id.to_network())
             .with_container_name(&container_name)
             .with_log_consumer(TracingConsumer::new("bitcoind"))
@@ -120,30 +120,23 @@ impl BitcoindFixture {
     }
 
     async fn ensure_wallet_created(&self) -> Result<()> {
-        // Try to create wallet with retries
-        let max_retries = 10;
-        let mut retries = 0;
-        let mut last_error = None;
-
-        while retries < max_retries {
-            match self.create_wallet_rpc().await {
-                Ok(_) => {
-                    info!("Successfully created or confirmed bitcoin wallet");
-                    return Ok(());
+        // The container wait strategy already blocks until "init message: Done
+        // loading" appears on stdout, so the RPC server should be up. A short
+        // retry loop covers the brief gap between that log line and the RPC
+        // server accepting connections; the outer timeout bounds the wait so
+        // a genuinely stuck bitcoind surfaces as a clean failure instead of
+        // hanging the test.
+        tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                if self.create_wallet_rpc().await.is_ok() {
+                    return;
                 }
-                Err(e) => {
-                    retries += 1;
-                    info!(
-                        "Failed to create wallet (retry {}/{}): {}",
-                        retries, max_retries, &e
-                    );
-                    last_error = Some(e);
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        }
-
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Failed to create wallet after retries")))
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for bitcoind to create wallet"))?;
+        Ok(())
     }
 
     async fn create_wallet_rpc(&self) -> Result<()> {
@@ -198,6 +191,29 @@ impl BitcoindFixture {
             .await
     }
 
+    /// Broadcast a transaction with maxfeerate=0, bypassing fee-rate checks.
+    /// Useful for v3 transactions with ephemeral anchors on regtest.
+    pub async fn broadcast_transaction_no_fee_check(&self, tx: &Transaction) -> Result<Txid> {
+        let tx_hex = hex::encode(bitcoin::consensus::serialize(tx));
+        self.rpc_call::<String>("sendrawtransaction", &[json!(tx_hex), json!(0)])
+            .map_ok(|txid_str| txid_str.parse().unwrap())
+            .await
+    }
+
+    /// Submit a package of transactions to bitcoind via the `submitpackage` RPC.
+    ///
+    /// This is required for v3 transactions with ephemeral anchors, which cannot
+    /// be broadcast individually because the 0-value anchor output is non-standard
+    /// on its own.
+    pub async fn submit_package(&self, txs: &[&Transaction]) -> Result<Value> {
+        let hex_array: Vec<String> = txs
+            .iter()
+            .map(|tx| hex::encode(bitcoin::consensus::serialize(tx)))
+            .collect();
+        self.rpc_call::<Value>("submitpackage", &[json!(hex_array)])
+            .await
+    }
+
     pub async fn get_transaction(&self, txid: &Txid) -> Result<Transaction> {
         let tx_hex = self
             .rpc_call::<String>("getrawtransaction", &[json!(txid.to_string())])
@@ -221,19 +237,51 @@ impl BitcoindFixture {
         txid: &Txid,
         min_confirmations: u64,
     ) -> Result<()> {
-        loop {
-            let result: Value = self
-                .rpc_call("gettransaction", &[json!(txid.to_string())])
-                .await?;
+        self.wait_for_tx_confirmation_with_timeout(txid, min_confirmations, Duration::from_secs(60))
+            .await
+    }
 
-            if let Some(confirmations) = result.get("confirmations").and_then(|c| c.as_u64())
-                && confirmations >= min_confirmations
-            {
-                return Ok(());
+    pub async fn wait_for_tx_confirmation_with_timeout(
+        &self,
+        txid: &Txid,
+        min_confirmations: u64,
+        timeout: Duration,
+    ) -> Result<()> {
+        let poll = async {
+            loop {
+                let result: Value = self
+                    .rpc_call("gettransaction", &[json!(txid.to_string())])
+                    .await?;
+
+                if let Some(confirmations) = result.get("confirmations").and_then(|c| c.as_u64())
+                    && confirmations >= min_confirmations
+                {
+                    return Ok::<(), anyhow::Error>(());
+                }
+
+                sleep(Duration::from_millis(500)).await;
             }
+        };
 
-            sleep(Duration::from_millis(500)).await;
+        match tokio::time::timeout(timeout, poll).await {
+            Ok(res) => res,
+            Err(_) => Err(anyhow::anyhow!(
+                "Timed out after {:?} waiting for tx {} to reach {} confirmations",
+                timeout,
+                txid,
+                min_confirmations,
+            )),
         }
+    }
+
+    /// Public JSON-RPC accessor for tests and helpers that need to reach
+    /// bitcoind methods not already wrapped here.
+    pub async fn rpc<T: for<'de> Deserialize<'de>>(
+        &self,
+        method: &str,
+        params: &[Value],
+    ) -> Result<T> {
+        self.rpc_call(method, params).await
     }
 
     async fn rpc_call<T: for<'de> Deserialize<'de>>(

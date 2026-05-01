@@ -60,6 +60,17 @@ impl BreezSdk {
         self.inner.get_info(request).await
     }
 
+    pub async fn prepare_unilateral_exit(
+        &self,
+        request: PrepareUnilateralExitRequest,
+        signer_secret_key: Vec<u8>,
+    ) -> Result<PrepareUnilateralExitResponse, SdkError> {
+        let signer = breez_sdk_spark::signer::SingleKeySigner::new(signer_secret_key)
+            .map_err(|e| SdkError::Generic(format!("Invalid signer key: {e}")))?;
+        let signer = std::sync::Arc::new(signer);
+        self.inner.prepare_unilateral_exit(request, signer).await
+    }
+
     pub async fn receive_payment(
         &self,
         request: ReceivePaymentRequest,

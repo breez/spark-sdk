@@ -11,10 +11,10 @@ use breez_sdk_spark::{
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
     LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
     PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
-    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
-    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
-    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    UpdateUserSettingsRequest,
+    PrepareUnilateralExitRequest, ReceivePaymentMethod, ReceivePaymentRequest,
+    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
+    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
+    TokenTransactionType, UnilateralExitCpfpInput, UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -278,6 +278,20 @@ pub enum Command {
         #[arg(long)]
         sat_per_vbyte: Option<u64>,
     },
+    /// Prepare a unilateral exit package (auto-selects profitable leaves)
+    PrepareUnilateralExit {
+        /// Fee rate in satoshis per virtual byte
+        fee_rate_sat_per_vbyte: u64,
+        /// Destination address for the sweep transaction
+        destination: String,
+        /// CPFP inputs "txid:vout:value:pubkey[:type]" used to pay fees.
+        /// Type is "p2wpkh" (default) or "p2tr".
+        #[arg(short = 'u', long = "utxo")]
+        utxos: Vec<String>,
+        /// Hex-encoded private key to sign CPFP transactions
+        #[arg(short)]
+        signing_key: String,
+    },
     ListUnclaimedDeposits,
     /// Buy Bitcoin using an external provider
     BuyBitcoin {
@@ -443,6 +457,83 @@ pub(crate) async fn execute_command(
         Command::Sync => {
             let value = sdk.sync_wallet(SyncWalletRequest {}).await?;
             print_value(&value)?;
+            Ok(true)
+        }
+        Command::PrepareUnilateralExit {
+            fee_rate_sat_per_vbyte,
+            destination,
+            utxos,
+            signing_key,
+        } => {
+            let inputs = utxos
+                .into_iter()
+                .map(|s| parse_cpfp_input(&s))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let sk_bytes = hex::decode(&signing_key)
+                .map_err(|e| anyhow::anyhow!("Invalid signing key hex: {e}"))?;
+            let signer = breez_sdk_spark::signer::SingleKeySigner::new(sk_bytes)
+                .map_err(|e| anyhow::anyhow!("Invalid signing key: {e}"))?;
+            let signer = std::sync::Arc::new(signer);
+
+            let response = sdk
+                .prepare_unilateral_exit(
+                    PrepareUnilateralExitRequest {
+                        fee_rate_sat_per_vbyte,
+                        inputs,
+                        destination,
+                    },
+                    signer,
+                )
+                .await?;
+
+            for leaf in &response.leaves {
+                println!();
+                println!(
+                    "Leaf {}: {} sats (estimated cost: {} sats)",
+                    leaf.leaf_id, leaf.value, leaf.estimated_cost
+                );
+                println!();
+
+                let total_txs = leaf.transactions.len();
+                for (index, tc) in leaf.transactions.iter().enumerate() {
+                    let index_str = format!("{}. ", index.saturating_add(1));
+                    let index_spaces = " ".repeat(index_str.len());
+
+                    let is_refund_tx = index == total_txs.saturating_sub(1);
+                    let is_leaf_tx = index == total_txs.saturating_sub(2);
+                    let tx_type = if is_refund_tx {
+                        "Refund TX"
+                    } else if is_leaf_tx {
+                        "Leaf TX"
+                    } else {
+                        "Node TX"
+                    };
+
+                    if let Some(blocks) = tc.csv_timelock_blocks {
+                        println!("{index_str}{tx_type} (CSV: {blocks} blocks): {}", tc.tx_hex);
+                    } else {
+                        println!("{index_str}{tx_type}: {}", tc.tx_hex);
+                    }
+                    if let Some(cpfp_hex) = &tc.cpfp_tx_hex {
+                        println!("{index_spaces}CPFP TX: {cpfp_hex}");
+                        println!("{index_spaces}Package: {},{}", tc.tx_hex, cpfp_hex);
+                    } else {
+                        println!("{index_spaces}(already confirmed, no CPFP needed)");
+                    }
+                }
+            }
+
+            if !response.unverified_node_ids.is_empty() {
+                println!();
+                println!(
+                    "Warning: could not verify confirmation status for {} nodes",
+                    response.unverified_node_ids.len()
+                );
+            }
+
+            println!();
+            println!("Sweep TX: {}", response.sweep_tx_hex);
             Ok(true)
         }
         Command::ListUnclaimedDeposits => {
@@ -1052,4 +1143,38 @@ pub(crate) fn print_value<T: serde::Serialize>(value: &T) -> Result<(), serde_js
 
 fn serialize<T: serde::Serialize>(value: &T) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(value)
+}
+
+/// Parse a CPFP input from a string in the format "txid:vout:value:pubkey[:type]".
+/// Type is "p2wpkh" (default) or "p2tr".
+fn parse_cpfp_input(s: &str) -> Result<UnilateralExitCpfpInput, anyhow::Error> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() < 4 || parts.len() > 5 {
+        return Err(anyhow::anyhow!(
+            "Expected format: txid:vout:value:pubkey[:type]"
+        ));
+    }
+    let txid = parts[0].to_string();
+    let vout: u32 = parts[1].parse()?;
+    let value: u64 = parts[2].parse()?;
+    let pubkey = parts[3].to_string();
+
+    let utxo_type = parts.get(4).copied().unwrap_or("p2wpkh");
+    match utxo_type {
+        "p2wpkh" => Ok(UnilateralExitCpfpInput::P2wpkh {
+            txid,
+            vout,
+            value,
+            pubkey,
+        }),
+        "p2tr" => Ok(UnilateralExitCpfpInput::P2tr {
+            txid,
+            vout,
+            value,
+            pubkey,
+        }),
+        _ => Err(anyhow::anyhow!(
+            "Unknown UTXO type: {utxo_type}. Use p2wpkh or p2tr"
+        )),
+    }
 }

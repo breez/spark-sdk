@@ -1,15 +1,19 @@
+pub mod chain_service;
 pub mod faucet;
 pub mod fixtures;
 pub mod helpers;
+pub mod local_sdk;
 mod log;
 
 use std::sync::Arc;
 
+pub use chain_service::LocalBitcoindChainService;
 pub use faucet::RegtestFaucet;
 pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};
 pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
+pub use local_sdk::{LocalSdk, build_local_sdk};
 
 use anyhow::Result;
 use breez_sdk_spark::{BreezSdk, Config, SdkEvent};

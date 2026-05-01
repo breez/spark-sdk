@@ -6,6 +6,7 @@ mod secret_sharing;
 use crate::tree::TreeNodeId;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey, schnorr};
+use bitcoin::taproot::TapNodeHash;
 use frost_secp256k1_tr::round2::SignatureShare;
 
 pub use default_signer::{DefaultSigner, DefaultSignerError, KeySet, KeySetType};
@@ -25,6 +26,16 @@ pub trait Signer: Send + Sync + 'static {
     async fn sign_hash_schnorr_with_identity_key(
         &self,
         hash: &[u8],
+    ) -> Result<schnorr::Signature, SignerError>;
+
+    /// Signs a hash with a key derived from a SecretSource, applying the BIP341 tap_tweak.
+    /// The tap_tweak parameter is the optional merkle root of the taproot script tree.
+    /// Pass `None` for key-path-only spends (no script tree).
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: &SecretSource,
+        hash: &[u8],
+        tap_tweak: Option<TapNodeHash>,
     ) -> Result<schnorr::Signature, SignerError>;
 
     async fn generate_random_signing_commitment(

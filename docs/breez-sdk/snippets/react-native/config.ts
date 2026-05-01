@@ -76,19 +76,22 @@ const exampleConfigureSparkConfig = () => {
         id: 0,
         identifier: '0000000000000000000000000000000000000000000000000000000000000001',
         address: 'https://0.spark.example.com',
-        identityPublicKey: '03acd9a5a88db102730ff83dee69d69088cc4c9d93bbee893e90fd5051b7da9651'
+        identityPublicKey: '03acd9a5a88db102730ff83dee69d69088cc4c9d93bbee893e90fd5051b7da9651',
+        caCert: undefined
       },
       {
         id: 1,
         identifier: '0000000000000000000000000000000000000000000000000000000000000002',
         address: 'https://1.spark.example.com',
-        identityPublicKey: '02d2d103cacb1d6355efeab27637c74484e2a7459e49110c3fe885210369782e23'
+        identityPublicKey: '02d2d103cacb1d6355efeab27637c74484e2a7459e49110c3fe885210369782e23',
+        caCert: undefined
       },
       {
         id: 2,
         identifier: '0000000000000000000000000000000000000000000000000000000000000003',
         address: 'https://2.spark.example.com',
-        identityPublicKey: '0350f07ffc21bfd59d31e0a7a600e2995273938444447cb9bc4c75b8a895dbb853'
+        identityPublicKey: '0350f07ffc21bfd59d31e0a7a600e2995273938444447cb9bc4c75b8a895dbb853',
+        caCert: undefined
       }
     ],
     sspConfig: {

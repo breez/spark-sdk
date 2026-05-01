@@ -739,6 +739,11 @@ pub struct SparkSigningOperator {
     pub address: String,
     /// Hex-encoded compressed public key of the operator.
     pub identity_public_key: String,
+    /// Optional PEM-encoded CA certificate used to verify the operator's TLS
+    /// certificate. Required when the operator presents a certificate signed
+    /// by a private CA (e.g. local test fixtures).
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub ca_cert: Option<Vec<u8>>,
 }
 
 /// Configuration for the Spark Service Provider (SSP).
@@ -1004,6 +1009,102 @@ impl std::fmt::Display for MaxFee {
 pub struct Credentials {
     pub username: String,
     pub password: String,
+}
+
+/// An input used to pay fees for a unilateral exit via CPFP.
+///
+/// P2WPKH and P2TR variants auto-compute the scriptPubKey and signed input weight from
+/// the provided public key. The Custom variant allows arbitrary script types by providing
+/// these values directly.
+///
+/// Change always goes back to the first input's address.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum UnilateralExitCpfpInput {
+    /// A P2WPKH input (signed input weight: 272 WU)
+    P2wpkh {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    /// A P2TR key-path input (signed input weight: 230 WU)
+    P2tr {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    /// A custom input with caller-provided scriptPubKey and weight
+    Custom {
+        txid: String,
+        vout: u32,
+        value: u64,
+        /// Hex-encoded scriptPubKey of the output being spent
+        script_pubkey_hex: String,
+        /// Expected weight of this input when signed, in weight units (WU)
+        signed_input_weight: u64,
+    },
+}
+
+/// Request to prepare a unilateral exit
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareUnilateralExitRequest {
+    /// Fee rate in satoshis per virtual byte
+    pub fee_rate_sat_per_vbyte: u64,
+    /// CPFP inputs used to pay fees for the unilateral exit
+    pub inputs: Vec<UnilateralExitCpfpInput>,
+    /// Destination address for the sweep transaction that spends refund outputs
+    pub destination: String,
+}
+
+/// A single transaction in a unilateral exit chain with its CPFP fee-bump
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnilateralExitTransaction {
+    /// The node ID this transaction belongs to
+    pub node_id: String,
+    /// The hex-encoded parent transaction (pre-signed by Spark)
+    pub tx_hex: String,
+    /// The hex-encoded signed CPFP child transaction (ready to broadcast).
+    /// `None` if this node was already confirmed on-chain.
+    pub cpfp_tx_hex: Option<String>,
+    /// If this transaction has a relative timelock (CSV), the number of blocks that
+    /// the previous transaction's output must be confirmed before this transaction
+    /// can be included in a block. `None` if there is no timelock.
+    pub csv_timelock_blocks: Option<u32>,
+}
+
+/// A leaf selected for unilateral exit, with its full transaction chain
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct UnilateralExitLeaf {
+    /// The unique identifier of the leaf
+    pub leaf_id: String,
+    /// The value of the leaf in satoshis
+    pub value: u64,
+    /// Estimated marginal exit cost in satoshis (CPFP fees + sweep input fee)
+    pub estimated_cost: u64,
+    /// Ordered list of transactions to broadcast for this leaf's exit.
+    /// Includes ancestor `node_txs`, the leaf `node_tx`, and the `refund_tx`,
+    /// each with their CPFP fee-bump child. Broadcast in order.
+    pub transactions: Vec<UnilateralExitTransaction>,
+}
+
+/// Response containing the prepared unilateral exit transactions
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PrepareUnilateralExitResponse {
+    /// Per-leaf exit details, each containing the full broadcast chain
+    pub leaves: Vec<UnilateralExitLeaf>,
+    /// Hex-encoded signed transaction that sweeps all refund outputs to the destination address.
+    pub sweep_tx_hex: String,
+    /// Node IDs whose on-chain confirmation status could not be determined due to
+    /// chain service errors. These nodes were assumed unconfirmed (CPFP children
+    /// were built for them), but if they are actually confirmed, broadcasting their
+    /// CPFP children may fail.
+    pub unverified_node_ids: Vec<String>,
 }
 
 /// Request to get the balance of the wallet

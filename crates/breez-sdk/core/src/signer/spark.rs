@@ -51,6 +51,18 @@ impl Signer for SparkSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))
     }
 
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: &SecretSource,
+        hash: &[u8],
+        tap_tweak: Option<bitcoin::taproot::TapNodeHash>,
+    ) -> Result<schnorr::Signature, SignerError> {
+        self.signer
+            .sign_hash_schnorr_with_tweak(secret, hash, tap_tweak)
+            .await
+            .map_err(|e| SignerError::Generic(e.to_string()))
+    }
+
     async fn generate_random_signing_commitment(
         &self,
     ) -> Result<FrostSigningCommitmentsWithNonces, SignerError> {

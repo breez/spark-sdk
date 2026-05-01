@@ -1,18 +1,18 @@
 use std::str::FromStr;
 
 use bitcoin::{
-    self, Address, PrivateKey, Psbt, Txid, Witness,
+    self, Address, Amount, OutPoint, PrivateKey, Psbt, TxOut, Txid, Witness,
     bip32::{DerivationPath, Xpriv},
     consensus::encode::serialize_hex,
     ecdsa::Signature,
     hashes::{Hash, sha256},
-    key::Secp256k1,
+    key::{Secp256k1, TapTweak as _},
     secp256k1::{PublicKey, SecretKey},
-    sighash::SighashCache,
+    sighash::{self, SighashCache},
 };
 use clap::Subcommand;
 use spark_wallet::{
-    Network, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
+    CpfpInput, Network, SparkWallet, SparkWalletError, TreeNodeId, is_ephemeral_anchor_output,
 };
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -32,15 +32,18 @@ impl From<ExitSpeed> for spark_wallet::ExitSpeed {
     }
 }
 
-struct CpfpUtxo(spark_wallet::CpfpUtxo);
+struct ParsedCpfpInput(CpfpInput);
 
-impl std::str::FromStr for CpfpUtxo {
+impl std::str::FromStr for ParsedCpfpInput {
     type Err = Box<dyn std::error::Error>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 4 {
-            return Err("Invalid format, expected txid:vout:value:pubkey".into());
+        if parts.len() != 4 && parts.len() != 5 {
+            return Err(
+                "Invalid format, expected txid:vout:value:pubkey[:type] where type is p2wpkh or p2tr"
+                    .into(),
+            );
         }
 
         let txid = Txid::from_str(parts[0])?;
@@ -49,11 +52,36 @@ impl std::str::FromStr for CpfpUtxo {
         let pubkey_bytes = hex::decode(parts[3])?;
         let pubkey = PublicKey::from_slice(&pubkey_bytes)?;
 
-        Ok(CpfpUtxo(spark_wallet::CpfpUtxo {
-            txid,
-            vout,
-            value,
-            pubkey,
+        let utxo_type = if parts.len() == 5 { parts[4] } else { "p2wpkh" };
+
+        let (script_pubkey, signed_input_weight) = match utxo_type {
+            "p2wpkh" => {
+                let script = bitcoin::Address::p2wpkh(
+                    &bitcoin::CompressedPublicKey(pubkey),
+                    bitcoin::Network::Bitcoin,
+                )
+                .script_pubkey();
+                (script, 272)
+            }
+            "p2tr" => {
+                let secp = bitcoin::key::Secp256k1::new();
+                let (xonly, _) = pubkey.x_only_public_key();
+                let script = bitcoin::Address::p2tr(&secp, xonly, None, bitcoin::Network::Bitcoin)
+                    .script_pubkey();
+                (script, 230)
+            }
+            other => {
+                return Err(format!("Unknown UTXO type '{other}', expected p2wpkh or p2tr").into());
+            }
+        };
+
+        Ok(ParsedCpfpInput(CpfpInput {
+            outpoint: OutPoint { txid, vout },
+            witness_utxo: TxOut {
+                value: Amount::from_sat(value),
+                script_pubkey,
+            },
+            signed_input_weight,
         }))
     }
 }
@@ -75,6 +103,8 @@ pub enum WithdrawCommand {
     UnilateralExit {
         /// Fee rate in sats/vbyte.
         fee_rate: u64,
+        /// Destination address for the sweep transaction that spends refund outputs.
+        destination: String,
         /// The leaf IDs of the tree nodes to unilateral exit. Defaults to all leaves.
         #[clap(short, long = "leaf")]
         leaf_ids: Vec<TreeNodeId>,
@@ -125,6 +155,7 @@ pub async fn handle_command(
         }
         WithdrawCommand::UnilateralExit {
             fee_rate,
+            destination,
             leaf_ids,
             utxos,
             signing_key,
@@ -134,13 +165,20 @@ pub async fn handle_command(
                 .transpose()?
                 .map(|pk| PrivateKey::new(pk, network));
 
-            let utxos = utxos
+            let inputs = utxos
                 .into_iter()
-                .map(|s| CpfpUtxo::from_str(&s).map(|wrapper| wrapper.0))
+                .map(|s| ParsedCpfpInput::from_str(&s).map(|wrapper| wrapper.0))
                 .collect::<Result<_, _>>()?;
-            let all_leaf_tx_cpfp_psbts = wallet.unilateral_exit(fee_rate, leaf_ids, utxos).await?;
+            let btc_network: bitcoin::Network = network.into();
+            let destination: Address = destination
+                .parse::<Address<bitcoin::address::NetworkUnchecked>>()?
+                .require_network(btc_network)
+                .map_err(|e| format!("destination network mismatch: {e}"))?;
+            let result = wallet
+                .unilateral_exit(fee_rate, leaf_ids, inputs, destination, None, Vec::new())
+                .await?;
 
-            for leaf_tx_cpfp_psbts in &all_leaf_tx_cpfp_psbts {
+            for leaf_tx_cpfp_psbts in &result.leaves {
                 println!();
                 println!("Leaf ID: {}", leaf_tx_cpfp_psbts.leaf_id);
                 println!();
@@ -167,7 +205,11 @@ pub async fn handle_command(
                     println!("{index_str}{tx_type} ID: {txid}");
                     println!("{index_spaces}{tx_type}: {tx_hex}");
 
-                    let mut psbt = tx_cpfp_psbt.child_psbt.clone();
+                    let Some(mut psbt) = tx_cpfp_psbt.child_psbt.clone() else {
+                        println!("{index_spaces}Output already spent on-chain; skip this step.");
+                        println!();
+                        continue;
+                    };
                     let psbt_hex = psbt.serialize_hex();
                     println!("{index_spaces}PSBT (unsigned): {psbt_hex}");
 
@@ -182,17 +224,15 @@ pub async fn handle_command(
                     }
 
                     // Display CSV timelock for refund transaction
-                    if is_refund_tx && let Some(input) = tx_cpfp_psbt.parent_tx.input.first() {
-                        let sequence = input.sequence.to_consensus_u32();
-                        // CSV uses the lower 16 bits for the relative lock value
-                        // Bit 22 (0x00400000) indicates blocks vs time
-                        if sequence & 0x00400000 == 0 {
-                            let csv_blocks = sequence & 0xFFFF;
-                            println!(
-                                "{index_spaces}Timelock: {} blocks after Leaf TX confirms",
-                                csv_blocks
-                            );
-                        }
+                    if is_refund_tx
+                        && let Some(input) = tx_cpfp_psbt.parent_tx.input.first()
+                        && let Some(bitcoin::relative::LockTime::Blocks(h)) =
+                            input.sequence.to_relative_lock_time()
+                    {
+                        println!(
+                            "{index_spaces}Timelock: {} blocks after Leaf TX confirms",
+                            h.value()
+                        );
                     }
 
                     // Independent derivation path verification for refund TX
@@ -300,16 +340,27 @@ fn verify_refund_derivation_path(
 }
 
 fn sign_psbt(psbt: &mut Psbt, signing_key: &PrivateKey) -> Result<(), SparkWalletError> {
-    let mut cache = SighashCache::new(&psbt.unsigned_tx);
-    let mut signatures = vec![];
-    let mut anchor_index = None;
     let secp = Secp256k1::new();
     let pubkey = signing_key.public_key(&secp);
-    // Sign inputs where the witness utxo is a non anchor output
+
+    // Collect all prevouts for taproot sighash computation
+    let prevouts: Vec<TxOut> = psbt
+        .inputs
+        .iter()
+        .map(|input| input.witness_utxo.clone().unwrap_or(TxOut::NULL))
+        .collect();
+
+    let mut cache = SighashCache::new(&psbt.unsigned_tx);
+    let mut ecdsa_signatures = vec![];
+    let mut taproot_indices = vec![];
+    let mut anchor_index = None;
+
     for (i, input) in psbt.inputs.iter().enumerate() {
         if let Some(tx_out) = &input.witness_utxo {
             if is_ephemeral_anchor_output(tx_out) {
                 anchor_index = Some(i);
+            } else if tx_out.script_pubkey.is_p2tr() {
+                taproot_indices.push(i);
             } else {
                 let (msg, ecdsa_type) = psbt
                     .sighash_ecdsa(i, &mut cache)
@@ -319,17 +370,43 @@ fn sign_psbt(psbt: &mut Psbt, signing_key: &PrivateKey) -> Result<(), SparkWalle
                     signature: sig,
                     sighash_type: ecdsa_type,
                 };
-                signatures.push((i, pubkey, signature));
+                ecdsa_signatures.push((i, pubkey, signature));
             }
         }
     }
-    // Update the inputs partial sigs with the signatures
-    for (i, pubkey, signature) in signatures.into_iter() {
+
+    // Apply ECDSA signatures
+    for (i, pubkey, signature) in ecdsa_signatures {
         psbt.inputs[i].partial_sigs.insert(pubkey, signature);
     }
+
+    // Sign taproot inputs with Schnorr key-path spend
+    if !taproot_indices.is_empty() {
+        let keypair = bitcoin::key::Keypair::from_secret_key(&secp, &signing_key.inner)
+            .tap_tweak(&secp, None)
+            .to_keypair();
+        let prevouts_ref = sighash::Prevouts::All(&prevouts);
+        for i in taproot_indices {
+            let sighash = cache
+                .taproot_key_spend_signature_hash(
+                    i,
+                    &prevouts_ref,
+                    sighash::TapSighashType::Default,
+                )
+                .map_err(|e| SparkWalletError::Generic(e.to_string()))?;
+            let msg = bitcoin::secp256k1::Message::from_digest(sighash.to_byte_array());
+            let schnorr_sig = secp.sign_schnorr_no_aux_rand(&msg, &keypair);
+            let tap_sig = bitcoin::taproot::Signature {
+                signature: schnorr_sig,
+                sighash_type: sighash::TapSighashType::Default,
+            };
+            psbt.inputs[i].tap_key_sig = Some(tap_sig);
+        }
+    }
+
     // Set an empty witness for the anchor input
     if let Some(anchor_index) = anchor_index {
-        psbt.inputs[anchor_index].final_script_witness = Some(Witness::new())
+        psbt.inputs[anchor_index].final_script_witness = Some(Witness::new());
     }
     Ok(())
 }

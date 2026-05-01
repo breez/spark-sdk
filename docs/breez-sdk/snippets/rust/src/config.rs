@@ -87,6 +87,7 @@ pub(crate) fn configure_spark_config() -> Result<()> {
                 identity_public_key:
                     "03acd9a5a88db102730ff83dee69d69088cc4c9d93bbee893e90fd5051b7da9651"
                         .to_string(),
+                ca_cert: None,
             },
             SparkSigningOperator {
                 id: 1,
@@ -97,6 +98,7 @@ pub(crate) fn configure_spark_config() -> Result<()> {
                 identity_public_key:
                     "02d2d103cacb1d6355efeab27637c74484e2a7459e49110c3fe885210369782e23"
                         .to_string(),
+                ca_cert: None,
             },
             SparkSigningOperator {
                 id: 2,
@@ -107,6 +109,7 @@ pub(crate) fn configure_spark_config() -> Result<()> {
                 identity_public_key:
                     "0350f07ffc21bfd59d31e0a7a600e2995273938444447cb9bc4c75b8a895dbb853"
                         .to_string(),
+                ca_cert: None,
             },
         ],
         ssp_config: SparkSspConfig {

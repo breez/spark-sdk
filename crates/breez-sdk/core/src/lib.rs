@@ -22,7 +22,7 @@ pub mod token_conversion;
 mod utils;
 
 pub use chain::{
-    BitcoinChainService, ChainServiceError, RecommendedFees, TxStatus, Utxo,
+    BitcoinChainService, ChainServiceError, Outspend, RecommendedFees, TxStatus, Utxo,
     rest_client::{ChainApiType, RestClientChainService},
 };
 pub use common::rest::{RestClient, RestResponse};

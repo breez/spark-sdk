@@ -5,6 +5,7 @@ use bitcoin::key::{Parity, TapTweak};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::secp256k1::{self, All, Keypair, Message, PublicKey, SecretKey, schnorr};
+use bitcoin::taproot::TapNodeHash;
 use bitcoin::{
     hashes::{Hash, sha256},
     key::Secp256k1,
@@ -413,6 +414,33 @@ impl Signer for DefaultSigner {
         let sig = self.secp.sign_schnorr_with_rng(
             &Message::from_digest(hash_array),
             &self.key_set.identity_key_pair,
+            &mut rng,
+        );
+        Ok(sig)
+    }
+
+    async fn sign_hash_schnorr_with_tweak(
+        &self,
+        secret: &SecretSource,
+        hash: &[u8],
+        tap_tweak: Option<TapNodeHash>,
+    ) -> Result<schnorr::Signature, SignerError> {
+        if hash.len() != 32 {
+            return Err(SignerError::Generic(
+                "Hash must be exactly 32 bytes".to_string(),
+            ));
+        }
+        let mut hash_array = [0u8; 32];
+        hash_array.copy_from_slice(hash);
+
+        let secret_key = secret.to_secret_key(self)?;
+        let keypair = secret_key.keypair(&self.secp);
+        let tweaked_keypair = keypair.tap_tweak(&self.secp, tap_tweak).to_keypair();
+
+        let mut rng = thread_rng();
+        let sig = self.secp.sign_schnorr_with_rng(
+            &Message::from_digest(hash_array),
+            &tweaked_keypair,
             &mut rng,
         );
         Ok(sig)

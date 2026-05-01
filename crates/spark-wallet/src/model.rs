@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use bitcoin::{Address, Transaction, hashes::sha256, secp256k1::PublicKey};
+use bitcoin::{Address, OutPoint, Transaction, hashes::sha256, secp256k1::PublicKey};
 use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use spark::{
@@ -23,7 +23,50 @@ use spark::{
     utils::paging::PagingFilter,
 };
 
+use spark::services::{LeafTxCpfpPsbts, SelectedLeaf};
+
 use crate::SparkWalletError;
+
+/// Result of `unilateral_exit_autoselect`.
+///
+/// The optimistic exit path assuming nothing has been spent on-chain yet.
+/// The caller may run chain queries against the entries, collect the confirmed
+/// spender transactions, and pass them to [`SparkWallet::unilateral_exit`]
+/// to get the final list (with `child_psbt: None` for already-spent steps)
+/// and an adapted sweep. `sweep_tx` is pre-built assuming the CPFP refund_tx
+/// variants land — suitable as-is when no non-CPFP variants are in play.
+pub struct UnilateralExitAutoselect {
+    /// The leaves selected for exit with their estimated costs.
+    pub selected_leaves: Vec<SelectedLeaf>,
+    /// CPFP PSBTs for each selected leaf's broadcast chain.
+    pub leaf_tx_cpfp_psbts: Vec<LeafTxCpfpPsbts>,
+    /// Signed sweep transaction spending the CPFP `refund_tx` outputs. Valid
+    /// when the CPFP path is the one that lands on-chain.
+    pub sweep_tx: Transaction,
+    /// The tree nodes fetched during autoselect, for reuse in the follow-up
+    /// `unilateral_exit` call.
+    pub prefetched_nodes: Vec<spark::tree::TreeNode>,
+}
+
+/// Result of `unilateral_exit`.
+pub struct UnilateralExitResult {
+    /// Final CPFP PSBT list. Entries whose tracked output is already spent
+    /// on-chain carry `child_psbt: None`.
+    pub leaves: Vec<LeafTxCpfpPsbts>,
+    /// Signed sweep transaction that spends the refund outputs — whichever
+    /// variant actually landed on-chain for each leaf.
+    pub sweep_tx: Transaction,
+}
+
+/// Describes a refund output sitting on-chain after a unilateral exit.
+pub struct RefundOutput {
+    /// The on-chain outpoint (txid:vout) of the refund output.
+    pub outpoint: OutPoint,
+    /// The leaf ID used to derive the signing key for this output.
+    pub leaf_id: TreeNodeId,
+    /// The value in satoshis of this output.
+    pub value: u64,
+}
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]

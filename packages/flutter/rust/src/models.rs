@@ -60,6 +60,7 @@ pub struct _SparkSigningOperator {
     pub identifier: String,
     pub address: String,
     pub identity_public_key: String,
+    pub ca_cert: Option<Vec<u8>>,
 }
 
 #[frb(mirror(SparkSspConfig))]
@@ -171,6 +172,59 @@ pub enum _MaxFee {
 pub enum _Fee {
     Fixed { amount: u64 },
     Rate { sat_per_vbyte: u64 },
+}
+
+#[frb(mirror(UnilateralExitCpfpInput))]
+pub enum _UnilateralExitCpfpInput {
+    P2wpkh {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    P2tr {
+        txid: String,
+        vout: u32,
+        value: u64,
+        pubkey: String,
+    },
+    Custom {
+        txid: String,
+        vout: u32,
+        value: u64,
+        script_pubkey_hex: String,
+        signed_input_weight: u64,
+    },
+}
+
+#[frb(mirror(PrepareUnilateralExitRequest))]
+pub struct _PrepareUnilateralExitRequest {
+    pub fee_rate_sat_per_vbyte: u64,
+    pub inputs: Vec<UnilateralExitCpfpInput>,
+    pub destination: String,
+}
+
+#[frb(mirror(UnilateralExitTransaction))]
+pub struct _UnilateralExitTransaction {
+    pub node_id: String,
+    pub tx_hex: String,
+    pub cpfp_tx_hex: Option<String>,
+    pub csv_timelock_blocks: Option<u32>,
+}
+
+#[frb(mirror(UnilateralExitLeaf))]
+pub struct _UnilateralExitLeaf {
+    pub leaf_id: String,
+    pub value: u64,
+    pub estimated_cost: u64,
+    pub transactions: Vec<UnilateralExitTransaction>,
+}
+
+#[frb(mirror(PrepareUnilateralExitResponse))]
+pub struct _PrepareUnilateralExitResponse {
+    pub leaves: Vec<UnilateralExitLeaf>,
+    pub sweep_tx_hex: String,
+    pub unverified_node_ids: Vec<String>,
 }
 
 #[frb(mirror(GetInfoRequest))]

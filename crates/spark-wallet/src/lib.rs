@@ -15,12 +15,12 @@ pub use spark::{
     address::{SparkAddress, SparkAddressPaymentType},
     operator::rpc::{ConnectionManager, DefaultConnectionManager},
     services::{
-        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
-        FreezeIssuerTokenResponse, InvoiceDescription, LightningSendPayment, LightningSendStatus,
-        Preimage, PreimageRequestStatus, ReceiverTokenOutput, ServiceError,
-        SingleUseDepositAddress, StaticDepositAddress, TokenInputs, TokenTransaction,
+        CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpInput, ExitSpeed, Fee,
+        FreezeIssuerTokenResponse, InvoiceDescription, LeafTxCpfpPsbts, LightningSendPayment,
+        LightningSendStatus, Preimage, PreimageRequestStatus, ReceiverTokenOutput, SelectedLeaf,
+        ServiceError, SingleUseDepositAddress, StaticDepositAddress, TokenInputs, TokenTransaction,
         TokenTransactionStatus, TransferId, TransferObserver, TransferObserverError,
-        TransferStatus, TransferTokenOutput, TransferType, Utxo,
+        TransferStatus, TransferTokenOutput, TransferType, TxCpfpPsbt, Utxo,
     },
     session_manager::*,
     signer::{

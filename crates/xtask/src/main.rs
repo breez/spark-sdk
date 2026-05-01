@@ -169,6 +169,12 @@ fn test_cmd(
     doc: bool,
     rest: Vec<String>,
 ) -> Result<()> {
+    // Integration-test packages spin up docker containers from locally-built
+    // images; make sure those exist before the test run.
+    if matches!(package.as_deref(), Some("spark-itest" | "breez-sdk-itest")) {
+        build_itest_docker_images()?;
+    }
+
     let mut c = Command::new("cargo");
     c.arg("test");
     c.arg("--no-fail-fast");
@@ -684,6 +690,21 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
 }
 
 fn itest_cmd() -> Result<()> {
+    build_itest_docker_images()?;
+
+    // Run the integration tests with limited parallelism to avoid
+    // overwhelming Docker with too many concurrent container startups.
+    // Each test spins up its own bitcoind + operator containers.
+    let sh = Shell::new()?;
+    cmd!(
+        sh,
+        "cargo test -p spark-itest --no-fail-fast -- --test-threads=2"
+    )
+    .run()?;
+    Ok(())
+}
+
+fn build_itest_docker_images() -> Result<()> {
     let sh = Shell::new()?;
 
     // Verify Docker is available
@@ -719,6 +740,11 @@ fn itest_cmd() -> Result<()> {
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("invalid spark-so.dockerfile path"))?;
 
+    let bitcoind_df = docker_dir.join("bitcoind.dockerfile");
+    let bitcoind_df_str = bitcoind_df
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("invalid bitcoind.dockerfile path"))?;
+
     cmd!(
         sh,
         "docker build -t spark-migrations -f {migrations_df_str} {docker_dir_str}"
@@ -729,9 +755,12 @@ fn itest_cmd() -> Result<()> {
         "docker build -t spark-so -f {spark_so_df_str} {docker_dir_str}"
     )
     .run()?;
+    cmd!(
+        sh,
+        "docker build -t spark-itest-bitcoind:29.0 -f {bitcoind_df_str} {docker_dir_str}"
+    )
+    .run()?;
 
-    // Run the integration tests
-    cmd!(sh, "cargo test -p spark-itest --no-fail-fast").run()?;
     Ok(())
 }
 

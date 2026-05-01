@@ -11,6 +11,8 @@ path = "src/lib.rs"
 # Breez SDK under test (enable test-utils for direct helpers)
 breez-sdk-spark = { workspace = true, features = ["test-utils", "postgres"] }
 breez-sdk-common = { workspace = true }
+spark-itest.workspace = true
+spark-wallet.workspace = true
 testcontainers-modules = { workspace = true, features = ["postgres"] }
 
 # PostgreSQL for database creation utilities
