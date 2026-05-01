@@ -5,6 +5,7 @@ import CommonCrypto
 // MARK: - Passkey provider types
 
 enum PasskeyProviderType: String {
+    case platform
     case file
     case yubikey
     case fido2
@@ -22,11 +23,11 @@ struct PasskeyConfig {
 
 // MARK: - File-based PRF provider
 
-/// File-based implementation of `PasskeyPrfProvider`.
+/// File-based implementation of `PrfProvider`.
 ///
 /// Uses HMAC-SHA256 with a secret stored in a file. The secret is generated
 /// randomly on first use and persisted to disk.
-class FilePrfProvider: PasskeyPrfProvider {
+class FilePrfProvider: PrfProvider {
     private let secret: Data
 
     private static let secretFileName = "seedless-restore-secret"
@@ -79,6 +80,10 @@ class FilePrfProvider: PasskeyPrfProvider {
     func isPrfAvailable() async throws -> Bool {
         true
     }
+
+    func checkDomainAssociation() async throws -> DomainAssociation {
+        .skipped(reason: "FilePrfProvider does not verify domain association")
+    }
 }
 
 // MARK: - YubiKey PRF provider (skeleton)
@@ -87,7 +92,7 @@ class FilePrfProvider: PasskeyPrfProvider {
 ///
 /// This is a skeleton implementation. A full implementation would require
 /// a Swift YubiKey library (e.g., YubiKit from Yubico).
-class YubiKeyPrfProvider: PasskeyPrfProvider {
+class YubiKeyPrfProvider: PrfProvider {
     func derivePrfSeed(salt: String) async throws -> Data {
         throw PasskeyPrfError.Generic(
             "YubiKey PRF provider is not yet supported in the Swift CLI. " +
@@ -98,6 +103,10 @@ class YubiKeyPrfProvider: PasskeyPrfProvider {
     func isPrfAvailable() async throws -> Bool {
         false
     }
+
+    func checkDomainAssociation() async throws -> DomainAssociation {
+        .skipped(reason: "YubiKeyPrfProvider does not verify domain association")
+    }
 }
 
 // MARK: - FIDO2 PRF provider (skeleton)
@@ -106,7 +115,7 @@ class YubiKeyPrfProvider: PasskeyPrfProvider {
 ///
 /// This is a skeleton implementation. A full implementation would require
 /// a Swift FIDO2/CTAP2 library with HID transport support.
-class Fido2PrfProvider: PasskeyPrfProvider {
+class Fido2PrfProvider: PrfProvider {
     func derivePrfSeed(salt: String) async throws -> Data {
         throw PasskeyPrfError.Generic(
             "FIDO2 PRF provider is not yet supported in the Swift CLI. " +
@@ -117,12 +126,27 @@ class Fido2PrfProvider: PasskeyPrfProvider {
     func isPrfAvailable() async throws -> Bool {
         false
     }
+
+    func checkDomainAssociation() async throws -> DomainAssociation {
+        .skipped(reason: "Fido2PrfProvider does not verify domain association")
+    }
 }
 
 // MARK: - Provider factory
 
-func createPrfProvider(type: PasskeyProviderType, dataDir: String) throws -> PasskeyPrfProvider {
+func createPrfProvider(type: PasskeyProviderType, dataDir: String, rpId: String? = nil) throws -> PrfProvider {
     switch type {
+    case .platform:
+        if #available(iOS 18.0, macOS 15.0, *) {
+            return PasskeyProvider(
+                rpId: rpId ?? "keys.breez.technology",
+                rpName: "Breez SDK"
+            )
+        } else {
+            throw PasskeyPrfError.Generic(
+                "Platform passkey PRF requires iOS 18.0+ or macOS 15.0+"
+            )
+        }
     case .file:
         return try FilePrfProvider(dataDir: dataDir)
     case .yubikey:
@@ -135,7 +159,7 @@ func createPrfProvider(type: PasskeyProviderType, dataDir: String) throws -> Pas
 // MARK: - Passkey seed resolution
 
 func resolvePasskeySeed(
-    provider: PasskeyPrfProvider,
+    provider: PrfProvider,
     breezApiKey: String?,
     label: String?,
     listLabels: Bool,

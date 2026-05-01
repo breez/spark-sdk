@@ -291,15 +291,13 @@ fn check_doc_snippets_kotlin_multiplatform_cmd(skip_binding_gen: bool) -> Result
             );
         }
 
-        // `-PskipIosTargets` excludes the iOS targets from the module
-        // configuration so publishing the JVM publication doesn't pull in
-        // Konan downloads + iOS cinterop + iOS native compiles. SDK iOS
-        // compile coverage is provided by the cli-ci `kotlin-multiplatform-ios`
-        // job.
+        // Publish metadata + JVM + Android variants; iOS is excluded by
+        // `-PskipIosTargets` so this stays off the Konan + cinterop +
+        // iOS native compile path. SDK iOS compile coverage is provided
+        // by the cli-ci `kotlin-multiplatform-ios` job.
         let kotlin_multiplatform_dir = bindings_dir.join("langs/kotlin-multiplatform");
         let status = Command::new("./gradlew")
-            .arg("publishKotlinMultiplatformPublicationToMavenLocal")
-            .arg("publishJvmPublicationToMavenLocal")
+            .arg("publishToMavenLocal")
             .arg("-PlibraryVersion=0.0.0-local-docs")
             .arg("-PskipIosTargets")
             .current_dir(&kotlin_multiplatform_dir)
@@ -315,6 +313,8 @@ fn check_doc_snippets_kotlin_multiplatform_cmd(skip_binding_gen: bool) -> Result
     println!("Checking doc snippets Kotlin Multiplatform");
 
     let kotlin_snippets_dir = workspace_root.join("docs/breez-sdk/snippets/kotlin_mpp_lib");
+
+    // Compile JVM target (commonMain sources)
     let status = Command::new("./gradlew")
         .arg("compileKotlinJvm")
         .arg("-PskipIosTargets")
@@ -323,6 +323,19 @@ fn check_doc_snippets_kotlin_multiplatform_cmd(skip_binding_gen: bool) -> Result
     if !status.success() {
         anyhow::bail!(
             "Failed to compile Kotlin doc snippets in {:?}",
+            kotlin_snippets_dir
+        );
+    }
+
+    // Compile Android target (androidMain sources, including passkey snippets
+    // that use the built-in PasskeyProvider which requires android.app.Activity)
+    let status = Command::new("./gradlew")
+        .arg("compileReleaseKotlinAndroid")
+        .current_dir(&kotlin_snippets_dir)
+        .status()?;
+    if !status.success() {
+        anyhow::bail!(
+            "Failed to run './gradlew compileReleaseKotlinAndroid' in {:?}",
             kotlin_snippets_dir
         );
     }

@@ -76,10 +76,15 @@ kotlin {
 
         val androidMain by getting {
             dependsOn(commonMain)
+            kotlin.srcDir("../../shared/android-passkey/src/main/kotlin")
             dependencies {
                 implementation("net.java.dev.jna:jna:5.18.0@aar")
                 implementation("org.jetbrains.kotlinx:atomicfu:0.23.1")
                 implementation("androidx.annotation:annotation:1.7.1")
+                implementation("androidx.credentials:credentials:1.3.0")
+                implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+                // Required for Dispatchers.Main on Android
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
             }
         }
     }

@@ -102,7 +102,7 @@ jobs:
         with:
           name: kotlin-multiplatform-release.aar
           path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/build/outputs/aar/breez-sdk-spark-kmp-release.aar
-        
+
       - name: Publish artifacts
         if: ${{ inputs.publish }}
         working-directory: crates/breez-sdk/bindings/langs/kotlin-multiplatform

@@ -23,6 +23,11 @@
       "./nodejs": "./nodejs/index.js",
       "./web": "./web/index.js",
       "./ssr": "./ssr/index.js",
+      "./passkey-prf-provider": {
+        "types": "./web/passkey-prf-provider/index.d.ts",
+        "import": "./web/passkey-prf-provider/index.js",
+        "default": "./web/passkey-prf-provider/index.js"
+      },
       ".": {
         "node": {
           "import": "./nodejs/index.mjs",

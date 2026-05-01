@@ -10,10 +10,10 @@ import java.util.HashMap
 
 class BreezSdkSparkReactNativePackage : TurboReactPackage() {
   override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? {
-    return if (name == BreezSdkSparkReactNativeModule.NAME) {
-      BreezSdkSparkReactNativeModule(reactContext)
-    } else {
-      null
+    return when (name) {
+      BreezSdkSparkReactNativeModule.NAME -> BreezSdkSparkReactNativeModule(reactContext)
+      BreezSdkSparkPasskeyModule.NAME -> BreezSdkSparkPasskeyModule(reactContext)
+      else -> null
     }
   }
 
@@ -27,6 +27,14 @@ class BreezSdkSparkReactNativePackage : TurboReactPackage() {
         false,  // needsEagerInit
         false,  // isCxxModule
         true // isTurboModule
+      )
+      moduleInfos[BreezSdkSparkPasskeyModule.NAME] = ReactModuleInfo(
+        BreezSdkSparkPasskeyModule.NAME,
+        BreezSdkSparkPasskeyModule.NAME,
+        false,  // canOverrideExistingModule
+        false,  // needsEagerInit
+        false,  // isCxxModule
+        false // isTurboModule (standard native module)
       )
       moduleInfos
     }

@@ -19,17 +19,20 @@
 //!
 //! # Platform Implementation
 //!
-//! Platforms must implement the [`PasskeyPrfProvider`] trait to provide passkey
-//! PRF functionality. The SDK orchestrates the flow, while platforms handle the
-//! actual passkey authentication.
+//! Platforms must implement the [`PrfProvider`] trait to derive wallet seeds.
+//! The built-in `PasskeyProvider` on each platform satisfies this contract
+//! by authenticating with a platform passkey; custom CLI providers (`YubiKey`,
+//! FIDO2, file-backed) implement the same trait for deterministic derivation
+//! from other sources. The SDK orchestrates the flow, while implementations
+//! handle the actual derivation.
 //!
 //! # Example
 //!
 //! ```ignore
 //! use breez_sdk_spark::passkey::{Passkey, NostrRelayConfig};
 //!
-//! // Platform provides a PasskeyPrfProvider implementation
-//! let prf_provider = Arc::new(MyPasskeyPrfProvider::new());
+//! // Platform provides a PrfProvider implementation
+//! let prf_provider = Arc::new(MyPrfProvider::new());
 //!
 //! let passkey = Passkey::new(prf_provider, None);
 //!
@@ -53,7 +56,7 @@ pub use derivation::ACCOUNT_MASTER_SALT;
 use derivation::prf_to_mnemonic;
 pub use error::{PasskeyError, PasskeyPrfError};
 pub use models::{NostrRelayConfig, Wallet};
-pub use passkey_prf_provider::PasskeyPrfProvider;
+pub use passkey_prf_provider::{DomainAssociation, PrfProvider};
 
 use std::sync::Arc;
 
@@ -96,7 +99,7 @@ fn validate_label(label: &str) -> Result<(), PasskeyError> {
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct Passkey {
-    prf_provider: Arc<dyn PasskeyPrfProvider>,
+    prf_provider: Arc<dyn PrfProvider>,
     nostr_client: NostrSaltClient,
     /// Cached Nostr identity derived from the passkey's magic salt.
     /// Populated on first use, avoiding repeated PRF calls for Nostr operations.
@@ -130,10 +133,7 @@ impl Passkey {
     /// * `prf_provider` - Platform implementation of passkey PRF operations
     /// * `relay_config` - Optional configuration for Nostr relay connections (uses default if None)
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(
-        prf_provider: Arc<dyn PasskeyPrfProvider>,
-        relay_config: Option<NostrRelayConfig>,
-    ) -> Self {
+    pub fn new(prf_provider: Arc<dyn PrfProvider>, relay_config: Option<NostrRelayConfig>) -> Self {
         Self {
             prf_provider,
             nostr_client: NostrSaltClient::new(relay_config.unwrap_or_default()),
@@ -193,7 +193,7 @@ impl Passkey {
 
     /// Check if passkey PRF is available on this device.
     ///
-    /// Delegates to the platform's `PasskeyPrfProvider` implementation.
+    /// Delegates to the platform's `PrfProvider` implementation.
     pub async fn is_available(&self) -> Result<bool, PasskeyError> {
         self.prf_provider
             .is_prf_available()
@@ -212,19 +212,19 @@ mod tests {
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    // Mock implementation of PasskeyPrfProvider for testing
-    struct MockPasskeyPrfProvider {
+    // Mock implementation of PrfProvider for testing
+    struct MockPrfProvider {
         seed: [u8; 32],
     }
 
-    impl MockPasskeyPrfProvider {
+    impl MockPrfProvider {
         fn new(seed: [u8; 32]) -> Self {
             Self { seed }
         }
     }
 
     #[macros::async_trait]
-    impl PasskeyPrfProvider for MockPasskeyPrfProvider {
+    impl PrfProvider for MockPrfProvider {
         async fn derive_prf_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
             Ok(self.seed.to_vec())
         }
@@ -250,7 +250,7 @@ mod tests {
     }
 
     #[macros::async_trait]
-    impl PasskeyPrfProvider for SaltAwareMockProvider {
+    impl PrfProvider for SaltAwareMockProvider {
         async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
             let mut outputs = self.salt_outputs.lock().unwrap();
             if let Some(output) = outputs.get(&salt) {
@@ -279,18 +279,18 @@ mod tests {
     }
 
     // Mock that always fails - for testing error propagation
-    struct FailingPasskeyPrfProvider {
+    struct FailingPrfProvider {
         error: PasskeyPrfError,
     }
 
-    impl FailingPasskeyPrfProvider {
+    impl FailingPrfProvider {
         fn new(error: PasskeyPrfError) -> Self {
             Self { error }
         }
     }
 
     #[macros::async_trait]
-    impl PasskeyPrfProvider for FailingPasskeyPrfProvider {
+    impl PrfProvider for FailingPrfProvider {
         async fn derive_prf_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
             Err(self.error.clone())
         }
@@ -304,7 +304,7 @@ mod tests {
     struct UnavailablePrfProvider;
 
     #[macros::async_trait]
-    impl PasskeyPrfProvider for UnavailablePrfProvider {
+    impl PrfProvider for UnavailablePrfProvider {
         async fn derive_prf_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
             Err(PasskeyPrfError::PrfNotSupported)
         }
@@ -316,7 +316,7 @@ mod tests {
 
     #[macros::test_all]
     fn test_passkey_new() {
-        let prf_provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
+        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
         let config = NostrRelayConfig::default();
 
         let _passkey = Passkey::new(prf_provider, Some(config));
@@ -324,7 +324,7 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_is_available() {
-        let prf_provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
+        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
         let available = passkey.is_available().await.unwrap();
@@ -342,7 +342,7 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_is_available_error() {
-        let prf_provider = Arc::new(FailingPasskeyPrfProvider::new(
+        let prf_provider = Arc::new(FailingPrfProvider::new(
             PasskeyPrfError::AuthenticationFailed("Test error".to_string()),
         ));
         let passkey = Passkey::new(prf_provider, None);
@@ -365,8 +365,8 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_get_wallet_deterministic() {
-        let prf_provider1 = Arc::new(MockPasskeyPrfProvider::new([42u8; 32]));
-        let prf_provider2 = Arc::new(MockPasskeyPrfProvider::new([42u8; 32]));
+        let prf_provider1 = Arc::new(MockPrfProvider::new([42u8; 32]));
+        let prf_provider2 = Arc::new(MockPrfProvider::new([42u8; 32]));
 
         let passkey1 = Passkey::new(prf_provider1, None);
         let passkey2 = Passkey::new(prf_provider2, None);
@@ -381,8 +381,8 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_get_wallet_different_providers() {
-        let prf_provider1 = Arc::new(MockPasskeyPrfProvider::new([1u8; 32]));
-        let prf_provider2 = Arc::new(MockPasskeyPrfProvider::new([2u8; 32]));
+        let prf_provider1 = Arc::new(MockPrfProvider::new([1u8; 32]));
+        let prf_provider2 = Arc::new(MockPrfProvider::new([2u8; 32]));
 
         let passkey1 = Passkey::new(prf_provider1, None);
         let passkey2 = Passkey::new(prf_provider2, None);
@@ -397,7 +397,7 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_get_wallet_produces_12_words() {
-        let prf_provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
+        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
         let mnemonic = unwrap_mnemonic(passkey.get_wallet(Some("test".to_string())).await.unwrap());
@@ -408,7 +408,7 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_get_wallet_default_label() {
-        let prf_provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
+        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
         // None label should default to "Default" and not error
@@ -418,7 +418,7 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_get_wallet_custom_label() {
-        let prf_provider = Arc::new(MockPasskeyPrfProvider::new([0u8; 32]));
+        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
         let wallet = passkey
@@ -430,9 +430,7 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_get_wallet_error_propagation() {
-        let prf_provider = Arc::new(FailingPasskeyPrfProvider::new(
-            PasskeyPrfError::UserCancelled,
-        ));
+        let prf_provider = Arc::new(FailingPrfProvider::new(PasskeyPrfError::UserCancelled));
         let passkey = Passkey::new(prf_provider, None);
 
         let result = passkey.get_wallet(Some("test".to_string())).await;
@@ -506,8 +504,8 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_derive_nostr_identity_deterministic() {
-        let prf_provider1 = Arc::new(MockPasskeyPrfProvider::new([99u8; 32]));
-        let prf_provider2 = Arc::new(MockPasskeyPrfProvider::new([99u8; 32]));
+        let prf_provider1 = Arc::new(MockPrfProvider::new([99u8; 32]));
+        let prf_provider2 = Arc::new(MockPrfProvider::new([99u8; 32]));
 
         let passkey1 = Passkey::new(prf_provider1, None);
         let passkey2 = Passkey::new(prf_provider2, None);
@@ -524,8 +522,8 @@ mod tests {
 
     #[macros::async_test_all]
     async fn test_derive_nostr_identity_different_providers() {
-        let prf_provider1 = Arc::new(MockPasskeyPrfProvider::new([1u8; 32]));
-        let prf_provider2 = Arc::new(MockPasskeyPrfProvider::new([2u8; 32]));
+        let prf_provider1 = Arc::new(MockPrfProvider::new([1u8; 32]));
+        let prf_provider2 = Arc::new(MockPrfProvider::new([2u8; 32]));
 
         let passkey1 = Passkey::new(prf_provider1, None);
         let passkey2 = Passkey::new(prf_provider2, None);

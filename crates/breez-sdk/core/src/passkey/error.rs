@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// Error type for passkey PRF operations.
-/// Platforms implement `PasskeyPrfProvider` and return this error type.
+/// Platforms implement `PrfProvider` and return this error type.
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum PasskeyPrfError {
@@ -24,6 +24,20 @@ pub enum PasskeyPrfError {
     /// PRF evaluation failed
     #[error("PRF evaluation failed: {0}")]
     PrfEvaluationFailed(String),
+
+    /// Platform or app configuration error (e.g. missing AASA entitlement,
+    /// invalid assetlinks.json, misconfigured RP ID).
+    #[error("Configuration error: {0}")]
+    Configuration(String),
+
+    /// Credential registration was refused because a credential already
+    /// exists on the authenticator that matches one of the IDs the
+    /// caller passed in `excludeCredentialIds`. Surfaces the platform's
+    /// duplicate-prevention check as a typed error so callers can
+    /// route the user to the sign-in path instead of treating it as
+    /// a generic authentication failure.
+    #[error("Credential already exists: {0}")]
+    CredentialAlreadyExists(String),
 
     /// Generic error
     #[error("Passkey error: {0}")]

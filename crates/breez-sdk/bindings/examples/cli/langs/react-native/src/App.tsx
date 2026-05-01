@@ -2,15 +2,14 @@
  * Breez SDK CLI - React Native Terminal App
  *
  * A terminal/REPL-like UI that mirrors the same command structure as the Rust CLI.
- * The screen has a scrollable output area at the top and a text input at the bottom.
- *
- * Supports passkey-based seed derivation (matching the Rust CLI's --passkey flag)
- * as well as traditional mnemonic-based seed.
+ * Shows a setup screen on launch to select network, seed method, and passkey provider.
+ * Then presents a scrollable output area at the top and a text input at the bottom.
  */
 
 import 'react-native-get-random-values'
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
+  Alert,
   SafeAreaView,
   ScrollView,
   TextInput,
@@ -19,7 +18,9 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
+  Share,
   StatusBar,
+  TouchableOpacity,
 } from 'react-native'
 import {
   defaultConfig,
@@ -45,31 +46,235 @@ import {
   resolvePasskeySeed,
 } from './passkey'
 
+/** Base data directory. Network-specific subdirs are created below. */
+const BASE_DATA_DIR = `${RNFS.DocumentDirectoryPath}/breez-cli-data`
+
+/** Get a network-specific data directory to avoid storage conflicts. */
+function getDataDir(network: Network): string {
+  const suffix = network === Network.Mainnet ? 'mainnet' : 'regtest'
+  return `${BASE_DATA_DIR}/${suffix}`
+}
+
 // ---------------------------------------------------------------------------
-// Configuration
+// Setup Screen
 // ---------------------------------------------------------------------------
 
-/** Default network for the CLI app. Change to Network.Mainnet for production. */
-const DEFAULT_NETWORK = Network.Regtest as Network
-
-/** Data directory for the SDK. Uses the app's document directory. */
-const DATA_DIR = `${RNFS.DocumentDirectoryPath}/breez-cli-data`
+interface SetupConfig {
+  network: Network
+  passkeyConfig: PasskeyConfig | undefined
+  /** If provided, use this mnemonic instead of generating/loading one. */
+  restoreMnemonic: string | undefined
+}
 
 /**
- * Passkey configuration. Set to undefined for mnemonic-based seed (default).
- *
- * To enable passkey support, set this to a PasskeyConfig object. Example:
- *
- *   const PASSKEY_CONFIG: PasskeyConfig = {
- *     provider: PasskeyProvider.File,
- *     label: 'personal',
- *     listLabels: false,
- *     storeLabel: false,
- *   }
- *
- * In a production app, these would come from a settings screen or launch config.
+ * Read the Breez API key from a local secrets file.
+ * Create `secrets.json` in the project root with: { "apiKey": "your-key" }
+ * This file is gitignored.
  */
-const PASSKEY_CONFIG = undefined as PasskeyConfig | undefined
+let _cachedApiKey: string | undefined
+function getApiKey(): string | undefined {
+  if (_cachedApiKey !== undefined) return _cachedApiKey || undefined
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const secrets = require('../secrets.json')
+    _cachedApiKey = secrets.apiKey ?? ''
+    return _cachedApiKey || undefined
+  } catch {
+    _cachedApiKey = ''
+    return undefined
+  }
+}
+
+interface SetupScreenProps {
+  onStart: (config: SetupConfig) => void
+}
+
+const SetupScreen: React.FC<SetupScreenProps> = ({ onStart }) => {
+  const [network, setNetwork] = useState<Network>(Network.Regtest as Network)
+  const [seedMethod, setSeedMethod] = useState<'mnemonic' | 'passkey'>('mnemonic')
+  const [mnemonicMode, setMnemonicMode] = useState<'new' | 'restore'>('new')
+  const [mnemonicInput, setMnemonicInput] = useState('')
+  const [passkeyProvider, setPasskeyProvider] = useState<PasskeyProvider>(PasskeyProvider.File)
+
+  const handleStart = () => {
+    const restoreMnemonic = seedMethod === 'mnemonic' && mnemonicMode === 'restore'
+      ? mnemonicInput.trim()
+      : undefined
+    if (restoreMnemonic && restoreMnemonic.split(/\s+/).length !== 12) {
+      Alert.alert('Invalid Mnemonic', 'Please enter a valid 12-word recovery phrase.')
+      return
+    }
+    onStart({
+      network,
+      passkeyConfig: seedMethod === 'passkey' ? {
+        provider: passkeyProvider,
+        label: 'Default',
+        listLabels: false,
+        storeLabel: false,
+      } : undefined,
+      restoreMnemonic,
+    })
+  }
+
+  const handleShowDataInfo = async () => {
+    try {
+      const exists = await RNFS.exists(BASE_DATA_DIR)
+      if (!exists) {
+        Alert.alert('No Data', 'No CLI data directory found.')
+        return
+      }
+      const items = await RNFS.readDir(BASE_DATA_DIR)
+      const info = items.map(i => `${i.name} (${i.isDirectory() ? 'dir' : `${i.size}B`})`).join('\n')
+      Alert.alert('CLI Data', `${BASE_DATA_DIR}\n\n${info}`)
+    } catch (e) {
+      Alert.alert('Error', String(e))
+    }
+  }
+
+  const handleClearData = () => {
+    Alert.alert(
+      'Clear All Data',
+      'This will delete all SDK storage, mnemonics, and passkey secrets for all networks. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear Everything',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const exists = await RNFS.exists(BASE_DATA_DIR)
+              if (exists) {
+                await RNFS.unlink(BASE_DATA_DIR)
+              }
+              Alert.alert('Done', 'All CLI data cleared.')
+            } catch (e) {
+              Alert.alert('Error', String(e))
+            }
+          },
+        },
+      ],
+    )
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#1a1a2e" />
+      <View style={styles.setupContainer}>
+        <Text style={styles.setupTitle}>Breez SDK CLI</Text>
+        <Text style={styles.setupSubtitle}>React Native</Text>
+
+        {/* Network */}
+        <Text style={styles.sectionLabel}>Network</Text>
+        <View style={styles.buttonRow}>
+          {([Network.Regtest, Network.Mainnet] as Network[]).map(n => (
+            <TouchableOpacity
+              key={String(n)}
+              style={[styles.optionButton, network === n && styles.optionButtonActive]}
+              onPress={() => setNetwork(n)}
+            >
+              <Text style={[styles.optionText, network === n && styles.optionTextActive]}>
+                {n === Network.Mainnet ? 'Mainnet' : 'Regtest'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Seed Method */}
+        <Text style={styles.sectionLabel}>Seed Method</Text>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[styles.optionButton, seedMethod === 'mnemonic' && styles.optionButtonActive]}
+            onPress={() => setSeedMethod('mnemonic')}
+          >
+            <Text style={[styles.optionText, seedMethod === 'mnemonic' && styles.optionTextActive]}>Mnemonic</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.optionButton, seedMethod === 'passkey' && styles.optionButtonActive]}
+            onPress={() => setSeedMethod('passkey')}
+          >
+            <Text style={[styles.optionText, seedMethod === 'passkey' && styles.optionTextActive]}>Passkey</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Mnemonic Mode (only when mnemonic selected) */}
+        {seedMethod === 'mnemonic' && (
+          <>
+            <Text style={styles.sectionLabel}>Wallet</Text>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity
+                style={[styles.optionButton, mnemonicMode === 'new' && styles.optionButtonActive]}
+                onPress={() => setMnemonicMode('new')}
+              >
+                <Text style={[styles.optionText, mnemonicMode === 'new' && styles.optionTextActive]}>New Wallet</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.optionButton, mnemonicMode === 'restore' && styles.optionButtonActive]}
+                onPress={() => setMnemonicMode('restore')}
+              >
+                <Text style={[styles.optionText, mnemonicMode === 'restore' && styles.optionTextActive]}>Restore</Text>
+              </TouchableOpacity>
+            </View>
+            {mnemonicMode === 'restore' && (
+              <TextInput
+                style={styles.mnemonicInput}
+                value={mnemonicInput}
+                onChangeText={setMnemonicInput}
+                placeholder="Enter 12-word recovery phrase..."
+                placeholderTextColor="#555"
+                multiline
+                numberOfLines={3}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            )}
+          </>
+        )}
+
+        {/* Passkey Provider */}
+        {seedMethod === 'passkey' && (
+          <>
+            <Text style={styles.sectionLabel}>Passkey Provider</Text>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity
+                style={[styles.optionButton, passkeyProvider === PasskeyProvider.Platform && styles.optionButtonActive]}
+                onPress={() => setPasskeyProvider(PasskeyProvider.Platform)}
+              >
+                <Text style={[styles.optionText, passkeyProvider === PasskeyProvider.Platform && styles.optionTextActive]}>Platform</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.optionButton, passkeyProvider === PasskeyProvider.File && styles.optionButtonActive]}
+                onPress={() => setPasskeyProvider(PasskeyProvider.File)}
+              >
+                <Text style={[styles.optionText, passkeyProvider === PasskeyProvider.File && styles.optionTextActive]}>File</Text>
+              </TouchableOpacity>
+            </View>
+            {passkeyProvider === PasskeyProvider.Platform && (
+              <Text style={styles.hint}>
+                Requires RP domain registration.{'\n'}
+                Android 9+ with Google Play Services.
+              </Text>
+            )}
+          </>
+        )}
+
+        {/* Start */}
+        <TouchableOpacity style={styles.startButton} onPress={handleStart}>
+          <Text style={styles.startButtonText}>START</Text>
+        </TouchableOpacity>
+
+        {/* Footer: Share Logs & Clear Data */}
+        <View style={styles.setupFooter}>
+          <TouchableOpacity style={styles.footerButton} onPress={handleShowDataInfo}>
+            <Text style={styles.footerButtonText}>Data Info</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.footerButton} onPress={handleClearData}>
+            <Text style={[styles.footerButtonText, { color: '#e94560' }]}>Clear Data</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </SafeAreaView>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Event Listener
@@ -108,10 +313,16 @@ class CliEventListener {
 }
 
 // ---------------------------------------------------------------------------
-// App Component
+// CLI Screen
 // ---------------------------------------------------------------------------
 
-const App: React.FC = () => {
+interface CliScreenProps {
+  config: SetupConfig
+  onDisconnect: () => void
+}
+
+const CliScreen: React.FC<CliScreenProps> = ({ config, onDisconnect }) => {
+  const dataDir = getDataDir(config.network)
   const [logs, setLogs] = useState<string[]>([])
   const [inputText, setInputText] = useState('')
   const [isInitializing, setIsInitializing] = useState(true)
@@ -120,14 +331,37 @@ const App: React.FC = () => {
   const sdkRef = useRef<BreezSdkInterface | null>(null)
   const tokenIssuerRef = useRef<TokenIssuerInterface | null>(null)
   const registryRef = useRef(buildCommandRegistry())
-  const persistenceRef = useRef(new CliPersistence(DATA_DIR))
+  const persistenceRef = useRef(new CliPersistence(dataDir))
   const scrollViewRef = useRef<ScrollView>(null)
   const commandHistoryRef = useRef<string[]>([])
 
-  // Append a log line and auto-scroll
   const appendLog = useCallback((text: string) => {
     setLogs(prev => [...prev, text])
   }, [])
+
+  const handleShareLogs = useCallback(async () => {
+    try {
+      await Share.share({
+        title: 'Breez SDK CLI Session Logs',
+        message: logs.join('\n'),
+      })
+    } catch {
+      // User cancelled share
+    }
+  }, [logs])
+
+  const disconnectAndGoBack = useCallback(async () => {
+    if (sdkRef.current) {
+      try {
+        await sdkRef.current.disconnect()
+      } catch {
+        // Ignore disconnect errors
+      }
+      sdkRef.current = null
+      tokenIssuerRef.current = null
+    }
+    onDisconnect()
+  }, [onDisconnect])
 
   // Initialize the SDK on mount
   useEffect(() => {
@@ -139,27 +373,29 @@ const App: React.FC = () => {
         appendLog('Initializing SDK...')
 
         const persistence = persistenceRef.current
-
-        const config = defaultConfig(DEFAULT_NETWORK)
-        // API key can be set via environment or hardcoded for testing
-        // config.apiKey = '<your-api-key>'
+        const sdkConfig = defaultConfig(config.network)
+        const apiKey = getApiKey()
+        if (apiKey) {
+          sdkConfig.apiKey = apiKey
+          appendLog('API key loaded from secrets.json')
+        } else if (config.network === Network.Mainnet) {
+          appendLog('Warning: No API key found. Create secrets.json with { "apiKey": "..." }')
+        }
 
         let seed: Seed
 
-        if (PASSKEY_CONFIG) {
-          appendLog(`Using passkey provider: ${PASSKEY_CONFIG.provider}`)
+        if (config.passkeyConfig) {
+          appendLog(`Using passkey provider: ${config.passkeyConfig.provider}`)
 
-          const prfProvider = await buildPrfProvider(PASSKEY_CONFIG.provider, DATA_DIR)
-
-          // Retrieve the Breez API key if set
-          const breezApiKey = config.apiKey ?? undefined
+          const prfProvider = await buildPrfProvider(config.passkeyConfig.provider, dataDir)
+          const breezApiKey = sdkConfig.apiKey ?? undefined
 
           const result = await resolvePasskeySeed(
             prfProvider,
             breezApiKey,
-            PASSKEY_CONFIG.label,
-            PASSKEY_CONFIG.listLabels,
-            PASSKEY_CONFIG.storeLabel,
+            config.passkeyConfig.label,
+            config.passkeyConfig.listLabels,
+            config.passkeyConfig.storeLabel,
           )
 
           if (result.labels && result.labels.length > 0) {
@@ -169,24 +405,22 @@ const App: React.FC = () => {
             }
           }
 
-          if (PASSKEY_CONFIG.storeLabel && PASSKEY_CONFIG.label) {
-            appendLog(`Label '${PASSKEY_CONFIG.label}' published to Nostr`)
-          }
-
           seed = result.seed
           appendLog('Passkey seed derived successfully')
+        } else if (config.restoreMnemonic) {
+          appendLog('Restoring from provided mnemonic')
+          seed = new Seed.Mnemonic({ mnemonic: config.restoreMnemonic, passphrase: undefined })
         } else {
           const mnemonic = await persistence.getOrCreateMnemonic()
           seed = new Seed.Mnemonic({ mnemonic, passphrase: undefined })
         }
 
-        const builder = new SdkBuilder(config, seed)
-        await builder.withDefaultStorage(DATA_DIR)
+        const builder = new SdkBuilder(sdkConfig, seed)
+        await builder.withDefaultStorage(dataDir)
 
         const sdk = await builder.build()
         const tokenIssuer = sdk.getTokenIssuer()
 
-        // Add event listener
         const listener = new CliEventListener(appendLog)
         await sdk.addEventListener(listener)
 
@@ -194,20 +428,23 @@ const App: React.FC = () => {
           sdkRef.current = sdk
           tokenIssuerRef.current = tokenIssuer
 
-          const networkLabel = DEFAULT_NETWORK === Network.Mainnet ? 'mainnet' : 'regtest'
+          const networkLabel = config.network === Network.Mainnet ? 'mainnet' : 'regtest'
           appendLog(`SDK initialized on ${networkLabel}`)
-          appendLog("Type 'help' for available commands or 'exit' to quit")
+          appendLog(`Data dir: ${dataDir}`)
+          appendLog("Type 'help' for available commands.")
+          appendLog("Use the \u2190 button in the header to disconnect and go back.")
           appendLog('')
           setIsInitializing(false)
         }
 
-        // Load command history
         const history = await persistence.getHistory()
         commandHistoryRef.current = history
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error)
         if (mounted) {
           appendLog(`SDK initialization failed: ${message}`)
+          appendLog('')
+          appendLog('Tap the \u2190 button to go back and try again.')
           setIsInitializing(false)
         }
       }
@@ -217,16 +454,12 @@ const App: React.FC = () => {
 
     return () => {
       mounted = false
-      // Disconnect on unmount
       if (sdkRef.current) {
-        sdkRef.current.disconnect().catch(() => {
-          // Ignore disconnect errors on cleanup
-        })
+        sdkRef.current.disconnect().catch(() => {})
       }
     }
-  }, [appendLog])
+  }, [appendLog, config, dataDir])
 
-  // Auto-scroll to bottom when logs change
   useEffect(() => {
     const timer = setTimeout(() => {
       scrollViewRef.current?.scrollToEnd({ animated: true })
@@ -234,7 +467,6 @@ const App: React.FC = () => {
     return () => clearTimeout(timer)
   }, [logs])
 
-  // Handle command submission
   const handleSubmit = useCallback(async () => {
     const trimmed = inputText.trim()
     if (trimmed === '' || isProcessing) return
@@ -244,14 +476,18 @@ const App: React.FC = () => {
     const registry = registryRef.current
     const persistence = persistenceRef.current
 
-    const networkLabel = DEFAULT_NETWORK === Network.Mainnet ? 'mainnet' : 'regtest'
+    const networkLabel = config.network === Network.Mainnet ? 'mainnet' : 'regtest'
     appendLog(`breez-spark-cli [${networkLabel}]> ${trimmed}`)
     setInputText('')
-    // Save to history
     commandHistoryRef.current.push(trimmed)
-    persistence.addToHistory(trimmed).catch(() => {
-      // Ignore history save errors
-    })
+    persistence.addToHistory(trimmed).catch(() => {})
+
+    // Handle 'exit' / 'quit' locally — disconnect and go back
+    if (trimmed === 'exit' || trimmed === 'quit') {
+      appendLog('Disconnecting...')
+      await disconnectAndGoBack()
+      return
+    }
 
     if (!sdk || !tokenIssuer) {
       appendLog('Error: SDK not initialized')
@@ -273,14 +509,7 @@ const App: React.FC = () => {
       }
 
       if (!shouldContinue) {
-        try {
-          await sdk.disconnect()
-        } catch {
-          // Ignore disconnect errors
-        }
-        sdkRef.current = null
-        tokenIssuerRef.current = null
-        appendLog('SDK disconnected.')
+        await disconnectAndGoBack()
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
@@ -288,10 +517,9 @@ const App: React.FC = () => {
     } finally {
       setIsProcessing(false)
     }
-  }, [inputText, isProcessing, appendLog])
+  }, [inputText, isProcessing, appendLog, config, disconnectAndGoBack])
 
-  // Get the prompt prefix
-  const networkLabel = DEFAULT_NETWORK === Network.Mainnet ? 'mainnet' : 'regtest'
+  const networkLabel = config.network === Network.Mainnet ? 'mainnet' : 'regtest'
   const prompt = isInitializing
     ? 'initializing...'
     : isProcessing
@@ -306,12 +534,20 @@ const App: React.FC = () => {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
       >
-        {/* Header */}
+        {/* Header with back button and share */}
         <View style={styles.header}>
-          <Text style={styles.headerText}>Breez SDK CLI</Text>
-          <Text style={styles.headerSubtext}>
-            {isInitializing ? 'Initializing...' : `Connected (${networkLabel})`}
-          </Text>
+          <TouchableOpacity onPress={disconnectAndGoBack} style={styles.backButton}>
+            <Text style={styles.backButtonText}>{'\u2190'}</Text>
+          </TouchableOpacity>
+          <View style={styles.headerTextContainer}>
+            <Text style={styles.headerText}>Breez SDK CLI</Text>
+            <Text style={styles.headerSubtext}>
+              {isInitializing ? 'Initializing...' : `Connected (${networkLabel})`}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={handleShareLogs} style={styles.shareButton}>
+            <Text style={styles.shareButtonText}>Share</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Output Log */}
@@ -351,6 +587,20 @@ const App: React.FC = () => {
 }
 
 // ---------------------------------------------------------------------------
+// Root App
+// ---------------------------------------------------------------------------
+
+const App: React.FC = () => {
+  const [config, setConfig] = useState<SetupConfig | null>(null)
+
+  if (!config) {
+    return <SetupScreen onStart={setConfig} />
+  }
+
+  return <CliScreen config={config} onDisconnect={() => setConfig(null)} />
+}
+
+// ---------------------------------------------------------------------------
 // Styles
 // ---------------------------------------------------------------------------
 
@@ -362,12 +612,140 @@ const styles = StyleSheet.create({
   keyboardView: {
     flex: 1,
   },
+  // Setup screen
+  setupContainer: {
+    flex: 1,
+    paddingHorizontal: 32,
+    paddingTop: 60,
+  },
+  setupTitle: {
+    color: '#e94560',
+    fontSize: 28,
+    fontWeight: 'bold',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    textAlign: 'center',
+  },
+  setupSubtitle: {
+    color: '#53af7b',
+    fontSize: 14,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    textAlign: 'center',
+    marginBottom: 40,
+  },
+  sectionLabel: {
+    color: '#888',
+    fontSize: 12,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginTop: 24,
+    marginBottom: 8,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  optionButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+    alignItems: 'center',
+  },
+  optionButtonActive: {
+    borderColor: '#e94560',
+    backgroundColor: 'rgba(233, 69, 96, 0.15)',
+  },
+  optionText: {
+    color: '#666',
+    fontSize: 14,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontWeight: '600',
+  },
+  optionTextActive: {
+    color: '#e94560',
+  },
+  hint: {
+    color: '#666',
+    fontSize: 11,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginTop: 8,
+    lineHeight: 16,
+  },
+  mnemonicInput: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#333',
+    borderRadius: 8,
+    padding: 12,
+    color: '#fff',
+    fontSize: 13,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    minHeight: 70,
+    textAlignVertical: 'top',
+  },
+  startButton: {
+    marginTop: 40,
+    paddingVertical: 16,
+    borderRadius: 8,
+    backgroundColor: '#e94560',
+    alignItems: 'center',
+  },
+  startButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    letterSpacing: 2,
+  },
+  setupFooter: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 24,
+    marginTop: 32,
+    paddingBottom: 16,
+  },
+  footerButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+  footerButtonText: {
+    color: '#888',
+    fontSize: 13,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    textDecorationLine: 'underline',
+  },
+  // CLI screen
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
     backgroundColor: '#16213e',
     borderBottomWidth: 1,
     borderBottomColor: '#0f3460',
+  },
+  backButton: {
+    paddingRight: 12,
+    paddingVertical: 4,
+  },
+  backButtonText: {
+    color: '#e94560',
+    fontSize: 22,
+    fontWeight: 'bold',
+  },
+  headerTextContainer: {
+    flex: 1,
+  },
+  shareButton: {
+    paddingLeft: 12,
+    paddingVertical: 4,
+  },
+  shareButtonText: {
+    color: '#53af7b',
+    fontSize: 13,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   headerText: {
     color: '#e94560',

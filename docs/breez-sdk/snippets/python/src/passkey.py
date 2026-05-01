@@ -2,7 +2,7 @@
 from breez_sdk_spark import (
     ConnectRequest,
     NostrRelayConfig,
-    PasskeyPrfProvider,
+    PrfProvider,
     Passkey,
     connect,
     default_config,
@@ -11,8 +11,9 @@ from breez_sdk_spark import (
 
 
 # ANCHOR: implement-prf-provider
-# In practice, implement using platform-specific passkey APIs.
-class ExamplePasskeyPrfProvider(PasskeyPrfProvider):
+# Implement using platform-specific passkey APIs if the SDK does not
+# ship a built-in provider for your target.
+class CustomPrfProvider(PrfProvider):
     async def derive_prf_seed(self, salt: str):
         # Call platform passkey API with PRF extension
         # Returns 32-byte PRF output
@@ -24,9 +25,20 @@ class ExamplePasskeyPrfProvider(PasskeyPrfProvider):
 # ANCHOR_END: implement-prf-provider
 
 
+async def check_availability():
+    # ANCHOR: check-availability
+    prf_provider = CustomPrfProvider()
+
+    if await prf_provider.is_prf_available():
+        pass  # Show passkey as primary option
+    else:
+        pass  # Fall back to mnemonic flow
+    # ANCHOR_END: check-availability
+
+
 async def connect_with_passkey():
     # ANCHOR: connect-with-passkey
-    prf_provider = ExamplePasskeyPrfProvider()
+    prf_provider = CustomPrfProvider()
     passkey = Passkey(prf_provider, None)
 
     # Derive the wallet from the passkey (pass None for the default wallet)
@@ -40,7 +52,7 @@ async def connect_with_passkey():
 
 async def list_labels() -> list[str]:
     # ANCHOR: list-labels
-    prf_provider = ExamplePasskeyPrfProvider()
+    prf_provider = CustomPrfProvider()
     relay_config = NostrRelayConfig(breez_api_key="<breez api key>")
     passkey = Passkey(prf_provider, relay_config)
 
@@ -55,7 +67,7 @@ async def list_labels() -> list[str]:
 
 async def store_label():
     # ANCHOR: store-label
-    prf_provider = ExamplePasskeyPrfProvider()
+    prf_provider = CustomPrfProvider()
     relay_config = NostrRelayConfig(breez_api_key="<breez api key>")
     passkey = Passkey(prf_provider, relay_config)
 

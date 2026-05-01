@@ -52,7 +52,7 @@ func parsePasskeyProvider(s string) (PasskeyProvider, error) {
 
 const secretFileName = "seedless-restore-secret"
 
-// FilePrfProvider implements breez_sdk_spark.PasskeyPrfProvider using
+// FilePrfProvider implements breez_sdk_spark.PrfProvider using
 // HMAC-SHA256 with a secret stored in a file.
 type FilePrfProvider struct {
 	secret [32]byte
@@ -102,6 +102,12 @@ func (f *FilePrfProvider) IsPrfAvailable() (bool, error) {
 	return true, nil
 }
 
+func (f *FilePrfProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAssociation, error) {
+	return breez_sdk_spark.DomainAssociationSkipped{
+		Reason: "FilePrfProvider does not verify domain association",
+	}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Stub providers for hardware-dependent backends
 // ---------------------------------------------------------------------------
@@ -118,6 +124,12 @@ func (p *notYetSupportedProvider) IsPrfAvailable() (bool, error) {
 	return false, fmt.Errorf("%s passkey provider is not yet supported in the Go CLI", p.name)
 }
 
+func (p *notYetSupportedProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAssociation, error) {
+	return breez_sdk_spark.DomainAssociationSkipped{
+		Reason: fmt.Sprintf("%s does not verify domain association", p.name),
+	}, nil
+}
+
 // ---------------------------------------------------------------------------
 // Passkey seed resolution (orchestration)
 // ---------------------------------------------------------------------------
@@ -125,7 +137,7 @@ func (p *notYetSupportedProvider) IsPrfAvailable() (bool, error) {
 // resolvePasskeySeed derives a wallet seed using the given PRF provider,
 // matching the Rust CLI's resolve_passkey_seed logic.
 func resolvePasskeySeed(
-	provider breez_sdk_spark.PasskeyPrfProvider,
+	provider breez_sdk_spark.PrfProvider,
 	breezAPIKey *string,
 	label *string,
 	listLabels bool,
@@ -185,8 +197,8 @@ func resolvePasskeySeed(
 	return wallet.Seed, nil
 }
 
-// buildPrfProvider creates a PasskeyPrfProvider for the given provider type.
-func buildPrfProvider(provider PasskeyProvider, dataDir string) (breez_sdk_spark.PasskeyPrfProvider, error) {
+// buildPrfProvider creates a PrfProvider for the given provider type.
+func buildPrfProvider(provider PasskeyProvider, dataDir string) (breez_sdk_spark.PrfProvider, error) {
 	switch provider {
 	case PasskeyProviderFile:
 		return NewFilePrfProvider(dataDir)

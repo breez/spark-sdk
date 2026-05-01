@@ -3,6 +3,24 @@ name = "breez-sdk-spark-wasm"
 edition = "2024"
 version.workspace = true
 
+# Disable wasm-pack's post-build wasm-opt step. wasm-opt is distributed
+# via `binaryen` and wasm-pack downloads it on-demand from
+# https://github.com/WebAssembly/binaryen/releases — that endpoint
+# flakes on busy CI runners / rate-limited IPs and the download
+# failure hard-fails the whole wasm build with a confusing
+# "failed downloading" message.
+#
+# Trade-off: slightly larger .wasm outputs (wasm-opt typically
+# shaves 10-25%). The `--release` cargo profile still produces
+# LLVM-optimized wasm; wasm-opt is incremental peephole work.
+# Acceptable for a reference-app consumer profile.
+#
+# Re-enable once spark-sdk or consumers want the size win back;
+# requires pre-installing `binaryen` as a system package in CI
+# instead of relying on wasm-pack's runtime fetch.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
 [features]
 browser-tests = [] # Enable browser wasm-pack tests
 
