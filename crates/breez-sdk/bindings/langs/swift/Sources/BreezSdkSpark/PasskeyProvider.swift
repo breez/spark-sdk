@@ -577,8 +577,10 @@ public class PasskeyProvider: PrfProvider {
 
         // Configure dual-salt PRF: iOS 18+ supports two salt inputs
         // per assertion (saltInput1 + saltInput2), producing two PRF
-        // outputs in a single user prompt.
-        PasskeyPRFHelper.setAssertionPRFOnRequest(
+        // outputs in a single user prompt. Swift's ObjC bridge drops
+        // the `Request` suffix from the selector, so the call site
+        // uses the bridged name.
+        PasskeyPRFHelper.setAssertionPRFOn(
             assertionRequest,
             withSalt1: salt1Data,
             salt2: salt2Data
