@@ -183,6 +183,15 @@ pub struct SparkWallet {
     operator_pool: Arc<OperatorPool>,
     htlc_service: Arc<HtlcService>,
     leaf_optimizer: Arc<LeafOptimizer>,
+    /// One-shot, single-flight guard for `select_leaves_with_retry`'s call to
+    /// `refresh_leaves`. The cell's `get_or_init` blocks concurrent callers
+    /// during the in-flight refresh and short-circuits with a single atomic
+    /// load afterwards, so a startup payment burst triggers at most one
+    /// refresh and steady-state callers pay no synchronization cost. The
+    /// closure swallows refresh errors after logging, since "once per
+    /// lifetime" is what we want here regardless of outcome — subsequent
+    /// staleness is handled by the periodic + post-payment sync.
+    select_leaves_refresh: Arc<tokio::sync::OnceCell<()>>,
 }
 
 impl SparkWallet {
@@ -388,6 +397,7 @@ impl SparkWallet {
             operator_pool,
             htlc_service,
             leaf_optimizer,
+            select_leaves_refresh: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
 }
@@ -1663,8 +1673,28 @@ impl SparkWallet {
                 }
             }
 
-            info!("Failed to select leaves, refreshing leaves and retrying");
-            self.tree_service.refresh_leaves().await?;
+            // Refresh leaves at most once per wallet instance from this code
+            // path. The first failure may be the startup race (payment fires
+            // before initial sync populates the cache); subsequent failures
+            // are almost always genuine in-process contention or true
+            // insufficient funds, both of which a fresh refresh wouldn't
+            // resolve. The periodic + post-payment sync keeps the cache
+            // fresh in steady state, so re-refreshing on every retry just
+            // hammers the operators.
+            //
+            // `OnceCell::get_or_init` provides single-flight: a startup
+            // payment spike sees the first caller drive the refresh while
+            // the rest suspend on the cell. Once it completes, all later
+            // callers short-circuit with a single atomic load — no spurious
+            // InsufficientFunds bouncing during the very first refresh.
+            self.select_leaves_refresh
+                .get_or_init(|| async {
+                    info!("First select-leaves failure: refreshing leaves once");
+                    if let Err(e) = self.tree_service.refresh_leaves().await {
+                        warn!("Initial refresh_leaves failed (will rely on periodic sync): {e:?}");
+                    }
+                })
+                .await;
 
             // Check if we have enough funds after refresh
             if let Some(target_amounts) = target_amounts {
