@@ -154,6 +154,30 @@ class PostgresTreeStore {
    * Get all leaves categorized by status.
    * @returns {Promise<Object>} Leaves object with available, notAvailable, etc.
    */
+  /**
+   * Returns the wallet's spendable balance (available + missing-from-operators
+   * + swap-reserved). Aggregated server-side so we don't fetch every leaf.
+   * @returns {Promise<bigint>}
+   */
+  async getAvailableBalance() {
+    try {
+      const result = await this.pool.query(`
+        SELECT COALESCE(SUM((l.data->>'value')::bigint), 0)::bigint AS balance
+        FROM tree_leaves l
+        LEFT JOIN tree_reservations r ON l.reservation_id = r.id
+        WHERE
+          (l.reservation_id IS NULL AND l.status = 'Available')
+          OR r.purpose = 'Swap'
+      `);
+      return BigInt(result.rows[0].balance);
+    } catch (error) {
+      throw new TreeStoreError(
+        `Failed to get available balance: ${error.message}`,
+        error
+      );
+    }
+  }
+
   async getLeaves() {
     try {
       const result = await this.pool.query(`

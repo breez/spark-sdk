@@ -292,6 +292,58 @@ class PostgresTokenStore {
    * List all token outputs grouped by status.
    * @returns {Promise<Array<{metadata: Object, available: Array, reservedForPayment: Array, reservedForSwap: Array}>>}
    */
+  /**
+   * Returns the spendable per-token balances aggregated server-side.
+   * Each entry includes full token metadata + the available + swap-reserved sum.
+   * Tokens with zero spendable balance are filtered out by the HAVING clause.
+   * @returns {Promise<Array<{metadata: object, balance: string}>>}
+   */
+  async getTokenBalances() {
+    try {
+      const result = await this.pool.query(`
+        SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
+               m.max_supply, m.is_freezable, m.creation_entity_public_key,
+               COALESCE(SUM(
+                 CASE
+                   WHEN o.reservation_id IS NULL THEN o.token_amount::numeric
+                   WHEN r.purpose = 'Swap' THEN o.token_amount::numeric
+                   ELSE 0
+                 END
+               ), 0)::text AS balance
+        FROM token_metadata m
+        JOIN token_outputs o ON o.token_identifier = m.identifier
+        LEFT JOIN token_reservations r ON o.reservation_id = r.id
+        GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
+                 m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key
+        HAVING COALESCE(SUM(
+                 CASE
+                   WHEN o.reservation_id IS NULL THEN o.token_amount::numeric
+                   WHEN r.purpose = 'Swap' THEN o.token_amount::numeric
+                   ELSE 0
+                 END
+               ), 0) > 0
+      `);
+      return result.rows.map((row) => ({
+        metadata: {
+          identifier: row.identifier,
+          issuerPublicKey: row.issuer_public_key,
+          name: row.name,
+          ticker: row.ticker,
+          decimals: row.decimals,
+          maxSupply: row.max_supply,
+          isFreezable: row.is_freezable,
+          creationEntityPublicKey: row.creation_entity_public_key,
+        },
+        balance: row.balance,
+      }));
+    } catch (error) {
+      throw new TokenStoreError(
+        `Failed to get token balances: ${error.message}`,
+        error
+      );
+    }
+  }
+
   async listTokensOutputs() {
     try {
       const result = await this.pool.query(

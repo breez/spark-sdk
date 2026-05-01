@@ -192,6 +192,33 @@ impl TreeStore for WasmTreeStore {
         Ok(())
     }
 
+    async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
+        let promise = self
+            .tree_store
+            .get_available_balance()
+            .map_err(js_error_to_tree_error)?;
+
+        let t = Instant::now();
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        let js_dt = t.elapsed();
+
+        let balance = if let Some(n) = result.as_f64() {
+            n as u64
+        } else if let Ok(big) = result.clone().dyn_into::<wasm_bindgen_futures::js_sys::BigInt>() {
+            u64::try_from(big)
+                .map_err(|e| TreeServiceError::Generic(format!("BigInt overflow: {e:?}")))?
+        } else {
+            return Err(TreeServiceError::Generic(
+                "getAvailableBalance returned non-numeric value".to_string(),
+            ));
+        };
+
+        info!("WasmTreeStore::get_available_balance: {balance}, js_promise: {js_dt:?}");
+        Ok(balance)
+    }
+
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
         let promise = self
             .tree_store
@@ -397,6 +424,7 @@ type ReserveResult =
 export interface TreeStore {
     addLeaves: (leaves: TreeNode[]) => Promise<void>;
     getLeaves: () => Promise<Leaves>;
+    getAvailableBalance: () => Promise<bigint | number>;
     setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
     cancelReservation: (id: string, leavesToKeep: TreeNode[]) => Promise<void>;
     finalizeReservation: (id: string, newLeaves: TreeNode[] | null) => Promise<void>;
@@ -415,6 +443,9 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = getLeaves, catch)]
     pub fn get_leaves(this: &TreeStoreJs) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getAvailableBalance, catch)]
+    pub fn get_available_balance(this: &TreeStoreJs) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = setLeaves, catch)]
     pub fn set_leaves(

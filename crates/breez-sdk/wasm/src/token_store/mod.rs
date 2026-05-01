@@ -112,6 +112,13 @@ impl TryFrom<WasmTokenMetadata> for TokenMetadata {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct WasmTokenBalance {
+    metadata: WasmTokenMetadata,
+    balance: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct WasmTokenOutput {
     id: String,
     owner_public_key: String,
@@ -320,6 +327,42 @@ impl TokenOutputStore for WasmTokenStore {
             .await
             .map_err(js_error_to_token_error)?;
         Ok(())
+    }
+
+    async fn get_token_balances(
+        &self,
+    ) -> Result<Vec<(TokenMetadata, u128)>, TokenOutputServiceError> {
+        let promise = self
+            .token_store
+            .get_token_balances()
+            .map_err(js_error_to_token_error)?;
+
+        let t = Instant::now();
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_token_error)?;
+        let js_dt = t.elapsed();
+
+        let t = Instant::now();
+        let wasm_balances: Vec<WasmTokenBalance> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
+        let deser_dt = t.elapsed();
+
+        info!(
+            "WasmTokenStore::get_token_balances: {} entries, js_promise: {:?}, deserialize: {:?}",
+            wasm_balances.len(),
+            js_dt,
+            deser_dt
+        );
+
+        wasm_balances
+            .into_iter()
+            .map(|b| {
+                let metadata: TokenMetadata = b.metadata.try_into()?;
+                let balance: u128 = b.balance.parse().map_err(map_parse_err)?;
+                Ok((metadata, balance))
+            })
+            .collect()
     }
 
     async fn list_tokens_outputs(
@@ -567,6 +610,7 @@ type WasmReservationTarget =
 export interface TokenStore {
     setTokensOutputs: (tokenOutputs: WasmTokenOutputs[], refreshStartedAtMs: number) => Promise<void>;
     listTokensOutputs: () => Promise<WasmTokenOutputsPerStatus[]>;
+    getTokenBalances: () => Promise<WasmTokenBalance[]>;
     getTokenOutputs: (filter: WasmGetTokenOutputsFilter) => Promise<WasmTokenOutputsPerStatus>;
     insertTokenOutputs: (tokenOutputs: WasmTokenOutputs) => Promise<void>;
     reserveTokenOutputs: (
@@ -595,6 +639,9 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = listTokensOutputs, catch)]
     pub fn list_tokens_outputs(this: &TokenStoreJs) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getTokenBalances, catch)]
+    pub fn get_token_balances(this: &TokenStoreJs) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = getTokenOutputs, catch)]
     pub fn get_token_outputs(this: &TokenStoreJs, filter: JsValue) -> Result<Promise, JsValue>;
