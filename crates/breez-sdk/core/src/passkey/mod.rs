@@ -166,7 +166,8 @@ impl Passkey {
 
     /// Single-prompt setup: derive the Nostr identity and the wallet
     /// seed for `label` in one PRF ceremony, prime the Nostr identity
-    /// cache, and ensure the label is published to Nostr.
+    /// cache, and (when `publish_label` is true) ensure the label is
+    /// published to Nostr.
     ///
     /// On platforms whose [`PrfProvider`] implements the dual-salt fast
     /// path ([`PrfProvider::derive_prf_seeds`]), this collapses the
@@ -180,14 +181,39 @@ impl Passkey {
     /// [`Self::list_labels`] / [`Self::store_label`] calls on the same
     /// `Passkey` instance do not require additional PRF interactions.
     ///
+    /// # `publish_label`
+    ///
+    /// - `true`: publishes the label to Nostr (idempotent: skipped if
+    ///   already published for this Nostr identity). Use this for the
+    ///   onboarding create flow and any explicit "save this new label"
+    ///   user action.
+    /// - `false`: derives the wallet seed + Nostr identity but does not
+    ///   touch Nostr. Use this for **speculative cold-restore**: the
+    ///   caller dual-salts a guessed label (e.g. [`DEFAULT_LABEL`])
+    ///   to prime the Nostr cache and pre-derive a candidate wallet,
+    ///   then calls [`Self::list_labels`] to confirm whether the guess
+    ///   matches. If the guess is right, the speculative wallet is
+    ///   used directly (no extra prompt). If it's wrong (the user has
+    ///   different labels), the caller falls back to [`Self::get_wallet`]
+    ///   for the actual label, paying a second prompt. Setting
+    ///   `publish_label = true` here would silently create an unwanted
+    ///   "Default" Nostr label for users whose labels are something
+    ///   else, so the speculative path must use `false`.
+    ///
     /// For multi-label flows where the caller doesn't know the label
     /// up front, use [`Self::list_labels`] then [`Self::get_wallet`]
-    /// instead.
+    /// instead, or this method with `publish_label = false`.
     ///
     /// # Arguments
     /// * `label` - A user-chosen label. Defaults to [`DEFAULT_LABEL`]
     ///   when `None`.
-    pub async fn setup_wallet(&self, label: Option<String>) -> Result<Wallet, PasskeyError> {
+    /// * `publish_label` - Whether to publish `label` to Nostr after
+    ///   deriving. Pass `false` for speculative derivations.
+    pub async fn setup_wallet(
+        &self,
+        label: Option<String>,
+        publish_label: bool,
+    ) -> Result<Wallet, PasskeyError> {
         let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_string());
         validate_label(&label)?;
 
@@ -222,13 +248,16 @@ impl Passkey {
         let _ = self.nostr_keys.set(nostr_keys.clone());
 
         // Publish the label to Nostr (idempotent: skip if it already
-        // exists for this identity).
-        let exists = self
-            .nostr_client
-            .label_exists(&nostr_keys, &label)
-            .await?;
-        if !exists {
-            self.nostr_client.publish_label(&nostr_keys, &label).await?;
+        // exists for this identity). Skipped entirely when the caller
+        // is performing a speculative derivation.
+        if publish_label {
+            let exists = self
+                .nostr_client
+                .label_exists(&nostr_keys, &label)
+                .await?;
+            if !exists {
+                self.nostr_client.publish_label(&nostr_keys, &label).await?;
+            }
         }
 
         let mnemonic = prf_to_mnemonic(root_key)?;
