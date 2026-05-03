@@ -1560,3 +1560,63 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
         .unwrap();
     assert_eq!(stored.available.len(), 2);
 }
+
+pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputStore) {
+    // Insert outputs: token-1 has outputs at (tx-hash-0, 0), (tx-hash-1, 1), (tx-hash-2, 2)
+    let token1 = create_token_outputs(1, vec![100, 200, 300]);
+    store
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .await
+        .unwrap();
+
+    // Remove the output at (tx-hash-1, 1)
+    store
+        .remove_token_outputs(&[("tx-hash-1".to_string(), 1)])
+        .await
+        .unwrap();
+
+    let stored = store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+        .await
+        .unwrap();
+    assert_eq!(stored.available.len(), 2);
+    // Remaining outputs should be amounts 100 and 300
+    let mut amounts: Vec<u128> = stored
+        .available
+        .iter()
+        .map(|o| o.output.token_amount)
+        .collect();
+    amounts.sort();
+    assert_eq!(amounts, vec![100, 300]);
+}
+
+pub async fn test_remove_token_outputs_prevents_refresh_readd(store: &dyn TokenOutputStore) {
+    // Insert outputs
+    let token1 = create_token_outputs(1, vec![100, 200]);
+    store
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .await
+        .unwrap();
+
+    // Remove the output at (tx-hash-0, 0)
+    store
+        .remove_token_outputs(&[("tx-hash-0".to_string(), 0)])
+        .await
+        .unwrap();
+
+    // A refresh whose start time is before the removal should not re-add it,
+    // because the spent marker is newer than the refresh start.
+    let old_refresh = SystemTime::now() - Duration::from_secs(60);
+    let token1_refresh = create_token_outputs(1, vec![100, 200]);
+    store
+        .set_tokens_outputs(slice::from_ref(&token1_refresh), old_refresh)
+        .await
+        .unwrap();
+
+    let stored = store
+        .get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+        .await
+        .unwrap();
+    assert_eq!(stored.available.len(), 1);
+    assert_eq!(stored.available[0].output.token_amount, 200);
+}

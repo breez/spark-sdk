@@ -535,6 +535,55 @@ impl TokenOutputStore for MysqlTokenStore {
         Ok(())
     }
 
+    async fn remove_token_outputs(
+        &self,
+        prev_tx_refs: &[(String, u32)],
+    ) -> Result<(), TokenOutputServiceError> {
+        if prev_tx_refs.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
+
+        for (tx_hash, vout) in prev_tx_refs {
+            let row: Option<Row> = tx
+                .exec_first(
+                    "SELECT output_id FROM token_outputs \
+                     WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
+                    (
+                        self.identity.as_slice(),
+                        tx_hash.as_str(),
+                        (*vout).cast_signed(),
+                    ),
+                )
+                .await
+                .map_err(map_err)?;
+
+            if let Some(row) = row {
+                let output_id: String = row.get(0).unwrap_or_default();
+                tx.exec_drop(
+                    "DELETE FROM token_outputs WHERE user_id = ? AND output_id = ?",
+                    (self.identity.as_slice(), output_id.as_str()),
+                )
+                .await
+                .map_err(map_err)?;
+                tx.exec_drop(
+                    "INSERT IGNORE INTO token_spent_outputs (user_id, output_id, spent_at) \
+                     VALUES (?, ?, NOW())",
+                    (self.identity.as_slice(), output_id.as_str()),
+                )
+                .await
+                .map_err(map_err)?;
+            }
+        }
+
+        tx.commit().await.map_err(map_err)?;
+
+        trace!("Removed {} token outputs from MySQL", prev_tx_refs.len());
+        Ok(())
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn reserve_token_outputs(
         &self,
@@ -1751,6 +1800,18 @@ mod tests {
     async fn test_insert_outputs_clears_spent_status() {
         let fixture = MysqlTokenStoreTestFixture::new().await;
         shared_tests::test_insert_outputs_clears_spent_status(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_remove_token_outputs_by_prev_tx_ref() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_remove_token_outputs_by_prev_tx_ref(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_remove_token_outputs_prevents_refresh_readd() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_remove_token_outputs_prevents_refresh_readd(&fixture.store).await;
     }
 
     #[tokio::test]

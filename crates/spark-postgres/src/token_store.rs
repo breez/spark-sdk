@@ -675,6 +675,50 @@ impl TokenOutputStore for PostgresTokenStore {
         Ok(())
     }
 
+    async fn remove_token_outputs(
+        &self,
+        prev_tx_refs: &[(String, u32)],
+    ) -> Result<(), TokenOutputServiceError> {
+        if prev_tx_refs.is_empty() {
+            return Ok(());
+        }
+
+        let mut client = self.pool.get().await.map_err(map_err)?;
+        let tx = client.transaction().await.map_err(map_err)?;
+
+        for (tx_hash, vout) in prev_tx_refs {
+            let vout_i32 = (*vout).cast_signed();
+            let row = tx
+                .query_opt(
+                    "DELETE FROM token_outputs \
+                     WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3 \
+                     RETURNING output_id",
+                    &[&self.identity, tx_hash, &vout_i32],
+                )
+                .await
+                .map_err(map_err)?;
+
+            if let Some(row) = row {
+                let output_id: String = row.get(0);
+                tx.execute(
+                    "INSERT INTO token_spent_outputs (user_id, output_id, spent_at) \
+                     VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING",
+                    &[&self.identity, &output_id],
+                )
+                .await
+                .map_err(map_err)?;
+            }
+        }
+
+        tx.commit().await.map_err(map_err)?;
+
+        trace!(
+            "Removed {} token outputs from PostgreSQL",
+            prev_tx_refs.len()
+        );
+        Ok(())
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn reserve_token_outputs(
         &self,
@@ -1643,6 +1687,18 @@ mod tests {
     async fn test_insert_outputs_clears_spent_status() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
         shared_tests::test_insert_outputs_clears_spent_status(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_remove_token_outputs_by_prev_tx_ref() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_remove_token_outputs_by_prev_tx_ref(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_remove_token_outputs_prevents_refresh_readd() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_remove_token_outputs_prevents_refresh_readd(&fixture.store).await;
     }
 
     #[tokio::test]

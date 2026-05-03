@@ -131,6 +131,13 @@ impl TokenOutputService for SynchronousTokenOutputService {
         self.state.insert_token_outputs(token_outputs).await
     }
 
+    async fn remove_token_outputs(
+        &self,
+        prev_tx_refs: &[(String, u32)],
+    ) -> Result<(), TokenOutputServiceError> {
+        self.state.remove_token_outputs(prev_tx_refs).await
+    }
+
     async fn reserve_token_outputs(
         &self,
         token_identifier: &str,

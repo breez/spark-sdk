@@ -26,7 +26,7 @@ use crate::{
     },
     services::{
         FreezeIssuerTokenResponse, QueryTokenTransactionsFilter, ReceiverTokenOutput, ServiceError,
-        TokenTransaction, TransferObserver, TransferTokenOutput,
+        TokenInputs, TokenTransaction, TransferObserver, TransferTokenOutput,
     },
     signer::Signer,
     token::{
@@ -139,6 +139,69 @@ impl TokenService {
             tokens_config,
             transfer_observer,
         }
+    }
+
+    /// Updates the local token output store to reflect a completed token
+    /// transaction: removes spent inputs and inserts any new outputs that
+    /// belong to `identity_public_key`.
+    ///
+    /// This is the single entry-point for reconciling the local output pool
+    /// after receiving a token-transaction event (including transactions
+    /// initiated on another device).
+    pub async fn update_token_outputs_for_transaction(
+        &self,
+        transaction: &TokenTransaction,
+        identity_public_key: &PublicKey,
+    ) -> Result<(), ServiceError> {
+        // 1. Remove spent inputs so the balance drops immediately.
+        if let TokenInputs::Transfer(ref transfer_input) = transaction.inputs {
+            let spent_refs: Vec<(String, u32)> = transfer_input
+                .outputs_to_spend
+                .iter()
+                .map(|o| (o.prev_token_tx_hash.clone(), o.prev_token_tx_vout))
+                .collect();
+            if !spent_refs.is_empty() {
+                self.token_output_service
+                    .remove_token_outputs(&spent_refs)
+                    .await?;
+            }
+        }
+
+        // 2. Collect outputs that belong to us.
+        let our_outputs: Vec<TokenOutputWithPrevOut> = transaction
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.owner_public_key == *identity_public_key)
+            .map(|(vout, output)| TokenOutputWithPrevOut {
+                output: output.clone(),
+                prev_tx_hash: transaction.hash.clone(),
+                prev_tx_vout: vout as u32,
+            })
+            .collect();
+
+        // 3. Insert our new outputs (with metadata) into the local store.
+        if let Some(token_id) = our_outputs
+            .first()
+            .map(|o| o.output.token_identifier.clone())
+        {
+            let metadata = self
+                .get_tokens_metadata(&[token_id.as_str()], &[])
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    ServiceError::Generic(format!("Metadata not found for token {token_id}"))
+                })?;
+            self.token_output_service
+                .insert_token_outputs(&TokenOutputs {
+                    metadata,
+                    outputs: our_outputs,
+                })
+                .await?;
+        }
+
+        Ok(())
     }
 
     /// Refreshes token outputs from the operator.

@@ -443,6 +443,23 @@ impl TokenOutputStore for WasmTokenStore {
         Ok(())
     }
 
+    async fn remove_token_outputs(
+        &self,
+        prev_tx_refs: &[(String, u32)],
+    ) -> Result<(), TokenOutputServiceError> {
+        let refs: Vec<(String, u32)> = prev_tx_refs.to_vec();
+        let js_value = serde_wasm_bindgen::to_value(&refs)
+            .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
+        let promise = self
+            .token_store
+            .remove_token_outputs(js_value)
+            .map_err(js_error_to_token_error)?;
+        JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_token_error)?;
+        Ok(())
+    }
+
     #[allow(clippy::cast_possible_truncation)]
     async fn reserve_token_outputs(
         &self,
@@ -655,6 +672,12 @@ extern "C" {
     pub fn insert_token_outputs(
         this: &TokenStoreJs,
         token_outputs: JsValue,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = removeTokenOutputs, catch)]
+    pub fn remove_token_outputs(
+        this: &TokenStoreJs,
+        prev_tx_refs: JsValue,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = reserveTokenOutputs, catch)]

@@ -48,6 +48,35 @@ pub async fn get_tokens_metadata_cached_or_query(
     Ok([cached_results, queried_results].concat())
 }
 
+/// Returns whether the inputs of `transaction` are owned by `identity_public_key`.
+///
+/// For transfer inputs, the owner is determined by looking up the spent output
+/// on `parent_transaction`. For mint and create inputs the answer is always
+/// `false`. Assumes all inputs of `transaction` share the same owner public key.
+pub fn token_tx_inputs_are_ours(
+    transaction: &spark_wallet::TokenTransaction,
+    parent_transaction: Option<&spark_wallet::TokenTransaction>,
+    identity_public_key: PublicKey,
+) -> Result<bool, SdkError> {
+    match &transaction.inputs {
+        spark_wallet::TokenInputs::Transfer(token_transfer_input) => {
+            let first_input = token_transfer_input
+                .outputs_to_spend
+                .first()
+                .ok_or_else(|| SdkError::Generic("No input in token transfer input".to_string()))?;
+            let parent = parent_transaction.ok_or_else(|| {
+                SdkError::Generic("Parent transaction required for transfer input".to_string())
+            })?;
+            let output = parent
+                .outputs
+                .get(first_input.prev_token_tx_vout as usize)
+                .ok_or_else(|| SdkError::Generic("Output not found".to_string()))?;
+            Ok(output.owner_public_key == identity_public_key)
+        }
+        spark_wallet::TokenInputs::Mint(_) | spark_wallet::TokenInputs::Create(_) => Ok(false),
+    }
+}
+
 /// Converts a token transaction to payments
 ///
 /// Each resulting payment corresponds to a tx output (change outputs don't result in payments).
@@ -199,4 +228,142 @@ pub(crate) async fn map_and_persist_token_transaction(
             "No payment created from token invoice".to_string(),
         ))
         .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use platform_utils::time::SystemTime;
+    use spark_wallet::{
+        TokenInputs, TokenMintInput, TokenOutput, TokenOutputToSpend, TokenTransaction,
+        TokenTransactionStatus, TokenTransferInput,
+    };
+
+    use super::*;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn pk(fill_byte: u8) -> PublicKey {
+        let mut bytes = [fill_byte; 33];
+        bytes[0] = 2;
+        PublicKey::from_slice(&bytes).unwrap()
+    }
+
+    fn token_output(owner: PublicKey) -> TokenOutput {
+        TokenOutput {
+            id: "out".to_string(),
+            owner_public_key: owner,
+            revocation_commitment: "commitment".to_string(),
+            withdraw_bond_sats: 1000,
+            withdraw_relative_block_locktime: 144,
+            token_public_key: None,
+            token_identifier: "tk".to_string(),
+            token_amount: 100,
+        }
+    }
+
+    fn transfer_tx(prev_tx_hash: &str, prev_vout: u32) -> TokenTransaction {
+        TokenTransaction {
+            hash: "child".to_string(),
+            inputs: TokenInputs::Transfer(TokenTransferInput {
+                outputs_to_spend: vec![TokenOutputToSpend {
+                    prev_token_tx_hash: prev_tx_hash.to_string(),
+                    prev_token_tx_vout: prev_vout,
+                }],
+            }),
+            outputs: vec![],
+            status: TokenTransactionStatus::Finalized,
+            created_timestamp: SystemTime::now(),
+            fulfilled_invoices: vec![],
+        }
+    }
+
+    fn parent_tx(outputs: Vec<TokenOutput>) -> TokenTransaction {
+        TokenTransaction {
+            hash: "parent".to_string(),
+            inputs: TokenInputs::Mint(TokenMintInput {
+                issuer_public_key: pk(7),
+                token_id: None,
+            }),
+            outputs,
+            status: TokenTransactionStatus::Finalized,
+            created_timestamp: SystemTime::now(),
+            fulfilled_invoices: vec![],
+        }
+    }
+
+    #[macros::test_all]
+    fn transfer_owned_input_returns_true() {
+        let identity = pk(1);
+        let parent = parent_tx(vec![token_output(identity)]);
+        let tx = transfer_tx("parent", 0);
+        assert!(token_tx_inputs_are_ours(&tx, Some(&parent), identity).unwrap());
+    }
+
+    #[macros::test_all]
+    fn transfer_unowned_input_returns_false() {
+        let identity = pk(1);
+        let other = pk(2);
+        let parent = parent_tx(vec![token_output(other)]);
+        let tx = transfer_tx("parent", 0);
+        assert!(!token_tx_inputs_are_ours(&tx, Some(&parent), identity).unwrap());
+    }
+
+    #[macros::test_all]
+    fn transfer_picks_input_at_specified_vout() {
+        let identity = pk(1);
+        let other = pk(2);
+        let parent = parent_tx(vec![token_output(other), token_output(identity)]);
+        let tx = transfer_tx("parent", 1);
+        assert!(token_tx_inputs_are_ours(&tx, Some(&parent), identity).unwrap());
+    }
+
+    #[macros::test_all]
+    fn transfer_missing_parent_errors() {
+        let identity = pk(1);
+        let tx = transfer_tx("parent", 0);
+        assert!(token_tx_inputs_are_ours(&tx, None, identity).is_err());
+    }
+
+    #[macros::test_all]
+    fn transfer_no_inputs_errors() {
+        let identity = pk(1);
+        let tx = TokenTransaction {
+            hash: "child".to_string(),
+            inputs: TokenInputs::Transfer(TokenTransferInput {
+                outputs_to_spend: vec![],
+            }),
+            outputs: vec![],
+            status: TokenTransactionStatus::Finalized,
+            created_timestamp: SystemTime::now(),
+            fulfilled_invoices: vec![],
+        };
+        let parent = parent_tx(vec![token_output(identity)]);
+        assert!(token_tx_inputs_are_ours(&tx, Some(&parent), identity).is_err());
+    }
+
+    #[macros::test_all]
+    fn transfer_vout_out_of_range_errors() {
+        let identity = pk(1);
+        let parent = parent_tx(vec![token_output(identity)]);
+        let tx = transfer_tx("parent", 5);
+        assert!(token_tx_inputs_are_ours(&tx, Some(&parent), identity).is_err());
+    }
+
+    #[macros::test_all]
+    fn mint_returns_false_even_when_outputs_are_ours() {
+        let identity = pk(1);
+        let tx = TokenTransaction {
+            hash: "mint".to_string(),
+            inputs: TokenInputs::Mint(TokenMintInput {
+                issuer_public_key: identity,
+                token_id: None,
+            }),
+            outputs: vec![token_output(identity)],
+            status: TokenTransactionStatus::Finalized,
+            created_timestamp: SystemTime::now(),
+            fulfilled_invoices: vec![],
+        };
+        assert!(!token_tx_inputs_are_ours(&tx, None, identity).unwrap());
+    }
 }

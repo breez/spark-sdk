@@ -399,6 +399,37 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         Ok(())
     }
 
+    async fn remove_token_outputs(
+        &self,
+        prev_tx_refs: &[(String, u32)],
+    ) -> Result<(), TokenOutputServiceError> {
+        let mut state = self.token_outputs.lock().await;
+        let now = SystemTime::now();
+
+        for (tx_hash, vout) in prev_tx_refs {
+            // Find and remove the output matching this (prev_tx_hash, prev_tx_vout)
+            for available in state.available_token_outputs.values_mut() {
+                let output_id = available
+                    .outputs
+                    .values()
+                    .find(|s| s.output.prev_tx_hash == *tx_hash && s.output.prev_tx_vout == *vout)
+                    .map(|s| s.output.output.id.clone());
+                if let Some(id) = output_id {
+                    available.outputs.remove(&id);
+                    // Mark as spent to prevent re-adding during refresh
+                    state.spent_output_ids.insert(id, now);
+                    break;
+                }
+            }
+        }
+
+        trace!(
+            "Removed {} token outputs from the local state",
+            prev_tx_refs.len()
+        );
+        Ok(())
+    }
+
     async fn reserve_token_outputs(
         &self,
         token_identifier: &str,

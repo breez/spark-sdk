@@ -322,10 +322,9 @@ pub async fn build_sdk_with_custom_config_and_backend(
         // In regtest we don't need an API key; drop it if present to avoid network calls
         config.api_key = None;
     }
-    // Speed up tests and prefer spark routing
     config.prefer_spark_over_lightning = true;
-    config.sync_interval_secs = 5;
     if apply_sensible_test_defaults {
+        config.sync_interval_secs = 5;
         config.real_time_sync_server_url = None;
         config.lnurl_domain = None;
     }

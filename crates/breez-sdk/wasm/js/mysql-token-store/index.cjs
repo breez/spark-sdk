@@ -566,6 +566,37 @@ class MysqlTokenStore {
     }
   }
 
+  async removeTokenOutputs(prevTxRefs) {
+    if (!prevTxRefs || prevTxRefs.length === 0) return;
+    try {
+      await this._withTransaction(async (conn) => {
+        for (const [txHash, vout] of prevTxRefs) {
+          const [rows] = await conn.query(
+            "SELECT output_id FROM token_outputs WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
+            [this.identity, txHash, vout]
+          );
+          if (rows.length > 0) {
+            const outputId = rows[0].output_id;
+            await conn.query(
+              "DELETE FROM token_outputs WHERE user_id = ? AND output_id = ?",
+              [this.identity, outputId]
+            );
+            await conn.query(
+              "INSERT IGNORE INTO token_spent_outputs (user_id, output_id, spent_at) VALUES (?, ?, NOW())",
+              [this.identity, outputId]
+            );
+          }
+        }
+      });
+    } catch (error) {
+      if (error instanceof TokenStoreError) throw error;
+      throw new TokenStoreError(
+        `Failed to remove token outputs: ${error.message}`,
+        error
+      );
+    }
+  }
+
   async reserveTokenOutputs(
     tokenIdentifier,
     target,

@@ -200,6 +200,14 @@ pub trait TokenOutputStore: Send + Sync {
         token_outputs: &TokenOutputs,
     ) -> Result<(), TokenOutputServiceError>;
 
+    /// Removes outputs identified by their previous transaction coordinates
+    /// from the available pool and marks them as spent so that a concurrent
+    /// refresh will not re-add them.
+    async fn remove_token_outputs(
+        &self,
+        prev_tx_refs: &[(String, u32)],
+    ) -> Result<(), TokenOutputServiceError>;
+
     async fn reserve_token_outputs(
         &self,
         token_identifier: &str,
@@ -247,6 +255,14 @@ pub trait TokenOutputService: Send + Sync {
     async fn insert_token_outputs(
         &self,
         token_outputs: &TokenOutputs,
+    ) -> Result<(), TokenOutputServiceError>;
+
+    /// Removes outputs identified by their previous transaction coordinates
+    /// from the available pool and marks them as spent so that a concurrent
+    /// refresh will not re-add them.
+    async fn remove_token_outputs(
+        &self,
+        prev_tx_refs: &[(String, u32)],
     ) -> Result<(), TokenOutputServiceError>;
 
     async fn reserve_token_outputs(

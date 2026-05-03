@@ -564,6 +564,39 @@ class PostgresTokenStore {
   }
 
   /**
+   * Remove outputs identified by their previous transaction coordinates
+   * and mark them as spent so that a concurrent refresh will not re-add them.
+   * @param {Array<[string, number]>} prevTxRefs - Array of [prevTxHash, prevTxVout] tuples
+   * @returns {Promise<void>}
+   */
+  async removeTokenOutputs(prevTxRefs) {
+    if (!prevTxRefs || prevTxRefs.length === 0) return;
+    try {
+      await this._withTransaction(async (client) => {
+        for (const [txHash, vout] of prevTxRefs) {
+          const result = await client.query(
+            "DELETE FROM token_outputs WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3 RETURNING output_id",
+            [this.identity, txHash, vout]
+          );
+          if (result.rows.length > 0) {
+            const outputId = result.rows[0].output_id;
+            await client.query(
+              "INSERT INTO token_spent_outputs (user_id, output_id, spent_at) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING",
+              [this.identity, outputId]
+            );
+          }
+        }
+      });
+    } catch (error) {
+      if (error instanceof TokenStoreError) throw error;
+      throw new TokenStoreError(
+        `Failed to remove token outputs: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Reserve token outputs for a payment or swap.
    * @param {string} tokenIdentifier
    * @param {{type: string, value: number}} target - MinTotalValue or MaxOutputCount
