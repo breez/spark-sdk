@@ -48,6 +48,35 @@ pub async fn get_tokens_metadata_cached_or_query(
     Ok([cached_results, queried_results].concat())
 }
 
+/// Returns whether the inputs of `transaction` are owned by `identity_public_key`.
+///
+/// For transfer inputs, the owner is determined by looking up the spent output
+/// on `parent_transaction`. For mint and create inputs the answer is always
+/// `false`. Assumes all inputs of `transaction` share the same owner public key.
+pub fn token_tx_inputs_are_ours(
+    transaction: &spark_wallet::TokenTransaction,
+    parent_transaction: Option<&spark_wallet::TokenTransaction>,
+    identity_public_key: PublicKey,
+) -> Result<bool, SdkError> {
+    match &transaction.inputs {
+        spark_wallet::TokenInputs::Transfer(token_transfer_input) => {
+            let first_input = token_transfer_input
+                .outputs_to_spend
+                .first()
+                .ok_or_else(|| SdkError::Generic("No input in token transfer input".to_string()))?;
+            let parent = parent_transaction.ok_or_else(|| {
+                SdkError::Generic("Parent transaction required for transfer input".to_string())
+            })?;
+            let output = parent
+                .outputs
+                .get(first_input.prev_token_tx_vout as usize)
+                .ok_or_else(|| SdkError::Generic("Output not found".to_string()))?;
+            Ok(output.owner_public_key == identity_public_key)
+        }
+        spark_wallet::TokenInputs::Mint(_) | spark_wallet::TokenInputs::Create(_) => Ok(false),
+    }
+}
+
 /// Converts a token transaction to payments
 ///
 /// Each resulting payment corresponds to a tx output (change outputs don't result in payments).
