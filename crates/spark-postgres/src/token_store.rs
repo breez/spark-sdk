@@ -264,6 +264,47 @@ impl TokenOutputStore for PostgresTokenStore {
         Ok(())
     }
 
+    async fn get_token_balances(
+        &self,
+    ) -> Result<Vec<(TokenMetadata, u128)>, TokenOutputServiceError> {
+        let client = self.pool.get().await.map_err(map_err)?;
+        let rows = client
+            .query(
+                r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
+                         m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                         COALESCE(SUM(
+                            CASE
+                              WHEN o.reservation_id IS NULL THEN o.token_amount::numeric
+                              WHEN r.purpose = 'Swap' THEN o.token_amount::numeric
+                              ELSE 0
+                            END
+                         ), 0)::text AS balance
+                  FROM token_metadata m
+                  JOIN token_outputs o ON o.token_identifier = m.identifier
+                  LEFT JOIN token_reservations r ON o.reservation_id = r.id
+                  GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
+                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key
+                  HAVING COALESCE(SUM(
+                            CASE
+                              WHEN o.reservation_id IS NULL THEN o.token_amount::numeric
+                              WHEN r.purpose = 'Swap' THEN o.token_amount::numeric
+                              ELSE 0
+                            END
+                         ), 0) > 0",
+                &[],
+            )
+            .await
+            .map_err(map_err)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let metadata = Self::metadata_from_row(&row)?;
+            let balance_str: String = row.get("balance");
+            let balance: u128 = balance_str.parse().map_err(map_err)?;
+            out.push((metadata, balance));
+        }
+        Ok(out)
+    }
+
     async fn list_tokens_outputs(
         &self,
     ) -> Result<Vec<TokenOutputsPerStatus>, TokenOutputServiceError> {
@@ -591,8 +632,6 @@ impl TokenOutputStore for PostgresTokenStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        Self::acquire_write_lock(&tx).await?;
-
         // Clear reservation_id from outputs (ON DELETE SET NULL would do this,
         // but we do it explicitly for clarity)
         tx.execute(
@@ -619,8 +658,6 @@ impl TokenOutputStore for PostgresTokenStore {
     ) -> Result<(), TokenOutputServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
-
-        Self::acquire_write_lock(&tx).await?;
 
         // Get reservation purpose and reserved output IDs
         let reservation_row = tx

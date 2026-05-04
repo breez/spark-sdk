@@ -1,13 +1,13 @@
 use tracing::{error, trace};
 
 use crate::tree::{
-    LeavesReservation, TargetAmounts, TargetLeaves, TreeNode, TreeService, TreeServiceError,
+    LeafLike, LeavesReservation, TargetAmounts, TargetLeaves, TreeService, TreeServiceError,
 };
 
-pub fn select_leaves_by_target_amounts(
-    leaves: &[TreeNode],
+pub fn select_leaves_by_target_amounts<L: LeafLike>(
+    leaves: &[L],
     target_amounts: Option<&TargetAmounts>,
-) -> Result<TargetLeaves, TreeServiceError> {
+) -> Result<TargetLeaves<L>, TreeServiceError> {
     let mut remaining_leaves = leaves.to_vec();
 
     // If no target amounts are specified, return all remaining leaves
@@ -31,7 +31,7 @@ pub fn select_leaves_by_target_amounts(
                     remaining_leaves.retain(|leaf| {
                         !amount_leaves
                             .iter()
-                            .any(|amount_leaf| amount_leaf.id == leaf.id)
+                            .any(|amount_leaf| amount_leaf.leaf_id() == leaf.leaf_id())
                     });
                     // Select leaves that match the fee_sats from the remaining leaves
                     Some(
@@ -55,15 +55,15 @@ pub fn select_leaves_by_target_amounts(
 
 /// Selects leaves from the tree that sum up to exactly the target amount.
 /// If such a combination of leaves does not exist, it returns `None`.
-pub fn select_leaves_by_exact_amount(
-    leaves: &[TreeNode],
+pub fn select_leaves_by_exact_amount<L: LeafLike>(
+    leaves: &[L],
     target_amount_sat: u64,
-) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
+) -> Result<Option<Vec<L>>, TreeServiceError> {
     if target_amount_sat == 0 {
         return Err(TreeServiceError::InvalidAmount);
     }
 
-    if leaves.iter().map(|leaf| leaf.value).sum::<u64>() < target_amount_sat {
+    if leaves.iter().map(LeafLike::leaf_value).sum::<u64>() < target_amount_sat {
         return Err(TreeServiceError::InsufficientFunds);
     }
 
@@ -80,39 +80,40 @@ pub fn select_leaves_by_exact_amount(
     Ok(None)
 }
 
-pub fn select_leaves_by_exact_denominations(
-    leaves: &[TreeNode],
+pub fn select_leaves_by_exact_denominations<L: LeafLike>(
+    leaves: &[L],
     denominations: &[u64],
-) -> Result<Vec<TreeNode>, TreeServiceError> {
+) -> Result<Vec<L>, TreeServiceError> {
     let mut remaining_leaves = leaves.to_vec();
     let mut selected_leaves = Vec::new();
 
     for denomination in denominations {
-        let leaf = find_exact_single_match(&remaining_leaves, *denomination)
+        let idx = remaining_leaves
+            .iter()
+            .position(|l| l.leaf_value() == *denomination)
             .ok_or(TreeServiceError::UnselectableAmount)?;
-        selected_leaves.push(leaf.clone());
-        remaining_leaves.retain(|remaining_leaf| remaining_leaf.id != leaf.id);
+        selected_leaves.push(remaining_leaves.swap_remove(idx));
     }
 
     Ok(selected_leaves)
 }
 
 /// Selects leaves from the tree that sum up to at least the target amount.
-pub fn select_leaves_by_minimum_amount(
-    leaves: &[TreeNode],
+pub fn select_leaves_by_minimum_amount<L: LeafLike>(
+    leaves: &[L],
     target_amount_sat: u64,
-) -> Result<Option<Vec<TreeNode>>, TreeServiceError> {
+) -> Result<Option<Vec<L>>, TreeServiceError> {
     if target_amount_sat == 0 {
         return Err(TreeServiceError::InvalidAmount);
     }
-    if leaves.iter().map(|leaf| leaf.value).sum::<u64>() < target_amount_sat {
+    if leaves.iter().map(LeafLike::leaf_value).sum::<u64>() < target_amount_sat {
         return Err(TreeServiceError::InsufficientFunds);
     }
 
     let mut result = Vec::new();
     let mut sum = 0;
     for leaf in leaves {
-        sum += leaf.value;
+        sum += leaf.leaf_value();
         result.push(leaf.clone());
         if sum >= target_amount_sat {
             break;
@@ -126,13 +127,13 @@ pub fn select_leaves_by_minimum_amount(
     Ok(Some(result))
 }
 
-pub(crate) fn find_exact_single_match(
-    leaves: &[TreeNode],
+pub(crate) fn find_exact_single_match<L: LeafLike>(
+    leaves: &[L],
     target_amount_sat: u64,
-) -> Option<TreeNode> {
+) -> Option<L> {
     leaves
         .iter()
-        .find(|leaf| leaf.value == target_amount_sat)
+        .find(|leaf| leaf.leaf_value() == target_amount_sat)
         .cloned()
 }
 
@@ -144,18 +145,18 @@ fn is_power_of_two(value: u64) -> bool {
 /// Greedy algorithm to find exact match.
 /// Sorts leaves by value in descending order and takes the largest leaf that fits
 /// the remaining amount until the target is reached or no valid leaf can be found.
-fn greedy_exact_match(leaves: &[TreeNode], target_amount_sat: u64) -> Option<Vec<TreeNode>> {
+fn greedy_exact_match<L: LeafLike>(leaves: &[L], target_amount_sat: u64) -> Option<Vec<L>> {
     let mut sorted_leaves = leaves.to_vec();
-    sorted_leaves.sort_by_key(|b| std::cmp::Reverse(b.value));
+    sorted_leaves.sort_by_key(|b| std::cmp::Reverse(b.leaf_value()));
 
     let mut result = Vec::new();
     let mut remaining = target_amount_sat;
 
     for leaf in &sorted_leaves {
-        if leaf.value > remaining {
+        if leaf.leaf_value() > remaining {
             continue;
         }
-        remaining -= leaf.value;
+        remaining -= leaf.leaf_value();
         result.push(leaf.clone());
         if remaining == 0 {
             return Some(result);
@@ -165,10 +166,10 @@ fn greedy_exact_match(leaves: &[TreeNode], target_amount_sat: u64) -> Option<Vec
     None // Couldn't reach exact target
 }
 
-pub(crate) fn find_exact_multiple_match(
-    leaves: &[TreeNode],
+pub(crate) fn find_exact_multiple_match<L: LeafLike>(
+    leaves: &[L],
     target_amount_sat: u64,
-) -> Option<Vec<TreeNode>> {
+) -> Option<Vec<L>> {
     if target_amount_sat == 0 {
         return Some(Vec::new());
     }
@@ -182,9 +183,9 @@ pub(crate) fn find_exact_multiple_match(
     }
 
     // Pass 2: Try with only power-of-two leaves (if there were non-power-of-two leaves)
-    let power_of_two_leaves: Vec<_> = leaves
+    let power_of_two_leaves: Vec<L> = leaves
         .iter()
-        .filter(|l| is_power_of_two(l.value))
+        .filter(|l| is_power_of_two(l.leaf_value()))
         .cloned()
         .collect();
 

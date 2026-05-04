@@ -1,5 +1,5 @@
 use macros::async_trait;
-use platform_utils::time::SystemTime;
+use platform_utils::time::{Instant, SystemTime};
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     GetTokenOutputsFilter, ReservationTarget, SelectionStrategy, TokenMetadata, TokenOutput,
@@ -7,6 +7,7 @@ use spark_wallet::{
     TokenOutputsPerStatus, TokenOutputsReservation, TokenOutputsReservationId,
     TokenReservationPurpose,
 };
+use tracing::info;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
@@ -107,6 +108,13 @@ impl TryFrom<WasmTokenMetadata> for TokenMetadata {
                 .transpose()?,
         })
     }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmTokenBalance {
+    metadata: WasmTokenMetadata,
+    balance: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -321,6 +329,42 @@ impl TokenOutputStore for WasmTokenStore {
         Ok(())
     }
 
+    async fn get_token_balances(
+        &self,
+    ) -> Result<Vec<(TokenMetadata, u128)>, TokenOutputServiceError> {
+        let promise = self
+            .token_store
+            .get_token_balances()
+            .map_err(js_error_to_token_error)?;
+
+        let t = Instant::now();
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_token_error)?;
+        let js_dt = t.elapsed();
+
+        let t = Instant::now();
+        let wasm_balances: Vec<WasmTokenBalance> = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
+        let deser_dt = t.elapsed();
+
+        info!(
+            "WasmTokenStore::get_token_balances: {} entries, js_promise: {:?}, deserialize: {:?}",
+            wasm_balances.len(),
+            js_dt,
+            deser_dt
+        );
+
+        wasm_balances
+            .into_iter()
+            .map(|b| {
+                let metadata: TokenMetadata = b.metadata.try_into()?;
+                let balance: u128 = b.balance.parse().map_err(map_parse_err)?;
+                Ok((metadata, balance))
+            })
+            .collect()
+    }
+
     async fn list_tokens_outputs(
         &self,
     ) -> Result<Vec<TokenOutputsPerStatus>, TokenOutputServiceError> {
@@ -328,12 +372,26 @@ impl TokenOutputStore for WasmTokenStore {
             .token_store
             .list_tokens_outputs()
             .map_err(js_error_to_token_error)?;
+
+        let t = Instant::now();
         let result = JsFuture::from(promise)
             .await
             .map_err(js_error_to_token_error)?;
+        let js_dt = t.elapsed();
+
+        let t = Instant::now();
         let wasm_results: Vec<WasmTokenOutputsPerStatus> =
             serde_wasm_bindgen::from_value(result)
                 .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
+        let deser_dt = t.elapsed();
+
+        info!(
+            "WasmTokenStore::list_tokens_outputs: {} entries, js_promise: {:?}, deserialize: {:?}",
+            wasm_results.len(),
+            js_dt,
+            deser_dt
+        );
+
         wasm_results
             .into_iter()
             .map(TryInto::try_into)
@@ -552,6 +610,7 @@ type WasmReservationTarget =
 export interface TokenStore {
     setTokensOutputs: (tokenOutputs: WasmTokenOutputs[], refreshStartedAtMs: number) => Promise<void>;
     listTokensOutputs: () => Promise<WasmTokenOutputsPerStatus[]>;
+    getTokenBalances: () => Promise<WasmTokenBalance[]>;
     getTokenOutputs: (filter: WasmGetTokenOutputsFilter) => Promise<WasmTokenOutputsPerStatus>;
     insertTokenOutputs: (tokenOutputs: WasmTokenOutputs) => Promise<void>;
     reserveTokenOutputs: (
@@ -580,6 +639,9 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = listTokensOutputs, catch)]
     pub fn list_tokens_outputs(this: &TokenStoreJs) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getTokenBalances, catch)]
+    pub fn get_token_balances(this: &TokenStoreJs) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = getTokenOutputs, catch)]
     pub fn get_token_outputs(this: &TokenStoreJs, filter: JsValue) -> Result<Promise, JsValue>;

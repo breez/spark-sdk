@@ -4,12 +4,14 @@ mod tests;
 use std::sync::Arc;
 
 use macros::async_trait;
+use platform_utils::time::Instant;
 use platform_utils::tokio::sync::watch;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
     TargetAmounts, TreeNode, TreeServiceError, TreeStore,
 };
+use tracing::info;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
@@ -190,17 +192,64 @@ impl TreeStore for WasmTreeStore {
         Ok(())
     }
 
+    async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
+        let promise = self
+            .tree_store
+            .get_available_balance()
+            .map_err(js_error_to_tree_error)?;
+
+        let t = Instant::now();
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        let js_dt = t.elapsed();
+
+        let balance = if let Some(n) = result.as_f64() {
+            n as u64
+        } else if let Ok(big) = result
+            .clone()
+            .dyn_into::<wasm_bindgen_futures::js_sys::BigInt>()
+        {
+            u64::try_from(big)
+                .map_err(|e| TreeServiceError::Generic(format!("BigInt overflow: {e:?}")))?
+        } else {
+            return Err(TreeServiceError::Generic(
+                "getAvailableBalance returned non-numeric value".to_string(),
+            ));
+        };
+
+        info!("WasmTreeStore::get_available_balance: {balance}, js_promise: {js_dt:?}");
+        Ok(balance)
+    }
+
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
         let promise = self
             .tree_store
             .get_leaves()
             .map_err(js_error_to_tree_error)?;
+
+        let t = Instant::now();
         let result = JsFuture::from(promise)
             .await
             .map_err(js_error_to_tree_error)?;
+        let js_dt = t.elapsed();
+
+        let t = Instant::now();
         let wasm_leaves: WasmLeaves = serde_wasm_bindgen::from_value(result)
             .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
-        Ok(wasm_leaves.into())
+        let deser_dt = t.elapsed();
+
+        let leaves: Leaves = wasm_leaves.into();
+        let count = leaves.available.len()
+            + leaves.not_available.len()
+            + leaves.available_missing_from_operators.len()
+            + leaves.reserved_for_payment.len()
+            + leaves.reserved_for_swap.len();
+        info!(
+            "WasmTreeStore::get_leaves: {} leaves, js_promise: {:?}, deserialize: {:?}",
+            count, js_dt, deser_dt
+        );
+        Ok(leaves)
     }
 
     async fn set_leaves(
@@ -275,6 +324,7 @@ impl TreeStore for WasmTreeStore {
         exact_only: bool,
         purpose: ReservationPurpose,
     ) -> Result<ReserveResult, TreeServiceError> {
+        let total_start = Instant::now();
         let target_js = match target_amounts {
             Some(t) => {
                 let wasm_target: WasmTargetAmounts = t.into();
@@ -296,6 +346,18 @@ impl TreeStore for WasmTreeStore {
         if matches!(&reserve_result, ReserveResult::Success(_)) {
             self.notify_balance_change();
         }
+        let outcome = match &reserve_result {
+            ReserveResult::Success(r) => format!("success(leaves={})", r.leaves.len()),
+            ReserveResult::WaitForPending { .. } => "waitForPending".to_string(),
+            ReserveResult::InsufficientFunds => "insufficientFunds".to_string(),
+        };
+        info!(
+            "WasmTreeStore::try_reserve_leaves: {} (exact_only={}, purpose={:?}, took {:?})",
+            outcome,
+            exact_only,
+            purpose,
+            total_start.elapsed()
+        );
         Ok(reserve_result)
     }
 
@@ -378,6 +440,7 @@ type ReserveResult =
 export interface TreeStore {
     addLeaves: (leaves: TreeNode[]) => Promise<void>;
     getLeaves: () => Promise<Leaves>;
+    getAvailableBalance: () => Promise<bigint | number>;
     setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
     cancelReservation: (id: string, leavesToKeep: TreeNode[]) => Promise<void>;
     finalizeReservation: (id: string, newLeaves: TreeNode[] | null) => Promise<void>;
@@ -396,6 +459,9 @@ extern "C" {
 
     #[wasm_bindgen(structural, method, js_name = getLeaves, catch)]
     pub fn get_leaves(this: &TreeStoreJs) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = getAvailableBalance, catch)]
+    pub fn get_available_balance(this: &TreeStoreJs) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = setLeaves, catch)]
     pub fn set_leaves(

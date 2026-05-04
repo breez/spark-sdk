@@ -179,15 +179,21 @@ impl TreeService for SynchronousTreeService {
         let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
         let coordinator_leaves = coordinator_leaves_res?;
 
-        // Propagate any operator query error to preserve original behavior and
-        // collect successful operator leaves for later comparison
-        let mut operator_leaves_vec: Vec<Vec<TreeNode>> = Vec::new();
+        // Tolerate single-operator failures by treating their leaves as
+        // missing-from-operator instead of aborting the whole refresh. The
+        // multi-operator safety guarantee is preserved: a leaf an operator
+        // didn't acknowledge is flagged `is_missing_from_operators=true` and
+        // excluded from spending until that operator confirms it on a later
+        // refresh. Aborting on every operator hiccup used to trigger refresh
+        // storms that overloaded the (already flaky) operator further.
+        let mut successful_operators: Vec<(usize, Vec<TreeNode>)> = Vec::new();
+        let mut failed_operator_ids: Vec<usize> = Vec::new();
         for (id, res) in operator_results {
             match res {
-                Ok(leaves) => operator_leaves_vec.push(leaves),
+                Ok(leaves) => successful_operators.push((id, leaves)),
                 Err(e) => {
-                    error!("Failed to query operator {id}: {e:?}");
-                    return Err(e);
+                    error!("Failed to query operator {id}, treating its leaves as missing: {e:?}");
+                    failed_operator_ids.push(id);
                 }
             }
         }
@@ -195,8 +201,22 @@ impl TreeService for SynchronousTreeService {
         let mut missing_operator_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
         let mut ignored_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
 
-        // For each operator's leaves, compare against coordinator in the same way as before
-        for (operator_id, operator_leaves) in operators.into_iter().zip(operator_leaves_vec) {
+        // For each failed operator, conservatively treat every coordinator
+        // leaf as missing from that operator's view — we have no positive
+        // evidence either way, so flag them as untrusted until the operator
+        // recovers.
+        for failed_id in &failed_operator_ids {
+            for leaf in &coordinator_leaves {
+                warn!(
+                    "Treating leaf {} as missing from operator {} (operator query failed)",
+                    leaf.id, failed_id
+                );
+                missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
+            }
+        }
+
+        // For each successful operator, compare against coordinator in the same way as before
+        for (operator_id, operator_leaves) in &successful_operators {
             for leaf in &coordinator_leaves {
                 match operator_leaves.iter().find(|l| l.id == leaf.id) {
                     Some(operator_leaf) => {
@@ -209,7 +229,7 @@ impl TreeService for SynchronousTreeService {
                         {
                             warn!(
                                 "Ignoring leaf due to mismatch between coordinator and operator {}. Coordinator: {:?}, Operator: {:?}",
-                                operator_id.0, leaf, operator_leaf
+                                operator_id, leaf, operator_leaf
                             );
                             missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
                         }
@@ -217,7 +237,7 @@ impl TreeService for SynchronousTreeService {
                     None => {
                         warn!(
                             "Ignoring leaf due to missing from operator {}: {:?}",
-                            operator_id.0, leaf.id
+                            operator_id, leaf.id
                         );
                         missing_operator_leaves_map.insert(leaf.id.clone(), leaf.clone());
                     }
@@ -288,8 +308,7 @@ impl TreeService for SynchronousTreeService {
     }
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
-        let leaves = self.state.get_leaves().await?;
-        Ok(leaves.balance())
+        self.state.get_available_balance().await
     }
 }
 

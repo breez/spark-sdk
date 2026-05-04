@@ -173,6 +173,23 @@ pub trait TokenOutputStore: Send + Sync {
         &self,
     ) -> Result<Vec<TokenOutputsPerStatus>, TokenOutputServiceError>;
 
+    /// Returns just the spendable per-token balances paired with their metadata.
+    /// Default impl falls through to `list_tokens_outputs`; storage backends that
+    /// can compute the aggregate server-side should override.
+    async fn get_token_balances(
+        &self,
+    ) -> Result<Vec<(TokenMetadata, u128)>, TokenOutputServiceError> {
+        Ok(self
+            .list_tokens_outputs()
+            .await?
+            .into_iter()
+            .map(|t| {
+                let balance = t.balance();
+                (t.metadata, balance)
+            })
+            .collect())
+    }
+
     async fn get_token_outputs(
         &self,
         filter: GetTokenOutputsFilter<'_>,
@@ -215,6 +232,10 @@ pub trait TokenOutputService: Send + Sync {
     async fn list_tokens_outputs(
         &self,
     ) -> Result<Vec<TokenOutputsPerStatus>, TokenOutputServiceError>;
+
+    async fn get_token_balances(
+        &self,
+    ) -> Result<Vec<(TokenMetadata, u128)>, TokenOutputServiceError>;
 
     async fn refresh_tokens_outputs(&self) -> Result<(), TokenOutputServiceError>;
 

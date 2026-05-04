@@ -4,6 +4,7 @@ use breez_sdk_common::lnurl::{
     error::LnurlError,
     pay::{AesSuccessActionDataResult, SuccessAction, SuccessActionProcessed},
 };
+use platform_utils::time::Instant;
 use spark_wallet::SparkWallet;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc;
@@ -85,25 +86,42 @@ pub(crate) async fn update_balances(
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
 ) -> Result<(), SdkError> {
+    let total_start = Instant::now();
+
+    let t = Instant::now();
     let balance_sats = spark_wallet.get_balance().await?;
-    let token_balances = spark_wallet
-        .get_token_balances()
-        .await?
+    let get_balance_dt = t.elapsed();
+
+    let t = Instant::now();
+    let token_balances_raw = spark_wallet.get_token_balances().await?;
+    let get_token_balances_dt = t.elapsed();
+    let token_balances_count = token_balances_raw.len();
+    let token_balances = token_balances_raw
         .into_iter()
         .map(|(k, v)| (k, v.into()))
         .collect();
+
     let object_repository = ObjectCacheRepository::new(storage.clone());
 
+    let t = Instant::now();
     object_repository
         .save_account_info(&CachedAccountInfo {
             balance_sats,
             token_balances,
         })
         .await?;
+    let save_dt = t.elapsed();
+
     let identity_public_key = spark_wallet.get_identity_public_key();
     info!(
-        "Balance updated successfully {} for identity {}",
-        balance_sats, identity_public_key
+        "Balance updated successfully {} for identity {} (total: {:?}, get_balance: {:?}, get_token_balances[{}]: {:?}, save_account_info: {:?})",
+        balance_sats,
+        identity_public_key,
+        total_start.elapsed(),
+        get_balance_dt,
+        token_balances_count,
+        get_token_balances_dt,
+        save_dt
     );
     Ok(())
 }
