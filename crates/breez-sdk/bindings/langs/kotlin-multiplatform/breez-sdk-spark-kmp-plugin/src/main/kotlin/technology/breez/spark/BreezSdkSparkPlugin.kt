@@ -56,11 +56,15 @@ class BreezSdkSparkPlugin : Plugin<Project> {
             }
 
             if (searchPaths.isEmpty()) {
-                // xcframework slice based on target platform
+                // xcframework slice based on target platform.
                 // The simulator slice is a universal binary (arm64 + x86_64), so both
                 // iosSimulatorArm64 and iosX64 targets are covered by the same slice.
-                val slice = if (platformName == "iphonesimulator")
-                    "ios-arm64_x86_64-simulator" else "ios-arm64"
+                // The macOS slice is also a universal binary (arm64 + x86_64).
+                val slice = when (platformName) {
+                    "iphonesimulator" -> "ios-arm64_x86_64-simulator"
+                    "macosx" -> "macos-arm64_x86_64"
+                    else -> "ios-arm64"
+                }
 
                 // SPM artifacts path
                 val derivedDataRoot = buildDir.substringBefore("/Build/")

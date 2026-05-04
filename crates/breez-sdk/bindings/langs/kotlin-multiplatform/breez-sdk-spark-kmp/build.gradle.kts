@@ -6,10 +6,11 @@ plugins {
 
 apply(plugin = "kotlinx-atomicfu")
 
-// Skip iOS Kotlin/Native targets when explicitly requested. Used by the
-// docs-snippets CI job, which only needs the JVM publication. The cli-ci
-// `kotlin-multiplatform-ios` job and the release pipeline still build
-// every iOS target.
+// Skip Apple Kotlin/Native targets (iOS + macOS) when explicitly requested.
+// Used by the docs-snippets CI job, which only needs the JVM publication, and
+// by the Android AAR smoke-test which runs on Ubuntu without a Konan macOS
+// toolchain. The cli-ci `kotlin-multiplatform-ios`, `kotlin-multiplatform-macos`
+// jobs and the release pipeline still build every Apple target.
 val skipIosTargets = project.hasProperty("skipIosTargets")
 
 kotlin {
@@ -36,7 +37,9 @@ kotlin {
         listOf(
             iosX64(),
             iosArm64(),
-            iosSimulatorArm64()
+            iosSimulatorArm64(),
+            macosArm64(),
+            macosX64(),
         ).forEach {
             it.compilations["main"].cinterops {
                 create("breezSdkSparkCInterop") {

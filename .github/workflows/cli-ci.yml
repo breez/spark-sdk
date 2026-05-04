@@ -51,6 +51,15 @@ jobs:
             gradle: true
             konan: true
             sdk-target: true
+          # SDK macOS Kotlin/Native compile smoke-test — gobley native source +
+          # `.def`/cinterop bindings + Kotlin/Native compiler for macosArm64
+          # and macosX64 targets.
+          - lang: kotlin-multiplatform-macos
+            runner: macos-latest
+            java-version: "17"
+            gradle: true
+            konan: true
+            sdk-target: true
           - lang: python
             runner: ubuntu-latest
           - lang: react-native
@@ -128,7 +137,7 @@ jobs:
           key: gobley-uniffi-bindgen-${{ env.GOBLEY_REF }}-${{ runner.os }}
 
       - name: Generate KMP bindings (host)
-        if: matrix.lang == 'kotlin-multiplatform-ios'
+        if: matrix.lang == 'kotlin-multiplatform-ios' || matrix.lang == 'kotlin-multiplatform-macos'
         working-directory: crates/breez-sdk/bindings
         run: make build-kotlin-multiplatform-bindgen-host
 
@@ -136,6 +145,11 @@ jobs:
         if: matrix.lang == 'kotlin-multiplatform-ios'
         working-directory: crates/breez-sdk/bindings/langs/kotlin-multiplatform
         run: ./gradlew :breez-sdk-spark-kmp:compileKotlinIosArm64 :breez-sdk-spark-kmp:compileKotlinIosX64 :breez-sdk-spark-kmp:compileKotlinIosSimulatorArm64
+
+      - name: Compile macOS Kotlin/Native targets
+        if: matrix.lang == 'kotlin-multiplatform-macos'
+        working-directory: crates/breez-sdk/bindings/langs/kotlin-multiplatform
+        run: ./gradlew :breez-sdk-spark-kmp:compileKotlinMacosArm64 :breez-sdk-spark-kmp:compileKotlinMacosX64
 
       - name: Generate KMP bindings (Android arm64)
         if: matrix.lang == 'kotlin-multiplatform-android'
