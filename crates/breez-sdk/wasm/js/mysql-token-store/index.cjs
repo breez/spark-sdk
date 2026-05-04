@@ -76,7 +76,9 @@ class MysqlTokenStore {
   }
 
   /**
-   * Run a function inside a transaction holding the named write lock.
+   * Run a function inside a transaction holding the named write lock. Reserved
+   * for operations whose correctness depends on serializing the
+   * available-output set (`reserveTokenOutputs`, `setTokensOutputs`).
    * @param {function(import('mysql2/promise').PoolConnection): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -109,6 +111,30 @@ class MysqlTokenStore {
           .query("SELECT RELEASE_LOCK(?)", [TOKEN_STORE_WRITE_LOCK_NAME])
           .catch(() => {});
       }
+      conn.release();
+    }
+  }
+
+  /**
+   * Run a function inside a transaction without the advisory lock. Used by
+   * operations scoped to a single reservation_id (`cancelReservation`,
+   * `finalizeReservation`) where row-level FK + InnoDB MVCC suffice and the
+   * global lock would only add contention.
+   * @param {function(import('mysql2/promise').PoolConnection): Promise<T>} fn
+   * @returns {Promise<T>}
+   * @template T
+   */
+  async _withTransaction(fn) {
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const result = await fn(conn);
+      await conn.commit();
+      return result;
+    } catch (error) {
+      await conn.rollback().catch(() => {});
+      throw error;
+    } finally {
       conn.release();
     }
   }
@@ -262,6 +288,58 @@ class MysqlTokenStore {
       if (error instanceof TokenStoreError) throw error;
       throw new TokenStoreError(
         `Failed to set token outputs: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Returns the spendable per-token balances aggregated server-side.
+   * Each entry includes full token metadata + the available + swap-reserved sum.
+   * Tokens with zero spendable balance are filtered out by the HAVING clause.
+   * @returns {Promise<Array<{metadata: object, balance: string}>>}
+   */
+  async getTokenBalances() {
+    try {
+      const [rows] = await this.pool.query(`
+        SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
+               m.max_supply, m.is_freezable, m.creation_entity_public_key,
+               CAST(COALESCE(SUM(
+                 CASE
+                   WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
+                   WHEN r.purpose = 'Swap' THEN CAST(o.token_amount AS DECIMAL(65,0))
+                   ELSE 0
+                 END
+               ), 0) AS CHAR) AS balance
+        FROM token_metadata m
+        JOIN token_outputs o ON o.token_identifier = m.identifier
+        LEFT JOIN token_reservations r ON o.reservation_id = r.id
+        GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
+                 m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key
+        HAVING COALESCE(SUM(
+                 CASE
+                   WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
+                   WHEN r.purpose = 'Swap' THEN CAST(o.token_amount AS DECIMAL(65,0))
+                   ELSE 0
+                 END
+               ), 0) > 0
+      `);
+      return rows.map((row) => ({
+        metadata: {
+          identifier: row.identifier,
+          issuerPublicKey: row.issuer_public_key,
+          name: row.name,
+          ticker: row.ticker,
+          decimals: row.decimals,
+          maxSupply: row.max_supply,
+          isFreezable: toBool(row.is_freezable) ?? false,
+          creationEntityPublicKey: row.creation_entity_public_key || null,
+        },
+        balance: row.balance,
+      }));
+    } catch (error) {
+      throw new TokenStoreError(
+        `Failed to get token balances: ${error.message}`,
         error
       );
     }
@@ -592,7 +670,7 @@ class MysqlTokenStore {
 
   async cancelReservation(id) {
     try {
-      await this._withWriteTransaction(async (conn) => {
+      await this._withTransaction(async (conn) => {
         await conn.query(
           "UPDATE token_outputs SET reservation_id = NULL WHERE reservation_id = ?",
           [id]
@@ -610,7 +688,7 @@ class MysqlTokenStore {
 
   async finalizeReservation(id) {
     try {
-      await this._withWriteTransaction(async (conn) => {
+      await this._withTransaction(async (conn) => {
         const [reservationRows] = await conn.query(
           "SELECT purpose FROM token_reservations WHERE id = ?",
           [id]

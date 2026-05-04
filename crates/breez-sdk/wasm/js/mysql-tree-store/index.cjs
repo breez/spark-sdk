@@ -89,8 +89,8 @@ class MysqlTreeStore {
 
   /**
    * Run a function inside a transaction, holding the named write lock for the
-   * duration. The lock is acquired on the connection before BEGIN and released
-   * after COMMIT/ROLLBACK regardless of outcome.
+   * duration. Reserved for operations whose correctness depends on serializing
+   * the available-leaf set (`tryReserveLeaves`, `setLeaves`).
    * @param {function(import('mysql2/promise').PoolConnection): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -127,6 +127,31 @@ class MysqlTreeStore {
     }
   }
 
+  /**
+   * Run a function inside a transaction without the advisory lock. Used by
+   * operations scoped to a single reservation_id (`addLeaves`,
+   * `cancelReservation`, `finalizeReservation`, `updateReservation`) where
+   * row-level FK + InnoDB MVCC suffice and the global lock would only add
+   * contention.
+   * @param {function(import('mysql2/promise').PoolConnection): Promise<T>} fn
+   * @returns {Promise<T>}
+   * @template T
+   */
+  async _withTransaction(fn) {
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const result = await fn(conn);
+      await conn.commit();
+      return result;
+    } catch (error) {
+      await conn.rollback().catch(() => {});
+      throw error;
+    } finally {
+      conn.release();
+    }
+  }
+
   // ===== TreeStore Methods =====
 
   async addLeaves(leaves) {
@@ -135,7 +160,7 @@ class MysqlTreeStore {
         return;
       }
 
-      await this._withWriteTransaction(async (conn) => {
+      await this._withTransaction(async (conn) => {
         const leafIds = leaves.map((l) => l.id);
         await this._batchRemoveSpentLeaves(conn, leafIds);
         await this._batchUpsertLeaves(conn, leaves, false, null);
@@ -144,6 +169,30 @@ class MysqlTreeStore {
       if (error instanceof TreeStoreError) throw error;
       throw new TreeStoreError(
         `Failed to add leaves: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Returns the wallet's spendable balance (available + missing-from-operators
+   * + swap-reserved). Aggregated server-side so we don't fetch every leaf.
+   * @returns {Promise<bigint>}
+   */
+  async getAvailableBalance() {
+    try {
+      const [rows] = await this.pool.query(`
+        SELECT COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(l.data, '$.value')) AS UNSIGNED)), 0) AS balance
+        FROM tree_leaves l
+        LEFT JOIN tree_reservations r ON l.reservation_id = r.id
+        WHERE
+          (l.reservation_id IS NULL AND l.status = 'Available')
+          OR r.purpose = 'Swap'
+      `);
+      return BigInt(rows[0].balance);
+    } catch (error) {
+      throw new TreeStoreError(
+        `Failed to get available balance: ${error.message}`,
         error
       );
     }
@@ -257,7 +306,7 @@ class MysqlTreeStore {
 
   async cancelReservation(id, leavesToKeep) {
     try {
-      await this._withWriteTransaction(async (conn) => {
+      await this._withTransaction(async (conn) => {
         const [existsRows] = await conn.query(
           "SELECT id FROM tree_reservations WHERE id = ?",
           [id]
@@ -287,7 +336,7 @@ class MysqlTreeStore {
 
   async finalizeReservation(id, newLeaves) {
     try {
-      await this._withWriteTransaction(async (conn) => {
+      await this._withTransaction(async (conn) => {
         const [resRows] = await conn.query(
           "SELECT id, purpose FROM tree_reservations WHERE id = ?",
           [id]
@@ -332,22 +381,57 @@ class MysqlTreeStore {
     try {
       return await this._withWriteTransaction(async (conn) => {
         const targetAmount = targetAmounts ? this._totalSats(targetAmounts) : 0;
+        const maxTarget = this._maxTargetForPrefilter(targetAmounts);
 
-        const [availableRows] = await conn.query(
-          `SELECT data
+        // True total available across ALL eligible leaves — required for the
+        // WaitForPending decision. Must NOT be derived from the prefiltered
+        // slim set since the prefilter excludes big leaves.
+        const [totalRows] = await conn.query(
+          `SELECT COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)), 0) AS total
            FROM tree_leaves
            WHERE status = 'Available'
              AND is_missing_from_operators = 0
              AND reservation_id IS NULL`
         );
+        const available = Number(totalRows[0].total);
 
-        const availableLeaves = availableRows.map((r) => parseJson(r.data));
-        const available = availableLeaves.reduce((sum, l) => sum + l.value, 0);
+        // Slim projection: only (id, value) for leaves the selection might use.
+        // Includes all leaves with value <= maxTarget plus the smallest leaf
+        // with value > maxTarget (covers the minimum-amount fallback case
+        // where one larger leaf is sufficient).
+        const [slimRows] = await conn.query(
+          `SELECT id, CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) AS value
+           FROM tree_leaves
+           WHERE status = 'Available'
+             AND is_missing_from_operators = 0
+             AND reservation_id IS NULL
+             AND (
+               CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) <= ?
+               OR id = (
+                 SELECT id FROM (
+                   SELECT id FROM tree_leaves
+                   WHERE status = 'Available'
+                     AND is_missing_from_operators = 0
+                     AND reservation_id IS NULL
+                     AND CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) > ?
+                   ORDER BY CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
+                   LIMIT 1
+                 ) AS smallest_over
+               )
+             )`,
+          [maxTarget, maxTarget]
+        );
+
+        const slimLeaves = slimRows.map((r) => ({
+          id: r.id,
+          value: Number(r.value),
+        }));
 
         const pending = await this._calculatePendingBalance(conn);
 
+        // Try exact selection on slim leaves — selection only reads .id/.value
         const selected = this._selectLeavesByTargetAmounts(
-          availableLeaves,
+          slimLeaves,
           targetAmounts
         );
 
@@ -356,28 +440,36 @@ class MysqlTreeStore {
             throw new TreeStoreError("NonReservableLeaves");
           }
 
+          const fullLeaves = await this._fetchFullLeavesByIds(
+            conn,
+            selected.map((l) => l.id)
+          );
           const reservationId = this._generateId();
           await this._createReservation(
             conn,
             reservationId,
-            selected,
+            fullLeaves,
             purpose,
             0
           );
 
           return {
             type: "success",
-            reservation: { id: reservationId, leaves: selected },
+            reservation: { id: reservationId, leaves: fullLeaves },
           };
         }
 
         if (!exactOnly) {
           const minSelected = this._selectLeavesByMinimumAmount(
-            availableLeaves,
+            slimLeaves,
             targetAmount
           );
           if (minSelected !== null) {
-            const reservedAmount = minSelected.reduce(
+            const fullLeaves = await this._fetchFullLeavesByIds(
+              conn,
+              minSelected.map((l) => l.id)
+            );
+            const reservedAmount = fullLeaves.reduce(
               (sum, l) => sum + l.value,
               0
             );
@@ -390,14 +482,14 @@ class MysqlTreeStore {
             await this._createReservation(
               conn,
               reservationId,
-              minSelected,
+              fullLeaves,
               purpose,
               pendingChange
             );
 
             return {
               type: "success",
-              reservation: { id: reservationId, leaves: minSelected },
+              reservation: { id: reservationId, leaves: fullLeaves },
             };
           }
         }
@@ -439,7 +531,7 @@ class MysqlTreeStore {
 
   async updateReservation(reservationId, reservedLeaves, changeLeaves) {
     try {
-      return await this._withWriteTransaction(async (conn) => {
+      return await this._withTransaction(async (conn) => {
         const [existsRows] = await conn.query(
           "SELECT id FROM tree_reservations WHERE id = ?",
           [reservationId]
@@ -504,6 +596,35 @@ class MysqlTreeStore {
       return targetAmounts.denominations.reduce((sum, d) => sum + d, 0);
     }
     return 0;
+  }
+
+  /**
+   * Largest single value the selection algorithm could possibly need.
+   * For an unbounded target we have to return all leaves (no prefilter).
+   */
+  _maxTargetForPrefilter(targetAmounts) {
+    if (!targetAmounts) return Number.MAX_SAFE_INTEGER;
+    if (targetAmounts.type === "amountAndFee") {
+      return Math.max(targetAmounts.amountSats, targetAmounts.feeSats || 0);
+    }
+    if (targetAmounts.type === "exactDenominations") {
+      return targetAmounts.denominations.reduce((m, v) => Math.max(m, v), 0);
+    }
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  /**
+   * Pull the full `data` JSON for the leaves the selection algorithm picked.
+   * Typically this is 1-3 rows even when the prefiltered set was thousands.
+   */
+  async _fetchFullLeavesByIds(conn, ids) {
+    if (!ids || ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(", ");
+    const [rows] = await conn.query(
+      `SELECT data FROM tree_leaves WHERE id IN (${placeholders})`,
+      ids
+    );
+    return rows.map((r) => parseJson(r.data));
   }
 
   _selectLeavesByTargetAmounts(leaves, targetAmounts) {

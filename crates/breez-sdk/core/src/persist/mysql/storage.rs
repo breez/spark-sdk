@@ -750,29 +750,25 @@ impl Storage for MysqlStorage {
 
         let mut deposits = Vec::new();
         for row in &rows {
-            let claim_error_str: Option<String> = row.get(4);
+            let claim_error_str: Option<String> = get_opt_str(row, 4);
             let claim_error: Option<DepositClaimError> = from_json_string_opt(claim_error_str)?;
 
             deposits.push(DepositInfo {
-                txid: row
-                    .get(0)
-                    .ok_or_else(|| StorageError::Implementation("missing txid".into()))?,
+                txid: get_str(row, 0)?,
                 vout: u32::try_from(
-                    row.get::<i32, _>(1)
-                        .ok_or_else(|| StorageError::Implementation("missing vout".into()))?,
+                    row.get::<Option<i32>, _>(1)
+                        .ok_or_else(|| StorageError::Implementation("missing vout".into()))?
+                        .ok_or_else(|| StorageError::Implementation("vout is NULL".into()))?,
                 )?,
-                amount_sats: row
-                    .get::<Option<i64>, _>(2)
-                    .flatten()
+                amount_sats: get_opt_i64(row, 2)
                     .map(u64::try_from)
                     .transpose()?
                     .unwrap_or(0),
-                is_mature: row
-                    .get(3)
-                    .ok_or_else(|| StorageError::Implementation("missing is_mature".into()))?,
+                is_mature: get_opt_bool(row, 3)
+                    .ok_or_else(|| StorageError::Implementation("is_mature is NULL".into()))?,
                 claim_error,
-                refund_tx: row.get(5),
-                refund_tx_id: row.get(6),
+                refund_tx: get_opt_str(row, 5),
+                refund_tx_id: get_opt_str(row, 6),
             });
         }
         Ok(deposits)
@@ -1044,7 +1040,7 @@ impl Storage for MysqlStorage {
 
         let mut results = Vec::new();
         for row in &rows {
-            let existing_data: Option<String> = row.get(8);
+            let existing_data: Option<String> = get_opt_str(row, 8);
             let parent = if let Some(existing_data) = existing_data {
                 Some(Record {
                     id: RecordId::new(get_str(row, 0)?, get_str(row, 1)?),
@@ -1151,7 +1147,7 @@ impl Storage for MysqlStorage {
 
         let mut results = Vec::new();
         for row in &rows {
-            let existing_data: Option<String> = row.get(7);
+            let existing_data: Option<String> = get_opt_str(row, 7);
             let old_state = if let Some(existing_data) = existing_data {
                 Some(Record {
                     id: RecordId::new(get_str(row, 0)?, get_str(row, 1)?),
@@ -1196,7 +1192,7 @@ impl Storage for MysqlStorage {
             .map_err(map_db_error)?;
 
         if let Some(row) = row {
-            let existing_data: Option<String> = row.get(8);
+            let existing_data: Option<String> = get_opt_str(&row, 8);
             let parent = if let Some(existing_data) = existing_data {
                 Some(Record {
                     id: RecordId::new(get_str(&row, 0)?, get_str(&row, 1)?),
@@ -1311,11 +1307,11 @@ const SELECT_PAYMENT_SQL: &str = "
 
 #[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row) -> Result<Payment, StorageError> {
-    let withdraw_tx_id: Option<String> = row.get(7);
-    let deposit_tx_id: Option<String> = row.get(8);
-    let spark: Option<bool> = row.get(9);
-    let lightning_invoice: Option<String> = row.get(10);
-    let token_metadata: Option<String> = row.get(20);
+    let withdraw_tx_id: Option<String> = get_opt_str(row, 7);
+    let deposit_tx_id: Option<String> = get_opt_str(row, 8);
+    let spark: Option<bool> = get_opt_bool(row, 9);
+    let lightning_invoice: Option<String> = get_opt_str(row, 10);
+    let token_metadata: Option<String> = get_opt_str(row, 20);
 
     let details = match (
         lightning_invoice,
@@ -1327,9 +1323,9 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         (Some(invoice), _, _, _, _) => {
             let payment_hash: String = get_str(row, 11)?;
             let destination_pubkey: String = get_str(row, 12)?;
-            let description: Option<String> = row.get(13);
-            let preimage: Option<String> = row.get(14);
-            let htlc_status_str: Option<String> = row.get(15);
+            let description: Option<String> = get_opt_str(row, 13);
+            let preimage: Option<String> = get_opt_str(row, 14);
+            let htlc_status_str: Option<String> = get_opt_str(row, 15);
             let htlc_status: SparkHtlcStatus = htlc_status_str
                 .ok_or_else(|| {
                     StorageError::Implementation(
@@ -1347,12 +1343,12 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 expiry_time: u64::try_from(htlc_expiry_time)?,
                 status: htlc_status,
             };
-            let lnurl_pay_info_str: Option<String> = row.get(17);
-            let lnurl_withdraw_info_str: Option<String> = row.get(18);
-            let lnurl_nostr_zap_request: Option<String> = row.get(26);
-            let lnurl_nostr_zap_receipt: Option<String> = row.get(27);
-            let lnurl_sender_comment: Option<String> = row.get(28);
-            let lnurl_payment_hash: Option<String> = row.get(29);
+            let lnurl_pay_info_str: Option<String> = get_opt_str(row, 17);
+            let lnurl_withdraw_info_str: Option<String> = get_opt_str(row, 18);
+            let lnurl_nostr_zap_request: Option<String> = get_opt_str(row, 26);
+            let lnurl_nostr_zap_receipt: Option<String> = get_opt_str(row, 27);
+            let lnurl_sender_comment: Option<String> = get_opt_str(row, 28);
+            let lnurl_payment_hash: Option<String> = get_opt_str(row, 29);
 
             let lnurl_pay_info: Option<LnurlPayInfo> = from_json_string_opt(lnurl_pay_info_str)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> =
@@ -1380,11 +1376,11 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
         (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_str: Option<String> = row.get(24);
+            let invoice_details_str: Option<String> = get_opt_str(row, 24);
             let invoice_details = from_json_string_opt(invoice_details_str)?;
-            let htlc_details_str: Option<String> = row.get(25);
+            let htlc_details_str: Option<String> = get_opt_str(row, 25);
             let htlc_details = from_json_string_opt(htlc_details_str)?;
-            let conversion_info_str: Option<String> = row.get(19);
+            let conversion_info_str: Option<String> = get_opt_str(row, 19);
             let conversion_info: Option<ConversionInfo> =
                 from_json_string_opt(conversion_info_str)?;
             Some(PaymentDetails::Spark {
@@ -1398,9 +1394,9 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             let tx_type = tx_type_str
                 .parse()
                 .map_err(|e: String| StorageError::Serialization(e))?;
-            let invoice_details_str: Option<String> = row.get(23);
+            let invoice_details_str: Option<String> = get_opt_str(row, 23);
             let invoice_details = from_json_string_opt(invoice_details_str)?;
-            let conversion_info_str: Option<String> = row.get(19);
+            let conversion_info_str: Option<String> = get_opt_str(row, 19);
             let conversion_info: Option<ConversionInfo> =
                 from_json_string_opt(conversion_info_str)?;
             Some(PaymentDetails::Token {
@@ -1419,7 +1415,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
     let status_str: String = get_str(row, 2)?;
     let amount_str: String = get_str(row, 3)?;
     let fees_str: String = get_str(row, 4)?;
-    let method_str: Option<String> = row.get(6);
+    let method_str: Option<String> = get_opt_str(row, 6);
 
     Ok(Payment {
         id: get_str(row, 0)?,
@@ -1444,7 +1440,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 .unwrap_or(PaymentMethod::Lightning)
         }),
         conversion_details: {
-            let conversion_status_str: Option<String> = row.get(30);
+            let conversion_status_str: Option<String> = get_opt_str(row, 30);
             conversion_status_str
                 .map(|s| {
                     s.parse::<ConversionStatus>()
@@ -1472,13 +1468,35 @@ fn build_placeholders(n: usize) -> String {
 }
 
 fn get_str(row: &Row, idx: usize) -> Result<String, StorageError> {
-    row.get(idx)
-        .ok_or_else(|| StorageError::Implementation(format!("missing column at index {idx}")))
+    // `Row::get::<T, _>(idx)` panics during conversion when T is non-Option
+    // and the column value is NULL. Read as `Option<String>` first so NULL
+    // surfaces as `Some(None)` and a missing column as `None`, then collapse
+    // both into the same "missing" error path.
+    row.get::<Option<String>, _>(idx)
+        .ok_or_else(|| StorageError::Implementation(format!("missing column at index {idx}")))?
+        .ok_or_else(|| StorageError::Implementation(format!("column at index {idx} is NULL")))
 }
 
 fn get_i64(row: &Row, idx: usize) -> Result<i64, StorageError> {
-    row.get(idx)
-        .ok_or_else(|| StorageError::Implementation(format!("missing i64 column at index {idx}")))
+    row.get::<Option<i64>, _>(idx)
+        .ok_or_else(|| StorageError::Implementation(format!("missing i64 column at index {idx}")))?
+        .ok_or_else(|| StorageError::Implementation(format!("i64 column at index {idx} is NULL")))
+}
+
+/// NULL-safe `row.get` for nullable columns. `Row::get::<T, _>(idx)` panics on
+/// NULL during `FromValue` conversion when `T` is non-`Option`; reading as
+/// `Option<T>` and flattening avoids the panic and treats both "column
+/// missing" and "value NULL" as `None`.
+fn get_opt_str(row: &Row, idx: usize) -> Option<String> {
+    row.get::<Option<String>, _>(idx).flatten()
+}
+
+fn get_opt_bool(row: &Row, idx: usize) -> Option<bool> {
+    row.get::<Option<bool>, _>(idx).flatten()
+}
+
+fn get_opt_i64(row: &Row, idx: usize) -> Option<i64> {
+    row.get::<Option<i64>, _>(idx).flatten()
 }
 
 #[cfg(test)]
@@ -1564,5 +1582,77 @@ mod tests {
     async fn test_contacts_crud() {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_contacts_crud(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_asset_filtering() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_asset_filtering(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_filtering() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_timestamp_filtering(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_spark_htlc_status_filtering() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_spark_htlc_status_filtering(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_lightning_htlc_details_and_status_filtering() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_lightning_htlc_details_and_status_filtering(Box::new(
+            fixture.storage,
+        ))
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_conversion_refund_needed_filtering() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_conversion_refund_needed_filtering(Box::new(fixture.storage))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_token_transaction_type_filtering() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_token_transaction_type_filtering(Box::new(fixture.storage))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_combined_filters() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_combined_filters(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_sort_order() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_sort_order(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_details_update_persistence() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_payment_details_update_persistence(Box::new(fixture.storage))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_metadata_merge() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_payment_metadata_merge(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_conversion_status_persistence() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_conversion_status_persistence(Box::new(fixture.storage)).await;
     }
 }

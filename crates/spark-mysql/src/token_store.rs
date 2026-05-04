@@ -56,6 +56,51 @@ impl TokenOutputStore for MysqlTokenStore {
         result
     }
 
+    async fn get_token_balances(
+        &self,
+    ) -> Result<Vec<(TokenMetadata, u128)>, TokenOutputServiceError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        // Server-side aggregate: spendable (available + swap-reserved) per
+        // token. The `HAVING > 0` filter mirrors the postgres impl and drops
+        // tokens whose entire balance is locked in a Payment reservation.
+        // `token_amount` is stored as VARCHAR — cast to DECIMAL(65,0) so the
+        // SUM works across full u128 range, then return as TEXT for parsing.
+        let rows: Vec<Row> = conn
+            .query(
+                r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
+                         m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                         CAST(COALESCE(SUM(
+                            CASE
+                              WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
+                              WHEN r.purpose = 'Swap' THEN CAST(o.token_amount AS DECIMAL(65,0))
+                              ELSE 0
+                            END
+                         ), 0) AS CHAR) AS balance
+                  FROM token_metadata m
+                  JOIN token_outputs o ON o.token_identifier = m.identifier
+                  LEFT JOIN token_reservations r ON o.reservation_id = r.id
+                  GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
+                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key
+                  HAVING COALESCE(SUM(
+                            CASE
+                              WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
+                              WHEN r.purpose = 'Swap' THEN CAST(o.token_amount AS DECIMAL(65,0))
+                              ELSE 0
+                            END
+                         ), 0) > 0",
+            )
+            .await
+            .map_err(map_err)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let metadata = Self::metadata_from_row(&row)?;
+            let balance_str: String = row.get("balance").ok_or_else(missing_col)?;
+            let balance: u128 = balance_str.parse().map_err(map_err)?;
+            out.push((metadata, balance));
+        }
+        Ok(out)
+    }
+
     async fn list_tokens_outputs(
         &self,
     ) -> Result<Vec<TokenOutputsPerStatus>, TokenOutputServiceError> {
@@ -81,7 +126,7 @@ impl TokenOutputStore for MysqlTokenStore {
         let mut map: HashMap<String, TokenOutputsPerStatus> = HashMap::new();
 
         for row in rows {
-            let identifier: String = row.get("identifier").ok_or_else(missing_col)?;
+            let identifier: String = get_str_required(&row, "identifier")?;
             if !map.contains_key(&identifier) {
                 let metadata = Self::metadata_from_row(&row)?;
                 map.insert(
@@ -98,13 +143,16 @@ impl TokenOutputStore for MysqlTokenStore {
                 continue;
             };
 
-            let output_id: Option<String> = row.get("output_id");
+            // `Option<Option<String>>`: outer = column missing, inner = NULL.
+            // Both flatten to "no output for this row" (LEFT JOIN miss).
+            let output_id: Option<String> =
+                row.get::<Option<String>, _>("output_id").and_then(|v| v);
             if output_id.is_none() {
                 continue;
             }
 
             let output = Self::output_from_row(&row)?;
-            let purpose: Option<String> = row.get("purpose");
+            let purpose: Option<String> = row.get::<Option<String>, _>("purpose").and_then(|v| v);
 
             match purpose.as_deref() {
                 Some("Payment") => entry.reserved_for_payment.push(output),
@@ -161,13 +209,14 @@ impl TokenOutputStore for MysqlTokenStore {
         };
 
         for row in &rows {
-            let output_id: Option<String> = row.get("output_id");
+            let output_id: Option<String> =
+                row.get::<Option<String>, _>("output_id").and_then(|v| v);
             if output_id.is_none() {
                 continue;
             }
 
             let output = Self::output_from_row(row)?;
-            let purpose: Option<String> = row.get("purpose");
+            let purpose: Option<String> = row.get::<Option<String>, _>("purpose").and_then(|v| v);
 
             match purpose.as_deref() {
                 Some("Payment") => result.reserved_for_payment.push(output),
@@ -265,11 +314,9 @@ impl TokenOutputStore for MysqlTokenStore {
         &self,
         id: &TokenOutputsReservationId,
     ) -> Result<(), TokenOutputServiceError> {
+        // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::acquire_write_lock(&mut conn).await?;
-        let result = Self::cancel_reservation_inner(&mut conn, id).await;
-        Self::release_write_lock_quiet(&mut conn).await;
-        result?;
+        Self::cancel_reservation_inner(&mut conn, id).await?;
         trace!("Canceled token outputs reservation: {}", id);
         Ok(())
     }
@@ -278,11 +325,9 @@ impl TokenOutputStore for MysqlTokenStore {
         &self,
         id: &TokenOutputsReservationId,
     ) -> Result<(), TokenOutputServiceError> {
+        // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::acquire_write_lock(&mut conn).await?;
-        let result = Self::finalize_reservation_inner(&mut conn, id).await;
-        Self::release_write_lock_quiet(&mut conn).await;
-        result?;
+        Self::finalize_reservation_inner(&mut conn, id).await?;
         trace!("Finalized token outputs reservation: {}", id);
         Ok(())
     }
@@ -916,14 +961,31 @@ impl MysqlTokenStore {
 
     #[allow(clippy::cast_sign_loss)]
     fn metadata_from_row(row: &Row) -> Result<TokenMetadata, TokenOutputServiceError> {
-        let identifier: String = row.get("identifier").ok_or_else(missing_col)?;
-        let issuer_pk_str: String = row.get("issuer_public_key").ok_or_else(missing_col)?;
-        let name: String = row.get("name").ok_or_else(missing_col)?;
-        let ticker: String = row.get("ticker").ok_or_else(missing_col)?;
-        let decimals: i32 = row.get("decimals").ok_or_else(missing_col)?;
-        let max_supply_str: String = row.get("max_supply").ok_or_else(missing_col)?;
-        let is_freezable: bool = row.get("is_freezable").ok_or_else(missing_col)?;
-        let creation_entity_pk_str: Option<String> = row.get("creation_entity_public_key");
+        // Use Option<T> for every read to avoid panics on NULL — `row.get::<T, _>`
+        // with non-Option `T` panics on NULL during FromValue conversion. NOT NULL
+        // schema constraints already enforce this is rare, but a `(`Null`)` panic
+        // crashes the whole connection's listening loop instead of returning a
+        // typed error to the caller.
+        let identifier: String = get_str_required(row, "identifier")?;
+        let issuer_pk_str: String = get_str_required(row, "issuer_public_key")?;
+        let name: String = get_str_required(row, "name")?;
+        let ticker: String = get_str_required(row, "ticker")?;
+        let decimals: i32 = row
+            .get::<Option<i32>, _>("decimals")
+            .ok_or_else(missing_col)?
+            .ok_or_else(|| {
+                TokenOutputServiceError::Generic("decimals column is NULL".to_string())
+            })?;
+        let max_supply_str: String = get_str_required(row, "max_supply")?;
+        let is_freezable: bool = row
+            .get::<Option<bool>, _>("is_freezable")
+            .ok_or_else(missing_col)?
+            .ok_or_else(|| {
+                TokenOutputServiceError::Generic("is_freezable column is NULL".to_string())
+            })?;
+        let creation_entity_pk_str: Option<String> = row
+            .get::<Option<String>, _>("creation_entity_public_key")
+            .unwrap_or(None);
 
         Ok(TokenMetadata {
             identifier,
@@ -941,22 +1003,41 @@ impl MysqlTokenStore {
 
     #[allow(clippy::cast_sign_loss)]
     fn output_from_row(row: &Row) -> Result<TokenOutputWithPrevOut, TokenOutputServiceError> {
-        let output_id: String = row.get("output_id").ok_or_else(missing_col)?;
-        let owner_pk_str: String = row.get("owner_public_key").ok_or_else(missing_col)?;
-        let revocation_commitment: String =
-            row.get("revocation_commitment").ok_or_else(missing_col)?;
-        let withdraw_bond_sats: i64 = row.get("withdraw_bond_sats").ok_or_else(missing_col)?;
+        // See `metadata_from_row` for why every column is read via `Option<T>`
+        // first — `mysql_async` panics on NULL for non-Option `T`.
+        let output_id: String = get_str_required(row, "output_id")?;
+        let owner_pk_str: String = get_str_required(row, "owner_public_key")?;
+        let revocation_commitment: String = get_str_required(row, "revocation_commitment")?;
+        let withdraw_bond_sats: i64 = row
+            .get::<Option<i64>, _>("withdraw_bond_sats")
+            .ok_or_else(missing_col)?
+            .ok_or_else(|| {
+                TokenOutputServiceError::Generic("withdraw_bond_sats column is NULL".to_string())
+            })?;
         let withdraw_relative_block_locktime: i64 = row
-            .get("withdraw_relative_block_locktime")
-            .ok_or_else(missing_col)?;
-        let token_pk_str: Option<String> = row.get("token_public_key");
-        let token_amount_str: String = row.get("token_amount").ok_or_else(missing_col)?;
-        let prev_tx_hash: String = row.get("prev_tx_hash").ok_or_else(missing_col)?;
-        let prev_tx_vout: i32 = row.get("prev_tx_vout").ok_or_else(missing_col)?;
+            .get::<Option<i64>, _>("withdraw_relative_block_locktime")
+            .ok_or_else(missing_col)?
+            .ok_or_else(|| {
+                TokenOutputServiceError::Generic(
+                    "withdraw_relative_block_locktime column is NULL".to_string(),
+                )
+            })?;
+        let token_pk_str: Option<String> = row
+            .get::<Option<String>, _>("token_public_key")
+            .unwrap_or(None);
+        let token_amount_str: String = get_str_required(row, "token_amount")?;
+        let prev_tx_hash: String = get_str_required(row, "prev_tx_hash")?;
+        let prev_tx_vout: i32 = row
+            .get::<Option<i32>, _>("prev_tx_vout")
+            .ok_or_else(missing_col)?
+            .ok_or_else(|| {
+                TokenOutputServiceError::Generic("prev_tx_vout column is NULL".to_string())
+            })?;
 
         let token_identifier: String = row
-            .get("token_identifier")
-            .or_else(|| row.get("identifier"))
+            .get::<Option<String>, _>("token_identifier")
+            .and_then(|v| v) // Some(Some(s)) | Some(None) → Option<String>
+            .or_else(|| row.get::<Option<String>, _>("identifier").and_then(|v| v))
             .ok_or_else(missing_col)?;
 
         Ok(TokenOutputWithPrevOut {
@@ -987,6 +1068,19 @@ fn build_placeholders(n: usize) -> String {
         s.push('?');
     }
     s
+}
+
+/// Reads a column that the schema declares NOT NULL as an `Option<String>`
+/// first to avoid `mysql_async`'s panic-on-NULL behavior in `FromValue` for
+/// non-`Option` types, then surfaces both "column missing" and "column NULL"
+/// as `TokenOutputServiceError::Generic`. Use this for any `String` column
+/// in row-helper code, even when the schema says NOT NULL — a buggy
+/// migration or a CTE that exposes the same column name on multiple sides
+/// of a JOIN can otherwise crash the connection.
+fn get_str_required(row: &Row, col: &str) -> Result<String, TokenOutputServiceError> {
+    row.get::<Option<String>, _>(col)
+        .ok_or_else(missing_col)?
+        .ok_or_else(|| TokenOutputServiceError::Generic(format!("{col} column is NULL")))
 }
 
 fn missing_col() -> TokenOutputServiceError {

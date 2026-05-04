@@ -16,16 +16,16 @@
 //! - Partial indexes (`WHERE …`) are dropped (`MySQL` does not support them); the
 //!   selectivity is acceptable on full indexes for our workload.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use macros::async_trait;
 use mysql_async::prelude::*;
 use mysql_async::{Conn, Params, Pool, TxOpts, Value};
-use platform_utils::time::SystemTime;
+use platform_utils::time::{Instant, SystemTime};
 use spark_wallet::{
-    Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
+    LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
     TargetAmounts, TreeNode, TreeNodeStatus, TreeServiceError, TreeStore,
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
@@ -59,6 +59,24 @@ const RESERVATION_TIMEOUT_SECS: i64 = 300; // 5 minutes
 /// deployments where another instance may still be processing a refresh.
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000;
 
+/// Lightweight `(id, value)` pair used by `try_reserve_leaves` to run the
+/// selection algorithm without pulling each leaf's full `data` JSON.
+#[derive(Clone)]
+struct SlimLeaf {
+    id: String,
+    value: u64,
+}
+
+impl LeafLike for SlimLeaf {
+    type Id = String;
+    fn leaf_id(&self) -> &Self::Id {
+        &self.id
+    }
+    fn leaf_value(&self) -> u64 {
+        self.value
+    }
+}
+
 /// `MySQL`-backed tree store implementation.
 ///
 /// Uses an application-level named lock to serialize writes (`GET_LOCK`) and
@@ -84,12 +102,32 @@ impl TreeStore for MysqlTreeStore {
         }
 
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::acquire_write_lock(&mut conn).await?;
-        let result = Self::add_leaves_inner(&mut conn, leaves).await;
-        Self::release_write_lock_quiet(&mut conn).await;
-        result?;
+        // No global write lock: `add_leaves` is scoped to inserting/updating
+        // a known set of leaf rows; row-level locks + InnoDB MVCC are
+        // sufficient. Mirrors the postgres impl's lock-removal change.
+        Self::add_leaves_inner(&mut conn, leaves).await?;
         self.notify_balance_change();
         Ok(())
+    }
+
+    async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        // Server-side aggregation: counts the same set as `Leaves::balance()`
+        // (available + missing-from-operators is excluded; swap-reserved is
+        // included). Avoids fetching every leaf's `data` JSON when callers
+        // only need the spendable total.
+        let row: Option<i64> = conn
+            .query_first(
+                r"SELECT COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(l.data, '$.value')) AS UNSIGNED)), 0) AS balance
+                  FROM tree_leaves l
+                  LEFT JOIN tree_reservations r ON l.reservation_id = r.id
+                  WHERE
+                      (l.reservation_id IS NULL AND l.status = 'Available')
+                      OR r.purpose = 'Swap'",
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(u64::try_from(row.unwrap_or(0)).unwrap_or(0))
     }
 
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
@@ -170,11 +208,9 @@ impl TreeStore for MysqlTreeStore {
         id: &LeavesReservationId,
         leaves_to_keep: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
+        // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::acquire_write_lock(&mut conn).await?;
-        let result = Self::cancel_reservation_inner(&mut conn, id, leaves_to_keep).await;
-        Self::release_write_lock_quiet(&mut conn).await;
-        result?;
+        Self::cancel_reservation_inner(&mut conn, id, leaves_to_keep).await?;
         self.notify_balance_change();
         Ok(())
     }
@@ -184,11 +220,9 @@ impl TreeStore for MysqlTreeStore {
         id: &LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
+        // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::acquire_write_lock(&mut conn).await?;
-        let result = Self::finalize_reservation_inner(&mut conn, id, new_leaves).await;
-        Self::release_write_lock_quiet(&mut conn).await;
-        result?;
+        Self::finalize_reservation_inner(&mut conn, id, new_leaves).await?;
         trace!("Finalized reservation: {id}");
         self.notify_balance_change();
         Ok(())
@@ -243,17 +277,15 @@ impl TreeStore for MysqlTreeStore {
         reserved_leaves: &[TreeNode],
         change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError> {
+        // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::acquire_write_lock(&mut conn).await?;
-        let result = Self::update_reservation_inner(
+        let reservation = Self::update_reservation_inner(
             &mut conn,
             reservation_id,
             reserved_leaves,
             change_leaves,
         )
-        .await;
-        Self::release_write_lock_quiet(&mut conn).await;
-        let reservation = result?;
+        .await?;
         trace!(
             "Updated reservation {}: reserved {} leaves, added {} change leaves",
             reservation_id,
@@ -596,14 +628,19 @@ impl MysqlTreeStore {
         exact_only: bool,
         purpose: ReservationPurpose,
     ) -> Result<ReserveResult, TreeServiceError> {
+        let total_start = Instant::now();
+        let max_target = Self::slim_max_target(target_amounts);
         let mut tx = conn
             .start_transaction(TxOpts::default())
             .await
             .map_err(map_err)?;
 
-        let rows: Vec<String> = tx
-            .query(
-                r"SELECT data
+        // True total available across ALL eligible leaves — required for the
+        // WaitForPending decision. Must NOT be derived from the prefiltered
+        // slim set since the prefilter excludes big leaves.
+        let total_row: Option<i64> = tx
+            .query_first(
+                r"SELECT COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)), 0) AS total
                   FROM tree_leaves
                   WHERE status = 'Available'
                     AND is_missing_from_operators = 0
@@ -611,45 +648,68 @@ impl MysqlTreeStore {
             )
             .await
             .map_err(map_err)?;
+        let available: u64 = u64::try_from(total_row.unwrap_or(0)).unwrap_or(0);
 
-        let available_leaves: Vec<TreeNode> = rows
-            .iter()
-            .map(|s| Self::deserialize_node(s))
-            .collect::<Result<Vec<_>, _>>()?;
+        // Slim projection of selection candidates: id + value only.
+        // Includes all leaves with value <= max_target (covers exact-match +
+        // minimum-amount accumulators) plus the smallest leaf with value >
+        // max_target (covers the minimum-amount fallback case where one larger
+        // leaf is sufficient).
+        let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
+        let slim_rows: Vec<(String, i64)> = tx
+            .exec(
+                r"SELECT id, CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) AS value
+                  FROM tree_leaves
+                  WHERE status = 'Available'
+                    AND is_missing_from_operators = 0
+                    AND reservation_id IS NULL
+                    AND (
+                      CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) <= ?
+                      OR id = (
+                        SELECT id FROM (
+                          SELECT id FROM tree_leaves
+                          WHERE status = 'Available'
+                            AND is_missing_from_operators = 0
+                            AND reservation_id IS NULL
+                            AND CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) > ?
+                          ORDER BY CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
+                          LIMIT 1
+                        ) AS smallest_over
+                      )
+                    )",
+                (max_target_signed, max_target_signed),
+            )
+            .await
+            .map_err(map_err)?;
 
-        tracing::trace!(
-            "MysqlTreeStore::try_reserve_leaves: found {} available leaves",
-            available_leaves.len()
-        );
-        for leaf in &available_leaves {
-            tracing::trace!(
-                "MysqlTreeStore::try_reserve_leaves: available leaf {} owner={:?} value={}",
-                leaf.id,
-                leaf.owner_identity_public_key,
-                leaf.value
-            );
-        }
+        let slim: Vec<SlimLeaf> = slim_rows
+            .into_iter()
+            .map(|(id, value)| SlimLeaf {
+                id,
+                value: u64::try_from(value).unwrap_or(0),
+            })
+            .collect();
 
-        let available: u64 = available_leaves.iter().map(|l| l.value).sum();
         let pending = Self::calculate_pending_balance(&mut tx).await?;
 
-        let selected = select_leaves_by_target_amounts(&available_leaves, target_amounts);
+        // Try exact selection on the slim set — uses the same generic
+        // `select_helper` algorithm as the in-memory store.
+        let selected_exact = select_leaves_by_target_amounts(&slim, target_amounts);
 
-        match selected {
+        let result = match selected_exact {
             Ok(target_leaves) => {
-                let selected_leaves = [
-                    target_leaves.amount_leaves,
-                    target_leaves.fee_leaves.unwrap_or_default(),
-                ]
-                .concat();
-
-                if selected_leaves.is_empty() {
+                let selected_ids: Vec<String> = target_leaves
+                    .amount_leaves
+                    .iter()
+                    .chain(target_leaves.fee_leaves.iter().flatten())
+                    .map(|l| l.id.clone())
+                    .collect();
+                if selected_ids.is_empty() {
                     return Err(TreeServiceError::NonReservableLeaves);
                 }
-
+                let selected_leaves = Self::resolve_full_leaves(&mut tx, &selected_ids).await?;
                 Self::create_reservation(&mut tx, reservation_id, &selected_leaves, purpose, 0)
                     .await?;
-
                 tx.commit().await.map_err(map_err)?;
                 Ok(ReserveResult::Success(LeavesReservation::new(
                     selected_leaves,
@@ -657,16 +717,15 @@ impl MysqlTreeStore {
                 )))
             }
             Err(_) if !exact_only => {
-                if let Ok(Some(selected_leaves)) =
-                    select_leaves_by_minimum_amount(&available_leaves, target_amount)
-                {
+                if let Ok(Some(min_slim)) = select_leaves_by_minimum_amount(&slim, target_amount) {
+                    let min_ids: Vec<String> = min_slim.iter().map(|l| l.id.clone()).collect();
+                    let selected_leaves = Self::resolve_full_leaves(&mut tx, &min_ids).await?;
                     let reserved_amount: u64 = selected_leaves.iter().map(|l| l.value).sum();
                     let pending_change = if reserved_amount > target_amount && target_amount > 0 {
                         reserved_amount - target_amount
                     } else {
                         0
                     };
-
                     Self::create_reservation(
                         &mut tx,
                         reservation_id,
@@ -675,22 +734,20 @@ impl MysqlTreeStore {
                         pending_change,
                     )
                     .await?;
-
                     tx.commit().await.map_err(map_err)?;
-                    return Ok(ReserveResult::Success(LeavesReservation::new(
+                    Ok(ReserveResult::Success(LeavesReservation::new(
                         selected_leaves,
                         reservation_id.to_string(),
-                    )));
-                }
-
-                tx.commit().await.map_err(map_err)?;
-                if available + pending >= target_amount {
+                    )))
+                } else if available + pending >= target_amount {
+                    tx.commit().await.map_err(map_err)?;
                     Ok(ReserveResult::WaitForPending {
                         needed: target_amount,
                         available,
                         pending,
                     })
                 } else {
+                    tx.commit().await.map_err(map_err)?;
                     Ok(ReserveResult::InsufficientFunds)
                 }
             }
@@ -706,7 +763,72 @@ impl MysqlTreeStore {
                     Ok(ReserveResult::InsufficientFunds)
                 }
             }
+        };
+
+        let outcome = match &result {
+            Ok(ReserveResult::Success(r)) => format!("success(leaves={})", r.leaves.len()),
+            Ok(ReserveResult::WaitForPending { .. }) => "waitForPending".to_string(),
+            Ok(ReserveResult::InsufficientFunds) => "insufficientFunds".to_string(),
+            Err(e) => format!("err({e:?})"),
+        };
+        info!(
+            "MysqlTreeStore::try_reserve_leaves: {} (slim_candidates={}, max_target={}, exact_only={}, took {:?})",
+            outcome,
+            slim.len(),
+            max_target,
+            exact_only,
+            total_start.elapsed()
+        );
+        result
+    }
+
+    /// Largest single leaf value the selection algorithm could possibly need.
+    /// Used to bound the slim projection in `try_reserve_leaves`. For an
+    /// unbounded request we have to keep all leaves available.
+    fn slim_max_target(target_amounts: Option<&TargetAmounts>) -> u64 {
+        match target_amounts {
+            Some(TargetAmounts::AmountAndFee {
+                amount_sats,
+                fee_sats,
+            }) => std::cmp::max(*amount_sats, fee_sats.unwrap_or(0)),
+            Some(TargetAmounts::ExactDenominations { denominations }) => {
+                denominations.iter().copied().max().unwrap_or(0)
+            }
+            None => u64::MAX,
         }
+    }
+
+    /// Pull the full `TreeNode` JSON only for the leaves the slim selection
+    /// picked, preserving the algorithm's selection order. Typically 1-3 rows
+    /// even when the slim candidate set was thousands.
+    async fn resolve_full_leaves(
+        tx: &mut mysql_async::Transaction<'_>,
+        ids: &[String],
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = build_placeholders(ids.len());
+        let sql = format!("SELECT id, data FROM tree_leaves WHERE id IN ({placeholders})");
+        let params: Vec<Value> = ids.iter().cloned().map(Value::from).collect();
+        let rows: Vec<(String, String)> = tx
+            .exec(&sql, Params::Positional(params))
+            .await
+            .map_err(map_err)?;
+        let mut by_id: HashMap<String, TreeNode> = HashMap::with_capacity(rows.len());
+        for (id, data) in rows {
+            let node = Self::deserialize_node(&data)?;
+            by_id.insert(id, node);
+        }
+        let ordered: Vec<TreeNode> = ids.iter().filter_map(|id| by_id.remove(id)).collect();
+        if ordered.len() != ids.len() {
+            return Err(TreeServiceError::Generic(format!(
+                "Could not resolve full data for all selected leaves (wanted {}, got {})",
+                ids.len(),
+                ordered.len()
+            )));
+        }
+        Ok(ordered)
     }
 
     async fn update_reservation_inner(
