@@ -208,7 +208,9 @@ impl BreezSdk {
         &self,
         transaction: spark_wallet::TokenTransaction,
     ) -> Result<(), SdkError> {
-        let tx_inputs_are_ours = self.resolve_token_tx_inputs_are_ours(&transaction).await?;
+        let tx_inputs_are_ours = self
+            .token_tx_inputs_are_ours_cached_or_query(&transaction)
+            .await?;
         let object_repository = ObjectCacheRepository::new(self.storage.clone());
         let payments = token_transaction_to_payments(
             &self.spark_wallet,
@@ -253,7 +255,7 @@ impl BreezSdk {
     /// Wraps `token_tx_inputs_are_ours` with a local-cache fast path: if any
     /// payment for this tx hash already exists in storage, its `payment_type`
     /// answers the question and we skip the parent-tx fetch.
-    async fn resolve_token_tx_inputs_are_ours(
+    async fn token_tx_inputs_are_ours_cached_or_query(
         &self,
         transaction: &spark_wallet::TokenTransaction,
     ) -> Result<bool, SdkError> {
