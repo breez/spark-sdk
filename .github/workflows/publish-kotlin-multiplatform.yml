@@ -78,6 +78,12 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Cache Konan toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-1.9.21-${{ runner.os }}
+
       - name: Download Android JNI libs
         uses: actions/download-artifact@v4
         with:
