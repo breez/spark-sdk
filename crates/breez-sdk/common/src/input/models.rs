@@ -105,6 +105,7 @@ pub struct Bolt11InvoiceDetails {
     pub payment_secret: String,
     pub routing_hints: Vec<Bolt11RouteHint>,
     pub timestamp: u64,
+    pub fallback_addresses: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

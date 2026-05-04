@@ -4,7 +4,7 @@ use bitcoin::{Address, Denomination, address::NetworkUnchecked};
 use lightning::bolt11_invoice::Bolt11InvoiceDescriptionRef;
 use platform_utils::time::UNIX_EPOCH;
 use regex_lite::Regex;
-use spark_wallet::{SparkAddress, SparkAddressPaymentType};
+use spark_wallet::{SparkAddress, SparkAddressPaymentType, extract_bolt11_spark_address};
 use tracing::{debug, error, warn};
 
 use crate::{
@@ -758,6 +758,16 @@ fn parse_bolt11(input: &str, source: &PaymentRequestSource) -> Option<Bolt11Invo
         Err(_) => return None,
     };
 
+    // Check for spark addresses embedded in the fallback fields
+    let mut fallback_addresses: Vec<String> = bolt11
+        .fallback_addresses()
+        .into_iter()
+        .map(|a| a.to_string())
+        .collect();
+    if let Some((_, spark_address_str)) = extract_bolt11_spark_address(&bolt11) {
+        fallback_addresses.push(spark_address_str);
+    }
+
     Some(Bolt11InvoiceDetails {
         amount_msat: bolt11.amount_milli_satoshis(),
         description: match bolt11.description() {
@@ -798,6 +808,7 @@ fn parse_bolt11(input: &str, source: &PaymentRequestSource) -> Option<Bolt11Invo
             })
             .collect(),
         timestamp: bolt11.duration_since_epoch().as_secs(),
+        fallback_addresses,
     })
 }
 
