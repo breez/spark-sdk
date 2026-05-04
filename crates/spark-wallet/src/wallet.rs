@@ -1040,7 +1040,11 @@ impl SparkWallet {
         let our_pubkey = self.identity_public_key;
         let transfers = self
             .transfer_service
-            .query_transfers(&request.transfer_ids, request.paging)
+            .query_transfers(
+                &request.transfer_ids,
+                request.paging,
+                request.from_timestamp,
+            )
             .await?;
         create_transfers(
             transfers,
