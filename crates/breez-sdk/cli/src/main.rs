@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
     EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig, StableBalanceToken,
-    default_config, default_postgres_storage_config,
+    default_config, default_mysql_storage_config, default_postgres_storage_config,
 };
 use clap::Parser;
 use command::{Command, execute_command};
@@ -40,6 +40,11 @@ struct Cli {
     /// `PostgreSQL` connection string (enables `PostgreSQL` storage instead of `SQLite`)
     #[arg(long)]
     postgres_connection_string: Option<String>,
+
+    /// `MySQL` connection string (enables `MySQL` storage instead of `SQLite`).
+    /// Mutually exclusive with `--postgres-connection-string`.
+    #[arg(long, conflicts_with = "postgres_connection_string")]
+    mysql_connection_string: Option<String>,
 
     /// Stable balance tokens in "`TICKER:token_identifier`" format (repeatable)
     #[arg(long = "stable-balance-token")]
@@ -124,6 +129,7 @@ async fn run_interactive_mode(
     network: Network,
     account_number: Option<u32>,
     postgres_connection_string: Option<String>,
+    mysql_connection_string: Option<String>,
     stable_balance_config: Option<StableBalanceConfig>,
     passkey_config: Option<PasskeyConfig>,
 ) -> Result<()> {
@@ -175,6 +181,9 @@ async fn run_interactive_mode(
     if let Some(connection_string) = postgres_connection_string {
         sdk_builder =
             sdk_builder.with_postgres_backend(default_postgres_storage_config(connection_string));
+    } else if let Some(connection_string) = mysql_connection_string {
+        sdk_builder =
+            sdk_builder.with_mysql_backend(default_mysql_storage_config(connection_string));
     } else {
         sdk_builder = sdk_builder.with_default_storage(data_dir.to_string_lossy().to_string());
     }
@@ -303,6 +312,7 @@ async fn main() -> Result<(), anyhow::Error> {
         network,
         cli.account_number,
         cli.postgres_connection_string,
+        cli.mysql_connection_string,
         stable_balance_config,
         passkey_config,
     ))

@@ -1,0 +1,60 @@
+{
+  "name": "@breez-sdk/mysql-storage",
+  "version": "1.0.0",
+  "description": "Node.js MySQL storage implementation for Breez SDK WASM (CommonJS). Targets MySQL 8.0+.",
+  "main": "index.cjs",
+  "exports": {
+    ".": "./index.cjs",
+    "./storage": "./index.cjs",
+    "./migrations": "./migrations.cjs",
+    "./errors": "./errors.cjs"
+  },
+  "scripts": {
+    "lint": "eslint *.cjs",
+    "lint:fix": "eslint *.cjs --fix"
+  },
+  "dependencies": {
+    "mysql2": "^3.11.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "testcontainers": "^10.0.0"
+  },
+  "eslintConfig": {
+    "env": {
+      "node": true,
+      "es2022": true,
+      "jest": true
+    },
+    "extends": [
+      "eslint:recommended"
+    ],
+    "parserOptions": {
+      "ecmaVersion": 2022,
+      "sourceType": "script"
+    },
+    "rules": {
+      "no-console": "warn",
+      "no-unused-vars": "error",
+      "prefer-const": "error",
+      "no-var": "error"
+    }
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/breez/spark-sdk"
+  },
+  "keywords": [
+    "breez",
+    "lightning",
+    "mysql",
+    "storage",
+    "wasm",
+    "nodejs"
+  ],
+  "author": "Breez Technology Ltd.",
+  "license": "MIT"
+}

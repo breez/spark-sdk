@@ -47,6 +47,12 @@ pub use persist::postgres::{
     PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config,
 };
 
+#[cfg(all(
+    feature = "mysql",
+    not(all(target_family = "wasm", target_os = "unknown"))
+))]
+pub use persist::mysql::{MysqlStorageConfig, default_mysql_storage_config};
+
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use {
     persist::sqlite::SqliteStorage,

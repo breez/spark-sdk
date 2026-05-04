@@ -192,6 +192,9 @@ fn package_wasm_target(
         copy_postgres_storage_files(crate_dir, &out_path)?;
         copy_postgres_tree_store_files(crate_dir, &out_path)?;
         copy_postgres_token_store_files(crate_dir, &out_path)?;
+        copy_mysql_storage_files(crate_dir, &out_path)?;
+        copy_mysql_tree_store_files(crate_dir, &out_path)?;
+        copy_mysql_token_store_files(crate_dir, &out_path)?;
     }
 
     if target == "web" || target == "bundler" {
@@ -652,6 +655,180 @@ fn copy_postgres_token_store_files(crate_dir: &Path, out_path: &Path) -> Result<
     Ok(())
 }
 
+fn copy_mysql_storage_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let js_storage_src = crate_dir.join("js/mysql-storage");
+
+    if !js_storage_src.exists() {
+        println!(
+            "Warning: MySQL storage source directory not found at {:?}",
+            js_storage_src
+        );
+        return Ok(());
+    }
+
+    let storage_dest = out_path.join("mysql-storage");
+    std::fs::create_dir_all(&storage_dest)?;
+
+    let files_to_copy = ["index.cjs", "errors.cjs", "migrations.cjs"];
+    for file_name in files_to_copy {
+        let src_file = js_storage_src.join(file_name);
+        let dest_file = storage_dest.join(file_name);
+        if src_file.exists() {
+            std::fs::copy(&src_file, &dest_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_file.display(),
+                    dest_file.display()
+                )
+            })?;
+            println!("Copied MySQL storage file: {}", file_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "MySQL storage file not found: {}",
+                src_file.display()
+            ));
+        }
+    }
+
+    let storage_package_json = serde_json::json!({
+        "name": "@breez-sdk/mysql-storage",
+        "version": "1.0.0",
+        "description": "Node.js MySQL storage implementation for Breez SDK WASM (CommonJS)",
+        "main": "index.cjs",
+        "dependencies": {
+            "mysql2": "^3.11.0"
+        }
+    });
+    let dest_package_json = storage_dest.join("package.json");
+    let package_content = serde_json::to_string_pretty(&storage_package_json)
+        .with_context(|| "Failed to serialize mysql storage package.json")?;
+    std::fs::write(&dest_package_json, package_content)
+        .with_context(|| "Failed to write mysql storage package.json".to_string())?;
+    println!("Created MySQL storage package.json");
+
+    println!(
+        "Successfully copied MySQL storage files to {}",
+        storage_dest.display()
+    );
+    Ok(())
+}
+
+fn copy_mysql_tree_store_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let js_tree_store_src = crate_dir.join("js/mysql-tree-store");
+
+    if !js_tree_store_src.exists() {
+        println!(
+            "Warning: MySQL tree store source directory not found at {:?}",
+            js_tree_store_src
+        );
+        return Ok(());
+    }
+
+    let tree_store_dest = out_path.join("mysql-tree-store");
+    std::fs::create_dir_all(&tree_store_dest)?;
+
+    let files_to_copy = ["index.cjs", "errors.cjs", "migrations.cjs"];
+    for file_name in files_to_copy {
+        let src_file = js_tree_store_src.join(file_name);
+        let dest_file = tree_store_dest.join(file_name);
+        if src_file.exists() {
+            std::fs::copy(&src_file, &dest_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_file.display(),
+                    dest_file.display()
+                )
+            })?;
+            println!("Copied MySQL tree store file: {}", file_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "MySQL tree store file not found: {}",
+                src_file.display()
+            ));
+        }
+    }
+
+    let tree_store_package_json = serde_json::json!({
+        "name": "@breez-sdk/mysql-tree-store",
+        "version": "1.0.0",
+        "description": "Node.js MySQL tree store implementation for Breez SDK WASM (CommonJS)",
+        "main": "index.cjs",
+        "dependencies": {
+            "mysql2": "^3.11.0"
+        }
+    });
+    let dest_package_json = tree_store_dest.join("package.json");
+    let package_content = serde_json::to_string_pretty(&tree_store_package_json)
+        .with_context(|| "Failed to serialize mysql tree store package.json")?;
+    std::fs::write(&dest_package_json, package_content)
+        .with_context(|| "Failed to write mysql tree store package.json".to_string())?;
+    println!("Created MySQL tree store package.json");
+
+    println!(
+        "Successfully copied MySQL tree store files to {}",
+        tree_store_dest.display()
+    );
+    Ok(())
+}
+
+fn copy_mysql_token_store_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let js_token_store_src = crate_dir.join("js/mysql-token-store");
+
+    if !js_token_store_src.exists() {
+        println!(
+            "Warning: MySQL token store source directory not found at {:?}",
+            js_token_store_src
+        );
+        return Ok(());
+    }
+
+    let token_store_dest = out_path.join("mysql-token-store");
+    std::fs::create_dir_all(&token_store_dest)?;
+
+    let files_to_copy = ["index.cjs", "errors.cjs", "migrations.cjs"];
+    for file_name in files_to_copy {
+        let src_file = js_token_store_src.join(file_name);
+        let dest_file = token_store_dest.join(file_name);
+        if src_file.exists() {
+            std::fs::copy(&src_file, &dest_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_file.display(),
+                    dest_file.display()
+                )
+            })?;
+            println!("Copied MySQL token store file: {}", file_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "MySQL token store file not found: {}",
+                src_file.display()
+            ));
+        }
+    }
+
+    let token_store_package_json = serde_json::json!({
+        "name": "@breez-sdk/mysql-token-store",
+        "version": "1.0.0",
+        "description": "Node.js MySQL token store implementation for Breez SDK WASM (CommonJS)",
+        "main": "index.cjs",
+        "dependencies": {
+            "mysql2": "^3.11.0"
+        }
+    });
+    let dest_package_json = token_store_dest.join("package.json");
+    let package_content = serde_json::to_string_pretty(&token_store_package_json)
+        .with_context(|| "Failed to serialize mysql token store package.json")?;
+    std::fs::write(&dest_package_json, package_content)
+        .with_context(|| "Failed to write mysql token store package.json".to_string())?;
+    println!("Created MySQL token store package.json");
+
+    println!(
+        "Successfully copied MySQL token store files to {}",
+        token_store_dest.display()
+    );
+    Ok(())
+}
+
 fn create_nodejs_entry_point(out_path: &Path) -> Result<()> {
     let entry_content = r#"// Node.js entry point for Breez SDK with automatic storage support
 const wasmModule = require('./breez_sdk_spark_wasm.js');
@@ -700,6 +877,40 @@ try {
 } catch (error) {
     if (error.code !== 'MODULE_NOT_FOUND') {
         console.warn('Breez SDK: Failed to load PostgreSQL token store:', error.message);
+    }
+}
+
+// Automatically import and set up the MySQL storage for Node.js
+try {
+    const { createMysqlStorage, createMysqlPool, createMysqlStorageWithPool } = require('./mysql-storage/index.cjs');
+    global.createMysqlStorage = createMysqlStorage;
+    global.createMysqlPool = createMysqlPool;
+    global.createMysqlStorageWithPool = createMysqlStorageWithPool;
+} catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        console.warn('Breez SDK: Failed to load MySQL storage:', error.message);
+    }
+}
+
+// Automatically import and set up the MySQL tree store for Node.js
+try {
+    const { createMysqlTreeStore, createMysqlTreeStoreWithPool } = require('./mysql-tree-store/index.cjs');
+    global.createMysqlTreeStore = createMysqlTreeStore;
+    global.createMysqlTreeStoreWithPool = createMysqlTreeStoreWithPool;
+} catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        console.warn('Breez SDK: Failed to load MySQL tree store:', error.message);
+    }
+}
+
+// Automatically import and set up the MySQL token store for Node.js
+try {
+    const { createMysqlTokenStore, createMysqlTokenStoreWithPool } = require('./mysql-token-store/index.cjs');
+    global.createMysqlTokenStore = createMysqlTokenStore;
+    global.createMysqlTokenStoreWithPool = createMysqlTokenStoreWithPool;
+} catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        console.warn('Breez SDK: Failed to load MySQL token store:', error.message);
     }
 }
 
@@ -760,6 +971,9 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
             files_array.push(serde_json::Value::String(
                 "postgres-token-store/".to_string(),
             ));
+            files_array.push(serde_json::Value::String("mysql-storage/".to_string()));
+            files_array.push(serde_json::Value::String("mysql-tree-store/".to_string()));
+            files_array.push(serde_json::Value::String("mysql-token-store/".to_string()));
             files_array.push(serde_json::Value::String("index.js".to_string()));
             files_array.push(serde_json::Value::String("index.mjs".to_string()));
         }

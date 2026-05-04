@@ -1,0 +1,30 @@
+[package]
+name = "spark-mysql"
+version.workspace = true
+edition = "2024"
+
+[features]
+test-utils = ["spark-wallet/test-utils"]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+macros.workspace = true
+mysql_async = { workspace = true, features = ["chrono"] }
+platform-utils.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+spark-wallet.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+spark-mysql = { workspace = true, features = ["test-utils"] }
+testcontainers.workspace = true
+testcontainers-modules = { workspace = true, features = ["mysql"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

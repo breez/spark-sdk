@@ -5,6 +5,7 @@ use bitcoin::hashes::{Hash as _, sha256};
 use breez_sdk_spark::*;
 use rand::RngCore;
 use testcontainers::{ContainerAsync, runners::AsyncRunner};
+use testcontainers_modules::mysql::Mysql;
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::{OnceCell, mpsc};
 use tracing::{Instrument, debug, info};
@@ -22,6 +23,17 @@ struct SharedPgContainer {
 
 static PG_TREE_STORE_CONTAINER: OnceCell<SharedPgContainer> = OnceCell::const_new();
 static TREE_STORE_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Shared MySQL container for tree store testing.
+/// Started once on first access and kept alive for the process lifetime.
+struct SharedMysqlContainer {
+    _container: ContainerAsync<Mysql>,
+    /// Connection string up to (but not including) the path. Callers append `/<dbname>`.
+    base_url: String,
+}
+
+static MYSQL_TREE_STORE_CONTAINER: OnceCell<SharedMysqlContainer> = OnceCell::const_new();
+static MYSQL_TREE_STORE_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Returns the base connection string for the shared postgres container,
 /// starting the container on first call. Returns None if USE_POSTGRES_TREE_STORE is not set.
@@ -52,18 +64,54 @@ async fn get_postgres_tree_store_base_url() -> Option<&'static str> {
     Some(&shared.base_conn_str)
 }
 
-/// If USE_POSTGRES_TREE_STORE is set, creates a unique database and attaches
-/// a PostgreSQL backend to the builder. Otherwise sets default storage with the
-/// given directory. Exactly one storage configuration is applied.
+/// Returns the base URL for the shared mysql container,
+/// starting the container on first call. Returns None if USE_MYSQL_TREE_STORE is not set.
+async fn get_mysql_tree_store_base_url() -> Option<&'static str> {
+    if std::env::var("USE_MYSQL_TREE_STORE").is_err() {
+        return None;
+    }
+    let shared = MYSQL_TREE_STORE_CONTAINER
+        .get_or_init(|| async {
+            info!("Starting shared MySQL container for tree store testing...");
+            let container = Mysql::default()
+                .start()
+                .await
+                .expect("Failed to start MySQL container for tree store");
+            let port = container
+                .get_host_port_ipv4(3306)
+                .await
+                .expect("Failed to get MySQL container port");
+            info!("Shared MySQL tree store container started on port {port}");
+            SharedMysqlContainer {
+                _container: container,
+                base_url: format!("mysql://root@127.0.0.1:{port}"),
+            }
+        })
+        .await;
+    Some(&shared.base_url)
+}
+
+/// If USE_POSTGRES_TREE_STORE or USE_MYSQL_TREE_STORE is set, creates a unique
+/// database and attaches the corresponding backend to the builder. Otherwise
+/// sets default storage with the given directory. Exactly one storage
+/// configuration is applied; if both env vars are set, postgres wins.
 async fn apply_storage(builder: SdkBuilder, storage_dir: String) -> Result<SdkBuilder> {
-    let Some(base_url) = get_postgres_tree_store_base_url().await else {
-        return Ok(builder.with_default_storage(storage_dir));
-    };
-    let counter = TREE_STORE_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let conn_str = format!("{base_url} dbname=ts_{counter}");
-    ensure_postgres_database_exists(&conn_str).await?;
-    let pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
-    Ok(builder.with_postgres_backend(pg_config))
+    if let Some(base_url) = get_postgres_tree_store_base_url().await {
+        let counter = TREE_STORE_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let conn_str = format!("{base_url} dbname=ts_{counter}");
+        ensure_postgres_database_exists(&conn_str).await?;
+        let pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
+        return Ok(builder.with_postgres_backend(pg_config));
+    }
+    if let Some(base_url) = get_mysql_tree_store_base_url().await {
+        let counter = MYSQL_TREE_STORE_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let db_name = format!("ts_{counter}");
+        let conn_str = format!("{base_url}/{db_name}");
+        ensure_mysql_database_exists(base_url, &db_name).await?;
+        let my_config = breez_sdk_spark::default_mysql_storage_config(conn_str);
+        return Ok(builder.with_mysql_backend(my_config));
+    }
+    Ok(builder.with_default_storage(storage_dir))
 }
 
 /// Event listener that forwards events to a channel
@@ -288,6 +336,41 @@ pub async fn ensure_postgres_database_exists(conn_str: &str) -> Result<()> {
         info!("Database '{}' already exists", db_name);
     }
 
+    Ok(())
+}
+
+/// Ensures the named MySQL database exists, creating it if necessary.
+///
+/// `admin_url` should be the connection string up to (but not including) the
+/// `/<dbname>` path, e.g. `mysql://root@127.0.0.1:33060`. The function connects
+/// to the server's default `mysql` database to issue `CREATE DATABASE`.
+pub async fn ensure_mysql_database_exists(admin_url: &str, db_name: &str) -> Result<()> {
+    use mysql_async::prelude::*;
+
+    info!("Ensuring MySQL database '{}' exists...", db_name);
+
+    let admin_conn_str = format!("{admin_url}/mysql");
+    let pool = mysql_async::Pool::from_url(admin_conn_str.as_str())
+        .map_err(|e| anyhow::anyhow!("Failed to parse MySQL admin URL: {e}"))?;
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to MySQL admin database: {e}"))?;
+
+    // CREATE DATABASE IF NOT EXISTS is idempotent and safe to call concurrently.
+    // We don't parameterize the database name because identifiers can't be bound;
+    // we control db_name (it's of the form ts_<u64>), so injection isn't a risk.
+    let stmt = format!("CREATE DATABASE IF NOT EXISTS `{db_name}`");
+    conn.query_drop(stmt)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create MySQL database '{}': {e}", db_name))?;
+
+    drop(conn);
+    pool.disconnect()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to disconnect MySQL admin pool: {e}"))?;
+
+    info!("MySQL database '{}' is ready", db_name);
     Ok(())
 }
 
@@ -1331,6 +1414,58 @@ pub async fn build_sdk_with_postgres(
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
     // Ensure initial sync completes
+    let _ = sdk
+        .get_info(breez_sdk_spark::GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        span: tracing::Span::current(),
+        temp_dir: None,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}
+
+/// Build and initialize a BreezSDK instance backed by `MySQL` storage.
+///
+/// Mirror of `build_sdk_with_postgres` for the `MySQL` backend.
+///
+/// # Arguments
+/// * `connection_string` - MySQL URL connection string (e.g. `mysql://root@127.0.0.1:3306/dbname`)
+/// * `seed_bytes` - 32-byte seed for deterministic wallet generation
+pub async fn build_sdk_with_mysql(
+    connection_string: &str,
+    seed_bytes: [u8; 32],
+) -> Result<SdkInstance> {
+    let mut config = breez_sdk_spark::default_config(breez_sdk_spark::Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+    // Disable auto-optimization to avoid balance discrepancies when multiple instances run
+    // concurrently. Same rationale as build_sdk_with_postgres.
+    config.optimization_config.auto_enabled = false;
+
+    let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
+
+    let mut mysql_config =
+        breez_sdk_spark::default_mysql_storage_config(connection_string.to_string());
+    mysql_config.max_pool_size = 30;
+
+    let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
+        .with_mysql_backend(mysql_config)
+        .build()
+        .await?;
+
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
     let _ = sdk
         .get_info(breez_sdk_spark::GetInfoRequest {
             ensure_synced: Some(true),
