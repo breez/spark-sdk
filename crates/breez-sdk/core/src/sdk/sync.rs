@@ -1,6 +1,6 @@
 use platform_utils::time::{Duration, Instant, SystemTime};
 use platform_utils::tokio;
-use spark_wallet::{SparkAddress, WalletEvent};
+use spark_wallet::WalletEvent;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{Instrument, debug, error, info, trace, warn};
