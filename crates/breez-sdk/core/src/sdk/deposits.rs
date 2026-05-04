@@ -144,6 +144,7 @@ impl BreezSdk {
                 .list_transfers(ListTransfersRequest {
                     transfer_ids: vec![parsed_id.clone()],
                     paging: None,
+                    ..Default::default()
                 })
                 .await
             {
