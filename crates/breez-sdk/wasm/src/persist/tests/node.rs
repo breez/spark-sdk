@@ -539,9 +539,9 @@ async fn test_migration_from_v20_to_v21() {
 }
 
 #[wasm_bindgen_test]
-async fn test_mrh_payment_hash() {
-    let storage = create_test_storage("mrh_payment_hash").await;
-    breez_sdk_spark::storage_tests::test_mrh_payment_hash(Box::new(storage)).await;
+async fn test_fallback_payment_hash() {
+    let storage = create_test_storage("fallback_payment_hash").await;
+    breez_sdk_spark::storage_tests::test_fallback_payment_hash(Box::new(storage)).await;
 }
 
 #[wasm_bindgen_test]

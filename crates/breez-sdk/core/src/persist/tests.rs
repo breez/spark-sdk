@@ -3160,8 +3160,8 @@ pub async fn test_conversion_status_persistence(storage: Box<dyn Storage>) {
     );
 }
 
-/// Tests that the MRH payment hash can be stored and retrieved via the cache.
-pub async fn test_mrh_payment_hash(storage: Box<dyn Storage>) {
+/// Tests that the fallback payment hash can be stored and retrieved via the cache.
+pub async fn test_fallback_payment_hash(storage: Box<dyn Storage>) {
     let spark_invoice = "spark:testinvoice123";
     let payment_hash =
         "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899".to_string();
@@ -3170,16 +3170,16 @@ pub async fn test_mrh_payment_hash(storage: Box<dyn Storage>) {
     // Not found before insertion
     let result = cache.fetch_payment_metadata(spark_invoice).await.unwrap();
     assert!(
-        result.and_then(|r| r.mrh_payment_hash).is_none(),
+        result.and_then(|r| r.fallback_payment_hash).is_none(),
         "Expected None before insertion"
     );
 
-    // Store the MRH mapping
+    // Store the fallback mapping
     cache
         .save_payment_metadata(
             spark_invoice,
             &PaymentMetadata {
-                mrh_payment_hash: Some(payment_hash.clone()),
+                fallback_payment_hash: Some(payment_hash.clone()),
                 ..Default::default()
             },
         )
@@ -3189,7 +3189,7 @@ pub async fn test_mrh_payment_hash(storage: Box<dyn Storage>) {
     // Retrieve it back
     let result = cache.fetch_payment_metadata(spark_invoice).await.unwrap();
     assert_eq!(
-        result.and_then(|r| r.mrh_payment_hash).as_deref(),
+        result.and_then(|r| r.fallback_payment_hash).as_deref(),
         Some(payment_hash.as_str()),
         "Expected the stored payment hash"
     );
@@ -3197,7 +3197,8 @@ pub async fn test_mrh_payment_hash(storage: Box<dyn Storage>) {
 
 /// Tests that `get_payment_by_payment_hash` can look up a Lightning payment by its payment hash.
 pub async fn test_payment_by_payment_hash(storage: Box<dyn Storage>) {
-    let payment_hash = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+    let payment_hash =
+        "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210".to_string();
     let lightning_payment = Payment {
         id: "mrh_ln_payment_001".to_string(),
         payment_type: PaymentType::Receive,
@@ -3207,10 +3208,11 @@ pub async fn test_payment_by_payment_hash(storage: Box<dyn Storage>) {
         timestamp: 1_700_000_000,
         method: PaymentMethod::Lightning,
         details: Some(PaymentDetails::Lightning {
-            description: Some("MRH test payment".to_string()),
+            description: Some("Fallback test payment".to_string()),
             invoice: "lnbc500n1ptest".to_string(),
-            destination_pubkey: "03aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff0000000011111111aa".to_string(),
-            htlc_details: test_lightning_htlc(payment_hash),
+            destination_pubkey:
+                "03aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff0000000011111111aa".to_string(),
+            htlc_details: test_lightning_htlc(&payment_hash),
             lnurl_pay_info: None,
             lnurl_withdraw_info: None,
             lnurl_receive_metadata: None,
@@ -3220,7 +3222,7 @@ pub async fn test_payment_by_payment_hash(storage: Box<dyn Storage>) {
 
     // Not found before insertion
     let result = storage
-        .get_payment_by_payment_hash(payment_hash)
+        .get_payment_by_payment_hash(payment_hash.clone())
         .await
         .unwrap();
     assert!(result.is_none(), "Expected None before insertion");
@@ -3240,7 +3242,9 @@ pub async fn test_payment_by_payment_hash(storage: Box<dyn Storage>) {
 
     // Non-existent hash returns None
     let result = storage
-        .get_payment_by_payment_hash("0000000000000000000000000000000000000000000000000000000000000000")
+        .get_payment_by_payment_hash(
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        )
         .await
         .unwrap();
     assert!(result.is_none(), "Expected None for unknown payment hash");

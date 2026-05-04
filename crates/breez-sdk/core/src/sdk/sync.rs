@@ -1,6 +1,6 @@
 use platform_utils::time::{Duration, Instant, SystemTime};
 use platform_utils::tokio;
-use spark_wallet::WalletEvent;
+use spark_wallet::{SparkAddress, WalletEvent};
 use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::{Instrument, debug, error, info, trace, warn};
@@ -135,7 +135,7 @@ impl BreezSdk {
             }
             WalletEvent::TransferClaimed(transfer) => {
                 info!("Transfer claimed");
-                let spark_invoice = transfer.spark_invoice.clone();
+                let fallback_key = transfer.spark_invoice.clone();
                 // Drop any unclaimed-deposit record for this outpoint
                 // independently of payment ingestion below, so a
                 // Payment::try_from failure does not leave the record
@@ -149,10 +149,11 @@ impl BreezSdk {
                         error!("Failed to insert succeeded payment: {e:?}");
                     }
 
-                    // If this Spark transfer settles an MRH BOLT11 invoice, mark the associated
+                    // If this Spark transfer settles via fallback, mark the associated
                     // Lightning receive payment as complete.
-                    if let Some(si) = &spark_invoice {
-                        self.complete_mrh_lightning_payment(si).await;
+                    if let Some(fallback_key) = fallback_key {
+                        self.complete_lightning_payment_via_fallback(fallback_key)
+                            .await;
                     }
 
                     // Ensure potential lnurl metadata is synced before emitting the event.
@@ -290,15 +291,15 @@ impl BreezSdk {
         *lnurl_receive_metadata = db_lnurl_receive_metadata;
     }
 
-    /// When a Spark transfer settles an MRH BOLT11 invoice, find the pending Lightning
+    /// When a Spark transfer settles an invoice, find the pending Lightning
     /// receive payment by its payment hash and mark it as Completed.
-    async fn complete_mrh_lightning_payment(&self, spark_invoice: &str) {
+    async fn complete_lightning_payment_via_fallback(&self, fallback_key: String) {
         let cache = ObjectCacheRepository::new(self.storage.clone());
-        let payment_hash = match cache.fetch_payment_metadata(spark_invoice).await {
-            Ok(Some(metadata)) => metadata.mrh_payment_hash,
+        let payment_hash = match cache.fetch_payment_metadata(&fallback_key).await {
+            Ok(Some(metadata)) => metadata.fallback_payment_hash,
             Ok(None) => return,
             Err(e) => {
-                error!("Failed to fetch MRH payment metadata for {spark_invoice}: {e:?}");
+                error!("Failed to fetch fallback payment metadata for {fallback_key}: {e:?}");
                 return;
             }
         };
@@ -308,7 +309,7 @@ impl BreezSdk {
 
         let lightning_payment = match self
             .storage
-            .get_payment_by_payment_hash(&payment_hash)
+            .get_payment_by_payment_hash(payment_hash.clone())
             .await
         {
             Ok(Some(p)) => p,
@@ -339,7 +340,7 @@ impl BreezSdk {
         }
 
         if let Err(e) = self.storage.insert_payment(updated.clone()).await {
-            error!("Failed to mark MRH Lightning payment as complete: {e:?}");
+            error!("Failed to mark Lightning payment as complete: {e:?}");
             return;
         }
 

@@ -771,7 +771,7 @@ impl Storage for SqliteStorage {
 
     async fn get_payment_by_payment_hash(
         &self,
-        payment_hash: &str,
+        payment_hash: String,
     ) -> Result<Option<Payment>, StorageError> {
         let connection = self.get_connection()?;
         let query = format!("{SELECT_PAYMENT_SQL} WHERE l.payment_hash = ?");
@@ -2295,11 +2295,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mrh_payment_hash() {
-        let temp_dir = create_temp_dir("sqlite_mrh_payment_hash");
+    async fn test_fallback_payment_hash() {
+        let temp_dir = create_temp_dir("sqlite_fallback_payment_hash");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
-        crate::persist::tests::test_mrh_payment_hash(Box::new(storage)).await;
+        crate::persist::tests::test_fallback_payment_hash(Box::new(storage)).await;
     }
 
     #[tokio::test]

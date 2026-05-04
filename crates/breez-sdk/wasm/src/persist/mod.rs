@@ -188,11 +188,11 @@ impl breez_sdk_spark::Storage for WasmStorage {
 
     async fn get_payment_by_payment_hash(
         &self,
-        payment_hash: &str,
+        payment_hash: String,
     ) -> Result<Option<breez_sdk_spark::Payment>, StorageError> {
         let promise = self
             .storage
-            .get_payment_by_payment_hash(payment_hash.to_string())
+            .get_payment_by_payment_hash(payment_hash)
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
         let result = future.await.map_err(js_error_to_storage_error)?;

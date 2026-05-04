@@ -251,7 +251,7 @@ async fn main() -> Result<()> {
                     amount_sats: Some(amount),
                     expiry_secs: Some(3600),
                     payment_hash: None,
-                    use_mrh: None,
+                    fallback: None,
                 },
             })
             .await?

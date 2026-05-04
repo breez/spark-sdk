@@ -16,7 +16,8 @@ const exampleReceiveLightningPayment = async (sdk: BreezSdk) => {
       description,
       amountSats: optionalAmountSats,
       expirySecs: optionalExpirySecs,
-      paymentHash: undefined
+      paymentHash: undefined,
+      fallback: undefined
     })
   })
 

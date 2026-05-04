@@ -6,7 +6,7 @@ mod webhooks;
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
     AssetFilter, BreezSdk, BuyBitcoinRequest, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
+    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, FallbackMethod, Fee, FeePolicy,
     FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
     LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
@@ -39,6 +39,22 @@ pub enum ReceivePaymentMethodArg {
     SparkInvoice,
     Bitcoin,
     Bolt11,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[clap(rename_all = "lower")]
+pub enum ReceiveFallbackArg {
+    SparkAddress,
+    SparkInvoice,
+}
+
+impl From<ReceiveFallbackArg> for FallbackMethod {
+    fn from(val: ReceiveFallbackArg) -> Self {
+        match val {
+            ReceiveFallbackArg::SparkAddress => FallbackMethod::SparkAddress,
+            ReceiveFallbackArg::SparkInvoice => FallbackMethod::SparkInvoice,
+        }
+    }
 }
 
 #[derive(Clone, Parser)]
@@ -139,6 +155,10 @@ pub enum Command {
         /// Request a new bitcoin deposit address instead of reusing the current one.
         #[arg(long)]
         new_address: bool,
+
+        /// Request a new bitcoin deposit address instead of reusing the current one.
+        #[arg(long)]
+        fallback: Option<ReceiveFallbackArg>,
     },
 
     /// Pay the given payment request
@@ -558,6 +578,7 @@ pub(crate) async fn execute_command(
             sender_public_key,
             hodl,
             new_address,
+            fallback,
         } => {
             let payment_method = match payment_method {
                 ReceivePaymentMethodArg::SparkAddress => ReceivePaymentMethod::SparkAddress,
@@ -600,7 +621,7 @@ pub(crate) async fn execute_command(
                         amount_sats: amount.map(TryInto::try_into).transpose()?,
                         expiry_secs,
                         payment_hash,
-                        use_mrh: None,
+                        fallback: fallback.map(Into::into),
                     }
                 }
             };

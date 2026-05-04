@@ -515,7 +515,7 @@ impl Storage for SyncedStorage {
 
     async fn get_payment_by_payment_hash(
         &self,
-        payment_hash: &str,
+        payment_hash: String,
     ) -> Result<Option<Payment>, StorageError> {
         self.inner.get_payment_by_payment_hash(payment_hash).await
     }

@@ -690,6 +690,7 @@ where
                 Some(pubkey),
                 params.expiry,
                 state.include_spark_address,
+                None,
             )
             .await
             .map_err(|e| {
