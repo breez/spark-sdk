@@ -13,7 +13,7 @@ const examplePrepareSendPaymentLightningBolt11 = async (sdk: BreezSdk) => {
   const optionalAmountSats = BigInt(5_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
+    paymentRequest: { type: 'input', input: paymentRequest },
     amount: optionalAmountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
@@ -39,7 +39,7 @@ const examplePrepareSendPaymentOnchain = async (sdk: BreezSdk) => {
   const amountSats = BigInt(50_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
+    paymentRequest: { type: 'input', input: paymentRequest },
     amount: amountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
@@ -66,7 +66,7 @@ const examplePrepareSendPaymentSparkAddress = async (sdk: BreezSdk) => {
   const amountSats = BigInt(50_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
+    paymentRequest: { type: 'input', input: paymentRequest },
     amount: amountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
@@ -88,7 +88,7 @@ const examplePrepareSendPaymentSparkInvoice = async (sdk: BreezSdk) => {
   const optionalAmountSats = BigInt(50_000)
 
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
+    paymentRequest: { type: 'input', input: paymentRequest },
     amount: optionalAmountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
@@ -119,7 +119,7 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
   }
 
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
+    paymentRequest: { type: 'input', input: paymentRequest },
     amount: undefined,
     tokenIdentifier: undefined,
     conversionOptions,
@@ -202,7 +202,7 @@ const examplePrepareSendPaymentFeesIncluded = async (sdk: BreezSdk) => {
   const feePolicy: FeePolicy = 'feesIncluded'
 
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
+    paymentRequest: { type: 'input', input: paymentRequest },
     amount: amountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,
@@ -236,7 +236,7 @@ const examplePrepareSendPaymentSendAll = async (sdk: BreezSdk) => {
   const feePolicy: FeePolicy = 'feesIncluded'
 
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest,
+    paymentRequest: { type: 'input', input: paymentRequest },
     amount: tokenBalance.balance,
     tokenIdentifier,
     conversionOptions,

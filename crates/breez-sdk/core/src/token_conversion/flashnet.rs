@@ -17,9 +17,8 @@ use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
     AmountAdjustmentReason, Network, Payment, PaymentDetails, PaymentMetadata, Storage,
-    persist::{ObjectCacheRepository, StorageListPaymentsRequest, StoragePaymentDetailsFilter},
+    persist::{StorageListPaymentsRequest, StoragePaymentDetailsFilter},
     token_conversion::{ConversionAmount, DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS},
-    utils::token::token_transaction_to_payments,
 };
 
 use super::{
@@ -134,10 +133,10 @@ impl FlashnetTokenConverter {
                 payment_details_filter: Some(vec![
                     StoragePaymentDetailsFilter::Spark {
                         htlc_status: None,
-                        conversion_refund_needed: Some(true),
+                        conversion_filter: Some(crate::persist::ConversionFilter::AmmRefundNeeded),
                     },
                     StoragePaymentDetailsFilter::Token {
-                        conversion_refund_needed: Some(true),
+                        conversion_filter: Some(crate::persist::ConversionFilter::AmmRefundNeeded),
                         tx_hash: None,
                         tx_type: None,
                     },
@@ -184,7 +183,7 @@ impl FlashnetTokenConverter {
             }
         };
 
-        let Some(ConversionInfo {
+        let Some(ConversionInfo::Amm {
             pool_id,
             conversion_id,
             status: ConversionStatus::RefundNeeded,
@@ -194,7 +193,7 @@ impl FlashnetTokenConverter {
         }) = conversion_info
         else {
             return Err(ConversionError::RefundFailed(
-                "Conversion does not have a refund pending status".into(),
+                "Conversion is not an AMM conversion with refund pending status".into(),
             ));
         };
 
@@ -230,7 +229,7 @@ impl FlashnetTokenConverter {
                     .insert_payment_metadata(
                         payment.id.clone(),
                         PaymentMetadata {
-                            conversion_info: Some(ConversionInfo {
+                            conversion_info: Some(ConversionInfo::Amm {
                                 pool_id: pool_id.to_string(),
                                 conversion_id: conversion_id.clone(),
                                 status: ConversionStatus::Refunded,
@@ -387,48 +386,6 @@ impl FlashnetTokenConverter {
         })
     }
 
-    /// Fetches a payment id by its conversion identifier.
-    /// The identifier can be either a spark transfer id or a token transaction hash.
-    async fn fetch_payment_id_by_identifier(
-        &self,
-        identifier: &str,
-        tx_inputs_are_ours: bool,
-    ) -> Result<String, ConversionError> {
-        debug!("Fetching conversion payment for identifier: {}", identifier);
-
-        let payment_id: Result<String, ConversionError> =
-            if let Ok(transfer_id) = TransferId::from_str(identifier) {
-                Ok(transfer_id.to_string())
-            } else {
-                // It's a token transaction hash
-                let token_transactions = self
-                    .spark_wallet
-                    .get_token_transactions_by_hashes(vec![identifier.to_string()])
-                    .await?;
-                let token_transaction = token_transactions.first().ok_or_else(|| {
-                    ConversionError::ConversionFailed("Token transaction not found".into())
-                })?;
-                let object_repository = ObjectCacheRepository::new(self.storage.clone());
-                let payments = token_transaction_to_payments(
-                    &self.spark_wallet,
-                    &object_repository,
-                    token_transaction,
-                    tx_inputs_are_ours,
-                )
-                .await
-                .map_err(ConversionError::Sdk)?;
-                payments.first().cloned().map(|p| p.id).ok_or_else(|| {
-                    ConversionError::ConversionFailed(
-                        "Payment id not found for token transaction".into(),
-                    )
-                })
-            };
-
-        payment_id
-            .inspect(|p| debug!("Found payment id: {p:?}"))
-            .inspect_err(|e| debug!("No payment id found: {e}"))
-    }
-
     /// Updates the payment with the conversion info.
     ///
     /// Arguments:
@@ -462,7 +419,6 @@ impl FlashnetTokenConverter {
             "Updating payment conversion info for pool_id: {pool_id}, outbound_identifier: {outbound_identifier}, inbound_identifier: {inbound_identifier:?}, refund_identifier: {refund_identifier:?}, sent_fee: {sent_fee:?}, received_fee: {received_fee:?}",
         );
 
-        let cache = ObjectCacheRepository::new(self.storage.clone());
         let status = match (&inbound_identifier, &refund_identifier) {
             (Some(_), _) => ConversionStatus::Completed,
             (None, Some(_)) => ConversionStatus::Refunded,
@@ -473,51 +429,49 @@ impl FlashnetTokenConverter {
 
         // Insert sent, received, and refund payment metadata in parallel.
         let sent_fut = async {
-            let sent_payment_id = self
-                .fetch_payment_id_by_identifier(&outbound_identifier, true)
-                .await?;
-            self.storage
-                .insert_payment_metadata(
-                    sent_payment_id.clone(),
-                    PaymentMetadata {
-                        conversion_info: Some(ConversionInfo {
-                            pool_id: pool_id_str.clone(),
-                            conversion_id: conversion_id.clone(),
-                            status: status.clone(),
-                            fee: sent_fee,
-                            purpose: Some(purpose.clone()),
-                            amount_adjustment: amount_adjustment.clone(),
-                        }),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-            Ok::<_, ConversionError>(sent_payment_id)
+            crate::utils::payments::insert_or_cache_payment_metadata(
+                &outbound_identifier,
+                PaymentMetadata {
+                    conversion_info: Some(ConversionInfo::Amm {
+                        pool_id: pool_id_str.clone(),
+                        conversion_id: conversion_id.clone(),
+                        status: status.clone(),
+                        fee: sent_fee,
+                        purpose: Some(purpose.clone()),
+                        amount_adjustment: amount_adjustment.clone(),
+                    }),
+                    ..Default::default()
+                },
+                &self.spark_wallet,
+                &self.storage,
+                true,
+            )
+            .await
+            .map_err(ConversionError::Sdk)
         };
 
         let received_fut = async {
             if let Some(identifier) = &inbound_identifier {
-                let metadata = PaymentMetadata {
-                    conversion_info: Some(ConversionInfo {
-                        pool_id: pool_id_str.clone(),
-                        conversion_id: conversion_id.clone(),
-                        status: status.clone(),
-                        fee: received_fee,
-                        purpose: Some(purpose.clone()),
-                        amount_adjustment: None,
-                    }),
-                    ..Default::default()
-                };
-                if let Ok(payment_id) = self.fetch_payment_id_by_identifier(identifier, false).await
-                {
-                    self.storage
-                        .insert_payment_metadata(payment_id.clone(), metadata)
-                        .await?;
-                    Ok::<_, ConversionError>(Some(payment_id))
-                } else {
-                    cache.save_payment_metadata(identifier, &metadata).await?;
-                    Ok(Some(identifier.clone()))
-                }
+                let payment_id = crate::utils::payments::insert_or_cache_payment_metadata(
+                    identifier,
+                    PaymentMetadata {
+                        conversion_info: Some(ConversionInfo::Amm {
+                            pool_id: pool_id_str.clone(),
+                            conversion_id: conversion_id.clone(),
+                            status: status.clone(),
+                            fee: received_fee,
+                            purpose: Some(purpose.clone()),
+                            amount_adjustment: None,
+                        }),
+                        ..Default::default()
+                    },
+                    &self.spark_wallet,
+                    &self.storage,
+                    false,
+                )
+                .await
+                .map_err(ConversionError::Sdk)?;
+                Ok::<_, ConversionError>(Some(payment_id))
             } else {
                 Ok(None)
             }
@@ -526,7 +480,7 @@ impl FlashnetTokenConverter {
         let refund_fut = async {
             if let Some(identifier) = &refund_identifier {
                 let metadata = PaymentMetadata {
-                    conversion_info: Some(ConversionInfo {
+                    conversion_info: Some(ConversionInfo::Amm {
                         pool_id: pool_id_str.clone(),
                         conversion_id: conversion_id.clone(),
                         status: status.clone(),
@@ -536,14 +490,15 @@ impl FlashnetTokenConverter {
                     }),
                     ..Default::default()
                 };
-                if let Ok(payment_id) = self.fetch_payment_id_by_identifier(identifier, false).await
-                {
-                    self.storage
-                        .insert_payment_metadata(payment_id.clone(), metadata)
-                        .await?;
-                } else {
-                    cache.save_payment_metadata(identifier, &metadata).await?;
-                }
+                crate::utils::payments::insert_or_cache_payment_metadata(
+                    identifier,
+                    metadata,
+                    &self.spark_wallet,
+                    &self.storage,
+                    false,
+                )
+                .await
+                .map_err(ConversionError::Sdk)?;
             }
             Ok::<_, ConversionError>(())
         };
@@ -714,8 +669,8 @@ impl TokenConverter for FlashnetTokenConverter {
                     }
                 });
 
-                let (sent_payment_id, received_payment_id) = self
-                    .update_payment_conversion_info(
+                let (sent_payment_id, received_payment_id) =
+                    Box::pin(self.update_payment_conversion_info(
                         &pool_id,
                         response.transfer_id,
                         response.outbound_transfer_id,
@@ -723,7 +678,7 @@ impl TokenConverter for FlashnetTokenConverter {
                         fee_split,
                         purpose,
                         amount_adjustment.clone(),
-                    )
+                    ))
                     .await?;
 
                 if let Some(received_payment_id) = received_payment_id
@@ -749,17 +704,16 @@ impl TokenConverter for FlashnetTokenConverter {
                     source,
                 } = &e
                 {
-                    let _ = self
-                        .update_payment_conversion_info(
-                            &pool_id,
-                            transaction_identifier.clone(),
-                            None,
-                            None,
-                            None,
-                            purpose,
-                            amount_adjustment.clone(),
-                        )
-                        .await;
+                    let _ = Box::pin(self.update_payment_conversion_info(
+                        &pool_id,
+                        transaction_identifier.clone(),
+                        None,
+                        None,
+                        None,
+                        purpose,
+                        amount_adjustment.clone(),
+                    ))
+                    .await;
                     let _ = self.refund_trigger.send(());
                     Err(ConversionError::ConversionFailed(format!(
                         "Convert token failed, refund pending: {}",

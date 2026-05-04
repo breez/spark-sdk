@@ -1,11 +1,13 @@
-use breez_sdk_common::lnurl::{self, error::LnurlError, pay::validate_lnurl_pay};
+use breez_sdk_common::lnurl::{
+    self, error::LnurlError, pay::validate_lnurl_pay, withdraw::execute_lnurl_withdraw,
+};
 use tracing::info;
 
 use crate::{
     FeePolicy, InputType, LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayInfo,
     LnurlPayRequest, LnurlPayResponse, LnurlWithdrawInfo, LnurlWithdrawRequest,
-    LnurlWithdrawResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse, SendPaymentMethod,
-    WaitForPaymentIdentifier,
+    LnurlWithdrawResponse, PaymentRequest, PrepareLnurlPayRequest, PrepareLnurlPayResponse,
+    SendPaymentMethod, WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -13,7 +15,6 @@ use crate::{
     },
     persist::{ObjectCacheRepository, PaymentMetadata},
 };
-use breez_sdk_common::lnurl::withdraw::execute_lnurl_withdraw;
 
 use super::{BreezSdk, helpers::process_success_action};
 
@@ -88,7 +89,9 @@ impl BreezSdk {
 
         let prepare_response = self
             .prepare_send_payment(crate::PrepareSendPaymentRequest {
-                payment_request: success_data.pr,
+                payment_request: PaymentRequest::Input {
+                    input: success_data.pr,
+                },
                 amount: Some(u128::from(amount_sats)),
                 token_identifier: request.token_identifier.clone(),
                 conversion_options: request.conversion_options.clone(),

@@ -1,11 +1,15 @@
 use bitcoin::hashes::sha256;
+use bitcoin::secp256k1::PublicKey;
+use breez_sdk_common::input;
 use platform_utils::time::Duration;
+use platform_utils::time::SystemTime;
+use platform_utils::tokio;
 use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
+use spark_wallet::{InvoiceDescription, Preimage};
 use std::str::FromStr;
-use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use tracing::{Instrument, error, info, warn};
+use tracing::info;
 
 use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
@@ -14,28 +18,24 @@ use crate::{
     GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
     SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
     WaitForPaymentIdentifier,
+    cross_chain::{CrossChainFeeMode, CrossChainPrepared, CrossChainRoutePair, SourceAsset},
     error::SdkError,
     events::SdkEvent,
     models::{
-        ConversionStatus, ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentDetails,
+        ConversionStatus, ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentRequest,
         PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentMethod,
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
-        conversion_steps_from_payments,
     },
     persist::PaymentMetadata,
     token_conversion::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
     utils::{
-        payments::{get_payment_and_emit_event, get_payment_with_conversion_details},
+        conversions::{enrich_payment, get_payment_with_conversion_details},
         send_payment_validation::{get_dust_limit_sats, validate_prepare_send_payment_request},
         token::map_and_persist_token_transaction,
     },
 };
-use bitcoin::secp256k1::PublicKey;
-use platform_utils::time::SystemTime;
-use platform_utils::tokio;
-use spark_wallet::{InvoiceDescription, Preimage};
 
 use super::{
     BreezSdk, SyncType,
@@ -146,16 +146,50 @@ impl BreezSdk {
         &self,
         request: PrepareSendPaymentRequest,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
-        let parsed_input = self.parse(&request.payment_request).await?;
+        let fee_policy = request.fee_policy.unwrap_or_default();
+        let token_identifier = request.token_identifier.clone();
+
+        // Handle structured CrossChain variant directly — no parse step needed.
+        if let PaymentRequest::CrossChain {
+            ref address,
+            ref route,
+            max_slippage_bps,
+        } = request.payment_request
+        {
+            let amount = request.amount.ok_or(SdkError::InvalidInput(
+                "Amount is required for cross-chain sends".to_string(),
+            ))?;
+
+            return self
+                .prepare_cross_chain_send(
+                    address,
+                    route,
+                    amount,
+                    token_identifier,
+                    request.conversion_options.clone(),
+                    fee_policy,
+                    max_slippage_bps,
+                )
+                .await;
+        }
+
+        // Input string path — parse and dispatch as before.
+        let PaymentRequest::Input {
+            input: ref input_str,
+        } = request.payment_request
+        else {
+            return Err(SdkError::InvalidInput(
+                "Expected PaymentRequest::Input".to_string(),
+            ));
+        };
+
+        let parsed_input = self.parse(input_str).await?;
 
         validate_prepare_send_payment_request(
             &parsed_input,
             &request,
             &self.spark_wallet.get_identity_public_key().to_string(),
         )?;
-
-        let fee_policy = request.fee_policy.unwrap_or_default();
-        let token_identifier = request.token_identifier.clone();
 
         match &parsed_input {
             InputType::SparkAddress(spark_address_details) => {
@@ -250,9 +284,8 @@ impl BreezSdk {
                 })
             }
             InputType::Bolt11Invoice(detailed_bolt11_invoice) => {
-                let spark_address: Option<SparkAddress> = self
-                    .spark_wallet
-                    .extract_spark_address(&request.payment_request)?;
+                let spark_address: Option<SparkAddress> =
+                    self.spark_wallet.extract_spark_address(input_str)?;
 
                 let spark_transfer_fee_sats = if spark_address.is_some() {
                     Some(0)
@@ -283,10 +316,7 @@ impl BreezSdk {
                 // For FeesIncluded, estimate fee for user's full amount
                 let lightning_fee_sats = self
                     .spark_wallet
-                    .fetch_lightning_send_fee_estimate(
-                        &request.payment_request,
-                        Some(amount.try_into()?),
-                    )
+                    .fetch_lightning_send_fee_estimate(input_str, Some(amount.try_into()?))
                     .await?;
 
                 // Validate receiver amount is positive for FeesIncluded
@@ -403,6 +433,17 @@ impl BreezSdk {
                     fee_policy,
                 })
             }
+            InputType::CrossChainAddress(_) => {
+                // Cross-chain addresses detected via parse() require route
+                // selection. The caller should use get_cross_chain_routes()
+                // to discover routes, then PaymentRequest::CrossChain with
+                // the selected route.
+                Err(SdkError::InvalidInput(
+                    "Cross-chain address detected. Use get_cross_chain_routes() to discover \
+                     routes, then PaymentRequest::CrossChain { address, route }."
+                        .to_string(),
+                ))
+            }
             _ => Err(SdkError::InvalidInput(
                 "Unsupported payment method".to_string(),
             )),
@@ -446,31 +487,28 @@ impl BreezSdk {
     ) -> Result<ListPaymentsResponse, SdkError> {
         let mut payments = self.storage.list_payments(request.into()).await?;
 
-        // Only query child payments for payments that have conversion_details set
+        // Prefetch child payments in one query for all parents that have
+        // conversion_details set (AMM legs). Cross-chain payments don't have
+        // children.
         let parent_ids: Vec<String> = payments
             .iter()
             .filter(|p| p.conversion_details.is_some())
             .map(|p| p.id.clone())
             .collect();
 
-        if !parent_ids.is_empty() {
-            let related_payments_map = self.storage.get_payments_by_parent_ids(parent_ids).await?;
+        let related_payments_map = if parent_ids.is_empty() {
+            std::collections::HashMap::default()
+        } else {
+            self.storage.get_payments_by_parent_ids(parent_ids).await?
+        };
 
-            for payment in &mut payments {
-                if let Some(related_payments) = related_payments_map.get(&payment.id) {
-                    match conversion_steps_from_payments(related_payments) {
-                        Ok((from, to)) => {
-                            if let Some(ref mut cd) = payment.conversion_details {
-                                cd.from = from;
-                                cd.to = to;
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Failed to build conversion steps: {e}");
-                        }
-                    }
-                }
-            }
+        for payment in &mut payments {
+            let child_payments = if payment.conversion_details.is_some() {
+                related_payments_map.get(&payment.id).map(Vec::as_slice)
+            } else {
+                None
+            };
+            enrich_payment(payment, child_payments);
         }
 
         Ok(ListPaymentsResponse { payments })
@@ -527,6 +565,203 @@ impl BreezSdk {
         })
     }
 
+    /// Prepare a cross-chain send using the given route.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    async fn prepare_cross_chain_send(
+        &self,
+        address: &str,
+        route: &CrossChainRoutePair,
+        amount: u128,
+        token_identifier: Option<String>,
+        conversion_options: Option<ConversionOptions>,
+        fee_policy: FeePolicy,
+        max_slippage_bps: Option<u32>,
+    ) -> Result<PrepareSendPaymentResponse, SdkError> {
+        // Validate address is a recognized cross-chain address.
+        if input::detect_address_family(address).is_none() {
+            return Err(SdkError::InvalidInput(
+                "Address is not a recognized cross-chain address".to_string(),
+            ));
+        }
+
+        // Resolve slippage: request → config default → 100 bps. Bounds for
+        // request-supplied values are checked here; config-supplied values
+        // are validated at SDK startup in `Config::validate`.
+        let config_default = self
+            .config
+            .cross_chain_config
+            .as_ref()
+            .and_then(|c| c.default_slippage_bps);
+        if let Some(bps) = max_slippage_bps
+            && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
+                ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
+                .contains(&bps)
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "max_slippage_bps {bps} must be in {}..={}",
+                crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
+                crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+            )));
+        }
+        let resolved_slippage_bps = max_slippage_bps
+            .or(config_default)
+            .unwrap_or(crate::cross_chain::DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS);
+
+        crate::utils::send_payment_validation::validate_prepare_cross_chain_request_pre(
+            amount,
+            conversion_options.as_ref(),
+        )?;
+
+        // --- Source-selection decision tree ---
+        let effective_conversion_options = self
+            .resolve_cross_chain_source(
+                route,
+                token_identifier.as_ref(),
+                conversion_options.as_ref(),
+                amount,
+            )
+            .await?;
+
+        // Validate the effective source matches what the route accepts.
+        crate::utils::send_payment_validation::validate_prepare_cross_chain_request_post(
+            route,
+            token_identifier.as_ref(),
+            effective_conversion_options.as_ref(),
+        )?;
+
+        let is_conversion = effective_conversion_options.is_some();
+
+        // On the conversion path, `fee_policy` has no coherent partition: the
+        // wallet's only sats budget comes from the AMM output, so fees can
+        // only come out of that budget. Force `FeesIncluded` regardless of
+        // what the caller passed — keeps the stable-balance illusion intact
+        // for callers that default to `FeesExcluded` for sat sends.
+        let effective_fee_policy = if is_conversion {
+            FeePolicy::FeesIncluded
+        } else {
+            fee_policy
+        };
+
+        let fee_mode = match effective_fee_policy {
+            FeePolicy::FeesExcluded => CrossChainFeeMode::FeesExcluded,
+            FeePolicy::FeesIncluded => CrossChainFeeMode::FeesIncluded,
+        };
+
+        // Compute conversion estimate + provider-leg amount.
+        let (provider_amount, conversion_estimate, response_token_identifier) = if is_conversion {
+            let (estimated_sats, estimate) = self
+                .estimate_sats_from_token_conversion(
+                    effective_conversion_options.as_ref(),
+                    token_identifier.as_ref(),
+                    amount,
+                    effective_fee_policy,
+                )
+                .await?;
+            // Balance sufficiency: token balance must cover conversion input.
+            if let Some(ref ce) = estimate
+                && let ConversionType::ToBitcoin {
+                    from_token_identifier,
+                } = &ce.options.conversion_type
+            {
+                let balances = self.spark_wallet.get_token_balances().await?;
+                let have = balances
+                    .get(from_token_identifier)
+                    .map_or(0u128, |b| b.balance);
+                if have < ce.amount_in {
+                    return Err(SdkError::InvalidInput(format!(
+                        "Insufficient {from_token_identifier} balance for conversion: have {have}, need {}.",
+                        ce.amount_in
+                    )));
+                }
+            }
+            // Response token_identifier is None on ToBitcoin conversion — send
+            // leg is denominated in sats.
+            (estimated_sats, estimate, None)
+        } else {
+            // No conversion: token_identifier on response mirrors the route's
+            // matched source.
+            (amount, None, token_identifier.clone())
+        };
+
+        let service = self.cross_chain_providers.get(route.provider)?;
+        // When conversion is active, the provider source is always BTC (sats).
+        let provider_token_identifier = if is_conversion {
+            None
+        } else {
+            token_identifier.clone()
+        };
+
+        let prepared = service
+            .prepare(
+                address,
+                route,
+                provider_amount,
+                provider_token_identifier,
+                Some(resolved_slippage_bps),
+                fee_mode,
+            )
+            .await?;
+
+        Ok(PrepareSendPaymentResponse {
+            payment_method: SendPaymentMethod::CrossChainAddress {
+                route: prepared.pair,
+                recipient_address: prepared.recipient_address,
+                amount_in: prepared.amount_in,
+                estimated_out: prepared.estimated_out,
+                fee_amount: prepared.fee_amount,
+                fee_asset: prepared.fee_asset,
+                source_transfer_fee_sats: prepared.source_transfer_fee_sats,
+                fee_mode: prepared.fee_mode,
+                expires_at: prepared.expires_at,
+                provider_context: prepared.provider_context,
+            },
+            amount: provider_amount,
+            token_identifier: response_token_identifier,
+            conversion_estimate,
+            fee_policy: effective_fee_policy,
+        })
+    }
+
+    /// Resolves the effective `conversion_options` for a cross-chain send.
+    ///
+    /// Decision tree: explicit caller intent wins; then direct send if the
+    /// route accepts the user's `token_identifier`; then auto-inject
+    /// `ToBitcoin` if the token is the stable-balance active token and the
+    /// route accepts sats; then defer to the stable-balance sats-side
+    /// auto-inject when no `token_identifier` was supplied — the inner
+    /// `stable_balance.get_conversion_options` checks `balance_sats >= amount`
+    /// to decide whether a top-up conversion is needed.
+    async fn resolve_cross_chain_source(
+        &self,
+        route: &CrossChainRoutePair,
+        token_identifier: Option<&String>,
+        conversion_options: Option<&ConversionOptions>,
+        amount: u128,
+    ) -> Result<Option<ConversionOptions>, SdkError> {
+        let active_stable_token = match &self.stable_balance {
+            Some(sb) => sb.get_active_token_identifier().await,
+            None => None,
+        };
+        let stable_max_slippage_bps = self
+            .stable_balance
+            .as_ref()
+            .and_then(|sb| sb.config.max_slippage_bps);
+
+        match resolve_cross_chain_source_pure(
+            route,
+            token_identifier,
+            conversion_options,
+            active_stable_token.as_ref(),
+            stable_max_slippage_bps,
+        ) {
+            CrossChainSourceResolution::UseAsIs(opts) => Ok(opts),
+            CrossChainSourceResolution::DeferToStableBalance => {
+                self.get_conversion_options_for_payment(None, None, amount)
+                    .await
+            }
+        }
+    }
+
     pub(super) async fn maybe_convert_token_send_payment(
         &self,
         request: SendPaymentRequest,
@@ -539,6 +774,22 @@ impl BreezSdk {
         if request.idempotency_key.is_some() && token_identifier.is_some() {
             return Err(SdkError::InvalidInput(
                 "Idempotency key is not supported for token payments".to_string(),
+            ));
+        }
+        // Cross-chain sends ignore the user's idempotency_key today: the
+        // top-level lookup below would never hit (provider rows are keyed by
+        // LN payment id / spark_tx_hash, not the user key), and neither
+        // provider's send leg threads the key into its underlying Spark
+        // transfer. Reject explicitly so callers don't get the misleading
+        // impression that retries are deduped.
+        if request.idempotency_key.is_some()
+            && matches!(
+                request.prepare_response.payment_method,
+                SendPaymentMethod::CrossChainAddress { .. }
+            )
+        {
+            return Err(SdkError::InvalidInput(
+                "Idempotency key is not supported for cross-chain sends".to_string(),
             ));
         }
         if let Some(idempotency_key) = &request.idempotency_key {
@@ -777,7 +1028,57 @@ impl BreezSdk {
                     .await?;
                 Ok((response, purpose, uses_amount_in))
             }
+            SendPaymentMethod::CrossChainAddress {
+                recipient_address, ..
+            } => {
+                let purpose = ConversionPurpose::OngoingPayment {
+                    payment_request: recipient_address.clone(),
+                };
+                let conversion_amount_override = match &conversion_amount {
+                    ConversionAmount::AmountIn(_) => Some(conversion_amount),
+                    ConversionAmount::MinAmountOut(_) => None,
+                };
+                let response = self
+                    .convert_token_for_crosschain(
+                        conversion_options,
+                        amount,
+                        &purpose,
+                        from_token_identifier.as_ref(),
+                        conversion_amount_override,
+                    )
+                    .await?;
+                Ok((response, purpose, uses_amount_in))
+            }
         }
+    }
+
+    /// Runs the AMM token conversion for a cross-chain send.
+    ///
+    /// - **`AmountIn`**: converter's slippage floor is the prepare-time
+    ///   `estimate.amount_out`. Pass through.
+    /// - **`MinAmountOut`**: converter must deliver at least `response.amount`
+    ///   sats (the sats target the provider leg was sized for).
+    async fn convert_token_for_crosschain(
+        &self,
+        conversion_options: &ConversionOptions,
+        amount: u128,
+        conversion_purpose: &ConversionPurpose,
+        token_identifier: Option<&String>,
+        conversion_amount_override: Option<ConversionAmount>,
+    ) -> Result<TokenConversionResponse, SdkError> {
+        let conversion_amount =
+            conversion_amount_override.unwrap_or(ConversionAmount::MinAmountOut(amount));
+
+        self.token_converter
+            .convert(
+                conversion_options,
+                conversion_purpose,
+                token_identifier,
+                conversion_amount,
+                None,
+            )
+            .await
+            .map_err(Into::into)
     }
 
     /// Links conversion child payments to their parent to hide them from `list_payments`.
@@ -1002,6 +1303,65 @@ impl BreezSdk {
             SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
                 self.send_bitcoin_address(address, fee_quote, request, amount_override)
                     .await
+            }
+            SendPaymentMethod::CrossChainAddress {
+                route,
+                recipient_address,
+                amount_in,
+                estimated_out,
+                fee_amount,
+                fee_asset,
+                source_transfer_fee_sats,
+                fee_mode,
+                expires_at,
+                provider_context,
+            } => {
+                let service = self.cross_chain_providers.get(route.provider)?;
+
+                let prepared = CrossChainPrepared {
+                    amount_in: *amount_in,
+                    estimated_out: *estimated_out,
+                    fee_amount: *fee_amount,
+                    fee_asset: fee_asset.clone(),
+                    source_transfer_fee_sats: *source_transfer_fee_sats,
+                    fee_mode: *fee_mode,
+                    expires_at: expires_at.clone(),
+                    pair: route.clone(),
+                    recipient_address: recipient_address.clone(),
+                    token_identifier: token_identifier.clone(),
+                    provider_context: provider_context.clone(),
+                };
+
+                let response = service.send(&prepared).await?;
+
+                // Token transfers may not trigger the same wallet event
+                // path as BTC transfers — kick off a sync so the payment
+                // row is available for wait_for_payment.
+                if token_identifier.is_some() {
+                    self.sync_coordinator
+                        .trigger_sync_no_wait(SyncType::WalletState, true)
+                        .await;
+                }
+
+                // The Spark transfer leg produces a payment row via the
+                // existing wallet event path. The provider's send() has
+                // already attached conversion metadata to it. Wait for
+                // the payment to appear in storage — it may not be
+                // immediately available if async sync hasn't processed
+                // the Spark transfer yet.
+                let payment = self
+                    .wait_for_payment(
+                        WaitForPaymentIdentifier::PaymentId(response.payment_id.clone()),
+                        DEFAULT_CONVERSION_TIMEOUT_SECS,
+                    )
+                    .await
+                    .map_err(|_| {
+                        SdkError::Generic(format!(
+                            "Cross-chain send submitted (order {}), but payment row not yet synced.",
+                            response.order_id
+                        ))
+                    })?;
+                Ok(SendPaymentResponse { payment })
             }
         }
     }
@@ -1276,48 +1636,22 @@ impl BreezSdk {
             .map(|idempotency_key| TransferId::from_str(idempotency_key))
             .transpose()?;
 
-        let payment_response = Box::pin(
-            self.spark_wallet.pay_lightning_invoice(
+        let payment = self
+            .lightning_sender
+            .pay_and_persist_lightning_invoice(
                 &invoice_details.invoice.bolt11,
                 amount_to_send
                     .map(|a| Ok::<u64, SdkError>(a.try_into()?))
                     .transpose()?,
-                Some(fee_sats),
+                fee_sats,
                 prefer_spark,
+                amount,
                 transfer_id,
-            ),
-        )
-        .await?;
-        let payment = match payment_response.lightning_payment {
-            Some(lightning_payment) => {
-                let ssp_id = lightning_payment.id.clone();
-                let htlc_details = payment_response
-                    .transfer
-                    .htlc_preimage_request
-                    .ok_or_else(|| {
-                        SdkError::Generic(
-                            "Missing HTLC details for Lightning send payment".to_string(),
-                        )
-                    })?
-                    .try_into()?;
-                let payment = Payment::from_lightning(
-                    lightning_payment,
-                    amount,
-                    payment_response.transfer.id.to_string(),
-                    htlc_details,
-                )?;
-                self.poll_lightning_send_payment(&payment, ssp_id);
-                payment
-            }
-            None => payment_response.transfer.try_into()?,
-        };
+            )
+            .await?;
 
         let completion_timeout_secs = completion_timeout_secs.unwrap_or(0);
-
         if completion_timeout_secs == 0 {
-            // Insert the payment into storage to make it immediately available for listing
-            self.storage.insert_payment(payment.clone()).await?;
-
             return Ok(SendPaymentResponse { payment });
         }
 
@@ -1329,7 +1663,7 @@ impl BreezSdk {
             .await
             .unwrap_or(payment);
 
-        // Insert the payment into storage to make it immediately available for listing
+        // Re-persist the waited-on payment so listing reflects the latest state.
         self.storage.insert_payment(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
@@ -1463,72 +1797,6 @@ impl BreezSdk {
 
         self.event_emitter.remove_internal_listener(&id).await;
         result
-    }
-
-    // Pools the lightning send payment until it is in completed state.
-    fn poll_lightning_send_payment(&self, payment: &Payment, ssp_id: String) {
-        const MAX_POLL_ATTEMPTS: u32 = 20;
-        let payment_id = payment.id.clone();
-        info!("Polling lightning send payment {}", payment_id);
-
-        let Some(htlc_details) = payment.details.as_ref().and_then(|d| match d {
-            PaymentDetails::Lightning { htlc_details, .. } => Some(htlc_details.clone()),
-            _ => None,
-        }) else {
-            error!(
-                "Missing HTLC details for lightning send payment {payment_id}, skipping polling"
-            );
-            return;
-        };
-        let spark_wallet = self.spark_wallet.clone();
-        let storage = self.storage.clone();
-        let sync_coordinator = self.sync_coordinator.clone();
-        let event_emitter = self.event_emitter.clone();
-        let payment = payment.clone();
-        let payment_id = payment_id.clone();
-        let mut shutdown = self.shutdown_sender.subscribe();
-        let span = tracing::Span::current();
-
-        tokio::spawn(async move {
-            for i in 0..MAX_POLL_ATTEMPTS {
-                info!(
-                    "Polling lightning send payment {} attempt {}",
-                    payment_id, i
-                );
-                select! {
-                    _ = shutdown.changed() => {
-                        info!("Shutdown signal received");
-                        return;
-                    },
-                    p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
-                        if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
-                            info!("Polling payment status = {} {:?}", payment.status, p.status);
-                            if payment.status != PaymentStatus::Pending {
-                                info!("Polling payment completed status = {}", payment.status);
-                                // Update storage before emitting event so that
-                                // get_payment returns the correct status immediately.
-                                if let Err(e) = storage.insert_payment(payment.clone()).await {
-                                    error!("Failed to update payment in storage: {e:?}");
-                                }
-                                // Fetch the payment to include already stored metadata
-                                get_payment_and_emit_event(&storage, &event_emitter, payment.clone()).await;
-                                sync_coordinator
-                                    .trigger_sync_no_wait(SyncType::WalletState, true)
-                                    .await;
-                                return;
-                            }
-                        }
-
-                        let sleep_time = if i < 5 {
-                            Duration::from_secs(1)
-                        } else {
-                            Duration::from_secs(i.into())
-                        };
-                        tokio::time::sleep(sleep_time).await;
-                    }
-                }
-            }
-        }.instrument(span));
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -1807,12 +2075,22 @@ impl BreezSdk {
             return Ok(None);
         }
 
+        let input_str = match &request.payment_request {
+            PaymentRequest::Input { input: s } => s.as_str(),
+            // `prepare_send_payment` intercepts `PaymentRequest::CrossChain`
+            // up front and dispatches to `prepare_cross_chain_send`, so the
+            // Bolt11 path is only ever entered with `PaymentRequest::Input`.
+            // Defensive guard: error rather than panic if the dispatcher
+            // invariant is ever violated.
+            PaymentRequest::CrossChain { .. } => {
+                return Err(SdkError::Generic(
+                    "internal: CrossChain reached bolt11 prepare path".to_string(),
+                ));
+            }
+        };
         let lightning_fee_sats = self
             .spark_wallet
-            .fetch_lightning_send_fee_estimate(
-                &request.payment_request,
-                Some(estimated_sats.try_into()?),
-            )
+            .fetch_lightning_send_fee_estimate(input_str, Some(estimated_sats.try_into()?))
             .await?;
 
         let total_u64: u64 = estimated_sats.try_into()?;
@@ -1948,5 +2226,253 @@ impl BreezSdk {
             )
             .await
             .map_err(Into::into)
+    }
+}
+
+/// Result of the pure cross-chain source-selection decision tree.
+///
+/// `DeferToStableBalance` covers the no-token + sats-supported case where the
+/// caller must consult `stable_balance.get_conversion_options` (which itself
+/// depends on the runtime sats balance) to decide whether a top-up conversion
+/// is needed. Every other branch is fully resolved by static inputs.
+#[derive(Debug, Clone, PartialEq)]
+enum CrossChainSourceResolution {
+    UseAsIs(Option<ConversionOptions>),
+    DeferToStableBalance,
+}
+
+/// Pure decision logic for `BreezSdk::resolve_cross_chain_source`.
+///
+/// Inputs:
+/// - `active_stable_token` — `Some(id)` when stable-balance is configured AND
+///   has an active token; `None` otherwise.
+/// - `stable_max_slippage_bps` — slippage from `StableBalanceConfig` to put on
+///   the auto-injected `ToBitcoin` options when stable-balance fires.
+fn resolve_cross_chain_source_pure(
+    route: &CrossChainRoutePair,
+    token_identifier: Option<&String>,
+    conversion_options: Option<&ConversionOptions>,
+    active_stable_token: Option<&String>,
+    stable_max_slippage_bps: Option<u32>,
+) -> CrossChainSourceResolution {
+    // 1) Explicit caller intent wins.
+    if let Some(opts) = conversion_options {
+        return CrossChainSourceResolution::UseAsIs(Some(opts.clone()));
+    }
+
+    match token_identifier {
+        // 2) Caller specified a token.
+        Some(token_id) => {
+            let route_accepts_token = route
+                .supported_sources
+                .iter()
+                .any(|s| matches!(s, SourceAsset::Token(t) if t == token_id));
+            if route_accepts_token {
+                // Direct token send — no conversion needed.
+                return CrossChainSourceResolution::UseAsIs(None);
+            }
+
+            let route_accepts_bitcoin = route.supported_sources.contains(&SourceAsset::Bitcoin);
+            if !route_accepts_bitcoin {
+                // Neither direct nor auto-inject; caller must handle.
+                return CrossChainSourceResolution::UseAsIs(None);
+            }
+
+            // Auto-inject ToBitcoin if and only if `token_id` is the
+            // stable-balance active token.
+            if active_stable_token == Some(token_id) {
+                return CrossChainSourceResolution::UseAsIs(Some(ConversionOptions {
+                    conversion_type: ConversionType::ToBitcoin {
+                        from_token_identifier: token_id.clone(),
+                    },
+                    max_slippage_bps: stable_max_slippage_bps,
+                    completion_timeout_secs: None,
+                }));
+            }
+            CrossChainSourceResolution::UseAsIs(None)
+        }
+        // 3) No token specified.
+        None => {
+            if route.supported_sources.contains(&SourceAsset::Bitcoin) {
+                // Defer to stable_balance auto-inject: fires when the
+                // sats balance is insufficient to cover `amount`.
+                CrossChainSourceResolution::DeferToStableBalance
+            } else {
+                // Route only accepts tokens but user didn't specify one.
+                // FromBitcoin + CrossChain is out of scope; nothing to
+                // auto-inject. Leave as None; post-validation will error.
+                CrossChainSourceResolution::UseAsIs(None)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CrossChainProvider;
+
+    fn make_route(supported_sources: Vec<SourceAsset>) -> CrossChainRoutePair {
+        CrossChainRoutePair {
+            provider: CrossChainProvider::Orchestra,
+            chain: "tron".to_string(),
+            chain_id: None,
+            asset: "USDT".to_string(),
+            contract_address: None,
+            decimals: 6,
+            exact_out_eligible: false,
+            supported_sources,
+        }
+    }
+
+    fn explicit_options() -> ConversionOptions {
+        ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: "USDC".to_string(),
+            },
+            max_slippage_bps: Some(123),
+            completion_timeout_secs: Some(42),
+        }
+    }
+
+    #[test]
+    fn explicit_conversion_options_win() {
+        // Even when the route would accept the token directly, explicit
+        // caller-supplied options short-circuit the decision tree.
+        let route = make_route(vec![SourceAsset::Token("USDB".to_string())]);
+        let opts = explicit_options();
+        let usdb = "USDB".to_string();
+
+        let result = resolve_cross_chain_source_pure(
+            &route,
+            Some(&usdb),
+            Some(&opts),
+            Some(&usdb),
+            Some(50),
+        );
+
+        assert_eq!(
+            result,
+            CrossChainSourceResolution::UseAsIs(Some(opts.clone())),
+            "explicit options should pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn token_directly_supported_no_conversion() {
+        let route = make_route(vec![SourceAsset::Token("USDB".to_string())]);
+        let usdb = "USDB".to_string();
+
+        let result =
+            resolve_cross_chain_source_pure(&route, Some(&usdb), None, Some(&usdb), Some(50));
+
+        assert_eq!(
+            result,
+            CrossChainSourceResolution::UseAsIs(None),
+            "direct token send should not auto-inject conversion"
+        );
+    }
+
+    #[test]
+    fn token_unsupported_route_lacks_bitcoin_no_inject() {
+        // Route only supports a different token; no Bitcoin path exists, so
+        // we cannot auto-inject ToBitcoin. Leave as None — post-validation
+        // will reject.
+        let route = make_route(vec![SourceAsset::Token("USDB".to_string())]);
+        let user_token = "USDC".to_string();
+        let active_stable_token = "USDB".to_string();
+
+        let result = resolve_cross_chain_source_pure(
+            &route,
+            Some(&user_token),
+            None,
+            Some(&active_stable_token),
+            Some(50),
+        );
+
+        assert_eq!(result, CrossChainSourceResolution::UseAsIs(None));
+    }
+
+    #[test]
+    fn token_is_active_stable_balance_auto_injects_to_bitcoin() {
+        // Route accepts sats but not the user's token; the user's token IS
+        // the stable-balance active token, so auto-inject ToBitcoin.
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+        let usdb = "USDB".to_string();
+
+        let result =
+            resolve_cross_chain_source_pure(&route, Some(&usdb), None, Some(&usdb), Some(75));
+
+        let expected_opts = ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: "USDB".to_string(),
+            },
+            max_slippage_bps: Some(75),
+            completion_timeout_secs: None,
+        };
+        assert_eq!(
+            result,
+            CrossChainSourceResolution::UseAsIs(Some(expected_opts))
+        );
+    }
+
+    #[test]
+    fn token_is_not_active_stable_balance_no_inject() {
+        // Route accepts sats and a token, the user supplied a token, but the
+        // token is NOT the stable-balance active token — we leave the
+        // conversion options None. Post-validation will reject because the
+        // effective source (Token(USDC)) isn't in supported_sources.
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+        let user_token = "USDC".to_string();
+        let active_stable_token = "USDB".to_string();
+
+        let result = resolve_cross_chain_source_pure(
+            &route,
+            Some(&user_token),
+            None,
+            Some(&active_stable_token),
+            Some(50),
+        );
+
+        assert_eq!(result, CrossChainSourceResolution::UseAsIs(None));
+    }
+
+    #[test]
+    fn token_specified_no_stable_balance_configured_no_inject() {
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+        let usdb = "USDB".to_string();
+
+        let result = resolve_cross_chain_source_pure(&route, Some(&usdb), None, None, None);
+
+        assert_eq!(
+            result,
+            CrossChainSourceResolution::UseAsIs(None),
+            "without stable balance, no auto-inject is possible"
+        );
+    }
+
+    #[test]
+    fn no_token_route_accepts_sats_defers_to_stable_balance() {
+        let route = make_route(vec![SourceAsset::Bitcoin]);
+
+        let result = resolve_cross_chain_source_pure(&route, None, None, None, None);
+
+        assert_eq!(
+            result,
+            CrossChainSourceResolution::DeferToStableBalance,
+            "no-token + sats-route must defer so stable balance can decide"
+        );
+    }
+
+    #[test]
+    fn no_token_route_token_only_no_inject() {
+        // Route only accepts a token; caller didn't specify one and we
+        // cannot auto-inject FromBitcoin (out of scope). Post-validation
+        // will reject.
+        let route = make_route(vec![SourceAsset::Token("USDB".to_string())]);
+
+        let result = resolve_cross_chain_source_pure(&route, None, None, None, None);
+
+        assert_eq!(result, CrossChainSourceResolution::UseAsIs(None));
     }
 }

@@ -328,6 +328,14 @@ impl SqliteStorage {
             "ALTER TABLE unclaimed_deposits ADD COLUMN is_mature INTEGER NOT NULL DEFAULT 1;",
             // Add conversion_status to payment_metadata
             "ALTER TABLE payment_metadata ADD COLUMN conversion_status TEXT;",
+            // Backfill the `type` discriminator on existing conversion_info
+            // rows so the new `ConversionInfo` enum (tagged with
+            // `#[serde(tag = "type")]`) deserializes correctly. All existing
+            // rows are AMM conversions.
+            "UPDATE payment_metadata
+             SET conversion_info = json_set(conversion_info, '$.type', 'amm')
+             WHERE conversion_info IS NOT NULL
+               AND json_extract(conversion_info, '$.type') IS NULL;",
         ]
     }
 }
@@ -468,27 +476,44 @@ impl Storage for SqliteStorage {
                         params.push(Box::new(htlc_status.to_string()));
                     }
                 }
-                // Filter by conversion info presence
+                // Payment type discriminator — always added so the filter
+                // restricts to the correct payment kind even when no
+                // conversion-specific sub-filter is set.
+                match payment_details_filter {
+                    StoragePaymentDetailsFilter::Spark { .. } => {
+                        payment_details_clauses.push("p.spark = 1".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Token { .. } => {
+                        payment_details_clauses.push("p.spark IS NULL".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Lightning { .. } => {}
+                }
+
+                // Filter by conversion info type + status
                 let conversion_filter = match payment_details_filter {
                     StoragePaymentDetailsFilter::Spark {
-                        conversion_refund_needed: Some(v),
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark = 1")),
-                    StoragePaymentDetailsFilter::Token {
-                        conversion_refund_needed: Some(v),
+                    }
+                    | StoragePaymentDetailsFilter::Token {
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark IS NULL")),
+                    } => Some(cf),
                     _ => None,
                 };
-                if let Some((conversion_refund_needed, type_check)) = conversion_filter {
-                    let refund_needed = if *conversion_refund_needed {
-                        "= 'RefundNeeded'"
-                    } else {
-                        "!= 'RefundNeeded'"
+                if let Some(cf) = conversion_filter {
+                    let status_clause = match cf {
+                        crate::persist::ConversionFilter::AmmRefundNeeded => {
+                            "json_extract(pm.conversion_info, '$.type') = 'amm' AND \
+                             json_extract(pm.conversion_info, '$.status') = 'RefundNeeded'"
+                        }
+                        crate::persist::ConversionFilter::OrchestraPending => {
+                            "json_extract(pm.conversion_info, '$.type') = 'orchestra' AND \
+                             json_extract(pm.conversion_info, '$.status') NOT IN ('Completed', 'Failed', 'Refunded')"
+                        }
                     };
                     payment_details_clauses.push(format!(
-                        "{type_check} AND pm.conversion_info IS NOT NULL AND
-                         json_extract(pm.conversion_info, '$.status') {refund_needed}"
+                        "pm.conversion_info IS NOT NULL AND {status_clause}"
                     ));
                 }
                 // Filter by token transaction hash
@@ -1441,6 +1466,10 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             } else {
                 None
             };
+            let conversion_info_str: Option<String> = row.get(19)?;
+            let conversion_info: Option<ConversionInfo> = conversion_info_str
+                .map(|s: String| serde_json_from_str(&s, 19))
+                .transpose()?;
             Some(PaymentDetails::Lightning {
                 invoice,
                 destination_pubkey,
@@ -1449,6 +1478,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 lnurl_pay_info,
                 lnurl_withdraw_info,
                 lnurl_receive_metadata,
+                conversion_info,
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
@@ -1496,8 +1526,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let conversion_status: Option<ConversionStatus> = row.get(30)?;
     let conversion_details = conversion_status.map(|status| ConversionDetails {
         status,
-        from: None,
-        to: None,
+        conversions: vec![],
     });
 
     Ok(Payment {
@@ -2039,7 +2068,7 @@ mod tests {
             status_filter: None,
             asset_filter: None,
             payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed: None,
+                conversion_filter: None,
                 tx_hash: None,
                 tx_type: Some(TokenTransactionType::Transfer),
             }]),
@@ -2277,5 +2306,19 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_conversion_status_persistence(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_insert_boltz_conversion_info() {
+        let temp_dir = create_temp_dir("sqlite_insert_boltz_conversion_info");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+        crate::persist::tests::test_insert_boltz_conversion_info(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_boltz_status_to_completed() {
+        let temp_dir = create_temp_dir("sqlite_update_boltz_status_to_completed");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+        crate::persist::tests::test_update_boltz_status_to_completed(Box::new(storage)).await;
     }
 }

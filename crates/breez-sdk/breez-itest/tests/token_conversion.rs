@@ -68,7 +68,9 @@ async fn test_token_conversion_success(
     let prepare_btc_to_token = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(sats_to_token_success_amount),
             token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
             conversion_options: Some(ConversionOptions {
@@ -112,39 +114,41 @@ async fn test_token_conversion_success(
     // Check payment conversion details
     let btc_to_token_conversion_details = send_btc_to_token.payment.conversion_details.unwrap();
     assert_eq!(
-        btc_to_token_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .method,
-        PaymentMethod::Spark,
-        "From step should be a spark payment"
+        btc_to_token_conversion_details.conversions.len(),
+        1,
+        "Should have exactly one conversion (AMM)"
     );
-    assert!(
-        btc_to_token_conversion_details.from.as_ref().unwrap().fee > 0,
-        "From step should have a fee"
-    );
-    assert!(
-        btc_to_token_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .token_metadata
-            .is_none(),
-        "From step should have no token metadata"
-    );
-    let btc_to_token_to_step = btc_to_token_conversion_details
-        .to
-        .expect("Conversion should have a 'to' step");
+    let btc_to_token_conv = &btc_to_token_conversion_details.conversions[0];
     assert_eq!(
-        btc_to_token_to_step.method,
-        PaymentMethod::Token,
-        "To step should be a token payment"
+        btc_to_token_conv.from.chain,
+        ConversionChain::Spark,
+        "From chain should be spark"
     );
-    assert_eq!(btc_to_token_to_step.fee, 0, "To step should have no fee");
+    assert_eq!(
+        btc_to_token_conv.from.asset.ticker, "BTC",
+        "From asset should be BTC"
+    );
     assert!(
-        btc_to_token_to_step.token_metadata.is_some(),
-        "To step should have token metadata"
+        btc_to_token_conv.from.fee > 0,
+        "From side should have a fee"
+    );
+    assert_eq!(
+        btc_to_token_conv.from.asset.decimals, 0,
+        "From side (BTC/sats) should report decimals=0"
+    );
+    assert_eq!(
+        btc_to_token_conv.to.chain,
+        ConversionChain::Spark,
+        "To chain should be spark"
+    );
+    assert_ne!(
+        btc_to_token_conv.to.asset.ticker, "BTC",
+        "To asset should be a token"
+    );
+    assert_eq!(btc_to_token_conv.to.fee, 0, "To side should have no fee");
+    assert!(
+        btc_to_token_conv.to.asset.decimals > 0,
+        "To side (token) should have decimals > 0"
     );
 
     // Wait for Bob to receive the token payment
@@ -232,7 +236,9 @@ async fn test_token_conversion_success(
     let prepare_token_to_btc = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: alice_invoice.clone(),
+            payment_request: PaymentRequest::Input {
+                input: alice_invoice.clone(),
+            },
             amount: None, // Amount from invoice
             token_identifier: None,
             conversion_options: Some(ConversionOptions {
@@ -279,39 +285,41 @@ async fn test_token_conversion_success(
     // Check payment conversion details
     let token_to_btc_conversion_details = send_token_to_btc.payment.conversion_details.unwrap();
     assert_eq!(
-        token_to_btc_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .method,
-        PaymentMethod::Token,
-        "From step should be a token payment"
+        token_to_btc_conversion_details.conversions.len(),
+        1,
+        "Should have exactly one conversion (AMM)"
     );
-    assert!(
-        token_to_btc_conversion_details.from.as_ref().unwrap().fee > 0,
-        "From step should have a fee"
-    );
-    assert!(
-        token_to_btc_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .token_metadata
-            .is_some(),
-        "From step should have token metadata"
-    );
-    let token_to_btc_to_step = token_to_btc_conversion_details
-        .to
-        .expect("Conversion should have a 'to' step");
+    let token_to_btc_conv = &token_to_btc_conversion_details.conversions[0];
     assert_eq!(
-        token_to_btc_to_step.method,
-        PaymentMethod::Spark,
-        "To step should be a spark payment"
+        token_to_btc_conv.from.chain,
+        ConversionChain::Spark,
+        "From chain should be spark"
     );
-    assert_eq!(token_to_btc_to_step.fee, 0, "To step should have no fee");
+    assert_ne!(
+        token_to_btc_conv.from.asset.ticker, "BTC",
+        "From asset should be a token"
+    );
     assert!(
-        token_to_btc_to_step.token_metadata.is_none(),
-        "To step should have no token metadata"
+        token_to_btc_conv.from.fee > 0,
+        "From side should have a fee"
+    );
+    assert!(
+        token_to_btc_conv.from.asset.decimals > 0,
+        "From side (token) should have decimals > 0"
+    );
+    assert_eq!(
+        token_to_btc_conv.to.chain,
+        ConversionChain::Spark,
+        "To chain should be spark"
+    );
+    assert_eq!(
+        token_to_btc_conv.to.asset.ticker, "BTC",
+        "To asset should be BTC"
+    );
+    assert_eq!(token_to_btc_conv.to.fee, 0, "To side should have no fee");
+    assert_eq!(
+        token_to_btc_conv.to.asset.decimals, 0,
+        "To side (BTC/sats) should report decimals=0"
     );
 
     // Wait for Alice to receive the Bitcoin payment
@@ -431,7 +439,9 @@ async fn test_token_conversion_failure(
     let prepare_non_existent_result = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(sats_to_token_failure_amount),
             token_identifier: Some(non_existent_token_id.to_string()),
             conversion_options: Some(ConversionOptions {
@@ -472,7 +482,9 @@ async fn test_token_conversion_failure(
     let prepare_low_slippage = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(sats_to_token_failure_amount),
             token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
             conversion_options: Some(ConversionOptions {

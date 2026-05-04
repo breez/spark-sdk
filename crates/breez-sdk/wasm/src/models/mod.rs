@@ -221,6 +221,16 @@ pub enum InputType {
     LnurlWithdraw(LnurlWithdrawRequestDetails),
     SparkAddress(SparkAddressDetails),
     SparkInvoice(SparkInvoiceDetails),
+    CrossChainAddress(CrossChainAddressDetails),
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainAddressDetails)]
+pub struct CrossChainAddressDetails {
+    pub address: String,
+    pub address_family: CrossChainAddressFamily,
+    pub contract_address: Option<String>,
+    pub chain_id: Option<u64>,
+    pub amount: Option<u128>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkAddressDetails)]
@@ -458,17 +468,54 @@ pub struct Payment {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionDetails)]
 pub struct ConversionDetails {
     pub status: ConversionStatus,
-    pub from: Option<ConversionStep>,
-    pub to: Option<ConversionStep>,
+    #[serde(default)]
+    pub conversions: Vec<Conversion>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionStep)]
-pub struct ConversionStep {
-    pub payment_id: String,
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionProvider)]
+pub enum ConversionProvider {
+    Amm,
+    Orchestra,
+    Boltz,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionChain)]
+pub enum ConversionChain {
+    Spark,
+    Lightning,
+    External {
+        name: String,
+        #[serde(default)]
+        chain_id: Option<String>,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionAsset)]
+pub struct ConversionAsset {
+    pub ticker: String,
+    #[serde(default)]
+    pub identifier: Option<String>,
+    pub decimals: u32,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionSide)]
+pub struct ConversionSide {
+    pub chain: ConversionChain,
+    pub asset: ConversionAsset,
+    #[tsify(type = "string")]
+    #[serde(with = "serde_u128_as_string")]
     pub amount: u128,
+    #[tsify(type = "string")]
+    #[serde(with = "serde_u128_as_string")]
     pub fee: u128,
-    pub method: PaymentMethod,
-    pub token_metadata: Option<TokenMetadata>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Conversion)]
+pub struct Conversion {
+    pub provider: ConversionProvider,
+    pub status: ConversionStatus,
+    pub from: ConversionSide,
+    pub to: ConversionSide,
     #[serde(default)]
     pub amount_adjustment: Option<AmountAdjustmentReason>,
 }
@@ -495,6 +542,7 @@ pub enum PaymentDetails {
         lnurl_pay_info: Option<LnurlPayInfo>,
         lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
+        conversion_info: Option<ConversionInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -639,6 +687,12 @@ pub struct Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
+    pub cross_chain_config: Option<CrossChainConfig>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainConfig)]
+pub struct CrossChainConfig {
+    pub default_slippage_bps: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkConfig)]
@@ -790,6 +844,80 @@ pub struct SendOnchainSpeedFeeQuote {
     pub l1_broadcast_fee_sat: u64,
 }
 
+#[derive(Clone, Copy)]
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainProvider)]
+pub enum CrossChainProvider {
+    Orchestra,
+    Boltz,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainAddressFamily)]
+pub enum CrossChainAddressFamily {
+    Evm,
+    Solana,
+    Tron,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainRouteFilter)]
+pub enum CrossChainRouteFilter {
+    Send {
+        address_details: CrossChainAddressDetails,
+    },
+    Receive {
+        contract_address: Option<String>,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SourceAsset)]
+pub enum SourceAsset {
+    Bitcoin,
+    Token(String),
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainFeeMode)]
+pub enum CrossChainFeeMode {
+    FeesExcluded,
+    FeesIncluded,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainRoutePair)]
+pub struct CrossChainRoutePair {
+    pub provider: CrossChainProvider,
+    pub chain: String,
+    #[serde(default)]
+    pub chain_id: Option<String>,
+    pub asset: String,
+    pub contract_address: Option<String>,
+    pub decimals: u8,
+    pub exact_out_eligible: bool,
+    pub supported_sources: Vec<SourceAsset>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainProviderContext)]
+pub enum CrossChainProviderContext {
+    Orchestra {
+        quote_id: String,
+        deposit_address: String,
+    },
+    Boltz {
+        swap_id: String,
+        invoice: String,
+        max_slippage_bps: u32,
+    },
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentRequest)]
+pub enum PaymentRequest {
+    Input {
+        input: String,
+    },
+    CrossChain {
+        address: String,
+        route: CrossChainRoutePair,
+        max_slippage_bps: Option<u32>,
+    },
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentMethod)]
 pub enum SendPaymentMethod {
     BitcoinAddress {
@@ -814,6 +942,24 @@ pub enum SendPaymentMethod {
         #[serde(with = "serde_u128_as_string")]
         fee: u128,
         token_identifier: Option<String>,
+    },
+    CrossChainAddress {
+        route: CrossChainRoutePair,
+        recipient_address: String,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        amount_in: u128,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        fee_amount: u128,
+        fee_asset: Option<String>,
+        source_transfer_fee_sats: u64,
+        fee_mode: CrossChainFeeMode,
+        expires_at: String,
+        provider_context: CrossChainProviderContext,
     },
 }
 
@@ -888,7 +1034,7 @@ pub struct LnurlWithdrawResponse {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentRequest)]
 pub struct PrepareSendPaymentRequest {
-    pub payment_request: String,
+    pub payment_request: PaymentRequest,
     pub amount: Option<u128>,
     pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
@@ -959,14 +1105,20 @@ pub enum PaymentDetailsFilter {
     },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionFilter)]
+pub enum ConversionFilter {
+    AmmRefundNeeded,
+    OrchestraPending,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::StoragePaymentDetailsFilter)]
 pub enum StoragePaymentDetailsFilter {
     Spark {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        conversion_refund_needed: Option<bool>,
+        conversion_filter: Option<ConversionFilter>,
     },
     Token {
-        conversion_refund_needed: Option<bool>,
+        conversion_filter: Option<ConversionFilter>,
         tx_hash: Option<String>,
         tx_type: Option<TokenTransactionType>,
     },
@@ -1310,16 +1462,72 @@ pub enum ConversionStatus {
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionInfo)]
-pub struct ConversionInfo {
-    pub pool_id: String,
-    pub conversion_id: String,
-    pub status: ConversionStatus,
-    #[tsify(type = "string")]
-    #[serde(default, with = "serde_option_u128_as_string")]
-    pub fee: Option<u128>,
-    pub purpose: Option<ConversionPurpose>,
-    #[serde(default)]
-    pub amount_adjustment: Option<AmountAdjustmentReason>,
+pub enum ConversionInfo {
+    Amm {
+        pool_id: String,
+        conversion_id: String,
+        status: ConversionStatus,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        purpose: Option<ConversionPurpose>,
+        #[serde(default)]
+        amount_adjustment: Option<AmountAdjustmentReason>,
+    },
+    Orchestra {
+        chain: String,
+        #[serde(default)]
+        chain_id: Option<String>,
+        #[serde(default)]
+        asset: String,
+        #[serde(default)]
+        asset_contract: Option<String>,
+        recipient_address: String,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        delivered_amount: Option<u128>,
+        status: ConversionStatus,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        asset_decimals: u32,
+        order_id: String,
+        quote_id: String,
+        #[serde(default)]
+        read_token: Option<String>,
+    },
+    Boltz {
+        chain: String,
+        #[serde(default)]
+        chain_id: Option<String>,
+        #[serde(default)]
+        asset: String,
+        #[serde(default)]
+        asset_contract: Option<String>,
+        recipient_address: String,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        estimated_out: u128,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        delivered_amount: Option<u128>,
+        status: ConversionStatus,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        fee: Option<u128>,
+        asset_decimals: u32,
+        swap_id: String,
+        invoice: String,
+        invoice_amount_sats: u64,
+        #[serde(default)]
+        lz_guid: Option<String>,
+        max_slippage_bps: u32,
+        #[serde(default)]
+        quote_degraded: bool,
+    },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionOptions)]

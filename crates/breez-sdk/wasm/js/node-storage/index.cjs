@@ -204,6 +204,14 @@ class SqliteStorage {
         const allPaymentDetailsClauses = [];
         for (const paymentDetailsFilter of request.paymentDetailsFilter) {
           const paymentDetailsClauses = [];
+          // Base type check: ensure payment type matches the filter type
+          if (paymentDetailsFilter.type === "spark") {
+            paymentDetailsClauses.push("p.spark = 1");
+          } else if (paymentDetailsFilter.type === "token") {
+            paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
+          } else if (paymentDetailsFilter.type === "lightning") {
+            paymentDetailsClauses.push("l.htlc_status IS NOT NULL");
+          }
           // Filter by HTLC status (Spark or Lightning)
           const htlcAlias =
             paymentDetailsFilter.type === "spark" ? "s"
@@ -230,20 +238,23 @@ class SqliteStorage {
             }
             params.push(...paymentDetailsFilter.htlcStatus);
           }
-          // Filter by token conversion info presence
+          // Filter by conversion type + status
           if (
             (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
-              paymentDetailsFilter.conversionRefundNeeded !== undefined
+              paymentDetailsFilter.conversionFilter !== undefined
           ) {
             const typeCheck = paymentDetailsFilter.type === "spark" ? "p.spark = 1" : "p.spark IS NULL";
-            const refundNeeded =
-              paymentDetailsFilter.conversionRefundNeeded === true
-                ? "= 'refundNeeded'"
-                : "!= 'refundNeeded'";
-            paymentDetailsClauses.push(
-              `${typeCheck} AND pm.conversion_info IS NOT NULL AND
-              json_extract(pm.conversion_info, '$.status') ${refundNeeded}`
-            );
+            let statusClause;
+            if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
+              statusClause = "json_extract(pm.conversion_info, '$.type') = 'amm' AND json_extract(pm.conversion_info, '$.status') = 'refundNeeded'";
+            } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
+              statusClause = "json_extract(pm.conversion_info, '$.type') = 'orchestra' AND json_extract(pm.conversion_info, '$.status') NOT IN ('completed', 'failed', 'refunded')";
+            }
+            if (statusClause) {
+              paymentDetailsClauses.push(
+                `${typeCheck} AND pm.conversion_info IS NOT NULL AND ${statusClause}`
+              );
+            }
           }
           // Filter by token transaction hash
           if (
@@ -759,6 +770,17 @@ class SqliteStorage {
           nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
         };
+      }
+
+      if (row.conversion_info) {
+        try {
+          details.conversionInfo = JSON.parse(row.conversion_info);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse conversion_info JSON for payment ${row.id}: ${e.message}`,
+            e
+          );
+        }
       }
     } else if (row.withdraw_tx_id) {
       details = {

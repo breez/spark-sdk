@@ -40,6 +40,8 @@ impl BreezSdk {
             stable_balance: params.stable_balance,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
             session_manager: params.session_manager,
+            cross_chain_providers: params.cross_chain_providers,
+            lightning_sender: params.lightning_sender,
         };
 
         sdk.start(initial_synced_sender);

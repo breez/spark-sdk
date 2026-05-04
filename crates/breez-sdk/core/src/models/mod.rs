@@ -22,7 +22,9 @@ use std::{
 use crate::{
     BitcoinAddressDetails, BitcoinChainService, BitcoinNetwork, Bolt11InvoiceDetails,
     ExternalInputParser, FiatCurrency, LnurlPayRequestDetails, LnurlWithdrawRequestDetails, Rate,
-    SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed, error::DepositClaimError,
+    SdkError, SparkInvoiceDetails, SuccessAction, SuccessActionProcessed,
+    cross_chain::{CrossChainFeeMode, CrossChainProviderContext, CrossChainRoutePair},
+    error::DepositClaimError,
 };
 
 /// A list of external input parsers that are used by default.
@@ -253,99 +255,100 @@ impl Payment {
     }
 }
 
-/// Outlines the steps involved in a conversion.
+/// Outlines the steps involved in one or more conversions on a payment.
 ///
 /// Built progressively: `status` is available immediately from payment metadata,
-/// while `from`/`to` steps are enriched later from child payments.
+/// while `conversions` are enriched later from child payments and conversion info.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConversionDetails {
-    /// Current status of the conversion
+    /// Overall status of the conversion (persisted in storage)
     pub status: ConversionStatus,
-    /// The send step of the conversion (e.g., sats sent to Flashnet)
-    pub from: Option<ConversionStep>,
-    /// The receive step of the conversion (e.g., tokens received from Flashnet)
-    pub to: Option<ConversionStep>,
+    /// Ordered list of conversion steps. For sends: [AMM, cross-chain].
+    /// For receives: [cross-chain, AMM]. Rebuilt on retrieval, not persisted.
+    #[serde(default)]
+    pub conversions: Vec<Conversion>,
 }
 
-/// Extracts conversion steps (from/to) from a conversion's child payments.
-///
-/// Each conversion produces a send payment (sats → Flashnet) and a receive payment
-/// (tokens ← Flashnet), linked to the parent payment via `parent_payment_id` in
-/// payment metadata. The SDK queries these children from storage and converts them
-/// into the `from` and `to` steps.
-///
-/// Returns `(None, None)` when no child payments exist yet (e.g. Pending or Failed).
-pub fn conversion_steps_from_payments(
-    payments: &[Payment],
-) -> Result<(Option<ConversionStep>, Option<ConversionStep>), SdkError> {
-    let from = payments
-        .iter()
-        .find(|p| p.payment_type == PaymentType::Send)
-        .map(TryInto::try_into)
-        .transpose()?;
-    let to = payments
-        .iter()
-        .find(|p| p.payment_type == PaymentType::Receive)
-        .map(TryInto::try_into)
-        .transpose()?;
-    Ok((from, to))
+/// The provider that performed a conversion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ConversionProvider {
+    /// AMM (Flashnet pool) conversion between token and BTC on Spark
+    Amm,
+    /// Orchestra cross-chain conversion
+    Orchestra,
+    /// Boltz reverse-swap cross-chain conversion
+    Boltz,
 }
 
-/// A single step in a conversion
+/// The chain or network that a [`ConversionSide`] lives on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ConversionChain {
+    /// Spark layer-2 network.
+    Spark,
+    /// Bitcoin Lightning Network.
+    Lightning,
+    /// An external chain reached via a cross-chain provider.
+    External {
+        /// Human-readable chain name (e.g. `"base"`, `"solana"`, `"arbitrum"`).
+        name: String,
+        /// Stable chain identifier (e.g. EVM `chainId` as a decimal string,
+        /// or a chain-native identifier). `None` when the provider does not
+        /// expose one for this route.
+        chain_id: Option<String>,
+    },
+}
+
+/// The asset on a [`ConversionSide`] — groups the ticker, stable identifier,
+/// and decimals that always travel together.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConversionAsset {
+    /// Ticker (e.g. `"BTC"`, `"USDB"`, `"USDC"`, `"USDT"`). Tickers alone
+    /// are ambiguous across chains — pair with [`Self::identifier`] for a
+    /// hard match.
+    pub ticker: String,
+    /// Stable identifier: a Spark token identifier for Spark tokens, or a
+    /// contract/mint address for cross-chain assets. `None` for BTC/sats.
+    pub identifier: Option<String>,
+    /// Number of decimals for the asset.
+    /// `0` for BTC/sats sides (amount is already in the smallest unit,
+    /// so no scaling is needed); non-zero for token assets (e.g. `6` for
+    /// USDC/USDT/USDB).
+    pub decimals: u32,
+}
+
+/// One side (source or destination) of a conversion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct ConversionStep {
-    /// The underlying payment id of the conversion step
-    pub payment_id: String,
-    /// Payment amount in satoshis or token base units
+pub struct ConversionSide {
+    /// The chain or network for this side.
+    pub chain: ConversionChain,
+    /// The asset being converted on this side.
+    pub asset: ConversionAsset,
+    /// Amount in base units (satoshis or token base units)
     pub amount: u128,
-    /// Fee paid in satoshis or token base units
-    /// This represents the payment fee + the conversion fee
+    /// Fee in the same base units
     pub fee: u128,
-    /// Method of payment
-    pub method: PaymentMethod,
-    /// Token metadata if a token is used for payment
-    pub token_metadata: Option<TokenMetadata>,
-    /// The reason the conversion amount was adjusted, if applicable.
-    #[serde(default)]
-    pub amount_adjustment: Option<AmountAdjustmentReason>,
 }
 
-/// Converts a Spark or Token payment into a `ConversionStep`.
-/// Fees are a sum of the payment fee and the conversion fee, if applicable,
-/// from the payment details. Token metadata should only be set for a token payment.
-impl TryFrom<&Payment> for ConversionStep {
-    type Error = SdkError;
-    fn try_from(payment: &Payment) -> Result<Self, Self::Error> {
-        let (conversion_info, token_metadata) = match &payment.details {
-            Some(PaymentDetails::Spark {
-                conversion_info: Some(info),
-                ..
-            }) => (info, None),
-            Some(PaymentDetails::Token {
-                conversion_info: Some(info),
-                metadata,
-                ..
-            }) => (info, Some(metadata.clone())),
-            _ => {
-                return Err(SdkError::Generic(format!(
-                    "No conversion info available for payment {}",
-                    payment.id
-                )));
-            }
-        };
-        Ok(ConversionStep {
-            payment_id: payment.id.clone(),
-            amount: payment.amount,
-            fee: payment
-                .fees
-                .saturating_add(conversion_info.fee.unwrap_or(0)),
-            method: payment.method,
-            token_metadata,
-            amount_adjustment: conversion_info.amount_adjustment.clone(),
-        })
-    }
+/// A single conversion in a payment's conversion chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct Conversion {
+    /// The provider that performed this conversion
+    pub provider: ConversionProvider,
+    /// Status of this specific conversion step
+    pub status: ConversionStatus,
+    /// Source side of the conversion
+    pub from: ConversionSide,
+    /// Destination side of the conversion
+    pub to: ConversionSide,
+    /// Reason the conversion amount was adjusted, if applicable (AMM only)
+    #[serde(default)]
+    pub amount_adjustment: Option<AmountAdjustmentReason>,
 }
 
 #[cfg(feature = "uniffi")]
@@ -400,6 +403,11 @@ pub enum PaymentDetails {
 
         /// Lnurl receive information if this was a received lnurl payment.
         lnurl_receive_metadata: Option<LnurlReceiveMetadata>,
+
+        /// The information for a conversion — populated when this Lightning
+        /// payment is the source leg of a cross-chain conversion (e.g. a
+        /// Boltz reverse swap paying a hold invoice).
+        conversion_info: Option<ConversionInfo>,
     },
     Withdraw {
         tx_id: String,
@@ -613,6 +621,28 @@ pub struct Config {
     /// threshold, and token settings. Use this to connect to alternative Spark
     /// deployments (e.g. dev/staging environments).
     pub spark_config: Option<SparkConfig>,
+
+    /// Configuration for cross-chain sends via Orchestra and Boltz.
+    ///
+    /// `Some(_)` enables cross-chain sends (sats → USDT on external chains).
+    /// `None` (default on regtest) disables them entirely. On mainnet, the
+    /// `default_config` populates this with [`CrossChainConfig::default`].
+    pub cross_chain_config: Option<CrossChainConfig>,
+}
+
+/// Configuration for cross-chain sends.
+///
+/// The presence of this struct on [`Config::cross_chain_config`] enables
+/// cross-chain providers; `None` disables them.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CrossChainConfig {
+    /// Default maximum slippage in basis points used when
+    /// [`PaymentRequest::CrossChain::max_slippage_bps`] is not set on the
+    /// prepare request. Must be in `10..=500`. Falls back to 100 bps (1%)
+    /// when this field is `None`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub default_slippage_bps: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -814,6 +844,19 @@ impl Config {
                     "default_active_label '{default_label}' not found in tokens list"
                 )));
             }
+        }
+
+        if let Some(cc) = &self.cross_chain_config
+            && let Some(bps) = cc.default_slippage_bps
+            && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
+                ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
+                .contains(&bps)
+        {
+            return Err(SdkError::InvalidInput(format!(
+                "cross_chain_config.default_slippage_bps {bps} must be in {}..={}",
+                crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
+                crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+            )));
         }
 
         Ok(())
@@ -1121,6 +1164,49 @@ pub enum SendPaymentMethod {
         /// If empty, it is a Bitcoin payment
         token_identifier: Option<String>,
     },
+    /// A cross-chain send via a bridge/swap provider.
+    CrossChainAddress {
+        /// The route selected for this cross-chain send (includes provider, chain, asset).
+        route: CrossChainRoutePair,
+        /// Raw destination address (e.g. `0xabc...`).
+        recipient_address: String,
+        /// Amount routed to the provider (invoice target for Boltz, deposit
+        /// amount for Orchestra). Wallet total cost depends on `fee_mode`:
+        /// - `FeesExcluded`: `amount_in + source_transfer_fee_sats`
+        /// - `FeesIncluded`: the original `amount` on the request (exact
+        ///   when the send-time fee overpayment is not capped; slightly less
+        ///   otherwise).
+        ///
+        /// In `AmountIn` + conversion mode the user transfers tokens (per
+        /// `conversion_estimate.amount_in`) rather than sats on the wallet
+        /// side — `amount_in` still refers to the provider leg in sats.
+        amount_in: u128,
+        /// Estimated amount the recipient will receive in the destination
+        /// asset's base units. Already nets out any destination-chain costs
+        /// (e.g. gas, bridge messaging fees): those are reflected in the gap
+        /// between `amount_in` and `estimated_out` rather than in `fee_amount`.
+        estimated_out: u128,
+        /// Sender-side service fee charged by the provider, in `fee_asset`
+        /// base units. Does **not** include destination-chain costs (gas,
+        /// bridge messaging, etc.), which are already deducted from
+        /// `estimated_out`.
+        fee_amount: u128,
+        /// The asset the fee is denominated in (e.g. "USDC", "USDB"). `None` means BTC (sats).
+        fee_asset: Option<String>,
+        /// Sats cost to the wallet of moving `amount_in` from the wallet to
+        /// the provider. Boltz: LN routing fee budget (a hard cap enforced
+        /// at send time). Orchestra: Spark transfer fee (0 today).
+        source_transfer_fee_sats: u64,
+        /// Fee mode that was used at prepare time, carried through so the
+        /// send stage applies consistent semantics.
+        fee_mode: CrossChainFeeMode,
+        /// ISO8601 timestamp after which this quote is no longer valid.
+        expires_at: String,
+        /// Provider-internal state produced by `prepareSendPayment` and
+        /// required by `sendPayment`. Callers should round-trip this value
+        /// as-is.
+        provider_context: CrossChainProviderContext,
+    },
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1176,7 +1262,7 @@ pub struct PrepareLnurlPayRequest {
     /// If provided, the payment will include a token conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
-    /// How fees should be handled. Defaults to `FeesExcluded` (fees added on top).
+    /// How fees are handled. See [`FeePolicy`]. Defaults to `FeesExcluded`.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub fee_policy: Option<FeePolicy>,
 }
@@ -1198,7 +1284,9 @@ pub struct PrepareLnurlPayResponse {
     pub success_action: Option<SuccessAction>,
     /// When set, the payment will include a token conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
-    /// How fees are handled for this payment.
+    /// The fee policy actually applied. May differ from the request — e.g.,
+    /// LNURL sends with `token_identifier` set + conversion are always
+    /// `FeesIncluded` (explicit `FeesExcluded` is rejected).
     pub fee_policy: FeePolicy,
 }
 
@@ -1285,15 +1373,23 @@ impl LnurlPayInfo {
 }
 
 /// Specifies how fees are handled in a payment.
+///
+/// "Fees" are the wallet's sender-paid fees (Lightning routing, on-chain,
+/// Spark transfer). They do not include provider spreads or destination-chain
+/// costs on cross-chain routes; those are reported separately via
+/// `estimated_out` on the prepare response and are not deterministic.
+/// `FeePolicy` only controls the wallet's spend accounting.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum FeePolicy {
-    /// Fees are added on top of the specified amount (default behavior).
-    /// The receiver gets the exact amount specified.
+    /// Fees are added on top of `amount`. Wallet's total spend is
+    /// `amount + fees`. For direct sat sends, the recipient receives exactly
+    /// `amount`. Default.
     #[default]
     FeesExcluded,
-    /// Fees are deducted from the specified amount.
-    /// The receiver gets the amount minus fees.
+    /// Fees are deducted from `amount`. Wallet's total spend is `amount`.
+    /// Use this to drain a balance — pass `amount = balance` and the wallet
+    /// spends exactly that.
     FeesIncluded,
 }
 
@@ -1305,9 +1401,30 @@ pub enum OnchainConfirmationSpeed {
     Slow,
 }
 
+/// The payment destination. Either a raw string (bolt11, spark address, BIP-21,
+/// cross-chain URI, etc.) that is parsed internally, or a structured
+/// cross-chain destination with explicit chain + asset selection.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PaymentRequest {
+    /// Unparsed user input string (bolt11, spark address, BIP-21, cross-chain URI, etc.)
+    Input { input: String },
+    /// Cross-chain send with a selected route from `get_cross_chain_routes()`.
+    /// Amount comes from `PrepareSendPaymentRequest.amount`, not here.
+    CrossChain {
+        address: String,
+        route: CrossChainRoutePair,
+        /// Maximum slippage tolerance in basis points (1/100 of a percent)
+        /// for the cross-chain quote. Must be in `10..=500`. Falls back to
+        /// [`Config::default_slippage_bps`] when `None`, which itself
+        /// defaults to 100 bps (1%) when unset.
+        max_slippage_bps: Option<u32>,
+    },
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
-    pub payment_request: String,
+    pub payment_request: PaymentRequest,
     /// The amount to send.
     /// Optional for payment requests with embedded amounts (e.g., Spark/Bolt11 invoices with amounts).
     /// Required for Spark addresses, Bitcoin addresses, and amountless invoices.
@@ -1321,7 +1438,13 @@ pub struct PrepareSendPaymentRequest {
     /// If provided, the payment will include a conversion step before sending the payment
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub conversion_options: Option<ConversionOptions>,
-    /// How fees should be handled. Defaults to `FeesExcluded` (fees added on top).
+    /// How fees are handled. See [`FeePolicy`]. Defaults to `FeesExcluded`.
+    ///
+    /// Ignored on cross-chain AMM-conversion sends (whether the conversion was
+    /// explicitly requested or auto-injected by stable balance) — fees come
+    /// out of the converted sats. Bolt11 and Bitcoin AMM-conversion sends
+    /// still respect this field by sizing the conversion to cover fees. The
+    /// prepare response's `fee_policy` reflects what was actually applied.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub fee_policy: Option<FeePolicy>,
 }
@@ -1340,7 +1463,8 @@ pub struct PrepareSendPaymentResponse {
     pub token_identifier: Option<String>,
     /// When set, the payment will include a conversion step before sending the payment
     pub conversion_estimate: Option<ConversionEstimate>,
-    /// How fees are handled for this payment.
+    /// The fee policy actually applied. May differ from the request — e.g.,
+    /// cross-chain AMM-conversion sends are always `FeesIncluded`.
     pub fee_policy: FeePolicy,
 }
 
@@ -1378,7 +1502,8 @@ pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub options: Option<SendPaymentOptions>,
-    /// The optional idempotency key for all Spark based transfers (excludes token payments).
+    /// The optional idempotency key for all Spark based transfers (excludes token payments
+    /// and cross-chain sends).
     /// If set, providing the same idempotency key for multiple requests will ensure that only one
     /// payment is made. If an idempotency key is re-used, the same payment will be returned.
     /// The idempotency key must be a valid UUID.

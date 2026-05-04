@@ -5,10 +5,9 @@ use base64::Engine;
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, trace};
 
-use crate::{
-    FlashnetClient, FlashnetError,
-    models::{ChallengeRequest, ChallengeResponse, VerifyRequest, VerifyResponse},
-};
+use super::api::FlashnetClient;
+use super::models::{ChallengeRequest, ChallengeResponse, VerifyRequest, VerifyResponse};
+use crate::error::FlashnetError;
 
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
 

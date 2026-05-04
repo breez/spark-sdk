@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import type { Payment, BreezSdk, PrepareSendPaymentResponse } from '@breeztech/breez-sdk-spark-react-native'
 import {
+  PaymentRequest,
   SendPaymentOptions,
   SparkHtlcOptions,
   SparkHtlcStatus,
@@ -18,7 +19,7 @@ const exampleSendHtlcPayment = async (sdk: BreezSdk): Promise<Payment> => {
   // Set the amount you wish to pay the receiver
   const amountSats = BigInt(50_000)
   const prepareRequest = {
-    paymentRequest,
+    paymentRequest: new PaymentRequest.Input({ input: paymentRequest }),
     amount: amountSats,
     tokenIdentifier: undefined,
     conversionOptions: undefined,

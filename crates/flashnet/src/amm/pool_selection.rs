@@ -1,4 +1,5 @@
-use crate::{FlashnetError, models::CurveType, models::Pool};
+use super::models::{CurveType, Pool};
+use crate::error::FlashnetError;
 use spark::Network;
 use tracing::debug;
 
@@ -273,7 +274,7 @@ mod tests {
             tvl_asset_b: tvl,
             volume_24h_asset_b: volume,
             price_change_percent_24h: price_change,
-            curve_type: Some(crate::models::CurveType::ConstantProduct),
+            curve_type: Some(crate::amm::models::CurveType::ConstantProduct),
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,

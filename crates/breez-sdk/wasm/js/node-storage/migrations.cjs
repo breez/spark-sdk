@@ -433,6 +433,10 @@ class MigrationManager {
           `CREATE INDEX idx_payment_metadata_payment_id ON payment_metadata(payment_id)`,
         ],
       },
+      {
+        name: "Backfill conversion_info type discriminator",
+        sql: `UPDATE payment_metadata SET conversion_info = json_set(conversion_info, '$.type', 'amm') WHERE conversion_info IS NOT NULL AND json_extract(conversion_info, '$.type') IS NULL`,
+      },
     ];
   }
 }
