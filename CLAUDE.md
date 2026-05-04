@@ -61,6 +61,7 @@ make clippy-fix         # Fix clippy issues
 - **crates/spark** - Low-level Spark protocol (addresses, signing, operators, tokens)
 - **crates/spark-wallet** - High-level wallet operations wrapping Spark protocol
 - **crates/xtask** - Custom build tasks (powers `make` commands via `cargo xtask`)
+- **crates/platform-utils** - Platform-based utilities, used to avoid feature switching between WASM and non-WASM environments
 
 ### Key Abstractions
 
@@ -289,6 +290,8 @@ Working code examples for all platforms are in `docs/breez-sdk/snippets/`:
 6. **Balance after sync** - Call `getInfo({ ensureSynced: true })` to get accurate balance, or listen for `synced` events
 
 7. **Lightning address registration** - Call `registerLightningAddress()` to get a Lightning address; it's not automatic
+
+8. **Use platform-based utils when necessary** - Features like time and tokio are scoped based on the target architecture. We use crates/platform-utils rather than std.
 
 ### Networks
 
