@@ -75,7 +75,9 @@ class PostgresTokenStore {
   }
 
   /**
-   * Run a function inside a transaction with the advisory lock.
+   * Run a function inside a transaction with the advisory lock. Reserved for
+   * operations whose correctness depends on serializing the available-output
+   * set (`reserveTokenOutputs`, `setTokensOutputs`).
    * @param {function(import('pg').PoolClient): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -85,6 +87,30 @@ class PostgresTokenStore {
     try {
       await client.query("BEGIN");
       await client.query(`SELECT pg_advisory_xact_lock(${TOKEN_STORE_WRITE_LOCK_KEY})`);
+      const result = await fn(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Run a function inside a transaction without the advisory lock. Used by
+   * operations scoped to a single reservation_id (`cancelReservation`)
+   * where MVCC + row-level locks suffice and the global lock would only add
+   * contention.
+   * @param {function(import('pg').PoolClient): Promise<T>} fn
+   * @returns {Promise<T>}
+   * @template T
+   */
+  async _withTransaction(fn) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
       const result = await fn(client);
       await client.query("COMMIT");
       return result;
@@ -266,6 +292,52 @@ class PostgresTokenStore {
    * List all token outputs grouped by status.
    * @returns {Promise<Array<{metadata: Object, available: Array, reservedForPayment: Array, reservedForSwap: Array}>>}
    */
+  /**
+   * Returns the spendable per-token balances aggregated server-side.
+   * Each entry includes full token metadata + the available + swap-reserved sum.
+   * Matches the in-memory default impl which returns all tokens that have
+   * at least one output (including zero spendable balance).
+   * @returns {Promise<Array<{metadata: object, balance: string}>>}
+   */
+  async getTokenBalances() {
+    try {
+      const result = await this.pool.query(`
+        SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
+               m.max_supply, m.is_freezable, m.creation_entity_public_key,
+               COALESCE(SUM(
+                 CASE
+                   WHEN o.reservation_id IS NULL THEN o.token_amount::numeric
+                   WHEN r.purpose = 'Swap' THEN o.token_amount::numeric
+                   ELSE 0
+                 END
+               ), 0)::text AS balance
+        FROM token_metadata m
+        JOIN token_outputs o ON o.token_identifier = m.identifier
+        LEFT JOIN token_reservations r ON o.reservation_id = r.id
+        GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
+                 m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key
+      `);
+      return result.rows.map((row) => ({
+        metadata: {
+          identifier: row.identifier,
+          issuerPublicKey: row.issuer_public_key,
+          name: row.name,
+          ticker: row.ticker,
+          decimals: row.decimals,
+          maxSupply: row.max_supply,
+          isFreezable: row.is_freezable,
+          creationEntityPublicKey: row.creation_entity_public_key,
+        },
+        balance: row.balance,
+      }));
+    } catch (error) {
+      throw new TokenStoreError(
+        `Failed to get token balances: ${error.message}`,
+        error
+      );
+    }
+  }
+
   async listTokensOutputs() {
     try {
       const result = await this.pool.query(
@@ -614,7 +686,7 @@ class PostgresTokenStore {
    */
   async cancelReservation(id) {
     try {
-      await this._withWriteTransaction(async (client) => {
+      await this._withTransaction(async (client) => {
         // Clear reservation_id from outputs
         await client.query(
           "UPDATE token_outputs SET reservation_id = NULL WHERE reservation_id = $1",
@@ -642,6 +714,10 @@ class PostgresTokenStore {
    */
   async finalizeReservation(id) {
     try {
+      // _withWriteTransaction acquires the advisory lock so this serializes
+      // against `setTokensOutputs`. Without it, a concurrent setTokensOutputs
+      // could read token_spent_outputs before our marker commits and re-insert
+      // the just-spent output as Available.
       await this._withWriteTransaction(async (client) => {
         // Get reservation purpose
         const reservationResult = await client.query(

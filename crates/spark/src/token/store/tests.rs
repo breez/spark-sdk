@@ -388,6 +388,12 @@ async fn test_reserve_for_payment_affects_balance() {
 }
 
 #[async_test_all]
+async fn test_get_token_balances_includes_zero_spendable() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_get_token_balances_includes_zero_spendable(&store).await;
+}
+
+#[async_test_all]
 async fn test_reserve_for_swap_does_not_affect_balance() {
     let store = InMemoryTokenOutputStore::default();
     shared_tests::test_reserve_for_swap_does_not_affect_balance(&store).await;

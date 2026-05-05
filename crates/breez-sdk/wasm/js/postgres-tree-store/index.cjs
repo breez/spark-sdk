@@ -73,7 +73,9 @@ class PostgresTreeStore {
   }
 
   /**
-   * Run a function inside a transaction with the advisory lock.
+   * Run a function inside a transaction with the advisory lock. Reserved for
+   * operations whose correctness depends on serializing the available-leaf set
+   * (`tryReserveLeaves`, `setLeaves`).
    * @param {function(import('pg').PoolClient): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -83,6 +85,30 @@ class PostgresTreeStore {
     try {
       await client.query("BEGIN");
       await client.query(`SELECT pg_advisory_xact_lock(${TREE_STORE_WRITE_LOCK_KEY})`);
+      const result = await fn(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Run a function inside a transaction without the advisory lock. Used by
+   * operations scoped to a single reservation_id (`addLeaves`,
+   * `cancelReservation`, `updateReservation`) where MVCC + row-level locks
+   * suffice and the global lock would only add contention.
+   * @param {function(import('pg').PoolClient): Promise<T>} fn
+   * @returns {Promise<T>}
+   * @template T
+   */
+  async _withTransaction(fn) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
       const result = await fn(client);
       await client.query("COMMIT");
       return result;
@@ -106,7 +132,7 @@ class PostgresTreeStore {
         return;
       }
 
-      await this._withWriteTransaction(async (client) => {
+      await this._withTransaction(async (client) => {
         // Remove these leaves from spent_leaves table
         const leafIds = leaves.map((l) => l.id);
         await this._batchRemoveSpentLeaves(client, leafIds);
@@ -127,6 +153,30 @@ class PostgresTreeStore {
    * Get all leaves categorized by status.
    * @returns {Promise<Object>} Leaves object with available, notAvailable, etc.
    */
+  /**
+   * Returns the wallet's spendable balance (available + missing-from-operators
+   * + swap-reserved). Aggregated server-side so we don't fetch every leaf.
+   * @returns {Promise<bigint>}
+   */
+  async getAvailableBalance() {
+    try {
+      const result = await this.pool.query(`
+        SELECT COALESCE(SUM((l.data->>'value')::bigint), 0)::bigint AS balance
+        FROM tree_leaves l
+        LEFT JOIN tree_reservations r ON l.reservation_id = r.id
+        WHERE
+          (l.reservation_id IS NULL AND l.status = 'Available')
+          OR r.purpose = 'Swap'
+      `);
+      return BigInt(result.rows[0].balance);
+    } catch (error) {
+      throw new TreeStoreError(
+        `Failed to get available balance: ${error.message}`,
+        error
+      );
+    }
+  }
+
   async getLeaves() {
     try {
       const result = await this.pool.query(`
@@ -254,7 +304,7 @@ class PostgresTreeStore {
    */
   async cancelReservation(id, leavesToKeep) {
     try {
-      await this._withWriteTransaction(async (client) => {
+      await this._withTransaction(async (client) => {
         const res = await client.query(
           "SELECT id FROM tree_reservations WHERE id = $1",
           [id]
@@ -294,6 +344,10 @@ class PostgresTreeStore {
    */
   async finalizeReservation(id, newLeaves) {
     try {
+      // _withWriteTransaction acquires the advisory lock so this serializes
+      // against `setLeaves`. Without it, a concurrent setLeaves could read
+      // tree_spent_leaves before our marker commits and re-insert the
+      // just-spent leaf as Available.
       await this._withWriteTransaction(async (client) => {
         // Check if reservation exists and get purpose
         const res = await client.query(
@@ -353,59 +407,98 @@ class PostgresTreeStore {
     try {
       return await this._withWriteTransaction(async (client) => {
         const targetAmount = targetAmounts ? this._totalSats(targetAmounts) : 0;
+        const maxTarget = this._maxTargetForPrefilter(targetAmounts);
 
-        // Get available leaves
-        const availableResult = await client.query(`
-          SELECT data
+        // True total available, computed server-side over ALL eligible leaves.
+        // Required for the WaitForPending decision below — must NOT be derived
+        // from the prefiltered set since the prefilter may exclude big leaves.
+        const totalResult = await client.query(`
+          SELECT COALESCE(SUM((data->>'value')::bigint), 0)::bigint AS total
           FROM tree_leaves
           WHERE status = 'Available'
             AND is_missing_from_operators = FALSE
             AND reservation_id IS NULL
         `);
+        const available = Number(totalResult.rows[0].total);
 
-        const availableLeaves = availableResult.rows.map((r) => r.data);
-        const available = availableLeaves.reduce((sum, l) => sum + l.value, 0);
+        // Slim projection: only (id, value) for leaves the selection might use.
+        // Includes all leaves with value <= maxTarget (covers exact-match + the
+        // small-leaf accumulators for the minimum-amount path) plus the single
+        // smallest leaf with value > maxTarget (covers the minimum-amount
+        // fallback case where one larger leaf is sufficient).
+        const slimResult = await client.query(`
+          SELECT id, (data->>'value')::bigint AS value
+          FROM tree_leaves
+          WHERE status = 'Available'
+            AND is_missing_from_operators = FALSE
+            AND reservation_id IS NULL
+            AND (
+              (data->>'value')::bigint <= $1
+              OR id = (
+                SELECT id FROM tree_leaves
+                WHERE status = 'Available'
+                  AND is_missing_from_operators = FALSE
+                  AND reservation_id IS NULL
+                  AND (data->>'value')::bigint > $1
+                ORDER BY (data->>'value')::bigint
+                LIMIT 1
+              )
+            )
+        `, [maxTarget]);
+
+        const slimLeaves = slimResult.rows.map((r) => ({
+          id: r.id,
+          value: Number(r.value),
+        }));
 
         // Calculate pending balance
         const pending = await this._calculatePendingBalance(client);
 
-        // Try exact selection first
-        const selected = this._selectLeavesByTargetAmounts(availableLeaves, targetAmounts);
+        // Try exact selection on slim leaves — selection only reads .id/.value
+        const selected = this._selectLeavesByTargetAmounts(slimLeaves, targetAmounts);
 
         if (selected !== null) {
           if (selected.length === 0) {
             throw new TreeStoreError("NonReservableLeaves");
           }
 
+          const fullLeaves = await this._fetchFullLeavesByIds(
+            client,
+            selected.map((l) => l.id)
+          );
           const reservationId = this._generateId();
-          await this._createReservation(client, reservationId, selected, purpose, 0);
+          await this._createReservation(client, reservationId, fullLeaves, purpose, 0);
 
           return {
             type: "success",
             reservation: {
               id: reservationId,
-              leaves: selected,
+              leaves: fullLeaves,
             },
           };
         }
 
         if (!exactOnly) {
-          // Try minimum amount selection
-          const minSelected = this._selectLeavesByMinimumAmount(availableLeaves, targetAmount);
+          // Try minimum amount selection on the slim set
+          const minSelected = this._selectLeavesByMinimumAmount(slimLeaves, targetAmount);
           if (minSelected !== null) {
-            const reservedAmount = minSelected.reduce((sum, l) => sum + l.value, 0);
+            const fullLeaves = await this._fetchFullLeavesByIds(
+              client,
+              minSelected.map((l) => l.id)
+            );
+            const reservedAmount = fullLeaves.reduce((sum, l) => sum + l.value, 0);
             const pendingChange = reservedAmount > targetAmount && targetAmount > 0
               ? reservedAmount - targetAmount
               : 0;
 
             const reservationId = this._generateId();
-            await this._createReservation(client, reservationId, minSelected, purpose, pendingChange);
+            await this._createReservation(client, reservationId, fullLeaves, purpose, pendingChange);
 
             return {
               type: "success",
               reservation: {
                 id: reservationId,
-                leaves: minSelected,
+                leaves: fullLeaves,
               },
             };
           }
@@ -430,6 +523,30 @@ class PostgresTreeStore {
         error
       );
     }
+  }
+
+  _maxTargetForPrefilter(targetAmounts) {
+    if (!targetAmounts) return Number.MAX_SAFE_INTEGER;
+    if (targetAmounts.type === "amountAndFee") {
+      return targetAmounts.amountSats + (targetAmounts.feeSats || 0);
+    }
+    if (targetAmounts.type === "exactDenominations") {
+      return targetAmounts.denominations.reduce((m, v) => m + v, 0);
+    }
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  /**
+   * Pull the full `data` JSON for the leaves the selection algorithm picked.
+   * Typically this is 1-3 rows even when the prefiltered set was thousands.
+   */
+  async _fetchFullLeavesByIds(client, ids) {
+    if (!ids || ids.length === 0) return [];
+    const result = await client.query(
+      "SELECT data FROM tree_leaves WHERE id = ANY($1)",
+      [ids]
+    );
+    return result.rows.map((r) => r.data);
   }
 
   /**
@@ -457,7 +574,7 @@ class PostgresTreeStore {
    */
   async updateReservation(reservationId, reservedLeaves, changeLeaves) {
     try {
-      return await this._withWriteTransaction(async (client) => {
+      return await this._withTransaction(async (client) => {
         // Check if reservation exists
         const res = await client.query(
           "SELECT id FROM tree_reservations WHERE id = $1",

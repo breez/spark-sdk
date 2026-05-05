@@ -400,17 +400,37 @@ impl TargetAmounts {
     }
 }
 
-pub struct TargetLeaves {
-    pub amount_leaves: Vec<TreeNode>,
-    pub fee_leaves: Option<Vec<TreeNode>>,
+pub struct TargetLeaves<L = TreeNode> {
+    pub amount_leaves: Vec<L>,
+    pub fee_leaves: Option<Vec<L>>,
 }
 
-impl TargetLeaves {
-    pub fn new(amount_leaves: Vec<TreeNode>, fee_leaves: Option<Vec<TreeNode>>) -> Self {
+impl<L> TargetLeaves<L> {
+    pub fn new(amount_leaves: Vec<L>, fee_leaves: Option<Vec<L>>) -> Self {
         Self {
             amount_leaves,
             fee_leaves,
         }
+    }
+}
+
+/// Minimal "leaf-shaped" interface used by the selection algorithms in
+/// [`select_helper`]. Implementing this for a slim `(id, value)` projection
+/// lets storage backends (e.g. `PostgresTreeStore`) run the same selection
+/// without first deserializing every leaf's full `data` JSON.
+pub trait LeafLike: Clone {
+    type Id: Eq;
+    fn leaf_id(&self) -> &Self::Id;
+    fn leaf_value(&self) -> u64;
+}
+
+impl LeafLike for TreeNode {
+    type Id = TreeNodeId;
+    fn leaf_id(&self) -> &Self::Id {
+        &self.id
+    }
+    fn leaf_value(&self) -> u64 {
+        self.value
     }
 }
 
@@ -495,6 +515,16 @@ pub trait TreeStore: Send + Sync {
     /// # }
     /// ```
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError>;
+
+    /// Returns the wallet's spendable balance: the sum of leaf values that
+    /// would be included in `Leaves::balance()` (available + missing-operators
+    /// + swap-reserved). Default impl falls through to `get_leaves`; storage
+    /// backends that can compute this server-side should override to skip the
+    /// per-leaf fetch + deserialization round-trip.
+    async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
+        let leaves = self.get_leaves().await?;
+        Ok(leaves.balance())
+    }
 
     /// Replaces all leaves in the store with the provided set.
     ///

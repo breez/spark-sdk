@@ -288,8 +288,7 @@ impl TreeService for SynchronousTreeService {
     }
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
-        let leaves = self.state.get_leaves().await?;
-        Ok(leaves.balance())
+        self.state.get_available_balance().await
     }
 }
 
