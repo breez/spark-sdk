@@ -199,7 +199,7 @@ jobs:
       - name: Upload dummy darwin ${{ matrix.target }} artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bindings-dynamic-${{ matrix.target }}
+          name: bindings-${{ matrix.target }}
           path: ./*
 
   build-dsym-dummies:

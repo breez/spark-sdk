@@ -96,11 +96,51 @@ jobs:
           name: bindings-kotlin-multiplatform
           path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src
 
+      - name: Download JVM native library for Linux aarch64
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-aarch64-unknown-linux-gnu
+          path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/jvmMain/resources/linux-aarch64
+
+      - name: Download JVM native library for Linux x86_64
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-x86_64-unknown-linux-gnu
+          path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/jvmMain/resources/linux-x86-64
+
+      - name: Download JVM native library for macOS
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-dynamic-darwin-universal
+          path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/jvmMain/resources/darwin
+
       - name: Build Kotlin Multiplatform project
         working-directory: crates/breez-sdk/bindings/langs/kotlin-multiplatform
         env:
           ORG_GRADLE_PROJECT_libraryVersion: ${{ inputs.package-version || '0.0.1' }}
         run: ./gradlew :breez-sdk-spark-kmp:assemble :breez-sdk-spark-kmp-plugin:assemble
+
+      - name: Verify JVM native libraries are packaged
+        working-directory: crates/breez-sdk/bindings/langs/kotlin-multiplatform
+        run: |
+          JAR="$(find breez-sdk-spark-kmp/build/libs -type f -name 'breez-sdk-spark-kmp-jvm*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)"
+          if [ -z "$JAR" ]; then
+            echo "Could not find breez-sdk-spark-kmp JVM jar"
+            exit 1
+          fi
+
+          jar tf "$JAR" > jvm-jar-contents.txt
+
+          require_jar_entry() {
+            if ! grep -Fqx "$1" jvm-jar-contents.txt; then
+              echo "Missing $1 from $JAR"
+              exit 1
+            fi
+          }
+
+          require_jar_entry "linux-aarch64/libbreez_sdk_spark_bindings.so"
+          require_jar_entry "linux-x86-64/libbreez_sdk_spark_bindings.so"
+          require_jar_entry "darwin/libbreez_sdk_spark_bindings.dylib"
 
       - name: Archive aar
         if: ${{ !inputs.publish }}

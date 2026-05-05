@@ -32,6 +32,10 @@ kotlin {
 
 ## Integration
 
+### JVM
+
+The JVM artifact includes the native libraries needed for Linux and macOS. No additional native library installation is required on those platforms.
+
 ### iOS
 
 Install the native binary framework via [Swift Package Manager](#swift-package-manager). The Gradle plugin automatically configures the framework search path from Xcode's build environment.
