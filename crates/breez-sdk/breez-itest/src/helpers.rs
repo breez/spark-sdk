@@ -441,6 +441,55 @@ pub async fn drop_postgres_database(conn_str: &str) -> Result<()> {
     Ok(())
 }
 
+/// Drops a MySQL database if it exists.
+///
+/// `conn_str` is a MySQL URL of the form `mysql://user:pass@host:port/<dbname>`.
+/// We connect to the server's default `mysql` admin database to issue the drop.
+pub async fn drop_mysql_database(conn_str: &str) -> Result<()> {
+    use mysql_async::prelude::*;
+
+    let (admin_url, db_name) = split_mysql_url(conn_str)?;
+    if db_name.is_empty() || db_name == "mysql" {
+        return Ok(());
+    }
+
+    info!("Dropping MySQL database '{}' if exists...", db_name);
+
+    let admin_conn_str = format!("{admin_url}/mysql");
+    let pool = mysql_async::Pool::from_url(admin_conn_str.as_str())
+        .map_err(|e| anyhow::anyhow!("Failed to parse MySQL admin URL: {e}"))?;
+    let mut conn = pool
+        .get_conn()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to MySQL admin database: {e}"))?;
+
+    // Identifiers can't be parameterized; db_name is supplied by the caller, so
+    // we trust it (mirrors the postgres drop helper above).
+    let stmt = format!("DROP DATABASE IF EXISTS `{db_name}`");
+    conn.query_drop(stmt)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to drop MySQL database '{}': {e}", db_name))?;
+    drop(conn);
+    pool.disconnect()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to disconnect MySQL admin pool: {e}"))?;
+    info!("MySQL database '{}' dropped (or did not exist)", db_name);
+    Ok(())
+}
+
+/// Splits `mysql://user:pass@host:port/<dbname>` into `(admin_url, db_name)`,
+/// where `admin_url` is the URL minus the `/<dbname>` path.
+fn split_mysql_url(conn_str: &str) -> Result<(String, String)> {
+    let (scheme, rest) = conn_str
+        .split_once("://")
+        .ok_or_else(|| anyhow::anyhow!("Invalid MySQL URL (missing scheme): {conn_str}"))?;
+    let (authority, path) = rest
+        .split_once('/')
+        .ok_or_else(|| anyhow::anyhow!("Invalid MySQL URL (missing dbname): {conn_str}"))?;
+    let db_name = path.split('?').next().unwrap_or("").to_string();
+    Ok((format!("{scheme}://{authority}"), db_name))
+}
+
 /// Build and initialize a BreezSDK instance with optional PostgreSQL tree store
 ///
 /// Similar to `build_sdk_with_custom_config` but allows specifying a PostgreSQL
@@ -468,6 +517,7 @@ pub async fn build_sdk_with_tree_store_config(
     temp_dir: Option<tempfile::TempDir>,
     apply_sensible_test_defaults: bool,
     postgres_tree_store_connection: Option<String>,
+    mysql_tree_store_connection: Option<String>,
 ) -> Result<SdkInstance> {
     // Apply sensible test defaults if not already configured
     if config.api_key.is_some() && matches!(config.network, Network::Regtest) {
@@ -486,17 +536,17 @@ pub async fn build_sdk_with_tree_store_config(
 
     let mut builder = SdkBuilder::new(config, seed);
 
-    // Add postgres tree store if connection string provided, otherwise fall through
-    // to the env-var-based shared container
     if let Some(conn_str) = postgres_tree_store_connection {
-        // Ensure the database exists (create if necessary)
         ensure_postgres_database_exists(&conn_str).await?;
-
-        // Create config with 30 connections to support high concurrency
         let mut pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
         pg_config.max_pool_size = 30;
-
         builder = builder.with_postgres_backend(pg_config);
+    } else if let Some(conn_str) = mysql_tree_store_connection {
+        let (admin_url, db_name) = split_mysql_url(&conn_str)?;
+        ensure_mysql_database_exists(&admin_url, &db_name).await?;
+        let mut my_config = breez_sdk_spark::default_mysql_storage_config(conn_str);
+        my_config.max_pool_size = 30;
+        builder = builder.with_mysql_backend(my_config);
     } else {
         builder = apply_storage(builder, storage_dir).await?;
     }

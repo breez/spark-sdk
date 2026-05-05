@@ -612,6 +612,7 @@ async fn initialize_sdk_pair(
         None,
         true,
         sender_postgres,
+        None,
     )
     .await?;
 
@@ -633,6 +634,7 @@ async fn initialize_sdk_pair(
         None,
         true,
         receiver_postgres,
+        None,
     )
     .await?;
 
