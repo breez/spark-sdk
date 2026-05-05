@@ -252,7 +252,7 @@ public class PasskeyProvider: PrfProvider {
 
     /// Create a new passkey with PRF support.
     ///
-    /// Only registers the credential — no seed derivation. Triggers exactly
+    /// Only registers the credential, no seed derivation. Triggers exactly
     /// 1 platform prompt. Use this to separate credential creation from
     /// derivation in multi-step onboarding flows.
     ///
@@ -260,10 +260,12 @@ public class PasskeyProvider: PrfProvider {
     ///   - excludeCredentialIds: Optional list of credential IDs to exclude.
     ///     Pass previously created credential IDs to prevent the authenticator
     ///     from creating a duplicate on the same device.
-    /// - Returns: The credential ID of the newly created passkey.
+    /// - Returns: Credential ID plus AAGUID and backup-eligibility parsed
+    ///   from the attestation object. AAGUID and `backupEligible` are nil
+    ///   when the attestation can't be parsed.
     /// - Throws: `PasskeyPrfError` if the user cancels or PRF is not supported by the authenticator.
     @discardableResult
-    public func createPasskey(excludeCredentialIds: [Data] = []) async throws -> Data {
+    public func createPasskey(excludeCredentialIds: [Data] = []) async throws -> RegisteredCredential {
         return try await registerCredential(excludeCredentialIds: excludeCredentialIds)
     }
 
@@ -601,7 +603,7 @@ public class PasskeyProvider: PrfProvider {
         }
     }
 
-    private func registerCredential(excludeCredentialIds: [Data] = []) async throws -> Data {
+    private func registerCredential(excludeCredentialIds: [Data] = []) async throws -> RegisteredCredential {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = randomBytes(count: 32)
         let userId = randomBytes(count: 16)
@@ -627,7 +629,7 @@ public class PasskeyProvider: PrfProvider {
         delegate.anchor = anchor.presentationAnchor()
 
         return try await withCheckedThrowingContinuation { continuation in
-            delegate.continuation = continuation
+            delegate.registrationContinuation = continuation
             delegate.extractPrf = false
             controller.performRequests()
         }
@@ -640,6 +642,83 @@ public class PasskeyProvider: PrfProvider {
     }
 }
 
+// MARK: - Registered credential metadata
+
+/// Authenticator data captured at registration. `aaguid` is the 16-byte
+/// Authenticator Attestation GUID (provider identifier); `backupEligible`
+/// is the BE flag indicating whether the credential can sync across
+/// devices. Both are nil when the attestation can't be parsed. AAGUID is
+/// unverified attestation — display hint only, never a trust decision.
+public struct RegisteredCredential {
+    public let credentialId: Data
+    public let aaguid: Data?
+    public let backupEligible: Bool?
+
+    public init(credentialId: Data, aaguid: Data?, backupEligible: Bool?) {
+        self.credentialId = credentialId
+        self.aaguid = aaguid
+        self.backupEligible = backupEligible
+    }
+}
+
+/// Extract AAGUID + BE flag from the attestation object's authenticator
+/// data via byte-pattern search for the "authData" CBOR key. Returns nil
+/// when the pattern isn't found or the byte string is too short.
+///
+/// authData layout when AT flag is set (always on a successful create):
+///   [32]      flags (UP=0, UV=2, BE=3, BS=4, AT=6)
+///   [37..53)  AAGUID (16 bytes)
+@available(iOS 18.0, macOS 15.0, *)
+internal func extractRegistrationMetadata(from attestation: Data) -> (aaguid: Data, backupEligible: Bool)? {
+    let bytes = [UInt8](attestation)
+    // CBOR text key "authData": 0x68 = major type 3 (text) + length 8.
+    let key: [UInt8] = [0x68, 0x61, 0x75, 0x74, 0x68, 0x44, 0x61, 0x74, 0x61]
+    guard bytes.count >= key.count else { return nil }
+    var keyEnd = -1
+    for i in 0...(bytes.count - key.count) {
+        var match = true
+        for j in 0..<key.count where bytes[i + j] != key[j] {
+            match = false
+            break
+        }
+        if match { keyEnd = i + key.count; break }
+    }
+    guard keyEnd >= 0 && keyEnd < bytes.count else { return nil }
+
+    // Parse CBOR byte string (major type 2) at keyEnd.
+    let header = bytes[keyEnd]
+    guard header >> 5 == 2 else { return nil }
+    let minor = Int(header & 0x1f)
+    let length: Int
+    let dataStart: Int
+    switch minor {
+    case 0..<24:
+        length = minor
+        dataStart = keyEnd + 1
+    case 24:
+        guard keyEnd + 1 < bytes.count else { return nil }
+        length = Int(bytes[keyEnd + 1])
+        dataStart = keyEnd + 2
+    case 25:
+        guard keyEnd + 2 < bytes.count else { return nil }
+        length = (Int(bytes[keyEnd + 1]) << 8) | Int(bytes[keyEnd + 2])
+        dataStart = keyEnd + 3
+    case 26:
+        guard keyEnd + 4 < bytes.count else { return nil }
+        length = (Int(bytes[keyEnd + 1]) << 24) | (Int(bytes[keyEnd + 2]) << 16)
+            | (Int(bytes[keyEnd + 3]) << 8) | Int(bytes[keyEnd + 4])
+        dataStart = keyEnd + 5
+    default:
+        return nil
+    }
+    guard dataStart + length <= bytes.count, length >= 53 else { return nil }
+    let flags = bytes[dataStart + 32]
+    guard flags & 0x40 != 0 else { return nil }
+    let backupEligible = flags & 0x08 != 0
+    let aaguid = Data(bytes[(dataStart + 37)..<(dataStart + 53)])
+    return (aaguid: aaguid, backupEligible: backupEligible)
+}
+
 // MARK: - Authorization Delegate
 
 @available(iOS 18.0, macOS 15.0, *)
@@ -647,13 +726,13 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
     ASAuthorizationControllerPresentationContextProviding
 {
     var continuation: CheckedContinuation<Data, Error>?
+    var registrationContinuation: CheckedContinuation<RegisteredCredential, Error>?
     var anchor: ASPresentationAnchor = ASPresentationAnchor()
     var extractPrf = true
-    /// Invoked with the credential ID extracted from a successful
-    /// assertion before the continuation resolves. Set by the
-    /// PasskeyProvider so hosts can record which credential was used
-    /// on a sign-in. No-op on registration (the credential ID flows
-    /// out via the resumed Data instead).
+    /// Invoked with the credential ID from a successful assertion. Set
+    /// by PasskeyProvider so hosts can record which credential was used
+    /// on a sign-in. No-op on registration (the credential ID flows out
+    /// via the registrationContinuation).
     var onAssertionCredentialId: ((Data) -> Void)?
 
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
@@ -665,7 +744,6 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
         didCompleteWithAuthorization authorization: ASAuthorization
     ) {
         if extractPrf {
-            // Assertion — extract PRF output
             guard let credential = authorization.credential
                 as? ASAuthorizationPlatformPublicKeyCredentialAssertion
             else {
@@ -681,21 +759,33 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
             }
 
             // Surface the credential ID before resolving so hosts can
-            // record it (synced keychain, server-side allowlist, etc.).
-            // Failures here must not block the seed return — the
-            // recorder is best-effort observability.
+            // record it. Failures here are best-effort and must not
+            // block the seed return.
             onAssertionCredentialId?(credential.credentialID)
 
             continuation?.resume(returning: prfData)
         } else {
-            // Registration complete — extract and return the credential ID
             guard let credential = authorization.credential
                 as? ASAuthorizationPlatformPublicKeyCredentialRegistration
             else {
-                continuation?.resume(throwing: PasskeyPrfError.AuthenticationFailed("Unexpected credential type"))
+                registrationContinuation?.resume(
+                    throwing: PasskeyPrfError.AuthenticationFailed("Unexpected credential type"))
                 return
             }
-            continuation?.resume(returning: credential.credentialID)
+            var aaguid: Data? = nil
+            var backupEligible: Bool? = nil
+            if let attestation = credential.rawAttestationObject,
+               let meta = extractRegistrationMetadata(from: attestation)
+            {
+                aaguid = meta.aaguid
+                backupEligible = meta.backupEligible
+            }
+            registrationContinuation?.resume(
+                returning: RegisteredCredential(
+                    credentialId: credential.credentialID,
+                    aaguid: aaguid,
+                    backupEligible: backupEligible
+                ))
         }
     }
 
@@ -704,6 +794,7 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
     ) {
         let mapped = mapAuthorizationError(error)
         continuation?.resume(throwing: mapped)
+        registrationContinuation?.resume(throwing: mapped)
     }
 
     private func mapAuthorizationError(_ error: Error) -> PasskeyPrfError {
