@@ -174,3 +174,34 @@ const exampleDisconnect = async (sdk: BreezSdk) => {
   await sdk.disconnect()
   // ANCHOR_END: disconnect
 }
+
+const exampleConnectWithRecovery = async () => {
+  // ANCHOR: corrupt-storage-error
+  const storageDir = './.data'
+
+  const seed: Seed = { type: 'mnemonic', mnemonic: '<mnemonic words>', passphrase: undefined }
+  const connectRequest = {
+    config: (() => {
+      const config = defaultConfig('mainnet')
+      config.apiKey = '<breez api key>'
+      return config
+    })(),
+    seed,
+    storageDir
+  }
+
+  let sdk: BreezSdk
+  try {
+    sdk = await connect(connectRequest)
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Corrupt storage')) {
+      // The SDK storage is corrupted and cannot be recovered by retrying.
+      // Clear the storage directory and reconnect with fresh storage.
+      // (Platform-specific: delete the storageDir directory or clear IndexedDB)
+      sdk = await connect(connectRequest)
+    } else {
+      throw error
+    }
+  }
+  // ANCHOR_END: corrupt-storage-error
+}

@@ -1,4 +1,5 @@
 import logging
+import shutil
 from breez_sdk_spark import (
     BreezSdk,
     connect,
@@ -11,6 +12,7 @@ from breez_sdk_spark import (
     LogEntry,
     Logger,
     Network,
+    SdkError,
     SdkEvent,
     Seed,
     ServiceStatus,
@@ -163,3 +165,27 @@ async def disconnect(sdk: BreezSdk):
 
 
 # ANCHOR_END: disconnect
+
+
+# ANCHOR: corrupt-storage-error
+async def connect_with_recovery() -> BreezSdk:
+    storage_dir = "./.data"
+
+    def make_request():
+        config = default_config(Network.MAINNET)
+        config.api_key = "<breez api key>"
+        return ConnectRequest(
+            config=config,
+            seed=Seed.MNEMONIC(mnemonic="<mnemonic words>", passphrase=None),
+            storage_dir=storage_dir,
+        )
+
+    try:
+        return await connect(request=make_request())
+    except Exception as error:
+        if isinstance(error, SdkError.CorruptStorage):
+            # The SDK storage is corrupted and cannot be recovered by retrying.
+            # Clear the storage directory and reconnect with fresh storage.
+            shutil.rmtree(storage_dir, ignore_errors=True)
+            return await connect(request=make_request())
+# ANCHOR_END: corrupt-storage-error

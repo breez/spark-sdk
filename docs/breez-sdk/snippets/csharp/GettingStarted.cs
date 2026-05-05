@@ -159,5 +159,38 @@ namespace BreezSdkSnippets
             await sdk.Disconnect();
         }
         // ANCHOR_END: disconnect
+
+        // ANCHOR: corrupt-storage-error
+        async Task<BreezSdk> ConnectWithRecovery()
+        {
+            var storageDir = "./.data";
+
+            ConnectRequest MakeRequest()
+            {
+                var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+                {
+                    apiKey = "<breez api key>"
+                };
+                return new ConnectRequest(
+                    config: config,
+                    seed: new Seed.Mnemonic(mnemonic: "<mnemonic words>", passphrase: null),
+                    storageDir: storageDir
+                );
+            }
+
+            try
+            {
+                return await BreezSdkSparkMethods.Connect(MakeRequest());
+            }
+            catch (SdkException.CorruptStorage)
+            {
+                // The SDK storage is corrupted and cannot be recovered by retrying.
+                // Clear the storage directory and reconnect with fresh storage.
+                if (Directory.Exists(storageDir))
+                    Directory.Delete(storageDir, recursive: true);
+                return await BreezSdkSparkMethods.Connect(MakeRequest());
+            }
+        }
+        // ANCHOR_END: corrupt-storage-error
     }
 }

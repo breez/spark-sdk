@@ -1,4 +1,4 @@
-pub use breez_sdk_spark::passkey::{PasskeyPrfError, PasskeyError};
+pub use breez_sdk_spark::passkey::{PasskeyError, PasskeyPrfError};
 pub use breez_sdk_spark::{DepositClaimError, Fee, SdkError, StorageError};
 use flutter_rust_bridge::frb;
 
@@ -43,6 +43,7 @@ pub enum _SdkError {
     LnurlError(String),
     Signer(String),
     Generic(String),
+    CorruptStorage(String),
 }
 
 #[frb(mirror(StorageError))]
@@ -50,6 +51,7 @@ pub enum _StorageError {
     Connection(String),
     Implementation(String),
     InitializationError(String),
+    MigrationError(String),
     Serialization(String),
 }
 

@@ -356,7 +356,7 @@ impl From<rusqlite::Error> for StorageError {
 
 impl From<rusqlite_migration::Error> for StorageError {
     fn from(value: rusqlite_migration::Error) -> Self {
-        StorageError::Implementation(value.to_string())
+        StorageError::MigrationError(value.to_string())
     }
 }
 

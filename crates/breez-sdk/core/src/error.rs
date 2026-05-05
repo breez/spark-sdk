@@ -62,6 +62,11 @@ pub enum SdkError {
 
     #[error("Error: {0}")]
     Generic(String),
+
+    /// Initialization failed due to corrupted local storage.
+    /// The app must clear its local data (storage directory) and call `connect` again.
+    #[error("Corrupt storage: {0}")]
+    CorruptStorage(String),
 }
 
 impl From<crate::chain::ChainServiceError> for SdkError {

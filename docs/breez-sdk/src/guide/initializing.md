@@ -34,6 +34,19 @@ Instead of managing mnemonics directly, you can use passkeys to derive wallet se
 
 See [Connecting with a Passkey](passkey.md) for the full setup guide including PRF provider implementation, platform configuration, and label management.
 
+## Handling Initialization Failures
+
+Some initialization failures indicate that the local SDK storage is corrupted and retrying without action will not help. When {{#name connect}} returns a `CorruptStorage` error, the app must clear the SDK storage directory and retry.
+
+<div class="warning">
+<h4>Important</h4>
+
+Clearing the storage directory removes locally cached state. The wallet funds are safe — they are secured by the Spark protocol and can be recovered from the seed. However, local payment history and settings will be lost until the next sync.
+
+</div>
+
+{{#tabs getting_started:corrupt-storage-error}}
+
 ## Advanced Initialization
 
 For advanced use cases where you need more control, you can configure the SDK using the Builder pattern. With the SDK Builder you can define:

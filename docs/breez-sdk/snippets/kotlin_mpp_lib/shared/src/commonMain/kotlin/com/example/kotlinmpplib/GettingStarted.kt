@@ -162,4 +162,37 @@ class GettingStarted {
         }
     }
     // ANCHOR_END: disconnect
+
+    // ANCHOR: corrupt-storage-error
+    suspend fun connectWithRecovery(): BreezSdk? {
+        val storageDir = "./.data"
+
+        fun makeRequest(): ConnectRequest {
+            val config = defaultConfig(Network.MAINNET)
+            config.apiKey = "<breez api key>"
+            return ConnectRequest(
+                config = config,
+                seed = Seed.Mnemonic("<mnemonic words>", null),
+                storageDir = storageDir
+            )
+        }
+
+        return try {
+            connect(makeRequest())
+        } catch (e: SdkException.CorruptStorage) {
+            // The SDK storage is corrupted and cannot be recovered by retrying.
+            // Clear the storage directory and reconnect with fresh storage.
+            java.io.File(storageDir).deleteRecursively()
+            try {
+                connect(makeRequest())
+            } catch (e: Exception) {
+                // handle error
+                null
+            }
+        } catch (e: Exception) {
+            // handle error
+            null
+        }
+    }
+    // ANCHOR_END: corrupt-storage-error
 }

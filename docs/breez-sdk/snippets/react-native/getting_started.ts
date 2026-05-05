@@ -137,3 +137,33 @@ const exampleDisconnect = async (sdk: BreezSdk) => {
   await sdk.disconnect()
   // ANCHOR_END: disconnect
 }
+
+const exampleConnectWithRecovery = async () => {
+  // ANCHOR: corrupt-storage-error
+  const storageDir = `${RNFS.DocumentDirectoryPath}/data`
+
+  const connectRequest = {
+    config: (() => {
+      const config = defaultConfig(Network.Mainnet)
+      config.apiKey = '<breez api key>'
+      return config
+    })(),
+    seed: new Seed.Mnemonic({ mnemonic: '<mnemonic words>', passphrase: undefined }),
+    storageDir
+  }
+
+  let sdk
+  try {
+    sdk = await connect(connectRequest)
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Corrupt storage')) {
+      // The SDK storage is corrupted and cannot be recovered by retrying.
+      // Clear the storage directory and reconnect with fresh storage.
+      await RNFS.unlink(storageDir).catch(() => {})
+      sdk = await connect(connectRequest)
+    } else {
+      throw error
+    }
+  }
+  // ANCHOR_END: corrupt-storage-error
+}

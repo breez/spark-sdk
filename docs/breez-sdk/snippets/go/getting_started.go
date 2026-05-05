@@ -3,6 +3,7 @@ package example
 import (
 	"errors"
 	"log"
+	"os"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
 )
@@ -163,3 +164,34 @@ func Disconnect(sdk *breez_sdk_spark.BreezSdk) {
 }
 
 // ANCHOR_END: disconnect
+
+// ANCHOR: corrupt-storage-error
+func ConnectWithRecovery() (*breez_sdk_spark.BreezSdk, error) {
+	storageDir := "./.data"
+
+	makeRequest := func() breez_sdk_spark.ConnectRequest {
+		apiKey := "<breez api key>"
+		config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+		config.ApiKey = &apiKey
+		return breez_sdk_spark.ConnectRequest{
+			Config:     config,
+			Seed:       breez_sdk_spark.SeedMnemonic{Mnemonic: "<mnemonic words>", Passphrase: nil},
+			StorageDir: storageDir,
+		}
+	}
+
+	sdk, err := breez_sdk_spark.Connect(makeRequest())
+	if err != nil {
+		var corruptStorageErr *breez_sdk_spark.SdkErrorCorruptStorage
+		if errors.As(err, &corruptStorageErr) {
+			// The SDK storage is corrupted and cannot be recovered by retrying.
+			// Clear the storage directory and reconnect with fresh storage.
+			os.RemoveAll(storageDir)
+			return breez_sdk_spark.Connect(makeRequest())
+		}
+		return nil, err
+	}
+	return sdk, nil
+}
+
+// ANCHOR_END: corrupt-storage-error
