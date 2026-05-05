@@ -181,7 +181,7 @@ pub(crate) fn create_pool(
 pub(super) async fn run_migrations(
     pool: &deadpool_postgres::Pool,
     migrations_table: &str,
-    migrations: &[&[&str]],
+    migrations: &[Vec<String>],
 ) -> Result<(), StorageError> {
     spark_postgres::run_migrations(pool, migrations_table, migrations)
         .await

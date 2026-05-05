@@ -711,16 +711,16 @@ impl PostgresTreeStore {
     }
 
     /// Returns the list of migrations for the tree store.
-    fn migrations() -> Vec<&'static [&'static str]> {
+    fn migrations() -> Vec<Vec<String>> {
         vec![
             // Migration 1: Initial tree tables
-            &[
+            vec![
                 "CREATE TABLE IF NOT EXISTS tree_reservations (
                     id TEXT PRIMARY KEY,
                     purpose TEXT NOT NULL,
                     pending_change_amount BIGINT NOT NULL DEFAULT 0,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )",
+                )".to_string(),
                 "CREATE TABLE IF NOT EXISTS tree_leaves (
                     id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
@@ -729,24 +729,24 @@ impl PostgresTreeStore {
                     data JSONB NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )",
+                )".to_string(),
                 "CREATE TABLE IF NOT EXISTS tree_spent_leaves (
                     leaf_id TEXT PRIMARY KEY,
                     spent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )",
+                )".to_string(),
                 "CREATE INDEX IF NOT EXISTS idx_tree_leaves_available ON tree_leaves(status, is_missing_from_operators)
-                    WHERE status = 'Available' AND is_missing_from_operators = FALSE",
+                    WHERE status = 'Available' AND is_missing_from_operators = FALSE".to_string(),
                 "CREATE INDEX IF NOT EXISTS idx_tree_leaves_reservation ON tree_leaves(reservation_id)
-                    WHERE reservation_id IS NOT NULL",
-                "CREATE INDEX IF NOT EXISTS idx_tree_leaves_added_at ON tree_leaves(added_at)",
+                    WHERE reservation_id IS NOT NULL".to_string(),
+                "CREATE INDEX IF NOT EXISTS idx_tree_leaves_added_at ON tree_leaves(added_at)".to_string(),
             ],
             // Migration 2: Add swap status tracking for race condition fix
-            &[
+            vec![
                 "CREATE TABLE IF NOT EXISTS tree_swap_status (
                     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
                     last_completed_at TIMESTAMPTZ
-                )",
-                "INSERT INTO tree_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING",
+                )".to_string(),
+                "INSERT INTO tree_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING".to_string(),
             ],
         ]
     }

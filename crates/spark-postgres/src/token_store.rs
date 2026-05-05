@@ -775,10 +775,10 @@ impl PostgresTokenStore {
     }
 
     /// Returns the list of migrations for the token store.
-    fn migrations() -> Vec<&'static [&'static str]> {
+    fn migrations() -> Vec<Vec<String>> {
         vec![
             // Migration 1: Token store tables with race condition protection
-            &[
+            vec![
                 "CREATE TABLE IF NOT EXISTS token_metadata (
                     identifier TEXT PRIMARY KEY,
                     issuer_public_key TEXT NOT NULL,
@@ -788,14 +788,17 @@ impl PostgresTokenStore {
                     max_supply TEXT NOT NULL,
                     is_freezable BOOLEAN NOT NULL,
                     creation_entity_public_key TEXT
-                )",
+                )"
+                .to_string(),
                 "CREATE INDEX IF NOT EXISTS idx_token_metadata_issuer_pk
-                    ON token_metadata (issuer_public_key)",
+                    ON token_metadata (issuer_public_key)"
+                    .to_string(),
                 "CREATE TABLE IF NOT EXISTS token_reservations (
                     id TEXT PRIMARY KEY,
                     purpose TEXT NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )",
+                )"
+                .to_string(),
                 "CREATE TABLE IF NOT EXISTS token_outputs (
                     id TEXT PRIMARY KEY,
                     token_identifier TEXT NOT NULL REFERENCES token_metadata(identifier),
@@ -809,20 +812,25 @@ impl PostgresTokenStore {
                     prev_tx_vout INTEGER NOT NULL,
                     reservation_id TEXT REFERENCES token_reservations(id) ON DELETE SET NULL,
                     added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )",
+                )"
+                .to_string(),
                 "CREATE INDEX IF NOT EXISTS idx_token_outputs_identifier
-                    ON token_outputs (token_identifier)",
+                    ON token_outputs (token_identifier)"
+                    .to_string(),
                 "CREATE INDEX IF NOT EXISTS idx_token_outputs_reservation
-                    ON token_outputs (reservation_id) WHERE reservation_id IS NOT NULL",
+                    ON token_outputs (reservation_id) WHERE reservation_id IS NOT NULL"
+                    .to_string(),
                 "CREATE TABLE IF NOT EXISTS token_spent_outputs (
                     output_id TEXT PRIMARY KEY,
                     spent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )",
+                )"
+                .to_string(),
                 "CREATE TABLE IF NOT EXISTS token_swap_status (
                     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
                     last_completed_at TIMESTAMPTZ
-                )",
-                "INSERT INTO token_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING",
+                )"
+                .to_string(),
+                "INSERT INTO token_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING".to_string(),
             ],
         ]
     }

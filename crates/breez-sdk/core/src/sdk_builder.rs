@@ -505,10 +505,17 @@ impl SdkBuilder {
             if s.is_none()
                 && let Some(ref pool) = postgres_pool
             {
+                let identity_pub_key = spark_signer
+                    .get_identity_public_key()
+                    .await
+                    .map_err(|e| SdkError::Generic(e.to_string()))?;
                 s = Some(Arc::new(
-                    crate::persist::postgres::PostgresStorage::new_with_pool(pool.clone())
-                        .await
-                        .map_err(|e| SdkError::Generic(e.to_string()))?,
+                    crate::persist::postgres::PostgresStorage::new_with_pool(
+                        pool.clone(),
+                        &identity_pub_key.serialize(),
+                    )
+                    .await
+                    .map_err(|e| SdkError::Generic(e.to_string()))?,
                 ));
             }
 
