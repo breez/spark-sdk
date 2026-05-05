@@ -282,7 +282,9 @@ impl SdkBuilder {
                 });
                 self.builder = self.builder.with_storage(storage);
 
-                let tree_store_js = create_postgres_tree_store_with_pool(&pool, logger_ref).await?;
+                let tree_store_js =
+                    create_postgres_tree_store_with_pool(&pool, &identity_bytes, logger_ref)
+                        .await?;
                 let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
                 self.builder = self.builder.with_tree_store(tree_store);
 
@@ -373,6 +375,7 @@ extern "C" {
     #[wasm_bindgen(js_name = "createPostgresTreeStoreWithPool", catch)]
     async fn create_postgres_tree_store_with_pool(
         pool: &JsPool,
+        identity: &[u8],
         logger: Option<&Logger>,
     ) -> Result<TreeStoreJs, JsValue>;
 
