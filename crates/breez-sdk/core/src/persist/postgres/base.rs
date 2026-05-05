@@ -193,8 +193,9 @@ pub(super) async fn run_migrations(
 /// Creates a `PostgresTreeStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_postgres_tree_store(
     pool: deadpool_postgres::Pool,
+    identity: &[u8],
 ) -> Result<Arc<dyn TreeStore>, StorageError> {
-    spark_postgres::create_postgres_tree_store_from_pool(pool)
+    spark_postgres::create_postgres_tree_store_from_pool(pool, identity)
         .await
         .map_err(StorageError::from)
 }

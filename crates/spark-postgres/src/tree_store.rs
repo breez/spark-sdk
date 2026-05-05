@@ -46,10 +46,10 @@ impl LeafLike for SlimLeaf {
     }
 }
 
-/// Advisory lock key for serializing tree store write operations.
-/// This prevents deadlocks by ensuring only one write transaction runs at a time.
-/// The lock is automatically released when the transaction commits or rolls back.
-const TREE_STORE_WRITE_LOCK_KEY: i64 = 0x7472_6565_5354_4f52; // "treeTOR" as hex
+/// Advisory-lock classid for the tree store. Combined with a per-tenant `objid`
+/// (derived from the identity pubkey) so that two tenants never block each
+/// other's writes — only same-tenant writes serialize on the same lock.
+const TREE_STORE_LOCK_CLASSID: i32 = 0x7472_6565; // "tree" as hex
 
 /// Timeout for reservations in seconds. Reservations older than this are considered stale
 /// and will be cleaned up during `set_leaves()` to release leaves locked by crashed clients.
@@ -61,11 +61,103 @@ const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 ///
 /// This implementation uses database-level concurrency control (row locking)
 /// to safely handle concurrent operations, making it suitable for multi-instance
-/// deployments.
+/// deployments. Each instance is scoped to a single tenant identity so that
+/// multiple tenants can share one Postgres database without cross-pollinating
+/// tree state.
 pub struct PostgresTreeStore {
     pool: Pool,
+    /// 33-byte secp256k1 compressed pubkey identifying this tenant. All reads
+    /// and writes are filtered by `user_id = self.identity`.
+    identity: Vec<u8>,
+    /// Stable per-tenant lock objid derived from `identity`. Used as the
+    /// second argument to `pg_advisory_xact_lock(classid, objid)` so concurrent
+    /// writes from different tenants do not block each other.
+    lock_objid: i32,
     balance_changed_tx: Arc<watch::Sender<()>>,
     balance_changed_rx: watch::Receiver<()>,
+}
+
+/// Derives a stable 32-bit lock objid from a 33-byte secp256k1 pubkey.
+/// Uses the last 4 bytes of the pubkey x-coordinate (well-distributed by
+/// construction) reinterpreted as i32. Tail-takes via `chunks` so an
+/// unexpectedly short input simply yields zero rather than underflowing.
+fn identity_lock_objid(identity: &[u8]) -> i32 {
+    let buf: [u8; 4] = identity
+        .rchunks(4)
+        .next()
+        .and_then(|tail| tail.try_into().ok())
+        .unwrap_or([0u8; 4]);
+    i32::from_be_bytes(buf)
+}
+
+/// Builds the multi-tenant scoping migration for the tree store. The literal
+/// `identity` hex is inlined as a BYTEA literal (safe — typed pubkey bytes,
+/// character set restricted to `[0-9a-f]{66}`).
+fn tree_store_multi_tenant_migration(identity: &[u8]) -> Vec<String> {
+    let id_hex = hex::encode(identity);
+    let id_lit = format!("'\\x{id_hex}'::bytea");
+
+    vec![
+        // tree_leaves: drop the old single-column FK to tree_reservations(id)
+        // FIRST, before we touch the tree_reservations PK it depends on.
+        "ALTER TABLE tree_leaves DROP CONSTRAINT IF EXISTS tree_leaves_reservation_id_fkey"
+            .to_string(),
+        // tree_reservations: scope by user_id.
+        "ALTER TABLE tree_reservations ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE tree_reservations SET user_id = {id_lit}"),
+        "ALTER TABLE tree_reservations \
+         ALTER COLUMN user_id SET NOT NULL, \
+         DROP CONSTRAINT IF EXISTS tree_reservations_pkey, \
+         ADD PRIMARY KEY (user_id, id)"
+            .to_string(),
+        // tree_leaves: add user_id, rekey, and re-add the composite FK to the
+        // new tree_reservations PK.
+        "ALTER TABLE tree_leaves ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE tree_leaves SET user_id = {id_lit}"),
+        // The composite FK uses NO ACTION (the default) instead of the previous
+        // single-column `ON DELETE SET NULL`: PG-only column-list SET NULL is
+        // PG15+, and a whole-row SET NULL would try to null `user_id` too.
+        // Callers (`cleanup_stale_reservations`, `cancel_reservation`,
+        // `finalize_reservation`) explicitly clear `reservation_id` before
+        // deleting the parent reservation row.
+        "ALTER TABLE tree_leaves \
+         ALTER COLUMN user_id SET NOT NULL, \
+         DROP CONSTRAINT IF EXISTS tree_leaves_pkey, \
+         ADD PRIMARY KEY (user_id, id), \
+         ADD FOREIGN KEY (user_id, reservation_id) \
+            REFERENCES tree_reservations(user_id, id)"
+            .to_string(),
+        "DROP INDEX IF EXISTS idx_tree_leaves_available".to_string(),
+        "DROP INDEX IF EXISTS idx_tree_leaves_reservation".to_string(),
+        "DROP INDEX IF EXISTS idx_tree_leaves_added_at".to_string(),
+        "CREATE INDEX idx_tree_leaves_user_available \
+         ON tree_leaves(user_id, status, is_missing_from_operators) \
+         WHERE status = 'Available' AND is_missing_from_operators = FALSE"
+            .to_string(),
+        "CREATE INDEX idx_tree_leaves_user_reservation \
+         ON tree_leaves(user_id, reservation_id) \
+         WHERE reservation_id IS NOT NULL"
+            .to_string(),
+        "CREATE INDEX idx_tree_leaves_user_added_at ON tree_leaves(user_id, added_at)".to_string(),
+        // tree_spent_leaves: scope by user_id.
+        "ALTER TABLE tree_spent_leaves ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE tree_spent_leaves SET user_id = {id_lit}"),
+        "ALTER TABLE tree_spent_leaves \
+         ALTER COLUMN user_id SET NOT NULL, \
+         DROP CONSTRAINT IF EXISTS tree_spent_leaves_pkey, \
+         ADD PRIMARY KEY (user_id, leaf_id)"
+            .to_string(),
+        // tree_swap_status was a singleton (PK id=1, CHECK id=1). Drop the id
+        // column (CASCADE removes both PK and CHECK), then re-key by user_id so
+        // each tenant has its own swap-status row.
+        "ALTER TABLE tree_swap_status DROP COLUMN id CASCADE".to_string(),
+        "ALTER TABLE tree_swap_status ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE tree_swap_status SET user_id = {id_lit}"),
+        "ALTER TABLE tree_swap_status \
+         ALTER COLUMN user_id SET NOT NULL, \
+         ADD PRIMARY KEY (user_id)"
+            .to_string(),
+    ]
 }
 
 #[async_trait]
@@ -90,11 +182,11 @@ impl TreeStore for PostgresTreeStore {
         // our perspective. This handles the case where the same leaf returns to us
         // after we sent it to someone else.
         let leaf_ids: Vec<String> = leaves.iter().map(|l| l.id.to_string()).collect();
-        Self::batch_remove_spent_leaves(&tx, &leaf_ids).await?;
+        self.batch_remove_spent_leaves(&tx, &leaf_ids).await?;
 
         // Batch insert all leaves (no filtering needed since we just removed any
         // that were in spent_leaves)
-        Self::batch_upsert_leaves(&tx, leaves, false, None).await?;
+        self.batch_upsert_leaves(&tx, leaves, false, None).await?;
 
         tx.commit().await.map_err(map_err)?;
         tracing::trace!(
@@ -112,12 +204,15 @@ impl TreeStore for PostgresTreeStore {
                 r"
                 SELECT COALESCE(SUM((l.data->>'value')::bigint), 0)::bigint AS balance
                 FROM tree_leaves l
-                LEFT JOIN tree_reservations r ON l.reservation_id = r.id
-                WHERE
+                LEFT JOIN tree_reservations r
+                  ON l.reservation_id = r.id AND l.user_id = r.user_id
+                WHERE l.user_id = $1
+                  AND (
                     (l.reservation_id IS NULL AND l.status = 'Available')
                     OR r.purpose = 'Swap'
+                  )
                 ",
-                &[],
+                &[&self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -134,9 +229,11 @@ impl TreeStore for PostgresTreeStore {
                 SELECT l.id, l.status, l.is_missing_from_operators, l.data,
                        l.reservation_id, r.purpose
                 FROM tree_leaves l
-                LEFT JOIN tree_reservations r ON l.reservation_id = r.id
+                LEFT JOIN tree_reservations r
+                  ON l.reservation_id = r.id AND l.user_id = r.user_id
+                WHERE l.user_id = $1
                 ",
-                &[],
+                &[&self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -194,13 +291,13 @@ impl TreeStore for PostgresTreeStore {
         let tx = client.transaction().await.map_err(map_err)?;
 
         // Acquire advisory lock to prevent deadlocks with concurrent operations
-        Self::acquire_write_lock(&tx).await?;
+        self.acquire_write_lock(&tx).await?;
 
         // Drop expired reservations BEFORE evaluating has_active_swap, otherwise a stale
         // Swap reservation (from a crashed client or a swap whose finalize/cancel never
         // ran) keeps has_active_swap true forever, which makes set_leaves early-return
         // and never reach the cleanup again. The reservation pins itself in place.
-        Self::cleanup_stale_reservations(&tx).await?;
+        self.cleanup_stale_reservations(&tx).await?;
 
         // Check if any swap reservation is currently active, or if a swap completed
         // after this refresh started (making the refresh data potentially inconsistent).
@@ -209,10 +306,17 @@ impl TreeStore for PostgresTreeStore {
                 .query_one(
                     r"
                     SELECT
-                        EXISTS(SELECT 1 FROM tree_reservations WHERE purpose = 'Swap'),
-                        COALESCE((SELECT last_completed_at >= $1 FROM tree_swap_status WHERE id = 1), FALSE)
+                        EXISTS(
+                            SELECT 1 FROM tree_reservations
+                            WHERE user_id = $1 AND purpose = 'Swap'
+                        ),
+                        COALESCE(
+                            (SELECT last_completed_at >= $2
+                             FROM tree_swap_status WHERE user_id = $1),
+                            FALSE
+                        )
                     ",
-                    &[&refresh_timestamp],
+                    &[&self.identity, &refresh_timestamp],
                 )
                 .await
                 .map_err(map_err)?;
@@ -227,13 +331,14 @@ impl TreeStore for PostgresTreeStore {
             return Ok(());
         }
 
-        Self::cleanup_spent_markers(&tx, refresh_timestamp).await?;
+        self.cleanup_spent_markers(&tx, refresh_timestamp).await?;
 
         let spent_ids: HashSet<String> = {
             let rows = tx
                 .query(
-                    "SELECT leaf_id FROM tree_spent_leaves WHERE spent_at >= $1",
-                    &[&refresh_timestamp],
+                    "SELECT leaf_id FROM tree_spent_leaves \
+                     WHERE user_id = $1 AND spent_at >= $2",
+                    &[&self.identity, &refresh_timestamp],
                 )
                 .await
                 .map_err(map_err)?;
@@ -252,8 +357,9 @@ impl TreeStore for PostgresTreeStore {
         // (FK ON DELETE SET NULL) — those rows kept their old added_at, so they are
         // dropped here and re-fetched from the operator response in the upsert below.
         tx.execute(
-            "DELETE FROM tree_leaves WHERE reservation_id IS NULL AND added_at < $1",
-            &[&refresh_timestamp],
+            "DELETE FROM tree_leaves \
+             WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
+            &[&self.identity, &refresh_timestamp],
         )
         .await
         .map_err(map_err)?;
@@ -261,8 +367,10 @@ impl TreeStore for PostgresTreeStore {
         // Upsert all leaves. batch_upsert_leaves handles spent filtering via skip_ids,
         // and its ON CONFLICT clause preserves reservation_id (not in the UPDATE SET list).
         // Reserved leaves are also immune to timestamp-based deletion (WHERE reservation_id IS NULL).
-        Self::batch_upsert_leaves(&tx, leaves, false, Some(&spent_ids)).await?;
-        Self::batch_upsert_leaves(&tx, missing_operators_leaves, true, Some(&spent_ids)).await?;
+        self.batch_upsert_leaves(&tx, leaves, false, Some(&spent_ids))
+            .await?;
+        self.batch_upsert_leaves(&tx, missing_operators_leaves, true, Some(&spent_ids))
+            .await?;
 
         tx.commit().await.map_err(map_err)?;
         self.notify_balance_change();
@@ -278,7 +386,10 @@ impl TreeStore for PostgresTreeStore {
         let tx = client.transaction().await.map_err(map_err)?;
 
         let reservation = tx
-            .query_opt("SELECT id FROM tree_reservations WHERE id = $1", &[id])
+            .query_opt(
+                "SELECT id FROM tree_reservations WHERE user_id = $1 AND id = $2",
+                &[&self.identity, id],
+            )
             .await
             .map_err(map_err)?;
 
@@ -288,8 +399,8 @@ impl TreeStore for PostgresTreeStore {
 
         let prior_leaf_ids: Vec<String> = tx
             .query(
-                "SELECT id FROM tree_leaves WHERE reservation_id = $1",
-                &[id],
+                "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+                &[&self.identity, id],
             )
             .await
             .map_err(map_err)?
@@ -306,15 +417,22 @@ impl TreeStore for PostgresTreeStore {
             id, prior_leaf_ids, keep_ids, dropped_ids
         );
 
-        tx.execute("DELETE FROM tree_leaves WHERE reservation_id = $1", &[id])
-            .await
-            .map_err(map_err)?;
+        tx.execute(
+            "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+            &[&self.identity, id],
+        )
+        .await
+        .map_err(map_err)?;
 
-        tx.execute("DELETE FROM tree_reservations WHERE id = $1", &[id])
-            .await
-            .map_err(map_err)?;
+        tx.execute(
+            "DELETE FROM tree_reservations WHERE user_id = $1 AND id = $2",
+            &[&self.identity, id],
+        )
+        .await
+        .map_err(map_err)?;
 
-        Self::batch_upsert_leaves(&tx, leaves_to_keep, false, None).await?;
+        self.batch_upsert_leaves(&tx, leaves_to_keep, false, None)
+            .await?;
 
         tx.commit().await.map_err(map_err)?;
         self.notify_balance_change();
@@ -334,13 +452,13 @@ impl TreeStore for PostgresTreeStore {
         // transaction's spent-marker write — otherwise the snapshot would miss
         // our marker and the upsert would write the just-spent leaf back as
         // Available.
-        Self::acquire_write_lock(&tx).await?;
+        self.acquire_write_lock(&tx).await?;
 
         // Check if reservation exists and get its purpose
         let reservation = tx
             .query_opt(
-                "SELECT id, purpose FROM tree_reservations WHERE id = $1",
-                &[id],
+                "SELECT id, purpose FROM tree_reservations WHERE user_id = $1 AND id = $2",
+                &[&self.identity, id],
             )
             .await
             .map_err(map_err)?;
@@ -349,8 +467,8 @@ impl TreeStore for PostgresTreeStore {
             let is_swap = row.get::<_, String>("purpose") == "Swap";
             let leaf_ids: Vec<String> = tx
                 .query(
-                    "SELECT id FROM tree_leaves WHERE reservation_id = $1",
-                    &[id],
+                    "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+                    &[&self.identity, id],
                 )
                 .await
                 .map_err(map_err)?
@@ -369,15 +487,22 @@ impl TreeStore for PostgresTreeStore {
             reserved_leaf_ids,
             new_leaves.map_or(0, <[TreeNode]>::len)
         );
-        Self::batch_insert_spent_leaves(&tx, &reserved_leaf_ids).await?;
+        self.batch_insert_spent_leaves(&tx, &reserved_leaf_ids)
+            .await?;
 
-        tx.execute("DELETE FROM tree_leaves WHERE reservation_id = $1", &[id])
-            .await
-            .map_err(map_err)?;
+        tx.execute(
+            "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+            &[&self.identity, id],
+        )
+        .await
+        .map_err(map_err)?;
 
-        tx.execute("DELETE FROM tree_reservations WHERE id = $1", &[id])
-            .await
-            .map_err(map_err)?;
+        tx.execute(
+            "DELETE FROM tree_reservations WHERE user_id = $1 AND id = $2",
+            &[&self.identity, id],
+        )
+        .await
+        .map_err(map_err)?;
 
         if let Some(leaves) = new_leaves {
             for l in leaves {
@@ -386,16 +511,19 @@ impl TreeStore for PostgresTreeStore {
                     l.id, l.value, id
                 );
             }
-            Self::batch_upsert_leaves(&tx, leaves, false, None).await?;
+            self.batch_upsert_leaves(&tx, leaves, false, None).await?;
         }
 
         // If this was a swap with new leaves, update last_completed_at.
         // This is used to detect if a refresh started before a swap finished,
-        // which would cause stale data to be applied.
+        // which would cause stale data to be applied. UPSERT so a tenant
+        // that joined after migration 3 (and thus has no row) gets one created.
         if is_swap && new_leaves.is_some() {
             tx.execute(
-                "UPDATE tree_swap_status SET last_completed_at = NOW() WHERE id = 1",
-                &[],
+                "INSERT INTO tree_swap_status (user_id, last_completed_at) \
+                 VALUES ($1, NOW()) \
+                 ON CONFLICT (user_id) DO UPDATE SET last_completed_at = EXCLUDED.last_completed_at",
+                &[&self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -423,7 +551,7 @@ impl TreeStore for PostgresTreeStore {
         let tx = client.transaction().await.map_err(map_err)?;
 
         // Acquire advisory lock to prevent deadlocks with concurrent operations
-        Self::acquire_write_lock(&tx).await?;
+        self.acquire_write_lock(&tx).await?;
 
         // True total available across ALL eligible leaves — required for the
         // WaitForPending decision. Must NOT be derived from the prefiltered
@@ -433,11 +561,12 @@ impl TreeStore for PostgresTreeStore {
                 r"
                 SELECT COALESCE(SUM((data->>'value')::bigint), 0)::bigint AS total
                 FROM tree_leaves
-                WHERE status = 'Available'
+                WHERE user_id = $1
+                  AND status = 'Available'
                   AND is_missing_from_operators = FALSE
                   AND reservation_id IS NULL
                 ",
-                &[],
+                &[&self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -454,23 +583,25 @@ impl TreeStore for PostgresTreeStore {
                 r"
                 SELECT id, (data->>'value')::bigint AS value
                 FROM tree_leaves
-                WHERE status = 'Available'
+                WHERE user_id = $1
+                  AND status = 'Available'
                   AND is_missing_from_operators = FALSE
                   AND reservation_id IS NULL
                   AND (
-                    (data->>'value')::bigint <= $1
+                    (data->>'value')::bigint <= $2
                     OR id = (
                       SELECT id FROM tree_leaves
-                      WHERE status = 'Available'
+                      WHERE user_id = $1
+                        AND status = 'Available'
                         AND is_missing_from_operators = FALSE
                         AND reservation_id IS NULL
-                        AND (data->>'value')::bigint > $1
+                        AND (data->>'value')::bigint > $2
                       ORDER BY (data->>'value')::bigint
                       LIMIT 1
                     )
                   )
                 ",
-                &[&max_target_signed],
+                &[&self.identity, &max_target_signed],
             )
             .await
             .map_err(map_err)?;
@@ -487,7 +618,7 @@ impl TreeStore for PostgresTreeStore {
             .collect();
 
         // Calculate pending balance within the same transaction for consistency
-        let pending = Self::calculate_pending_balance(&tx).await?;
+        let pending = self.calculate_pending_balance(&tx).await?;
 
         // Try exact selection on the slim set — uses the same generic
         // `select_helper` algorithm as the in-memory store.
@@ -504,7 +635,7 @@ impl TreeStore for PostgresTreeStore {
                 if selected_ids.is_empty() {
                     return Err(TreeServiceError::NonReservableLeaves);
                 }
-                let selected_leaves = Self::resolve_full_leaves(&tx, &selected_ids).await?;
+                let selected_leaves = self.resolve_full_leaves(&tx, &selected_ids).await?;
                 self.create_reservation(&tx, &reservation_id, &selected_leaves, purpose, 0)
                     .await?;
                 tx.commit().await.map_err(map_err)?;
@@ -517,7 +648,7 @@ impl TreeStore for PostgresTreeStore {
             Err(_) if !exact_only => {
                 if let Ok(Some(min_slim)) = select_leaves_by_minimum_amount(&slim, target_amount) {
                     let min_ids: Vec<String> = min_slim.iter().map(|l| l.id.clone()).collect();
-                    let selected_leaves = Self::resolve_full_leaves(&tx, &min_ids).await?;
+                    let selected_leaves = self.resolve_full_leaves(&tx, &min_ids).await?;
                     let reserved_amount: u64 = selected_leaves.iter().map(|l| l.value).sum();
                     let pending_change = if reserved_amount > target_amount && target_amount > 0 {
                         reserved_amount - target_amount
@@ -604,8 +735,8 @@ impl TreeStore for PostgresTreeStore {
 
         let reservation = tx
             .query_opt(
-                "SELECT id FROM tree_reservations WHERE id = $1",
-                &[reservation_id],
+                "SELECT id FROM tree_reservations WHERE user_id = $1 AND id = $2",
+                &[&self.identity, reservation_id],
             )
             .await
             .map_err(map_err)?;
@@ -620,8 +751,8 @@ impl TreeStore for PostgresTreeStore {
         let old_reserved_leaf_ids: Vec<String> = {
             let rows = tx
                 .query(
-                    "SELECT id FROM tree_leaves WHERE reservation_id = $1",
-                    &[reservation_id],
+                    "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+                    &[&self.identity, reservation_id],
                 )
                 .await
                 .map_err(map_err)?;
@@ -629,28 +760,33 @@ impl TreeStore for PostgresTreeStore {
         };
 
         // Mark old leaves as spent and delete them (they no longer exist after the swap)
-        Self::batch_insert_spent_leaves(&tx, &old_reserved_leaf_ids).await?;
+        self.batch_insert_spent_leaves(&tx, &old_reserved_leaf_ids)
+            .await?;
         tx.execute(
-            "DELETE FROM tree_leaves WHERE reservation_id = $1",
-            &[reservation_id],
+            "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+            &[&self.identity, reservation_id],
         )
         .await
         .map_err(map_err)?;
 
         // Batch upsert change leaves to available pool with fresh timestamp (race condition fix)
-        Self::batch_upsert_leaves(&tx, change_leaves, false, None).await?;
+        self.batch_upsert_leaves(&tx, change_leaves, false, None)
+            .await?;
 
         // Batch upsert reserved leaves with fresh timestamp
-        Self::batch_upsert_leaves(&tx, reserved_leaves, false, None).await?;
+        self.batch_upsert_leaves(&tx, reserved_leaves, false, None)
+            .await?;
 
         // Set reservation_id on reserved leaves
         let leaf_ids: Vec<String> = reserved_leaves.iter().map(|l| l.id.to_string()).collect();
-        Self::batch_set_reservation_id(&tx, reservation_id, &leaf_ids).await?;
+        self.batch_set_reservation_id(&tx, reservation_id, &leaf_ids)
+            .await?;
 
         // Clear pending change amount
         tx.execute(
-            "UPDATE tree_reservations SET pending_change_amount = 0 WHERE id = $1",
-            &[reservation_id],
+            "UPDATE tree_reservations SET pending_change_amount = 0 \
+             WHERE user_id = $1 AND id = $2",
+            &[&self.identity, reservation_id],
         )
         .await
         .map_err(map_err)?;
@@ -676,25 +812,31 @@ impl PostgresTreeStore {
     /// Creates a new `PostgresTreeStore` from a configuration.
     ///
     /// This creates its own connection pool and runs tree store migrations.
-    pub async fn from_config(config: PostgresStorageConfig) -> Result<Self, PostgresError> {
+    /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
+    pub async fn from_config(
+        config: PostgresStorageConfig,
+        identity: &[u8],
+    ) -> Result<Self, PostgresError> {
         let pool = create_pool(&config)?;
-        Self::init(pool).await
+        Self::init(pool, identity).await
     }
 
     /// Creates a new `PostgresTreeStore` from an existing connection pool.
     ///
     /// This reuses the provided pool and runs tree store migrations.
     /// Useful when sharing a pool with other components (e.g., `PostgresStorage`).
-    pub async fn from_pool(pool: Pool) -> Result<Self, PostgresError> {
-        Self::init(pool).await
+    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
+        Self::init(pool, identity).await
     }
 
     /// Shared initialization logic for both constructors.
-    async fn init(pool: Pool) -> Result<Self, PostgresError> {
+    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
         let store = Self {
             pool,
+            identity: identity.to_vec(),
+            lock_objid: identity_lock_objid(identity),
             balance_changed_tx: Arc::new(balance_changed_tx),
             balance_changed_rx,
         };
@@ -707,11 +849,16 @@ impl PostgresTreeStore {
 
     /// Runs database migrations for tree store tables.
     async fn migrate(&self) -> Result<(), PostgresError> {
-        run_migrations(&self.pool, TREE_MIGRATIONS_TABLE, &Self::migrations()).await
+        run_migrations(
+            &self.pool,
+            TREE_MIGRATIONS_TABLE,
+            &Self::migrations(&self.identity),
+        )
+        .await
     }
 
     /// Returns the list of migrations for the tree store.
-    fn migrations() -> Vec<Vec<String>> {
+    fn migrations(identity: &[u8]) -> Vec<Vec<String>> {
         vec![
             // Migration 1: Initial tree tables
             vec![
@@ -748,6 +895,13 @@ impl PostgresTreeStore {
                 )".to_string(),
                 "INSERT INTO tree_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING".to_string(),
             ],
+            // Migration 3: Multi-tenant scoping. Adds user_id to every tree-store
+            // table, backfills with the connecting tenant's identity, and rewrites
+            // primary keys / FKs / indexes to lead with user_id. The
+            // `tree_swap_status` singleton is restructured the same way as
+            // `sync_revision` in the SDK-core storage. See `multi_tenant_migration`
+            // for the SQL.
+            tree_store_multi_tenant_migration(identity),
         ]
     }
 
@@ -762,12 +916,14 @@ impl PostgresTreeStore {
 
     /// Calculates the pending balance from in-flight swaps within a transaction.
     async fn calculate_pending_balance(
+        &self,
         tx: &tokio_postgres::Transaction<'_>,
     ) -> Result<u64, TreeServiceError> {
         let row = tx
             .query_one(
-                "SELECT COALESCE(SUM(pending_change_amount), 0)::BIGINT FROM tree_reservations",
-                &[],
+                "SELECT COALESCE(SUM(pending_change_amount), 0)::BIGINT \
+                 FROM tree_reservations WHERE user_id = $1",
+                &[&self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -792,6 +948,7 @@ impl PostgresTreeStore {
     /// Optionally skips leaves whose IDs are in the `skip_ids` set.
     /// Uses ON CONFLICT DO UPDATE to replace existing leaves (matching `InMemoryTreeStore` behavior).
     async fn batch_upsert_leaves(
+        &self,
         tx: &tokio_postgres::Transaction<'_>,
         leaves: &[TreeNode],
         is_missing_from_operators: bool,
@@ -833,17 +990,23 @@ impl PostgresTreeStore {
 
         tx.execute(
             r"
-            INSERT INTO tree_leaves (id, status, is_missing_from_operators, data, added_at)
-            SELECT id, status, missing, data, NOW()
+            INSERT INTO tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
+            SELECT $5, id, status, missing, data, NOW()
             FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::jsonb[])
                 AS t(id, status, missing, data)
-            ON CONFLICT (id) DO UPDATE SET
+            ON CONFLICT (user_id, id) DO UPDATE SET
                 status = EXCLUDED.status,
                 is_missing_from_operators = EXCLUDED.is_missing_from_operators,
                 data = EXCLUDED.data,
                 added_at = NOW()
             ",
-            &[&ids, &statuses, &missing_flags, &data_values],
+            &[
+                &ids,
+                &statuses,
+                &missing_flags,
+                &data_values,
+                &self.identity,
+            ],
         )
         .await
         .map_err(map_err)?;
@@ -853,6 +1016,7 @@ impl PostgresTreeStore {
 
     /// Batch sets `reservation_id` on leaves using UNNEST.
     async fn batch_set_reservation_id(
+        &self,
         tx: &tokio_postgres::Transaction<'_>,
         reservation_id: &str,
         leaf_ids: &[String],
@@ -865,9 +1029,9 @@ impl PostgresTreeStore {
             r"
             UPDATE tree_leaves
             SET reservation_id = $1
-            WHERE id = ANY($2)
+            WHERE user_id = $3 AND id = ANY($2)
             ",
-            &[&reservation_id, &leaf_ids],
+            &[&reservation_id, &leaf_ids, &self.identity],
         )
         .await
         .map_err(map_err)?;
@@ -877,6 +1041,7 @@ impl PostgresTreeStore {
 
     /// Batch inserts spent leaf markers using UNNEST.
     async fn batch_insert_spent_leaves(
+        &self,
         tx: &tokio_postgres::Transaction<'_>,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
@@ -886,11 +1051,11 @@ impl PostgresTreeStore {
 
         tx.execute(
             r"
-            INSERT INTO tree_spent_leaves (leaf_id)
-            SELECT * FROM UNNEST($1::text[])
+            INSERT INTO tree_spent_leaves (user_id, leaf_id)
+            SELECT $2, leaf_id FROM UNNEST($1::text[]) AS t(leaf_id)
             ON CONFLICT DO NOTHING
             ",
-            &[&leaf_ids],
+            &[&leaf_ids, &self.identity],
         )
         .await
         .map_err(map_err)?;
@@ -902,6 +1067,7 @@ impl PostgresTreeStore {
     /// This is called when receiving a leaf back (e.g., from a claimed transfer)
     /// to clear the "spent" status from when we previously sent it.
     async fn batch_remove_spent_leaves(
+        &self,
         tx: &tokio_postgres::Transaction<'_>,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
@@ -913,9 +1079,9 @@ impl PostgresTreeStore {
             .execute(
                 r"
                 DELETE FROM tree_spent_leaves
-                WHERE leaf_id = ANY($1)
+                WHERE user_id = $2 AND leaf_id = ANY($1)
                 ",
-                &[&leaf_ids],
+                &[&leaf_ids, &self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -949,6 +1115,7 @@ impl PostgresTreeStore {
     /// picked, preserving the algorithm's selection order. Typically 1-3 rows
     /// even when the slim candidate set was thousands.
     async fn resolve_full_leaves(
+        &self,
         tx: &tokio_postgres::Transaction<'_>,
         ids: &[String],
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
@@ -957,8 +1124,8 @@ impl PostgresTreeStore {
         }
         let rows = tx
             .query(
-                "SELECT id, data FROM tree_leaves WHERE id = ANY($1)",
-                &[&ids],
+                "SELECT id, data FROM tree_leaves WHERE user_id = $2 AND id = ANY($1)",
+                &[&ids, &self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -980,14 +1147,17 @@ impl PostgresTreeStore {
     }
 
     /// Acquires an exclusive advisory lock for write operations.
-    /// This serializes all tree store writes to prevent deadlocks.
+    /// Per-tenant: combines `TREE_STORE_LOCK_CLASSID` with the tenant-specific
+    /// `objid` so concurrent writes from different tenants do not block each
+    /// other. Same-tenant writes still serialize on the same lock.
     /// The lock is automatically released when the transaction commits or rolls back.
     async fn acquire_write_lock(
+        &self,
         tx: &tokio_postgres::Transaction<'_>,
     ) -> Result<(), TreeServiceError> {
         tx.execute(
-            "SELECT pg_advisory_xact_lock($1)",
-            &[&TREE_STORE_WRITE_LOCK_KEY],
+            "SELECT pg_advisory_xact_lock($1, $2)",
+            &[&TREE_STORE_LOCK_CLASSID, &self.lock_objid],
         )
         .await
         .map_err(map_err)?;
@@ -996,15 +1166,35 @@ impl PostgresTreeStore {
 
     /// Deletes reservations that have exceeded the timeout.
     /// Called during `set_leaves` to clean up stale reservations from crashed clients.
-    /// The `ON DELETE SET NULL` foreign key constraint automatically releases the leaves.
+    /// Releases the leaves by clearing their `reservation_id` first, then deletes
+    /// the parent reservations. The composite FK uses NO ACTION (the default)
+    /// because PG-only column-list `SET NULL (reservation_id)` is PG15+ and a
+    /// whole-row SET NULL would try to null `user_id` (NOT NULL).
     async fn cleanup_stale_reservations(
+        &self,
         tx: &tokio_postgres::Transaction<'_>,
     ) -> Result<u64, TreeServiceError> {
+        // Release leaves still pointing at any soon-to-be-deleted reservation,
+        // matching the previous `ON DELETE SET NULL` behavior.
+        tx.execute(
+            r"UPDATE tree_leaves SET reservation_id = NULL
+              WHERE user_id = $2
+                AND reservation_id IN (
+                    SELECT id FROM tree_reservations
+                    WHERE user_id = $2
+                      AND created_at < NOW() - make_interval(secs => $1)
+                )",
+            &[&RESERVATION_TIMEOUT_SECS, &self.identity],
+        )
+        .await
+        .map_err(map_err)?;
+
         let result = tx
             .execute(
                 r"DELETE FROM tree_reservations
-                  WHERE created_at < NOW() - make_interval(secs => $1)",
-                &[&RESERVATION_TIMEOUT_SECS],
+                  WHERE user_id = $2
+                    AND created_at < NOW() - make_interval(secs => $1)",
+                &[&RESERVATION_TIMEOUT_SECS, &self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -1022,6 +1212,7 @@ impl PostgresTreeStore {
     /// `spent_at < refresh_timestamp` are ignored (treated as deleted) but not actually
     /// removed until they exceed this threshold.
     async fn cleanup_spent_markers(
+        &self,
         tx: &tokio_postgres::Transaction<'_>,
         refresh_timestamp: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64, TreeServiceError> {
@@ -1032,8 +1223,8 @@ impl PostgresTreeStore {
 
         let result = tx
             .execute(
-                r"DELETE FROM tree_spent_leaves WHERE spent_at < $1",
-                &[&cleanup_cutoff],
+                r"DELETE FROM tree_spent_leaves WHERE user_id = $2 AND spent_at < $1",
+                &[&cleanup_cutoff, &self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -1060,8 +1251,14 @@ impl PostgresTreeStore {
         let pending_i64 = pending_change as i64;
 
         tx.execute(
-            "INSERT INTO tree_reservations (id, purpose, pending_change_amount) VALUES ($1, $2, $3)",
-            &[&reservation_id, &purpose.to_string(), &pending_i64],
+            "INSERT INTO tree_reservations (user_id, id, purpose, pending_change_amount) \
+             VALUES ($1, $2, $3, $4)",
+            &[
+                &self.identity,
+                &reservation_id,
+                &purpose.to_string(),
+                &pending_i64,
+            ],
         )
         .await
         .map_err(map_err)?;
@@ -1071,7 +1268,8 @@ impl PostgresTreeStore {
             "leaf_lifecycle reserve: reservation={} purpose={:?} leaf_ids={:?}",
             reservation_id, purpose, leaf_ids
         );
-        Self::batch_set_reservation_id(tx, reservation_id, &leaf_ids).await?;
+        self.batch_set_reservation_id(tx, reservation_id, &leaf_ids)
+            .await?;
 
         Ok(())
     }
@@ -1090,10 +1288,14 @@ fn map_err<E: std::fmt::Display>(e: E) -> TreeServiceError {
 /// # Arguments
 ///
 /// * `config` - Configuration for the `PostgreSQL` connection pool
+/// * `identity` - 33-byte secp256k1 pubkey scoping all reads and writes
 pub async fn create_postgres_tree_store(
     config: PostgresStorageConfig,
+    identity: &[u8],
 ) -> Result<Arc<dyn TreeStore>, PostgresError> {
-    Ok(Arc::new(PostgresTreeStore::from_config(config).await?))
+    Ok(Arc::new(
+        PostgresTreeStore::from_config(config, identity).await?,
+    ))
 }
 
 /// Creates a `PostgresTreeStore` instance from an existing connection pool.
@@ -1103,10 +1305,14 @@ pub async fn create_postgres_tree_store(
 /// # Arguments
 ///
 /// * `pool` - An existing deadpool-postgres connection pool
+/// * `identity` - 33-byte secp256k1 pubkey scoping all reads and writes
 pub async fn create_postgres_tree_store_from_pool(
     pool: Pool,
+    identity: &[u8],
 ) -> Result<Arc<dyn TreeStore>, PostgresError> {
-    Ok(Arc::new(PostgresTreeStore::from_pool(pool).await?))
+    Ok(Arc::new(
+        PostgresTreeStore::from_pool(pool, identity).await?,
+    ))
 }
 
 #[cfg(test)]
@@ -1116,6 +1322,14 @@ mod tests {
     use std::sync::Arc;
     use testcontainers::{ContainerAsync, runners::AsyncRunner};
     use testcontainers_modules::postgres::Postgres;
+
+    /// Fixed 33-byte test identity. Tests run in their own ephemeral container,
+    /// so a single shared identity is fine — the schema still gets exercised.
+    const TEST_IDENTITY: [u8; 33] = [
+        0x02, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+        0x1e, 0x1f, 0x20,
+    ];
 
     /// Helper struct that holds the container and store together.
     /// The container must be kept alive for the duration of the test.
@@ -1141,9 +1355,10 @@ mod tests {
                 "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
             );
 
-            let store = PostgresTreeStore::from_config(PostgresStorageConfig::with_defaults(
-                connection_string,
-            ))
+            let store = PostgresTreeStore::from_config(
+                PostgresStorageConfig::with_defaults(connection_string),
+                &TEST_IDENTITY,
+            )
             .await
             .expect("Failed to create PostgresTreeStore");
 
@@ -1999,12 +2214,14 @@ mod tests {
         .unwrap();
 
         // Hold the advisory lock on a separate connection so finalize must wait.
+        // Must use the same (classid, objid) pair as `acquire_write_lock`.
+        let lock_objid = fixture.store.lock_objid;
         let mut holder = fixture.store.pool.get().await.unwrap();
         let holder_tx = holder.transaction().await.unwrap();
         holder_tx
             .execute(
-                "SELECT pg_advisory_xact_lock($1)",
-                &[&TREE_STORE_WRITE_LOCK_KEY],
+                "SELECT pg_advisory_xact_lock($1, $2)",
+                &[&TREE_STORE_LOCK_CLASSID, &lock_objid],
             )
             .await
             .unwrap();
