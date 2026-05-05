@@ -1702,4 +1702,225 @@ mod tests {
             .unwrap()
             .unwrap();
     }
+
+    // ==================== Multi-tenant isolation ====================
+
+    /// A second 33-byte test identity (must differ from `TEST_IDENTITY`).
+    const TEST_IDENTITY_B: [u8; 33] = [
+        0x03, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae,
+        0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd,
+        0xbe, 0xbf, 0xc0,
+    ];
+
+    /// Two `PostgresTokenStore` instances with distinct identities sharing one
+    /// connection pool / DB. The container must be kept alive for the test.
+    struct TwoTenantTokenFixture {
+        a: PostgresTokenStore,
+        b: PostgresTokenStore,
+        #[allow(dead_code)]
+        container: ContainerAsync<Postgres>,
+    }
+
+    impl TwoTenantTokenFixture {
+        async fn new() -> Self {
+            let container = Postgres::default()
+                .start()
+                .await
+                .expect("Failed to start PostgreSQL container");
+
+            let host_port = container
+                .get_host_port_ipv4(5432)
+                .await
+                .expect("Failed to get host port");
+
+            let connection_string = format!(
+                "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+            );
+
+            let config = PostgresStorageConfig::with_defaults(connection_string);
+            let pool = create_pool(&config).expect("Failed to create pool");
+
+            let a = PostgresTokenStore::from_pool(pool.clone(), &TEST_IDENTITY)
+                .await
+                .expect("Failed to create tenant A");
+            let b = PostgresTokenStore::from_pool(pool, &TEST_IDENTITY_B)
+                .await
+                .expect("Failed to create tenant B");
+
+            Self { a, b, container }
+        }
+    }
+
+    /// End-to-end isolation: every `TokenOutputStore` method must keep tenants
+    /// A and B from observing each other's data. Critically, `token_metadata`
+    /// is per-tenant — both tenants seeding the same `identifier` ("token-1")
+    /// must coexist without collision and without leaking each other's
+    /// balances. Exercises set/insert/list/get/balance/reserve/finalize and
+    /// the per-tenant swap-status row.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
+    async fn test_two_tenant_isolation() {
+        let fx = TwoTenantTokenFixture::new().await;
+
+        // Both tenants seed the SAME token identifier with different output sets.
+        // shared_tests::create_token_outputs derives output IDs from identifier
+        // and amount, so tenants picking different amounts get different IDs —
+        // that's deliberate so we don't fight the schema's composite output PK
+        // unrelated to what we're checking here. The metadata identifier is
+        // identical across tenants and is the privacy-sensitive surface.
+        let a_token1 = shared_tests::create_token_outputs(1, vec![100, 200]);
+        let b_token1 = shared_tests::create_token_outputs(1, vec![500, 1_000, 2_000]);
+        // Plus a token only B holds — A must never see it (0-balance leakage).
+        let b_only_token2 = shared_tests::create_token_outputs(2, vec![777]);
+
+        fx.a.set_tokens_outputs(
+            std::slice::from_ref(&a_token1),
+            shared_tests::future_refresh_start(),
+        )
+        .await
+        .unwrap();
+        fx.b.set_tokens_outputs(
+            &[b_token1, b_only_token2],
+            shared_tests::future_refresh_start(),
+        )
+        .await
+        .unwrap();
+
+        // --- list_tokens_outputs respects tenant scope ---
+        let listed_a = fx.a.list_tokens_outputs().await.unwrap();
+        let listed_b = fx.b.list_tokens_outputs().await.unwrap();
+        assert_eq!(listed_a.len(), 1, "A only sees its own token");
+        assert_eq!(listed_b.len(), 2, "B sees its two tokens");
+        assert!(
+            !listed_a.iter().any(|t| t.metadata.identifier == "token-2"),
+            "A must not see B's token-2 (no zero-balance leakage)"
+        );
+        assert_eq!(listed_a[0].available.len(), 2, "A has 2 outputs of token-1");
+        let listed_b_t1 = listed_b
+            .iter()
+            .find(|t| t.metadata.identifier == "token-1")
+            .unwrap();
+        assert_eq!(listed_b_t1.available.len(), 3, "B has 3 outputs of token-1");
+
+        // --- get_token_balances per tenant ---
+        let bal_a = fx.a.get_token_balances().await.unwrap();
+        let bal_b = fx.b.get_token_balances().await.unwrap();
+        assert_eq!(bal_a.len(), 1);
+        assert_eq!(bal_a[0].0.identifier, "token-1");
+        assert_eq!(bal_a[0].1, 300, "A's token-1 balance is just A's outputs");
+        let bal_b_map: std::collections::HashMap<String, u128> =
+            bal_b.into_iter().map(|(m, v)| (m.identifier, v)).collect();
+        assert_eq!(bal_b_map.get("token-1"), Some(&3_500));
+        assert_eq!(bal_b_map.get("token-2"), Some(&777));
+
+        // --- get_token_outputs by identifier respects scope ---
+        let got_a =
+            fx.a.get_token_outputs(GetTokenOutputsFilter::Identifier("token-1"))
+                .await
+                .unwrap();
+        assert_eq!(got_a.available.len(), 2);
+
+        // A must NOT find B's "token-2".
+        let got_a_t2 =
+            fx.a.get_token_outputs(GetTokenOutputsFilter::Identifier("token-2"))
+                .await;
+        assert!(
+            matches!(got_a_t2, Err(TokenOutputServiceError::Generic(_))),
+            "A must not be able to read B's token-2 metadata"
+        );
+
+        // --- reserve on A must not consume B's outputs ---
+        let res_a =
+            fx.a.reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(100),
+                TokenReservationPurpose::Payment,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!res_a.token_outputs.outputs.is_empty());
+
+        let view_b = fx.b.list_tokens_outputs().await.unwrap();
+        let view_b_t1 = view_b
+            .iter()
+            .find(|t| t.metadata.identifier == "token-1")
+            .unwrap();
+        assert!(
+            view_b_t1.reserved_for_payment.is_empty(),
+            "B must not see A's reservation"
+        );
+        assert_eq!(view_b_t1.available.len(), 3);
+
+        // --- A reserving "token-2" must fail (B's token, A doesn't see it) ---
+        let res_a_t2 =
+            fx.a.reserve_token_outputs(
+                "token-2",
+                ReservationTarget::MinTotalValue(100),
+                TokenReservationPurpose::Payment,
+                None,
+                None,
+            )
+            .await;
+        assert!(
+            res_a_t2.is_err(),
+            "A must not be able to reserve from B's token-2"
+        );
+
+        // --- finalize on A must not affect B's outputs ---
+        fx.a.finalize_reservation(&res_a.id).await.unwrap();
+        let view_b = fx.b.list_tokens_outputs().await.unwrap();
+        let view_b_t1 = view_b
+            .iter()
+            .find(|t| t.metadata.identifier == "token-1")
+            .unwrap();
+        assert_eq!(view_b_t1.available.len(), 3, "B's outputs untouched");
+        assert_eq!(fx.b.get_token_balances().await.unwrap().len(), 2);
+
+        // --- swap-status row is per tenant: B's swap finalize lazily upserts
+        // B's row even though only A had ever set_tokens_outputs first. ---
+        let res_b_swap =
+            fx.b.reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(500),
+                TokenReservationPurpose::Swap,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // A sees nothing about B's swap.
+        let listed_a = fx.a.list_tokens_outputs().await.unwrap();
+        assert!(
+            listed_a.iter().all(|t| t.reserved_for_swap.is_empty()),
+            "A must not see B's swap reservation"
+        );
+        fx.b.finalize_reservation(&res_b_swap.id).await.unwrap();
+
+        // --- insert_token_outputs on A only inserts into A's namespace ---
+        // Use identifier_no=2 so the metadata identifier ("token-2") collides
+        // with B's existing entry — that exercises per-tenant `token_metadata`:
+        // both tenants must end up with their own row, and A's outputs/balance
+        // for "token-2" must differ from B's.
+        let a_token2 = shared_tests::create_token_outputs(2, vec![999]);
+        fx.a.insert_token_outputs(&a_token2).await.unwrap();
+
+        let bal_a = fx.a.get_token_balances().await.unwrap();
+        let bal_a_t2 = bal_a
+            .iter()
+            .find(|(m, _)| m.identifier == "token-2")
+            .expect("A should now have its own token-2");
+        assert_eq!(bal_a_t2.1, 999, "A's token-2 balance is A's output only");
+
+        let bal_b = fx.b.get_token_balances().await.unwrap();
+        let bal_b_t2 = bal_b
+            .iter()
+            .find(|(m, _)| m.identifier == "token-2")
+            .expect("B's token-2 still present");
+        assert_eq!(
+            bal_b_t2.1, 777,
+            "B's token-2 balance unchanged by A's insert"
+        );
+    }
 }

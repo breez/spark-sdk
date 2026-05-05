@@ -2262,4 +2262,183 @@ mod tests {
             "Spent leaf should not be Available"
         );
     }
+
+    // ==================== Multi-tenant isolation ====================
+
+    /// A second 33-byte test identity (must differ from `TEST_IDENTITY`).
+    const TEST_IDENTITY_B: [u8; 33] = [
+        0x03, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae,
+        0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd,
+        0xbe, 0xbf, 0xc0,
+    ];
+
+    /// Two `PostgresTreeStore` instances with distinct identities sharing one
+    /// connection pool / DB. The container must be kept alive for the test.
+    struct TwoTenantTreeFixture {
+        a: PostgresTreeStore,
+        b: PostgresTreeStore,
+        #[allow(dead_code)]
+        container: ContainerAsync<Postgres>,
+    }
+
+    impl TwoTenantTreeFixture {
+        async fn new() -> Self {
+            let container = Postgres::default()
+                .start()
+                .await
+                .expect("Failed to start PostgreSQL container");
+
+            let host_port = container
+                .get_host_port_ipv4(5432)
+                .await
+                .expect("Failed to get host port");
+
+            let connection_string = format!(
+                "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+            );
+
+            let config = PostgresStorageConfig::with_defaults(connection_string);
+            let pool = create_pool(&config).expect("Failed to create pool");
+
+            let a = PostgresTreeStore::from_pool(pool.clone(), &TEST_IDENTITY)
+                .await
+                .expect("Failed to create tenant A");
+            let b = PostgresTreeStore::from_pool(pool, &TEST_IDENTITY_B)
+                .await
+                .expect("Failed to create tenant B");
+
+            Self { a, b, container }
+        }
+    }
+
+    /// End-to-end isolation: every `TreeStore` method must keep tenants A and B
+    /// from observing each other's data. Exercises leaves, reservations, the
+    /// finalize→spent path, and the per-tenant swap-status row, asserting that
+    /// writes by A are invisible to B (and vice versa). Uses identical leaf
+    /// IDs across tenants to also confirm the composite primary keys land.
+    #[tokio::test]
+    async fn test_two_tenant_isolation() {
+        let fx = TwoTenantTreeFixture::new().await;
+
+        // --- add_leaves: same IDs, different per-tenant values ---
+        let leaves_a = vec![
+            create_test_tree_node("shared_leaf_1", 100),
+            create_test_tree_node("shared_leaf_2", 200),
+        ];
+        let leaves_b = vec![
+            create_test_tree_node("shared_leaf_1", 1_000),
+            create_test_tree_node("shared_leaf_2", 2_000),
+            create_test_tree_node("only_b_leaf", 500),
+        ];
+        fx.a.add_leaves(&leaves_a).await.unwrap();
+        fx.b.add_leaves(&leaves_b).await.unwrap();
+
+        // get_leaves only returns the calling tenant's rows.
+        let view_a = fx.a.get_leaves().await.unwrap();
+        let view_b = fx.b.get_leaves().await.unwrap();
+        assert_eq!(view_a.available.len(), 2, "A sees its 2 leaves");
+        assert_eq!(view_b.available.len(), 3, "B sees its 3 leaves");
+        assert!(
+            !view_a
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "only_b_leaf")
+        );
+        assert_eq!(
+            view_a.available.iter().map(|l| l.value).sum::<u64>(),
+            300,
+            "A's total reflects A's amounts only"
+        );
+        assert_eq!(
+            view_b.available.iter().map(|l| l.value).sum::<u64>(),
+            3_500,
+            "B's total reflects B's amounts only"
+        );
+
+        // get_available_balance respects scoping.
+        assert_eq!(fx.a.get_available_balance().await.unwrap(), 300);
+        assert_eq!(fx.b.get_available_balance().await.unwrap(), 3_500);
+
+        // --- reserve_leaves on A must not consume B's leaves ---
+        let res_a = reserve_leaves(
+            &fx.a,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res_a.leaves.len(), 1);
+
+        // B sees no reservations and its full balance is intact.
+        let view_b = fx.b.get_leaves().await.unwrap();
+        assert!(view_b.reserved_for_payment.is_empty());
+        assert_eq!(view_b.available.len(), 3);
+        assert_eq!(fx.b.get_available_balance().await.unwrap(), 3_500);
+
+        // A sees its reservation; available is reduced.
+        let view_a = fx.a.get_leaves().await.unwrap();
+        assert_eq!(view_a.reserved_for_payment.len(), 1);
+        assert_eq!(view_a.available.len(), 1);
+
+        // --- finalize on A (spent marker) does not touch B's identical-ID leaf ---
+        fx.a.finalize_reservation(&res_a.id, None).await.unwrap();
+
+        // The just-spent leaf is gone from A but still present in B (different
+        // composite PK, different spent-marker scope).
+        let view_a = fx.a.get_leaves().await.unwrap();
+        assert!(
+            !view_a
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "shared_leaf_1")
+        );
+        let view_b = fx.b.get_leaves().await.unwrap();
+        assert!(
+            view_b
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "shared_leaf_1"),
+            "B's shared_leaf_1 must survive A's finalize"
+        );
+
+        // --- set_leaves on A must not touch B's data ---
+        let refresh_start = SystemTime::now();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let refresh_a = vec![create_test_tree_node("a_only_post_refresh", 42)];
+        fx.a.set_leaves(&refresh_a, &[], refresh_start)
+            .await
+            .unwrap();
+
+        let view_a = fx.a.get_leaves().await.unwrap();
+        assert_eq!(view_a.available.len(), 1);
+        assert_eq!(view_a.available[0].id.to_string(), "a_only_post_refresh");
+        let view_b = fx.b.get_leaves().await.unwrap();
+        assert_eq!(view_b.available.len(), 3, "B unaffected by A's set_leaves");
+
+        // --- B can perform a swap-finalize without A's swap-status row ever
+        // existing (lazy upsert per tenant). B's reservation must not block A. ---
+        let res_b_swap = reserve_leaves(
+            &fx.b,
+            Some(&TargetAmounts::new_amount_and_fee(1_000, None)),
+            true,
+            ReservationPurpose::Swap,
+        )
+        .await
+        .unwrap();
+        let view_a = fx.a.get_leaves().await.unwrap();
+        assert!(
+            view_a.reserved_for_swap.is_empty(),
+            "A must not see B's swap reservation"
+        );
+        let new_b_leaf = create_test_tree_node("b_swap_change", 600);
+        fx.b.finalize_reservation(&res_b_swap.id, Some(&[new_b_leaf]))
+            .await
+            .unwrap();
+
+        // A is still entirely unaffected.
+        let view_a = fx.a.get_leaves().await.unwrap();
+        assert_eq!(view_a.available.len(), 1);
+        assert_eq!(view_a.available[0].id.to_string(), "a_only_post_refresh");
+    }
 }
