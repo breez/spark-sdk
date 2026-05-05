@@ -9,6 +9,22 @@ export type DomainAssociation =
     | { kind: 'Skipped'; reason: string };
 
 /**
+ * Authenticator data captured at registration. `aaguid` is the 16-byte
+ * Authenticator Attestation GUID (provider identifier); `backupEligible`
+ * is the BE flag indicating whether the credential can sync across
+ * devices. Both are `null` when the platform doesn't expose enough
+ * authenticator data to extract them.
+ *
+ * AAGUID is unverified attestation. Use as a display hint only, never
+ * for trust decisions.
+ */
+export interface RegisteredCredential {
+    credentialId: Uint8Array;
+    aaguid: Uint8Array | null;
+    backupEligible: boolean | null;
+}
+
+/**
  * Thrown when `createPasskey` asks the platform to register a new
  * passkey but it refuses because an entry in `excludeCredentialIds`
  * matches a credential already on the device. Hosts should route the
@@ -176,12 +192,14 @@ export declare class PasskeyProvider {
      * @param excludeCredentialIds - Optional list of credential IDs to exclude.
      *   Pass previously created credential IDs to prevent the authenticator
      *   from creating a duplicate on the same device.
-     * @returns The credential ID of the newly created passkey.
+     * @returns The credential ID plus AAGUID and backup-eligibility flag
+     *   parsed from the authenticator data. AAGUID and `backupEligible`
+     *   are `null` on browsers that don't expose `getAuthenticatorData()`.
      * @throws {PasskeyAlreadyExistsError} If an entry in `excludeCredentialIds`
      *   matches a credential already on the device.
      * @throws If the user cancels or PRF is not supported by the authenticator.
      */
-    createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<Uint8Array>;
+    createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<RegisteredCredential>;
 
     /**
      * Check if a PRF-capable passkey is available on this device.

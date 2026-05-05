@@ -56,6 +56,20 @@ import java.security.SecureRandom
  * mode so wrappers can switch on [Kind] without peeking at WebAuthn or
  * Credential Manager internals.
  */
+
+/**
+ * Authenticator data captured at registration. [aaguid] is the 16-byte
+ * Authenticator Attestation GUID (provider identifier); [backupEligible]
+ * is the BE flag indicating whether the credential can sync across
+ * devices. Both are null when the attestation can't be parsed. AAGUID is
+ * unverified attestation: display hint only, never a trust decision.
+ */
+public data class RegisteredCredential(
+    public val credentialId: ByteArray,
+    public val aaguid: ByteArray?,
+    public val backupEligible: Boolean?,
+)
+
 public object CredentialManagerPrfCore {
 
     /** Default Relying Party ID for cross-platform credential sharing. */
@@ -480,7 +494,9 @@ public object CredentialManagerPrfCore {
      * @param excludeCredentialIds Optional list of credential IDs to exclude.
      *   Pass previously created credential IDs to prevent the authenticator
      *   from creating a duplicate on the same device.
-     * @return The credential ID of the newly created passkey.
+     * @return Credential ID plus AAGUID and backup-eligibility parsed from
+     *   the attestation object. AAGUID and backupEligible are null when
+     *   the attestation can't be parsed.
      */
     public suspend fun createCredential(
         activity: Activity,
@@ -489,7 +505,7 @@ public object CredentialManagerPrfCore {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: List<ByteArray> = emptyList(),
-    ): ByteArray = withContext(Dispatchers.Main) {
+    ): RegisteredCredential = withContext(Dispatchers.Main) {
         try {
             registerCredential(activity, rpId, rpName, userName, userDisplayName, excludeCredentialIds)
         } catch (e: CredentialManagerPrfCoreException) {
@@ -761,7 +777,7 @@ public object CredentialManagerPrfCore {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: List<ByteArray> = emptyList(),
-    ): ByteArray {
+    ): RegisteredCredential {
         val credentialManager = CredentialManager.create(activity)
         val challenge = randomBase64Url(32)
         val userId = randomBase64Url(16)
@@ -829,7 +845,80 @@ public object CredentialManagerPrfCore {
                 "No credential ID in registration response",
             )
         }
-        return Base64.decode(rawId, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        val credentialId = Base64.decode(rawId, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        var aaguid: ByteArray? = null
+        var backupEligible: Boolean? = null
+        val attestationB64 = responseJson.optJSONObject("response")?.optString("attestationObject", "") ?: ""
+        if (attestationB64.isNotEmpty()) {
+            val attestation = Base64.decode(
+                attestationB64,
+                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+            )
+            extractRegistrationMetadata(attestation)?.let { meta ->
+                aaguid = meta.first
+                backupEligible = meta.second
+            }
+        }
+        return RegisteredCredential(credentialId, aaguid, backupEligible)
+    }
+
+    /**
+     * Extract AAGUID + BE flag from the attestation object's authenticator
+     * data via byte-pattern search for the "authData" CBOR key. Returns
+     * null when the pattern isn't found or the byte string is too short.
+     *
+     * authData layout when AT flag is set (always on a successful create):
+     *   [32]      flags (UP=0, UV=2, BE=3, BS=4, AT=6)
+     *   [37..53)  AAGUID (16 bytes)
+     */
+    private fun extractRegistrationMetadata(attestation: ByteArray): Pair<ByteArray, Boolean>? {
+        // CBOR text key "authData": 0x68 = major type 3 (text) + length 8.
+        val key = byteArrayOf(0x68, 0x61, 0x75, 0x74, 0x68, 0x44, 0x61, 0x74, 0x61)
+        if (attestation.size < key.size) return null
+        var keyEnd = -1
+        for (i in 0..(attestation.size - key.size)) {
+            var match = true
+            for (j in key.indices) {
+                if (attestation[i + j] != key[j]) { match = false; break }
+            }
+            if (match) { keyEnd = i + key.size; break }
+        }
+        if (keyEnd < 0 || keyEnd >= attestation.size) return null
+
+        val header = attestation[keyEnd].toInt() and 0xff
+        if (header shr 5 != 2) return null
+        val minor = header and 0x1f
+        val length: Int
+        val dataStart: Int
+        when {
+            minor < 24 -> { length = minor; dataStart = keyEnd + 1 }
+            minor == 24 -> {
+                if (keyEnd + 1 >= attestation.size) return null
+                length = attestation[keyEnd + 1].toInt() and 0xff
+                dataStart = keyEnd + 2
+            }
+            minor == 25 -> {
+                if (keyEnd + 2 >= attestation.size) return null
+                length = ((attestation[keyEnd + 1].toInt() and 0xff) shl 8) or
+                    (attestation[keyEnd + 2].toInt() and 0xff)
+                dataStart = keyEnd + 3
+            }
+            minor == 26 -> {
+                if (keyEnd + 4 >= attestation.size) return null
+                length = ((attestation[keyEnd + 1].toInt() and 0xff) shl 24) or
+                    ((attestation[keyEnd + 2].toInt() and 0xff) shl 16) or
+                    ((attestation[keyEnd + 3].toInt() and 0xff) shl 8) or
+                    (attestation[keyEnd + 4].toInt() and 0xff)
+                dataStart = keyEnd + 5
+            }
+            else -> return null
+        }
+        if (dataStart + length > attestation.size || length < 53) return null
+        val flags = attestation[dataStart + 32].toInt() and 0xff
+        if (flags and 0x40 == 0) return null
+        val backupEligible = flags and 0x08 != 0
+        val aaguid = attestation.copyOfRange(dataStart + 37, dataStart + 53)
+        return Pair(aaguid, backupEligible)
     }
 
     private fun randomBase64Url(byteCount: Int): String {

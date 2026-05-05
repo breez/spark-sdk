@@ -78,12 +78,16 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
 
             Task { @MainActor in
                 do {
-                    let credentialId = try await registerCredential(
+                    let registered = try await registerCredential(
                         rpId: rpId, rpName: rpName,
                         userName: userName, userDisplayName: userDisplayName,
                         excludeCredentialIds: excludeCredentialIds
                     )
-                    result(credentialId.base64EncodedString())
+                    result([
+                        "credentialId": registered.credentialId.base64EncodedString(),
+                        "aaguid": registered.aaguid?.base64EncodedString() as Any?,
+                        "backupEligible": registered.backupEligible as Any?,
+                    ])
                 } catch PasskeyError.userCancelled {
                     result(FlutterError(code: "ERR_USER_CANCELLED", message: "User cancelled registration", details: nil))
                 } catch PasskeyError.prfNotSupported {
@@ -163,7 +167,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         rpId: String, rpName: String,
         userName: String, userDisplayName: String,
         excludeCredentialIds: [Data] = []
-    ) async throws -> Data {
+    ) async throws -> RegisteredCredential {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = randomBytes(count: 32)
         let userId = randomBytes(count: 16)
@@ -187,7 +191,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         controller.presentationContextProvider = delegate
 
         return try await withCheckedThrowingContinuation { continuation in
-            delegate.continuation = continuation
+            delegate.registrationContinuation = continuation
             delegate.extractPrf = false
             DispatchQueue.main.async {
                 controller.performRequests()
@@ -202,6 +206,59 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
     }
 }
 
+// MARK: - Registered credential metadata
+
+fileprivate struct RegisteredCredential {
+    let credentialId: Data
+    let aaguid: Data?
+    let backupEligible: Bool?
+}
+
+/// Extract AAGUID + BE flag from the attestation object's authenticator
+/// data via byte-pattern search for the "authData" CBOR key.
+fileprivate func extractRegistrationMetadata(from attestation: Data) -> (aaguid: Data, backupEligible: Bool)? {
+    let bytes = [UInt8](attestation)
+    let key: [UInt8] = [0x68, 0x61, 0x75, 0x74, 0x68, 0x44, 0x61, 0x74, 0x61]
+    guard bytes.count >= key.count else { return nil }
+    var keyEnd = -1
+    for i in 0...(bytes.count - key.count) {
+        var match = true
+        for j in 0..<key.count where bytes[i + j] != key[j] {
+            match = false
+            break
+        }
+        if match { keyEnd = i + key.count; break }
+    }
+    guard keyEnd >= 0 && keyEnd < bytes.count else { return nil }
+    let header = bytes[keyEnd]
+    guard header >> 5 == 2 else { return nil }
+    let minor = Int(header & 0x1f)
+    let length: Int
+    let dataStart: Int
+    switch minor {
+    case 0..<24: length = minor; dataStart = keyEnd + 1
+    case 24:
+        guard keyEnd + 1 < bytes.count else { return nil }
+        length = Int(bytes[keyEnd + 1]); dataStart = keyEnd + 2
+    case 25:
+        guard keyEnd + 2 < bytes.count else { return nil }
+        length = (Int(bytes[keyEnd + 1]) << 8) | Int(bytes[keyEnd + 2])
+        dataStart = keyEnd + 3
+    case 26:
+        guard keyEnd + 4 < bytes.count else { return nil }
+        length = (Int(bytes[keyEnd + 1]) << 24) | (Int(bytes[keyEnd + 2]) << 16)
+            | (Int(bytes[keyEnd + 3]) << 8) | Int(bytes[keyEnd + 4])
+        dataStart = keyEnd + 5
+    default: return nil
+    }
+    guard dataStart + length <= bytes.count, length >= 53 else { return nil }
+    let flags = bytes[dataStart + 32]
+    guard flags & 0x40 != 0 else { return nil }
+    let backupEligible = flags & 0x08 != 0
+    let aaguid = Data(bytes[(dataStart + 37)..<(dataStart + 53)])
+    return (aaguid: aaguid, backupEligible: backupEligible)
+}
+
 // MARK: - Passkey Delegate
 
 @available(iOS 18.0, *)
@@ -209,6 +266,7 @@ private class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate,
     ASAuthorizationControllerPresentationContextProviding
 {
     var continuation: CheckedContinuation<Data, Error>?
+    var registrationContinuation: CheckedContinuation<RegisteredCredential, Error>?
     var extractPrf = true
 
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
@@ -240,14 +298,27 @@ private class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate,
 
             continuation?.resume(returning: prfData)
         } else {
-            // Registration complete — extract and return the credential ID
             guard let credential = authorization.credential
                 as? ASAuthorizationPlatformPublicKeyCredentialRegistration
             else {
-                continuation?.resume(throwing: PasskeyError.authenticationFailed("Unexpected credential type"))
+                registrationContinuation?.resume(
+                    throwing: PasskeyError.authenticationFailed("Unexpected credential type"))
                 return
             }
-            continuation?.resume(returning: credential.credentialID)
+            var aaguid: Data? = nil
+            var backupEligible: Bool? = nil
+            if let attestation = credential.rawAttestationObject,
+               let meta = extractRegistrationMetadata(from: attestation)
+            {
+                aaguid = meta.aaguid
+                backupEligible = meta.backupEligible
+            }
+            registrationContinuation?.resume(
+                returning: RegisteredCredential(
+                    credentialId: credential.credentialID,
+                    aaguid: aaguid,
+                    backupEligible: backupEligible
+                ))
         }
     }
 
@@ -256,20 +327,18 @@ private class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate,
         didCompleteWithError error: Error
     ) {
         let nsError = error as NSError
+        let mapped: PasskeyError
         if nsError.domain == ASAuthorizationError.errorDomain {
             switch ASAuthorizationError.Code(rawValue: nsError.code) {
-            case .canceled:
-                continuation?.resume(throwing: PasskeyError.userCancelled)
-            case .notHandled:
-                continuation?.resume(throwing: PasskeyError.credentialNotFound)
-            default:
-                continuation?.resume(
-                    throwing: PasskeyError.authenticationFailed(nsError.localizedDescription))
+            case .canceled: mapped = .userCancelled
+            case .notHandled: mapped = .credentialNotFound
+            default: mapped = .authenticationFailed(nsError.localizedDescription)
             }
         } else {
-            continuation?.resume(
-                throwing: PasskeyError.authenticationFailed(error.localizedDescription))
+            mapped = .authenticationFailed(error.localizedDescription)
         }
+        continuation?.resume(throwing: mapped)
+        registrationContinuation?.resume(throwing: mapped)
     }
 }
 

@@ -43,6 +43,19 @@ function passkeyModuleUnavailableError(operation: string): Error {
 /**
  * Options for constructing a PasskeyProvider.
  */
+/**
+ * Authenticator data captured at registration. `aaguid` is the 16-byte
+ * Authenticator Attestation GUID (provider identifier); `backupEligible`
+ * is the BE flag indicating whether the credential can sync across
+ * devices. Both are `null` when the attestation can't be parsed. AAGUID
+ * is unverified attestation: display hint only, never a trust decision.
+ */
+export interface RegisteredCredential {
+  credentialId: Uint8Array;
+  aaguid: Uint8Array | null;
+  backupEligible: boolean | null;
+}
+
 export interface PasskeyProviderOptions {
   /**
    * Relying Party ID. Must match the domain configured for cross-platform
@@ -154,32 +167,39 @@ export class PasskeyProvider {
   /**
    * Create a new passkey with PRF support.
    *
-   * Only registers the credential — no seed derivation. Triggers exactly
+   * Only registers the credential, no seed derivation. Triggers exactly
    * 1 platform prompt. Use this to separate credential creation from
    * derivation in multi-step onboarding flows.
    *
    * @param excludeCredentialIds - Optional list of credential IDs to exclude.
    *   Pass previously created credential IDs to prevent the authenticator
    *   from creating a duplicate on the same device.
-   * @returns The credential ID of the newly created passkey.
+   * @returns Credential ID plus AAGUID and backup-eligibility parsed from
+   *   the attestation object. AAGUID and `backupEligible` are null when
+   *   the attestation can't be parsed.
    * @throws If the user cancels or PRF is not supported by the authenticator.
    */
-  async createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<Uint8Array> {
+  async createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<RegisteredCredential> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('createPasskey');
     }
 
     const excludeBase64 = (excludeCredentialIds ?? []).map(id => uint8ArrayToBase64(id));
 
-    const base64Result: string = await BreezSdkSparkPasskey.createPasskey(
-      this.rpId,
-      this.rpName,
-      this.userName,
-      this.userDisplayName,
-      excludeBase64
-    );
+    const result: { credentialId: string; aaguid: string | null; backupEligible: boolean | null } =
+      await BreezSdkSparkPasskey.createPasskey(
+        this.rpId,
+        this.rpName,
+        this.userName,
+        this.userDisplayName,
+        excludeBase64
+      );
 
-    return base64ToUint8Array(base64Result);
+    return {
+      credentialId: base64ToUint8Array(result.credentialId),
+      aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
+      backupEligible: result.backupEligible,
+    };
   }
 
   /**

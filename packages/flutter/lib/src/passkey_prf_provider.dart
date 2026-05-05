@@ -3,6 +3,23 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
+/// Authenticator data captured at registration. [aaguid] is the 16-byte
+/// Authenticator Attestation GUID (provider identifier); [backupEligible]
+/// is the BE flag indicating whether the credential can sync across
+/// devices. Both are null when the attestation can't be parsed. AAGUID is
+/// unverified attestation: display hint only, never a trust decision.
+class RegisteredCredential {
+  final Uint8List credentialId;
+  final Uint8List? aaguid;
+  final bool? backupEligible;
+
+  const RegisteredCredential({
+    required this.credentialId,
+    required this.aaguid,
+    required this.backupEligible,
+  });
+}
+
 /// Options for constructing a [PasskeyProvider].
 class PasskeyProviderOptions {
   /// Relying Party ID. Must match the domain configured for cross-platform
@@ -135,7 +152,7 @@ class PasskeyProvider {
 
   /// Create a new passkey with PRF support.
   ///
-  /// Only registers the credential — no seed derivation. Triggers exactly
+  /// Only registers the credential, no seed derivation. Triggers exactly
   /// 1 platform prompt. Use this to separate credential creation from
   /// derivation in multi-step onboarding flows.
   ///
@@ -143,12 +160,14 @@ class PasskeyProvider {
   /// Pass previously created credential IDs to prevent the authenticator from
   /// creating a duplicate on the same device.
   ///
-  /// Returns the credential ID of the newly created passkey.
+  /// Returns the credential ID plus AAGUID and backup-eligibility parsed
+  /// from the attestation object. AAGUID and `backupEligible` are null
+  /// when the attestation can't be parsed.
   ///
   /// Throws [PasskeyPrfException] if the user cancels or PRF is not supported.
-  Future<Uint8List> createPasskey({List<Uint8List>? excludeCredentialIds}) async {
+  Future<RegisteredCredential> createPasskey({List<Uint8List>? excludeCredentialIds}) async {
     try {
-      final result = await _channel.invokeMethod<String>('createPasskey', {
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>('createPasskey', {
         'rpId': _rpId,
         'rpName': _rpName,
         'userName': _userName,
@@ -156,7 +175,16 @@ class PasskeyProvider {
         if (excludeCredentialIds != null && excludeCredentialIds.isNotEmpty)
           'excludeCredentialIds': excludeCredentialIds.map((id) => base64Encode(id)).toList(),
       });
-      return base64Decode(result!);
+      final map = result!;
+      final credentialId = base64Decode(map['credentialId'] as String);
+      final aaguidB64 = map['aaguid'] as String?;
+      final aaguid = aaguidB64 == null ? null : base64Decode(aaguidB64);
+      final backupEligible = map['backupEligible'] as bool?;
+      return RegisteredCredential(
+        credentialId: credentialId,
+        aaguid: aaguid,
+        backupEligible: backupEligible,
+      );
     } on PlatformException catch (e) {
       throw _mapPlatformException(e);
     }

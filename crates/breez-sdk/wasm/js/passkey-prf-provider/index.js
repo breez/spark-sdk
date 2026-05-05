@@ -36,6 +36,36 @@ function randomBytes(length) {
 }
 
 /**
+ * Extract AAGUID + BE flag from a successful create response via the
+ * WebAuthn Level 2 `getAuthenticatorData()` accessor.
+ *
+ * authData layout when AT flag is set (always on a successful create):
+ *   [32]      flags (UP=0, UV=2, BE=3, BS=4, AT=6)
+ *   [37..53)  AAGUID (16 bytes)
+ *
+ * @param {PublicKeyCredential} credential
+ * @returns {{ aaguid: Uint8Array, backupEligible: boolean } | null}
+ */
+function extractRegistrationMetadata(credential) {
+    try {
+        const response = credential.response;
+        if (!response || typeof response.getAuthenticatorData !== 'function') {
+            return null;
+        }
+        const authData = new Uint8Array(response.getAuthenticatorData());
+        if (authData.length < 53) return null;
+        const flags = authData[32];
+        const hasAttestedCredData = (flags & 0x40) !== 0;
+        if (!hasAttestedCredData) return null;
+        const backupEligible = (flags & 0x08) !== 0;
+        const aaguid = authData.slice(37, 53);
+        return { aaguid, backupEligible };
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Thrown when `createPasskey` asks the platform to register a new
  * passkey but it refuses because an entry in `excludeCredentialIds`
  * matches a credential already on the device. Hosts should route the
@@ -200,14 +230,17 @@ export class PasskeyProvider {
     /**
      * Create a new passkey with PRF support.
      *
-     * Only registers the credential — no seed derivation. Triggers exactly
+     * Only registers the credential, no seed derivation. Triggers exactly
      * 1 WebAuthn prompt. Use this to separate credential creation from
      * derivation in multi-step onboarding flows.
      *
      * If a passkey already exists for this RP ID, this will create an
      * additional credential (browsers allow multiple per RP).
      *
-     * @returns {Promise<void>}
+     * @returns {Promise<{ credentialId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
+     *   `credentialId` is always populated. `aaguid` and `backupEligible`
+     *   are null when the browser does not expose `getAuthenticatorData()`
+     *   on the create response (pre-Level-2 implementations).
      * @throws {Error} If the user cancels or PRF is not supported by the authenticator.
      */
     async createPasskey(excludeCredentialIds) {
@@ -470,7 +503,7 @@ export class PasskeyProvider {
     /**
      * Register a new discoverable credential with PRF extension enabled.
      * @param {Uint8Array[]} [excludeCredentialIds=[]] - Credential IDs to exclude.
-     * @returns {Promise<Uint8Array>} The credential ID of the newly created passkey.
+     * @returns {Promise<{ credentialId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
      * @private
      */
     async _registerCredential(excludeCredentialIds = []) {
@@ -546,7 +579,12 @@ export class PasskeyProvider {
             );
         }
 
-        return new Uint8Array(credential.rawId);
+        const meta = extractRegistrationMetadata(credential);
+        return {
+            credentialId: new Uint8Array(credential.rawId),
+            aaguid: meta ? meta.aaguid : null,
+            backupEligible: meta ? meta.backupEligible : null,
+        };
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.breeztech.breezsdkspark
 
 import android.util.Base64
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -118,7 +119,7 @@ class BreezSdkSparkPasskeyModule(
 
         scope.launch {
             try {
-                val credentialId = CredentialManagerPrfCore.createCredential(
+                val credential = CredentialManagerPrfCore.createCredential(
                     activity = activity,
                     rpId = rpId,
                     rpName = rpName,
@@ -126,7 +127,19 @@ class BreezSdkSparkPasskeyModule(
                     userDisplayName = userDisplayName,
                     excludeCredentialIds = excludeCredentialIds,
                 )
-                promise.resolve(Base64.encodeToString(credentialId, Base64.NO_WRAP))
+                val map = Arguments.createMap()
+                map.putString("credentialId", Base64.encodeToString(credential.credentialId, Base64.NO_WRAP))
+                if (credential.aaguid != null) {
+                    map.putString("aaguid", Base64.encodeToString(credential.aaguid, Base64.NO_WRAP))
+                } else {
+                    map.putNull("aaguid")
+                }
+                if (credential.backupEligible != null) {
+                    map.putBoolean("backupEligible", credential.backupEligible!!)
+                } else {
+                    map.putNull("backupEligible")
+                }
+                promise.resolve(map)
             } catch (e: CredentialManagerPrfCoreException) {
                 promise.reject(e.errorCode, e.message ?: e.defaultMessage)
             } catch (e: Exception) {

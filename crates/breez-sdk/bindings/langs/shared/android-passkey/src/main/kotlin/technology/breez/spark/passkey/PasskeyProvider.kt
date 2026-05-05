@@ -7,6 +7,7 @@ import breez_sdk_spark.PrfProvider
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
 import technology.breez.spark.passkey.core.DomainAssociationResult
+import technology.breez.spark.passkey.core.RegisteredCredential
 
 /**
  * Built-in [PrfProvider] that uses the AndroidX Credential Manager +
@@ -203,9 +204,11 @@ public class PasskeyProvider(
      * @param excludeCredentialIds Optional list of credential IDs to exclude.
      *   Pass previously created credential IDs to prevent the authenticator
      *   from creating a duplicate on the same device.
-     * @return The credential ID of the newly created passkey.
+     * @return Credential ID plus AAGUID and backup-eligibility parsed from
+     *   the attestation object. AAGUID and backupEligible are null when
+     *   the attestation can't be parsed.
      */
-    public suspend fun createPasskey(excludeCredentialIds: List<ByteArray> = emptyList()): ByteArray {
+    public suspend fun createPasskey(excludeCredentialIds: List<ByteArray> = emptyList()): RegisteredCredential {
         try {
             return CredentialManagerPrfCore.createCredential(
                 activity = activityProvider(),
