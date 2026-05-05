@@ -34,7 +34,7 @@ use crate::{
     signer::Signer,
     token::{
         GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
-        TokenMetadata, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
+        TokenMetadata, TokenOutput, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
         with_reserved_token_outputs,
     },
     utils::{
@@ -884,12 +884,23 @@ impl TokenService {
             })
             .collect();
 
+        let outputs = broadcast_response
+            .final_token_transaction
+            .map(|ft| {
+                ft.final_token_outputs
+                    .into_iter()
+                    .map(|fo| (fo, self.network).try_into())
+                    .collect::<Result<Vec<TokenOutput>, ServiceError>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+
         let created_timestamp = now;
 
         Ok(TokenTransaction {
             hash: txid,
             inputs: TokenInputs::Transfer(TokenTransferInput { outputs_to_spend }),
-            outputs: vec![],
+            outputs,
             status: if is_finalized {
                 TokenTransactionStatus::Finalized
             } else {
@@ -2284,5 +2295,49 @@ mod tests {
 
         let decoded = super::bech32m_decode_token_id(&encoded, Some(Network::Regtest)).unwrap();
         assert_eq!(decoded, raw_token_id);
+    }
+
+    #[test_all]
+    fn test_final_token_output_conversion_populates_payment_required_fields() {
+        use crate::token::TokenOutput;
+
+        // secp256k1 generator G — on-curve, so PublicKey::from_slice accepts it.
+        let owner_pubkey =
+            hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+                .unwrap();
+        let token_id = vec![0xab; 32];
+        let amount_bytes = 1000u128.to_be_bytes().to_vec();
+        let revocation_commitment = vec![0xcd; 33];
+
+        let final_output = rpc::spark_token::FinalTokenOutput {
+            partial_token_output: Some(rpc::spark_token::PartialTokenOutput {
+                owner_public_key: owner_pubkey.clone(),
+                withdraw_bond_sats: 10_000,
+                withdraw_relative_block_locktime: 1_000,
+                token_identifier: token_id.clone(),
+                token_amount: amount_bytes,
+            }),
+            revocation_commitment: revocation_commitment.clone(),
+        };
+
+        let local: TokenOutput = (final_output, Network::Regtest)
+            .try_into()
+            .expect("FinalTokenOutput must convert to local TokenOutput");
+
+        assert_eq!(local.owner_public_key.serialize().to_vec(), owner_pubkey);
+        assert_eq!(local.token_amount, 1000);
+        assert!(
+            local.token_identifier.starts_with("btknrt1"),
+            "expected regtest btknrt1 prefix, got {}",
+            local.token_identifier
+        );
+        assert_eq!(local.withdraw_bond_sats, 10_000);
+        assert_eq!(local.withdraw_relative_block_locktime, 1_000);
+        assert_eq!(
+            local.revocation_commitment,
+            hex::encode(&revocation_commitment)
+        );
+        assert!(local.id.is_empty());
+        assert!(local.token_public_key.is_none());
     }
 }
