@@ -289,7 +289,8 @@ impl SdkBuilder {
                 self.builder = self.builder.with_tree_store(tree_store);
 
                 let token_store_js =
-                    create_postgres_token_store_with_pool(&pool, logger_ref).await?;
+                    create_postgres_token_store_with_pool(&pool, &identity_bytes, logger_ref)
+                        .await?;
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
             }
@@ -382,6 +383,7 @@ extern "C" {
     #[wasm_bindgen(js_name = "createPostgresTokenStoreWithPool", catch)]
     async fn create_postgres_token_store_with_pool(
         pool: &JsPool,
+        identity: &[u8],
         logger: Option<&Logger>,
     ) -> Result<TokenStoreJs, JsValue>;
 
