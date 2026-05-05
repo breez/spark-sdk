@@ -602,10 +602,12 @@ impl SdkBuilder {
 
         #[cfg(feature = "postgres")]
         if token_output_store.is_none()
-            && let Some((ref pool, _)) = postgres_backend
+            && let Some((ref pool, ref identity)) = postgres_backend
         {
-            token_output_store =
-                Some(crate::persist::postgres::create_postgres_token_store(pool.clone()).await?);
+            token_output_store = Some(
+                crate::persist::postgres::create_postgres_token_store(pool.clone(), identity)
+                    .await?,
+            );
         }
 
         #[cfg(feature = "mysql")]

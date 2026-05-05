@@ -203,8 +203,9 @@ pub(crate) async fn create_postgres_tree_store(
 /// Creates a `PostgresTokenStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_postgres_token_store(
     pool: deadpool_postgres::Pool,
+    identity: &[u8],
 ) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
-    spark_postgres::create_postgres_token_store_from_pool(pool)
+    spark_postgres::create_postgres_token_store_from_pool(pool, identity)
         .await
         .map_err(StorageError::from)
 }
