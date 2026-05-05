@@ -634,6 +634,74 @@ pub async fn test_try_reserve_wait_for_pending(store: &dyn TreeStore) {
     }
 }
 
+pub async fn test_try_reserve_min_amount_with_leaves_above_individual_target(
+    store: &dyn TreeStore,
+) {
+    // Regression: the Postgres slim prefilter capped on max(amount, fee), so
+    // for AmountAndFee {1000, 500} only a single leaf > 1000 was loaded into
+    // the slim set. The minimum-amount fallback then saw insufficient slim
+    // value (one 1024 < 1500 target) and returned WaitForPending even though
+    // the wallet trivially had the funds. Cap must be amount + fee.
+    let leaves = vec![
+        create_test_tree_node("node1", 1024),
+        create_test_tree_node("node2", 1024),
+        create_test_tree_node("node3", 1024),
+        create_test_tree_node("node4", 1024),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let result = store
+        .try_reserve_leaves(
+            Some(&TargetAmounts::new_amount_and_fee(1000, Some(500))),
+            false,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+    match result {
+        ReserveResult::Success(reservation) => {
+            assert!(reservation.sum() >= 1500);
+        }
+        other => panic!("Expected Success, got {:?}", other),
+    }
+}
+
+pub async fn test_try_reserve_min_amount_exact_denominations_above_individual(
+    store: &dyn TreeStore,
+) {
+    // Same regression for ExactDenominations: cap was max() instead of sum,
+    // so when no leaf matched any individual denomination the min-amount
+    // fallback was starved of candidates above the per-denomination max.
+    // Here every denomination is unrepresented as an exact match (no 600s),
+    // so selection falls through to the min-amount path which needs leaves
+    // summing to 1200.
+    let leaves = vec![
+        create_test_tree_node("node1", 1024),
+        create_test_tree_node("node2", 1024),
+        create_test_tree_node("node3", 1024),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    let result = store
+        .try_reserve_leaves(
+            Some(&TargetAmounts::ExactDenominations {
+                denominations: vec![600, 600],
+            }),
+            false,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+    match result {
+        ReserveResult::Success(reservation) => {
+            assert!(reservation.sum() >= 1200);
+        }
+        other => panic!("Expected Success, got {:?}", other),
+    }
+}
+
 pub async fn test_try_reserve_fail_immediately_when_insufficient(store: &dyn TreeStore) {
     // Add 100 sat leaf
     let leaves = vec![create_test_tree_node("node1", 100)];

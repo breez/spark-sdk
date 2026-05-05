@@ -182,6 +182,24 @@ async fn test_try_reserve_fail_immediately_when_insufficient() {
 }
 
 #[wasm_bindgen_test]
+async fn test_try_reserve_min_amount_with_leaves_above_individual_target() {
+    let store = create_test_tree_store("pg_tree_min_above_target").await;
+    breez_sdk_spark::tree_store_tests::test_try_reserve_min_amount_with_leaves_above_individual_target(
+        &store,
+    )
+    .await;
+}
+
+#[wasm_bindgen_test]
+async fn test_try_reserve_min_amount_exact_denominations_above_individual() {
+    let store = create_test_tree_store("pg_tree_min_exact_denoms").await;
+    breez_sdk_spark::tree_store_tests::test_try_reserve_min_amount_exact_denominations_above_individual(
+        &store,
+    )
+    .await;
+}
+
+#[wasm_bindgen_test]
 async fn test_balance_change_notification() {
     let store = create_test_tree_store("pg_tree_balance_notif").await;
     breez_sdk_spark::tree_store_tests::test_balance_change_notification(&store).await;

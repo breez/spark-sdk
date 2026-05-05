@@ -204,19 +204,13 @@ impl TreeStore for WasmTreeStore {
             .map_err(js_error_to_tree_error)?;
         let js_dt = t.elapsed();
 
-        let balance = if let Some(n) = result.as_f64() {
-            n as u64
-        } else if let Ok(big) = result
-            .clone()
+        let big = result
             .dyn_into::<wasm_bindgen_futures::js_sys::BigInt>()
-        {
-            u64::try_from(big)
-                .map_err(|e| TreeServiceError::Generic(format!("BigInt overflow: {e:?}")))?
-        } else {
-            return Err(TreeServiceError::Generic(
-                "getAvailableBalance returned non-numeric value".to_string(),
-            ));
-        };
+            .map_err(|_| {
+                TreeServiceError::Generic("getAvailableBalance must return a BigInt".to_string())
+            })?;
+        let balance = u64::try_from(big)
+            .map_err(|e| TreeServiceError::Generic(format!("BigInt overflow: {e:?}")))?;
 
         info!("WasmTreeStore::get_available_balance: {balance}, js_promise: {js_dt:?}");
         Ok(balance)
@@ -440,7 +434,7 @@ type ReserveResult =
 export interface TreeStore {
     addLeaves: (leaves: TreeNode[]) => Promise<void>;
     getLeaves: () => Promise<Leaves>;
-    getAvailableBalance: () => Promise<bigint | number>;
+    getAvailableBalance: () => Promise<bigint>;
     setLeaves: (leaves: TreeNode[], missingLeaves: TreeNode[], refreshStartedAtMs: number) => Promise<void>;
     cancelReservation: (id: string, leavesToKeep: TreeNode[]) => Promise<void>;
     finalizeReservation: (id: string, newLeaves: TreeNode[] | null) => Promise<void>;

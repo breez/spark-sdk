@@ -599,6 +599,11 @@ interface WasmTokenOutputsReservation {
     tokenOutputs: WasmTokenOutputs;
 }
 
+interface WasmTokenBalance {
+    metadata: WasmTokenMetadata;
+    balance: string;
+}
+
 type WasmGetTokenOutputsFilter =
     | { type: 'identifier'; identifier: string }
     | { type: 'issuerPublicKey'; issuerPublicKey: string };

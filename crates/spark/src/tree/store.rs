@@ -1065,6 +1065,22 @@ mod tests {
     }
 
     #[async_test_all]
+    async fn test_try_reserve_min_amount_with_leaves_above_individual_target() {
+        shared_tests::test_try_reserve_min_amount_with_leaves_above_individual_target(
+            &InMemoryTreeStore::new(),
+        )
+        .await;
+    }
+
+    #[async_test_all]
+    async fn test_try_reserve_min_amount_exact_denominations_above_individual() {
+        shared_tests::test_try_reserve_min_amount_exact_denominations_above_individual(
+            &InMemoryTreeStore::new(),
+        )
+        .await;
+    }
+
+    #[async_test_all]
     async fn test_balance_change_notification() {
         shared_tests::test_balance_change_notification(&InMemoryTreeStore::new()).await;
     }

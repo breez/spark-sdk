@@ -283,14 +283,7 @@ impl TokenOutputStore for PostgresTokenStore {
                   JOIN token_outputs o ON o.token_identifier = m.identifier
                   LEFT JOIN token_reservations r ON o.reservation_id = r.id
                   GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
-                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key
-                  HAVING COALESCE(SUM(
-                            CASE
-                              WHEN o.reservation_id IS NULL THEN o.token_amount::numeric
-                              WHEN r.purpose = 'Swap' THEN o.token_amount::numeric
-                              ELSE 0
-                            END
-                         ), 0) > 0",
+                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key",
                 &[],
             )
             .await
@@ -658,6 +651,11 @@ impl TokenOutputStore for PostgresTokenStore {
     ) -> Result<(), TokenOutputServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
+
+        // Serialize against `set_tokens_outputs` so its `token_spent_outputs`
+        // snapshot and the upsert that consumes it cannot interleave with this
+        // transaction's spent-marker write.
+        Self::acquire_write_lock(&tx).await?;
 
         // Get reservation purpose and reserved output IDs
         let reservation_row = tx
@@ -1283,6 +1281,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_token_balances_includes_zero_spendable() {
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+        shared_tests::test_get_token_balances_includes_zero_spendable(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn test_reserve_for_swap_does_not_affect_balance() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
         shared_tests::test_reserve_for_swap_does_not_affect_balance(&fixture.store).await;
@@ -1413,5 +1417,65 @@ mod tests {
                 .any(|o| o.output.token_amount == 300),
             "the 300-amount output from the refresh should be present"
         );
+    }
+
+    #[tokio::test]
+    async fn test_finalize_reservation_blocked_by_write_lock() {
+        // Regression: `finalize_reservation` must acquire the same advisory
+        // lock as `set_tokens_outputs` so they serialize. Otherwise a
+        // concurrent set_tokens_outputs could read the spent_outputs snapshot
+        // before our marker commits and re-insert the just-spent output as
+        // Available.
+        let fixture = PostgresTokenStoreTestFixture::new().await;
+
+        let token_outputs = shared_tests::create_token_outputs(1, vec![100, 200]);
+        fixture
+            .store
+            .set_tokens_outputs(&[token_outputs], shared_tests::future_refresh_start())
+            .await
+            .unwrap();
+        let reservation = fixture
+            .store
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(100),
+                TokenReservationPurpose::Payment,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Hold the token-store write lock on a separate connection.
+        let mut holder = fixture.store.pool.get().await.unwrap();
+        let holder_tx = holder.transaction().await.unwrap();
+        holder_tx
+            .execute(
+                "SELECT pg_advisory_xact_lock($1)",
+                &[&TOKEN_STORE_WRITE_LOCK_KEY],
+            )
+            .await
+            .unwrap();
+
+        let store = Arc::new(fixture.store);
+        let store_for_task = store.clone();
+        let res_id = reservation.id.clone();
+        let finalize_task =
+            tokio::spawn(async move { store_for_task.finalize_reservation(&res_id).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !finalize_task.is_finished(),
+            "finalize_reservation completed while advisory lock was held — \
+             the lock is not being acquired"
+        );
+
+        holder_tx.commit().await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), finalize_task)
+            .await
+            .expect("finalize_reservation did not complete after lock released")
+            .unwrap()
+            .unwrap();
     }
 }

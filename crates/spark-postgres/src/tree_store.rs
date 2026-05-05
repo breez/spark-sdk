@@ -329,6 +329,13 @@ impl TreeStore for PostgresTreeStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
+        // Serialize against `set_leaves` so its `tree_spent_leaves` snapshot
+        // and the upsert that consumes it cannot interleave with this
+        // transaction's spent-marker write — otherwise the snapshot would miss
+        // our marker and the upsert would write the just-spent leaf back as
+        // Available.
+        Self::acquire_write_lock(&tx).await?;
+
         // Check if reservation exists and get its purpose
         let reservation = tx
             .query_opt(
@@ -923,18 +930,17 @@ impl PostgresTreeStore {
         Ok(())
     }
 
-    /// Largest single leaf value the selection algorithm could possibly need.
-    /// Used to bound the slim projection in `try_reserve_leaves`. For an
-    /// unbounded request we have to keep all leaves available.
     fn slim_max_target(target_amounts: Option<&TargetAmounts>) -> u64 {
         match target_amounts {
             Some(TargetAmounts::AmountAndFee {
                 amount_sats,
                 fee_sats,
-            }) => std::cmp::max(*amount_sats, fee_sats.unwrap_or(0)),
-            Some(TargetAmounts::ExactDenominations { denominations }) => {
-                denominations.iter().copied().max().unwrap_or(0)
-            }
+            }) => amount_sats.saturating_add(fee_sats.unwrap_or(0)),
+            Some(TargetAmounts::ExactDenominations { denominations }) => denominations
+                .iter()
+                .copied()
+                .try_fold(0u64, u64::checked_add)
+                .unwrap_or(u64::MAX),
             None => u64::MAX,
         }
     }
@@ -1286,6 +1292,24 @@ mod tests {
     async fn test_try_reserve_fail_immediately_when_insufficient() {
         let fixture = PostgresTreeStoreTestFixture::new().await;
         shared_tests::test_try_reserve_fail_immediately_when_insufficient(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_try_reserve_min_amount_with_leaves_above_individual_target() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_try_reserve_min_amount_with_leaves_above_individual_target(
+            &fixture.store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_try_reserve_min_amount_exact_denominations_above_individual() {
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        shared_tests::test_try_reserve_min_amount_exact_denominations_above_individual(
+            &fixture.store,
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -1946,6 +1970,79 @@ mod tests {
         assert!(
             timeout_result.0 > 0,
             "Expected at least one successful reservation"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_finalize_reservation_blocked_by_write_lock() {
+        // Regression: `finalize_reservation` must acquire the same advisory
+        // lock as `set_leaves` to serialize them. Without the lock, a
+        // concurrent set_leaves could read the spent_leaves snapshot before
+        // finalize commits, then upsert the just-spent leaf back as Available.
+        //
+        // We assert the lock is acquired by holding it manually on a separate
+        // connection and verifying that finalize blocks until we release.
+        let fixture = PostgresTreeStoreTestFixture::new().await;
+        let leaf = create_test_tree_node("locked_leaf", 100);
+        fixture
+            .store
+            .add_leaves(std::slice::from_ref(&leaf))
+            .await
+            .unwrap();
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        // Hold the advisory lock on a separate connection so finalize must wait.
+        let mut holder = fixture.store.pool.get().await.unwrap();
+        let holder_tx = holder.transaction().await.unwrap();
+        holder_tx
+            .execute(
+                "SELECT pg_advisory_xact_lock($1)",
+                &[&TREE_STORE_WRITE_LOCK_KEY],
+            )
+            .await
+            .unwrap();
+
+        // Spawn finalize — should block on the advisory lock.
+        let store = Arc::new(fixture.store);
+        let store_for_task = store.clone();
+        let res_id = reservation.id.clone();
+        let finalize_task =
+            tokio::spawn(async move { store_for_task.finalize_reservation(&res_id, None).await });
+
+        // Give finalize a generous chance to acquire the (held) lock. Without
+        // the fix it would complete almost instantly; with the fix it must wait.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !finalize_task.is_finished(),
+            "finalize_reservation completed while advisory lock was held — \
+             the lock is not being acquired"
+        );
+
+        // Release the lock.
+        holder_tx.commit().await.unwrap();
+
+        // Now finalize should complete shortly.
+        tokio::time::timeout(std::time::Duration::from_secs(5), finalize_task)
+            .await
+            .expect("finalize_reservation did not complete after lock released")
+            .unwrap()
+            .unwrap();
+
+        // Sanity: leaf is no longer Available (it's been spent).
+        let leaves = store.get_leaves().await.unwrap();
+        assert!(
+            !leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "locked_leaf"),
+            "Spent leaf should not be Available"
         );
     }
 }

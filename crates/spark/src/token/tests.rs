@@ -1133,6 +1133,37 @@ pub async fn test_reserve_for_payment_affects_balance(store: &dyn TokenOutputSto
     assert_eq!(stored_token1.balance(), initial_balance);
 }
 
+pub async fn test_get_token_balances_includes_zero_spendable(store: &dyn TokenOutputStore) {
+    // The Postgres impl previously filtered out tokens whose entire balance
+    // was reserved-for-payment (HAVING ... > 0), diverging from the in-memory
+    // default which keeps them. Now both impls match — a token with only
+    // payment-reserved outputs still appears in the balances list with
+    // balance 0.
+    let token_outputs = create_token_outputs(1, vec![100, 200]);
+    store
+        .set_tokens_outputs(&[token_outputs], future_refresh_start())
+        .await
+        .unwrap();
+
+    let _reservation = store
+        .reserve_token_outputs(
+            "token-1",
+            ReservationTarget::MinTotalValue(300),
+            ReservationPurpose::Payment,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let balances = store.get_token_balances().await.unwrap();
+    let entry = balances
+        .iter()
+        .find(|(m, _)| m.identifier == "token-1")
+        .expect("token-1 must still be present even with 0 spendable balance");
+    assert_eq!(entry.1, 0);
+}
+
 pub async fn test_reserve_for_swap_does_not_affect_balance(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![100, 200, 300]);
     store
