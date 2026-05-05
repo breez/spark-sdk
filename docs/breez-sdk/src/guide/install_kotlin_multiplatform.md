@@ -36,13 +36,6 @@ kotlin {
 
 Install the native binary framework via [Swift Package Manager](#swift-package-manager). The Gradle plugin automatically configures the framework search path from Xcode's build environment.
 
-<div class="warning">
-<h4>Developer note</h4>
-
-`breez-sdk-spark-kmp` Gradle dependency and the Swift package **MUST** have the same version. A version mismatch between the two will cause linking or runtime errors.
-
-</div>
-
 Add the Gradle plugin to your module's `build.gradle.kts` and update the iOS framework binaries to use a dynamic framework:
 
 ```gradle
@@ -64,9 +57,38 @@ kotlin {
 }
 ```
 
-#### Swift Package Manager
+### macOS
 
-##### Installation via Xcode
+Similarly to [iOS](#ios):
+
+```gradle
+plugins {
+    id("technology.breez.spark.kmp") version "{VERSION}"
+}
+
+kotlin {
+    listOf(
+        macosArm64(),
+        macosX64(),
+    ).forEach {
+        it.binaries.framework {
+            baseName = "shared"
+            isStatic = false
+        }
+    }
+}
+```
+
+### Swift Package Manager
+
+<div class="warning">
+<h4>Developer note</h4>
+
+`breez-sdk-spark-kmp` Gradle dependency and the Swift package **MUST** have the same version. A version mismatch between the two will cause linking or runtime errors.
+
+</div>
+
+#### Installation via Xcode
 
 Via `File > Add Packages...`, add
 
@@ -76,7 +98,7 @@ https://github.com/breez/breez-sdk-spark-swift.git
 
 as a package dependency in Xcode.
 
-##### Installation via Swift Package Manifest
+#### Installation via Swift Package Manifest
 
 Add the following to the dependencies array of your `Package.swift`:
 
