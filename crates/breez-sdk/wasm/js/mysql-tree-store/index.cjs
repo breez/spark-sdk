@@ -130,9 +130,8 @@ class MysqlTreeStore {
   /**
    * Run a function inside a transaction without the advisory lock. Used by
    * operations scoped to a single reservation_id (`addLeaves`,
-   * `cancelReservation`, `finalizeReservation`, `updateReservation`) where
-   * row-level FK + InnoDB MVCC suffice and the global lock would only add
-   * contention.
+   * `cancelReservation`, `updateReservation`) where row-level FK + InnoDB MVCC
+   * suffice and the global lock would only add contention.
    * @param {function(import('mysql2/promise').PoolConnection): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -336,7 +335,11 @@ class MysqlTreeStore {
 
   async finalizeReservation(id, newLeaves) {
     try {
-      await this._withTransaction(async (conn) => {
+      // _withWriteTransaction acquires the GET_LOCK so this serializes
+      // against `setLeaves`. Without it, a concurrent setLeaves could read
+      // tree_spent_leaves before our marker commits and re-insert the
+      // just-spent leaf as Available.
+      await this._withWriteTransaction(async (conn) => {
         const [resRows] = await conn.query(
           "SELECT id, purpose FROM tree_reservations WHERE id = ?",
           [id]
@@ -598,17 +601,13 @@ class MysqlTreeStore {
     return 0;
   }
 
-  /**
-   * Largest single value the selection algorithm could possibly need.
-   * For an unbounded target we have to return all leaves (no prefilter).
-   */
   _maxTargetForPrefilter(targetAmounts) {
     if (!targetAmounts) return Number.MAX_SAFE_INTEGER;
     if (targetAmounts.type === "amountAndFee") {
-      return Math.max(targetAmounts.amountSats, targetAmounts.feeSats || 0);
+      return targetAmounts.amountSats + (targetAmounts.feeSats || 0);
     }
     if (targetAmounts.type === "exactDenominations") {
-      return targetAmounts.denominations.reduce((m, v) => Math.max(m, v), 0);
+      return targetAmounts.denominations.reduce((m, v) => m + v, 0);
     }
     return Number.MAX_SAFE_INTEGER;
   }

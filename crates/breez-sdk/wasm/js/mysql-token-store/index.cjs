@@ -117,9 +117,9 @@ class MysqlTokenStore {
 
   /**
    * Run a function inside a transaction without the advisory lock. Used by
-   * operations scoped to a single reservation_id (`cancelReservation`,
-   * `finalizeReservation`) where row-level FK + InnoDB MVCC suffice and the
-   * global lock would only add contention.
+   * operations scoped to a single reservation_id (`cancelReservation`)
+   * where row-level FK + InnoDB MVCC suffice and the global lock would only
+   * add contention.
    * @param {function(import('mysql2/promise').PoolConnection): Promise<T>} fn
    * @returns {Promise<T>}
    * @template T
@@ -296,7 +296,8 @@ class MysqlTokenStore {
   /**
    * Returns the spendable per-token balances aggregated server-side.
    * Each entry includes full token metadata + the available + swap-reserved sum.
-   * Tokens with zero spendable balance are filtered out by the HAVING clause.
+   * Matches the in-memory default impl which returns all tokens that have
+   * at least one output (including zero spendable balance).
    * @returns {Promise<Array<{metadata: object, balance: string}>>}
    */
   async getTokenBalances() {
@@ -316,13 +317,6 @@ class MysqlTokenStore {
         LEFT JOIN token_reservations r ON o.reservation_id = r.id
         GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
                  m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key
-        HAVING COALESCE(SUM(
-                 CASE
-                   WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
-                   WHEN r.purpose = 'Swap' THEN CAST(o.token_amount AS DECIMAL(65,0))
-                   ELSE 0
-                 END
-               ), 0) > 0
       `);
       return rows.map((row) => ({
         metadata: {
@@ -688,7 +682,11 @@ class MysqlTokenStore {
 
   async finalizeReservation(id) {
     try {
-      await this._withTransaction(async (conn) => {
+      // _withWriteTransaction acquires the GET_LOCK so this serializes
+      // against `setTokensOutputs`. Without it, a concurrent setTokensOutputs
+      // could read token_spent_outputs before our marker commits and re-insert
+      // the just-spent output as Available.
+      await this._withWriteTransaction(async (conn) => {
         const [reservationRows] = await conn.query(
           "SELECT purpose FROM token_reservations WHERE id = ?",
           [id]

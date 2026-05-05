@@ -220,9 +220,16 @@ impl TreeStore for MysqlTreeStore {
         id: &LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
-        // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
+        // Serialize against `set_leaves` so its `tree_spent_leaves` snapshot
+        // and the upsert that consumes it cannot interleave with this
+        // transaction's spent-marker write — otherwise the snapshot would miss
+        // our marker and the upsert would write the just-spent leaf back as
+        // Available.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::finalize_reservation_inner(&mut conn, id, new_leaves).await?;
+        Self::acquire_write_lock(&mut conn).await?;
+        let result = Self::finalize_reservation_inner(&mut conn, id, new_leaves).await;
+        Self::release_write_lock_quiet(&mut conn).await;
+        result?;
         trace!("Finalized reservation: {id}");
         self.notify_balance_change();
         Ok(())
@@ -797,18 +804,17 @@ impl MysqlTreeStore {
         result
     }
 
-    /// Largest single leaf value the selection algorithm could possibly need.
-    /// Used to bound the slim projection in `try_reserve_leaves`. For an
-    /// unbounded request we have to keep all leaves available.
     fn slim_max_target(target_amounts: Option<&TargetAmounts>) -> u64 {
         match target_amounts {
             Some(TargetAmounts::AmountAndFee {
                 amount_sats,
                 fee_sats,
-            }) => std::cmp::max(*amount_sats, fee_sats.unwrap_or(0)),
-            Some(TargetAmounts::ExactDenominations { denominations }) => {
-                denominations.iter().copied().max().unwrap_or(0)
-            }
+            }) => amount_sats.saturating_add(fee_sats.unwrap_or(0)),
+            Some(TargetAmounts::ExactDenominations { denominations }) => denominations
+                .iter()
+                .copied()
+                .try_fold(0u64, u64::checked_add)
+                .unwrap_or(u64::MAX),
             None => u64::MAX,
         }
     }
@@ -1300,6 +1306,24 @@ mod tests {
         shared_tests::test_update_reservation_basic(&fixture.store).await;
     }
 
+    #[tokio::test]
+    async fn test_try_reserve_min_amount_with_leaves_above_individual_target() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_try_reserve_min_amount_with_leaves_above_individual_target(
+            &fixture.store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_try_reserve_min_amount_exact_denominations_above_individual() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_try_reserve_min_amount_exact_denominations_above_individual(
+            &fixture.store,
+        )
+        .await;
+    }
+
     // ==================== MySQL-Specific Tests ====================
 
     #[tokio::test]
@@ -1414,5 +1438,79 @@ mod tests {
         .expect("Test timed out - possible deadlock");
 
         assert!(timeout > 0, "Expected at least one successful reservation");
+    }
+
+    #[tokio::test]
+    async fn test_finalize_reservation_blocked_by_write_lock() {
+        // Regression: `finalize_reservation` must acquire the same named lock
+        // as `set_leaves` to serialize them. Without the lock, a concurrent
+        // set_leaves could read the spent_leaves snapshot before finalize
+        // commits, then upsert the just-spent leaf back as Available.
+        //
+        // We assert the lock is acquired by holding it manually on a separate
+        // connection and verifying that finalize blocks until we release.
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        let leaf = create_test_tree_node("locked_leaf", 100);
+        fixture
+            .store
+            .add_leaves(std::slice::from_ref(&leaf))
+            .await
+            .unwrap();
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        // Hold the named lock on a separate connection so finalize must wait.
+        let mut holder = fixture.store.pool.get_conn().await.unwrap();
+        let acquired: Option<i64> = holder
+            .exec_first(
+                "SELECT GET_LOCK(?, ?)",
+                (TREE_STORE_WRITE_LOCK_NAME, WRITE_LOCK_TIMEOUT_SECS),
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired, Some(1), "holder failed to acquire the lock");
+
+        let store = Arc::new(fixture.store);
+        let store_for_task = store.clone();
+        let res_id = reservation.id.clone();
+        let finalize_task =
+            tokio::spawn(async move { store_for_task.finalize_reservation(&res_id, None).await });
+
+        // Without the fix, finalize would complete almost instantly. With it,
+        // it must wait for the held lock.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !finalize_task.is_finished(),
+            "finalize_reservation completed while named lock was held — \
+             the lock is not being acquired"
+        );
+
+        // Release the lock — finalize should complete shortly.
+        holder
+            .exec_drop("SELECT RELEASE_LOCK(?)", (TREE_STORE_WRITE_LOCK_NAME,))
+            .await
+            .unwrap();
+        drop(holder);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), finalize_task)
+            .await
+            .expect("finalize_reservation did not complete after lock released")
+            .unwrap()
+            .unwrap();
+
+        let leaves = store.get_leaves().await.unwrap();
+        assert!(
+            !leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "locked_leaf"),
+            "Spent leaf should not be Available"
+        );
     }
 }

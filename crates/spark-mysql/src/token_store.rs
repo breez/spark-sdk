@@ -61,8 +61,8 @@ impl TokenOutputStore for MysqlTokenStore {
     ) -> Result<Vec<(TokenMetadata, u128)>, TokenOutputServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
         // Server-side aggregate: spendable (available + swap-reserved) per
-        // token. The `HAVING > 0` filter mirrors the postgres impl and drops
-        // tokens whose entire balance is locked in a Payment reservation.
+        // token. Matches the in-memory default impl which returns all tokens
+        // that have at least one output (including zero spendable balance).
         // `token_amount` is stored as VARCHAR — cast to DECIMAL(65,0) so the
         // SUM works across full u128 range, then return as TEXT for parsing.
         let rows: Vec<Row> = conn
@@ -80,14 +80,7 @@ impl TokenOutputStore for MysqlTokenStore {
                   JOIN token_outputs o ON o.token_identifier = m.identifier
                   LEFT JOIN token_reservations r ON o.reservation_id = r.id
                   GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
-                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key
-                  HAVING COALESCE(SUM(
-                            CASE
-                              WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
-                              WHEN r.purpose = 'Swap' THEN CAST(o.token_amount AS DECIMAL(65,0))
-                              ELSE 0
-                            END
-                         ), 0) > 0",
+                           m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key",
             )
             .await
             .map_err(map_err)?;
@@ -325,9 +318,14 @@ impl TokenOutputStore for MysqlTokenStore {
         &self,
         id: &TokenOutputsReservationId,
     ) -> Result<(), TokenOutputServiceError> {
-        // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
+        // Serialize against `set_tokens_outputs` so its `token_spent_outputs`
+        // snapshot and the upsert that consumes it cannot interleave with this
+        // transaction's spent-marker write.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::finalize_reservation_inner(&mut conn, id).await?;
+        Self::acquire_write_lock(&mut conn).await?;
+        let result = Self::finalize_reservation_inner(&mut conn, id).await;
+        Self::release_write_lock_quiet(&mut conn).await;
+        result?;
         trace!("Finalized token outputs reservation: {}", id);
         Ok(())
     }
@@ -1173,5 +1171,74 @@ mod tests {
     async fn test_finalize_swap_marks_spent_and_tracks_completion() {
         let fixture = MysqlTokenStoreTestFixture::new().await;
         shared_tests::test_finalize_swap_marks_spent_and_tracks_completion(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_token_balances_includes_zero_spendable() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_get_token_balances_includes_zero_spendable(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_finalize_reservation_blocked_by_write_lock() {
+        // Regression: `finalize_reservation` must acquire the same named lock
+        // as `set_tokens_outputs` so they serialize. Otherwise a concurrent
+        // set_tokens_outputs could read the spent_outputs snapshot before our
+        // marker commits and re-insert the just-spent output as Available.
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+
+        let token_outputs = shared_tests::create_token_outputs(1, vec![100, 200]);
+        fixture
+            .store
+            .set_tokens_outputs(&[token_outputs], shared_tests::future_refresh_start())
+            .await
+            .unwrap();
+        let reservation = fixture
+            .store
+            .reserve_token_outputs(
+                "token-1",
+                ReservationTarget::MinTotalValue(100),
+                TokenReservationPurpose::Payment,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Hold the named lock on a separate connection.
+        let mut holder = fixture.store.pool.get_conn().await.unwrap();
+        let acquired: Option<i64> = holder
+            .exec_first(
+                "SELECT GET_LOCK(?, ?)",
+                (TOKEN_STORE_WRITE_LOCK_NAME, WRITE_LOCK_TIMEOUT_SECS),
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired, Some(1), "holder failed to acquire the lock");
+
+        let store = Arc::new(fixture.store);
+        let store_for_task = store.clone();
+        let res_id = reservation.id.clone();
+        let finalize_task =
+            tokio::spawn(async move { store_for_task.finalize_reservation(&res_id).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !finalize_task.is_finished(),
+            "finalize_reservation completed while named lock was held — \
+             the lock is not being acquired"
+        );
+
+        holder
+            .exec_drop("SELECT RELEASE_LOCK(?)", (TOKEN_STORE_WRITE_LOCK_NAME,))
+            .await
+            .unwrap();
+        drop(holder);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), finalize_task)
+            .await
+            .expect("finalize_reservation did not complete after lock released")
+            .unwrap()
+            .unwrap();
     }
 }
