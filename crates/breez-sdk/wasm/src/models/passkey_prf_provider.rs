@@ -34,10 +34,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         Ok(array.to_vec())
     }
 
-    async fn derive_prf_seeds(
-        &self,
-        salts: Vec<String>,
-    ) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
+    async fn derive_prf_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
         // Probe the JS side: if the foreign object exposes
         // `derivePrfSeeds`, prefer the bulk fast path. Custom JS
         // providers that only implement the legacy `derivePrfSeed`
@@ -75,9 +72,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
             .map_err(js_error_to_passkey_prf_error)?
             .dyn_into::<Promise>()
             .map_err(|_| {
-                PasskeyPrfError::Generic(
-                    "derivePrfSeeds did not return a Promise".to_string(),
-                )
+                PasskeyPrfError::Generic("derivePrfSeeds did not return a Promise".to_string())
             })?;
         let result = JsFuture::from(result_promise)
             .await

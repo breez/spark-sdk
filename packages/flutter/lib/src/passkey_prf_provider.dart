@@ -154,9 +154,7 @@ class PasskeyProvider {
         'userName': _userName,
         'userDisplayName': _userDisplayName,
         if (excludeCredentialIds != null && excludeCredentialIds.isNotEmpty)
-          'excludeCredentialIds': excludeCredentialIds
-              .map((id) => base64Encode(id))
-              .toList(),
+          'excludeCredentialIds': excludeCredentialIds.map((id) => base64Encode(id)).toList(),
       });
       return base64Decode(result!);
     } on PlatformException catch (e) {

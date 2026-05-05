@@ -251,10 +251,7 @@ impl Passkey {
         // exists for this identity). Skipped entirely when the caller
         // is performing a speculative derivation.
         if publish_label {
-            let exists = self
-                .nostr_client
-                .label_exists(&nostr_keys, &label)
-                .await?;
+            let exists = self.nostr_client.label_exists(&nostr_keys, &label).await?;
             if !exists {
                 self.nostr_client.publish_label(&nostr_keys, &label).await?;
             }

@@ -94,7 +94,7 @@ pub trait PrfProvider: Send + Sync {
     /// The default implementation loops over [`Self::derive_prf_seed`],
     /// producing N user prompts for N salts. Built-in `PasskeyProvider`
     /// implementations on iOS, Android, and the browser SHOULD override
-    /// this with the platform's dual-salt fast path: the WebAuthn PRF
+    /// this with the platform's dual-salt fast path: the `WebAuthn` PRF
     /// extension supports up to two salts per assertion via
     /// `prf.eval.first` + `prf.eval.second`, collapsing two derivations
     /// into a single user prompt.
@@ -118,10 +118,7 @@ pub trait PrfProvider: Send + Sync {
     /// * `Err(PasskeyPrfError)` - If authentication fails, PRF is not
     ///   supported, or fewer outputs than salts are returned by the
     ///   platform.
-    async fn derive_prf_seeds(
-        &self,
-        salts: Vec<String>,
-    ) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
+    async fn derive_prf_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
         let mut out = Vec::with_capacity(salts.len());
         for salt in salts {
             out.push(self.derive_prf_seed(salt).await?);
@@ -149,7 +146,7 @@ pub trait PrfProvider: Send + Sync {
     /// # When to call
     ///
     /// - **First launch / onboarding**: call once to catch misconfiguration
-    ///   early, before the first WebAuthn ceremony.
+    ///   early, before the first `WebAuthn` ceremony.
     /// - **Error recovery**: if `derivePrfSeed` returns `CredentialNotFound`
     ///   but you expect a credential to exist, call this to distinguish
     ///   "genuinely no credential" from "platform configuration is broken."
@@ -167,13 +164,13 @@ pub trait PrfProvider: Send + Sync {
     ///   stale if the AASA file was recently updated.
     /// - **Android**: queries the Digital Asset Links API for a matching
     ///   `get_login_creds` statement. Returns `Skipped` (not `NotAssociated`)
-    ///   on mismatch, because Android's CredentialManager performs its own
+    ///   on mismatch, because Android's `CredentialManager` performs its own
     ///   internal verification that may be more up-to-date than the public API.
     /// - **Browser**: checks that `rpId` is a registrable suffix of
     ///   `window.location.hostname` (the same rule the browser enforces
-    ///   at WebAuthn call time). No network request needed.
+    ///   at `WebAuthn` call time). No network request needed.
     ///
-    /// Custom providers (YubiKey, FIDO2, file-backed) that have no platform
+    /// Custom providers (`YubiKey`, FIDO2, file-backed) that have no platform
     /// verification source should inherit the default, which returns
     /// `Skipped`.
     ///

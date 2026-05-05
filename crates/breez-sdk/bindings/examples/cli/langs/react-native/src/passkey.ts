@@ -17,7 +17,7 @@ import {
   type PrfProvider,
   type NostrRelayConfig,
 } from '@breeztech/breez-sdk-spark-react-native'
-import { PasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
+import { PasskeyProvider as PlatformPasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
 import RNFS from 'react-native-fs'
 import { generateRandomBytes, hmacSha256 } from './crypto_utils'
 
@@ -229,7 +229,7 @@ export async function buildPrfProvider(
 ): Promise<{ derivePrfSeed: (salt: string) => Promise<ArrayBuffer>; isPrfAvailable: () => Promise<boolean> }> {
   switch (provider) {
     case PasskeyProvider.Platform:
-      return new PasskeyProvider()
+      return new PlatformPasskeyProvider()
     case PasskeyProvider.File:
       return FilePrfProvider.create(dataDir)
     case PasskeyProvider.YubiKey:
