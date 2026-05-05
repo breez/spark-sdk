@@ -138,7 +138,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
 
         scope.launch {
             try {
-                val credentialId = CredentialManagerPrfCore.createCredential(
+                val credential = CredentialManagerPrfCore.createCredential(
                     activity = currentActivity,
                     rpId = rpId,
                     rpName = rpName,
@@ -146,7 +146,11 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                     userDisplayName = userDisplayName,
                     excludeCredentialIds = excludeCredentialIds,
                 )
-                result.success(Base64.encodeToString(credentialId, Base64.NO_WRAP))
+                result.success(mapOf(
+                    "credentialId" to Base64.encodeToString(credential.credentialId, Base64.NO_WRAP),
+                    "aaguid" to credential.aaguid?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
+                    "backupEligible" to credential.backupEligible,
+                ))
             } catch (e: CredentialManagerPrfCoreException) {
                 result.error(e.errorCode, e.message ?: e.defaultMessage, null)
             } catch (e: Exception) {
