@@ -50,6 +50,52 @@ fn is_transaction_preempted_error(error: &OperatorRpcError) -> bool {
     matches!(error, OperatorRpcError::Connection(status) if status.code() == tonic::Code::Aborted)
 }
 
+/// Build the list of `TransferTokenOutput` entries that consolidation should send
+/// to the wallet's own spark address.
+///
+/// The summed input `amount` is split into `target_output_count` outputs of
+/// `amount / target_output_count`. The transfer builder auto-adds any remainder
+/// as a change output to the same address, so the resulting on-chain output
+/// count is exactly `target_output_count`. If the per-output amount would round
+/// down to zero (i.e., `amount < target_output_count`), we fall back to a
+/// single output of `amount` to avoid creating zero-value outputs.
+fn build_consolidation_outputs(
+    token_id: &str,
+    amount: u128,
+    target_output_count: u32,
+    receiver_address: &SparkAddress,
+) -> Vec<TransferTokenOutput> {
+    let n = u128::from(target_output_count);
+    if n <= 1 || amount < n {
+        if amount < n {
+            warn!(
+                "Consolidation amount {} smaller than target_output_count {}; falling back to a single output",
+                amount, target_output_count
+            );
+        }
+        return vec![TransferTokenOutput {
+            token_id: token_id.to_string(),
+            amount,
+            receiver_address: receiver_address.clone(),
+            spark_invoice: None,
+        }];
+    }
+
+    let per_output = amount / n;
+    // Emit (n - 1) explicit outputs of `per_output`. The remainder
+    // (amount - (n - 1) * per_output) becomes the change output added by
+    // build_transfer_token_transaction, also routed back to receiver_address,
+    // landing us at exactly `target_output_count` outputs.
+    (0..(target_output_count - 1))
+        .map(|_| TransferTokenOutput {
+            token_id: token_id.to_string(),
+            amount: per_output,
+            receiver_address: receiver_address.clone(),
+            spark_invoice: None,
+        })
+        .collect()
+}
+
 const HRP_STR_MAINNET: &str = "btkn";
 const HRP_STR_TESTNET: &str = "btknt";
 const HRP_STR_REGTEST: &str = "btknrt";
@@ -501,7 +547,10 @@ impl TokenService {
                 Err(ServiceError::NeededTooManyOutputs)
                     if attempt < MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS - 1 =>
                 {
-                    self.optimize_token_outputs(Some(&token_id), 2).await?;
+                    // Emergency consolidation during a transfer retry: collapse to a
+                    // single output regardless of the wallet's configured target so the
+                    // next retry has the simplest possible input set to work with.
+                    self.optimize_token_outputs(Some(&token_id), 2, 1).await?;
                     attempt += 1;
                     continue;
                 }
@@ -590,14 +639,32 @@ impl TokenService {
     /// Optimizes token outputs by consolidating them when there are more than the configured threshold.
     /// Processes one token at a time. Token identifier can be provided, otherwise one is automatically selected.
     /// Only optimizes if the number of outputs is greater than the provided `min_outputs_threshold` (min 2).
+    ///
+    /// `target_output_count` controls how many outputs the consolidation transfer produces.
+    /// The summed input amount is split into roughly-equal outputs to the wallet's own
+    /// spark address; any integer-division remainder becomes the change output (also
+    /// self-addressed), so the resulting output count is exactly `target_output_count`.
+    /// If the per-output amount would round down to zero, the consolidation falls back
+    /// to a single output to avoid creating zero-value outputs.
     pub async fn optimize_token_outputs(
         &self,
         token_identifier: Option<&str>,
         min_outputs_threshold: u32,
+        target_output_count: u32,
     ) -> Result<(), ServiceError> {
         if min_outputs_threshold <= 1 {
             return Err(ServiceError::ValidationError(
                 "min_outputs_threshold must be greater than 1".to_string(),
+            ));
+        }
+        if target_output_count < 1 {
+            return Err(ServiceError::ValidationError(
+                "target_output_count must be at least 1".to_string(),
+            ));
+        }
+        if target_output_count >= min_outputs_threshold {
+            return Err(ServiceError::ValidationError(
+                "target_output_count must be strictly less than min_outputs_threshold".to_string(),
             ));
         }
 
@@ -645,21 +712,24 @@ impl TokenService {
                 .map(|o| o.output.token_amount)
                 .sum::<u128>();
 
+            let receiver_address = SparkAddress::new(
+                self.signer.get_identity_public_key().await?,
+                self.network,
+                None,
+            );
+            let receiver_outputs = build_consolidation_outputs(
+                &output.metadata.identifier,
+                amount,
+                target_output_count,
+                &receiver_address,
+            );
+
             let token_transaction = with_reserved_token_outputs(
                 self.token_output_service.as_ref(),
                 self.transfer_tokens_inner(
                     &output.metadata.identifier,
                     reservation.token_outputs.outputs.clone(),
-                    vec![TransferTokenOutput {
-                        token_id: output.metadata.identifier.clone(),
-                        amount,
-                        receiver_address: SparkAddress::new(
-                            self.signer.get_identity_public_key().await?,
-                            self.network,
-                            None,
-                        ),
-                        spark_invoice: None,
-                    }],
+                    receiver_outputs,
                 ),
                 &reservation,
             )

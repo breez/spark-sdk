@@ -44,7 +44,7 @@ func ConfigurePrivateEnabledDefault() {
 func ConfigureOptimizationConfiguration() {
 	// ANCHOR: optimization-configuration
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
-	config.OptimizationConfig = breez_sdk_spark.OptimizationConfig{AutoEnabled: true, Multiplicity: 1}
+	config.OptimizationConfig = breez_sdk_spark.OptimizationConfig{AutoEnabled: true, Multiplicity: 1, TokenTargetOutputCount: 5}
 	// ANCHOR_END: optimization-configuration
 	log.Printf("Config: %+v", config)
 }

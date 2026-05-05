@@ -88,6 +88,7 @@ impl TestFixtures {
             leaf_auto_optimize_enabled: false,
             token_outputs_optimization_options: TokenOutputsOptimizationOptions {
                 min_outputs_threshold: 50,
+                target_output_count: 5,
                 auto_optimize_interval: None,
             },
             self_payment_allowed: false,

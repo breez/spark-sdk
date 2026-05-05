@@ -44,7 +44,9 @@ async def configure_private_enabled_default():
 async def configure_optimization_configuration():
     # ANCHOR: optimization-configuration
     config = default_config(network=Network.MAINNET)
-    config.optimization_config = OptimizationConfig(auto_enabled=True, multiplicity=1)
+    config.optimization_config = OptimizationConfig(
+        auto_enabled=True, multiplicity=1, token_target_output_count=5
+    )
     # ANCHOR_END: optimization-configuration
     logging.info(f"Config: {config}")
 
