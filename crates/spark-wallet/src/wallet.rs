@@ -1343,6 +1343,37 @@ impl SparkWallet {
         Ok(tx)
     }
 
+    /// Transfers tokens using the v3 single-phase broadcast flow.
+    ///
+    /// Functionally equivalent to [`transfer_tokens`] but uses the `broadcast_transaction`
+    /// RPC instead of the two-phase `start_transaction` + `commit_transaction` flow.
+    pub async fn transfer_tokens_v3(
+        &self,
+        outputs: Vec<TransferTokenOutput>,
+        selected_outputs: Option<Vec<TokenOutputWithPrevOut>>,
+        selection_strategy: Option<SelectionStrategy>,
+    ) -> Result<TokenTransaction, SparkWalletError> {
+        if outputs.iter().any(|o| o.spark_invoice.is_some()) {
+            return Err(SparkWalletError::Generic(
+                "Spark invoices are not supported for token transfers. Use the `fulfill_spark_invoice` method instead.".to_string(),
+            ));
+        }
+
+        if !self.config.self_payment_allowed
+            && outputs
+                .iter()
+                .any(|o| o.receiver_address.identity_public_key == self.identity_public_key)
+        {
+            return Err(SparkWalletError::SelfPaymentNotAllowed);
+        }
+
+        let tx = self
+            .token_service
+            .transfer_tokens_v3(outputs, selected_outputs, selection_strategy)
+            .await?;
+        Ok(tx)
+    }
+
     pub async fn list_token_transactions(
         &self,
         request: ListTokenTransactionsRequest,

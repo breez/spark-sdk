@@ -4687,6 +4687,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "spark-token-primitives",
  "thiserror 2.0.18",
  "tokio",
  "tonic",
@@ -4777,6 +4778,21 @@ dependencies = [
  "tracing",
  "uuid",
  "webpki-roots 1.0.7",
+]
+
+[[package]]
+name = "spark-token-primitives"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d155f13255bbe0b53214979bce25ef6b92a7179b2370f67f37ae5ff1abaa67f"
+dependencies = [
+ "bech32",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]
