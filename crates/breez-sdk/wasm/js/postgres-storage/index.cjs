@@ -63,15 +63,26 @@ const SELECT_PAYMENT_SQL = `
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id
       FROM payments p
-      LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
-      LEFT JOIN payment_details_token t ON p.id = t.payment_id
-      LEFT JOIN payment_details_spark s ON p.id = s.payment_id
-      LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash`;
+      LEFT JOIN payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
+      LEFT JOIN payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
+      LEFT JOIN payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
+      LEFT JOIN payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
+      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id`;
 
 class PostgresStorage {
-  constructor(pool, logger = null) {
+  /**
+   * @param {import('pg').Pool} pool - Connection pool (may be shared with other tenants).
+   * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+   *   uniquely identifying this tenant. All reads and writes are scoped to it
+   *   so that multiple instances with distinct identities can share one DB.
+   * @param {object} [logger]
+   */
+  constructor(pool, identity, logger = null) {
+    if (!identity) {
+      throw new StorageError("PostgresStorage requires a tenant identity");
+    }
     this.pool = pool;
+    this.identity = Buffer.from(identity);
     this.logger = logger;
   }
 
@@ -81,7 +92,7 @@ class PostgresStorage {
   async initialize() {
     try {
       const migrationManager = new PostgresMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool);
+      await migrationManager.migrate(this.pool, this.identity);
       return this;
     } catch (error) {
       throw new StorageError(
@@ -127,8 +138,8 @@ class PostgresStorage {
   async getCachedItem(key) {
     try {
       const result = await this.pool.query(
-        "SELECT value FROM settings WHERE key = $1",
-        [key]
+        "SELECT value FROM settings WHERE user_id = $1 AND key = $2",
+        [this.identity, key]
       );
       return result.rows.length > 0 ? result.rows[0].value : null;
     } catch (error) {
@@ -142,9 +153,9 @@ class PostgresStorage {
   async setCachedItem(key, value) {
     try {
       await this.pool.query(
-        `INSERT INTO settings (key, value) VALUES ($1, $2)
-         ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value`,
-        [key, value]
+        `INSERT INTO settings (user_id, key, value) VALUES ($1, $2, $3)
+         ON CONFLICT(user_id, key) DO UPDATE SET value = EXCLUDED.value`,
+        [this.identity, key, value]
       );
     } catch (error) {
       throw new StorageError(
@@ -156,7 +167,10 @@ class PostgresStorage {
 
   async deleteCachedItem(key) {
     try {
-      await this.pool.query("DELETE FROM settings WHERE key = $1", [key]);
+      await this.pool.query(
+        "DELETE FROM settings WHERE user_id = $1 AND key = $2",
+        [this.identity, key]
+      );
     } catch (error) {
       throw new StorageError(
         `Failed to delete cached item '${key}': ${error.message}`,
@@ -173,9 +187,10 @@ class PostgresStorage {
       const actualLimit =
         request.limit != null ? request.limit : 4294967295;
 
-      const whereClauses = [];
-      const params = [];
-      let paramIdx = 1;
+      // Tenant scoping is always $1; dynamic filters use $2 onwards.
+      const whereClauses = ["p.user_id = $1"];
+      const params = [this.identity];
+      let paramIdx = 2;
 
       // Filter by payment type
       if (request.typeFilter && request.typeFilter.length > 0) {
@@ -349,9 +364,9 @@ class PostgresStorage {
         const spark = payment.details?.type === "spark" ? true : null;
 
         await client.query(
-          `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT(id) DO UPDATE SET
+          `INSERT INTO payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           ON CONFLICT(user_id, id) DO UPDATE SET
              payment_type=EXCLUDED.payment_type,
              status=EXCLUDED.status,
              amount=EXCLUDED.amount,
@@ -362,6 +377,7 @@ class PostgresStorage {
              deposit_tx_id=EXCLUDED.deposit_tx_id,
              spark=EXCLUDED.spark`,
           [
+            this.identity,
             payment.id,
             payment.paymentType,
             payment.status,
@@ -381,12 +397,13 @@ class PostgresStorage {
             payment.details.htlcDetails != null)
         ) {
           await client.query(
-            `INSERT INTO payment_details_spark (payment_id, invoice_details, htlc_details)
-             VALUES ($1, $2, $3)
-             ON CONFLICT(payment_id) DO UPDATE SET
+            `INSERT INTO payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT(user_id, payment_id) DO UPDATE SET
                invoice_details=COALESCE(EXCLUDED.invoice_details, payment_details_spark.invoice_details),
                htlc_details=COALESCE(EXCLUDED.htlc_details, payment_details_spark.htlc_details)`,
             [
+              this.identity,
               payment.id,
               payment.details.invoiceDetails
                 ? JSON.stringify(payment.details.invoiceDetails)
@@ -401,9 +418,9 @@ class PostgresStorage {
         if (payment.details?.type === "lightning") {
           await client.query(
             `INSERT INTO payment_details_lightning
-              (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-              ON CONFLICT(payment_id) DO UPDATE SET
+              (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              ON CONFLICT(user_id, payment_id) DO UPDATE SET
                 invoice=EXCLUDED.invoice,
                 payment_hash=EXCLUDED.payment_hash,
                 destination_pubkey=EXCLUDED.destination_pubkey,
@@ -412,6 +429,7 @@ class PostgresStorage {
                 htlc_status=COALESCE(EXCLUDED.htlc_status, payment_details_lightning.htlc_status),
                 htlc_expiry_time=COALESCE(EXCLUDED.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)`,
             [
+              this.identity,
               payment.id,
               payment.details.invoice,
               payment.details.htlcDetails.paymentHash,
@@ -427,14 +445,15 @@ class PostgresStorage {
         if (payment.details?.type === "token") {
           await client.query(
             `INSERT INTO payment_details_token
-              (payment_id, metadata, tx_hash, tx_type, invoice_details)
-              VALUES ($1, $2, $3, $4, $5)
-              ON CONFLICT(payment_id) DO UPDATE SET
+              (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
+              VALUES ($1, $2, $3, $4, $5, $6)
+              ON CONFLICT(user_id, payment_id) DO UPDATE SET
                 metadata=EXCLUDED.metadata,
                 tx_hash=EXCLUDED.tx_hash,
                 tx_type=EXCLUDED.tx_type,
                 invoice_details=COALESCE(EXCLUDED.invoice_details, payment_details_token.invoice_details)`,
             [
+              this.identity,
               payment.id,
               JSON.stringify(payment.details.metadata),
               payment.details.txHash,
@@ -462,8 +481,8 @@ class PostgresStorage {
       }
 
       const result = await this.pool.query(
-        `${SELECT_PAYMENT_SQL} WHERE p.id = $1`,
-        [id]
+        `${SELECT_PAYMENT_SQL} WHERE p.user_id = $1 AND p.id = $2`,
+        [this.identity, id]
       );
 
       if (result.rows.length === 0) {
@@ -487,8 +506,8 @@ class PostgresStorage {
       }
 
       const result = await this.pool.query(
-        `${SELECT_PAYMENT_SQL} WHERE l.invoice = $1`,
-        [invoice]
+        `${SELECT_PAYMENT_SQL} WHERE p.user_id = $1 AND l.invoice = $2`,
+        [this.identity, invoice]
       );
 
       if (result.rows.length === 0) {
@@ -511,22 +530,24 @@ class PostgresStorage {
         return {};
       }
 
-      // Early exit if no related payments exist
+      // Early exit if no related payments exist for this tenant
       const hasRelatedResult = await this.pool.query(
-        "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE parent_payment_id IS NOT NULL LIMIT 1)"
+        "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE user_id = $1 AND parent_payment_id IS NOT NULL LIMIT 1)",
+        [this.identity]
       );
       if (!hasRelatedResult.rows[0].exists) {
         return {};
       }
 
+      // $1 is reserved for user_id; parent ids start at $2.
       const placeholders = parentPaymentIds.map(
-        (_, i) => `$${i + 1}`
+        (_, i) => `$${i + 2}`
       );
-      const query = `${SELECT_PAYMENT_SQL} WHERE pm.parent_payment_id IN (${placeholders.join(", ")}) ORDER BY p.timestamp ASC`;
+      const query = `${SELECT_PAYMENT_SQL} WHERE p.user_id = $1 AND pm.parent_payment_id IN (${placeholders.join(", ")}) ORDER BY p.timestamp ASC`;
 
       const queryResult = await this.pool.query(
         query,
-        parentPaymentIds
+        [this.identity, ...parentPaymentIds]
       );
 
       const result = {};
@@ -551,9 +572,9 @@ class PostgresStorage {
   async insertPaymentMetadata(paymentId, metadata) {
     try {
       await this.pool.query(
-        `INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT(payment_id) DO UPDATE SET
+        `INSERT INTO payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT(user_id, payment_id) DO UPDATE SET
            parent_payment_id = COALESCE(EXCLUDED.parent_payment_id, payment_metadata.parent_payment_id),
            lnurl_pay_info = COALESCE(EXCLUDED.lnurl_pay_info, payment_metadata.lnurl_pay_info),
            lnurl_withdraw_info = COALESCE(EXCLUDED.lnurl_withdraw_info, payment_metadata.lnurl_withdraw_info),
@@ -561,6 +582,7 @@ class PostgresStorage {
            conversion_info = COALESCE(EXCLUDED.conversion_info, payment_metadata.conversion_info),
            conversion_status = COALESCE(EXCLUDED.conversion_status, payment_metadata.conversion_status)`,
         [
+          this.identity,
           paymentId,
           metadata.parentPaymentId,
           metadata.lnurlPayInfo
@@ -589,10 +611,10 @@ class PostgresStorage {
   async addDeposit(txid, vout, amountSats, isMature) {
     try {
       await this.pool.query(
-        `INSERT INTO unclaimed_deposits (txid, vout, amount_sats, is_mature)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT(txid, vout) DO UPDATE SET is_mature = EXCLUDED.is_mature, amount_sats = EXCLUDED.amount_sats`,
-        [txid, vout, amountSats, isMature]
+        `INSERT INTO unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT(user_id, txid, vout) DO UPDATE SET is_mature = EXCLUDED.is_mature, amount_sats = EXCLUDED.amount_sats`,
+        [this.identity, txid, vout, amountSats, isMature]
       );
     } catch (error) {
       throw new StorageError(
@@ -605,8 +627,8 @@ class PostgresStorage {
   async deleteDeposit(txid, vout) {
     try {
       await this.pool.query(
-        "DELETE FROM unclaimed_deposits WHERE txid = $1 AND vout = $2",
-        [txid, vout]
+        "DELETE FROM unclaimed_deposits WHERE user_id = $1 AND txid = $2 AND vout = $3",
+        [this.identity, txid, vout]
       );
     } catch (error) {
       throw new StorageError(
@@ -619,7 +641,8 @@ class PostgresStorage {
   async listDeposits() {
     try {
       const result = await this.pool.query(
-        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits"
+        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits WHERE user_id = $1",
+        [this.identity]
       );
 
       return result.rows.map((row) => ({
@@ -645,15 +668,15 @@ class PostgresStorage {
         await this.pool.query(
           `UPDATE unclaimed_deposits
            SET claim_error = $1, refund_tx = NULL, refund_tx_id = NULL
-           WHERE txid = $2 AND vout = $3`,
-          [JSON.stringify(payload.error), txid, vout]
+           WHERE user_id = $2 AND txid = $3 AND vout = $4`,
+          [JSON.stringify(payload.error), this.identity, txid, vout]
         );
       } else if (payload.type === "refund") {
         await this.pool.query(
           `UPDATE unclaimed_deposits
            SET refund_tx = $1, refund_tx_id = $2, claim_error = NULL
-           WHERE txid = $3 AND vout = $4`,
-          [payload.refundTx, payload.refundTxid, txid, vout]
+           WHERE user_id = $3 AND txid = $4 AND vout = $5`,
+          [payload.refundTx, payload.refundTxid, this.identity, txid, vout]
         );
       } else {
         throw new StorageError(`Unknown payload type: ${payload.type}`);
@@ -672,13 +695,14 @@ class PostgresStorage {
       await this._withTransaction(async (client) => {
         for (const item of metadata) {
           await client.query(
-            `INSERT INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT(payment_hash) DO UPDATE SET
+            `INSERT INTO lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT(user_id, payment_hash) DO UPDATE SET
                nostr_zap_request = EXCLUDED.nostr_zap_request,
                nostr_zap_receipt = EXCLUDED.nostr_zap_receipt,
                sender_comment = EXCLUDED.sender_comment`,
             [
+              this.identity,
               item.paymentHash,
               item.nostrZapRequest || null,
               item.nostrZapReceipt || null,
@@ -833,9 +857,10 @@ class PostgresStorage {
       const result = await this.pool.query(
         `SELECT id, name, payment_identifier, created_at, updated_at
          FROM contacts
+         WHERE user_id = $1
          ORDER BY name ASC
-         LIMIT $1 OFFSET $2`,
-        [limit, offset]
+         LIMIT $2 OFFSET $3`,
+        [this.identity, limit, offset]
       );
 
       return result.rows.map((row) => ({
@@ -858,8 +883,8 @@ class PostgresStorage {
       const result = await this.pool.query(
         `SELECT id, name, payment_identifier, created_at, updated_at
          FROM contacts
-         WHERE id = $1`,
-        [id]
+         WHERE user_id = $1 AND id = $2`,
+        [this.identity, id]
       );
 
       if (result.rows.length === 0) {
@@ -885,13 +910,14 @@ class PostgresStorage {
   async insertContact(contact) {
     try {
       await this.pool.query(
-        `INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT(id) DO UPDATE SET
+        `INSERT INTO contacts (user_id, id, name, payment_identifier, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT(user_id, id) DO UPDATE SET
            name = EXCLUDED.name,
            payment_identifier = EXCLUDED.payment_identifier,
            updated_at = EXCLUDED.updated_at`,
         [
+          this.identity,
           contact.id,
           contact.name,
           contact.paymentIdentifier,
@@ -909,7 +935,10 @@ class PostgresStorage {
 
   async deleteContact(id) {
     try {
-      await this.pool.query("DELETE FROM contacts WHERE id = $1", [id]);
+      await this.pool.query(
+        "DELETE FROM contacts WHERE user_id = $1 AND id = $2",
+        [this.identity, id]
+      );
     } catch (error) {
       throw new StorageError(
         `Failed to delete contact: ${error.message}`,
@@ -923,21 +952,25 @@ class PostgresStorage {
   async syncAddOutgoingChange(record) {
     try {
       return await this._withTransaction(async (client) => {
+        // Local queue revision is per-tenant — two tenants don't share a queue.
         const revisionResult = await client.query(
-          "SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM sync_outgoing"
+          "SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM sync_outgoing WHERE user_id = $1",
+          [this.identity]
         );
         const revision = BigInt(revisionResult.rows[0].revision);
 
         await client.query(
           `INSERT INTO sync_outgoing (
+            user_id,
             record_type,
             data_id,
             schema_version,
             commit_time,
             updated_fields_json,
             revision
-          ) VALUES ($1, $2, $3, $4, $5, $6)`,
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [
+            this.identity,
             record.id.type,
             record.id.dataId,
             record.schemaVersion,
@@ -962,8 +995,9 @@ class PostgresStorage {
     try {
       await this._withTransaction(async (client) => {
         const deleteResult = await client.query(
-          "DELETE FROM sync_outgoing WHERE record_type = $1 AND data_id = $2 AND revision = $3",
+          "DELETE FROM sync_outgoing WHERE user_id = $1 AND record_type = $2 AND data_id = $3 AND revision = $4",
           [
+            this.identity,
             record.id.type,
             record.id.dataId,
             localRevision.toString(),
@@ -981,19 +1015,21 @@ class PostgresStorage {
 
         await client.query(
           `INSERT INTO sync_state (
+            user_id,
             record_type,
             data_id,
             revision,
             schema_version,
             commit_time,
             data
-          ) VALUES ($1, $2, $3, $4, $5, $6)
-          ON CONFLICT(record_type, data_id) DO UPDATE SET
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT(user_id, record_type, data_id) DO UPDATE SET
             schema_version = EXCLUDED.schema_version,
             commit_time = EXCLUDED.commit_time,
             data = EXCLUDED.data,
             revision = EXCLUDED.revision`,
           [
+            this.identity,
             record.id.type,
             record.id.dataId,
             record.revision.toString(),
@@ -1003,9 +1039,11 @@ class PostgresStorage {
           ]
         );
 
+        // Upsert this tenant's revision row; fresh tenants without a row get one.
         await client.query(
-          "UPDATE sync_revision SET revision = GREATEST(revision, $1)",
-          [record.revision.toString()]
+          `INSERT INTO sync_revision (user_id, revision) VALUES ($1, $2)
+           ON CONFLICT (user_id) DO UPDATE SET revision = GREATEST(sync_revision.revision, EXCLUDED.revision)`,
+          [this.identity, record.revision.toString()]
         );
       });
     } catch (error) {
@@ -1034,10 +1072,12 @@ class PostgresStorage {
         FROM sync_outgoing o
         LEFT JOIN sync_state e ON
           o.record_type = e.record_type AND
-          o.data_id = e.data_id
+          o.data_id = e.data_id AND
+          o.user_id = e.user_id
+        WHERE o.user_id = $1
         ORDER BY o.revision ASC
-        LIMIT $1`,
-        [limit]
+        LIMIT $2`,
+        [this.identity, limit]
       );
 
       return result.rows.map((row) => {
@@ -1082,8 +1122,10 @@ class PostgresStorage {
 
   async syncGetLastRevision() {
     try {
+      // A tenant that hasn't synced anything yet may have no row; treat as 0.
       const result = await this.pool.query(
-        "SELECT revision FROM sync_revision"
+        "SELECT revision FROM sync_revision WHERE user_id = $1",
+        [this.identity]
       );
       return result.rows.length > 0
         ? BigInt(result.rows[0].revision)
@@ -1106,18 +1148,20 @@ class PostgresStorage {
         for (const record of records) {
           await client.query(
             `INSERT INTO sync_incoming (
+              user_id,
               record_type,
               data_id,
               schema_version,
               commit_time,
               data,
               revision
-            ) VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT(record_type, data_id, revision) DO UPDATE SET
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT(user_id, record_type, data_id, revision) DO UPDATE SET
               schema_version = EXCLUDED.schema_version,
               commit_time = EXCLUDED.commit_time,
               data = EXCLUDED.data`,
             [
+              this.identity,
               record.id.type,
               record.id.dataId,
               record.schemaVersion,
@@ -1141,10 +1185,11 @@ class PostgresStorage {
     try {
       await this.pool.query(
         `DELETE FROM sync_incoming
-         WHERE record_type = $1
-         AND data_id = $2
-         AND revision = $3`,
-        [record.id.type, record.id.dataId, record.revision.toString()]
+         WHERE user_id = $1
+         AND record_type = $2
+         AND data_id = $3
+         AND revision = $4`,
+        [this.identity, record.id.type, record.id.dataId, record.revision.toString()]
       );
     } catch (error) {
       throw new StorageError(
@@ -1167,10 +1212,11 @@ class PostgresStorage {
                 e.data AS existing_data,
                 e.revision AS existing_revision
          FROM sync_incoming i
-         LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id
+         LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
+         WHERE i.user_id = $1
          ORDER BY i.revision ASC
-         LIMIT $1`,
-        [limit]
+         LIMIT $2`,
+        [this.identity, limit]
       );
 
       return result.rows.map((row) => {
@@ -1230,9 +1276,12 @@ class PostgresStorage {
         FROM sync_outgoing o
         LEFT JOIN sync_state e ON
           o.record_type = e.record_type AND
-          o.data_id = e.data_id
+          o.data_id = e.data_id AND
+          o.user_id = e.user_id
+        WHERE o.user_id = $1
         ORDER BY o.revision DESC
-        LIMIT 1`
+        LIMIT 1`,
+        [this.identity]
       );
 
       if (result.rows.length === 0) {
@@ -1284,19 +1333,21 @@ class PostgresStorage {
       await this._withTransaction(async (client) => {
         await client.query(
           `INSERT INTO sync_state (
+            user_id,
             record_type,
             data_id,
             revision,
             schema_version,
             commit_time,
             data
-          ) VALUES ($1, $2, $3, $4, $5, $6)
-          ON CONFLICT(record_type, data_id) DO UPDATE SET
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT(user_id, record_type, data_id) DO UPDATE SET
             schema_version = EXCLUDED.schema_version,
             commit_time = EXCLUDED.commit_time,
             data = EXCLUDED.data,
             revision = EXCLUDED.revision`,
           [
+            this.identity,
             record.id.type,
             record.id.dataId,
             record.revision.toString(),
@@ -1307,8 +1358,9 @@ class PostgresStorage {
         );
 
         await client.query(
-          "UPDATE sync_revision SET revision = GREATEST(revision, $1)",
-          [record.revision.toString()]
+          `INSERT INTO sync_revision (user_id, revision) VALUES ($1, $2)
+           ON CONFLICT (user_id) DO UPDATE SET revision = GREATEST(sync_revision.revision, EXCLUDED.revision)`,
+          [this.identity, record.revision.toString()]
         );
       });
     } catch (error) {
@@ -1350,12 +1402,14 @@ function defaultPostgresStorageConfig(connectionString) {
  * @param {number} config.maxPoolSize - Maximum number of connections in the pool
  * @param {number} config.createTimeoutSecs - Timeout in seconds for establishing a new connection
  * @param {number} config.recycleTimeoutSecs - Timeout in seconds before recycling an idle connection
+ * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+ *   uniquely identifying this tenant.
  * @param {object} [logger] - Optional logger
  * @returns {Promise<PostgresStorage>}
  */
-async function createPostgresStorage(config, logger = null) {
+async function createPostgresStorage(config, identity, logger = null) {
   const pool = createPostgresPool(config);
-  return createPostgresStorageWithPool(pool, logger);
+  return createPostgresStorageWithPool(pool, identity, logger);
 }
 
 /**
@@ -1378,11 +1432,12 @@ function createPostgresPool(config) {
  * Create a PostgresStorage instance from an existing pg.Pool.
  *
  * @param {pg.Pool} pool - An existing connection pool
+ * @param {Buffer|Uint8Array} identity - 33-byte tenant identity (secp256k1 pubkey).
  * @param {object} [logger] - Optional logger
  * @returns {Promise<PostgresStorage>}
  */
-async function createPostgresStorageWithPool(pool, logger = null) {
-  const storage = new PostgresStorage(pool, logger);
+async function createPostgresStorageWithPool(pool, identity, logger = null) {
+  const storage = new PostgresStorage(pool, identity, logger);
   await storage.initialize();
   return storage;
 }

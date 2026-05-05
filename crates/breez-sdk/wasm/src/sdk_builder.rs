@@ -263,8 +263,26 @@ impl SdkBuilder {
                 // Create a single shared pool for all postgres stores
                 let pool = create_postgres_pool(config.clone())?;
 
+                // Derive tenant identity from the seed and pass to the JS storage so it
+                // can scope every read/write by `user_id`.
+                let key_set = KeySet::new(
+                    &self.seed.to_bytes()?,
+                    self.network.into(),
+                    self.key_set_type.into(),
+                    self.use_address_index,
+                    self.account_number,
+                )
+                .map_err(WasmError::new)?;
+                let identity_pub_key = key_set.identity_key_pair.public_key();
+                let identity_bytes = identity_pub_key.serialize();
+
                 let storage = Arc::new(WasmStorage {
-                    storage: create_postgres_storage_with_pool(&pool, logger_ref).await?,
+                    storage: create_postgres_storage_with_pool(
+                        &pool,
+                        &identity_bytes,
+                        logger_ref,
+                    )
+                    .await?,
                 });
                 self.builder = self.builder.with_storage(storage);
 
@@ -352,6 +370,7 @@ extern "C" {
     #[wasm_bindgen(js_name = "createPostgresStorageWithPool", catch)]
     async fn create_postgres_storage_with_pool(
         pool: &JsPool,
+        identity: &[u8],
         logger: Option<&Logger>,
     ) -> Result<crate::persist::Storage, JsValue>;
 

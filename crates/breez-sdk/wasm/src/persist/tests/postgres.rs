@@ -11,6 +11,7 @@ extern "C" {
     #[wasm_bindgen(js_name = "createPostgresStorage", catch)]
     async fn create_postgres_storage(
         config: PostgresStorageConfig,
+        identity: &[u8],
         logger: Option<&crate::logger::Logger>,
     ) -> Result<Storage, JsValue>;
 }
@@ -21,6 +22,14 @@ extern "C" {
     #[wasm_bindgen(js_name = "createTestConnectionString", catch)]
     async fn create_test_connection_string(test_name: &str) -> Result<JsValue, JsValue>;
 }
+
+/// Fixed 33-byte test identity. Each test gets its own isolated DB via
+/// `createTestConnectionString`, so a single shared identity is fine.
+const TEST_IDENTITY: [u8; 33] = [
+    0x02, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+    0x20,
+];
 
 /// Helper to create a WasmStorage instance for testing using postgres-storage
 async fn create_test_storage(test_name: &str) -> WasmStorage {
@@ -33,7 +42,7 @@ async fn create_test_storage(test_name: &str) -> WasmStorage {
 
     let config = crate::sdk_builder::default_postgres_storage_config(&conn_string);
 
-    let storage = create_postgres_storage(config, None)
+    let storage = create_postgres_storage(config, &TEST_IDENTITY, None)
         .await
         .expect("Failed to create postgres storage instance");
     WasmStorage { storage }
