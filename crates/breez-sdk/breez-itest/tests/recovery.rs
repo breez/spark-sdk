@@ -19,7 +19,6 @@ use breez_sdk_spark::*;
 use rand::RngCore;
 use rstest::*;
 use serde::{Deserialize, Serialize};
-use tempdir::TempDir;
 use tracing::{info, warn};
 
 // ============================================================================
@@ -221,7 +220,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let alice_mnemonic = bip39::Mnemonic::from_entropy(&entropy)?;
     info!("Generated mnemonic for Alice");
 
-    let alice_temp_dir = TempDir::new("breez-sdk-alice")?;
+    let alice_temp_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice")
+        .tempdir()?;
     let mut alice = build_sdk_from_mnemonic(
         alice_temp_dir.path().to_string_lossy().to_string(),
         alice_mnemonic.to_string(),
@@ -740,7 +741,9 @@ async fn test_wallet_recovery_from_mnemonic() -> Result<()> {
     );
 
     // 2. Create fresh storage (simulates new device)
-    let temp_dir = TempDir::new("breez-sdk-recovery")?;
+    let temp_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-recovery")
+        .tempdir()?;
     let storage_path = temp_dir.path().to_string_lossy().to_string();
 
     info!("Initializing wallet from mnemonic at: {}", storage_path);

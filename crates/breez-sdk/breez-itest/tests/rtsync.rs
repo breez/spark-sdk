@@ -5,7 +5,6 @@ use breez_sdk_itest::*;
 use breez_sdk_spark::*;
 use rand::RngCore;
 use rstest::*;
-use tempdir::TempDir;
 use tracing::info;
 
 // ---------------------
@@ -60,7 +59,7 @@ async fn bob_sdk(#[future] lnurl_fixture: LnurlFixture) -> Result<SdkInstance> {
     let lnurl = Arc::new(lnurl_fixture.await);
     let lnurl_domain = lnurl.http_url().to_string();
 
-    let temp_dir = TempDir::new("breez-sdk-bob")?;
+    let temp_dir = tempfile::Builder::new().prefix("breez-sdk-bob").tempdir()?;
 
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
@@ -97,7 +96,9 @@ async fn create_sdk_with_rtsync_and_lnurl(
     sync_url: &str,
     lnurl_domain: Option<String>,
 ) -> Result<SdkInstance> {
-    let temp_dir = TempDir::new(&format!("breez-sdk-{name}"))?;
+    let temp_dir = tempfile::Builder::new()
+        .prefix(format!("breez-sdk-{name}").as_str())
+        .tempdir()?;
 
     let mut config = default_config(Network::Regtest);
     config.api_key = None;

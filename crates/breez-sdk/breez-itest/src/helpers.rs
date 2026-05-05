@@ -11,7 +11,7 @@ use tracing::{Instrument, debug, info};
 
 use crate::SdkInstance;
 use crate::faucet::RegtestFaucet;
-use tempdir::TempDir;
+use tempfile::TempDir;
 
 /// Shared PostgreSQL container for tree store testing.
 /// Started once on first access and kept alive for the process lifetime.
@@ -91,7 +91,7 @@ impl EventListener for ChannelEventListener {
 pub async fn build_sdk_with_dir(
     storage_dir: String,
     seed_bytes: [u8; 32],
-    temp_dir: Option<tempdir::TempDir>,
+    temp_dir: Option<tempfile::TempDir>,
 ) -> Result<SdkInstance> {
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
@@ -148,7 +148,7 @@ pub async fn build_sdk_with_custom_config(
     storage_dir: String,
     seed_bytes: [u8; 32],
     mut config: Config,
-    temp_dir: Option<tempdir::TempDir>,
+    temp_dir: Option<tempfile::TempDir>,
     apply_sensible_test_defaults: bool,
 ) -> Result<SdkInstance> {
     // Apply sensible test defaults if not already configured
@@ -382,7 +382,7 @@ pub async fn build_sdk_with_tree_store_config(
     storage_dir: String,
     seed_bytes: [u8; 32],
     mut config: Config,
-    temp_dir: Option<tempdir::TempDir>,
+    temp_dir: Option<tempfile::TempDir>,
     apply_sensible_test_defaults: bool,
     postgres_tree_store_connection: Option<String>,
 ) -> Result<SdkInstance> {
@@ -459,7 +459,7 @@ pub async fn build_sdk_from_mnemonic(
     storage_dir: String,
     mnemonic: String,
     passphrase: Option<String>,
-    temp_dir: Option<tempdir::TempDir>,
+    temp_dir: Option<tempfile::TempDir>,
 ) -> Result<SdkInstance> {
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed

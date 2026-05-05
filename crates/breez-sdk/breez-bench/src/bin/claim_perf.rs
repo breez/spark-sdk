@@ -11,7 +11,6 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use futures::{StreamExt, stream};
 use rand::{Rng, RngCore};
-use tempdir::TempDir;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -155,7 +154,9 @@ async fn run_single_claim_benchmark(
     rand::thread_rng().fill_bytes(&mut receiver_seed);
 
     // 1. Create sender SDK
-    let sender_dir = TempDir::new("claim-bench-sender")?;
+    let sender_dir = tempfile::Builder::new()
+        .prefix("claim-bench-sender")
+        .tempdir()?;
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
     let mut sender_config = default_config(Network::Regtest);
@@ -173,7 +174,9 @@ async fn run_single_claim_benchmark(
     let mut sender_events = itest_sender.events;
 
     // 2. Create a temporary receiver just to get the Spark address, then disconnect it
-    let receiver_dir = TempDir::new("claim-bench-receiver")?;
+    let receiver_dir = tempfile::Builder::new()
+        .prefix("claim-bench-receiver")
+        .tempdir()?;
     let mut temp_receiver_config = default_config(Network::Regtest);
     temp_receiver_config.optimization_config.auto_enabled = false;
     let mut temp_receiver = build_sdk_with_tree_store_config(

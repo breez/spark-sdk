@@ -6,7 +6,6 @@ use anyhow::Result;
 use breez_sdk_spark::{MaxFee, Network, StableBalanceConfig, StableBalanceToken, default_config};
 use rand::RngCore;
 use rstest::fixture;
-use tempdir::TempDir;
 use tracing::info;
 
 use crate::{
@@ -22,7 +21,9 @@ pub const SHELL_REGTEST_TOKEN_ID: &str =
 /// Fixture: Alice's SDK with temporary storage
 #[fixture]
 pub async fn alice_sdk() -> Result<SdkInstance> {
-    let alice_dir = TempDir::new("breez-sdk-alice")?;
+    let alice_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice")
+        .tempdir()?;
     let path = alice_dir.path().to_string_lossy().to_string();
 
     // Generate random seed for Alice
@@ -36,7 +37,7 @@ pub async fn alice_sdk() -> Result<SdkInstance> {
 /// Fixture: Bob's SDK with temporary storage
 #[fixture]
 pub async fn bob_sdk() -> Result<SdkInstance> {
-    let bob_dir = TempDir::new("breez-sdk-bob")?;
+    let bob_dir = tempfile::Builder::new().prefix("breez-sdk-bob").tempdir()?;
     let path = bob_dir.path().to_string_lossy().to_string();
 
     // Generate random seed for Bob
@@ -49,7 +50,9 @@ pub async fn bob_sdk() -> Result<SdkInstance> {
 
 #[fixture]
 pub async fn bob_no_fee_sdk() -> Result<SdkInstance> {
-    let dir = TempDir::new("breez-sdk-bob-no-fee")?;
+    let dir = tempfile::Builder::new()
+        .prefix("breez-sdk-bob-no-fee")
+        .tempdir()?;
     let path = dir.path().to_string_lossy().to_string();
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
@@ -61,7 +64,9 @@ pub async fn bob_no_fee_sdk() -> Result<SdkInstance> {
 
 #[fixture]
 pub async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
-    let dir = TempDir::new("breez-sdk-bob-fee")?;
+    let dir = tempfile::Builder::new()
+        .prefix("breez-sdk-bob-fee")
+        .tempdir()?;
     let path = dir.path().to_string_lossy().to_string();
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);
@@ -74,7 +79,9 @@ pub async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
 /// Fixture: Alice's SDK with external signer
 #[fixture]
 pub async fn alice_external_signer_sdk() -> Result<SdkInstance> {
-    let alice_dir = TempDir::new("breez-sdk-alice-ext-signer")?;
+    let alice_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-ext-signer")
+        .tempdir()?;
     let path = alice_dir.path().to_string_lossy().to_string();
 
     let mnemonic = random_mnemonic()?;
@@ -86,7 +93,9 @@ pub async fn alice_external_signer_sdk() -> Result<SdkInstance> {
 /// Fixture: Bob's SDK with external signer
 #[fixture]
 pub async fn bob_external_signer_sdk() -> Result<SdkInstance> {
-    let bob_dir = TempDir::new("breez-sdk-bob-ext-signer")?;
+    let bob_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-bob-ext-signer")
+        .tempdir()?;
     let path = bob_dir.path().to_string_lossy().to_string();
 
     let mnemonic = random_mnemonic()?;
@@ -104,7 +113,9 @@ fn random_mnemonic() -> Result<String> {
 /// Fixture: Alice's SDK with stable balance config
 #[fixture]
 pub async fn alice_sdk_stable_balance() -> Result<SdkInstance> {
-    let alice_dir = TempDir::new("breez-sdk-alice-stable-balance")?;
+    let alice_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-stable-balance")
+        .tempdir()?;
     let path = alice_dir.path().to_string_lossy().to_string();
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);

@@ -196,9 +196,7 @@ impl TreeService for SynchronousTreeService {
         let mut ignored_leaves_map: HashMap<TreeNodeId, TreeNode> = HashMap::new();
 
         // For each operator's leaves, compare against coordinator in the same way as before
-        for (operator_id, operator_leaves) in
-            operators.into_iter().zip(operator_leaves_vec.into_iter())
-        {
+        for (operator_id, operator_leaves) in operators.into_iter().zip(operator_leaves_vec) {
             for leaf in &coordinator_leaves {
                 match operator_leaves.iter().find(|l| l.id == leaf.id) {
                     Some(operator_leaf) => {

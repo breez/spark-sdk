@@ -6,7 +6,6 @@ use breez_sdk_spark::*;
 use platform_utils::{DefaultHttpClient, HttpClient};
 use rand::RngCore;
 use rstest::*;
-use tempdir::TempDir;
 use tracing::{Instrument, debug, info};
 
 // ---------------------
@@ -32,7 +31,9 @@ async fn setup_lnurl(use_postgres: bool) -> LnurlFixture {
 #[fixture]
 async fn alice_sdk() -> Result<SdkInstance> {
     async {
-        let temp_dir = TempDir::new("breez-sdk-alice-lnurl")?;
+        let temp_dir = tempfile::Builder::new()
+            .prefix("breez-sdk-alice-lnurl")
+            .tempdir()?;
 
         // Generate random seed for Alice
         let mut seed = [0u8; 32];
@@ -66,7 +67,9 @@ async fn setup_bob(use_postgres: bool) -> Result<SdkInstance> {
         let lnurl = Arc::new(setup_lnurl(use_postgres).await);
         let lnurl_domain = lnurl.http_url().to_string();
 
-        let temp_dir = TempDir::new("breez-sdk-bob-lnurl")?;
+        let temp_dir = tempfile::Builder::new()
+            .prefix("breez-sdk-bob-lnurl")
+            .tempdir()?;
 
         // Generate random seed for Bob
         let mut seed = [0u8; 32];
@@ -1003,7 +1006,9 @@ async fn test_11_lnurl_spark_address_payment(
     let lnurl_domain = lnurl.http_url().to_string();
 
     let mut bob = async {
-        let temp_dir = TempDir::new("breez-sdk-bob-spark-addr")?;
+        let temp_dir = tempfile::Builder::new()
+            .prefix("breez-sdk-bob-spark-addr")
+            .tempdir()?;
         let mut seed = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut seed);
 

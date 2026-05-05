@@ -3,7 +3,6 @@ use breez_sdk_itest::ReinitializableSdkInstance;
 use breez_sdk_itest::fixtures::{BEAN_REGTEST_TOKEN_ID, SHELL_REGTEST_TOKEN_ID};
 use breez_sdk_spark::*;
 use rstest::*;
-use tempdir::TempDir;
 use tracing::info;
 
 // ---------------------
@@ -14,8 +13,14 @@ use tracing::info;
 fn persistent_sdk_private() -> ReinitializableSdkInstance {
     let mut cfg = default_config(Network::Regtest);
     cfg.private_enabled_default = true;
-    ReinitializableSdkInstance::new(cfg, TempDir::new("breez-sdk-persistent-private").unwrap())
-        .unwrap()
+    ReinitializableSdkInstance::new(
+        cfg,
+        tempfile::Builder::new()
+            .prefix("breez-sdk-persistent-private")
+            .tempdir()
+            .unwrap(),
+    )
+    .unwrap()
 }
 
 #[fixture]
@@ -24,7 +29,10 @@ fn persistent_sdk_non_private() -> ReinitializableSdkInstance {
     cfg.private_enabled_default = false;
     ReinitializableSdkInstance::new(
         cfg,
-        TempDir::new("breez-sdk-persistent-non-private").unwrap(),
+        tempfile::Builder::new()
+            .prefix("breez-sdk-persistent-non-private")
+            .tempdir()
+            .unwrap(),
     )
     .unwrap()
 }
@@ -115,7 +123,10 @@ fn persistent_sdk_stable_balance() -> ReinitializableSdkInstance {
     });
     ReinitializableSdkInstance::new(
         cfg,
-        TempDir::new("breez-sdk-persistent-stable-balance").unwrap(),
+        tempfile::Builder::new()
+            .prefix("breez-sdk-persistent-stable-balance")
+            .tempdir()
+            .unwrap(),
     )
     .unwrap()
 }

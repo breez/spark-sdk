@@ -28,7 +28,7 @@ fn normalize_dns_name(dns_name: String) -> String {
 
 /// Parses a DNS name string into a dnssec-prover Name.
 fn parse_dns_name(dns_name: &str) -> Result<Name> {
-    Name::try_from(dns_name).map_err(|()| anyhow::anyhow!("Invalid DNS name: {}", dns_name))
+    Name::try_from(dns_name).map_err(|()| anyhow::anyhow!("Invalid DNS name: {dns_name}"))
 }
 
 /// Verifies a DNSSEC proof and extracts TXT records for the given name.
@@ -44,8 +44,8 @@ fn verify_proof_and_extract_txt(proof: &[u8], name: &Name) -> Result<Vec<String>
     let rrs = parse_rr_stream(proof).map_err(|()| anyhow::anyhow!("Failed to parse DNS proof"))?;
 
     // Verify the DNSSEC chain
-    let verified = verify_rr_stream(&rrs)
-        .map_err(|e| anyhow::anyhow!("DNSSEC verification failed: {:?}", e))?;
+    let verified =
+        verify_rr_stream(&rrs).map_err(|e| anyhow::anyhow!("DNSSEC verification failed: {e:?}"))?;
 
     // Check that the proof is currently valid
     let now = SystemTime::now()

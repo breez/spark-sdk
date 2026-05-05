@@ -169,7 +169,9 @@ async fn test_concurrent_token_operations() -> Result<()> {
 
     // Create Bob (SQLite, different seed)
     info!("Creating Bob with SQLite storage...");
-    let bob_dir = tempdir::TempDir::new("breez-sdk-bob-tokens")?;
+    let bob_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-bob-tokens")
+        .tempdir()?;
     let bob_path = bob_dir.path().to_string_lossy().to_string();
     let mut bob_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bob_seed);

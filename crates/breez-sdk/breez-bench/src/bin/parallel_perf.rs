@@ -10,7 +10,6 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use rand::seq::SliceRandom;
 use rand::{Rng, RngCore, SeedableRng};
-use tempdir::TempDir;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -118,7 +117,7 @@ struct BenchSdkInstance {
     sdk: BreezSdk,
     events: mpsc::Receiver<SdkEvent>,
     #[allow(dead_code)]
-    temp_dir: Option<tempdir::TempDir>,
+    temp_dir: Option<tempfile::TempDir>,
 }
 
 #[tokio::main]
@@ -589,7 +588,9 @@ async fn initialize_sdk_pair(
     receiver_postgres: Option<String>,
 ) -> Result<(BenchSdkInstance, BenchSdkInstance)> {
     // Create sender SDK
-    let sender_dir = TempDir::new("parallel-perf-sender")?;
+    let sender_dir = tempfile::Builder::new()
+        .prefix("parallel-perf-sender")
+        .tempdir()?;
     let sender_path = sender_dir.path().to_string_lossy().to_string();
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
@@ -615,7 +616,9 @@ async fn initialize_sdk_pair(
     .await?;
 
     // Create receiver SDK
-    let receiver_dir = TempDir::new("parallel-perf-receiver")?;
+    let receiver_dir = tempfile::Builder::new()
+        .prefix("parallel-perf-receiver")
+        .tempdir()?;
     let receiver_path = receiver_dir.path().to_string_lossy().to_string();
     let mut receiver_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut receiver_seed);
