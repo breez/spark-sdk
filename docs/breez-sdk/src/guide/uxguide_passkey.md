@@ -22,14 +22,15 @@ Each step should own its own error handling. A failure partway through should re
 
 ### Credential ID management
 
-`createPasskey()` returns the credential ID of the newly registered passkey. Store this ID locally (for example in `localStorage`, `SharedPreferences`, or `UserDefaults`) so you can:
+`createPasskey()` returns a `RegisteredCredential` carrying the credential ID plus authenticator metadata parsed from the attestation: `aaguid` (16-byte provider identifier) and `backupEligible` (BE flag indicating the credential can sync across devices). Both metadata fields are `null` when the platform doesn't surface enough authenticator data. Store the credential ID locally (for example in `localStorage`, `SharedPreferences`, or `UserDefaults`) so you can:
 
 1. **Prevent duplicate credentials.** On subsequent calls to `createPasskey()`, pass the stored IDs via the `excludeCredentialIds` parameter. When the authenticator already holds one of these credentials, the platform will reject the registration with a "credential already registered" error instead of silently creating a duplicate.
 2. **Track which credentials belong to this app instance.** The credential ID is an opaque byte array assigned by the authenticator. It is not sensitive, but it is only useful on the device where the credential was created.
+3. **Display provider name + sync state in account-management UI.** AAGUID identifies the credential provider (iCloud Keychain, Google Password Manager, 1Password, hardware key, etc.) when looked up against a known-AAGUID database such as [passkeydeveloper/passkey-authenticator-aaguids](https://github.com/passkeydeveloper/passkey-authenticator-aaguids). `backupEligible` indicates whether the credential will sync to the user's other devices. Both AAGUID and BE are unverified attestation: use as display hints only, never for trust decisions.
 
 ```typescript
 // Web example
-const credentialId = await prfProvider.createPasskey();
+const { credentialId, aaguid, backupEligible } = await prfProvider.createPasskey();
 // Store for later use
 localStorage.setItem('passkeyCredentialId', btoa(String.fromCharCode(...credentialId)));
 
@@ -38,7 +39,7 @@ const existingId = localStorage.getItem('passkeyCredentialId');
 const exclude = existingId
   ? [Uint8Array.from(atob(existingId), c => c.charCodeAt(0))]
   : [];
-const newId = await prfProvider.createPasskey(exclude);
+const newCredential = await prfProvider.createPasskey(exclude);
 ```
 
 ### Guidelines
