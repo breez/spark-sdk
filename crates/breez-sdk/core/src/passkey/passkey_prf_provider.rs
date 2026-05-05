@@ -94,7 +94,7 @@ pub trait PrfProvider: Send + Sync {
     /// The default implementation loops over [`Self::derive_prf_seed`],
     /// producing N user prompts for N salts. Built-in `PasskeyProvider`
     /// implementations on iOS, Android, and the browser SHOULD override
-    /// this with the platform's dual-salt fast path: the WebAuthn PRF
+    /// this with the platform's dual-salt fast path: the `WebAuthn` PRF
     /// extension supports up to two salts per assertion via
     /// `prf.eval.first` + `prf.eval.second`, collapsing two derivations
     /// into a single user prompt.
@@ -118,10 +118,7 @@ pub trait PrfProvider: Send + Sync {
     /// * `Err(PasskeyPrfError)` - If authentication fails, PRF is not
     ///   supported, or fewer outputs than salts are returned by the
     ///   platform.
-    async fn derive_prf_seeds(
-        &self,
-        salts: Vec<String>,
-    ) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
+    async fn derive_prf_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
         let mut out = Vec::with_capacity(salts.len());
         for salt in salts {
             out.push(self.derive_prf_seed(salt).await?);
