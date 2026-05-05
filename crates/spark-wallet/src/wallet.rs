@@ -191,7 +191,7 @@ pub struct SparkWallet {
     /// closure swallows refresh errors after logging, since "once per
     /// lifetime" is what we want here regardless of outcome — subsequent
     /// staleness is handled by the periodic + post-payment sync.
-    select_leaves_refresh: Arc<tokio::sync::OnceCell<()>>,
+    select_leaves_refresh: tokio::sync::OnceCell<()>,
 }
 
 impl SparkWallet {
@@ -397,7 +397,7 @@ impl SparkWallet {
             operator_pool,
             htlc_service,
             leaf_optimizer,
-            select_leaves_refresh: Arc::new(tokio::sync::OnceCell::new()),
+            select_leaves_refresh: tokio::sync::OnceCell::new(),
         })
     }
 }
