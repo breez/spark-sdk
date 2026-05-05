@@ -118,7 +118,7 @@ impl TreeStore for MysqlTreeStore {
         // only need the spendable total.
         let row: Option<i64> = conn
             .query_first(
-                r"SELECT COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(l.data, '$.value')) AS UNSIGNED)), 0) AS balance
+                r"SELECT COALESCE(SUM(l.value), 0) AS balance
                   FROM tree_leaves l
                   LEFT JOIN tree_reservations r ON l.reservation_id = r.id
                   WHERE
@@ -369,6 +369,21 @@ impl MysqlTreeStore {
                     CHECK (id = 1)
                 )",
                 "INSERT IGNORE INTO tree_swap_status (id) VALUES (1)",
+            ],
+            // Migration 3: Promote `value` out of the JSON `data` column into a
+            // dedicated BIGINT. JSON_EXTRACT/JSON_UNQUOTE on every reservation
+            // and balance query was the dominant cost vs. postgres's
+            // `(data->>'value')::bigint` expression. Also adds a composite index
+            // `(status, is_missing_from_operators, reservation_id, value)` so
+            // the slim selection in `try_reserve_leaves` is index-only.
+            &[
+                "ALTER TABLE tree_leaves
+                    ADD COLUMN value BIGINT NOT NULL DEFAULT 0",
+                "UPDATE tree_leaves
+                    SET value = CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
+                    WHERE value = 0",
+                "CREATE INDEX idx_tree_leaves_slim
+                    ON tree_leaves(status, is_missing_from_operators, reservation_id, value)",
             ],
         ]
     }
@@ -640,7 +655,7 @@ impl MysqlTreeStore {
         // slim set since the prefilter excludes big leaves.
         let total_row: Option<i64> = tx
             .query_first(
-                r"SELECT COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)), 0) AS total
+                r"SELECT COALESCE(SUM(value), 0) AS total
                   FROM tree_leaves
                   WHERE status = 'Available'
                     AND is_missing_from_operators = 0
@@ -658,21 +673,21 @@ impl MysqlTreeStore {
         let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
         let slim_rows: Vec<(String, i64)> = tx
             .exec(
-                r"SELECT id, CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) AS value
+                r"SELECT id, value
                   FROM tree_leaves
                   WHERE status = 'Available'
                     AND is_missing_from_operators = 0
                     AND reservation_id IS NULL
                     AND (
-                      CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) <= ?
+                      value <= ?
                       OR id = (
                         SELECT id FROM (
                           SELECT id FROM tree_leaves
                           WHERE status = 'Available'
                             AND is_missing_from_operators = 0
                             AND reservation_id IS NULL
-                            AND CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) > ?
-                          ORDER BY CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
+                            AND value > ?
+                          ORDER BY value
                           LIMIT 1
                         ) AS smallest_over
                       )
@@ -936,26 +951,30 @@ impl MysqlTreeStore {
             return Ok(());
         }
 
-        // Build VALUES (?, ?, ?, ?, NOW(6)), (?, ?, ?, ?, NOW(6)), …
+        // Build VALUES (?, ?, ?, ?, ?, NOW(6)), …
         let mut sql = String::from(
-            "INSERT INTO tree_leaves (id, status, is_missing_from_operators, data, added_at) VALUES ",
+            "INSERT INTO tree_leaves (id, status, is_missing_from_operators, data, value, added_at) VALUES ",
         );
-        let mut params: Vec<Value> = Vec::with_capacity(filtered.len() * 4);
+        let mut params: Vec<Value> = Vec::with_capacity(filtered.len() * 5);
         for (i, leaf) in filtered.iter().enumerate() {
             if i > 0 {
                 sql.push_str(", ");
             }
-            sql.push_str("(?, ?, ?, ?, NOW(6))");
+            sql.push_str("(?, ?, ?, ?, ?, NOW(6))");
+            #[allow(clippy::cast_possible_wrap)]
+            let value_i64 = leaf.value as i64;
             params.push(Value::from(leaf.id.to_string()));
             params.push(Value::from(leaf.status.to_string()));
             params.push(Value::from(is_missing_from_operators));
             params.push(Value::from(Self::serialize_node(leaf)?));
+            params.push(Value::from(value_i64));
         }
         sql.push_str(
             " ON DUPLICATE KEY UPDATE
                 status = VALUES(status),
                 is_missing_from_operators = VALUES(is_missing_from_operators),
                 data = VALUES(data),
+                value = VALUES(value),
                 added_at = NOW(6)",
         );
 

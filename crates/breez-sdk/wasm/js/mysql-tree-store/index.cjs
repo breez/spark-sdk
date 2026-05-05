@@ -182,7 +182,7 @@ class MysqlTreeStore {
   async getAvailableBalance() {
     try {
       const [rows] = await this.pool.query(`
-        SELECT COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(l.data, '$.value')) AS UNSIGNED)), 0) AS balance
+        SELECT COALESCE(SUM(l.value), 0) AS balance
         FROM tree_leaves l
         LEFT JOIN tree_reservations r ON l.reservation_id = r.id
         WHERE
@@ -387,7 +387,7 @@ class MysqlTreeStore {
         // WaitForPending decision. Must NOT be derived from the prefiltered
         // slim set since the prefilter excludes big leaves.
         const [totalRows] = await conn.query(
-          `SELECT COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)), 0) AS total
+          `SELECT COALESCE(SUM(value), 0) AS total
            FROM tree_leaves
            WHERE status = 'Available'
              AND is_missing_from_operators = 0
@@ -400,21 +400,21 @@ class MysqlTreeStore {
         // with value > maxTarget (covers the minimum-amount fallback case
         // where one larger leaf is sufficient).
         const [slimRows] = await conn.query(
-          `SELECT id, CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) AS value
+          `SELECT id, value
            FROM tree_leaves
            WHERE status = 'Available'
              AND is_missing_from_operators = 0
              AND reservation_id IS NULL
              AND (
-               CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) <= ?
+               value <= ?
                OR id = (
                  SELECT id FROM (
                    SELECT id FROM tree_leaves
                    WHERE status = 'Available'
                      AND is_missing_from_operators = 0
                      AND reservation_id IS NULL
-                     AND CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED) > ?
-                   ORDER BY CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
+                     AND value > ?
+                   ORDER BY value
                    LIMIT 1
                  ) AS smallest_over
                )
@@ -765,7 +765,7 @@ class MysqlTreeStore {
     if (filtered.length === 0) return;
 
     const valueClauses = new Array(filtered.length)
-      .fill("(?, ?, ?, ?, NOW(6))")
+      .fill("(?, ?, ?, ?, ?, NOW(6))")
       .join(", ");
     const params = [];
     for (const leaf of filtered) {
@@ -773,17 +773,19 @@ class MysqlTreeStore {
         leaf.id,
         leaf.status,
         isMissingFromOperators ? 1 : 0,
-        JSON.stringify(leaf)
+        JSON.stringify(leaf),
+        leaf.value
       );
     }
 
     await conn.query(
-      `INSERT INTO tree_leaves (id, status, is_missing_from_operators, data, added_at)
+      `INSERT INTO tree_leaves (id, status, is_missing_from_operators, data, value, added_at)
        VALUES ${valueClauses}
        ON DUPLICATE KEY UPDATE
          status = VALUES(status),
          is_missing_from_operators = VALUES(is_missing_from_operators),
          data = VALUES(data),
+         value = VALUES(value),
          added_at = NOW(6)`,
       params
     );

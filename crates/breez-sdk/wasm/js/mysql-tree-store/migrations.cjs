@@ -120,6 +120,18 @@ class MysqlTreeStoreMigrationManager {
           `INSERT IGNORE INTO tree_swap_status (id) VALUES (1)`,
         ],
       },
+      {
+        name: "Promote leaf value to BIGINT column with covering index",
+        sql: [
+          `ALTER TABLE tree_leaves
+            ADD COLUMN value BIGINT NOT NULL DEFAULT 0`,
+          `UPDATE tree_leaves
+            SET value = CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
+            WHERE value = 0`,
+          `CREATE INDEX idx_tree_leaves_slim
+            ON tree_leaves(status, is_missing_from_operators, reservation_id, value)`,
+        ],
+      },
     ];
   }
 }
