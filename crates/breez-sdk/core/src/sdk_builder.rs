@@ -688,3 +688,27 @@ fn default_storage(
     let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
     Ok(storage)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SdkBuilder;
+    use crate::{Network, default_config};
+
+    #[test]
+    fn default_config_spark_config_builds_valid_wallet_config() {
+        for network in [Network::Mainnet, Network::Regtest] {
+            let config = default_config(network);
+            let spark_config = config
+                .spark_config
+                .as_ref()
+                .expect("default_config must populate spark_config");
+            SdkBuilder::build_spark_wallet_config(network.into(), spark_config).unwrap_or_else(
+                |e| {
+                    panic!(
+                        "default_config({network:?}).spark_config failed to build SparkWalletConfig: {e}"
+                    )
+                },
+            );
+        }
+    }
+}
