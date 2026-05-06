@@ -3,8 +3,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::{
-    BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
-    RestClient, SdkError, Seed, SspConnectionManager, Storage, chain::rest_client::ChainApiType,
+    BitcoinChainService, BreezSdk, Config, ConnectionManager, Credentials, FiatService,
+    KeySetConfig, PaymentObserver, RestClient, SdkError, Seed, SspConnectionManager, Storage,
+    chain::rest_client::ChainApiType,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -106,6 +107,14 @@ impl SdkBuilder {
     pub async fn with_ssp_connection_manager(&self, manager: Arc<SspConnectionManager>) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_ssp_connection_manager(manager);
+    }
+
+    /// Sets a shared connection manager to be reused across SDK instances.
+    /// Arguments:
+    /// - `connection_manager`: The shared connection manager.
+    pub async fn with_connection_manager(&self, connection_manager: Arc<ConnectionManager>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_connection_manager(connection_manager);
     }
 
     /// Builds the `BreezSdk` instance with the configured components.

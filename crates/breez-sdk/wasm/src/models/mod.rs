@@ -1,4 +1,5 @@
 pub mod chain_service;
+pub mod connection_manager;
 mod error;
 pub mod fiat_service;
 pub mod issuer;

@@ -24,6 +24,7 @@ use crate::{
         BitcoinChainService,
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
     },
+    connection_manager::ConnectionManager,
     error::SdkError,
     lnurl::{DefaultLnurlServerClient, LnurlServerClient},
     models::Config,
@@ -76,6 +77,7 @@ pub struct SdkBuilder {
     tree_store: Option<Arc<dyn TreeStore>>,
     token_output_store: Option<Arc<dyn TokenOutputStore>>,
     ssp_connection_manager: Option<Arc<crate::SspConnectionManager>>,
+    connection_manager: Option<Arc<ConnectionManager>>,
 }
 
 impl SdkBuilder {
@@ -110,6 +112,7 @@ impl SdkBuilder {
             tree_store: None,
             token_output_store: None,
             ssp_connection_manager: None,
+            connection_manager: None,
         }
     }
 
@@ -137,6 +140,7 @@ impl SdkBuilder {
             tree_store: None,
             token_output_store: None,
             ssp_connection_manager: None,
+            connection_manager: None,
         }
     }
 
@@ -315,6 +319,21 @@ impl SdkBuilder {
         manager: Arc<crate::SspConnectionManager>,
     ) -> Self {
         self.ssp_connection_manager = Some(manager);
+        self
+    }
+
+    /// Sets a shared [`ConnectionManager`] for the SDK to use.
+    ///
+    /// Pass the same `Arc` to multiple `SdkBuilder` instances to reuse one set
+    /// of gRPC channels to the Spark operators across many SDK instances. All
+    /// SDKs sharing a connection manager must be configured for the same
+    /// network and operator pool. See [`ConnectionManager`] for details.
+    ///
+    /// # Arguments
+    /// - `connection_manager`: The shared connection manager.
+    #[must_use]
+    pub fn with_connection_manager(mut self, connection_manager: Arc<ConnectionManager>) -> Self {
+        self.connection_manager = Some(connection_manager);
         self
     }
 
@@ -664,6 +683,10 @@ impl SdkBuilder {
         if let Some(ssp_connection_manager) = &self.ssp_connection_manager {
             wallet_builder =
                 wallet_builder.with_ssp_http_client(ssp_connection_manager.client.clone());
+        }
+        if let Some(connection_manager) = &self.connection_manager {
+            wallet_builder =
+                wallet_builder.with_connection_manager(connection_manager.inner.clone());
         }
         let spark_wallet = Arc::new(wallet_builder.build().await?);
 

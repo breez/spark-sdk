@@ -6,6 +6,7 @@ use crate::{
     models::{
         Config, Credentials, Seed,
         chain_service::{BitcoinChainService, ChainApiType, WasmBitcoinChainService},
+        connection_manager::ConnectionManager,
         fiat_service::{FiatService, WasmFiatService},
         payment_observer::{PaymentObserver, WasmPaymentObserver},
         rest_client::{RestClient, WasmRestClient},
@@ -237,6 +238,14 @@ impl SdkBuilder {
         self.builder = self
             .builder
             .with_ssp_connection_manager(manager.inner.clone());
+        self
+    }
+
+    #[wasm_bindgen(js_name = "withConnectionManager")]
+    pub fn with_connection_manager(mut self, connection_manager: ConnectionManager) -> Self {
+        self.builder = self
+            .builder
+            .with_connection_manager(connection_manager.inner);
         self
     }
 

@@ -10,6 +10,7 @@ Using the SDK Builder gives you more control over the initialization and modular
 - Change the [Key Set](#with-key-set) to alter the derivation path used
 - [Payment Observer](#with-payment-observer) to be notified before payments occur
 - [SSP Connection Manager](#with-ssp-connection-manager) to share the SSP HTTP client across SDK instances
+- [Connection Manager](#with-connection-manager) to share gRPC connections across SDK instances
 
 {{#tabs sdk_building:init-sdk-advanced}}
 
@@ -111,5 +112,21 @@ Construct one via {{#name new_ssp_connection_manager}} and pass it to each {{#na
 <h4>Developer note</h4>
 
 The user agent of the first SDK to construct the SSP Connection Manager is reused for all subsequent instances.
+
+</div>
+
+<h2 id="with-connection-manager">
+    <a class="header" href="#with-connection-manager">With Connection Manager</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_connection_manager">API docs</a>
+</h2>
+
+A Connection Manager can be shared across SDK instances so they reuse the same gRPC connections to the Spark operators instead of opening a new set per user.
+
+Construct one Connection Manager via {{#name new_connection_manager}} and pass it to each {{#name SdkBuilder}} via {{#name with_connection_manager}}. Connections close when the last reference to the Connection Manager is dropped; calling {{#name disconnect}} on an SDK instance does not affect it.
+
+<div class="warning">
+<h4>Developer note</h4>
+
+All SDK instances sharing a Connection Manager must be configured for the same network and operator pool. The cache is keyed by operator address, so the TLS settings and user agent of the first SDK to connect to a given operator are reused for everyone afterwards.
 
 </div>
