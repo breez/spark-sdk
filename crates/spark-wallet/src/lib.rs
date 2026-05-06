@@ -18,9 +18,10 @@ pub use spark::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
         FreezeIssuerTokenResponse, InvoiceDescription, LightningSendPayment, LightningSendStatus,
         Preimage, PreimageRequestStatus, ReceiverTokenOutput, ServiceError,
-        SingleUseDepositAddress, StaticDepositAddress, TokenInputs, TokenTransaction,
-        TokenTransactionStatus, TransferId, TransferObserver, TransferObserverError,
-        TransferStatus, TransferTokenOutput, TransferType, Utxo,
+        SingleUseDepositAddress, StaticDepositAddress, TokenInputs, TokenMintInput,
+        TokenOutputToSpend, TokenTransaction, TokenTransactionStatus, TokenTransferInput,
+        TransferId, TransferObserver, TransferObserverError, TransferStatus, TransferTokenOutput,
+        TransferType, Utxo,
     },
     session_manager::*,
     signer::{

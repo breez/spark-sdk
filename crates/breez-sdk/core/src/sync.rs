@@ -9,7 +9,10 @@ use tracing::{error, info};
 use crate::{
     EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository, StorageListPaymentsRequest},
-    utils::{payments::get_payment_and_emit_event, token::token_transaction_to_payments},
+    utils::{
+        payments::get_payment_and_emit_event,
+        token::{token_transaction_to_payments, token_tx_inputs_are_ours},
+    },
 };
 
 const PAYMENT_SYNC_BATCH_SIZE: u64 = 50;
@@ -351,27 +354,26 @@ impl SparkSyncService {
             );
             // Process transfers in this page
             for transaction in &token_transactions.items {
-                let tx_inputs_are_ours = match &transaction.inputs {
+                let parent_transaction = match &transaction.inputs {
                     spark_wallet::TokenInputs::Transfer(token_transfer_input) => {
                         let first_input = token_transfer_input.outputs_to_spend.first().ok_or(
                             SdkError::Generic("No input in token transfer input".to_string()),
                         )?;
-                        let parent_transaction = parent_transactions
-                            .iter()
-                            .find(|tx| tx.hash == first_input.prev_token_tx_hash)
-                            .ok_or(SdkError::Generic(
-                                "Parent transaction not found".to_string(),
-                            ))?;
-                        let output = parent_transaction
-                            .outputs
-                            .get(first_input.prev_token_tx_vout as usize)
-                            .ok_or(SdkError::Generic("Output not found".to_string()))?;
-                        output.owner_public_key == our_public_key
+                        Some(
+                            parent_transactions
+                                .iter()
+                                .find(|tx| tx.hash == first_input.prev_token_tx_hash)
+                                .ok_or(SdkError::Generic(
+                                    "Parent transaction not found".to_string(),
+                                ))?,
+                        )
                     }
                     spark_wallet::TokenInputs::Mint(_) | spark_wallet::TokenInputs::Create(_) => {
-                        false
+                        None
                     }
                 };
+                let tx_inputs_are_ours =
+                    token_tx_inputs_are_ours(transaction, parent_transaction, our_public_key)?;
 
                 // Create payment records
                 let payments = token_transaction_to_payments(

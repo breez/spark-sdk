@@ -134,7 +134,7 @@ pub async fn wallets(#[future] test_fixtures: TestFixtures) -> WalletsFixture {
             .await
             .expect("Failed to receive alice wallet event");
         info!("Alice wallet event: {:?}", event);
-        if event == WalletEvent::Synced {
+        if matches!(event, WalletEvent::Synced) {
             break;
         }
     }
@@ -144,7 +144,7 @@ pub async fn wallets(#[future] test_fixtures: TestFixtures) -> WalletsFixture {
             .await
             .expect("Failed to receive bob wallet event");
         info!("Bob wallet event: {:?}", event);
-        if event == WalletEvent::Synced {
+        if matches!(event, WalletEvent::Synced) {
             break;
         }
     }
