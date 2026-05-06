@@ -476,13 +476,10 @@ impl FromStr for SparkAddress {
 
         let address = SparkAddress::new(identity_public_key, network, invoice_fields);
 
-        if address.is_invoice() {
+        if address.is_invoice()
+            && let Some(sig) = signature
+        {
             let hash = address.compute_invoice_hash()?;
-
-            let Some(sig) = signature else {
-                return Err(AddressError::Other("Invoice has no signature".to_string()));
-            };
-
             let secp = Secp256k1::new();
             if secp
                 .verify_schnorr(
