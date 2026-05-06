@@ -90,7 +90,7 @@ jobs:
       bindings-android: ${{ !!needs.pre-setup.outputs.android-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.react-native-package-version }}
       bindings-darwin: ${{  !!needs.pre-setup.outputs.csharp-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version || !!needs.pre-setup.outputs.swift-package-version }}
       bindings-ios: ${{ !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.swift-package-version || !!needs.pre-setup.outputs.react-native-package-version }}
-      bindings-linux: ${{ !!needs.pre-setup.outputs.csharp-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version }}
+      bindings-linux: ${{ !!needs.pre-setup.outputs.csharp-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.kotlin-multiplatform-package-version || !!needs.pre-setup.outputs.python-package-version }}
       bindings-wasm: ${{ !!needs.pre-setup.outputs.wasm-package-version }}
       bindings-windows: ${{ !!needs.pre-setup.outputs.csharp-package-version || !!needs.pre-setup.outputs.golang-package-version || !!needs.pre-setup.outputs.python-package-version }}
       android: ${{ !!needs.pre-setup.outputs.android-package-version }}
@@ -238,6 +238,7 @@ jobs:
     needs:
       - setup
       - build-bindings-android
+      - build-bindings-linux
     if: ${{ needs.setup.outputs.kotlin-multiplatform == 'true' }}
     uses: ./.github/workflows/publish-kotlin-multiplatform.yml
     with:
