@@ -136,6 +136,7 @@ jobs:
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI
+          ln -sf Versions/Current/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
 
       - name: Embed dSYMs in xcframework
         run: |
@@ -156,7 +157,7 @@ jobs:
       - name: Compress XCFramework
         working-directory: build/crates/breez-sdk/bindings/langs/swift
         run: |
-          zip -9 -r breez_sdk_sparkFFI.xcframework.zip breez_sdk_sparkFFI.xcframework
+          zip -9 -r -y breez_sdk_sparkFFI.xcframework.zip breez_sdk_sparkFFI.xcframework
           echo "XCF_CHECKSUM=`swift package compute-checksum breez_sdk_sparkFFI.xcframework.zip`" >> $GITHUB_ENV
 
       - name: Remove dist Sources
