@@ -16,12 +16,14 @@ use crate::pool::{map_db_error, map_pool_error};
 /// # Arguments
 /// * `pool` - The connection pool to use
 /// * `migrations_table` - Name of the table to track migration versions (e.g., `schema_migrations`)
-/// * `migrations` - List of migrations, where each migration is a list of SQL statements
+/// * `migrations` - List of migrations, where each migration is a list of SQL statements.
+///   Statements are owned `String`s so callers can build them at runtime (e.g. inlining a
+///   tenant identity into a backfill).
 #[allow(clippy::arithmetic_side_effects)]
 pub async fn run_migrations(
     pool: &Pool,
     migrations_table: &str,
-    migrations: &[&[&str]],
+    migrations: &[Vec<String>],
 ) -> Result<(), PostgresError> {
     let mut client = pool.get().await.map_err(map_pool_error)?;
 
@@ -63,8 +65,8 @@ pub async fn run_migrations(
     for (i, migration) in migrations.iter().enumerate() {
         let version = i32::try_from(i + 1).unwrap_or(i32::MAX);
         if version > current_version {
-            for statement in *migration {
-                tx.execute(*statement, &[]).await.map_err(|e| {
+            for statement in migration {
+                tx.execute(statement.as_str(), &[]).await.map_err(|e| {
                     PostgresError::Database(format!("Migration {version} failed: {e}"))
                 })?;
             }

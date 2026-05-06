@@ -22,8 +22,16 @@ class TreeStoreMigrationManager {
   /**
    * Run all pending migrations inside a single transaction with an advisory lock.
    * @param {import('pg').Pool} pool
+   * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+   *   identifying the tenant. Used to backfill `user_id` columns in the
+   *   multi-tenant scoping migration. Required.
    */
-  async migrate(pool) {
+  async migrate(pool, identity) {
+    if (!identity || identity.length !== 33) {
+      throw new TreeStoreError(
+        "tenant identity (33-byte secp256k1 pubkey) is required"
+      );
+    }
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -45,7 +53,7 @@ class TreeStoreMigrationManager {
       );
       const currentVersion = versionResult.rows[0].version;
 
-      const migrations = this._getMigrations();
+      const migrations = this._getMigrations(identity);
 
       if (currentVersion >= migrations.length) {
         this._log("info", `Tree store database is up to date (version ${currentVersion})`);
@@ -96,8 +104,16 @@ class TreeStoreMigrationManager {
 
   /**
    * Migrations matching the Rust PostgresTreeStore schema exactly.
+   *
+   * @param {Buffer|Uint8Array} identity - tenant identity inlined as a hex
+   *   BYTEA literal in the multi-tenant scoping migration. Safe because the
+   *   bytes come from a typed secp256k1 pubkey (`[0-9a-f]{66}` after hex
+   *   encoding) — not user-controlled input.
    */
-  _getMigrations() {
+  _getMigrations(identity) {
+    const idHex = Buffer.from(identity).toString("hex");
+    const idLit = `'\\x${idHex}'::bytea`;
+
     return [
       {
         name: "Create tree store tables",
@@ -141,6 +157,67 @@ class TreeStoreMigrationManager {
             last_completed_at TIMESTAMPTZ
           )`,
           `INSERT INTO tree_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING`,
+        ],
+      },
+      {
+        // Mirrors Rust migration 3 in spark-postgres/src/tree_store.rs.
+        // Adds user_id to every tree-store table, backfills with the connecting
+        // tenant's identity, and rewrites primary keys / FKs / indexes to lead
+        // with user_id. The composite FK uses NO ACTION (the default) instead
+        // of the previous single-column ON DELETE SET NULL — PG-only column-list
+        // SET NULL is PG15+, and a whole-row SET NULL would null user_id (NOT
+        // NULL). cleanupStaleReservations now releases leaves explicitly.
+        name: "Multi-tenant scoping: add user_id and rewrite primary keys",
+        sql: [
+          // Drop the old single-column FK FIRST, before touching the
+          // tree_reservations PK it depends on.
+          `ALTER TABLE tree_leaves
+             DROP CONSTRAINT IF EXISTS tree_leaves_reservation_id_fkey`,
+
+          // tree_reservations: scope by user_id.
+          `ALTER TABLE tree_reservations ADD COLUMN user_id BYTEA`,
+          `UPDATE tree_reservations SET user_id = ${idLit}`,
+          `ALTER TABLE tree_reservations
+             ALTER COLUMN user_id SET NOT NULL,
+             DROP CONSTRAINT IF EXISTS tree_reservations_pkey,
+             ADD PRIMARY KEY (user_id, id)`,
+
+          // tree_leaves: add user_id, rekey, and re-add the composite FK.
+          `ALTER TABLE tree_leaves ADD COLUMN user_id BYTEA`,
+          `UPDATE tree_leaves SET user_id = ${idLit}`,
+          `ALTER TABLE tree_leaves
+             ALTER COLUMN user_id SET NOT NULL,
+             DROP CONSTRAINT IF EXISTS tree_leaves_pkey,
+             ADD PRIMARY KEY (user_id, id),
+             ADD FOREIGN KEY (user_id, reservation_id)
+                REFERENCES tree_reservations(user_id, id)`,
+          `DROP INDEX IF EXISTS idx_tree_leaves_available`,
+          `DROP INDEX IF EXISTS idx_tree_leaves_reservation`,
+          `DROP INDEX IF EXISTS idx_tree_leaves_added_at`,
+          `CREATE INDEX idx_tree_leaves_user_available
+             ON tree_leaves(user_id, status, is_missing_from_operators)
+             WHERE status = 'Available' AND is_missing_from_operators = FALSE`,
+          `CREATE INDEX idx_tree_leaves_user_reservation
+             ON tree_leaves(user_id, reservation_id)
+             WHERE reservation_id IS NOT NULL`,
+          `CREATE INDEX idx_tree_leaves_user_added_at ON tree_leaves(user_id, added_at)`,
+
+          // tree_spent_leaves: scope by user_id.
+          `ALTER TABLE tree_spent_leaves ADD COLUMN user_id BYTEA`,
+          `UPDATE tree_spent_leaves SET user_id = ${idLit}`,
+          `ALTER TABLE tree_spent_leaves
+             ALTER COLUMN user_id SET NOT NULL,
+             DROP CONSTRAINT IF EXISTS tree_spent_leaves_pkey,
+             ADD PRIMARY KEY (user_id, leaf_id)`,
+
+          // tree_swap_status was a singleton (PK id=1, CHECK id=1). Drop the id
+          // column (CASCADE removes both PK and CHECK), then re-key by user_id.
+          `ALTER TABLE tree_swap_status DROP COLUMN id CASCADE`,
+          `ALTER TABLE tree_swap_status ADD COLUMN user_id BYTEA`,
+          `UPDATE tree_swap_status SET user_id = ${idLit}`,
+          `ALTER TABLE tree_swap_status
+             ALTER COLUMN user_id SET NOT NULL,
+             ADD PRIMARY KEY (user_id)`,
         ],
       },
     ];

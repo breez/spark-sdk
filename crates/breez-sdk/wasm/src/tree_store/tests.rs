@@ -10,6 +10,7 @@ extern "C" {
     #[wasm_bindgen(js_name = "createPostgresTreeStore", catch)]
     async fn create_postgres_tree_store(
         config: PostgresStorageConfig,
+        identity: &[u8],
         logger: Option<&crate::logger::Logger>,
     ) -> Result<TreeStoreJs, JsValue>;
 }
@@ -20,6 +21,14 @@ extern "C" {
     #[wasm_bindgen(js_name = "createTestConnectionString", catch)]
     async fn create_test_connection_string(test_name: &str) -> Result<JsValue, JsValue>;
 }
+
+/// Fixed 33-byte test identity. Each test gets its own isolated DB via
+/// `createTestConnectionString`, so a single shared identity is fine.
+const TEST_IDENTITY: [u8; 33] = [
+    0x02, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+    0x20,
+];
 
 /// Helper to create a WasmTreeStore instance for testing
 async fn create_test_tree_store(test_name: &str) -> WasmTreeStore {
@@ -32,7 +41,7 @@ async fn create_test_tree_store(test_name: &str) -> WasmTreeStore {
 
     let config = crate::sdk_builder::default_postgres_storage_config(&conn_string);
 
-    let tree_store_js = create_postgres_tree_store(config, None)
+    let tree_store_js = create_postgres_tree_store(config, &TEST_IDENTITY, None)
         .await
         .expect("Failed to create postgres tree store instance");
     WasmTreeStore::new(tree_store_js)

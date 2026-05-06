@@ -8,6 +8,7 @@
 //! configuration, and a generic migration runner) that can be reused by downstream
 //! crates for their own `PostgreSQL` storage needs.
 
+mod advisory_lock;
 pub mod config;
 pub mod error;
 pub mod migrations;

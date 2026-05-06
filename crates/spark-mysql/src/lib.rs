@@ -11,6 +11,7 @@
 //! Targets `MySQL` 8.0+ (uses native `JSON` type, `CHECK` constraints, and `GET_LOCK`
 //! for application-level write serialization).
 
+mod advisory_lock;
 pub mod config;
 pub mod error;
 pub mod migrations;

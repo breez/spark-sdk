@@ -452,25 +452,36 @@ impl SdkBuilder {
             _ => {}
         }
 
-        // Create a shared PostgreSQL pool if postgres backend is configured.
-        // This single pool is reused for storage, tree store, and token store.
+        // Create a shared PostgreSQL pool if postgres backend is configured,
+        // bundled with the tenant identity used to scope every read/write so
+        // storage, tree store, and token store share the same scope.
         #[cfg(feature = "postgres")]
-        let postgres_pool = if let Some(ref postgres_config) = self.postgres_backend_config {
-            Some(
-                crate::persist::postgres::create_pool(postgres_config)
-                    .map_err(|e| SdkError::Generic(e.to_string()))?,
-            )
+        let postgres_backend = if let Some(ref postgres_config) = self.postgres_backend_config {
+            let pool = crate::persist::postgres::create_pool(postgres_config)
+                .map_err(|e| SdkError::Generic(e.to_string()))?;
+            let identity = spark_signer
+                .get_identity_public_key()
+                .await
+                .map_err(|e| SdkError::Generic(e.to_string()))?
+                .serialize();
+            Some((pool, identity))
         } else {
             None
         };
 
-        // Create a shared MySQL pool if mysql backend is configured.
+        // Create a shared MySQL pool if mysql backend is configured, bundled
+        // with the tenant identity used to scope every read/write so storage,
+        // tree store, and token store share the same scope.
         #[cfg(feature = "mysql")]
-        let mysql_pool = if let Some(ref mysql_config) = self.mysql_backend_config {
-            Some(
-                crate::persist::mysql::create_pool(mysql_config)
-                    .map_err(|e| SdkError::Generic(e.to_string()))?,
-            )
+        let mysql_backend = if let Some(ref mysql_config) = self.mysql_backend_config {
+            let pool = crate::persist::mysql::create_pool(mysql_config)
+                .map_err(|e| SdkError::Generic(e.to_string()))?;
+            let identity = spark_signer
+                .get_identity_public_key()
+                .await
+                .map_err(|e| SdkError::Generic(e.to_string()))?
+                .serialize();
+            Some((pool, identity))
         } else {
             None
         };
@@ -503,12 +514,15 @@ impl SdkBuilder {
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
             if s.is_none()
-                && let Some(ref pool) = postgres_pool
+                && let Some((ref pool, ref identity)) = postgres_backend
             {
                 s = Some(Arc::new(
-                    crate::persist::postgres::PostgresStorage::new_with_pool(pool.clone())
-                        .await
-                        .map_err(|e| SdkError::Generic(e.to_string()))?,
+                    crate::persist::postgres::PostgresStorage::new_with_pool(
+                        pool.clone(),
+                        identity,
+                    )
+                    .await
+                    .map_err(|e| SdkError::Generic(e.to_string()))?,
                 ));
             }
 
@@ -517,10 +531,10 @@ impl SdkBuilder {
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
             if s.is_none()
-                && let Some(ref pool) = mysql_pool
+                && let Some((ref pool, ref identity)) = mysql_backend
             {
                 s = Some(Arc::new(
-                    crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone())
+                    crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone(), identity)
                         .await
                         .map_err(|e| SdkError::Generic(e.to_string()))?,
                 ));
@@ -573,17 +587,20 @@ impl SdkBuilder {
 
         #[cfg(feature = "postgres")]
         if tree_store.is_none()
-            && let Some(ref pool) = postgres_pool
+            && let Some((ref pool, ref identity)) = postgres_backend
         {
-            tree_store =
-                Some(crate::persist::postgres::create_postgres_tree_store(pool.clone()).await?);
+            tree_store = Some(
+                crate::persist::postgres::create_postgres_tree_store(pool.clone(), identity)
+                    .await?,
+            );
         }
 
         #[cfg(feature = "mysql")]
         if tree_store.is_none()
-            && let Some(ref pool) = mysql_pool
+            && let Some((ref pool, ref identity)) = mysql_backend
         {
-            tree_store = Some(crate::persist::mysql::create_mysql_tree_store(pool.clone()).await?);
+            tree_store =
+                Some(crate::persist::mysql::create_mysql_tree_store(pool.clone(), identity).await?);
         }
 
         // Create token output store if configured
@@ -592,18 +609,21 @@ impl SdkBuilder {
 
         #[cfg(feature = "postgres")]
         if token_output_store.is_none()
-            && let Some(ref pool) = postgres_pool
+            && let Some((ref pool, ref identity)) = postgres_backend
         {
-            token_output_store =
-                Some(crate::persist::postgres::create_postgres_token_store(pool.clone()).await?);
+            token_output_store = Some(
+                crate::persist::postgres::create_postgres_token_store(pool.clone(), identity)
+                    .await?,
+            );
         }
 
         #[cfg(feature = "mysql")]
         if token_output_store.is_none()
-            && let Some(ref pool) = mysql_pool
+            && let Some((ref pool, ref identity)) = mysql_backend
         {
-            token_output_store =
-                Some(crate::persist::mysql::create_mysql_token_store(pool.clone()).await?);
+            token_output_store = Some(
+                crate::persist::mysql::create_mysql_token_store(pool.clone(), identity).await?,
+            );
         }
 
         let session_manager = Arc::new(BreezSessionManager::new(Arc::new(

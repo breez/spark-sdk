@@ -25,10 +25,10 @@ const { TreeStoreError } = require("./errors.cjs");
 const { TreeStoreMigrationManager } = require("./migrations.cjs");
 
 /**
- * Advisory lock key for serializing tree store write operations.
- * Matches the Rust constant TREE_STORE_WRITE_LOCK_KEY = 0x7472_6565_5354_4f52
+ * Domain prefix mixed into the per-tenant advisory-lock key. Distinct prefixes
+ * guarantee that locks from different stores (tree, token, …) never collide.
  */
-const TREE_STORE_WRITE_LOCK_KEY = "8390880541608791890"; // 0x7472656553544f52 as decimal string
+const TREE_STORE_LOCK_PREFIX = "breez-spark-sdk:tree:";
 
 /**
  * Timeout for reservations in seconds. Reservations older than this are stale.
@@ -40,9 +40,37 @@ const RESERVATION_TIMEOUT_SECS = 300; // 5 minutes
  */
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
+/**
+ * Derive a stable per-tenant 64-bit advisory-lock key by hashing a domain
+ * prefix together with the identity pubkey and folding the first 8 bytes of
+ * the SHA-256 digest into a signed big-endian i64 — the type expected by
+ * `pg_advisory_xact_lock(bigint)`. The 64-bit space keeps cross-tenant
+ * collisions negligible (~1.2e-10 at 65k tenants).
+ */
+function _identityLockKey(prefix, identity) {
+  const crypto = require("crypto");
+  const hash = crypto.createHash("sha256");
+  hash.update(prefix);
+  hash.update(Buffer.from(identity));
+  return hash.digest().readBigInt64BE(0);
+}
+
 class PostgresTreeStore {
-  constructor(pool, logger = null) {
+  /**
+   * @param {import('pg').Pool} pool
+   * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+   *   identifying the tenant. All reads and writes are scoped by this.
+   * @param {object} [logger]
+   */
+  constructor(pool, identity, logger = null) {
+    if (!identity || identity.length !== 33) {
+      throw new TreeStoreError(
+        "tenant identity (33-byte secp256k1 pubkey) is required"
+      );
+    }
     this.pool = pool;
+    this.identity = Buffer.from(identity);
+    this.lockKey = _identityLockKey(TREE_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
   }
 
@@ -52,7 +80,7 @@ class PostgresTreeStore {
   async initialize() {
     try {
       const migrationManager = new TreeStoreMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool);
+      await migrationManager.migrate(this.pool, this.identity);
       return this;
     } catch (error) {
       throw new TreeStoreError(
@@ -84,7 +112,10 @@ class PostgresTreeStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query(`SELECT pg_advisory_xact_lock(${TREE_STORE_WRITE_LOCK_KEY})`);
+      // Per-tenant advisory lock: 64-bit key derived from a tree-store domain
+      // prefix and the tenant identity, so different tenants don't serialize
+      // on each other and tree/token locks never collide.
+      await client.query("SELECT pg_advisory_xact_lock($1)", [this.lockKey]);
       const result = await fn(client);
       await client.query("COMMIT");
       return result;
@@ -160,14 +191,20 @@ class PostgresTreeStore {
    */
   async getAvailableBalance() {
     try {
-      const result = await this.pool.query(`
+      const result = await this.pool.query(
+        `
         SELECT COALESCE(SUM((l.data->>'value')::bigint), 0)::bigint AS balance
         FROM tree_leaves l
-        LEFT JOIN tree_reservations r ON l.reservation_id = r.id
-        WHERE
-          (l.reservation_id IS NULL AND l.status = 'Available')
-          OR r.purpose = 'Swap'
-      `);
+        LEFT JOIN tree_reservations r
+          ON l.reservation_id = r.id AND l.user_id = r.user_id
+        WHERE l.user_id = $1
+          AND (
+            (l.reservation_id IS NULL AND l.status = 'Available')
+            OR r.purpose = 'Swap'
+          )
+      `,
+        [this.identity]
+      );
       return BigInt(result.rows[0].balance);
     } catch (error) {
       throw new TreeStoreError(
@@ -179,12 +216,17 @@ class PostgresTreeStore {
 
   async getLeaves() {
     try {
-      const result = await this.pool.query(`
+      const result = await this.pool.query(
+        `
         SELECT l.id, l.status, l.is_missing_from_operators, l.data,
                l.reservation_id, r.purpose
         FROM tree_leaves l
-        LEFT JOIN tree_reservations r ON l.reservation_id = r.id
-      `);
+        LEFT JOIN tree_reservations r
+          ON l.reservation_id = r.id AND l.user_id = r.user_id
+        WHERE l.user_id = $1
+      `,
+        [this.identity]
+      );
 
       const available = [];
       const notAvailable = [];
@@ -246,11 +288,21 @@ class PostgresTreeStore {
         await this._cleanupStaleReservations(client);
 
         // Check for active swap or swap completed during refresh
-        const swapCheckResult = await client.query(`
+        const swapCheckResult = await client.query(
+          `
           SELECT
-            EXISTS(SELECT 1 FROM tree_reservations WHERE purpose = 'Swap') AS has_active_swap,
-            COALESCE((SELECT last_completed_at >= $1 FROM tree_swap_status WHERE id = 1), FALSE) AS swap_completed_during_refresh
-        `, [refreshTimestamp]);
+            EXISTS(
+              SELECT 1 FROM tree_reservations
+              WHERE user_id = $1 AND purpose = 'Swap'
+            ) AS has_active_swap,
+            COALESCE(
+              (SELECT last_completed_at >= $2
+               FROM tree_swap_status WHERE user_id = $1),
+              FALSE
+            ) AS swap_completed_during_refresh
+        `,
+          [this.identity, refreshTimestamp]
+        );
 
         const { has_active_swap, swap_completed_during_refresh } = swapCheckResult.rows[0];
 
@@ -262,18 +314,18 @@ class PostgresTreeStore {
         await this._cleanupSpentMarkers(client, refreshTimestamp);
 
         const spentResult = await client.query(
-          "SELECT leaf_id FROM tree_spent_leaves WHERE spent_at >= $1",
-          [refreshTimestamp]
+          "SELECT leaf_id FROM tree_spent_leaves WHERE user_id = $1 AND spent_at >= $2",
+          [this.identity, refreshTimestamp]
         );
         const spentIds = new Set(spentResult.rows.map((r) => r.leaf_id));
 
         // Delete non-reserved leaves added before refresh started.
-        // Includes leaves released earlier in this transaction by _cleanupStaleReservations
-        // (FK ON DELETE SET NULL) — those rows kept their old added_at, so they are
-        // dropped here and re-fetched from the operator response in the upsert below.
+        // Includes leaves released earlier in this transaction by
+        // _cleanupStaleReservations (which now NULLs reservation_id explicitly,
+        // since the composite FK uses NO ACTION).
         await client.query(
-          "DELETE FROM tree_leaves WHERE reservation_id IS NULL AND added_at < $1",
-          [refreshTimestamp]
+          "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
+          [this.identity, refreshTimestamp]
         );
 
         // Upsert all leaves (filtering spent)
@@ -306,8 +358,8 @@ class PostgresTreeStore {
     try {
       await this._withTransaction(async (client) => {
         const res = await client.query(
-          "SELECT id FROM tree_reservations WHERE id = $1",
-          [id]
+          "SELECT id FROM tree_reservations WHERE user_id = $1 AND id = $2",
+          [this.identity, id]
         );
 
         if (res.rows.length === 0) {
@@ -315,13 +367,13 @@ class PostgresTreeStore {
         }
 
         await client.query(
-          "DELETE FROM tree_leaves WHERE reservation_id = $1",
-          [id]
+          "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+          [this.identity, id]
         );
 
         await client.query(
-          "DELETE FROM tree_reservations WHERE id = $1",
-          [id]
+          "DELETE FROM tree_reservations WHERE user_id = $1 AND id = $2",
+          [this.identity, id]
         );
 
         if (leavesToKeep && leavesToKeep.length > 0) {
@@ -351,8 +403,8 @@ class PostgresTreeStore {
       await this._withWriteTransaction(async (client) => {
         // Check if reservation exists and get purpose
         const res = await client.query(
-          "SELECT id, purpose FROM tree_reservations WHERE id = $1",
-          [id]
+          "SELECT id, purpose FROM tree_reservations WHERE user_id = $1 AND id = $2",
+          [this.identity, id]
         );
 
         let isSwap = false;
@@ -360,18 +412,18 @@ class PostgresTreeStore {
         if (res.rows.length > 0) {
           isSwap = res.rows[0].purpose === "Swap";
           const leafResult = await client.query(
-            "SELECT id FROM tree_leaves WHERE reservation_id = $1",
-            [id]
+            "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+            [this.identity, id]
           );
           reservedLeafIds = leafResult.rows.map((r) => r.id);
           await this._batchInsertSpentLeaves(client, reservedLeafIds);
           await client.query(
-            "DELETE FROM tree_leaves WHERE reservation_id = $1",
-            [id]
+            "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+            [this.identity, id]
           );
           await client.query(
-            "DELETE FROM tree_reservations WHERE id = $1",
-            [id]
+            "DELETE FROM tree_reservations WHERE user_id = $1 AND id = $2",
+            [this.identity, id]
           );
         }
 
@@ -380,10 +432,15 @@ class PostgresTreeStore {
           await this._batchUpsertLeaves(client, newLeaves, false, null);
         }
 
-        // If swap with new leaves, update last_completed_at
+        // If swap with new leaves, update last_completed_at. UPSERT so a tenant
+        // that joined after migration 3 (and thus has no row) gets one created.
         if (isSwap && newLeaves && newLeaves.length > 0) {
           await client.query(
-            "UPDATE tree_swap_status SET last_completed_at = NOW() WHERE id = 1"
+            `INSERT INTO tree_swap_status (user_id, last_completed_at)
+             VALUES ($1, NOW())
+             ON CONFLICT (user_id) DO UPDATE
+               SET last_completed_at = EXCLUDED.last_completed_at`,
+            [this.identity]
           );
         }
       });
@@ -412,13 +469,17 @@ class PostgresTreeStore {
         // True total available, computed server-side over ALL eligible leaves.
         // Required for the WaitForPending decision below — must NOT be derived
         // from the prefiltered set since the prefilter may exclude big leaves.
-        const totalResult = await client.query(`
+        const totalResult = await client.query(
+          `
           SELECT COALESCE(SUM((data->>'value')::bigint), 0)::bigint AS total
           FROM tree_leaves
-          WHERE status = 'Available'
+          WHERE user_id = $1
+            AND status = 'Available'
             AND is_missing_from_operators = FALSE
             AND reservation_id IS NULL
-        `);
+        `,
+          [this.identity]
+        );
         const available = Number(totalResult.rows[0].total);
 
         // Slim projection: only (id, value) for leaves the selection might use.
@@ -426,25 +487,30 @@ class PostgresTreeStore {
         // small-leaf accumulators for the minimum-amount path) plus the single
         // smallest leaf with value > maxTarget (covers the minimum-amount
         // fallback case where one larger leaf is sufficient).
-        const slimResult = await client.query(`
+        const slimResult = await client.query(
+          `
           SELECT id, (data->>'value')::bigint AS value
           FROM tree_leaves
-          WHERE status = 'Available'
+          WHERE user_id = $1
+            AND status = 'Available'
             AND is_missing_from_operators = FALSE
             AND reservation_id IS NULL
             AND (
-              (data->>'value')::bigint <= $1
+              (data->>'value')::bigint <= $2
               OR id = (
                 SELECT id FROM tree_leaves
-                WHERE status = 'Available'
+                WHERE user_id = $1
+                  AND status = 'Available'
                   AND is_missing_from_operators = FALSE
                   AND reservation_id IS NULL
-                  AND (data->>'value')::bigint > $1
+                  AND (data->>'value')::bigint > $2
                 ORDER BY (data->>'value')::bigint
                 LIMIT 1
               )
             )
-        `, [maxTarget]);
+        `,
+          [this.identity, maxTarget]
+        );
 
         const slimLeaves = slimResult.rows.map((r) => ({
           id: r.id,
@@ -543,8 +609,8 @@ class PostgresTreeStore {
   async _fetchFullLeavesByIds(client, ids) {
     if (!ids || ids.length === 0) return [];
     const result = await client.query(
-      "SELECT data FROM tree_leaves WHERE id = ANY($1)",
-      [ids]
+      "SELECT data FROM tree_leaves WHERE user_id = $2 AND id = ANY($1)",
+      [ids, this.identity]
     );
     return result.rows.map((r) => r.data);
   }
@@ -577,8 +643,8 @@ class PostgresTreeStore {
       return await this._withTransaction(async (client) => {
         // Check if reservation exists
         const res = await client.query(
-          "SELECT id FROM tree_reservations WHERE id = $1",
-          [reservationId]
+          "SELECT id FROM tree_reservations WHERE user_id = $1 AND id = $2",
+          [this.identity, reservationId]
         );
 
         if (res.rows.length === 0) {
@@ -587,15 +653,15 @@ class PostgresTreeStore {
 
         // Get old reserved leaf IDs and mark as spent
         const oldLeavesResult = await client.query(
-          "SELECT id FROM tree_leaves WHERE reservation_id = $1",
-          [reservationId]
+          "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+          [this.identity, reservationId]
         );
         const oldLeafIds = oldLeavesResult.rows.map((r) => r.id);
 
         await this._batchInsertSpentLeaves(client, oldLeafIds);
         await client.query(
-          "DELETE FROM tree_leaves WHERE reservation_id = $1",
-          [reservationId]
+          "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+          [this.identity, reservationId]
         );
 
         // Upsert change leaves to available pool
@@ -610,8 +676,8 @@ class PostgresTreeStore {
 
         // Clear pending change amount
         await client.query(
-          "UPDATE tree_reservations SET pending_change_amount = 0 WHERE id = $1",
-          [reservationId]
+          "UPDATE tree_reservations SET pending_change_amount = 0 WHERE user_id = $1 AND id = $2",
+          [this.identity, reservationId]
         );
 
         return {
@@ -793,7 +859,8 @@ class PostgresTreeStore {
    */
   async _calculatePendingBalance(client) {
     const result = await client.query(
-      "SELECT COALESCE(SUM(pending_change_amount), 0)::BIGINT AS pending FROM tree_reservations"
+      "SELECT COALESCE(SUM(pending_change_amount), 0)::BIGINT AS pending FROM tree_reservations WHERE user_id = $1",
+      [this.identity]
     );
     return Number(result.rows[0].pending);
   }
@@ -803,8 +870,8 @@ class PostgresTreeStore {
    */
   async _createReservation(client, reservationId, leaves, purpose, pendingChange) {
     await client.query(
-      "INSERT INTO tree_reservations (id, purpose, pending_change_amount) VALUES ($1, $2, $3)",
-      [reservationId, purpose, pendingChange]
+      "INSERT INTO tree_reservations (user_id, id, purpose, pending_change_amount) VALUES ($1, $2, $3, $4)",
+      [this.identity, reservationId, purpose, pendingChange]
     );
 
     const leafIds = leaves.map((l) => l.id);
@@ -829,16 +896,16 @@ class PostgresTreeStore {
     const dataValues = filtered.map((l) => JSON.stringify(l));
 
     await client.query(
-      `INSERT INTO tree_leaves (id, status, is_missing_from_operators, data, added_at)
-       SELECT id, status, missing, data::jsonb, NOW()
+      `INSERT INTO tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
+       SELECT $5, id, status, missing, data::jsonb, NOW()
        FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::text[])
            AS t(id, status, missing, data)
-       ON CONFLICT (id) DO UPDATE SET
+       ON CONFLICT (user_id, id) DO UPDATE SET
          status = EXCLUDED.status,
          is_missing_from_operators = EXCLUDED.is_missing_from_operators,
          data = EXCLUDED.data,
          added_at = NOW()`,
-      [ids, statuses, missingFlags, dataValues]
+      [ids, statuses, missingFlags, dataValues, this.identity]
     );
   }
 
@@ -849,8 +916,8 @@ class PostgresTreeStore {
     if (leafIds.length === 0) return;
 
     await client.query(
-      "UPDATE tree_leaves SET reservation_id = $1 WHERE id = ANY($2)",
-      [reservationId, leafIds]
+      "UPDATE tree_leaves SET reservation_id = $1 WHERE user_id = $3 AND id = ANY($2)",
+      [reservationId, leafIds, this.identity]
     );
   }
 
@@ -861,8 +928,10 @@ class PostgresTreeStore {
     if (leafIds.length === 0) return;
 
     await client.query(
-      "INSERT INTO tree_spent_leaves (leaf_id) SELECT * FROM UNNEST($1::text[]) ON CONFLICT DO NOTHING",
-      [leafIds]
+      `INSERT INTO tree_spent_leaves (user_id, leaf_id)
+       SELECT $2, leaf_id FROM UNNEST($1::text[]) AS t(leaf_id)
+       ON CONFLICT DO NOTHING`,
+      [leafIds, this.identity]
     );
   }
 
@@ -873,19 +942,33 @@ class PostgresTreeStore {
     if (leafIds.length === 0) return;
 
     await client.query(
-      "DELETE FROM tree_spent_leaves WHERE leaf_id = ANY($1)",
-      [leafIds]
+      "DELETE FROM tree_spent_leaves WHERE user_id = $2 AND leaf_id = ANY($1)",
+      [leafIds, this.identity]
     );
   }
 
   /**
-   * Clean up stale reservations.
+   * Clean up stale reservations. Releases the leaves by clearing their
+   * reservation_id first, then deletes the parent reservations — the composite
+   * FK uses NO ACTION (the default) since column-list SET NULL is PG15+ and a
+   * whole-row SET NULL would null user_id (NOT NULL).
    */
   async _cleanupStaleReservations(client) {
     await client.query(
+      `UPDATE tree_leaves SET reservation_id = NULL
+       WHERE user_id = $2
+         AND reservation_id IN (
+           SELECT id FROM tree_reservations
+           WHERE user_id = $2
+             AND created_at < NOW() - make_interval(secs => $1)
+         )`,
+      [RESERVATION_TIMEOUT_SECS, this.identity]
+    );
+    await client.query(
       `DELETE FROM tree_reservations
-       WHERE created_at < NOW() - make_interval(secs => $1)`,
-      [RESERVATION_TIMEOUT_SECS]
+       WHERE user_id = $2
+         AND created_at < NOW() - make_interval(secs => $1)`,
+      [RESERVATION_TIMEOUT_SECS, this.identity]
     );
   }
 
@@ -897,8 +980,8 @@ class PostgresTreeStore {
     const cleanupCutoff = new Date(refreshTimestamp.getTime() - thresholdMs);
 
     await client.query(
-      "DELETE FROM tree_spent_leaves WHERE spent_at < $1",
-      [cleanupCutoff]
+      "DELETE FROM tree_spent_leaves WHERE user_id = $2 AND spent_at < $1",
+      [cleanupCutoff, this.identity]
     );
   }
 }
@@ -911,28 +994,30 @@ class PostgresTreeStore {
  * @param {number} config.maxPoolSize - Maximum number of connections in the pool
  * @param {number} config.createTimeoutSecs - Timeout in seconds for establishing a new connection
  * @param {number} config.recycleTimeoutSecs - Timeout in seconds before recycling an idle connection
+ * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey scoping reads/writes
  * @param {object} [logger] - Optional logger
  * @returns {Promise<PostgresTreeStore>}
  */
-async function createPostgresTreeStore(config, logger = null) {
+async function createPostgresTreeStore(config, identity, logger = null) {
   const pool = new pg.Pool({
     connectionString: config.connectionString,
     max: config.maxPoolSize,
     connectionTimeoutMillis: config.createTimeoutSecs * 1000,
     idleTimeoutMillis: config.recycleTimeoutSecs * 1000,
   });
-  return createPostgresTreeStoreWithPool(pool, logger);
+  return createPostgresTreeStoreWithPool(pool, identity, logger);
 }
 
 /**
  * Create a PostgresTreeStore instance from an existing pg.Pool.
  *
  * @param {pg.Pool} pool - An existing connection pool
+ * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey scoping reads/writes
  * @param {object} [logger] - Optional logger
  * @returns {Promise<PostgresTreeStore>}
  */
-async function createPostgresTreeStoreWithPool(pool, logger = null) {
-  const store = new PostgresTreeStore(pool, logger);
+async function createPostgresTreeStoreWithPool(pool, identity, logger = null) {
+  const store = new PostgresTreeStore(pool, identity, logger);
   await store.initialize();
   return store;
 }
