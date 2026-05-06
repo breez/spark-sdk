@@ -122,13 +122,16 @@ export class PasskeyProvider {
      *   want users registering security keys or QR-paired devices.
      *   When omitted, the browser shows all available authenticators.
      * @param {Array<'client-device'|'security-key'|'hybrid'>} [options.hints]
-     *   WebAuthn L3 priority hints for the create-time chooser. Soft
-     *   signal compared to `authenticatorAttachment`: browsers that
-     *   honor it surface the listed authenticator classes first;
+     *   WebAuthn L3 priority hints, applied to both create() and get()
+     *   public-key options. Soft signal compared to
+     *   `authenticatorAttachment` (which is create-only): browsers
+     *   that honor it surface the listed authenticator classes first;
      *   browsers that ignore it fall back to default ordering. Stacks
-     *   with `authenticatorAttachment` (the hard filter wins). Pass
+     *   with `authenticatorAttachment` on create. Pass
      *   `['client-device']` to nudge platform authenticator before
-     *   security-key / hybrid options.
+     *   security-key / hybrid options. The get() side is the only
+     *   standards-track lever for influencing the sign-in picker
+     *   (since `authenticatorAttachment` is not allowed there).
      */
     constructor(options = {}) {
         this.rpId = options.rpId || DEFAULT_RP_ID;
@@ -498,6 +501,18 @@ export class PasskeyProvider {
                 },
             },
         };
+        // WebAuthn L3 hints apply to both create() and get() options.
+        // On the assertion path this is a soft signal that nudges the
+        // browser's get() picker toward the listed authenticator
+        // classes — passing `['client-device']` deprioritizes the
+        // cross-device QR / hybrid sheet on browsers that honor it
+        // (recent Chrome). Mobile pickers in particular default to
+        // surfacing QR options for new users; this is the only
+        // standards-track lever we have on get() since
+        // `authenticatorAttachment` is create-only per spec.
+        if (Array.isArray(this.hints) && this.hints.length > 0) {
+            options.publicKey.hints = [...this.hints];
+        }
         // Privacy-gated to empty allowCredentials. Only enable
         // immediate mediation when the browser explicitly advertises
         // `immediateGet` via `getClientCapabilities()` — otherwise
@@ -617,8 +632,14 @@ export class PasskeyProvider {
                 },
             },
         };
-        // See `_getAssertionWithPrf` for the empty-allowCredentials
-        // privacy gate and the capability-gated immediate option.
+        // Mirror the hints + immediate-mediation logic from
+        // `_getAssertionWithPrf`. Hints deprioritize the cross-device
+        // sheet on supporting browsers; immediate mediation suppresses
+        // the picker entirely when no creds exist on browsers that
+        // implement it.
+        if (Array.isArray(this.hints) && this.hints.length > 0) {
+            options.publicKey.hints = [...this.hints];
+        }
         if (allowCredentials.length === 0 && await this._supportsImmediateGet()) {
             this._applyImmediateOption(options);
         }

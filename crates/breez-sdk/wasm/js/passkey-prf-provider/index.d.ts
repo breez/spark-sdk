@@ -154,13 +154,16 @@ export interface PasskeyProviderOptions {
     authenticatorAttachment?: 'platform' | 'cross-platform';
 
     /**
-     * WebAuthn L3 priority hints for the create-time chooser. Soft
-     * signal compared to `authenticatorAttachment`: browsers that honor
-     * it surface the listed authenticator classes first; browsers that
-     * ignore it fall back to default ordering. Stacks with
-     * `authenticatorAttachment` (the hard filter wins). Pass
-     * `['client-device']` to nudge platform authenticator before
-     * security-key / hybrid options.
+     * WebAuthn L3 priority hints, applied to both create() and get()
+     * public-key options. Soft signal compared to
+     * `authenticatorAttachment` (which is create-only): browsers that
+     * honor it surface the listed authenticator classes first;
+     * browsers that ignore it fall back to default ordering. Stacks
+     * with `authenticatorAttachment` on create. Pass `['client-device']`
+     * to nudge platform authenticator before security-key / hybrid
+     * options. The get() side is the only standards-track lever for
+     * influencing the sign-in picker (since `authenticatorAttachment`
+     * is not allowed there).
      */
     hints?: ('client-device' | 'security-key' | 'hybrid')[];
 }
