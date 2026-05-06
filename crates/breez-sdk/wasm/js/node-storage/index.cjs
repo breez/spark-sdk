@@ -484,10 +484,36 @@ class SqliteStorage {
       return Promise.resolve(this._rowToPayment(row));
     } catch (error) {
       if (error instanceof StorageError) return Promise.reject(error);
-      const paymentId = id || "unknown";
       return Promise.reject(
         new StorageError(
           `Failed to get payment by invoice '${invoice}': ${error.message}`,
+          error
+        )
+      );
+    }
+  }
+
+  getPaymentByPaymentHash(paymentHash) {
+    try {
+      if (!paymentHash) {
+        return Promise.reject(
+          new StorageError("Payment hash cannot be null or undefined")
+        );
+      }
+
+      const stmt = this.db.prepare(`${SELECT_PAYMENT_SQL} WHERE l.payment_hash = ?`);
+      const row = stmt.get(paymentHash);
+
+      if (!row) {
+        return Promise.resolve(null);
+      }
+
+      return Promise.resolve(this._rowToPayment(row));
+    } catch (error) {
+      if (error instanceof StorageError) return Promise.reject(error);
+      return Promise.reject(
+        new StorageError(
+          `Failed to get payment by payment hash '${paymentHash}': ${error.message}`,
           error
         )
       );

@@ -11,6 +11,8 @@ pub enum LightningCommand {
         amount_sat: u64,
         description: Option<String>,
         expiry_secs: Option<u32>,
+        include_spark_address: Option<bool>,
+        spark_invoice: Option<String>,
     },
     /// Create a HODL lightning invoice (no preimage stored with operators).
     /// The preimage is generated locally and printed. Use `htlc claim` to settle later.
@@ -18,6 +20,8 @@ pub enum LightningCommand {
         amount_sat: u64,
         description: Option<String>,
         expiry_secs: Option<u32>,
+        include_spark_address: Option<bool>,
+        spark_invoice: Option<String>,
     },
     /// Fetch a lightning receive payment.
     FetchReceivePayment { id: String },
@@ -54,10 +58,19 @@ pub async fn handle_command(
             amount_sat,
             description,
             expiry_secs,
+            include_spark_address,
+            spark_invoice,
         } => {
             let desc = description.map(InvoiceDescription::Memo);
             let payment = wallet
-                .create_lightning_invoice(amount_sat, desc, None, expiry_secs, true)
+                .create_lightning_invoice(
+                    amount_sat,
+                    desc,
+                    None,
+                    expiry_secs,
+                    include_spark_address.unwrap_or(false),
+                    spark_invoice,
+                )
                 .await?;
             let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)
                 .unwrap()
@@ -72,6 +85,8 @@ pub async fn handle_command(
             amount_sat,
             description,
             expiry_secs,
+            include_spark_address,
+            spark_invoice,
         } => {
             // Generate preimage locally
             let preimage_secret = bitcoin::secp256k1::SecretKey::new(&mut OsRng);
@@ -82,7 +97,15 @@ pub async fn handle_command(
 
             let desc = description.map(InvoiceDescription::Memo);
             let payment = wallet
-                .create_hodl_lightning_invoice(amount_sat, desc, payment_hash, None, expiry_secs)
+                .create_hodl_lightning_invoice(
+                    amount_sat,
+                    desc,
+                    payment_hash,
+                    None,
+                    expiry_secs,
+                    include_spark_address.unwrap_or(false),
+                    spark_invoice,
+                )
                 .await?;
 
             let qr = QrCode::with_error_correction_level(&payment.invoice, EcLevel::L)

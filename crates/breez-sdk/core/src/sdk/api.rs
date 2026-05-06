@@ -381,6 +381,7 @@ impl BreezSdk {
                         Some(amount_sats),
                         None,
                         None,
+                        None,
                     )
                     .await?;
                 CashAppProvider::build_url(&receive_response.payment_request)

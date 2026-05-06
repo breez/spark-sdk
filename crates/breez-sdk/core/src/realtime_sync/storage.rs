@@ -513,6 +513,13 @@ impl Storage for SyncedStorage {
         self.inner.get_payment_by_invoice(invoice).await
     }
 
+    async fn get_payment_by_payment_hash(
+        &self,
+        payment_hash: String,
+    ) -> Result<Option<Payment>, StorageError> {
+        self.inner.get_payment_by_payment_hash(payment_hash).await
+    }
+
     async fn get_payments_by_parent_ids(
         &self,
         parent_payment_ids: Vec<String>,

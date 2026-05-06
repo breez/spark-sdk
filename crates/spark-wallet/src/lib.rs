@@ -45,6 +45,7 @@ pub use spark::{
         select_leaves_by_target_amounts,
     },
     utils::{
+        lightning::extract_bolt11_spark_address,
         paging::{Order, PagingFilter, PagingResult},
         transactions::is_ephemeral_anchor_output,
     },

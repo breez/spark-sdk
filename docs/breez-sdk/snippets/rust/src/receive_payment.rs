@@ -17,6 +17,7 @@ async fn receive_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
                 amount_sats: optional_amount_sats,
                 expiry_secs: optional_expiry_secs,
                 payment_hash: None,
+                fallback: None,
             },
         })
         .await?;

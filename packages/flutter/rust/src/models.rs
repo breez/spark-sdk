@@ -392,6 +392,12 @@ pub struct _PrepareSendPaymentResponse {
     pub fee_policy: FeePolicy,
 }
 
+#[frb(mirror(FallbackMethod))]
+pub enum _FallbackMethod {
+    SparkInvoice,
+    SparkAddress,
+}
+
 #[frb(mirror(ReceivePaymentMethod))]
 pub enum _ReceivePaymentMethod {
     SparkAddress,
@@ -410,6 +416,7 @@ pub enum _ReceivePaymentMethod {
         amount_sats: Option<u64>,
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
+        fallback: Option<FallbackMethod>,
     },
 }
 

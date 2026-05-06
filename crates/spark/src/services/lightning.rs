@@ -9,6 +9,7 @@ use crate::ssp::{
     ServiceProvider,
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
+use crate::utils::lightning::extract_bolt11_spark_address;
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
 use crate::{signer::Signer, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
@@ -28,7 +29,6 @@ use super::models::LightningSendRequestStatus;
 
 const DEFAULT_RECEIVE_EXPIRY_SECS: u32 = 60 * 60 * 24 * 30; // 30 days
 const DEFAULT_SEND_EXPIRY_SECS: u64 = 60 * 60 * 24 * 16; // 16 days
-const RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID: u64 = 17592187092992000001;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum InvoiceDescription {
@@ -227,6 +227,7 @@ impl LightningService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_lightning_invoice(
         &self,
         amount_sats: u64,
@@ -235,6 +236,7 @@ impl LightningService {
         expiry_secs: Option<u32>,
         include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
+        spark_invoice: Option<String>,
     ) -> Result<LightningReceivePayment, ServiceError> {
         self.create_lightning_invoice_inner(
             amount_sats,
@@ -244,6 +246,7 @@ impl LightningService {
             expiry_secs,
             include_spark_address,
             identity_pubkey,
+            spark_invoice,
         )
         .await
     }
@@ -254,13 +257,16 @@ impl LightningService {
     ///
     /// Spark addresses are never included in HODL invoices because a direct Spark
     /// transfer would bypass the Lightning HTLC hold mechanism entirely.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_hodl_lightning_invoice(
         &self,
         amount_sats: u64,
         description: Option<InvoiceDescription>,
         payment_hash: sha256::Hash,
         expiry_secs: Option<u32>,
+        include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
+        spark_invoice: Option<String>,
     ) -> Result<LightningReceivePayment, ServiceError> {
         self.create_lightning_invoice_inner(
             amount_sats,
@@ -268,8 +274,9 @@ impl LightningService {
             None,
             Some(payment_hash),
             expiry_secs,
-            false,
+            include_spark_address,
             identity_pubkey,
+            spark_invoice,
         )
         .await
     }
@@ -284,6 +291,7 @@ impl LightningService {
         expiry_secs: Option<u32>,
         include_spark_address: bool,
         identity_pubkey: Option<PublicKey>,
+        spark_invoice: Option<String>,
     ) -> Result<LightningReceivePayment, ServiceError> {
         // Validate expiry_secs does not exceed i32::MAX (server limitation)
         if let Some(expiry) = expiry_secs
@@ -333,7 +341,7 @@ impl LightningService {
                 expiry_secs: Some(expiry.into()),
                 memo,
                 include_spark_address,
-                spark_invoice: None,
+                spark_invoice,
             })
             .await?;
         let decoded_invoice = Bolt11Invoice::from_str(&invoice.invoice.encoded_invoice)
@@ -341,7 +349,8 @@ impl LightningService {
 
         // check if the spark address in the invoice matches the identity pubkey only
         if include_spark_address {
-            let spark_address = self.extract_spark_address(&decoded_invoice);
+            let spark_address = extract_bolt11_spark_address(&decoded_invoice)
+                .map(|(spark_address, _)| spark_address);
             let Some(spark_address) = spark_address else {
                 return Err(ServiceError::SSPswapError(
                     "Invalid invoice. Spark address not found".to_string(),
@@ -525,7 +534,16 @@ impl LightningService {
         max_fee_sat: Option<u64>,
         amount_to_send: Option<u64>,
         prefer_spark: bool,
-    ) -> Result<(u64, Option<SparkAddress>), ServiceError> {
+    ) -> Result<
+        (
+            u64,
+            Option<(
+                /* address */ SparkAddress,
+                /* address_str */ String,
+            )>,
+        ),
+        ServiceError,
+    > {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
 
@@ -537,7 +555,8 @@ impl LightningService {
 
         // get the invoice amount in sats, then validate the amount
         let to_pay_sat = get_invoice_amount_sats(&decoded_invoice, amount_to_send)?;
-        if prefer_spark && let Some(receiver_address) = self.extract_spark_address(&decoded_invoice)
+        if prefer_spark
+            && let Some(receiver_address) = extract_bolt11_spark_address(&decoded_invoice)
         {
             return Ok((to_pay_sat, Some(receiver_address)));
         }
@@ -567,18 +586,7 @@ impl LightningService {
     ) -> Result<Option<SparkAddress>, ServiceError> {
         let decoded_invoice = Bolt11Invoice::from_str(invoice)
             .map_err(|err| ServiceError::InvoiceDecodingError(err.to_string()))?;
-        Ok(self.extract_spark_address(&decoded_invoice))
-    }
-
-    fn extract_spark_address(&self, decoded_invoice: &Bolt11Invoice) -> Option<SparkAddress> {
-        for route_hint in decoded_invoice.route_hints() {
-            for node in route_hint.0 {
-                if node.short_channel_id == RECEIVER_IDENTITY_PUBLIC_KEY_SHORT_CHANNEL_ID {
-                    return Some(SparkAddress::new(node.src_node_id, self.network, None));
-                }
-            }
-        }
-        None
+        Ok(extract_bolt11_spark_address(&decoded_invoice).map(|(spark_address, _)| spark_address))
     }
 
     pub async fn fetch_lightning_send_fee_estimate(

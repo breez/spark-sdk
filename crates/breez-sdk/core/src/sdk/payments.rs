@@ -9,8 +9,8 @@ use tracing::{Instrument, error, info, warn};
 
 use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
-    ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType, FeePolicy,
-    FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
+    ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType, FallbackMethod,
+    FeePolicy, FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
     GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
     SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
     WaitForPaymentIdentifier,
@@ -22,7 +22,7 @@ use crate::{
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
         conversion_steps_from_payments,
     },
-    persist::PaymentMetadata,
+    persist::{ObjectCacheRepository, PaymentMetadata},
     token_conversion::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
@@ -102,9 +102,16 @@ impl BreezSdk {
                 amount_sats,
                 expiry_secs,
                 payment_hash,
+                fallback,
             } => {
-                self.receive_bolt11_invoice(description, amount_sats, expiry_secs, payment_hash)
-                    .await
+                self.receive_bolt11_invoice(
+                    description,
+                    amount_sats,
+                    expiry_secs,
+                    payment_hash,
+                    fallback,
+                )
+                .await
             }
         }
     }
@@ -495,17 +502,40 @@ impl BreezSdk {
         amount_sats: Option<u64>,
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
+        fallback: Option<FallbackMethod>,
     ) -> Result<ReceivePaymentResponse, SdkError> {
+        let (include_spark_address, spark_invoice) = match fallback {
+            Some(FallbackMethod::SparkInvoice) => (
+                false,
+                Some(
+                    self.spark_wallet
+                        .create_spark_invoice(
+                            amount_sats.map(u128::from),
+                            None,
+                            expiry_secs.and_then(|secs| {
+                                SystemTime::now().checked_add(Duration::from_secs(u64::from(secs)))
+                            }),
+                            Some(description.clone()),
+                            None,
+                        )
+                        .await?,
+                ),
+            ),
+            Some(FallbackMethod::SparkAddress) => (true, None),
+            None => (self.config.prefer_spark_over_lightning, None),
+        };
         let invoice = if let Some(payment_hash_hex) = payment_hash {
             let hash = sha256::Hash::from_str(&payment_hash_hex)
                 .map_err(|e| SdkError::InvalidInput(format!("Invalid payment hash: {e}")))?;
             self.spark_wallet
                 .create_hodl_lightning_invoice(
                     amount_sats.unwrap_or_default(),
-                    Some(InvoiceDescription::Memo(description.clone())),
+                    Some(InvoiceDescription::Memo(description)),
                     hash,
                     None,
                     expiry_secs,
+                    include_spark_address,
+                    spark_invoice.clone(),
                 )
                 .await?
                 .invoice
@@ -513,14 +543,37 @@ impl BreezSdk {
             self.spark_wallet
                 .create_lightning_invoice(
                     amount_sats.unwrap_or_default(),
-                    Some(InvoiceDescription::Memo(description.clone())),
+                    Some(InvoiceDescription::Memo(description)),
                     None,
                     expiry_secs,
-                    self.config.prefer_spark_over_lightning,
+                    include_spark_address,
+                    spark_invoice.clone(),
                 )
                 .await?
                 .invoice
         };
+
+        if spark_invoice.is_some() || include_spark_address {
+            if let Some(details) = breez_sdk_common::input::parse_invoice(&invoice)
+                && let Some(fallback_address) = details.fallback_addresses.first()
+            {
+                let cache = ObjectCacheRepository::new(self.storage.clone());
+                if let Err(e) = cache
+                    .save_payment_metadata(
+                        fallback_address,
+                        &PaymentMetadata {
+                            fallback_payment_hash: Some(details.payment_hash),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    error!("Failed to store fallback payment hash mapping: {e:?}");
+                }
+            } else {
+                error!("Failed to parse BOLT11 invoice for fallback mapping");
+            }
+        }
         Ok(ReceivePaymentResponse {
             payment_request: invoice,
             fee: 0,

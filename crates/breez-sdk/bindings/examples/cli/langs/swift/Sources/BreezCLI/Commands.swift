@@ -394,7 +394,8 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
             description: description ?? "",
             amountSats: amountSats,
             expirySecs: expirySecs,
-            paymentHash: paymentHash
+            paymentHash: paymentHash,
+            fallback: nil
         )
 
     default:

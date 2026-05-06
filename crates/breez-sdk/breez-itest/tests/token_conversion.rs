@@ -222,6 +222,7 @@ async fn test_token_conversion_success(
                 amount_sats: Some(token_to_sats_success_amount),
                 expiry_secs: None,
                 payment_hash: None,
+                fallback: None,
             },
         })
         .await?

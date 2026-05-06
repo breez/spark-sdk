@@ -433,17 +433,31 @@ impl SparkWallet {
             .await?;
 
         // In case the invoice is for a spark address, we can just transfer the amount to the receiver.
-        if let Some(receiver_spark_address) = receiver_spark_address {
+        if let Some((receiver_address, receiver_address_str)) = receiver_spark_address {
             if !self.config.self_payment_allowed
-                && receiver_spark_address.identity_public_key == self.identity_public_key
+                && receiver_address.identity_public_key == self.identity_public_key
             {
                 return Err(SparkWalletError::SelfPaymentNotAllowed);
             }
 
+            let transfer = match receiver_address.is_invoice() {
+                true => {
+                    self.transfer_with_invoice(
+                        total_amount_sat,
+                        &receiver_address,
+                        transfer_id,
+                        Some(receiver_address_str),
+                    )
+                    .await?
+                }
+                false => {
+                    self.transfer(total_amount_sat, &receiver_address, transfer_id)
+                        .await?
+                }
+            };
+
             return Ok(PayLightningInvoiceResult {
-                transfer: self
-                    .transfer(total_amount_sat, &receiver_spark_address, transfer_id)
-                    .await?,
+                transfer,
                 lightning_payment: None,
             });
         }
@@ -530,6 +544,7 @@ impl SparkWallet {
         public_key: Option<PublicKey>,
         expiry_secs: Option<u32>,
         include_spark_address: bool,
+        spark_invoice: Option<String>,
     ) -> Result<LightningReceivePayment, SparkWalletError> {
         Ok(self
             .lightning_service
@@ -540,12 +555,14 @@ impl SparkWallet {
                 expiry_secs,
                 include_spark_address,
                 public_key,
+                spark_invoice,
             )
             .await?)
     }
 
     /// Creates a HODL Lightning invoice. The SSP will hold the HTLC until
     /// `claim_htlc` is called with the preimage matching the payment_hash.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_hodl_lightning_invoice(
         &self,
         amount_sat: u64,
@@ -553,6 +570,8 @@ impl SparkWallet {
         payment_hash: Hash,
         public_key: Option<PublicKey>,
         expiry_secs: Option<u32>,
+        include_spark_address: bool,
+        spark_invoice: Option<String>,
     ) -> Result<LightningReceivePayment, SparkWalletError> {
         Ok(self
             .lightning_service
@@ -561,7 +580,9 @@ impl SparkWallet {
                 description,
                 payment_hash,
                 expiry_secs,
+                include_spark_address,
                 public_key,
+                spark_invoice,
             )
             .await?)
     }

@@ -30,6 +30,7 @@ async fn test_01_lightning_hodl_success(
                 amount_sats: Some(10_000),
                 expiry_secs: None,
                 payment_hash: Some(payment_hash.clone()),
+                fallback: None,
             },
         })
         .await?

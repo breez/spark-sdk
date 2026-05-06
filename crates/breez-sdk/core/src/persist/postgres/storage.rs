@@ -722,6 +722,20 @@ impl Storage for PostgresStorage {
         }
     }
 
+    async fn get_payment_by_payment_hash(
+        &self,
+        payment_hash: String,
+    ) -> Result<Option<Payment>, StorageError> {
+        let client = self.pool.get().await.map_err(map_pool_error)?;
+        let query = format!("{SELECT_PAYMENT_SQL} WHERE l.payment_hash = $1");
+        let row = client.query_opt(&query, &[&payment_hash]).await?;
+
+        match row {
+            Some(r) => Ok(Some(map_payment(&r)?)),
+            None => Ok(None),
+        }
+    }
+
     #[allow(clippy::arithmetic_side_effects)]
     async fn get_payments_by_parent_ids(
         &self,
@@ -1694,6 +1708,18 @@ mod tests {
     async fn test_conversion_status_persistence() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_conversion_status_persistence(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_fallback_payment_hash() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_fallback_payment_hash(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_by_payment_hash() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_payment_by_payment_hash(Box::new(fixture.storage)).await;
     }
 
     /// Generates a self-signed CA certificate in PEM format for testing.

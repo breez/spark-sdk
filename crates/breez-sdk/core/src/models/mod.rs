@@ -1058,6 +1058,13 @@ pub struct SyncWalletResponse {}
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FallbackMethod {
+    SparkInvoice,
+    SparkAddress,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ReceivePaymentMethod {
     SparkAddress,
     SparkInvoice {
@@ -1088,6 +1095,10 @@ pub enum ReceivePaymentMethod {
         /// The payer's HTLC will be held until the preimage is provided via
         /// `claim_htlc_payment` or the HTLC expires.
         payment_hash: Option<String>,
+        /// Whether or not to enable fallback payments. Defaults to false.
+        /// When fallback payments are enabled payers will be able to pay directly via Spark invoice
+        /// or Spark address if their clients support it.
+        fallback: Option<FallbackMethod>,
     },
 }
 

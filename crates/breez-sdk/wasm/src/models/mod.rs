@@ -752,6 +752,12 @@ pub struct SyncWalletRequest {}
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SyncWalletResponse)]
 pub struct SyncWalletResponse {}
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::FallbackMethod)]
+pub enum FallbackMethod {
+    SparkAddress,
+    SparkInvoice,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ReceivePaymentMethod)]
 pub enum ReceivePaymentMethod {
     SparkAddress,
@@ -772,6 +778,7 @@ pub enum ReceivePaymentMethod {
         amount_sats: Option<u64>,
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
+        fallback: Option<FallbackMethod>,
     },
 }
 
@@ -1036,6 +1043,7 @@ pub struct PaymentMetadata {
     pub lnurl_description: Option<String>,
     pub conversion_info: Option<ConversionInfo>,
     pub conversion_status: Option<ConversionStatus>,
+    pub fallback_payment_hash: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SetLnurlMetadataItem)]

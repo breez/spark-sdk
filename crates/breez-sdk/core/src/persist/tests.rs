@@ -3159,3 +3159,93 @@ pub async fn test_conversion_status_persistence(storage: Box<dyn Storage>) {
         "conversion_status should be updated to Completed"
     );
 }
+
+/// Tests that the fallback payment hash can be stored and retrieved via the cache.
+pub async fn test_fallback_payment_hash(storage: Box<dyn Storage>) {
+    let spark_invoice = "spark:testinvoice123";
+    let payment_hash =
+        "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899".to_string();
+    let cache = ObjectCacheRepository::new(storage.into());
+
+    // Not found before insertion
+    let result = cache.fetch_payment_metadata(spark_invoice).await.unwrap();
+    assert!(
+        result.and_then(|r| r.fallback_payment_hash).is_none(),
+        "Expected None before insertion"
+    );
+
+    // Store the fallback mapping
+    cache
+        .save_payment_metadata(
+            spark_invoice,
+            &PaymentMetadata {
+                fallback_payment_hash: Some(payment_hash.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // Retrieve it back
+    let result = cache.fetch_payment_metadata(spark_invoice).await.unwrap();
+    assert_eq!(
+        result.and_then(|r| r.fallback_payment_hash).as_deref(),
+        Some(payment_hash.as_str()),
+        "Expected the stored payment hash"
+    );
+}
+
+/// Tests that `get_payment_by_payment_hash` can look up a Lightning payment by its payment hash.
+pub async fn test_payment_by_payment_hash(storage: Box<dyn Storage>) {
+    let payment_hash =
+        "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210".to_string();
+    let lightning_payment = Payment {
+        id: "mrh_ln_payment_001".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Pending,
+        amount: 50_000,
+        fees: 0,
+        timestamp: 1_700_000_000,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("Fallback test payment".to_string()),
+            invoice: "lnbc500n1ptest".to_string(),
+            destination_pubkey:
+                "03aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff0000000011111111aa".to_string(),
+            htlc_details: test_lightning_htlc(&payment_hash),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+        }),
+        conversion_details: None,
+    };
+
+    // Not found before insertion
+    let result = storage
+        .get_payment_by_payment_hash(payment_hash.clone())
+        .await
+        .unwrap();
+    assert!(result.is_none(), "Expected None before insertion");
+
+    storage
+        .insert_payment(lightning_payment.clone())
+        .await
+        .unwrap();
+
+    // Found after insertion
+    let result = storage
+        .get_payment_by_payment_hash(payment_hash)
+        .await
+        .unwrap();
+    assert!(result.is_some(), "Expected payment to be found");
+    assert_eq!(result.unwrap().id, lightning_payment.id);
+
+    // Non-existent hash returns None
+    let result = storage
+        .get_payment_by_payment_hash(
+            "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        )
+        .await
+        .unwrap();
+    assert!(result.is_none(), "Expected None for unknown payment hash");
+}

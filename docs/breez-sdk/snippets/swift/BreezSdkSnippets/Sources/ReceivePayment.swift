@@ -16,7 +16,8 @@ func receiveLightning(sdk: BreezSdk) async throws -> ReceivePaymentResponse {
                     description: description,
                     amountSats: optionalAmountSats,
                     expirySecs: optionalExpirySecs,
-                    paymentHash: nil
+                    paymentHash: nil,
+                    fallback: nil
                 )
             ))
 

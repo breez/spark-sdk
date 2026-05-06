@@ -959,6 +959,83 @@ class IndexedDBStorage {
     });
   }
 
+  async getPaymentByPaymentHash(paymentHash) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction(
+        ["payments", "payment_metadata", "lnurl_receive_metadata"],
+        "readonly"
+      );
+      const paymentStore = transaction.objectStore("payments");
+      const metadataStore = transaction.objectStore("payment_metadata");
+      const lnurlReceiveMetadataStore = transaction.objectStore(
+        "lnurl_receive_metadata"
+      );
+
+      // Scan all payments to find one with matching payment hash
+      const cursorRequest = paymentStore.openCursor();
+      let found = false;
+
+      cursorRequest.onsuccess = (event) => {
+        if (found) return;
+        const cursor = event.target.result;
+        if (!cursor) {
+          if (!found) resolve(null);
+          return;
+        }
+
+        const payment = cursor.value;
+        let details;
+        try {
+          details = typeof payment.details === "string"
+            ? JSON.parse(payment.details)
+            : payment.details;
+        } catch (_) {
+          cursor.continue();
+          return;
+        }
+
+        if (
+          details &&
+          details.type === "lightning" &&
+          details.htlcDetails?.paymentHash === paymentHash
+        ) {
+          found = true;
+
+          const metadataRequest = metadataStore.get(payment.id);
+          metadataRequest.onsuccess = () => {
+            const metadata = metadataRequest.result;
+            const paymentWithMetadata = this._mergePaymentMetadata(
+              payment,
+              metadata
+            );
+            this._fetchLnurlReceiveMetadata(
+              paymentWithMetadata,
+              lnurlReceiveMetadataStore
+            )
+              .then(resolve)
+              .catch(() => resolve(paymentWithMetadata));
+          };
+          metadataRequest.onerror = () => resolve(payment);
+        } else {
+          cursor.continue();
+        }
+      };
+
+      cursorRequest.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get payment by payment hash '${paymentHash}': ${cursorRequest.error?.message || "Unknown error"}`,
+            cursorRequest.error
+          )
+        );
+      };
+    });
+  }
+
   /**
    * Checks if any related payments exist (payments with a parentPaymentId).
    * Uses the parentPaymentId index for efficient lookup.

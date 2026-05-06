@@ -505,6 +505,31 @@ class PostgresStorage {
     }
   }
 
+  async getPaymentByPaymentHash(paymentHash) {
+    try {
+      if (!paymentHash) {
+        throw new StorageError("Payment hash cannot be null or undefined");
+      }
+
+      const result = await this.pool.query(
+        `${SELECT_PAYMENT_SQL} WHERE l.payment_hash = $1`,
+        [paymentHash]
+      );
+
+      if (result.rows.length === 0) {
+        return null;
+      }
+
+      return this._rowToPayment(result.rows[0]);
+    } catch (error) {
+      if (error instanceof StorageError) throw error;
+      throw new StorageError(
+        `Failed to get payment by payment hash '${paymentHash}': ${error.message}`,
+        error
+      );
+    }
+  }
+
   async getPaymentsByParentIds(parentPaymentIds) {
     try {
       if (!parentPaymentIds || parentPaymentIds.length === 0) {
