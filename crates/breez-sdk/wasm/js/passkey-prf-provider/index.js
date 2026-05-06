@@ -140,6 +140,69 @@ export class PasskeyProvider {
          * @type {((credentialId: Uint8Array) => void) | undefined}
          */
         this.onAssertionCredentialId = undefined;
+
+        /**
+         * Cached result of `PublicKeyCredential.getClientCapabilities()`
+         * for the `immediateGet` capability. Lazily populated on the
+         * first assertion; reused for subsequent calls so we only pay
+         * the capability lookup once. Possible values:
+         *   - `undefined`: not yet checked
+         *   - `null`: capability lookup unsupported / failed
+         *   - `true` / `false`: browser explicitly advertised support
+         * @type {boolean | null | undefined}
+         * @private
+         */
+        this._immediateGetSupported = undefined;
+    }
+
+    /**
+     * Resolve whether the current browser supports
+     * `mediation`/`uiMode: 'immediate'`. Uses
+     * `PublicKeyCredential.getClientCapabilities()` (returns the
+     * `immediateGet` flag); cached after the first call.
+     *
+     * @returns {Promise<boolean>}
+     * @private
+     */
+    async _supportsImmediateGet() {
+        if (this._immediateGetSupported === true) return true;
+        if (this._immediateGetSupported === false) return false;
+        if (this._immediateGetSupported === null) return false;
+        try {
+            if (typeof PublicKeyCredential === 'undefined'
+                || typeof PublicKeyCredential.getClientCapabilities !== 'function') {
+                this._immediateGetSupported = null;
+                return false;
+            }
+            const caps = await PublicKeyCredential.getClientCapabilities('public-key');
+            this._immediateGetSupported = caps?.immediateGet === true;
+        } catch {
+            this._immediateGetSupported = null;
+        }
+        return this._immediateGetSupported === true;
+    }
+
+    /**
+     * Set the immediate-mediation option on the get() request, picking
+     * the right field name across the spec transition. Chrome ≤ 144
+     * implements the original `mediation: 'immediate'`; Chrome 145+
+     * renamed it to `uiMode: 'immediate'`. Both names are set when
+     * the field-rename milestone is unknown so older Chromes ignore
+     * `uiMode` (unknown property) and newer Chromes ignore the
+     * `mediation` value because the enum no longer accepts it — but
+     * since both throw TypeError if a known property gets an unknown
+     * value, we pick by Chrome major when detectable and fall back
+     * to `uiMode` for non-Chrome / unknown UA.
+     * @private
+     */
+    _applyImmediateOption(options) {
+        const m = (typeof navigator !== 'undefined' && /Chrome\/(\d+)/.exec(navigator.userAgent || ''));
+        const chromeMajor = m ? parseInt(m[1], 10) : NaN;
+        if (Number.isFinite(chromeMajor) && chromeMajor <= 144) {
+            options.mediation = 'immediate';
+        } else {
+            options.uiMode = 'immediate';
+        }
     }
 
     /**
@@ -372,6 +435,14 @@ export class PasskeyProvider {
                 },
             },
         };
+        // Privacy-gated to empty allowCredentials. Only enable
+        // immediate mediation when the browser explicitly advertises
+        // `immediateGet` via `getClientCapabilities()` — otherwise
+        // we'd trip the legacy `mediation` enum check (TypeError) or
+        // silently degrade.
+        if (allowCredentials.length === 0 && await this._supportsImmediateGet()) {
+            this._applyImmediateOption(options);
+        }
 
         let credential;
         try {
@@ -469,6 +540,11 @@ export class PasskeyProvider {
                 },
             },
         };
+        // See `_getAssertionWithPrf` for the empty-allowCredentials
+        // privacy gate and the capability-gated immediate option.
+        if (allowCredentials.length === 0 && await this._supportsImmediateGet()) {
+            this._applyImmediateOption(options);
+        }
 
         let credential;
         try {
