@@ -66,6 +66,8 @@ pub struct SdkBuilder {
     storage: Option<Arc<dyn Storage>>,
     #[cfg(feature = "postgres")]
     postgres_backend_config: Option<crate::persist::postgres::PostgresStorageConfig>,
+    #[cfg(feature = "mysql")]
+    mysql_backend_config: Option<crate::persist::mysql::MysqlStorageConfig>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn platform_utils::HttpClient>>,
@@ -97,6 +99,8 @@ impl SdkBuilder {
             storage: None,
             #[cfg(feature = "postgres")]
             postgres_backend_config: None,
+            #[cfg(feature = "mysql")]
+            mysql_backend_config: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -121,6 +125,8 @@ impl SdkBuilder {
             storage: None,
             #[cfg(feature = "postgres")]
             postgres_backend_config: None,
+            #[cfg(feature = "mysql")]
+            mysql_backend_config: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -185,6 +191,17 @@ impl SdkBuilder {
         config: crate::persist::postgres::PostgresStorageConfig,
     ) -> Self {
         self.postgres_backend_config = Some(config);
+        self
+    }
+
+    /// Sets `MySQL` as the backend for all stores (storage, tree store, and token store).
+    /// The store instances will be created during `build()`.
+    /// Arguments:
+    /// - `config`: The `MySQL` storage configuration.
+    #[must_use]
+    #[cfg(feature = "mysql")]
+    pub fn with_mysql_backend(mut self, config: crate::persist::mysql::MysqlStorageConfig) -> Self {
+        self.mysql_backend_config = Some(config);
         self
     }
 
@@ -411,10 +428,16 @@ impl SdkBuilder {
         #[cfg(not(feature = "postgres"))]
         let has_postgres = false;
 
+        #[cfg(feature = "mysql")]
+        let has_mysql = self.mysql_backend_config.is_some();
+        #[cfg(not(feature = "mysql"))]
+        let has_mysql = false;
+
         let storage_count = [
             self.storage.is_some(),
             self.storage_dir.is_some(),
             has_postgres,
+            has_mysql,
         ]
         .into_iter()
         .filter(|&v| v)
@@ -441,6 +464,17 @@ impl SdkBuilder {
             None
         };
 
+        // Create a shared MySQL pool if mysql backend is configured.
+        #[cfg(feature = "mysql")]
+        let mysql_pool = if let Some(ref mysql_config) = self.mysql_backend_config {
+            Some(
+                crate::persist::mysql::create_pool(mysql_config)
+                    .map_err(|e| SdkError::Generic(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
         // Initialize storage
         let storage: Arc<dyn Storage> = if let Some(storage) = self.storage {
             storage
@@ -461,26 +495,38 @@ impl SdkBuilder {
                 ));
             }
         } else {
+            #[allow(unused_mut)]
+            let mut s: Option<Arc<dyn Storage>> = None;
+
             #[cfg(all(
                 feature = "postgres",
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
-            if let Some(ref pool) = postgres_pool {
-                Arc::new(
+            if s.is_none()
+                && let Some(ref pool) = postgres_pool
+            {
+                s = Some(Arc::new(
                     crate::persist::postgres::PostgresStorage::new_with_pool(pool.clone())
                         .await
                         .map_err(|e| SdkError::Generic(e.to_string()))?,
-                )
-            } else {
-                return Err(SdkError::Generic("No storage configured".to_string()));
+                ));
             }
-            #[cfg(not(all(
-                feature = "postgres",
+
+            #[cfg(all(
+                feature = "mysql",
                 not(all(target_family = "wasm", target_os = "unknown"))
-            )))]
+            ))]
+            if s.is_none()
+                && let Some(ref pool) = mysql_pool
             {
-                return Err(SdkError::Generic("No storage configured".to_string()));
+                s = Some(Arc::new(
+                    crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone())
+                        .await
+                        .map_err(|e| SdkError::Generic(e.to_string()))?,
+                ));
             }
+
+            s.ok_or_else(|| SdkError::Generic("No storage configured".to_string()))?
         };
 
         let user_agent = format!(
@@ -533,6 +579,13 @@ impl SdkBuilder {
                 Some(crate::persist::postgres::create_postgres_tree_store(pool.clone()).await?);
         }
 
+        #[cfg(feature = "mysql")]
+        if tree_store.is_none()
+            && let Some(ref pool) = mysql_pool
+        {
+            tree_store = Some(crate::persist::mysql::create_mysql_tree_store(pool.clone()).await?);
+        }
+
         // Create token output store if configured
         #[allow(unused_mut)]
         let mut token_output_store: Option<Arc<dyn TokenOutputStore>> = self.token_output_store;
@@ -543,6 +596,14 @@ impl SdkBuilder {
         {
             token_output_store =
                 Some(crate::persist::postgres::create_postgres_token_store(pool.clone()).await?);
+        }
+
+        #[cfg(feature = "mysql")]
+        if token_output_store.is_none()
+            && let Some(ref pool) = mysql_pool
+        {
+            token_output_store =
+                Some(crate::persist::mysql::create_mysql_token_store(pool.clone()).await?);
         }
 
         let session_manager = Arc::new(BreezSessionManager::new(Arc::new(

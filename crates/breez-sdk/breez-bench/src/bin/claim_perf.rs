@@ -168,6 +168,7 @@ async fn run_single_claim_benchmark(
         None,
         true,
         sender_postgres,
+        None,
     )
     .await?;
     let sender_sdk = Arc::new(itest_sender.sdk);
@@ -186,6 +187,7 @@ async fn run_single_claim_benchmark(
         None,
         true,
         receiver_postgres.clone(),
+        None,
     )
     .await?;
 
@@ -298,6 +300,7 @@ async fn run_single_claim_benchmark(
         None,
         true,
         receiver_postgres,
+        None,
     )
     .await?;
     let receiver_sdk = itest_receiver.sdk;

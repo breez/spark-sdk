@@ -1,3 +1,4 @@
+pub mod concurrent_scenarios;
 pub mod faucet;
 pub mod fixtures;
 pub mod helpers;
@@ -5,6 +6,9 @@ mod log;
 
 use std::sync::Arc;
 
+pub use concurrent_scenarios::{
+    run_concurrent_multi_instance_operations, run_concurrent_token_operations,
+};
 pub use faucet::RegtestFaucet;
 pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};
 pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};

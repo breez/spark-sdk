@@ -9,7 +9,9 @@ use tokio::sync::{Semaphore, mpsc};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use breez_sdk_itest::{RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database};
+use breez_sdk_itest::{
+    RegtestFaucet, build_sdk_with_tree_store_config, drop_mysql_database, drop_postgres_database,
+};
 use breez_sdk_spark::{
     BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
     ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest, default_config,
@@ -43,14 +45,23 @@ struct Args {
     #[arg(long, value_name = "MULTIPLICITY")]
     pre_optimize: Option<u8>,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "sender_mysql")]
     sender_postgres: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "receiver_mysql")]
     receiver_postgres: Option<String>,
 
     #[arg(long)]
     clean_postgres: bool,
+
+    #[arg(long)]
+    sender_mysql: Option<String>,
+
+    #[arg(long)]
+    receiver_mysql: Option<String>,
+
+    #[arg(long)]
+    clean_mysql: bool,
 
     #[arg(long, default_value = "1.5")]
     funding_buffer: f64,
@@ -123,6 +134,20 @@ async fn main() -> Result<()> {
         }
     }
 
+    if args.clean_mysql {
+        if let Some(conn_str) = &args.sender_mysql {
+            drop_mysql_database(conn_str).await?;
+        }
+        if let Some(conn_str) = &args.receiver_mysql {
+            drop_mysql_database(conn_str).await?;
+        }
+        if args.sender_mysql.is_none() && args.receiver_mysql.is_none() {
+            warn!(
+                "--clean-mysql specified but no --sender-mysql or --receiver-mysql provided, skipping cleanup"
+            );
+        }
+    }
+
     if args.total_payments == 0 {
         bail!("--total-payments must be > 0");
     }
@@ -173,6 +198,8 @@ async fn main() -> Result<()> {
         args.pre_optimize,
         args.sender_postgres.clone(),
         args.receiver_postgres.clone(),
+        args.sender_mysql.clone(),
+        args.receiver_mysql.clone(),
     )
     .await?;
 
@@ -205,13 +232,13 @@ async fn main() -> Result<()> {
     let mut sender_instances: Vec<BenchSdkInstance> = Vec::new();
     sender_instances.push(sender);
     if args.sender_instances > 1 {
-        if args.sender_postgres.is_none() {
+        if args.sender_postgres.is_none() && args.sender_mysql.is_none() {
             bail!(
-                "--sender-instances > 1 requires --sender-postgres so the instances share a tree store"
+                "--sender-instances > 1 requires --sender-postgres or --sender-mysql so the instances share a tree store"
             );
         }
         info!(
-            "Spawning {} additional sender SDK instance(s) sharing the same wallet + postgres tree store",
+            "Spawning {} additional sender SDK instance(s) sharing the same wallet + tree store",
             args.sender_instances - 1
         );
         for i in 1..args.sender_instances {
@@ -220,6 +247,7 @@ async fn main() -> Result<()> {
                 args.no_auto_optimize,
                 args.pre_optimize,
                 args.sender_postgres.clone(),
+                args.sender_mysql.clone(),
                 i,
             )
             .await?;
@@ -581,6 +609,8 @@ async fn initialize_sdk_pair(
     pre_optimize: Option<u8>,
     sender_postgres: Option<String>,
     receiver_postgres: Option<String>,
+    sender_mysql: Option<String>,
+    receiver_mysql: Option<String>,
 ) -> Result<(BenchSdkInstance, BenchSdkInstance, [u8; 32])> {
     let sender_dir = tempfile::Builder::new()
         .prefix("concurrent-perf-sender")
@@ -603,6 +633,7 @@ async fn initialize_sdk_pair(
         None,
         true,
         sender_postgres,
+        sender_mysql,
     )
     .await?;
 
@@ -622,6 +653,7 @@ async fn initialize_sdk_pair(
         None,
         true,
         receiver_postgres,
+        receiver_mysql,
     )
     .await?;
 
@@ -645,6 +677,7 @@ async fn build_extra_sender(
     no_auto_optimize: bool,
     pre_optimize: Option<u8>,
     sender_postgres: Option<String>,
+    sender_mysql: Option<String>,
     instance_index: u32,
 ) -> Result<BenchSdkInstance> {
     let dir = tempfile::Builder::new()
@@ -659,8 +692,16 @@ async fn build_extra_sender(
     if let Some(multiplicity) = pre_optimize {
         config.optimization_config.multiplicity = multiplicity;
     }
-    let itest =
-        build_sdk_with_tree_store_config(path, seed, config, None, true, sender_postgres).await?;
+    let itest = build_sdk_with_tree_store_config(
+        path,
+        seed,
+        config,
+        None,
+        true,
+        sender_postgres,
+        sender_mysql,
+    )
+    .await?;
 
     Ok(BenchSdkInstance {
         sdk: itest.sdk,

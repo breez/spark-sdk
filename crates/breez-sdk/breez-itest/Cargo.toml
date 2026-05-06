@@ -9,12 +9,14 @@ path = "src/lib.rs"
 
 [dependencies]
 # Breez SDK under test (enable test-utils for direct helpers)
-breez-sdk-spark = { workspace = true, features = ["test-utils", "postgres"] }
+breez-sdk-spark = { workspace = true, features = ["test-utils", "postgres", "mysql"] }
 breez-sdk-common = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["postgres"] }
+testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }
 
 # PostgreSQL for database creation utilities
 tokio-postgres.workspace = true
+# MySQL for database creation utilities
+mysql_async.workspace = true
 
 # Async/test stack
 tokio = { workspace = true, features = ["full"] }

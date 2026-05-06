@@ -11,6 +11,7 @@ const {
   SdkBuilder,
   defaultConfig,
   defaultPostgresStorageConfig,
+  defaultMysqlStorageConfig,
   initLogging,
 } = require('@breeztech/breez-sdk-spark/nodejs')
 
@@ -37,6 +38,8 @@ function parseArgs() {
     multiplicity: null,
     senderPostgres: null,
     receiverPostgres: null,
+    senderMysql: null,
+    receiverMysql: null,
     senderInstances: 1,
   }
   for (let i = 0; i < args.length; i++) {
@@ -60,6 +63,8 @@ function parseArgs() {
       case '--multiplicity': opts.multiplicity = parseInt(args[++i], 10); break
       case '--sender-postgres': opts.senderPostgres = args[++i]; break
       case '--receiver-postgres': opts.receiverPostgres = args[++i]; break
+      case '--sender-mysql': opts.senderMysql = args[++i]; break
+      case '--receiver-mysql': opts.receiverMysql = args[++i]; break
       case '--sender-instances': opts.senderInstances = parseInt(args[++i], 10); break
       case '-h':
       case '--help': {
@@ -92,6 +97,11 @@ function printHelp() {
   console.log('  --receiver-data-dir PATH    Override receiver data dir')
   console.log('  --keep-data                 Do not remove data dirs at the end')
   console.log('  --bucket-secs N             Throughput histogram bucket size (default: 60)')
+  console.log('  --sender-postgres URL       Sender Postgres connection (multi-instance share)')
+  console.log('  --receiver-postgres URL     Receiver Postgres connection')
+  console.log('  --sender-mysql URL          Sender MySQL connection (multi-instance share)')
+  console.log('  --receiver-mysql URL        Receiver MySQL connection')
+  console.log('  --sender-instances N        Sender SDK instances sharing one tree store (default: 1)')
   console.log('')
   console.log('Required env: FAUCET_USERNAME, FAUCET_PASSWORD')
   console.log('Optional env: FAUCET_URL, BREEZ_API_KEY')
@@ -163,7 +173,7 @@ class FileLogger {
   }
 }
 
-async function buildSdk(opts, role, mnemonic, dataDir, postgres) {
+async function buildSdk(opts, role, mnemonic, dataDir, storage) {
   const config = defaultConfig(opts.network)
   if (opts.apiKey) config.apiKey = opts.apiKey
   if (config.optimizationConfig) {
@@ -175,8 +185,11 @@ async function buildSdk(opts, role, mnemonic, dataDir, postgres) {
 
   const seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
   let builder = SdkBuilder.new(config, seed)
+  const { postgres, mysql } = storage || {}
   if (postgres) {
     builder = builder.withPostgresBackend(defaultPostgresStorageConfig(postgres))
+  } else if (mysql) {
+    builder = builder.withMysqlBackend(defaultMysqlStorageConfig(mysql))
   } else {
     builder = await builder.withDefaultStorage(dataDir)
   }
@@ -363,9 +376,20 @@ async function main() {
   const senderLog = path.join(senderDataDir, 'sdk.log')
   const receiverLog = path.join(receiverDataDir, 'sdk.log')
 
-  if (opts.senderInstances > 1 && !opts.senderPostgres) {
-    throw new Error('--sender-instances > 1 requires --sender-postgres so they share a tree store')
+  if (opts.senderInstances > 1 && !opts.senderPostgres && !opts.senderMysql) {
+    throw new Error('--sender-instances > 1 requires --sender-postgres or --sender-mysql so they share a tree store')
   }
+  if (opts.senderPostgres && opts.senderMysql) {
+    throw new Error('--sender-postgres and --sender-mysql are mutually exclusive')
+  }
+  if (opts.receiverPostgres && opts.receiverMysql) {
+    throw new Error('--receiver-postgres and --receiver-mysql are mutually exclusive')
+  }
+
+  const senderStorage = { postgres: opts.senderPostgres, mysql: opts.senderMysql }
+  const receiverStorage = { postgres: opts.receiverPostgres, mysql: opts.receiverMysql }
+  const senderBackend = opts.senderPostgres ? 'postgres' : opts.senderMysql ? 'mysql' : 'sqlite'
+  const receiverBackend = opts.receiverPostgres ? 'postgres' : opts.receiverMysql ? 'mysql' : 'sqlite'
 
   console.log('Concurrent Spark Transfer Test (Node.js / wasm)')
   console.log('==============================================')
@@ -374,8 +398,8 @@ async function main() {
   console.log(`Sender instances:  ${opts.senderInstances}`)
   console.log(`Amount range:      ${opts.minAmount} - ${opts.maxAmount} sats`)
   console.log(`Network:           ${opts.network}`)
-  console.log(`Sender backend:    ${opts.senderPostgres ? 'postgres' : 'sqlite'}`)
-  console.log(`Receiver backend:  ${opts.receiverPostgres ? 'postgres' : 'sqlite'}`)
+  console.log(`Sender backend:    ${senderBackend}`)
+  console.log(`Receiver backend:  ${receiverBackend}`)
   console.log(`Sender data dir:   ${senderDataDir}`)
   console.log(`Receiver data dir: ${receiverDataDir}`)
   console.log(`Sender log:        ${senderLog}`)
@@ -400,10 +424,10 @@ async function main() {
   console.log('')
   console.log('Initializing sender SDK (instance 0)...')
   const senders = []
-  const firstSender = await buildSdk(opts, 'sender', senderMnemonic, senderDataDir, opts.senderPostgres)
+  const firstSender = await buildSdk(opts, 'sender', senderMnemonic, senderDataDir, senderStorage)
   senders.push(firstSender)
   console.log('Initializing receiver SDK...')
-  const receiver = await buildSdk(opts, 'receiver', receiverMnemonic, receiverDataDir, opts.receiverPostgres)
+  const receiver = await buildSdk(opts, 'receiver', receiverMnemonic, receiverDataDir, receiverStorage)
 
   console.log('Waiting for initial sync (sender 0)...')
   await firstSender.events.waitFor((ev) => ev.type === 'synced', 120_000).catch(() => {})
@@ -417,7 +441,7 @@ async function main() {
     const dataDir = `${senderDataDir}-inst-${i}`
     fs.mkdirSync(dataDir, { recursive: true })
     console.log(`Initializing sender SDK (instance ${i})...`)
-    const inst = await buildSdk(opts, 'sender', senderMnemonic, dataDir, opts.senderPostgres)
+    const inst = await buildSdk(opts, 'sender', senderMnemonic, dataDir, senderStorage)
     senders.push(inst)
     await inst.events.waitFor((ev) => ev.type === 'synced', 120_000).catch(() => {})
   }
