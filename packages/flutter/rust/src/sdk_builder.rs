@@ -3,7 +3,7 @@ use std::sync::Arc;
 use breez_sdk_spark::{ChainApiType, Config, Credentials, SdkError, Seed};
 use flutter_rust_bridge::frb;
 
-use crate::sdk::BreezSdk;
+use crate::{connection_manager::ConnectionManager, sdk::BreezSdk};
 
 pub struct SdkBuilder {
     inner: Arc<breez_sdk_spark::SdkBuilder>,
@@ -44,6 +44,15 @@ impl SdkBuilder {
     ) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
             .with_rest_chain_service(url, api_type, credentials);
+        Self {
+            inner: Arc::new(builder),
+        }
+    }
+
+    #[frb(sync)]
+    pub fn with_connection_manager(self, connection_manager: ConnectionManager) -> Self {
+        let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
+            .with_connection_manager(connection_manager.inner);
         Self {
             inner: Arc::new(builder),
         }

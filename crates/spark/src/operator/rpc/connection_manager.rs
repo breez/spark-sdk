@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tracing::debug;
 
 use crate::operator::{
@@ -15,7 +15,7 @@ pub trait ConnectionManager: Send + Sync {
 }
 
 pub struct DefaultConnectionManager {
-    connections_map: Mutex<HashMap<String, Transport>>,
+    connections_map: RwLock<HashMap<String, Transport>>,
 }
 
 impl Default for DefaultConnectionManager {
@@ -36,9 +36,8 @@ impl DefaultConnectionManager {
                 tracing::warn!("Failed to install rustls crypto provider, ignoring error");
             }
         }
-        let connections_map = HashMap::new();
         Self {
-            connections_map: Mutex::new(connections_map),
+            connections_map: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -46,22 +45,25 @@ impl DefaultConnectionManager {
 #[macros::async_trait]
 impl ConnectionManager for DefaultConnectionManager {
     async fn get_transport(&self, operator: &OperatorConfig) -> Result<Transport> {
-        let mut map = self.connections_map.lock().await;
-        let operator_connection = map.get(&operator.address.to_string());
-        match operator_connection {
-            Some(operator_connection) => Ok(operator_connection.clone()),
-            None => {
-                let transport = GrpcClient::new(
-                    operator.address.to_string(),
-                    operator.ca_cert.clone(),
-                    operator.user_agent.clone(),
-                )?
-                .into_inner();
-
-                map.insert(operator.address.to_string(), transport.clone());
-                debug!("Created new connection to operator: {}", operator.address);
-                Ok(transport)
-            }
+        let key = operator.address.to_string();
+        if let Some(transport) = self.connections_map.read().await.get(&key) {
+            return Ok(transport.clone());
         }
+
+        let mut map = self.connections_map.write().await;
+        if let Some(transport) = map.get(&key) {
+            return Ok(transport.clone());
+        }
+
+        let transport = GrpcClient::new(
+            operator.address.to_string(),
+            operator.ca_cert.clone(),
+            operator.user_agent.clone(),
+        )?
+        .into_inner();
+
+        map.insert(key, transport.clone());
+        debug!("Created new connection to operator: {}", operator.address);
+        Ok(transport)
     }
 }
