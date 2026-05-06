@@ -188,10 +188,10 @@ impl SdkBuilder {
     }
 
     #[wasm_bindgen(js_name = "withConnectionManager")]
-    pub fn with_connection_manager(mut self, connection_manager: ConnectionManager) -> Self {
+    pub fn with_connection_manager(mut self, connection_manager: &ConnectionManager) -> Self {
         self.builder = self
             .builder
-            .with_connection_manager(connection_manager.inner);
+            .with_connection_manager(connection_manager.inner.clone());
         self
     }
 

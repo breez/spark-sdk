@@ -50,9 +50,9 @@ impl SdkBuilder {
     }
 
     #[frb(sync)]
-    pub fn with_connection_manager(self, connection_manager: ConnectionManager) -> Self {
+    pub fn with_connection_manager(self, connection_manager: &ConnectionManager) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
-            .with_connection_manager(connection_manager.inner);
+            .with_connection_manager(connection_manager.inner.clone());
         Self {
             inner: Arc::new(builder),
         }
