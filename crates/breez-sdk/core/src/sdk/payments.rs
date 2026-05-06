@@ -11,9 +11,9 @@ use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
     ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType, FeePolicy,
     FetchConversionLimitsRequest, FetchConversionLimitsResponse, GetPaymentRequest,
-    GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus, SendOnchainFeeQuote,
-    SendPaymentMethod, SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails,
-    WaitForPaymentIdentifier,
+    GetPaymentResponse, InputType, OnchainConfirmationSpeed, PaymentStatus,
+    QuerySparkInvoicesRequest, QuerySparkInvoicesResponse, SendOnchainFeeQuote, SendPaymentMethod,
+    SendPaymentOptions, SparkHtlcOptions, SparkInvoiceDetails, WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
     models::{
@@ -484,6 +484,25 @@ impl BreezSdk {
             get_payment_with_conversion_details(request.payment_id, self.storage.clone()).await?;
 
         Ok(GetPaymentResponse { payment })
+    }
+
+    /// Queries the Spark operator for the status of one or more Spark invoices.
+    ///
+    /// Returns one result per input invoice, reporting whether it is `NotFound`,
+    /// `Pending`, `Finalized` (paid), or `Returned`, along with the underlying
+    /// transfer details once finalized.
+    pub async fn query_spark_invoices(
+        &self,
+        request: QuerySparkInvoicesRequest,
+    ) -> Result<QuerySparkInvoicesResponse, SdkError> {
+        let results = self
+            .spark_wallet
+            .query_spark_invoices(request.invoices)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        Ok(QuerySparkInvoicesResponse { results })
     }
 }
 
