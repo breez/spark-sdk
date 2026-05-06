@@ -291,6 +291,7 @@ pub struct ListTokenTransactionsRequest {
 pub struct ListTransfersRequest {
     pub paging: Option<PagingFilter>,
     pub transfer_ids: Vec<TransferId>,
+    pub from_timestamp: Option<SystemTime>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

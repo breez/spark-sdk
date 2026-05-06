@@ -793,7 +793,9 @@ pub(crate) struct CachedAccountInfo {
 
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct CachedSyncInfo {
-    pub(crate) offset: u64,
+    /// Unix seconds of the most-recently processed final (non-pending) transfer.
+    #[serde(default)]
+    pub(crate) last_synced_timestamp: Option<u64>,
     pub(crate) last_synced_final_token_payment_id: Option<String>,
 }
 

@@ -1188,6 +1188,7 @@ impl TransferService {
         &self,
         transfer_ids: &[TransferId],
         paging: PagingFilter,
+        from_timestamp: Option<SystemTime>,
     ) -> Result<PagingResult<Transfer>, ServiceError> {
         trace!(
             "Querying transfers with limit: {:?}, offset: {:?}",
@@ -1217,6 +1218,11 @@ impl TransferService {
                     operator_rpc::spark::TransferType::CooperativeExit.into(),
                     operator_rpc::spark::TransferType::UtxoSwap.into(),
                 ],
+                time_filter: from_timestamp
+                    .map(|t| web_time_to_prost_timestamp(&t))
+                    .transpose()
+                    .map_err(|_| ServiceError::Generic("Invalid timestamp filter".to_string()))?
+                    .map(operator_rpc::spark::transfer_filter::TimeFilter::CreatedAfter),
                 ..Default::default()
             })
             .await?;
@@ -1236,12 +1242,16 @@ impl TransferService {
         &self,
         transfer_ids: &[TransferId],
         paging: Option<PagingFilter>,
+        from_timestamp: Option<SystemTime>,
     ) -> Result<PagingResult<Transfer>, ServiceError> {
         let transfers = match paging {
-            Some(paging) => self.query_transfers_inner(transfer_ids, paging).await?,
+            Some(paging) => {
+                self.query_transfers_inner(transfer_ids, paging, from_timestamp)
+                    .await?
+            }
             None => {
                 pager(
-                    |f| self.query_transfers_inner(transfer_ids, f),
+                    |f| self.query_transfers_inner(transfer_ids, f, from_timestamp),
                     PagingFilter::default(),
                 )
                 .await?

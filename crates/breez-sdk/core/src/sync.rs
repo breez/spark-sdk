@@ -1,14 +1,14 @@
-use std::{str::FromStr, sync::Arc};
+use std::sync::Arc;
 
+use platform_utils::time::{Duration, UNIX_EPOCH};
 use spark_wallet::{
     ListTokenTransactionsRequest, ListTransfersRequest, Order, PagingFilter, SparkWallet,
-    TransferId,
 };
 use tracing::{error, info};
 
 use crate::{
     EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
-    persist::{CachedSyncInfo, ObjectCacheRepository, StorageListPaymentsRequest},
+    persist::{CachedSyncInfo, ObjectCacheRepository},
     utils::{payments::get_payment_and_emit_event, token::token_transaction_to_payments},
 };
 
@@ -47,36 +47,48 @@ impl SparkSyncService {
         object_repository: &ObjectCacheRepository,
         initial_sync_complete: bool,
     ) -> Result<(), SdkError> {
-        // Get the last offset we processed from storage
+        // Get the last timestamp cursor we processed from storage
         let cached_sync_info = object_repository
             .fetch_sync_info()
             .await?
             .unwrap_or_default();
-        let current_offset = cached_sync_info.offset;
+        let last_synced_timestamp = cached_sync_info.last_synced_timestamp;
         let last_synced_final_token_payment_id =
             cached_sync_info.last_synced_final_token_payment_id;
 
+        let from_timestamp =
+            last_synced_timestamp.and_then(|ts| UNIX_EPOCH.checked_add(Duration::from_secs(ts)));
+
         // We'll keep querying in batches until we have all transfers
         let mut next_filter = Some(PagingFilter {
-            offset: current_offset,
+            offset: 0,
             limit: PAYMENT_SYNC_BATCH_SIZE,
             order: Order::Ascending,
         });
-        info!("Syncing payments to storage, offset = {}", current_offset);
-        let mut pending_payments: u64 = 0;
+        info!(
+            "Syncing payments to storage, from_timestamp = {:?}",
+            last_synced_timestamp
+        );
+        // Tracks the timestamp of the latest final transfer seen across all batches
+        let mut new_cursor: Option<u64> = last_synced_timestamp;
+        // Tracks the timestamp of the oldest pending transfer seen across all batches.
+        // The effective cursor is min(new_cursor, min_pending_timestamp) so that pending
+        // payments are always re-fetched on the next sync
+        let mut min_pending_timestamp: Option<u64> = None;
         while let Some(filter) = next_filter {
-            // Get batch of transfers starting from current offset
+            // Get batch of transfers created after our timestamp cursor
             let transfers_response = self
                 .spark_wallet
                 .list_transfers(ListTransfersRequest {
                     paging: Some(filter.clone()),
+                    from_timestamp,
                     ..Default::default()
                 })
                 .await?;
 
             info!(
-                "Syncing payments to storage, offset = {}, transfers = {}",
-                filter.offset,
+                "Syncing payments to storage, from_timestamp = {:?}, transfers = {}",
+                last_synced_timestamp,
                 transfers_response.len()
             );
             // Process transfers in this batch
@@ -109,10 +121,21 @@ impl SparkSyncService {
                 if let Err(err) = self.storage.insert_payment(payment.clone()).await {
                     error!("Failed to insert payment: {err:?}");
                 }
-                if payment.status == PaymentStatus::Pending {
-                    pending_payments = pending_payments.saturating_add(1);
-                }
                 info!("Inserted payment: {payment:?}");
+
+                if payment.status == PaymentStatus::Pending {
+                    // Pull the cursor back to the oldest pending payment so it is
+                    // always re-fetched on the next sync run
+                    min_pending_timestamp = Some(
+                        min_pending_timestamp
+                            .map_or(payment.timestamp, |m: u64| m.min(payment.timestamp)),
+                    );
+                } else {
+                    // Advance the cursor to the latest final transfer
+                    if Some(payment.timestamp) > new_cursor {
+                        new_cursor = Some(payment.timestamp);
+                    }
+                }
 
                 if should_emit {
                     // Fetch the payment to include already stored metadata
@@ -121,111 +144,31 @@ impl SparkSyncService {
                 }
             }
 
-            // Check if we have more transfers to fetch
-            let cache_offset = filter
-                .offset
-                .saturating_add(u64::try_from(transfers_response.len())?);
+            next_filter = transfers_response.next;
+        }
 
-            // Update our last processed offset in the storage. We should remove pending payments
-            // from the offset as they might be removed from the list later.
+        // Effective cursor: take the minimum of the latest-final cursor and the
+        // oldest-pending timestamp, so pending payments are always within the next
+        // sync window.
+        let effective_cursor = match (new_cursor, min_pending_timestamp) {
+            (Some(f), Some(p)) => Some(f.min(p)),
+            (cursor, pending) => cursor.or(pending),
+        };
+
+        if effective_cursor != last_synced_timestamp {
             let save_res = object_repository
                 .save_sync_info(&CachedSyncInfo {
-                    offset: cache_offset.saturating_sub(pending_payments),
+                    last_synced_timestamp: effective_cursor,
                     last_synced_final_token_payment_id: last_synced_final_token_payment_id.clone(),
                 })
                 .await;
 
             if let Err(err) = save_res {
-                error!("Failed to update last sync offset: {err:?}");
+                error!("Failed to update last sync timestamp: {err:?}");
             }
-
-            next_filter = transfers_response.next;
         }
-
-        // Re-check all locally-stored pending payments to catch status transitions
-        // that occurred before our current offset window (e.g. pending → failed).
-        self.reconcile_pending_payments(initial_sync_complete).await;
 
         Ok(())
-    }
-
-    /// Re-fetches all locally-stored pending payments from the server and updates
-    /// any whose status has changed. This catches cases where a payment transitioned to
-    /// failed/completed before the current sync offset window began.
-    /// Skip payments younger than 1 minute to avoid unnecessary server load.
-    async fn reconcile_pending_payments(&self, initial_sync_complete: bool) {
-        let now = u64::from(breez_sdk_common::utils::now());
-        let pending_payments = match self
-            .storage
-            .list_payments(StorageListPaymentsRequest {
-                status_filter: Some(vec![PaymentStatus::Pending]),
-                to_timestamp: Some(now.saturating_sub(60)),
-                ..Default::default()
-            })
-            .await
-        {
-            Ok(p) => p,
-            Err(e) => {
-                error!("Failed to list pending payments for reconciliation: {e:?}");
-                return;
-            }
-        };
-
-        let transfer_ids: Vec<TransferId> = pending_payments
-            .iter()
-            .filter_map(|p| TransferId::from_str(&p.id).ok())
-            .collect();
-        if transfer_ids.is_empty() {
-            return;
-        }
-
-        info!(
-            "Reconciling {} locally-pending bitcoin payments against server",
-            transfer_ids.len()
-        );
-        let transfers_response = match self
-            .spark_wallet
-            .list_transfers(ListTransfersRequest {
-                transfer_ids,
-                ..Default::default()
-            })
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                error!("Failed to fetch pending payments for reconciliation: {e:?}");
-                return;
-            }
-        };
-
-        for transfer in &transfers_response.items {
-            let payment = match Payment::try_from(transfer.clone()) {
-                Ok(p) => p,
-                Err(e) => {
-                    error!("Failed to convert transfer to payment during reconciliation: {e:?}");
-                    continue;
-                }
-            };
-
-            if payment.status == PaymentStatus::Pending {
-                continue;
-            }
-
-            info!(
-                "Reconciliation: payment {} status changed from Pending to {:?}",
-                payment.id, payment.status
-            );
-
-            if let Err(e) = self.storage.insert_payment(payment.clone()).await {
-                error!("Failed to update payment status during reconciliation: {e:?}");
-                continue;
-            }
-
-            if initial_sync_complete {
-                get_payment_and_emit_event(&self.storage, &self.event_emitter, payment.clone())
-                    .await;
-            }
-        }
     }
 
     async fn apply_payment_metadata(&self, payment: &Payment) -> Result<(), SdkError> {
@@ -451,7 +394,7 @@ impl SparkSyncService {
             info!("Updating last synced token payment id to {last_synced_final_token_payment_id}");
             object_repository
                 .save_sync_info(&CachedSyncInfo {
-                    offset: cached_sync_info.offset,
+                    last_synced_timestamp: cached_sync_info.last_synced_timestamp,
                     last_synced_final_token_payment_id: Some(last_synced_final_token_payment_id),
                 })
                 .await?;
