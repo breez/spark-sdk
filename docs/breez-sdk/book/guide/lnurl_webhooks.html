@@ -1,0 +1,312 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Lightning Address payment notifications - Breez SDK - Spark</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../styles.css">
+        <link rel="stylesheet" href="../theme/pagetoc.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Breez SDK - Spark</h1>
+
+                    <div class="right-buttons">
+                        <a href="https://github.com/breez/spark-sdk" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/breez/spark-sdk/edit/main/crates/breez-sdk/docs/src/guide/lnurl_webhooks.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="lightning-address-payment-notifications"><a class="header" href="#lightning-address-payment-notifications">Lightning Address payment notifications</a></h1>
+<p>When one of your users receives a payment to their Lightning Address, Breez can send a webhook to your server. Payments are received automatically without any user interaction — the webhook simply lets you know it happened. For example, you could send the user a push notification, update a balance in your backend, trigger a fulfillment flow, or log the event for analytics.</p>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h2>
+<p>Your users' Lightning Addresses are served by the Breez LNURL server. When a payment comes in, the LNURL server sends a webhook to your server.</p>
+<p><img src="images/lnurl_webhook_flow.svg" alt="Webhook flow" /></p>
+<p>As an example, if you want to send push notifications to your users, you could run a Notification Delivery Service (NDS) that receives the webhook and forwards a push notification to the user's device:</p>
+<p><img src="images/lnurl_webhook_nds.svg" alt="NDS push notification flow" /></p>
+<h2 id="getting-started"><a class="header" href="#getting-started">Getting started</a></h2>
+<p>To start receiving webhooks, <a href="mailto:contact@breez.technology">send us</a> your webhook endpoint URL. Breez will configure it for your domain so that all Lightning Address payments on that domain trigger a POST request to your endpoint.</p>
+<p>Your endpoint should accept <code>POST</code> requests with a JSON body and respond with a <code>2xx</code> status code to acknowledge receipt.</p>
+<h2 id="signature-verification"><a class="header" href="#signature-verification">Signature verification</a></h2>
+<p>Every webhook request includes an <code>X-Breez-Signature</code> header containing a hex-encoded HMAC-SHA256 signature of the raw request body. You should verify this signature to ensure the request came from Breez and was not tampered with.</p>
+<p>The signing secret is provided to you during webhook setup. To verify:</p>
+<ol>
+<li>Compute the HMAC-SHA256 of the raw request body using your shared secret.</li>
+<li>Hex-encode the result.</li>
+<li>Compare it to the value in the <code>X-Breez-Signature</code> header.</li>
+</ol>
+<p><strong>Node.js example:</strong></p>
+<pre><code class="language-javascript">const crypto = require('crypto');
+
+function verifyWebhookSignature(secret, body, signatureHeader) {
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(body)
+    .digest('hex');
+  return crypto.timingSafeEqual(
+    Buffer.from(expected),
+    Buffer.from(signatureHeader),
+  );
+}
+</code></pre>
+<p><strong>Python example:</strong></p>
+<pre><code class="language-python">import hmac
+import hashlib
+
+def verify_webhook_signature(secret: str, body: bytes, signature_header: str) -&gt; bool:
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature_header)
+</code></pre>
+<h2 id="payload"><a class="header" href="#payload">Payload</a></h2>
+<p>All payloads use a <code>{ "template": "...", "data": { ... } }</code> envelope. Currently the only template is <code>spark_payment_received</code>:</p>
+<pre><code class="language-json">{
+  "template": "spark_payment_received",
+  "data": {
+    "payment_hash": "abc123...",
+    "invoice": "lnbc50u1p...",
+    "preimage": "def456...",
+    "amount_sat": 50000,
+    "user_pubkey": "02abc123...",
+    "lightning_address": "alice@yourdomain.com",
+    "sender_comment": "Thanks!",
+    "timestamp": 1711929600000
+  }
+}
+</code></pre>
+<div class="table-wrapper"><table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>payment_hash</code></td><td><code>string</code></td><td>Hex-encoded payment hash</td></tr>
+<tr><td><code>invoice</code></td><td><code>string</code></td><td>BOLT11 invoice that was paid</td></tr>
+<tr><td><code>preimage</code></td><td><code>string</code></td><td>Hex-encoded payment preimage</td></tr>
+<tr><td><code>amount_sat</code></td><td><code>number | null</code></td><td>Amount received in satoshis. May be <code>null</code> in rare cases where the amount is not available.</td></tr>
+<tr><td><code>user_pubkey</code></td><td><code>string</code></td><td>The Spark identity public key of the user who received the payment</td></tr>
+<tr><td><code>lightning_address</code></td><td><code>string | null</code></td><td>The Lightning Address that received the payment (e.g. <code>alice@yourdomain.com</code>)</td></tr>
+<tr><td><code>sender_comment</code></td><td><code>string | null</code></td><td>Comment attached by the sender, if any</td></tr>
+<tr><td><code>timestamp</code></td><td><code>number</code></td><td>Milliseconds since Unix epoch when the webhook was enqueued</td></tr>
+</tbody></table>
+</div>
+<h2 id="retries"><a class="header" href="#retries">Retries</a></h2>
+<p>If your endpoint is unreachable or responds with a non-2xx status code, Breez will automatically retry delivery with exponential backoff. Because of this, your endpoint may receive the same webhook more than once for the same payment — use the <code>paymentHash</code> field to deduplicate.</p>
+<h2 id="best-practices"><a class="header" href="#best-practices">Best practices</a></h2>
+<ul>
+<li><strong>Verify the signature.</strong> Always verify the <code>X-Breez-Signature</code> header before processing the webhook. Reject requests with missing or invalid signatures.</li>
+<li><strong>Return 2xx quickly.</strong> Do your processing asynchronously after acknowledging the webhook. Slow responses will be treated as failures and retried.</li>
+<li><strong>Deduplicate on <code>paymentHash</code>.</strong> The same payment may be delivered more than once due to retries.</li>
+<li><strong>Use <code>lightningAddress</code> or <code>userPubkey</code> to identify the user.</strong> These fields tell you which user received the payment.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../guide/receive_lnurl_pay.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../guide/lnurl_withdraw.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../guide/receive_lnurl_pay.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../guide/lnurl_withdraw.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../tabs.js"></script>
+        <script src="../theme/pagetoc.js"></script>
+
+
+
+    </div>
+    </body>
+</html>
