@@ -19,6 +19,7 @@ macros.workspace = true
 platform-utils.workspace = true
 rustls.workspace = true
 serde.workspace = true
+sha2.workspace = true
 serde_json.workspace = true
 spark-wallet.workspace = true
 thiserror.workspace = true

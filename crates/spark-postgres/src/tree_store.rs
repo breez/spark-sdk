@@ -20,6 +20,7 @@ use tokio::sync::watch;
 use tracing::{debug, info, trace};
 use uuid::Uuid;
 
+use crate::advisory_lock::identity_lock_key;
 use crate::config::PostgresStorageConfig;
 use crate::error::PostgresError;
 use crate::migrations::run_migrations;
@@ -46,10 +47,10 @@ impl LeafLike for SlimLeaf {
     }
 }
 
-/// Advisory-lock classid for the tree store. Combined with a per-tenant `objid`
-/// (derived from the identity pubkey) so that two tenants never block each
-/// other's writes — only same-tenant writes serialize on the same lock.
-const TREE_STORE_LOCK_CLASSID: i32 = 0x7472_6565; // "tree" as hex
+/// Domain prefix mixed into the per-tenant advisory lock hash so the tree
+/// store's locks never collide with the token store's, even when two tenants
+/// share a database.
+const TREE_STORE_LOCK_PREFIX: &[u8] = b"breez-spark-sdk:tree:";
 
 /// Timeout for reservations in seconds. Reservations older than this are considered stale
 /// and will be cleaned up during `set_leaves()` to release leaves locked by crashed clients.
@@ -69,25 +70,12 @@ pub struct PostgresTreeStore {
     /// 33-byte secp256k1 compressed pubkey identifying this tenant. All reads
     /// and writes are filtered by `user_id = self.identity`.
     identity: Vec<u8>,
-    /// Stable per-tenant lock objid derived from `identity`. Used as the
-    /// second argument to `pg_advisory_xact_lock(classid, objid)` so concurrent
-    /// writes from different tenants do not block each other.
-    lock_objid: i32,
+    /// Stable per-tenant 64-bit advisory lock key derived from `identity`.
+    /// Passed to the single-arg form `pg_advisory_xact_lock(bigint)` so two
+    /// tenants don't serialize on each other's writes.
+    lock_key: i64,
     balance_changed_tx: Arc<watch::Sender<()>>,
     balance_changed_rx: watch::Receiver<()>,
-}
-
-/// Derives a stable 32-bit lock objid from a 33-byte secp256k1 pubkey.
-/// Uses the last 4 bytes of the pubkey x-coordinate (well-distributed by
-/// construction) reinterpreted as i32. Tail-takes via `chunks` so an
-/// unexpectedly short input simply yields zero rather than underflowing.
-fn identity_lock_objid(identity: &[u8]) -> i32 {
-    let buf: [u8; 4] = identity
-        .rchunks(4)
-        .next()
-        .and_then(|tail| tail.try_into().ok())
-        .unwrap_or([0u8; 4]);
-    i32::from_be_bytes(buf)
 }
 
 /// Builds the multi-tenant scoping migration for the tree store. The literal
@@ -836,7 +824,7 @@ impl PostgresTreeStore {
         let store = Self {
             pool,
             identity: identity.to_vec(),
-            lock_objid: identity_lock_objid(identity),
+            lock_key: identity_lock_key(TREE_STORE_LOCK_PREFIX, identity),
             balance_changed_tx: Arc::new(balance_changed_tx),
             balance_changed_rx,
         };
@@ -1147,20 +1135,17 @@ impl PostgresTreeStore {
     }
 
     /// Acquires an exclusive advisory lock for write operations.
-    /// Per-tenant: combines `TREE_STORE_LOCK_CLASSID` with the tenant-specific
-    /// `objid` so concurrent writes from different tenants do not block each
-    /// other. Same-tenant writes still serialize on the same lock.
+    /// Per-tenant: keyed by `lock_key` (64-bit hash of a tree-store domain
+    /// prefix + identity) so concurrent writes from different tenants do not
+    /// block each other. Same-tenant writes still serialize on the same lock.
     /// The lock is automatically released when the transaction commits or rolls back.
     async fn acquire_write_lock(
         &self,
         tx: &tokio_postgres::Transaction<'_>,
     ) -> Result<(), TreeServiceError> {
-        tx.execute(
-            "SELECT pg_advisory_xact_lock($1, $2)",
-            &[&TREE_STORE_LOCK_CLASSID, &self.lock_objid],
-        )
-        .await
-        .map_err(map_err)?;
+        tx.execute("SELECT pg_advisory_xact_lock($1)", &[&self.lock_key])
+            .await
+            .map_err(map_err)?;
         Ok(())
     }
 
@@ -2214,15 +2199,12 @@ mod tests {
         .unwrap();
 
         // Hold the advisory lock on a separate connection so finalize must wait.
-        // Must use the same (classid, objid) pair as `acquire_write_lock`.
-        let lock_objid = fixture.store.lock_objid;
+        // Must use the same key as `acquire_write_lock`.
+        let lock_key = fixture.store.lock_key;
         let mut holder = fixture.store.pool.get().await.unwrap();
         let holder_tx = holder.transaction().await.unwrap();
         holder_tx
-            .execute(
-                "SELECT pg_advisory_xact_lock($1, $2)",
-                &[&TREE_STORE_LOCK_CLASSID, &lock_objid],
-            )
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
             .await
             .unwrap();
 

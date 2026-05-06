@@ -19,6 +19,7 @@ use spark_wallet::{
 use tracing::{trace, warn};
 use uuid::Uuid;
 
+use crate::advisory_lock::identity_lock_key;
 use crate::config::PostgresStorageConfig;
 use crate::error::PostgresError;
 use crate::migrations::run_migrations;
@@ -27,10 +28,10 @@ use crate::pool::create_pool;
 /// Name of the schema migrations table for `PostgresTokenStore`.
 const TOKEN_MIGRATIONS_TABLE: &str = "token_schema_migrations";
 
-/// Advisory-lock classid for the token store. Combined with a per-tenant
-/// `objid` (derived from the identity pubkey) so two tenants don't serialize
-/// on each other's writes — only same-tenant writes share the same lock.
-const TOKEN_STORE_LOCK_CLASSID: i32 = 0x746F_6B6E; // "tokn" as hex
+/// Domain prefix mixed into the per-tenant advisory lock hash so the token
+/// store's locks never collide with the tree store's, even when two tenants
+/// share a database.
+const TOKEN_STORE_LOCK_PREFIX: &[u8] = b"breez-spark-sdk:token:";
 
 /// Spent markers are kept in the database for this duration to support multiple
 /// SDK instances sharing the same postgres database. During `set_tokens_outputs`, spent
@@ -51,20 +52,10 @@ pub struct PostgresTokenStore {
     /// 33-byte secp256k1 compressed pubkey identifying this tenant. All reads
     /// and writes are filtered by `user_id = self.identity`.
     identity: Vec<u8>,
-    /// Stable per-tenant lock objid derived from `identity`. Used as the
-    /// second argument to `pg_advisory_xact_lock(classid, objid)`.
-    lock_objid: i32,
-}
-
-/// Derive a stable 32-bit lock objid from a 33-byte secp256k1 pubkey.
-/// Reuses the same scheme as the tree store so behavior is consistent.
-fn identity_lock_objid(identity: &[u8]) -> i32 {
-    let buf: [u8; 4] = identity
-        .rchunks(4)
-        .next()
-        .and_then(|tail| tail.try_into().ok())
-        .unwrap_or([0u8; 4]);
-    i32::from_be_bytes(buf)
+    /// Stable per-tenant 64-bit advisory lock key derived from `identity`.
+    /// Passed to the single-arg form `pg_advisory_xact_lock(bigint)` so two
+    /// tenants don't serialize on each other's writes.
+    lock_key: i64,
 }
 
 /// Builds the multi-tenant scoping migration for the token store. Adds
@@ -922,7 +913,7 @@ impl PostgresTokenStore {
         let store = Self {
             pool,
             identity: identity.to_vec(),
-            lock_objid: identity_lock_objid(identity),
+            lock_key: identity_lock_key(TOKEN_STORE_LOCK_PREFIX, identity),
         };
         store.migrate().await?;
         Ok(store)
@@ -1005,19 +996,16 @@ impl PostgresTokenStore {
     }
 
     /// Acquires an exclusive advisory lock for write operations.
-    /// Per-tenant: combines `TOKEN_STORE_LOCK_CLASSID` with the tenant-specific
-    /// `objid` so concurrent writes from different tenants do not block each
-    /// other. Same-tenant writes still serialize on the same lock.
+    /// Per-tenant: keyed by `lock_key` (64-bit hash of a token-store domain
+    /// prefix + identity) so concurrent writes from different tenants do not
+    /// block each other. Same-tenant writes still serialize on the same lock.
     async fn acquire_write_lock(
         &self,
         tx: &tokio_postgres::Transaction<'_>,
     ) -> Result<(), TokenOutputServiceError> {
-        tx.execute(
-            "SELECT pg_advisory_xact_lock($1, $2)",
-            &[&TOKEN_STORE_LOCK_CLASSID, &self.lock_objid],
-        )
-        .await
-        .map_err(map_err)?;
+        tx.execute("SELECT pg_advisory_xact_lock($1)", &[&self.lock_key])
+            .await
+            .map_err(map_err)?;
         Ok(())
     }
 
@@ -1669,15 +1657,12 @@ mod tests {
             .unwrap();
 
         // Hold the token-store write lock on a separate connection. Must use
-        // the same (classid, objid) pair as `acquire_write_lock`.
-        let lock_objid = fixture.store.lock_objid;
+        // the same key as `acquire_write_lock`.
+        let lock_key = fixture.store.lock_key;
         let mut holder = fixture.store.pool.get().await.unwrap();
         let holder_tx = holder.transaction().await.unwrap();
         holder_tx
-            .execute(
-                "SELECT pg_advisory_xact_lock($1, $2)",
-                &[&TOKEN_STORE_LOCK_CLASSID, &lock_objid],
-            )
+            .execute("SELECT pg_advisory_xact_lock($1)", &[&lock_key])
             .await
             .unwrap();
 
