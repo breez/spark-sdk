@@ -33,15 +33,27 @@ const { TreeStoreError } = require("./errors.cjs");
 const { MysqlTreeStoreMigrationManager } = require("./migrations.cjs");
 
 /**
- * Named lock that serializes all tree store writes across processes.
- * Mirrors the Rust constant `TREE_STORE_WRITE_LOCK_NAME`.
+ * Domain prefix mixed into the per-tenant `GET_LOCK` name. Distinct prefixes
+ * guarantee that tree-store and token-store locks never collide.
  */
-const TREE_STORE_WRITE_LOCK_NAME = "tree_store_write_lock";
+const TREE_STORE_LOCK_PREFIX = "breez-spark-sdk:tree:";
 /** Seconds to wait when acquiring the write lock. */
 const WRITE_LOCK_TIMEOUT_SECS = 30;
 
 const RESERVATION_TIMEOUT_SECS = 300;
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000;
+
+/**
+ * Derive a stable per-tenant lock name from a tenant identity pubkey. Hashes
+ * a domain prefix together with the identity (SHA-256, first 8 bytes hex).
+ */
+function _identityLockName(prefix, identity) {
+  const crypto = require("crypto");
+  const hash = crypto.createHash("sha256");
+  hash.update(prefix);
+  hash.update(Buffer.from(identity));
+  return prefix + hash.digest("hex").slice(0, 16);
+}
 
 /** mysql2 may return JSON columns as either parsed objects or raw strings. */
 function parseJson(value) {
@@ -62,15 +74,28 @@ function buildPlaceholders(n) {
 }
 
 class MysqlTreeStore {
-  constructor(pool, logger = null) {
+  /**
+   * @param {import('mysql2/promise').Pool} pool
+   * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+   *   identifying the tenant. All reads and writes are scoped by this.
+   * @param {object} [logger]
+   */
+  constructor(pool, identity, logger = null) {
+    if (!identity || identity.length !== 33) {
+      throw new TreeStoreError(
+        "tenant identity (33-byte secp256k1 pubkey) is required"
+      );
+    }
     this.pool = pool;
+    this.identity = Buffer.from(identity);
+    this.lockName = _identityLockName(TREE_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
   }
 
   async initialize() {
     try {
       const migrationManager = new MysqlTreeStoreMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool);
+      await migrationManager.migrate(this.pool, this.identity);
       return this;
     } catch (error) {
       throw new TreeStoreError(
@@ -101,7 +126,7 @@ class MysqlTreeStore {
     try {
       const [lockRows] = await conn.query(
         "SELECT GET_LOCK(?, ?) AS acquired",
-        [TREE_STORE_WRITE_LOCK_NAME, WRITE_LOCK_TIMEOUT_SECS]
+        [this.lockName, WRITE_LOCK_TIMEOUT_SECS]
       );
       if (!lockRows || lockRows[0].acquired !== 1) {
         throw new TreeStoreError(
@@ -120,7 +145,7 @@ class MysqlTreeStore {
     } finally {
       if (lockAcquired) {
         await conn
-          .query("SELECT RELEASE_LOCK(?)", [TREE_STORE_WRITE_LOCK_NAME])
+          .query("SELECT RELEASE_LOCK(?)", [this.lockName])
           .catch(() => {});
       }
       conn.release();
@@ -180,14 +205,18 @@ class MysqlTreeStore {
    */
   async getAvailableBalance() {
     try {
-      const [rows] = await this.pool.query(`
-        SELECT COALESCE(SUM(l.value), 0) AS balance
-        FROM tree_leaves l
-        LEFT JOIN tree_reservations r ON l.reservation_id = r.id
-        WHERE
-          (l.reservation_id IS NULL AND l.status = 'Available')
-          OR r.purpose = 'Swap'
-      `);
+      const [rows] = await this.pool.query(
+        `SELECT COALESCE(SUM(l.value), 0) AS balance
+         FROM tree_leaves l
+         LEFT JOIN tree_reservations r
+           ON l.reservation_id = r.id AND l.user_id = r.user_id
+         WHERE l.user_id = ?
+           AND (
+             (l.reservation_id IS NULL AND l.status = 'Available')
+             OR r.purpose = 'Swap'
+           )`,
+        [this.identity]
+      );
       return BigInt(rows[0].balance);
     } catch (error) {
       throw new TreeStoreError(
@@ -199,12 +228,15 @@ class MysqlTreeStore {
 
   async getLeaves() {
     try {
-      const [rows] = await this.pool.query(`
-        SELECT l.id, l.status, l.is_missing_from_operators, l.data,
-               l.reservation_id, r.purpose
-        FROM tree_leaves l
-        LEFT JOIN tree_reservations r ON l.reservation_id = r.id
-      `);
+      const [rows] = await this.pool.query(
+        `SELECT l.id, l.status, l.is_missing_from_operators, l.data,
+                l.reservation_id, r.purpose
+         FROM tree_leaves l
+         LEFT JOIN tree_reservations r
+           ON l.reservation_id = r.id AND l.user_id = r.user_id
+         WHERE l.user_id = ?`,
+        [this.identity]
+      );
 
       const available = [];
       const notAvailable = [];
@@ -264,12 +296,12 @@ class MysqlTreeStore {
 
         const [swapRows] = await conn.query(
           `SELECT
-            (SELECT EXISTS(SELECT 1 FROM tree_reservations WHERE purpose = 'Swap')) AS has_active_swap,
+            (SELECT EXISTS(SELECT 1 FROM tree_reservations WHERE user_id = ? AND purpose = 'Swap')) AS has_active_swap,
             COALESCE(
-              (SELECT (last_completed_at >= ?) FROM tree_swap_status WHERE id = 1),
+              (SELECT (last_completed_at >= ?) FROM tree_swap_status WHERE user_id = ?),
               0
             ) AS swap_completed_during_refresh`,
-          [refreshTimestamp]
+          [this.identity, refreshTimestamp, this.identity]
         );
         const hasActiveSwap = !!swapRows[0].has_active_swap;
         const swapCompletedDuringRefresh = !!swapRows[0].swap_completed_during_refresh;
@@ -281,14 +313,17 @@ class MysqlTreeStore {
         await this._cleanupSpentMarkers(conn, refreshTimestamp);
 
         const [spentRows] = await conn.query(
-          "SELECT leaf_id FROM tree_spent_leaves WHERE spent_at >= ?",
-          [refreshTimestamp]
+          "SELECT leaf_id FROM tree_spent_leaves WHERE user_id = ? AND spent_at >= ?",
+          [this.identity, refreshTimestamp]
         );
         const spentIds = new Set(spentRows.map((r) => r.leaf_id));
 
+        // Includes leaves released earlier in this transaction by
+        // _cleanupStaleReservations (which now NULLs reservation_id explicitly,
+        // since the composite FK uses NO ACTION).
         await conn.query(
-          "DELETE FROM tree_leaves WHERE reservation_id IS NULL AND added_at < ?",
-          [refreshTimestamp]
+          "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
+          [this.identity, refreshTimestamp]
         );
 
         await this._batchUpsertLeaves(conn, leaves, false, spentIds);
@@ -307,18 +342,22 @@ class MysqlTreeStore {
     try {
       await this._withTransaction(async (conn) => {
         const [existsRows] = await conn.query(
-          "SELECT id FROM tree_reservations WHERE id = ?",
-          [id]
+          "SELECT id FROM tree_reservations WHERE user_id = ? AND id = ?",
+          [this.identity, id]
         );
 
         if (existsRows.length === 0) {
           return;
         }
 
-        await conn.query("DELETE FROM tree_leaves WHERE reservation_id = ?", [
-          id,
-        ]);
-        await conn.query("DELETE FROM tree_reservations WHERE id = ?", [id]);
+        await conn.query(
+          "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+          [this.identity, id]
+        );
+        await conn.query(
+          "DELETE FROM tree_reservations WHERE user_id = ? AND id = ?",
+          [this.identity, id]
+        );
 
         if (leavesToKeep && leavesToKeep.length > 0) {
           await this._batchUpsertLeaves(conn, leavesToKeep, false, null);
@@ -341,33 +380,40 @@ class MysqlTreeStore {
       // just-spent leaf as Available.
       await this._withWriteTransaction(async (conn) => {
         const [resRows] = await conn.query(
-          "SELECT id, purpose FROM tree_reservations WHERE id = ?",
-          [id]
+          "SELECT id, purpose FROM tree_reservations WHERE user_id = ? AND id = ?",
+          [this.identity, id]
         );
 
         let isSwap = false;
         if (resRows.length > 0) {
           isSwap = resRows[0].purpose === "Swap";
           const [leafRows] = await conn.query(
-            "SELECT id FROM tree_leaves WHERE reservation_id = ?",
-            [id]
+            "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            [this.identity, id]
           );
           const reservedLeafIds = leafRows.map((r) => r.id);
           await this._batchInsertSpentLeaves(conn, reservedLeafIds);
           await conn.query(
-            "DELETE FROM tree_leaves WHERE reservation_id = ?",
-            [id]
+            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            [this.identity, id]
           );
-          await conn.query("DELETE FROM tree_reservations WHERE id = ?", [id]);
+          await conn.query(
+            "DELETE FROM tree_reservations WHERE user_id = ? AND id = ?",
+            [this.identity, id]
+          );
         }
 
         if (newLeaves && newLeaves.length > 0) {
           await this._batchUpsertLeaves(conn, newLeaves, false, null);
         }
 
+        // UPSERT so a tenant that joined after the multi-tenant migration
+        // (and thus has no row) gets one created lazily.
         if (isSwap && newLeaves && newLeaves.length > 0) {
           await conn.query(
-            "UPDATE tree_swap_status SET last_completed_at = NOW(6) WHERE id = 1"
+            `INSERT INTO tree_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
+             ON DUPLICATE KEY UPDATE last_completed_at = VALUES(last_completed_at)`,
+            [this.identity]
           );
         }
       });
@@ -386,26 +432,22 @@ class MysqlTreeStore {
         const targetAmount = targetAmounts ? this._totalSats(targetAmounts) : 0;
         const maxTarget = this._maxTargetForPrefilter(targetAmounts);
 
-        // True total available across ALL eligible leaves — required for the
-        // WaitForPending decision. Must NOT be derived from the prefiltered
-        // slim set since the prefilter excludes big leaves.
         const [totalRows] = await conn.query(
           `SELECT COALESCE(SUM(value), 0) AS total
            FROM tree_leaves
-           WHERE status = 'Available'
+           WHERE user_id = ?
+             AND status = 'Available'
              AND is_missing_from_operators = 0
-             AND reservation_id IS NULL`
+             AND reservation_id IS NULL`,
+          [this.identity]
         );
         const available = Number(totalRows[0].total);
 
-        // Slim projection: only (id, value) for leaves the selection might use.
-        // Includes all leaves with value <= maxTarget plus the smallest leaf
-        // with value > maxTarget (covers the minimum-amount fallback case
-        // where one larger leaf is sufficient).
         const [slimRows] = await conn.query(
           `SELECT id, value
            FROM tree_leaves
-           WHERE status = 'Available'
+           WHERE user_id = ?
+             AND status = 'Available'
              AND is_missing_from_operators = 0
              AND reservation_id IS NULL
              AND (
@@ -413,7 +455,8 @@ class MysqlTreeStore {
                OR id = (
                  SELECT id FROM (
                    SELECT id FROM tree_leaves
-                   WHERE status = 'Available'
+                   WHERE user_id = ?
+                     AND status = 'Available'
                      AND is_missing_from_operators = 0
                      AND reservation_id IS NULL
                      AND value > ?
@@ -422,7 +465,7 @@ class MysqlTreeStore {
                  ) AS smallest_over
                )
              )`,
-          [maxTarget, maxTarget]
+          [this.identity, maxTarget, this.identity, maxTarget]
         );
 
         const slimLeaves = slimRows.map((r) => ({
@@ -536,8 +579,8 @@ class MysqlTreeStore {
     try {
       return await this._withTransaction(async (conn) => {
         const [existsRows] = await conn.query(
-          "SELECT id FROM tree_reservations WHERE id = ?",
-          [reservationId]
+          "SELECT id FROM tree_reservations WHERE user_id = ? AND id = ?",
+          [this.identity, reservationId]
         );
 
         if (existsRows.length === 0) {
@@ -545,15 +588,15 @@ class MysqlTreeStore {
         }
 
         const [oldLeafRows] = await conn.query(
-          "SELECT id FROM tree_leaves WHERE reservation_id = ?",
-          [reservationId]
+          "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+          [this.identity, reservationId]
         );
         const oldLeafIds = oldLeafRows.map((r) => r.id);
 
         await this._batchInsertSpentLeaves(conn, oldLeafIds);
         await conn.query(
-          "DELETE FROM tree_leaves WHERE reservation_id = ?",
-          [reservationId]
+          "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+          [this.identity, reservationId]
         );
 
         await this._batchUpsertLeaves(conn, changeLeaves, false, null);
@@ -563,8 +606,8 @@ class MysqlTreeStore {
         await this._batchSetReservationId(conn, reservationId, reservedLeafIds);
 
         await conn.query(
-          "UPDATE tree_reservations SET pending_change_amount = 0 WHERE id = ?",
-          [reservationId]
+          "UPDATE tree_reservations SET pending_change_amount = 0 WHERE user_id = ? AND id = ?",
+          [this.identity, reservationId]
         );
 
         return { id: reservationId, leaves: reservedLeaves };
@@ -620,8 +663,8 @@ class MysqlTreeStore {
     if (!ids || ids.length === 0) return [];
     const placeholders = ids.map(() => "?").join(", ");
     const [rows] = await conn.query(
-      `SELECT data FROM tree_leaves WHERE id IN (${placeholders})`,
-      ids
+      `SELECT data FROM tree_leaves WHERE user_id = ? AND id IN (${placeholders})`,
+      [this.identity, ...ids]
     );
     return rows.map((r) => parseJson(r.data));
   }
@@ -739,15 +782,16 @@ class MysqlTreeStore {
 
   async _calculatePendingBalance(conn) {
     const [rows] = await conn.query(
-      "SELECT COALESCE(SUM(pending_change_amount), 0) AS pending FROM tree_reservations"
+      "SELECT COALESCE(SUM(pending_change_amount), 0) AS pending FROM tree_reservations WHERE user_id = ?",
+      [this.identity]
     );
     return Number(rows[0].pending);
   }
 
   async _createReservation(conn, reservationId, leaves, purpose, pendingChange) {
     await conn.query(
-      "INSERT INTO tree_reservations (id, purpose, pending_change_amount) VALUES (?, ?, ?)",
-      [reservationId, purpose, pendingChange]
+      "INSERT INTO tree_reservations (user_id, id, purpose, pending_change_amount) VALUES (?, ?, ?, ?)",
+      [this.identity, reservationId, purpose, pendingChange]
     );
 
     const leafIds = leaves.map((l) => l.id);
@@ -764,11 +808,12 @@ class MysqlTreeStore {
     if (filtered.length === 0) return;
 
     const valueClauses = new Array(filtered.length)
-      .fill("(?, ?, ?, ?, ?, NOW(6))")
+      .fill("(?, ?, ?, ?, ?, ?, NOW(6))")
       .join(", ");
     const params = [];
     for (const leaf of filtered) {
       params.push(
+        this.identity,
         leaf.id,
         leaf.status,
         isMissingFromOperators ? 1 : 0,
@@ -778,7 +823,7 @@ class MysqlTreeStore {
     }
 
     await conn.query(
-      `INSERT INTO tree_leaves (id, status, is_missing_from_operators, data, value, added_at)
+      `INSERT INTO tree_leaves (user_id, id, status, is_missing_from_operators, data, value, added_at)
        VALUES ${valueClauses}
        ON DUPLICATE KEY UPDATE
          status = VALUES(status),
@@ -795,22 +840,26 @@ class MysqlTreeStore {
 
     const placeholders = buildPlaceholders(leafIds.length);
     await conn.query(
-      `UPDATE tree_leaves SET reservation_id = ? WHERE id IN (${placeholders})`,
-      [reservationId, ...leafIds]
+      `UPDATE tree_leaves SET reservation_id = ? WHERE user_id = ? AND id IN (${placeholders})`,
+      [reservationId, this.identity, ...leafIds]
     );
   }
 
   async _batchInsertSpentLeaves(conn, leafIds) {
     if (leafIds.length === 0) return;
 
-    const valueClauses = new Array(leafIds.length).fill("(?)").join(", ");
+    const valueClauses = new Array(leafIds.length).fill("(?, ?)").join(", ");
+    const params = [];
+    for (const id of leafIds) {
+      params.push(this.identity, id);
+    }
     // Suppress duplicate-PK errors only — unlike INSERT IGNORE, real
     // problems (FK violations, NOT NULL violations, type errors) still
     // propagate.
     await conn.query(
-      `INSERT INTO tree_spent_leaves (leaf_id) VALUES ${valueClauses}
+      `INSERT INTO tree_spent_leaves (user_id, leaf_id) VALUES ${valueClauses}
        ON DUPLICATE KEY UPDATE leaf_id = leaf_id`,
-      leafIds
+      params
     );
   }
 
@@ -819,16 +868,32 @@ class MysqlTreeStore {
 
     const placeholders = buildPlaceholders(leafIds.length);
     await conn.query(
-      `DELETE FROM tree_spent_leaves WHERE leaf_id IN (${placeholders})`,
-      leafIds
+      `DELETE FROM tree_spent_leaves WHERE user_id = ? AND leaf_id IN (${placeholders})`,
+      [this.identity, ...leafIds]
     );
   }
 
+  /// Cleans up stale reservations for THIS tenant. Releases dependent leaves
+  /// by clearing reservation_id first, then deletes the parent rows — the
+  /// composite FK uses NO ACTION because column-list SET NULL would null
+  /// user_id (NOT NULL).
   async _cleanupStaleReservations(conn) {
     await conn.query(
+      `UPDATE tree_leaves SET reservation_id = NULL
+       WHERE user_id = ?
+         AND reservation_id IN (
+           SELECT id FROM (
+             SELECT id FROM tree_reservations
+             WHERE user_id = ?
+               AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)
+           ) AS stale
+         )`,
+      [this.identity, this.identity, RESERVATION_TIMEOUT_SECS]
+    );
+    await conn.query(
       `DELETE FROM tree_reservations
-       WHERE created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)`,
-      [RESERVATION_TIMEOUT_SECS]
+       WHERE user_id = ? AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)`,
+      [this.identity, RESERVATION_TIMEOUT_SECS]
     );
   }
 
@@ -837,9 +902,10 @@ class MysqlTreeStore {
       refreshTimestamp.getTime() - SPENT_MARKER_CLEANUP_THRESHOLD_MS
     );
 
-    await conn.query("DELETE FROM tree_spent_leaves WHERE spent_at < ?", [
-      cleanupCutoff,
-    ]);
+    await conn.query(
+      "DELETE FROM tree_spent_leaves WHERE user_id = ? AND spent_at < ?",
+      [this.identity, cleanupCutoff]
+    );
   }
 }
 
@@ -854,13 +920,13 @@ function createMysqlPool(config) {
   });
 }
 
-async function createMysqlTreeStore(config, logger = null) {
+async function createMysqlTreeStore(config, identity, logger = null) {
   const pool = createMysqlPool(config);
-  return createMysqlTreeStoreWithPool(pool, logger);
+  return createMysqlTreeStoreWithPool(pool, identity, logger);
 }
 
-async function createMysqlTreeStoreWithPool(pool, logger = null) {
-  const store = new MysqlTreeStore(pool, logger);
+async function createMysqlTreeStoreWithPool(pool, identity, logger = null) {
+  const store = new MysqlTreeStore(pool, identity, logger);
   await store.initialize();
   return store;
 }

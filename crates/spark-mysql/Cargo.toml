@@ -11,7 +11,9 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+bitcoin.workspace = true
 chrono.workspace = true
+hex.workspace = true
 macros.workspace = true
 mysql_async = { workspace = true, features = ["chrono"] }
 platform-utils.workspace = true

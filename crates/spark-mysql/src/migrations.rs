@@ -62,10 +62,15 @@ const MIGRATION_LOCK_TIMEOUT_SECS: i64 = 60;
 /// structured variants for the non-idempotent DDL — `MySQL` doesn't support
 /// `IF NOT EXISTS` on add/drop column or create index, so the runner emits
 /// an `information_schema` guard before each statement.
-#[derive(Clone, Copy, Debug)]
+///
+/// `Sql` carries an owned `String` so callers can build statements at runtime
+/// (e.g. inlining a tenant identity into a backfill); the structured variants
+/// keep `&'static str` because their identifiers are always known at compile
+/// time.
+#[derive(Clone, Debug)]
 pub enum Migration {
     /// Run the SQL statement as-is. Errors propagate.
-    Sql(&'static str),
+    Sql(String),
 
     /// `ALTER TABLE <table> ADD COLUMN <column> <definition>`, guarded by an
     /// `information_schema.columns` lookup so re-running an already applied
@@ -101,6 +106,29 @@ pub enum Migration {
         name: &'static str,
         table: &'static str,
     },
+
+    /// Drops a foreign-key constraint on `table` named `name`, guarded by an
+    /// `information_schema.table_constraints` lookup so re-running an already
+    /// applied migration is a no-op. Needed when rewriting parent PKs to lead
+    /// with `user_id`: dependent FKs must be dropped first.
+    DropForeignKey {
+        name: &'static str,
+        table: &'static str,
+    },
+
+    /// `ALTER TABLE <table> DROP PRIMARY KEY`, guarded by an
+    /// `information_schema.table_constraints` lookup so re-running an already
+    /// applied migration is a no-op. Needed when rewriting PKs to lead with
+    /// `user_id`: a partial-apply replay would otherwise fail with
+    /// `ER_CANT_DROP_FIELD_OR_KEY`.
+    DropPrimaryKey { table: &'static str },
+}
+
+impl Migration {
+    /// Convenience constructor for the common case of a `&'static str` literal.
+    pub fn sql(s: &str) -> Self {
+        Self::Sql(s.to_string())
+    }
 }
 
 /// Runs database migrations with version tracking and concurrency control.
@@ -119,7 +147,7 @@ pub enum Migration {
 pub async fn run_migrations(
     pool: &Pool,
     migrations_table: &str,
-    migrations: &[&[Migration]],
+    migrations: &[Vec<Migration>],
 ) -> Result<(), MysqlError> {
     let mut conn = pool
         .get_conn()
@@ -159,7 +187,7 @@ pub async fn run_migrations(
 async fn run_migrations_inner(
     conn: &mut mysql_async::Conn,
     migrations_table: &str,
-    migrations: &[&[Migration]],
+    migrations: &[Vec<Migration>],
 ) -> Result<(), MysqlError> {
     // Begin transaction. Migration table creation lives inside the transaction
     // for parity with the postgres impl, but note that DDL implicitly commits
@@ -193,8 +221,8 @@ async fn run_migrations_inner(
     for (i, migration) in migrations.iter().enumerate() {
         let version = i32::try_from(i + 1).unwrap_or(i32::MAX);
         if version > current_version {
-            for step in *migration {
-                run_step(conn, version, *step).await?;
+            for step in migration {
+                run_step(conn, version, step).await?;
             }
             let insert_sql = format!("INSERT INTO `{migrations_table}` (version) VALUES (?)");
             conn.exec_drop(&insert_sql, (version,))
@@ -214,11 +242,11 @@ async fn run_migrations_inner(
 async fn run_step(
     conn: &mut mysql_async::Conn,
     version: i32,
-    step: Migration,
+    step: &Migration,
 ) -> Result<(), MysqlError> {
     match step {
         Migration::Sql(sql) => conn
-            .query_drop(sql)
+            .query_drop(sql.as_str())
             .await
             .map_err(|e| MysqlError::Database(format!("Migration {version} failed: {e}"))),
 
@@ -277,6 +305,30 @@ async fn run_step(
                 ))
             })
         }
+
+        Migration::DropForeignKey { name, table } => {
+            if !foreign_key_exists(conn, table, name).await? {
+                return Ok(());
+            }
+            let sql = format!("ALTER TABLE `{table}` DROP FOREIGN KEY `{name}`");
+            conn.query_drop(&sql).await.map_err(|e| {
+                MysqlError::Database(format!(
+                    "Migration {version} DROP FOREIGN KEY {name} on {table} failed: {e}"
+                ))
+            })
+        }
+
+        Migration::DropPrimaryKey { table } => {
+            if !primary_key_exists(conn, table).await? {
+                return Ok(());
+            }
+            let sql = format!("ALTER TABLE `{table}` DROP PRIMARY KEY");
+            conn.query_drop(&sql).await.map_err(|e| {
+                MysqlError::Database(format!(
+                    "Migration {version} DROP PRIMARY KEY on {table} failed: {e}"
+                ))
+            })
+        }
     }
 }
 
@@ -312,6 +364,44 @@ async fn index_exists(
                AND table_name = ?
                AND index_name = ?",
             (table, index_name),
+        )
+        .await
+        .map_err(map_db_error)?;
+    Ok(count.unwrap_or(0) > 0)
+}
+
+/// Checks `information_schema.table_constraints` for a given foreign-key
+/// constraint on the current schema.
+async fn foreign_key_exists(
+    conn: &mut mysql_async::Conn,
+    table: &str,
+    fk_name: &str,
+) -> Result<bool, MysqlError> {
+    let count: Option<i64> = conn
+        .exec_first(
+            "SELECT COUNT(*) FROM information_schema.table_constraints
+             WHERE table_schema = DATABASE()
+               AND table_name = ?
+               AND constraint_name = ?
+               AND constraint_type = 'FOREIGN KEY'",
+            (table, fk_name),
+        )
+        .await
+        .map_err(map_db_error)?;
+    Ok(count.unwrap_or(0) > 0)
+}
+
+/// Checks `information_schema.table_constraints` for a primary-key constraint
+/// on the current schema. A PRIMARY KEY constraint is always named `PRIMARY`
+/// in `MySQL`.
+async fn primary_key_exists(conn: &mut mysql_async::Conn, table: &str) -> Result<bool, MysqlError> {
+    let count: Option<i64> = conn
+        .exec_first(
+            "SELECT COUNT(*) FROM information_schema.table_constraints
+             WHERE table_schema = DATABASE()
+               AND table_name = ?
+               AND constraint_type = 'PRIMARY KEY'",
+            (table,),
         )
         .await
         .map_err(map_db_error)?;
@@ -365,11 +455,11 @@ mod tests {
         // ADD COLUMN and CREATE INDEX statements must succeed despite the
         // objects already existing. The DROP at the end must also succeed
         // even though we never created `dropme`.
-        let migrations: Vec<&[Migration]> = vec![
-            &[Migration::Sql(
+        let migrations: Vec<Vec<Migration>> = vec![
+            vec![Migration::sql(
                 "CREATE TABLE IF NOT EXISTS example (id VARCHAR(64) PRIMARY KEY, data JSON NOT NULL)",
             )],
-            &[
+            vec![
                 Migration::AddColumn {
                     table: "example",
                     column: "value",
