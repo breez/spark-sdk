@@ -522,6 +522,19 @@ export class PasskeyProvider {
             this._applyImmediateOption(options);
         }
 
+        // [DEBUG] Surface the get() options so callers can verify
+        // hints and mediation are populated as expected on the
+        // sign-in path. Mirrors the create-side log.
+        console.log('[passkey-prf] sign-in get publicKeyOptions:', {
+            kind: 'single-salt',
+            rpId: options.publicKey.rpId,
+            allowCredentialsCount: options.publicKey.allowCredentials.length,
+            userVerification: options.publicKey.userVerification,
+            hints: options.publicKey.hints,
+            mediation: options.mediation,
+            uiMode: options.uiMode,
+        });
+
         let credential;
         try {
             credential = await navigator.credentials.get(options);
@@ -643,6 +656,16 @@ export class PasskeyProvider {
         if (allowCredentials.length === 0 && await this._supportsImmediateGet()) {
             this._applyImmediateOption(options);
         }
+
+        console.log('[passkey-prf] sign-in get publicKeyOptions:', {
+            kind: 'dual-salt',
+            rpId: options.publicKey.rpId,
+            allowCredentialsCount: options.publicKey.allowCredentials.length,
+            userVerification: options.publicKey.userVerification,
+            hints: options.publicKey.hints,
+            mediation: options.mediation,
+            uiMode: options.uiMode,
+        });
 
         let credential;
         try {
