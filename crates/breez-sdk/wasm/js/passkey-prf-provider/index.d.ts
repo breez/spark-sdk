@@ -36,6 +36,53 @@ export declare class PasskeyAlreadyExistsError extends Error {
 }
 
 /**
+ * Per-call overrides for `createPasskey`. All fields are optional;
+ * omitted fields fall back to the corresponding constructor option,
+ * then to the spec default (random 16-byte `userId`, ctor `userName`,
+ * ctor `userDisplayName`).
+ *
+ * Per-call values let hosts vary registration metadata between
+ * `createPasskey` invocations without reconstructing the provider
+ * (which is typically a module-level singleton). Common uses:
+ *   - rotating a per-wallet `userDisplayName` discriminator so the OS
+ *     picker can distinguish multiple credentials on the same RP
+ *   - encoding host-side wallet bookkeeping into `userId` so it
+ *     round-trips on assertion via `userHandle`
+ */
+export interface CreatePasskeyRequest {
+    /**
+     * Credential IDs the authenticator must refuse to duplicate. When
+     * any entry matches a credential already on the device, the browser
+     * raises `InvalidStateError`, surfaced here as
+     * `PasskeyAlreadyExistsError`. Defaults to none (no dedup check).
+     */
+    excludeCredentialIds?: Uint8Array[];
+
+    /**
+     * Override for the WebAuthn `user.id` field. Must be 1-64 bytes per
+     * WebAuthn spec; throws otherwise. Defaults to a fresh
+     * `crypto.getRandomValues(16)` per call. Random is the recommended
+     * default; persisting / reusing a `userId` across calls causes the
+     * OS to treat the creates as the same account and may surface a
+     * "replace existing passkey?" prompt.
+     */
+    userId?: Uint8Array;
+
+    /**
+     * Override for the WebAuthn `user.name` field. Shown as a secondary
+     * label in some passkey managers.
+     */
+    userName?: string;
+
+    /**
+     * Override for the WebAuthn `user.displayName` field. Primary label
+     * in most pickers (iCloud Keychain, Google Password Manager).
+     * Useful for per-wallet discriminators.
+     */
+    userDisplayName?: string;
+}
+
+/**
  * Options for constructing a PasskeyProvider.
  */
 export interface PasskeyProviderOptions {
@@ -93,6 +140,29 @@ export interface PasskeyProviderOptions {
      * @default []
      */
     allowCredentialIds?: Uint8Array[];
+
+    /**
+     * When set, narrows the create-time UI to the chosen authenticator
+     * class. `'platform'` scopes registration to the local platform
+     * authenticator (Touch ID / Face ID / Windows Hello / iCloud
+     * Keychain), suppressing security-key and hybrid (cross-device)
+     * options in the browser's chooser. `'cross-platform'` is the
+     * inverse: only roaming authenticators (USB / NFC / BLE security
+     * keys, hybrid). When omitted, the browser shows all available
+     * authenticators.
+     */
+    authenticatorAttachment?: 'platform' | 'cross-platform';
+
+    /**
+     * WebAuthn L3 priority hints for the create-time chooser. Soft
+     * signal compared to `authenticatorAttachment`: browsers that honor
+     * it surface the listed authenticator classes first; browsers that
+     * ignore it fall back to default ordering. Stacks with
+     * `authenticatorAttachment` (the hard filter wins). Pass
+     * `['client-device']` to nudge platform authenticator before
+     * security-key / hybrid options.
+     */
+    hints?: ('client-device' | 'security-key' | 'hybrid')[];
 }
 
 /**
@@ -129,22 +199,30 @@ export declare class PasskeyProvider {
     allowCredentialIds: Uint8Array[];
 
     /**
-     * Optional callback fired with the credential ID returned by every
-     * successful WebAuthn assertion (sign-in path). Hosts can set this
-     * to record which credential was just used so they can populate
-     * `excludeCredentialIds` and `allowCredentialIds` on subsequent
-     * requests.
+     * Optional callback fired with the credential ID and user handle
+     * returned by every successful WebAuthn assertion (sign-in path).
+     * Hosts can set this to record which credential was just used so
+     * they can populate `excludeCredentialIds` and `allowCredentialIds`
+     * on subsequent requests.
      *
-     * Useful for migrating users whose passkey predates the host's own
-     * credential-ID tracking: the first successful sign-in surfaces
-     * the credential ID, after which the host's records are correct
-     * and the platform-level "already exists" check can fire on
-     * future create attempts.
+     * Useful for:
+     * - Migrating users whose passkey predates the host's own
+     *   credential-ID tracking: the first successful sign-in surfaces
+     *   the credential ID, after which the host's records are correct
+     *   and the platform-level "already exists" check can fire on
+     *   future create attempts.
+     * - Retroactive rename of a credential's `user.name` /
+     *   `user.displayName` via `PublicKeyCredential.signalCurrentUserDetails`,
+     *   which requires the credential's `user.id` (the `userHandle`).
+     *
+     * The second argument may be `null` on browsers that don't return
+     * `userHandle` in the assertion response (rare — most authenticators
+     * include it for discoverable credentials).
      *
      * Set before calling `derivePrfSeed`. Not invoked on registration
      * (see `createPasskey`'s return value for that).
      */
-    onAssertionCredentialId?: (credentialId: Uint8Array) => void;
+    onAssertionCredentialId?: (credentialId: Uint8Array, userHandle: Uint8Array | null) => void;
 
     /**
      * Derive a 32-byte seed from passkey PRF with the given salt.
@@ -189,17 +267,19 @@ export declare class PasskeyProvider {
      * 1 WebAuthn prompt. Use this to separate credential creation from
      * derivation in multi-step onboarding flows.
      *
-     * @param excludeCredentialIds - Optional list of credential IDs to exclude.
-     *   Pass previously created credential IDs to prevent the authenticator
-     *   from creating a duplicate on the same device.
+     * @param request - Per-call overrides. Passing a plain `Uint8Array[]`
+     *   is accepted as a backward-compat shim for
+     *   `{ excludeCredentialIds: array }` and is equivalent to the
+     *   pre-`CreatePasskeyRequest` signature.
      * @returns The credential ID plus AAGUID and backup-eligibility flag
      *   parsed from the authenticator data. AAGUID and `backupEligible`
      *   are `null` on browsers that don't expose `getAuthenticatorData()`.
      * @throws {PasskeyAlreadyExistsError} If an entry in `excludeCredentialIds`
      *   matches a credential already on the device.
-     * @throws If the user cancels or PRF is not supported by the authenticator.
+     * @throws If the user cancels, `userId` fails the WebAuthn 1-64 byte
+     *   length validation, or PRF is not supported by the authenticator.
      */
-    createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<RegisteredCredential>;
+    createPasskey(request?: CreatePasskeyRequest | Uint8Array[]): Promise<RegisteredCredential>;
 
     /**
      * Check if a PRF-capable passkey is available on this device.
