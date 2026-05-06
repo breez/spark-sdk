@@ -117,7 +117,8 @@ class MysqlTreeStoreMigrationManager {
             last_completed_at DATETIME(6) NULL,
             CHECK (id = 1)
           )`,
-          `INSERT IGNORE INTO tree_swap_status (id) VALUES (1)`,
+          `INSERT INTO tree_swap_status (id) VALUES (1)
+            ON DUPLICATE KEY UPDATE id = id`,
         ],
       },
       {

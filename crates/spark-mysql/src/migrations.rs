@@ -38,9 +38,12 @@
 //! genuine errors (parse errors, missing tables, permission denials, etc.).
 //!
 //! [`Migration::Sql`] is the escape hatch for already-idempotent statements
-//! (`CREATE TABLE IF NOT EXISTS`, `INSERT IGNORE`, `UPDATE`, etc.) and any
-//! DDL that doesn't fit one of the structured variants — those run as-is and
-//! their errors propagate normally.
+//! (`CREATE TABLE IF NOT EXISTS`, `INSERT … ON DUPLICATE KEY UPDATE id = id`,
+//! plain DML) and any DDL that doesn't fit one of the structured variants —
+//! those run as-is and their errors propagate normally. Avoid `INSERT IGNORE`
+//! for idempotent inserts: it silently swallows non-PK errors (FK / NOT NULL
+//! / type errors). Use the explicit `ON DUPLICATE KEY UPDATE` form so only
+//! genuine duplicate-key collisions are no-op'd.
 
 use mysql_async::Pool;
 use mysql_async::prelude::*;
@@ -54,11 +57,11 @@ const MIGRATION_LOCK_TIMEOUT_SECS: i64 = 60;
 /// A single migration step.
 ///
 /// Use [`Migration::Sql`] for statements that are already idempotent (e.g.
-/// `CREATE TABLE IF NOT EXISTS`, `INSERT IGNORE`, plain DML) or that don't
-/// fit one of the structured variants. Use the structured variants for the
-/// non-idempotent DDL — `MySQL` doesn't support `IF NOT EXISTS` on add/drop
-/// column or create index, so the runner emits an `information_schema` guard
-/// before each statement.
+/// `CREATE TABLE IF NOT EXISTS`, `INSERT … ON DUPLICATE KEY UPDATE id = id`,
+/// plain DML) or that don't fit one of the structured variants. Use the
+/// structured variants for the non-idempotent DDL — `MySQL` doesn't support
+/// `IF NOT EXISTS` on add/drop column or create index, so the runner emits
+/// an `information_schema` guard before each statement.
 #[derive(Clone, Copy, Debug)]
 pub enum Migration {
     /// Run the SQL statement as-is. Errors propagate.

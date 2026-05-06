@@ -804,8 +804,12 @@ class MysqlTreeStore {
     if (leafIds.length === 0) return;
 
     const valueClauses = new Array(leafIds.length).fill("(?)").join(", ");
+    // Suppress duplicate-PK errors only — unlike INSERT IGNORE, real
+    // problems (FK violations, NOT NULL violations, type errors) still
+    // propagate.
     await conn.query(
-      `INSERT IGNORE INTO tree_spent_leaves (leaf_id) VALUES ${valueClauses}`,
+      `INSERT INTO tree_spent_leaves (leaf_id) VALUES ${valueClauses}
+       ON DUPLICATE KEY UPDATE leaf_id = leaf_id`,
       leafIds
     );
   }

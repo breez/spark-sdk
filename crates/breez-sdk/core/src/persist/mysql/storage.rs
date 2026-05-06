@@ -143,7 +143,10 @@ impl MysqlStorage {
                         CHECK (id = 1)
                     )",
                 ),
-                Migration::Sql("INSERT IGNORE INTO sync_revision (id, revision) VALUES (1, 0)"),
+                Migration::Sql(
+                    "INSERT INTO sync_revision (id, revision) VALUES (1, 0)
+                     ON DUPLICATE KEY UPDATE id = id",
+                ),
                 Migration::Sql(
                     "CREATE TABLE IF NOT EXISTS sync_outgoing (
                         record_type VARCHAR(255) NOT NULL,

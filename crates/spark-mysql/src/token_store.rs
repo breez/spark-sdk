@@ -430,7 +430,10 @@ impl MysqlTokenStore {
                     CHECK (id = 1)
                 )",
             ),
-            Migration::Sql("INSERT IGNORE INTO token_swap_status (id) VALUES (1)"),
+            Migration::Sql(
+                "INSERT INTO token_swap_status (id) VALUES (1)
+                 ON DUPLICATE KEY UPDATE id = id",
+            ),
         ]]
     }
 
@@ -491,7 +494,8 @@ impl MysqlTokenStore {
                 "Skipping set_tokens_outputs: active_swap={}, swap_completed_during_refresh={}",
                 has_active_swap, swap_completed_during_refresh
             );
-            tx.commit().await.map_err(map_err)?;
+            // Drop the in-flight cleanup work by letting the transaction roll
+            // back on drop, matching the postgres impl.
             return Ok(());
         }
 
@@ -835,7 +839,7 @@ impl MysqlTokenStore {
 
         if !reserved_output_ids.is_empty() {
             let mut sql =
-                String::from("INSERT IGNORE INTO token_spent_outputs (output_id) VALUES ");
+                String::from("INSERT INTO token_spent_outputs (output_id) VALUES ");
             let mut params: Vec<Value> = Vec::with_capacity(reserved_output_ids.len());
             for (i, oid) in reserved_output_ids.iter().enumerate() {
                 if i > 0 {
@@ -844,6 +848,8 @@ impl MysqlTokenStore {
                 sql.push_str("(?)");
                 params.push(Value::from(oid.clone()));
             }
+            // Suppress duplicate-PK errors only.
+            sql.push_str(" ON DUPLICATE KEY UPDATE output_id = output_id");
             tx.exec_drop(&sql, Params::Positional(params))
                 .await
                 .map_err(map_err)?;
@@ -883,11 +889,15 @@ impl MysqlTokenStore {
         output: &TokenOutputWithPrevOut,
     ) -> Result<(), TokenOutputServiceError> {
         tx.exec_drop(
-            r"INSERT IGNORE INTO token_outputs
+            // ON DUPLICATE KEY UPDATE id = id no-ops on the (id) primary key
+            // conflict only — unlike INSERT IGNORE, FK / NOT NULL / type
+            // errors still propagate.
+            r"INSERT INTO token_outputs
                 (id, token_identifier, owner_public_key, revocation_commitment,
                  withdraw_bond_sats, withdraw_relative_block_locktime,
                  token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6))",
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6))
+              ON DUPLICATE KEY UPDATE id = id",
             (
                 &output.output.id,
                 token_identifier,
@@ -1200,6 +1210,214 @@ mod tests {
         let fixture = MysqlTokenStoreTestFixture::new().await;
         shared_tests::test_get_token_balances_includes_zero_spendable(&fixture.store).await;
     }
+
+    // ---- newly wired shared tests, parity with spark-postgres ----
+
+    #[tokio::test]
+    async fn test_cancel_nonexistent_reservation() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_cancel_nonexistent_reservation(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_finalize_nonexistent_reservation() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_finalize_nonexistent_reservation(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_token_outputs_none_found() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_get_token_outputs_none_found(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_insert_outputs_clears_spent_status() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_insert_outputs_clears_spent_status(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_insert_outputs_preserved_by_set_tokens_outputs() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_insert_outputs_preserved_by_set_tokens_outputs(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_mixed_reservation_purposes_balance() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_mixed_reservation_purposes_balance(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_multiple_parallel_reservations() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_multiple_parallel_reservations(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_all_available_outputs() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_all_available_outputs(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_exact_amount_match() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_exact_amount_match(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_for_payment_affects_balance() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_for_payment_affects_balance(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_for_swap_does_not_affect_balance() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_for_swap_does_not_affect_balance(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_insufficient_outputs() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_insufficient_outputs(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_max_output_count_largest_first() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_max_output_count_largest_first(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_max_output_count_more_than_available() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_max_output_count_more_than_available(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_max_output_count_smallest_first() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_max_output_count_smallest_first(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_max_output_count_zero_rejected() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_max_output_count_zero_rejected(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_multiple_outputs_combination() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_multiple_outputs_combination(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_nonexistent_token() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_nonexistent_token(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_single_large_output() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_single_large_output(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_token_outputs_and_cancel() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_token_outputs_and_cancel(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_token_outputs_and_set_add_output() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_token_outputs_and_set_add_output(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_token_outputs_and_set_remove_reserved_output() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_token_outputs_and_set_remove_reserved_output(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_token_outputs_selection_strategy_largest_first() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_token_outputs_selection_strategy_largest_first(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_token_outputs_selection_strategy_smallest_first() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_token_outputs_selection_strategy_smallest_first(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_with_preferred_outputs() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_with_preferred_outputs(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_with_preferred_outputs_insufficient() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_with_preferred_outputs_insufficient(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_zero_amount() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_reserve_zero_amount(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_reconciles_reservation_with_empty_outputs() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_set_reconciles_reservation_with_empty_outputs(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_removes_all_tokens() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_set_removes_all_tokens(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_tokens_outputs_skipped_after_swap_completes_during_refresh() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_set_tokens_outputs_skipped_after_swap_completes_during_refresh(
+            &fixture.store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_tokens_outputs_skipped_during_active_swap() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_set_tokens_outputs_skipped_during_active_swap(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_tokens_outputs_with_update() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_set_tokens_outputs_with_update(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_spent_outputs_not_restored_by_set_tokens_outputs() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_spent_outputs_not_restored_by_set_tokens_outputs(&fixture.store).await;
+    }
+
+    // ==================== MySQL-Specific Tests ====================
 
     #[tokio::test]
     async fn test_finalize_reservation_blocked_by_write_lock() {

@@ -7,7 +7,8 @@
 //! - `TIMESTAMPTZ NOT NULL DEFAULT NOW()` → `DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)`
 //! - `TEXT PRIMARY KEY` → `VARCHAR(255) PRIMARY KEY` (TEXT cannot be a primary key in `MySQL` without prefix length)
 //! - `ON CONFLICT (id) DO UPDATE SET … = EXCLUDED.…` → `ON DUPLICATE KEY UPDATE … = VALUES(…)`
-//! - `ON CONFLICT DO NOTHING` → `INSERT IGNORE`
+//! - `ON CONFLICT DO NOTHING` → `INSERT … ON DUPLICATE KEY UPDATE <pk> = <pk>`
+//!   (avoid `INSERT IGNORE`: it silently swallows non-PK errors too)
 //! - `pg_advisory_xact_lock(key)` → `GET_LOCK('tree_store_write_lock', timeout)` with explicit `RELEASE_LOCK`
 //! - `$N` positional placeholders → `?` placeholders
 //! - `UNNEST(...)` batch inserts → manually built `VALUES (?,?,…), (?,?,…), …`
@@ -394,7 +395,10 @@ impl MysqlTreeStore {
                         CHECK (id = 1)
                     )",
                 ),
-                Migration::Sql("INSERT IGNORE INTO tree_swap_status (id) VALUES (1)"),
+                Migration::Sql(
+                    "INSERT INTO tree_swap_status (id) VALUES (1)
+                     ON DUPLICATE KEY UPDATE id = id",
+                ),
             ],
             // Migration 3: Promote `value` out of the JSON `data` column into a
             // dedicated BIGINT. JSON_EXTRACT/JSON_UNQUOTE on every reservation
@@ -523,8 +527,10 @@ impl MysqlTreeStore {
                 "leaf_lifecycle set_leaves: SKIP active_swap={} swap_completed_during_refresh={} refresh_timestamp={:?}",
                 has_active_swap, swap_completed_during_refresh, refresh_timestamp
             );
-            // Commit the cleanup that already ran.
-            tx.commit().await.map_err(map_err)?;
+            // Drop the in-flight cleanup work by letting the transaction roll
+            // back on drop, matching the postgres impl. The
+            // `cleanup_stale_reservations` DELETE is idempotent so the next
+            // refresh re-runs it harmlessly.
             return Ok(());
         }
 
@@ -1055,7 +1061,7 @@ impl MysqlTreeStore {
             return Ok(());
         }
 
-        let mut sql = String::from("INSERT IGNORE INTO tree_spent_leaves (leaf_id) VALUES ");
+        let mut sql = String::from("INSERT INTO tree_spent_leaves (leaf_id) VALUES ");
         let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len());
         for (i, id) in leaf_ids.iter().enumerate() {
             if i > 0 {
@@ -1064,6 +1070,10 @@ impl MysqlTreeStore {
             sql.push_str("(?)");
             params.push(Value::from(id.clone()));
         }
+        // Suppress duplicate-PK errors only — unlike INSERT IGNORE, real
+        // problems (FK violations, NOT NULL violations, type errors) still
+        // propagate.
+        sql.push_str(" ON DUPLICATE KEY UPDATE leaf_id = leaf_id");
 
         tx.exec_drop(&sql, Params::Positional(params))
             .await
@@ -1352,6 +1362,244 @@ mod tests {
             &fixture.store,
         )
         .await;
+    }
+
+    // ---- newly wired shared tests, parity with spark-postgres ----
+
+    #[tokio::test]
+    async fn test_add_leaves_clears_spent_status() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_add_leaves_clears_spent_status(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_add_leaves_empty_slice() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_add_leaves_empty_slice(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_add_leaves_not_deleted_by_set_leaves() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_add_leaves_not_deleted_by_set_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_balance_change_notification() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_balance_change_notification(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_cancel_reservation_drops_all_when_keep_empty() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_cancel_reservation_drops_all_when_keep_empty(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_cancel_reservation_drops_unkept_leaves() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_cancel_reservation_drops_unkept_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_cancel_reservation_nonexistent() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_cancel_reservation_nonexistent(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_change_leaves_from_swap_protected() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_change_leaves_from_swap_protected(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_finalize_reservation_nonexistent() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_finalize_reservation_nonexistent(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_finalize_with_new_leaves_protected() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_finalize_with_new_leaves_protected(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_leaves_missing_operators_filters_spent() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_get_leaves_missing_operators_filters_spent(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_leaves_not_available() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_get_leaves_not_available(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_missing_operators_replaced_on_set_leaves() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_missing_operators_replaced_on_set_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_multiple_reservations() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_multiple_reservations(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_non_reservable_leaves() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_non_reservable_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_notification_after_swap_with_exact_amount() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_notification_after_swap_with_exact_amount(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_notification_on_pending_balance_change() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_notification_on_pending_balance_change(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_old_leaves_deleted_by_set_leaves() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_old_leaves_deleted_by_set_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_payment_reservation_excluded_from_balance() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_payment_reservation_excluded_from_balance(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_pending_cleared_on_cancel() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_pending_cleared_on_cancel(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_pending_cleared_on_finalize() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_pending_cleared_on_finalize(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reservation_ids_are_unique() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_reservation_ids_are_unique(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_leaves_empty() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_leaves_empty(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_skips_non_available_leaves() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_skips_non_available_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_with_none_target_reserves_all() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_with_none_target_reserves_all(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_preserves_reservations_for_in_flight_swaps() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_preserves_reservations_for_in_flight_swaps(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_proceeds_after_swap_when_refresh_starts_later() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_proceeds_after_swap_when_refresh_starts_later(&fixture.store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_replaces_fully() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_replaces_fully(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_set_leaves_with_reservations() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_set_leaves_with_reservations(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_spent_ids_cleaned_up_when_no_longer_in_refresh(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_spent_leaves_not_restored_by_set_leaves() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_spent_leaves_not_restored_by_set_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_swap_reservation_included_in_balance() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_swap_reservation_included_in_balance(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_try_reserve_fail_immediately_when_insufficient() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_try_reserve_fail_immediately_when_insufficient(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_try_reserve_insufficient_funds() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_try_reserve_insufficient_funds(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_try_reserve_success() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_try_reserve_success(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_try_reserve_wait_for_pending() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_try_reserve_wait_for_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_reservation_clears_pending() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_update_reservation_clears_pending(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_reservation_nonexistent() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_update_reservation_nonexistent(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_reservation_preserves_purpose() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_update_reservation_preserves_purpose(&fixture.store).await;
     }
 
     // ==================== MySQL-Specific Tests ====================

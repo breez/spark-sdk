@@ -26,14 +26,6 @@ pub struct MysqlStorageConfig {
     /// Maximum number of connections in the pool.
     pub max_pool_size: u32,
 
-    /// Timeout in seconds waiting for a connection from the pool.
-    /// `None` means wait indefinitely.
-    pub wait_timeout_secs: Option<u64>,
-
-    /// Timeout in seconds for establishing a new connection.
-    /// `None` means no timeout.
-    pub create_timeout_secs: Option<u64>,
-
     /// Timeout in seconds before recycling an idle connection.
     /// `None` means connections are not recycled based on idle time.
     pub recycle_timeout_secs: Option<u64>,
@@ -49,8 +41,6 @@ impl From<MysqlStorageConfig> for spark_mysql::MysqlStorageConfig {
         Self {
             connection_string: config.connection_string,
             max_pool_size: config.max_pool_size,
-            wait_timeout_secs: config.wait_timeout_secs,
-            create_timeout_secs: config.create_timeout_secs,
             recycle_timeout_secs: config.recycle_timeout_secs,
             root_ca_pem: config.root_ca_pem,
         }
@@ -62,8 +52,6 @@ impl From<spark_mysql::MysqlStorageConfig> for MysqlStorageConfig {
         Self {
             connection_string: config.connection_string,
             max_pool_size: config.max_pool_size,
-            wait_timeout_secs: config.wait_timeout_secs,
-            create_timeout_secs: config.create_timeout_secs,
             recycle_timeout_secs: config.recycle_timeout_secs,
             root_ca_pem: config.root_ca_pem,
         }

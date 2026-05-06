@@ -6,7 +6,8 @@
  * - TIMESTAMPTZ NOT NULL DEFAULT NOW() → DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
  * - TEXT PRIMARY KEY → VARCHAR(255) PRIMARY KEY
  * - BOOLEAN → TINYINT(1)
- * - ON CONFLICT DO NOTHING → INSERT IGNORE
+ * - ON CONFLICT DO NOTHING → INSERT … ON DUPLICATE KEY UPDATE <pk> = <pk>
+ *   (avoid INSERT IGNORE: it silently swallows non-PK errors too)
  * - pg_advisory_xact_lock → GET_LOCK/RELEASE_LOCK
  * - reserved word `key` quoted with backticks
  *
@@ -198,7 +199,8 @@ class MysqlMigrationManager {
             revision BIGINT NOT NULL DEFAULT 0,
             CHECK (id = 1)
           )`,
-          `INSERT IGNORE INTO sync_revision (id, revision) VALUES (1, 0)`,
+          `INSERT INTO sync_revision (id, revision) VALUES (1, 0)
+            ON DUPLICATE KEY UPDATE id = id`,
 
           `CREATE TABLE IF NOT EXISTS sync_outgoing (
             record_type VARCHAR(255) NOT NULL,

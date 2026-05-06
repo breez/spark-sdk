@@ -6,7 +6,8 @@
  * - `JSONB` operators (`::jsonb->>`, `@>`) → `JSON_EXTRACT`/`JSON_UNQUOTE`/`JSON_CONTAINS`
  * - `ON CONFLICT (col) DO UPDATE SET col = EXCLUDED.col` →
  *     `ON DUPLICATE KEY UPDATE col = VALUES(col)`
- * - `ON CONFLICT DO NOTHING` → `INSERT IGNORE`
+ * - `ON CONFLICT DO NOTHING` → `INSERT … ON DUPLICATE KEY UPDATE <pk> = <pk>`
+ *   (avoid `INSERT IGNORE`: it silently swallows non-PK errors too)
  * - `pg`'s `pool.query(sql, params)` returns `{ rows, rowCount }`; mysql2's
  *   `pool.query(sql, params)` returns `[rows, fields]` for SELECT and
  *   `[okPacket, fields]` (with `affectedRows`) for write operations.

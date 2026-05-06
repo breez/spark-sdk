@@ -41,13 +41,6 @@ pub fn create_pool(config: &MysqlStorageConfig) -> Result<Pool, MysqlError> {
 
     builder = builder.pool_opts(pool_opts);
 
-    // Note: mysql_async's Pool doesn't expose explicit wait/create timeouts at the pool layer.
-    // We accept those fields for API parity with the postgres config; honoring them would
-    // require wrapping every pool.get_conn() call with tokio::time::timeout, which we can
-    // add later if a deployment needs it.
-    let _ = config.wait_timeout_secs;
-    let _ = config.create_timeout_secs;
-
     Ok(Pool::new(builder))
 }
 

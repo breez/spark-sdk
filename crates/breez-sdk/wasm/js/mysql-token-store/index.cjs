@@ -706,8 +706,10 @@ class MysqlTokenStore {
           const valueClauses = new Array(reservedOutputIds.length)
             .fill("(?)")
             .join(", ");
+          // Suppress duplicate-PK errors only.
           await conn.query(
-            `INSERT IGNORE INTO token_spent_outputs (output_id) VALUES ${valueClauses}`,
+            `INSERT INTO token_spent_outputs (output_id) VALUES ${valueClauses}
+             ON DUPLICATE KEY UPDATE output_id = output_id`,
             reservedOutputIds
           );
         }
@@ -803,12 +805,16 @@ class MysqlTokenStore {
   }
 
   async _insertSingleOutput(conn, tokenIdentifier, output) {
+    // ON DUPLICATE KEY UPDATE id = id no-ops on the (id) primary key
+    // conflict only — unlike INSERT IGNORE, FK / NOT NULL / type errors
+    // still propagate.
     await conn.query(
-      `INSERT IGNORE INTO token_outputs
+      `INSERT INTO token_outputs
         (id, token_identifier, owner_public_key, revocation_commitment,
          withdraw_bond_sats, withdraw_relative_block_locktime,
          token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6))`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6))
+       ON DUPLICATE KEY UPDATE id = id`,
       [
         output.output.id,
         tokenIdentifier,

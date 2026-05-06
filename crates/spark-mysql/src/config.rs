@@ -16,14 +16,6 @@ pub struct MysqlStorageConfig {
     /// Maximum number of connections in the pool.
     pub max_pool_size: u32,
 
-    /// Timeout in seconds waiting for a connection from the pool.
-    /// `None` means wait indefinitely.
-    pub wait_timeout_secs: Option<u64>,
-
-    /// Timeout in seconds for establishing a new connection.
-    /// `None` means no timeout.
-    pub create_timeout_secs: Option<u64>,
-
     /// Timeout in seconds before recycling an idle connection.
     /// `None` means connections are not recycled based on idle time.
     pub recycle_timeout_secs: Option<u64>,
@@ -41,8 +33,6 @@ impl MysqlStorageConfig {
         Self {
             connection_string: connection_string.into(),
             max_pool_size: DEFAULT_MAX_POOL_SIZE,
-            wait_timeout_secs: None,
-            create_timeout_secs: None,
             recycle_timeout_secs: None,
             root_ca_pem: None,
         }
