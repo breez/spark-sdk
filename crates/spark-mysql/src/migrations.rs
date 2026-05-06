@@ -347,11 +347,9 @@ mod tests {
         // Pre-create the schema state that a previous half-finished migration
         // would have left behind: a base table plus an extra column / index.
         let mut conn = pool.get_conn().await.expect("get_conn");
-        conn.query_drop(
-            "CREATE TABLE example (id VARCHAR(64) PRIMARY KEY, data JSON NOT NULL)",
-        )
-        .await
-        .expect("create base table");
+        conn.query_drop("CREATE TABLE example (id VARCHAR(64) PRIMARY KEY, data JSON NOT NULL)")
+            .await
+            .expect("create base table");
         conn.query_drop("ALTER TABLE example ADD COLUMN value BIGINT NOT NULL DEFAULT 0")
             .await
             .expect("pre-add column");

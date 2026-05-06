@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
-use spark_mysql::mysql_async;
 pub use spark_mysql::Migration;
+use spark_mysql::mysql_async;
 use spark_wallet::{TokenOutputStore, TreeStore};
 
 use crate::persist::StorageError;

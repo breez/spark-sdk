@@ -26,9 +26,9 @@ use crate::{
     },
 };
 
+use super::base::{Migration, map_db_error, run_migrations};
 #[cfg(test)]
 use super::base::{MysqlStorageConfig, create_pool};
-use super::base::{Migration, map_db_error, run_migrations};
 
 const MIGRATIONS_TABLE: &str = "schema_migrations";
 
