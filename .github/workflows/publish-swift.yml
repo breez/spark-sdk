@@ -127,17 +127,27 @@ jobs:
         run: |
           mkdir -p build/crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark
           cp swift/*.swift build/crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/
+          
+          # iOS
           cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/Headers
           cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/Headers
-          cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/Headers
           cp aarch64-apple-ios/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
           cp ios-universal-sim/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
-          cp darwin-universal/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI
-          cp darwin-universal/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/ios-arm64_x86_64-simulator/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+
+          # macOS
+          cp swift/breez_sdk_*FFI.h build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/Headers
+          cp darwin-universal/libbreez_sdk_spark_bindings.dylib build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI
           install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/Versions/A/breez_sdk_sparkFFI
-          install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+          ## Create symlinks, necessary for correct versioned package
+          pushd build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework
+          ln -s A Versions/Current
+          ln -s Versions/Current/breez_sdk_sparkFFI breez_sdk_sparkFFI
+          ln -s Versions/Current/Headers Headers
+          popd
+          ## Sign the framework
+          codesign --force --sign - build/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/macos-arm64_x86_64/breez_sdk_sparkFFI.framework
 
       - name: Embed dSYMs in xcframework
         run: |
@@ -158,7 +168,7 @@ jobs:
       - name: Compress XCFramework
         working-directory: build/crates/breez-sdk/bindings/langs/swift
         run: |
-          zip -9 -r breez_sdk_sparkFFI.xcframework.zip breez_sdk_sparkFFI.xcframework
+          zip -9 -r -y breez_sdk_sparkFFI.xcframework.zip breez_sdk_sparkFFI.xcframework
           echo "XCF_CHECKSUM=`swift package compute-checksum breez_sdk_sparkFFI.xcframework.zip`" >> $GITHUB_ENV
 
       - name: Remove dist Sources
