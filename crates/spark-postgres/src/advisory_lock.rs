@@ -6,18 +6,18 @@
 //! negligible (~1.2e-10 at 65k tenants) while distinct prefixes guarantee that
 //! locks from different stores never collide.
 
-use sha2::{Digest, Sha256};
+use bitcoin::hashes::{Hash, HashEngine, sha256};
 
 /// Derives a stable 64-bit advisory-lock key from a tenant identity pubkey.
 /// Hashes a domain prefix together with the identity and folds the first 8
 /// bytes of the SHA-256 digest into an `i64` (the type expected by
 /// `pg_advisory_xact_lock(bigint)`).
 pub(crate) fn identity_lock_key(prefix: &[u8], identity: &[u8]) -> i64 {
-    let mut hasher = Sha256::new();
-    hasher.update(prefix);
-    hasher.update(identity);
-    let digest = hasher.finalize();
+    let mut engine = sha256::Hash::engine();
+    engine.input(prefix);
+    engine.input(identity);
+    let digest = sha256::Hash::from_engine(engine);
     let mut buf = [0u8; 8];
-    buf.copy_from_slice(&digest[..8]);
+    buf.copy_from_slice(&digest.as_byte_array()[..8]);
     i64::from_be_bytes(buf)
 }
