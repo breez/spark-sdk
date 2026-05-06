@@ -567,7 +567,14 @@ public object CredentialManagerPrfCore {
         }.toString()
 
         val option = GetPublicKeyCredentialOption(requestJson)
-        val request = GetCredentialRequest(listOf(option))
+        // Suppress the cross-device QR sheet so a missing local
+        // credential surfaces immediately as NoCredentialException
+        // instead of routing the user into a hybrid flow they'll
+        // never use for a wallet passkey.
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(option)
+            .setPreferImmediatelyAvailableCredentials(true)
+            .build()
         val response = credentialManager.getCredential(activity, request)
 
         val authResponseJson = response.credential.data.getString(
@@ -703,7 +710,11 @@ public object CredentialManagerPrfCore {
         }.toString()
 
         val option = GetPublicKeyCredentialOption(requestJson)
-        val request = GetCredentialRequest(listOf(option))
+        // See single-salt path for rationale.
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(option)
+            .setPreferImmediatelyAvailableCredentials(true)
+            .build()
         val response = credentialManager.getCredential(activity, request)
 
         val authResponseJson = response.credential.data.getString(
