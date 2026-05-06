@@ -3,7 +3,7 @@
 Your job is to update the {{LANG_NAME}} CLI to match the current Rust CLI.
 
 ### What changed
-${{ steps.diff-info.outputs.diff_summary }}
+{{DIFF_SUMMARY}}
 
 ### Step 1: Learn the {{LANG_NAME}} SDK API
 Before comparing anything, read these {{LANG_NAME}} SDK snippets at `{{SNIPPET_DIR}}`:
@@ -14,7 +14,7 @@ Before comparing anything, read these {{LANG_NAME}} SDK snippets at `{{SNIPPET_D
 These snippets are compiled and tested — they are the ground truth for what methods exist and how they are called in {{LANG_NAME}}. You will need this context to identify real divergences vs naming conventions.
 
 ### Step 2: Analyze the changes
-If a diff base was provided, run: `git diff ${{ steps.diff-info.outputs.diff_base }} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
+If a diff base was provided, run: `git diff {{DIFF_BASE}} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
 The diff is a hint for what changed recently, but it may not reveal all differences.
 
 **Always read the current Rust CLI source files and compare them against the {{LANG_NAME}} CLI.** The Rust CLI is the source of truth. Read each mapped file pair (see Step 3) and perform this comparison for each pair:
