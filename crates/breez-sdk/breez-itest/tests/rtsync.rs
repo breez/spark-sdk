@@ -147,6 +147,7 @@ async fn test_01_rtsync_lnurl_info_sync(
         .register_lightning_address(RegisterLightningAddressRequest {
             username: "bob".to_string(),
             description: Some(ln_address_description.clone()),
+            transfer: None,
         })
         .await?
         .lightning_address;
@@ -264,6 +265,7 @@ async fn test_02_rtsync_lightning_address_sync(
         .register_lightning_address(RegisterLightningAddressRequest {
             username: "alicesync".to_string(),
             description: Some("Alice's synced address".to_string()),
+            transfer: None,
         })
         .await?;
     info!(

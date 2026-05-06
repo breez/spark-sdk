@@ -161,6 +161,7 @@ export const COMMAND_NAMES = [
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
+  'accept-lightning-address-transfer',
   'delete-lightning-address',
   'list-fiat-currencies',
   'list-fiat-rates',
@@ -201,6 +202,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'check-lightning-address-available', description: 'Check if a lightning address username is available', run: handleCheckLightningAddress },
     { name: 'get-lightning-address', description: 'Get registered lightning address', run: handleGetLightningAddress },
     { name: 'register-lightning-address', description: 'Register a lightning address', run: handleRegisterLightningAddress },
+    { name: 'accept-lightning-address-transfer', description: 'Produce a transfer authorization for the current username, granting it to a transferee pubkey', run: handleAcceptLightningAddressTransfer },
     { name: 'delete-lightning-address', description: 'Delete lightning address', run: handleDeleteLightningAddress },
     { name: 'list-fiat-currencies', description: 'List fiat currencies', run: handleListFiatCurrencies },
     { name: 'list-fiat-rates', description: 'List available fiat rates', run: handleListFiatRates },
@@ -964,15 +966,38 @@ async function handleGetLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: T
 async function handleRegisterLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   const positional = args.filter(a => !a.startsWith('-'))
   if (positional.length < 1) {
-    return 'Usage: register-lightning-address <username> [-d <description>]'
+    return 'Usage: register-lightning-address <username> [-d <description>] [--transfer-pubkey <pk> --transfer-signature <sig>]'
   }
 
   const username = positional[0]
   const description = parseFlag(args, '--description', '-d')
+  const transferPubkey = parseFlag(args, '--transfer-pubkey')
+  const transferSignature = parseFlag(args, '--transfer-signature')
+
+  if (Boolean(transferPubkey) !== Boolean(transferSignature)) {
+    return 'Error: --transfer-pubkey and --transfer-signature must be provided together'
+  }
+  const transfer = transferPubkey
+    ? { pubkey: transferPubkey, signature: transferSignature! }
+    : undefined
 
   const result = await sdk.registerLightningAddress({
     username,
     description,
+    transfer,
+  })
+  return formatValue(result)
+}
+
+// --- accept-lightning-address-transfer ---
+
+async function handleAcceptLightningAddressTransfer(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  const positional = args.filter(a => !a.startsWith('-'))
+  if (positional.length < 1) {
+    return 'Usage: accept-lightning-address-transfer <transferee_pubkey>'
+  }
+  const result = await sdk.acceptLightningAddressTransfer({
+    transfereePubkey: positional[0],
   })
   return formatValue(result)
 }

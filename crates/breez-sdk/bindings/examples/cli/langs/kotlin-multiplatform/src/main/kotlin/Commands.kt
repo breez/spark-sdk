@@ -33,6 +33,7 @@ val COMMAND_NAMES = listOf(
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
+    "accept-lightning-address-transfer",
     "delete-lightning-address",
     "list-fiat-currencies",
     "list-fiat-rates",
@@ -67,6 +68,7 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "check-lightning-address-available" to CliCommand("check-lightning-address-available", "Check if a lightning address username is available", ::handleCheckLightningAddress),
         "get-lightning-address" to CliCommand("get-lightning-address", "Get registered lightning address", ::handleGetLightningAddress),
         "register-lightning-address" to CliCommand("register-lightning-address", "Register a lightning address", ::handleRegisterLightningAddress),
+        "accept-lightning-address-transfer" to CliCommand("accept-lightning-address-transfer", "Produce a transfer authorization for the current username, granting it to a transferee pubkey", ::handleAcceptLightningAddressTransfer),
         "delete-lightning-address" to CliCommand("delete-lightning-address", "Delete lightning address", ::handleDeleteLightningAddress),
         "list-fiat-currencies" to CliCommand("list-fiat-currencies", "List fiat currencies", ::handleListFiatCurrencies),
         "list-fiat-rates" to CliCommand("list-fiat-rates", "List available fiat rates", ::handleListFiatRates),
@@ -804,16 +806,43 @@ suspend fun handleGetLightningAddress(sdk: BreezSdk, reader: LineReader, args: L
 suspend fun handleRegisterLightningAddress(sdk: BreezSdk, reader: LineReader, args: List<String>) {
     val fp = FlagParser(args)
     val description = fp.getString("d", "description")
+    val transferPubkey = fp.getString("transfer-pubkey")
+    val transferSignature = fp.getString("transfer-signature")
 
     if (fp.positional.isEmpty()) {
-        println("Usage: register-lightning-address <username> [-d <description>]")
+        println("Usage: register-lightning-address <username> [-d <description>] [--transfer-pubkey <pk> --transfer-signature <sig>]")
         return
+    }
+
+    if ((transferPubkey == null) != (transferSignature == null)) {
+        println("Error: --transfer-pubkey and --transfer-signature must be provided together")
+        return
+    }
+    val transfer = transferPubkey?.let {
+        LightningAddressTransfer(pubkey = it, signature = transferSignature!!)
     }
 
     val result = sdk.registerLightningAddress(
         RegisterLightningAddressRequest(
             username = fp.positional[0],
             description = description,
+            transfer = transfer,
+        )
+    )
+    printValue(result)
+}
+
+// --- accept-lightning-address-transfer ---
+
+suspend fun handleAcceptLightningAddressTransfer(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+    if (fp.positional.isEmpty()) {
+        println("Usage: accept-lightning-address-transfer <transferee_pubkey>")
+        return
+    }
+    val result = sdk.acceptLightningAddressTransfer(
+        AcceptLightningAddressTransferRequest(
+            transfereePubkey = fp.positional[0],
         )
     )
     printValue(result)

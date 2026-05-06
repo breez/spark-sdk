@@ -59,6 +59,42 @@ Future<(String, String, String, String, String)> getLightningAddress(
   return (lightningAddress, username, description, lnurlUrl, lnurlBech32);
 }
 
+// Run on the *current owner's* wallet. Produces the authorization that the
+// new owner needs to take over the username in a single atomic call.
+Future<LightningAddressTransfer> signLightningAddressTransfer(
+  BreezSdk currentOwnerSdk,
+  String transfereePubkey,
+) async {
+  // ANCHOR: sign-lightning-address-transfer
+  final transfer = await currentOwnerSdk.acceptLightningAddressTransfer(
+    request: AcceptLightningAddressTransferRequest(
+      transfereePubkey: transfereePubkey,
+    ),
+  );
+  // ANCHOR_END: sign-lightning-address-transfer
+  return transfer;
+}
+
+// Run on the *new owner's* wallet with the authorization received
+// out-of-band from the current owner.
+Future<void> registerLightningAddressViaTransfer(
+  BreezSdk newOwnerSdk,
+  LightningAddressTransfer transfer,
+) async {
+  final username = 'myusername';
+  final description = 'My Lightning Address';
+
+  // ANCHOR: register-lightning-address-transfer
+  final request = RegisterLightningAddressRequest(
+    username: username,
+    description: description,
+    transfer: transfer,
+  );
+
+  await newOwnerSdk.registerLightningAddress(request: request);
+  // ANCHOR_END: register-lightning-address-transfer
+}
+
 Future<void> deleteLightningAddress(BreezSdk sdk) async {
   // ANCHOR: delete-lightning-address
   await sdk.deleteLightningAddress();

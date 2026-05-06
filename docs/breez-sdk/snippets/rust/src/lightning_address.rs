@@ -1,6 +1,7 @@
 use breez_sdk_spark::{
-    default_config, BreezSdk, CheckLightningAddressRequest, Config, GetPaymentRequest, Network,
-    PaymentDetails, RegisterLightningAddressRequest,
+    default_config, AcceptLightningAddressTransferRequest, BreezSdk, CheckLightningAddressRequest,
+    Config, GetPaymentRequest, LightningAddressTransfer, Network, PaymentDetails,
+    RegisterLightningAddressRequest,
 };
 
 pub fn configure_lightning_address() -> Config {
@@ -33,6 +34,7 @@ pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(Strin
     let request = RegisterLightningAddressRequest {
         username,
         description,
+        transfer: None,
     };
 
     let address_info = sdk.register_lightning_address(request).await?;
@@ -40,6 +42,46 @@ pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(Strin
     let lnurl_url = address_info.lnurl.url;
     let lnurl_bech32 = address_info.lnurl.bech32;
     // ANCHOR_END: register-lightning-address
+    Ok((lightning_address, lnurl_url, lnurl_bech32))
+}
+
+// Step 1 — run on the *current owner's* wallet. Produces the authorization
+// the new owner needs to take over the username in a single atomic call.
+pub async fn sign_lightning_address_transfer(
+    current_owner_sdk: &BreezSdk,
+    transferee_pubkey: &str,
+) -> anyhow::Result<LightningAddressTransfer> {
+    // ANCHOR: sign-lightning-address-transfer
+    let transfer = current_owner_sdk
+        .accept_lightning_address_transfer(AcceptLightningAddressTransferRequest {
+            transferee_pubkey: transferee_pubkey.to_string(),
+        })
+        .await?;
+    // ANCHOR_END: sign-lightning-address-transfer
+    Ok(transfer)
+}
+
+// Step 2 — run on the *new owner's* wallet with the authorization received
+// from the current owner (e.g. via QR code or deep link).
+pub async fn register_lightning_address_via_transfer(
+    new_owner_sdk: &BreezSdk,
+    transfer: LightningAddressTransfer,
+) -> anyhow::Result<(String, String, String)> {
+    let username = "a username".to_string();
+    let description = Some("Lightning address description".to_string());
+
+    // ANCHOR: register-lightning-address-transfer
+    let request = RegisterLightningAddressRequest {
+        username,
+        description,
+        transfer: Some(transfer),
+    };
+
+    let address_info = new_owner_sdk.register_lightning_address(request).await?;
+    let lightning_address = address_info.lightning_address;
+    let lnurl_url = address_info.lnurl.url;
+    let lnurl_bech32 = address_info.lnurl.bech32;
+    // ANCHOR_END: register-lightning-address-transfer
     Ok((lightning_address, lnurl_url, lnurl_bech32))
 }
 

@@ -65,6 +65,28 @@ You can retrieve information about the currently registered Lightning address.
 
 {{#tabs lightning_address:get-lightning-address}}
 
+### Transferring a Lightning address
+
+A user who already owns a registered Lightning address can hand it over to a different owner (pubkey) in a single atomic server operation — ownership is removed from the old pubkey and the new pubkey takes it in one step, without exposing a window during which the username could be snatched by a third party.
+
+> **Note:** Existing payments are not transferred to the new owner. Only the address.
+
+The flow has two steps, run on two different SDKs:
+
+**Step 1: Current owner (pubkey A)** calls {{#name accept_lightning_address_transfer}} with the new owner's {{#name identity_pubkey}} (available via {{#name get_info}} on the new owner's SDK). The method returns a {{#name LightningAddressTransfer}} containing `pubkey` and `signature`, which is the authorization that grants B the right to take over the username.
+
+> **Note:** The signed intent (`"transfer:{pubkey_a}-{username}-{pubkey_b}"`) has no timestamp, so A's authorization is a persistent capability for this specific A → B → username triple. Only B can actually submit the transfer, because the server also requires B's own signature over the request; A's authorization alone doesn't let any third party move the username.
+
+{{#tabs lightning_address:sign-lightning-address-transfer}}
+
+The returned {{#name LightningAddressTransfer}} is then sent out-of-band to the new owner.
+
+**Step 2: New owner (pubkey B)** calls {{#name register_lightning_address}} with the `transfer` field populated. The SDK passes the transfer request to the server which, in one transaction, verifies B's request signature, verifies A's authorization, and transfers ownership.
+
+{{#tabs lightning_address:register-lightning-address-transfer}}
+
+If pubkey B had a different username registered, it is replaced by the transferred one. The server rejects the call if pubkey A does not currently own the username (e.g. the name was already transferred to a third pubkey).
+
 ### Deleting a Lightning address
 
 When a user no longer wants to use the Lightning address, you can delete it.

@@ -28,7 +28,8 @@ const exampleRegisterLightningAddress = async (sdk: BreezSdk) => {
   // ANCHOR: register-lightning-address
   const request = {
     username,
-    description
+    description,
+    transfer: undefined
   }
 
   const addressInfo = await sdk.registerLightningAddress(request)
@@ -50,6 +51,40 @@ const exampleGetLightningAddress = async (sdk: BreezSdk) => {
     const lnurlBech32 = addressInfoOpt.lnurl.bech32
   }
   // ANCHOR_END: get-lightning-address
+}
+
+// Run on the *current owner's* wallet. Produces the authorization that the
+// new owner needs to take over the username in a single atomic call.
+const exampleSignLightningAddressTransfer = async (
+  currentOwnerSdk: BreezSdk,
+  transfereePubkey: string
+) => {
+  // ANCHOR: sign-lightning-address-transfer
+  const transfer = await currentOwnerSdk.acceptLightningAddressTransfer({
+    transfereePubkey
+  })
+  // ANCHOR_END: sign-lightning-address-transfer
+  return transfer
+}
+
+// Run on the *new owner's* wallet with the authorization received
+// out-of-band from the current owner.
+const exampleRegisterLightningAddressViaTransfer = async (
+  newOwnerSdk: BreezSdk,
+  transfer: { pubkey: string, signature: string }
+) => {
+  const username = 'myusername'
+  const description = 'My Lightning Address'
+
+  // ANCHOR: register-lightning-address-transfer
+  const request = {
+    username,
+    description,
+    transfer
+  }
+
+  const addressInfo = await newOwnerSdk.registerLightningAddress(request)
+  // ANCHOR_END: register-lightning-address-transfer
 }
 
 const exampleDeleteLightningAddress = async (sdk: BreezSdk) => {

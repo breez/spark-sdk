@@ -6,6 +6,7 @@ import time
 
 import breez_sdk_spark
 from breez_sdk_spark import (
+    AcceptLightningAddressTransferRequest,
     AssetFilter,
     BuyBitcoinRequest,
     CheckLightningAddressRequest,
@@ -20,6 +21,7 @@ from breez_sdk_spark import (
     GetPaymentRequest,
     GetTokensMetadataRequest,
     InputType,
+    LightningAddressTransfer,
     ListPaymentsRequest,
     ListUnclaimedDepositsRequest,
     LnurlPayRequest,
@@ -67,6 +69,7 @@ COMMAND_NAMES = [
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
+    "accept-lightning-address-transfer",
     "delete-lightning-address",
     "list-fiat-currencies",
     "list-fiat-rates",
@@ -651,13 +654,40 @@ def _build_register_lightning_address_parser():
     p = _parser("register-lightning-address", "Register a lightning address")
     p.add_argument("username", help="The lightning address username")
     p.add_argument("description", nargs="?", default=None, help="Description for the lnurl response")
+    p.add_argument("--transfer-pubkey", default=None, help="Pubkey of the current owner when taking over a username")
+    p.add_argument("--transfer-signature", default=None, help="Signature by the current owner over 'transfer:{owner}-{username}-{self}'")
     return p
 
 async def _handle_register_lightning_address(sdk, _token_issuer, _session, args):
+    if bool(args.transfer_pubkey) != bool(args.transfer_signature):
+        raise ValueError("--transfer-pubkey and --transfer-signature must be provided together")
+    transfer = None
+    if args.transfer_pubkey:
+        transfer = LightningAddressTransfer(
+            pubkey=args.transfer_pubkey,
+            signature=args.transfer_signature,
+        )
     result = await sdk.register_lightning_address(
         request=RegisterLightningAddressRequest(
             username=args.username,
             description=args.description,
+            transfer=transfer,
+        )
+    )
+    print_value(result)
+
+
+# --- accept-lightning-address-transfer ---
+
+def _build_accept_lightning_address_transfer_parser():
+    p = _parser("accept-lightning-address-transfer", "Produce a transfer authorization for the current username, granting it to transferee_pubkey")
+    p.add_argument("transferee_pubkey", help="Hex-encoded secp256k1 compressed pubkey of the new owner")
+    return p
+
+async def _handle_accept_lightning_address_transfer(sdk, _token_issuer, _session, args):
+    result = await sdk.accept_lightning_address_transfer(
+        request=AcceptLightningAddressTransferRequest(
+            transferee_pubkey=args.transferee_pubkey,
         )
     )
     print_value(result)
@@ -880,6 +910,7 @@ def build_command_registry():
         "check-lightning-address-available": (_build_check_lightning_address_available_parser(), _handle_check_lightning_address_available),
         "get-lightning-address": (_build_get_lightning_address_parser(), _handle_get_lightning_address),
         "register-lightning-address": (_build_register_lightning_address_parser(), _handle_register_lightning_address),
+        "accept-lightning-address-transfer": (_build_accept_lightning_address_transfer_parser(), _handle_accept_lightning_address_transfer),
         "delete-lightning-address": (_build_delete_lightning_address_parser(), _handle_delete_lightning_address),
         "list-fiat-currencies": (_build_list_fiat_currencies_parser(), _handle_list_fiat_currencies),
         "list-fiat-rates": (_build_list_fiat_rates_parser(), _handle_list_fiat_rates),
