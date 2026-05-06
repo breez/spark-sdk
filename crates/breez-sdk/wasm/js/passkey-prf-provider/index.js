@@ -113,6 +113,22 @@ export class PasskeyProvider {
      *   deterministic seed derivation when multiple credentials might
      *   exist for the same RP. When empty (default), the browser picks
      *   any credential matching the RP.
+     * @param {'platform'|'cross-platform'} [options.authenticatorAttachment]
+     *   When set, narrows the create-time UI to the chosen authenticator
+     *   class. `'platform'` scopes registration to the local platform
+     *   authenticator (Touch ID / Face ID / Windows Hello / iCloud
+     *   Keychain), suppressing security-key and hybrid (cross-device)
+     *   options in the browser's chooser. Useful for hosts that do not
+     *   want users registering security keys or QR-paired devices.
+     *   When omitted, the browser shows all available authenticators.
+     * @param {Array<'client-device'|'security-key'|'hybrid'>} [options.hints]
+     *   WebAuthn L3 priority hints for the create-time chooser. Soft
+     *   signal compared to `authenticatorAttachment`: browsers that
+     *   honor it surface the listed authenticator classes first;
+     *   browsers that ignore it fall back to default ordering. Stacks
+     *   with `authenticatorAttachment` (the hard filter wins). Pass
+     *   `['client-device']` to nudge platform authenticator before
+     *   security-key / hybrid options.
      */
     constructor(options = {}) {
         this.rpId = options.rpId || DEFAULT_RP_ID;
@@ -121,6 +137,8 @@ export class PasskeyProvider {
         this.userDisplayName = options.userDisplayName || this.userName;
         this.autoRegister = options.autoRegister !== false;
         this.allowCredentialIds = options.allowCredentialIds || [];
+        this.authenticatorAttachment = options.authenticatorAttachment;
+        this.hints = options.hints;
         /**
          * Optional callback fired with the credential ID returned by
          * every successful WebAuthn assertion. Hosts can set this to
@@ -291,6 +309,42 @@ export class PasskeyProvider {
     }
 
     /**
+     * Per-call overrides for {@link createPasskey}. All fields are
+     * optional. When omitted, the provider falls back to the
+     * corresponding constructor option, then to the spec default
+     * (random 16-byte `userId`, `userName` = ctor `userName`,
+     * `userDisplayName` = ctor `userDisplayName`).
+     *
+     * Per-call values let hosts vary registration metadata between
+     * `createPasskey` invocations without reconstructing the provider
+     * (which is typically a module-level singleton). Common uses:
+     *   - rotating a per-wallet `userDisplayName` discriminator so the
+     *     OS picker can distinguish multiple credentials on the same RP
+     *   - encoding host-side wallet bookkeeping into `userId` so it
+     *     round-trips on assertion via `userHandle`
+     *
+     * @typedef {Object} CreatePasskeyRequest
+     * @property {Uint8Array[]} [excludeCredentialIds] - Credential IDs the
+     *   authenticator must refuse to duplicate. When any entry matches a
+     *   credential already on the device, the browser raises
+     *   `InvalidStateError`, surfaced here as
+     *   {@link PasskeyAlreadyExistsError}. Defaults to none (no dedup
+     *   check).
+     * @property {Uint8Array} [userId] - Override for the WebAuthn `user.id`
+     *   field. Must be 1–64 bytes per WebAuthn spec; throws otherwise.
+     *   Defaults to a fresh `crypto.getRandomValues(16)` per call. Random
+     *   is the recommended default. Persisting / reusing a `userId` across
+     *   calls causes the OS to treat both creates as the same account
+     *   and may surface a "replace existing passkey?" prompt.
+     * @property {string} [userName] - Override for the WebAuthn `user.name`
+     *   field. Shown as a secondary label in some passkey managers.
+     * @property {string} [userDisplayName] - Override for the WebAuthn
+     *   `user.displayName` field. Primary label in most pickers (iCloud
+     *   Keychain, Google Password Manager). Useful for per-wallet
+     *   discriminators ("Glow . May 6, 2026").
+     */
+
+    /**
      * Create a new passkey with PRF support.
      *
      * Only registers the credential, no seed derivation. Triggers exactly
@@ -300,14 +354,23 @@ export class PasskeyProvider {
      * If a passkey already exists for this RP ID, this will create an
      * additional credential (browsers allow multiple per RP).
      *
+     * @param {CreatePasskeyRequest|Uint8Array[]} [request] - Per-call
+     *   overrides. Passing a plain array is accepted as a backward-compat
+     *   shim for `{ excludeCredentialIds: array }` and is equivalent to
+     *   the pre-`CreatePasskeyRequest` signature.
      * @returns {Promise<{ credentialId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
      *   `credentialId` is always populated. `aaguid` and `backupEligible`
      *   are null when the browser does not expose `getAuthenticatorData()`
      *   on the create response (pre-Level-2 implementations).
      * @throws {Error} If the user cancels or PRF is not supported by the authenticator.
      */
-    async createPasskey(excludeCredentialIds) {
-        return await this._registerCredential(excludeCredentialIds);
+    async createPasskey(request) {
+        // Backward compat: array arg from the pre-CreatePasskeyRequest
+        // signature is rewrapped as `{ excludeCredentialIds }`.
+        if (Array.isArray(request)) {
+            request = { excludeCredentialIds: request };
+        }
+        return await this._registerCredential(request || {});
     }
 
     /**
@@ -462,7 +525,21 @@ export class PasskeyProvider {
         // blocked by host-side bookkeeping.
         if (typeof this.onAssertionCredentialId === 'function') {
             try {
-                this.onAssertionCredentialId(new Uint8Array(credential.rawId));
+                // userHandle is the WebAuthn `user.id` value the RP set
+                // at create time, returned in the assertion response.
+                // Hosts can pass it to `PublicKeyCredential.signalCurrentUserDetails`
+                // to retroactively rename a credential's `user.name` /
+                // `user.displayName` after sign-in (useful for migrating
+                // legacy creds created with a generic `user.name` that
+                // password managers collapse in their picker).
+                const userHandleBuf = credential.response && credential.response.userHandle;
+                const userHandle = userHandleBuf ? new Uint8Array(userHandleBuf) : null;
+                console.log('[passkey-prf] sign-in onAssertionCredentialId:', {
+                    credentialIdLength: credential.rawId.byteLength,
+                    userHandleLength: userHandle ? userHandle.byteLength : null,
+                    userHandlePresent: userHandle !== null,
+                });
+                this.onAssertionCredentialId(new Uint8Array(credential.rawId), userHandle);
             } catch {
                 // best-effort
             }
@@ -559,7 +636,21 @@ export class PasskeyProvider {
 
         if (typeof this.onAssertionCredentialId === 'function') {
             try {
-                this.onAssertionCredentialId(new Uint8Array(credential.rawId));
+                // userHandle is the WebAuthn `user.id` value the RP set
+                // at create time, returned in the assertion response.
+                // Hosts can pass it to `PublicKeyCredential.signalCurrentUserDetails`
+                // to retroactively rename a credential's `user.name` /
+                // `user.displayName` after sign-in (useful for migrating
+                // legacy creds created with a generic `user.name` that
+                // password managers collapse in their picker).
+                const userHandleBuf = credential.response && credential.response.userHandle;
+                const userHandle = userHandleBuf ? new Uint8Array(userHandleBuf) : null;
+                console.log('[passkey-prf] sign-in onAssertionCredentialId:', {
+                    credentialIdLength: credential.rawId.byteLength,
+                    userHandleLength: userHandle ? userHandle.byteLength : null,
+                    userHandlePresent: userHandle !== null,
+                });
+                this.onAssertionCredentialId(new Uint8Array(credential.rawId), userHandle);
             } catch {
                 // best-effort
             }
@@ -578,11 +669,43 @@ export class PasskeyProvider {
 
     /**
      * Register a new discoverable credential with PRF extension enabled.
-     * @param {Uint8Array[]} [excludeCredentialIds=[]] - Credential IDs to exclude.
+     * @param {CreatePasskeyRequest} [request={}] - Per-call overrides.
      * @returns {Promise<{ credentialId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
      * @private
      */
-    async _registerCredential(excludeCredentialIds = []) {
+    async _registerCredential(request = {}) {
+        const {
+            excludeCredentialIds = [],
+            userId,
+            userName,
+            userDisplayName,
+        } = request;
+
+        // Validate per-call userId. WebAuthn spec requires user.id to be
+        // 1-64 bytes (BufferSource). Reject upfront so a malformed value
+        // surfaces as a clear API error instead of an opaque
+        // TypeError from the platform.
+        let resolvedUserId;
+        if (userId !== undefined) {
+            if (!(userId instanceof Uint8Array) || userId.length < 1 || userId.length > 64) {
+                throw new Error(
+                    'CreatePasskeyRequest.userId must be a Uint8Array of length 1-64 bytes'
+                );
+            }
+            resolvedUserId = userId;
+        } else {
+            resolvedUserId = randomBytes(16);
+        }
+
+        const authenticatorSelection = {
+            residentKey: 'required',
+            requireResidentKey: true,
+            userVerification: 'required',
+        };
+        if (this.authenticatorAttachment) {
+            authenticatorSelection.authenticatorAttachment = this.authenticatorAttachment;
+        }
+
         const publicKeyOptions = {
             challenge: randomBytes(32),
             rp: {
@@ -590,23 +713,26 @@ export class PasskeyProvider {
                 name: this.rpName,
             },
             user: {
-                id: randomBytes(16),
-                name: this.userName,
-                displayName: this.userDisplayName,
+                id: resolvedUserId,
+                name: userName ?? this.userName,
+                displayName: userDisplayName ?? this.userDisplayName,
             },
             pubKeyCredParams: [
                 { type: 'public-key', alg: -7 },   // ES256 (P-256)
                 { type: 'public-key', alg: -257 },  // RS256
             ],
-            authenticatorSelection: {
-                residentKey: 'required',
-                requireResidentKey: true,
-                userVerification: 'required',
-            },
+            authenticatorSelection,
             extensions: {
                 prf: {},
             },
         };
+
+        if (Array.isArray(this.hints) && this.hints.length > 0) {
+            // Defensive copy: spec accepts a sequence so we shouldn't
+            // hand the platform a reference the host can mutate
+            // mid-ceremony.
+            publicKeyOptions.hints = [...this.hints];
+        }
 
         if (excludeCredentialIds.length > 0) {
             publicKeyOptions.excludeCredentials = excludeCredentialIds.map(id => ({
@@ -614,6 +740,23 @@ export class PasskeyProvider {
                 id,
             }));
         }
+
+        // [DEBUG] Surface the exact options we're about to hand the
+        // platform so callers can verify authenticatorAttachment +
+        // hints + user.{id,name,displayName} are populated as
+        // expected. Remove once the prototype is verified.
+        console.log('[passkey-prf] createPasskey publicKeyOptions:', {
+            rpId: publicKeyOptions.rp.id,
+            rpName: publicKeyOptions.rp.name,
+            userIdLength: publicKeyOptions.user.id.byteLength,
+            userName: publicKeyOptions.user.name,
+            userDisplayName: publicKeyOptions.user.displayName,
+            authenticatorAttachment: publicKeyOptions.authenticatorSelection.authenticatorAttachment,
+            residentKey: publicKeyOptions.authenticatorSelection.residentKey,
+            userVerification: publicKeyOptions.authenticatorSelection.userVerification,
+            hints: publicKeyOptions.hints,
+            excludeCount: (publicKeyOptions.excludeCredentials || []).length,
+        });
 
         let credential;
         try {
