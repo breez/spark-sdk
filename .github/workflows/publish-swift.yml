@@ -157,7 +157,7 @@ jobs:
       - name: Compress XCFramework
         working-directory: build/crates/breez-sdk/bindings/langs/swift
         run: |
-          zip -9 -r -y breez_sdk_sparkFFI.xcframework.zip breez_sdk_sparkFFI.xcframework
+          ditto -c -k --sequesterRsrc --keepParent breez_sdk_sparkFFI.xcframework breez_sdk_sparkFFI.xcframework.zip
           echo "XCF_CHECKSUM=`swift package compute-checksum breez_sdk_sparkFFI.xcframework.zip`" >> $GITHUB_ENV
 
       - name: Remove dist Sources
