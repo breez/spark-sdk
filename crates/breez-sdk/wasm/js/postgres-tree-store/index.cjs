@@ -25,11 +25,10 @@ const { TreeStoreError } = require("./errors.cjs");
 const { TreeStoreMigrationManager } = require("./migrations.cjs");
 
 /**
- * Advisory-lock classid for the tree store. Combined with a per-tenant `objid`
- * (derived from the identity pubkey) so that two tenants never block each
- * other's writes — only same-tenant writes serialize on the same lock.
+ * Domain prefix mixed into the per-tenant advisory-lock key. Distinct prefixes
+ * guarantee that locks from different stores (tree, token, …) never collide.
  */
-const TREE_STORE_LOCK_CLASSID = 0x74726565; // "tree" as hex
+const TREE_STORE_LOCK_PREFIX = "breez-spark-sdk:tree:";
 
 /**
  * Timeout for reservations in seconds. Reservations older than this are stale.
@@ -42,13 +41,18 @@ const RESERVATION_TIMEOUT_SECS = 300; // 5 minutes
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
- * Derive a stable 32-bit lock objid from a 33-byte secp256k1 pubkey by
- * reinterpreting its last 4 bytes as a signed 32-bit integer (big-endian).
+ * Derive a stable per-tenant 64-bit advisory-lock key by hashing a domain
+ * prefix together with the identity pubkey and folding the first 8 bytes of
+ * the SHA-256 digest into a signed big-endian i64 — the type expected by
+ * `pg_advisory_xact_lock(bigint)`. The 64-bit space keeps cross-tenant
+ * collisions negligible (~1.2e-10 at 65k tenants).
  */
-function _identityLockObjid(identity) {
-  if (!identity || identity.length < 4) return 0;
-  const tail = Buffer.from(identity).slice(-4);
-  return tail.readInt32BE(0);
+function _identityLockKey(prefix, identity) {
+  const crypto = require("crypto");
+  const hash = crypto.createHash("sha256");
+  hash.update(prefix);
+  hash.update(Buffer.from(identity));
+  return hash.digest().readBigInt64BE(0);
 }
 
 class PostgresTreeStore {
@@ -66,7 +70,7 @@ class PostgresTreeStore {
     }
     this.pool = pool;
     this.identity = Buffer.from(identity);
-    this.lockObjid = _identityLockObjid(identity);
+    this.lockKey = _identityLockKey(TREE_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
   }
 
@@ -108,12 +112,10 @@ class PostgresTreeStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      // Per-tenant advisory lock: classid is constant, objid is derived from
-      // the tenant identity so different tenants don't serialize on each other.
-      await client.query("SELECT pg_advisory_xact_lock($1, $2)", [
-        TREE_STORE_LOCK_CLASSID,
-        this.lockObjid,
-      ]);
+      // Per-tenant advisory lock: 64-bit key derived from a tree-store domain
+      // prefix and the tenant identity, so different tenants don't serialize
+      // on each other and tree/token locks never collide.
+      await client.query("SELECT pg_advisory_xact_lock($1)", [this.lockKey]);
       const result = await fn(client);
       await client.query("COMMIT");
       return result;
