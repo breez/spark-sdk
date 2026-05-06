@@ -562,7 +562,7 @@ public class PasskeyProvider: PrfProvider {
         return try await withCheckedThrowingContinuation { continuation in
             delegate.continuation = continuation
             delegate.extractPrf = true
-            controller.performRequests()
+            performAssertionRequest(controller)
         }
     }
 
@@ -599,6 +599,19 @@ public class PasskeyProvider: PrfProvider {
 
         return try await withCheckedThrowingContinuation { continuation in
             delegate.continuation = continuation
+            performAssertionRequest(controller)
+        }
+    }
+
+    /// Wraps `controller.performRequests` for assertion paths and
+    /// suppresses the OS's hybrid (cross-device QR) sign-in option.
+    /// Wallet-style integrators target only local credentials, so a
+    /// fast `.canceled` failure is preferable to a confusing QR sheet
+    /// when no passkey is on the device.
+    private func performAssertionRequest(_ controller: ASAuthorizationController) {
+        if #available(iOS 16.0, macOS 13.0, *) {
+            controller.performRequests(options: .preferImmediatelyAvailableCredentials)
+        } else {
             controller.performRequests()
         }
     }
@@ -803,6 +816,14 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
         if nsError.domain == ASAuthorizationError.errorDomain {
             switch ASAuthorizationError.Code(rawValue: nsError.code) {
             case .canceled:
+                // `preferImmediatelyAvailableCredentials` collapses
+                // both no-creds and user-dismissed into `.canceled`
+                // and Apple's APIs don't expose any in-process signal
+                // to disambiguate. Hosts that need to distinguish
+                // (e.g. to silently fall through to register on
+                // genuine no-creds) measure elapsed wall-clock time
+                // around the call: fast-fail returns in well under
+                // 200ms while a user-dismissed sheet takes seconds.
                 return .UserCancelled
             case .unknown:
                 if nsError.localizedDescription.contains("no credential")
@@ -892,6 +913,14 @@ private class DualSaltAuthorizationDelegate: NSObject, ASAuthorizationController
         if nsError.domain == ASAuthorizationError.errorDomain {
             switch ASAuthorizationError.Code(rawValue: nsError.code) {
             case .canceled:
+                // `preferImmediatelyAvailableCredentials` collapses
+                // both no-creds and user-dismissed into `.canceled`
+                // and Apple's APIs don't expose any in-process signal
+                // to disambiguate. Hosts that need to distinguish
+                // (e.g. to silently fall through to register on
+                // genuine no-creds) measure elapsed wall-clock time
+                // around the call: fast-fail returns in well under
+                // 200ms while a user-dismissed sheet takes seconds.
                 return .UserCancelled
             case .unknown:
                 if nsError.localizedDescription.contains("no credential")
