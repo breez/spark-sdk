@@ -838,8 +838,7 @@ impl MysqlTokenStore {
             .map_err(map_err)?;
 
         if !reserved_output_ids.is_empty() {
-            let mut sql =
-                String::from("INSERT INTO token_spent_outputs (output_id) VALUES ");
+            let mut sql = String::from("INSERT INTO token_spent_outputs (output_id) VALUES ");
             let mut params: Vec<Value> = Vec::with_capacity(reserved_output_ids.len());
             for (i, oid) in reserved_output_ids.iter().enumerate() {
                 if i > 0 {
