@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::config::MysqlStorageConfig;
 use crate::error::MysqlError;
-use crate::migrations::run_migrations;
+use crate::migrations::{Migration, run_migrations};
 use crate::pool::create_pool;
 
 const TOKEN_MIGRATIONS_TABLE: &str = "token_schema_migrations";
@@ -361,54 +361,76 @@ impl MysqlTokenStore {
         run_migrations(&self.pool, TOKEN_MIGRATIONS_TABLE, &Self::migrations()).await
     }
 
-    fn migrations() -> Vec<&'static [&'static str]> {
+    fn migrations() -> Vec<&'static [Migration]> {
         vec![&[
-            "CREATE TABLE IF NOT EXISTS token_metadata (
-                identifier VARCHAR(255) NOT NULL PRIMARY KEY,
-                issuer_public_key VARCHAR(255) NOT NULL,
-                name VARCHAR(255) NOT NULL,
-                ticker VARCHAR(64) NOT NULL,
-                decimals INT NOT NULL,
-                max_supply VARCHAR(128) NOT NULL,
-                is_freezable TINYINT(1) NOT NULL,
-                creation_entity_public_key VARCHAR(255) NULL
-            )",
-            "CREATE INDEX idx_token_metadata_issuer_pk ON token_metadata (issuer_public_key)",
-            "CREATE TABLE IF NOT EXISTS token_reservations (
-                id VARCHAR(255) NOT NULL PRIMARY KEY,
-                purpose VARCHAR(64) NOT NULL,
-                created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-            )",
-            "CREATE TABLE IF NOT EXISTS token_outputs (
-                id VARCHAR(255) NOT NULL PRIMARY KEY,
-                token_identifier VARCHAR(255) NOT NULL,
-                owner_public_key VARCHAR(255) NOT NULL,
-                revocation_commitment VARCHAR(255) NOT NULL,
-                withdraw_bond_sats BIGINT NOT NULL,
-                withdraw_relative_block_locktime BIGINT NOT NULL,
-                token_public_key VARCHAR(255) NULL,
-                token_amount VARCHAR(128) NOT NULL,
-                prev_tx_hash VARCHAR(255) NOT NULL,
-                prev_tx_vout INT NOT NULL,
-                reservation_id VARCHAR(255) NULL,
-                added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                CONSTRAINT fk_token_outputs_metadata FOREIGN KEY (token_identifier)
-                    REFERENCES token_metadata(identifier),
-                CONSTRAINT fk_token_outputs_reservation FOREIGN KEY (reservation_id)
-                    REFERENCES token_reservations(id) ON DELETE SET NULL
-            )",
-            "CREATE INDEX idx_token_outputs_identifier ON token_outputs (token_identifier)",
-            "CREATE INDEX idx_token_outputs_reservation ON token_outputs (reservation_id)",
-            "CREATE TABLE IF NOT EXISTS token_spent_outputs (
-                output_id VARCHAR(255) NOT NULL PRIMARY KEY,
-                spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-            )",
-            "CREATE TABLE IF NOT EXISTS token_swap_status (
-                id INT NOT NULL PRIMARY KEY DEFAULT 1,
-                last_completed_at DATETIME(6) NULL,
-                CHECK (id = 1)
-            )",
-            "INSERT IGNORE INTO token_swap_status (id) VALUES (1)",
+            Migration::Sql(
+                "CREATE TABLE IF NOT EXISTS token_metadata (
+                    identifier VARCHAR(255) NOT NULL PRIMARY KEY,
+                    issuer_public_key VARCHAR(255) NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    ticker VARCHAR(64) NOT NULL,
+                    decimals INT NOT NULL,
+                    max_supply VARCHAR(128) NOT NULL,
+                    is_freezable TINYINT(1) NOT NULL,
+                    creation_entity_public_key VARCHAR(255) NULL
+                )",
+            ),
+            Migration::CreateIndex {
+                name: "idx_token_metadata_issuer_pk",
+                table: "token_metadata",
+                columns: "(issuer_public_key)",
+            },
+            Migration::Sql(
+                "CREATE TABLE IF NOT EXISTS token_reservations (
+                    id VARCHAR(255) NOT NULL PRIMARY KEY,
+                    purpose VARCHAR(64) NOT NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                )",
+            ),
+            Migration::Sql(
+                "CREATE TABLE IF NOT EXISTS token_outputs (
+                    id VARCHAR(255) NOT NULL PRIMARY KEY,
+                    token_identifier VARCHAR(255) NOT NULL,
+                    owner_public_key VARCHAR(255) NOT NULL,
+                    revocation_commitment VARCHAR(255) NOT NULL,
+                    withdraw_bond_sats BIGINT NOT NULL,
+                    withdraw_relative_block_locktime BIGINT NOT NULL,
+                    token_public_key VARCHAR(255) NULL,
+                    token_amount VARCHAR(128) NOT NULL,
+                    prev_tx_hash VARCHAR(255) NOT NULL,
+                    prev_tx_vout INT NOT NULL,
+                    reservation_id VARCHAR(255) NULL,
+                    added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    CONSTRAINT fk_token_outputs_metadata FOREIGN KEY (token_identifier)
+                        REFERENCES token_metadata(identifier),
+                    CONSTRAINT fk_token_outputs_reservation FOREIGN KEY (reservation_id)
+                        REFERENCES token_reservations(id) ON DELETE SET NULL
+                )",
+            ),
+            Migration::CreateIndex {
+                name: "idx_token_outputs_identifier",
+                table: "token_outputs",
+                columns: "(token_identifier)",
+            },
+            Migration::CreateIndex {
+                name: "idx_token_outputs_reservation",
+                table: "token_outputs",
+                columns: "(reservation_id)",
+            },
+            Migration::Sql(
+                "CREATE TABLE IF NOT EXISTS token_spent_outputs (
+                    output_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                    spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                )",
+            ),
+            Migration::Sql(
+                "CREATE TABLE IF NOT EXISTS token_swap_status (
+                    id INT NOT NULL PRIMARY KEY DEFAULT 1,
+                    last_completed_at DATETIME(6) NULL,
+                    CHECK (id = 1)
+                )",
+            ),
+            Migration::Sql("INSERT IGNORE INTO token_swap_status (id) VALUES (1)"),
         ]]
     }
 

@@ -495,64 +495,38 @@ impl SdkBuilder {
                 ));
             }
         } else {
+            #[allow(unused_mut)]
+            let mut s: Option<Arc<dyn Storage>> = None;
+
             #[cfg(all(
                 feature = "postgres",
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
-            if let Some(ref pool) = postgres_pool {
-                Arc::new(
+            if s.is_none()
+                && let Some(ref pool) = postgres_pool
+            {
+                s = Some(Arc::new(
                     crate::persist::postgres::PostgresStorage::new_with_pool(pool.clone())
                         .await
                         .map_err(|e| SdkError::Generic(e.to_string()))?,
-                )
-            } else {
-                #[cfg(all(
-                    feature = "mysql",
-                    not(all(target_family = "wasm", target_os = "unknown"))
-                ))]
-                if let Some(ref pool) = mysql_pool {
-                    Arc::new(
-                        crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone())
-                            .await
-                            .map_err(|e| SdkError::Generic(e.to_string()))?,
-                    )
-                } else {
-                    return Err(SdkError::Generic("No storage configured".to_string()));
-                }
-                #[cfg(not(all(
-                    feature = "mysql",
-                    not(all(target_family = "wasm", target_os = "unknown"))
-                )))]
-                {
-                    return Err(SdkError::Generic("No storage configured".to_string()));
-                }
+                ));
             }
-            #[cfg(not(all(
-                feature = "postgres",
+
+            #[cfg(all(
+                feature = "mysql",
                 not(all(target_family = "wasm", target_os = "unknown"))
-            )))]
+            ))]
+            if s.is_none()
+                && let Some(ref pool) = mysql_pool
             {
-                #[cfg(all(
-                    feature = "mysql",
-                    not(all(target_family = "wasm", target_os = "unknown"))
-                ))]
-                if let Some(ref pool) = mysql_pool {
-                    Arc::new(
-                        crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone())
-                            .await
-                            .map_err(|e| SdkError::Generic(e.to_string()))?,
-                    )
-                } else {
-                    return Err(SdkError::Generic("No storage configured".to_string()));
-                }
-                #[cfg(not(all(
-                    feature = "mysql",
-                    not(all(target_family = "wasm", target_os = "unknown"))
-                )))]
-                {
-                    return Err(SdkError::Generic("No storage configured".to_string()));
-                }
+                s = Some(Arc::new(
+                    crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone())
+                        .await
+                        .map_err(|e| SdkError::Generic(e.to_string()))?,
+                ));
             }
+
+            s.ok_or_else(|| SdkError::Generic("No storage configured".to_string()))?
         };
 
         let user_agent = format!(

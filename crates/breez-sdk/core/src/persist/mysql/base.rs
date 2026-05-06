@@ -1,49 +1,17 @@
 //! Adapter module bridging `spark-mysql` types with breez-sdk types.
 //!
 //! Provides:
-//! - UniFFI-annotated wrapper types for `MysqlStorageConfig` and `PoolQueueMode`
+//! - UniFFI-annotated wrapper type for `MysqlStorageConfig`
 //! - Error conversions between `spark_mysql::MysqlError` and `StorageError`
 //! - Error mapping helpers for `storage.rs`
 
 use std::sync::Arc;
 
 use spark_mysql::mysql_async;
+pub use spark_mysql::Migration;
 use spark_wallet::{TokenOutputStore, TreeStore};
 
 use crate::persist::StorageError;
-
-/// Queue mode for the connection pool.
-///
-/// Currently informational — `mysql_async`'s pool does not expose the same
-/// FIFO/LIFO toggle as deadpool. Kept for API parity with `PoolQueueMode` on
-/// the postgres backend.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum PoolQueueMode {
-    /// First In, First Out (default).
-    #[default]
-    Fifo,
-    /// Last In, First Out.
-    Lifo,
-}
-
-impl From<PoolQueueMode> for spark_mysql::PoolQueueMode {
-    fn from(mode: PoolQueueMode) -> Self {
-        match mode {
-            PoolQueueMode::Fifo => spark_mysql::PoolQueueMode::Fifo,
-            PoolQueueMode::Lifo => spark_mysql::PoolQueueMode::Lifo,
-        }
-    }
-}
-
-impl From<spark_mysql::PoolQueueMode> for PoolQueueMode {
-    fn from(mode: spark_mysql::PoolQueueMode) -> Self {
-        match mode {
-            spark_mysql::PoolQueueMode::Fifo => PoolQueueMode::Fifo,
-            spark_mysql::PoolQueueMode::Lifo => PoolQueueMode::Lifo,
-        }
-    }
-}
 
 /// Configuration for `MySQL` storage connection pool.
 #[derive(Clone, Debug)]
@@ -70,10 +38,6 @@ pub struct MysqlStorageConfig {
     /// `None` means connections are not recycled based on idle time.
     pub recycle_timeout_secs: Option<u64>,
 
-    /// Queue mode for retrieving connections from the pool.
-    /// Default: FIFO.
-    pub queue_mode: PoolQueueMode,
-
     /// Custom CA certificate(s) in PEM format for server verification.
     /// Only used when the connection string requests TLS
     /// (`ssl-mode=verify_ca` or `ssl-mode=verify_identity`).
@@ -88,7 +52,6 @@ impl From<MysqlStorageConfig> for spark_mysql::MysqlStorageConfig {
             wait_timeout_secs: config.wait_timeout_secs,
             create_timeout_secs: config.create_timeout_secs,
             recycle_timeout_secs: config.recycle_timeout_secs,
-            queue_mode: config.queue_mode.into(),
             root_ca_pem: config.root_ca_pem,
         }
     }
@@ -102,7 +65,6 @@ impl From<spark_mysql::MysqlStorageConfig> for MysqlStorageConfig {
             wait_timeout_secs: config.wait_timeout_secs,
             create_timeout_secs: config.create_timeout_secs,
             recycle_timeout_secs: config.recycle_timeout_secs,
-            queue_mode: config.queue_mode.into(),
             root_ca_pem: config.root_ca_pem,
         }
     }
@@ -161,7 +123,7 @@ pub(crate) fn create_pool(config: &MysqlStorageConfig) -> Result<mysql_async::Po
 pub(super) async fn run_migrations(
     pool: &mysql_async::Pool,
     migrations_table: &str,
-    migrations: &[&[&str]],
+    migrations: &[&[Migration]],
 ) -> Result<(), StorageError> {
     spark_mysql::run_migrations(pool, migrations_table, migrations)
         .await

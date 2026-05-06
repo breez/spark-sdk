@@ -45,10 +45,10 @@ struct Args {
     #[arg(long, value_name = "MULTIPLICITY")]
     pre_optimize: Option<u8>,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "sender_mysql")]
     sender_postgres: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "receiver_mysql")]
     receiver_postgres: Option<String>,
 
     #[arg(long)]
@@ -119,13 +119,6 @@ async fn main() -> Result<()> {
         .without_time()
         .with_env_filter(filter)
         .init();
-
-    if args.sender_postgres.is_some() && args.sender_mysql.is_some() {
-        bail!("--sender-postgres and --sender-mysql are mutually exclusive");
-    }
-    if args.receiver_postgres.is_some() && args.receiver_mysql.is_some() {
-        bail!("--receiver-postgres and --receiver-mysql are mutually exclusive");
-    }
 
     if args.clean_postgres {
         if let Some(conn_str) = &args.sender_postgres {

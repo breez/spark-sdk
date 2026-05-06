@@ -28,7 +28,7 @@ use crate::{
 
 #[cfg(test)]
 use super::base::{MysqlStorageConfig, create_pool};
-use super::base::{map_db_error, run_migrations};
+use super::base::{Migration, map_db_error, run_migrations};
 
 const MIGRATIONS_TABLE: &str = "schema_migrations";
 
@@ -55,168 +55,259 @@ impl MysqlStorage {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn migrations() -> Vec<&'static [&'static str]> {
+    pub(crate) fn migrations() -> Vec<&'static [Migration]> {
         vec![
             // Migration 1: Core tables
             &[
-                "CREATE TABLE IF NOT EXISTS payments (
-                    id VARCHAR(255) NOT NULL PRIMARY KEY,
-                    payment_type VARCHAR(64) NOT NULL,
-                    status VARCHAR(64) NOT NULL,
-                    amount VARCHAR(64) NOT NULL,
-                    fees VARCHAR(64) NOT NULL,
-                    timestamp BIGINT NOT NULL,
-                    method VARCHAR(64) NULL,
-                    withdraw_tx_id VARCHAR(255) NULL,
-                    deposit_tx_id VARCHAR(255) NULL,
-                    spark TINYINT(1) NULL
-                )",
-                "CREATE TABLE IF NOT EXISTS settings (
-                    `key` VARCHAR(255) NOT NULL PRIMARY KEY,
-                    value LONGTEXT NOT NULL
-                )",
-                "CREATE TABLE IF NOT EXISTS unclaimed_deposits (
-                    txid VARCHAR(255) NOT NULL,
-                    vout INT NOT NULL,
-                    amount_sats BIGINT NULL,
-                    claim_error JSON NULL,
-                    refund_tx LONGTEXT NULL,
-                    refund_tx_id VARCHAR(255) NULL,
-                    PRIMARY KEY (txid, vout)
-                )",
-                "CREATE TABLE IF NOT EXISTS payment_metadata (
-                    payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
-                    parent_payment_id VARCHAR(255) NULL,
-                    lnurl_pay_info JSON NULL,
-                    lnurl_withdraw_info JSON NULL,
-                    lnurl_description LONGTEXT NULL,
-                    conversion_info JSON NULL
-                )",
-                "CREATE TABLE IF NOT EXISTS payment_details_lightning (
-                    payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
-                    invoice LONGTEXT NOT NULL,
-                    payment_hash VARCHAR(255) NOT NULL,
-                    destination_pubkey VARCHAR(255) NOT NULL,
-                    description LONGTEXT NULL,
-                    preimage VARCHAR(255) NULL
-                )",
-                "CREATE TABLE IF NOT EXISTS payment_details_token (
-                    payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
-                    metadata JSON NOT NULL,
-                    tx_hash VARCHAR(255) NOT NULL,
-                    invoice_details JSON NULL
-                )",
-                "CREATE TABLE IF NOT EXISTS payment_details_spark (
-                    payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
-                    invoice_details JSON NULL,
-                    htlc_details JSON NULL
-                )",
-                "CREATE TABLE IF NOT EXISTS lnurl_receive_metadata (
-                    payment_hash VARCHAR(255) NOT NULL PRIMARY KEY,
-                    nostr_zap_request LONGTEXT NULL,
-                    nostr_zap_receipt LONGTEXT NULL,
-                    sender_comment LONGTEXT NULL
-                )",
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS payments (
+                        id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        payment_type VARCHAR(64) NOT NULL,
+                        status VARCHAR(64) NOT NULL,
+                        amount VARCHAR(64) NOT NULL,
+                        fees VARCHAR(64) NOT NULL,
+                        timestamp BIGINT NOT NULL,
+                        method VARCHAR(64) NULL,
+                        withdraw_tx_id VARCHAR(255) NULL,
+                        deposit_tx_id VARCHAR(255) NULL,
+                        spark TINYINT(1) NULL
+                    )",
+                ),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS settings (
+                        `key` VARCHAR(255) NOT NULL PRIMARY KEY,
+                        value LONGTEXT NOT NULL
+                    )",
+                ),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS unclaimed_deposits (
+                        txid VARCHAR(255) NOT NULL,
+                        vout INT NOT NULL,
+                        amount_sats BIGINT NULL,
+                        claim_error JSON NULL,
+                        refund_tx LONGTEXT NULL,
+                        refund_tx_id VARCHAR(255) NULL,
+                        PRIMARY KEY (txid, vout)
+                    )",
+                ),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS payment_metadata (
+                        payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        parent_payment_id VARCHAR(255) NULL,
+                        lnurl_pay_info JSON NULL,
+                        lnurl_withdraw_info JSON NULL,
+                        lnurl_description LONGTEXT NULL,
+                        conversion_info JSON NULL
+                    )",
+                ),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS payment_details_lightning (
+                        payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        invoice LONGTEXT NOT NULL,
+                        payment_hash VARCHAR(255) NOT NULL,
+                        destination_pubkey VARCHAR(255) NOT NULL,
+                        description LONGTEXT NULL,
+                        preimage VARCHAR(255) NULL
+                    )",
+                ),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS payment_details_token (
+                        payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        metadata JSON NOT NULL,
+                        tx_hash VARCHAR(255) NOT NULL,
+                        invoice_details JSON NULL
+                    )",
+                ),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS payment_details_spark (
+                        payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        invoice_details JSON NULL,
+                        htlc_details JSON NULL
+                    )",
+                ),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS lnurl_receive_metadata (
+                        payment_hash VARCHAR(255) NOT NULL PRIMARY KEY,
+                        nostr_zap_request LONGTEXT NULL,
+                        nostr_zap_receipt LONGTEXT NULL,
+                        sender_comment LONGTEXT NULL
+                    )",
+                ),
             ],
             // Migration 2: Sync tables
             &[
-                "CREATE TABLE IF NOT EXISTS sync_revision (
-                    id INT NOT NULL PRIMARY KEY DEFAULT 1,
-                    revision BIGINT NOT NULL DEFAULT 0,
-                    CHECK (id = 1)
-                )",
-                "INSERT IGNORE INTO sync_revision (id, revision) VALUES (1, 0)",
-                "CREATE TABLE IF NOT EXISTS sync_outgoing (
-                    record_type VARCHAR(255) NOT NULL,
-                    data_id VARCHAR(255) NOT NULL,
-                    schema_version VARCHAR(64) NOT NULL,
-                    commit_time BIGINT NOT NULL,
-                    updated_fields_json JSON NOT NULL,
-                    revision BIGINT NOT NULL
-                )",
-                "CREATE INDEX idx_sync_outgoing_data_id_record_type ON sync_outgoing(record_type, data_id)",
-                "CREATE TABLE IF NOT EXISTS sync_state (
-                    record_type VARCHAR(255) NOT NULL,
-                    data_id VARCHAR(255) NOT NULL,
-                    schema_version VARCHAR(64) NOT NULL,
-                    commit_time BIGINT NOT NULL,
-                    data JSON NOT NULL,
-                    revision BIGINT NOT NULL,
-                    PRIMARY KEY(record_type, data_id)
-                )",
-                "CREATE TABLE IF NOT EXISTS sync_incoming (
-                    record_type VARCHAR(255) NOT NULL,
-                    data_id VARCHAR(255) NOT NULL,
-                    schema_version VARCHAR(64) NOT NULL,
-                    commit_time BIGINT NOT NULL,
-                    data JSON NOT NULL,
-                    revision BIGINT NOT NULL,
-                    PRIMARY KEY(record_type, data_id, revision)
-                )",
-                "CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision)",
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS sync_revision (
+                        id INT NOT NULL PRIMARY KEY DEFAULT 1,
+                        revision BIGINT NOT NULL DEFAULT 0,
+                        CHECK (id = 1)
+                    )",
+                ),
+                Migration::Sql("INSERT IGNORE INTO sync_revision (id, revision) VALUES (1, 0)"),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS sync_outgoing (
+                        record_type VARCHAR(255) NOT NULL,
+                        data_id VARCHAR(255) NOT NULL,
+                        schema_version VARCHAR(64) NOT NULL,
+                        commit_time BIGINT NOT NULL,
+                        updated_fields_json JSON NOT NULL,
+                        revision BIGINT NOT NULL
+                    )",
+                ),
+                Migration::CreateIndex {
+                    name: "idx_sync_outgoing_data_id_record_type",
+                    table: "sync_outgoing",
+                    columns: "(record_type, data_id)",
+                },
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS sync_state (
+                        record_type VARCHAR(255) NOT NULL,
+                        data_id VARCHAR(255) NOT NULL,
+                        schema_version VARCHAR(64) NOT NULL,
+                        commit_time BIGINT NOT NULL,
+                        data JSON NOT NULL,
+                        revision BIGINT NOT NULL,
+                        PRIMARY KEY(record_type, data_id)
+                    )",
+                ),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS sync_incoming (
+                        record_type VARCHAR(255) NOT NULL,
+                        data_id VARCHAR(255) NOT NULL,
+                        schema_version VARCHAR(64) NOT NULL,
+                        commit_time BIGINT NOT NULL,
+                        data JSON NOT NULL,
+                        revision BIGINT NOT NULL,
+                        PRIMARY KEY(record_type, data_id, revision)
+                    )",
+                ),
+                Migration::CreateIndex {
+                    name: "idx_sync_incoming_revision",
+                    table: "sync_incoming",
+                    columns: "(revision)",
+                },
             ],
             // Migration 3: Indexes
             &[
-                "CREATE INDEX idx_payments_timestamp ON payments(timestamp)",
-                "CREATE INDEX idx_payments_payment_type ON payments(payment_type)",
-                "CREATE INDEX idx_payments_status ON payments(status)",
-                "CREATE INDEX idx_payment_details_lightning_invoice
-                    ON payment_details_lightning(invoice(255))",
-                "CREATE INDEX idx_payment_metadata_parent ON payment_metadata(parent_payment_id)",
+                Migration::CreateIndex {
+                    name: "idx_payments_timestamp",
+                    table: "payments",
+                    columns: "(timestamp)",
+                },
+                Migration::CreateIndex {
+                    name: "idx_payments_payment_type",
+                    table: "payments",
+                    columns: "(payment_type)",
+                },
+                Migration::CreateIndex {
+                    name: "idx_payments_status",
+                    table: "payments",
+                    columns: "(status)",
+                },
+                Migration::CreateIndex {
+                    name: "idx_payment_details_lightning_invoice",
+                    table: "payment_details_lightning",
+                    columns: "(invoice(255))",
+                },
+                Migration::CreateIndex {
+                    name: "idx_payment_metadata_parent",
+                    table: "payment_metadata",
+                    columns: "(parent_payment_id)",
+                },
             ],
             // Migration 4: Add tx_type to token payments
-            &["ALTER TABLE payment_details_token ADD COLUMN tx_type VARCHAR(64) NOT NULL DEFAULT 'transfer'"],
+            &[Migration::AddColumn {
+                table: "payment_details_token",
+                column: "tx_type",
+                definition: "VARCHAR(64) NOT NULL DEFAULT 'transfer'",
+            }],
             // Migration 5: Clear sync tables to force re-sync
             &[
-                "DELETE FROM sync_outgoing",
-                "DELETE FROM sync_incoming",
-                "DELETE FROM sync_state",
-                "UPDATE sync_revision SET revision = 0",
-                "DELETE FROM settings WHERE `key` = 'sync_initial_complete'",
+                Migration::Sql("DELETE FROM sync_outgoing"),
+                Migration::Sql("DELETE FROM sync_incoming"),
+                Migration::Sql("DELETE FROM sync_state"),
+                Migration::Sql("UPDATE sync_revision SET revision = 0"),
+                Migration::Sql("DELETE FROM settings WHERE `key` = 'sync_initial_complete'"),
             ],
             // Migration 6: Add htlc_status and htlc_expiry_time to lightning payments
             &[
-                "ALTER TABLE payment_details_lightning ADD COLUMN htlc_status VARCHAR(64) NOT NULL DEFAULT 'WaitingForPreimage'",
-                "ALTER TABLE payment_details_lightning ADD COLUMN htlc_expiry_time BIGINT NOT NULL DEFAULT 0",
+                Migration::AddColumn {
+                    table: "payment_details_lightning",
+                    column: "htlc_status",
+                    definition: "VARCHAR(64) NOT NULL DEFAULT 'WaitingForPreimage'",
+                },
+                Migration::AddColumn {
+                    table: "payment_details_lightning",
+                    column: "htlc_expiry_time",
+                    definition: "BIGINT NOT NULL DEFAULT 0",
+                },
             ],
             // Migration 7: Backfill htlc_status for existing Lightning payments
             &[
-                "UPDATE payment_details_lightning
-                 SET htlc_status = CASE
-                         WHEN (SELECT status FROM payments WHERE id = payment_id) = 'completed' THEN 'PreimageShared'
-                         WHEN (SELECT status FROM payments WHERE id = payment_id) = 'pending' THEN 'WaitingForPreimage'
-                         ELSE 'Returned'
-                     END",
-                "UPDATE settings
-                 SET value = JSON_SET(value, '$.offset', 0)
-                 WHERE `key` = 'sync_offset' AND value IS NOT NULL",
+                Migration::Sql(
+                    "UPDATE payment_details_lightning
+                     SET htlc_status = CASE
+                             WHEN (SELECT status FROM payments WHERE id = payment_id) = 'completed' THEN 'PreimageShared'
+                             WHEN (SELECT status FROM payments WHERE id = payment_id) = 'pending' THEN 'WaitingForPreimage'
+                             ELSE 'Returned'
+                         END",
+                ),
+                Migration::Sql(
+                    "UPDATE settings
+                     SET value = JSON_SET(value, '$.offset', 0)
+                     WHERE `key` = 'sync_offset' AND value IS NOT NULL",
+                ),
             ],
             // Migration 8: lnurl_receive_metadata preimage column (added then later dropped)
             &[
-                "ALTER TABLE lnurl_receive_metadata ADD COLUMN preimage VARCHAR(255) NULL",
-                "DELETE FROM settings WHERE `key` = 'lnurl_metadata_updated_after'",
+                Migration::AddColumn {
+                    table: "lnurl_receive_metadata",
+                    column: "preimage",
+                    definition: "VARCHAR(255) NULL",
+                },
+                Migration::Sql("DELETE FROM settings WHERE `key` = 'lnurl_metadata_updated_after'"),
             ],
             // Migration 9: Clear cached lightning address (schema changed)
-            &["DELETE FROM settings WHERE `key` = 'lightning_address'"],
+            &[Migration::Sql(
+                "DELETE FROM settings WHERE `key` = 'lightning_address'",
+            )],
             // Migration 10: Index on payment_hash for JOIN with lnurl_receive_metadata
-            &["CREATE INDEX idx_payment_details_lightning_payment_hash
-                ON payment_details_lightning(payment_hash)"],
+            &[Migration::CreateIndex {
+                name: "idx_payment_details_lightning_payment_hash",
+                table: "payment_details_lightning",
+                columns: "(payment_hash)",
+            }],
             // Migration 11: Contacts table
-            &["CREATE TABLE IF NOT EXISTS contacts (
-                    id VARCHAR(255) NOT NULL PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    payment_identifier VARCHAR(255) NOT NULL,
-                    created_at BIGINT NOT NULL,
-                    updated_at BIGINT NOT NULL
-                )"],
+            &[Migration::Sql(
+                "CREATE TABLE IF NOT EXISTS contacts (
+                        id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        name VARCHAR(255) NOT NULL,
+                        payment_identifier VARCHAR(255) NOT NULL,
+                        created_at BIGINT NOT NULL,
+                        updated_at BIGINT NOT NULL
+                    )",
+            )],
             // Migration 12: Drop preimage column from lnurl_receive_metadata
-            &["ALTER TABLE lnurl_receive_metadata DROP COLUMN preimage"],
+            &[Migration::DropColumn {
+                table: "lnurl_receive_metadata",
+                column: "preimage",
+            }],
             // Migration 13: Clear cached lightning address again (format changed)
-            &["DELETE FROM settings WHERE `key` = 'lightning_address'"],
+            &[Migration::Sql(
+                "DELETE FROM settings WHERE `key` = 'lightning_address'",
+            )],
             // Migration 14: Add is_mature to unclaimed_deposits
-            &["ALTER TABLE unclaimed_deposits ADD COLUMN is_mature TINYINT(1) NOT NULL DEFAULT 1"],
+            &[Migration::AddColumn {
+                table: "unclaimed_deposits",
+                column: "is_mature",
+                definition: "TINYINT(1) NOT NULL DEFAULT 1",
+            }],
             // Migration 15: Add conversion_status to payment_metadata
-            &["ALTER TABLE payment_metadata ADD COLUMN conversion_status VARCHAR(64) NULL"],
+            &[Migration::AddColumn {
+                table: "payment_metadata",
+                column: "conversion_status",
+                definition: "VARCHAR(64) NULL",
+            }],
         ]
     }
 }

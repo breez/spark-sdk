@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use crate::config::MysqlStorageConfig;
 use crate::error::MysqlError;
-use crate::migrations::run_migrations;
+use crate::migrations::{Migration, run_migrations};
 use crate::pool::create_pool;
 
 /// Name of the schema migrations table for `MysqlTreeStore`.
@@ -335,47 +335,66 @@ impl MysqlTreeStore {
         run_migrations(&self.pool, TREE_MIGRATIONS_TABLE, &Self::migrations()).await
     }
 
-    fn migrations() -> Vec<&'static [&'static str]> {
+    fn migrations() -> Vec<&'static [Migration]> {
         vec![
             // Migration 1: Initial tree tables.
             //
             // Reservations are referenced via FK so that ON DELETE SET NULL
             // releases the leaves automatically when a reservation is dropped.
             &[
-                "CREATE TABLE IF NOT EXISTS tree_reservations (
-                    id VARCHAR(255) NOT NULL PRIMARY KEY,
-                    purpose VARCHAR(64) NOT NULL,
-                    pending_change_amount BIGINT NOT NULL DEFAULT 0,
-                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                )",
-                "CREATE TABLE IF NOT EXISTS tree_leaves (
-                    id VARCHAR(255) NOT NULL PRIMARY KEY,
-                    status VARCHAR(64) NOT NULL,
-                    is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
-                    reservation_id VARCHAR(255) NULL,
-                    data JSON NOT NULL,
-                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                    added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                    CONSTRAINT fk_tree_leaves_reservation FOREIGN KEY (reservation_id)
-                        REFERENCES tree_reservations(id) ON DELETE SET NULL
-                )",
-                "CREATE TABLE IF NOT EXISTS tree_spent_leaves (
-                    leaf_id VARCHAR(255) NOT NULL PRIMARY KEY,
-                    spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                )",
-                "CREATE INDEX idx_tree_leaves_available
-                    ON tree_leaves(status, is_missing_from_operators)",
-                "CREATE INDEX idx_tree_leaves_reservation ON tree_leaves(reservation_id)",
-                "CREATE INDEX idx_tree_leaves_added_at ON tree_leaves(added_at)",
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS tree_reservations (
+                        id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        purpose VARCHAR(64) NOT NULL,
+                        pending_change_amount BIGINT NOT NULL DEFAULT 0,
+                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                    )",
+                ),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS tree_leaves (
+                        id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        status VARCHAR(64) NOT NULL,
+                        is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
+                        reservation_id VARCHAR(255) NULL,
+                        data JSON NOT NULL,
+                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                        added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                        CONSTRAINT fk_tree_leaves_reservation FOREIGN KEY (reservation_id)
+                            REFERENCES tree_reservations(id) ON DELETE SET NULL
+                    )",
+                ),
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS tree_spent_leaves (
+                        leaf_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                    )",
+                ),
+                Migration::CreateIndex {
+                    name: "idx_tree_leaves_available",
+                    table: "tree_leaves",
+                    columns: "(status, is_missing_from_operators)",
+                },
+                Migration::CreateIndex {
+                    name: "idx_tree_leaves_reservation",
+                    table: "tree_leaves",
+                    columns: "(reservation_id)",
+                },
+                Migration::CreateIndex {
+                    name: "idx_tree_leaves_added_at",
+                    table: "tree_leaves",
+                    columns: "(added_at)",
+                },
             ],
             // Migration 2: Swap status tracking.
             &[
-                "CREATE TABLE IF NOT EXISTS tree_swap_status (
-                    id INT NOT NULL PRIMARY KEY DEFAULT 1,
-                    last_completed_at DATETIME(6) NULL,
-                    CHECK (id = 1)
-                )",
-                "INSERT IGNORE INTO tree_swap_status (id) VALUES (1)",
+                Migration::Sql(
+                    "CREATE TABLE IF NOT EXISTS tree_swap_status (
+                        id INT NOT NULL PRIMARY KEY DEFAULT 1,
+                        last_completed_at DATETIME(6) NULL,
+                        CHECK (id = 1)
+                    )",
+                ),
+                Migration::Sql("INSERT IGNORE INTO tree_swap_status (id) VALUES (1)"),
             ],
             // Migration 3: Promote `value` out of the JSON `data` column into a
             // dedicated BIGINT. JSON_EXTRACT/JSON_UNQUOTE on every reservation
@@ -384,13 +403,24 @@ impl MysqlTreeStore {
             // `(status, is_missing_from_operators, reservation_id, value)` so
             // the slim selection in `try_reserve_leaves` is index-only.
             &[
-                "ALTER TABLE tree_leaves
-                    ADD COLUMN value BIGINT NOT NULL DEFAULT 0",
-                "UPDATE tree_leaves
-                    SET value = CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
-                    WHERE value = 0",
-                "CREATE INDEX idx_tree_leaves_slim
-                    ON tree_leaves(status, is_missing_from_operators, reservation_id, value)",
+                Migration::AddColumn {
+                    table: "tree_leaves",
+                    column: "value",
+                    definition: "BIGINT NOT NULL DEFAULT 0",
+                },
+                // Backfill existing rows from the JSON. Re-running this is a
+                // no-op because by then `value` is already populated and the
+                // `WHERE value = 0` predicate filters everything out.
+                Migration::Sql(
+                    "UPDATE tree_leaves
+                        SET value = CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
+                        WHERE value = 0",
+                ),
+                Migration::CreateIndex {
+                    name: "idx_tree_leaves_slim",
+                    table: "tree_leaves",
+                    columns: "(status, is_missing_from_operators, reservation_id, value)",
+                },
             ],
         ]
     }

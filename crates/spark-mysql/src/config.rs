@@ -4,21 +4,6 @@
 /// Mirrors the deadpool default of `num_cpus * 4` reasonably without depending on `num_cpus`.
 const DEFAULT_MAX_POOL_SIZE: u32 = 32;
 
-/// Queue mode for the connection pool.
-///
-/// Determines the order in which connections are retrieved from the pool.
-/// Currently informational for the `MySQL` backend (`mysql_async`'s pool does not
-/// expose the same FIFO/LIFO toggle as deadpool, so this is recorded but not
-/// applied). Kept for API parity with the `PostgreSQL` backend.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PoolQueueMode {
-    /// First In, First Out (default).
-    #[default]
-    Fifo,
-    /// Last In, First Out.
-    Lifo,
-}
-
 /// Configuration for `MySQL` storage connection pool.
 #[derive(Clone, Debug)]
 pub struct MysqlStorageConfig {
@@ -43,11 +28,6 @@ pub struct MysqlStorageConfig {
     /// `None` means connections are not recycled based on idle time.
     pub recycle_timeout_secs: Option<u64>,
 
-    /// Queue mode for retrieving connections from the pool.
-    /// Kept for API parity with the `PostgreSQL` backend; `mysql_async` does not
-    /// expose this knob today.
-    pub queue_mode: PoolQueueMode,
-
     /// Custom CA certificate(s) in PEM format for server verification.
     /// Only used when the connection string requests TLS (`ssl-mode=verify_ca`,
     /// `ssl-mode=verify_identity`).
@@ -64,7 +44,6 @@ impl MysqlStorageConfig {
             wait_timeout_secs: None,
             create_timeout_secs: None,
             recycle_timeout_secs: None,
-            queue_mode: PoolQueueMode::default(),
             root_ca_pem: None,
         }
     }
