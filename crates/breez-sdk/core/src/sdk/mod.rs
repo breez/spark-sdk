@@ -200,7 +200,54 @@ pub fn default_config(network: Network) -> Config {
         },
         stable_balance_config: None,
         max_concurrent_claims: 4,
-        spark_config: None,
+        spark_config: Some(default_spark_config(network)),
+    }
+}
+
+/// Builds the default [`SparkConfig`](crate::models::SparkConfig) for the given network.
+///
+/// Surfaced through [`default_config`] as `Config::spark_config` so callers can read the
+/// baked-in operator and SSP endpoints and selectively override individual fields (e.g. to
+/// point at a staging environment) before passing the [`Config`] to [`connect`].
+fn default_spark_config(network: Network) -> crate::models::SparkConfig {
+    use crate::models::{SparkSigningOperator, SparkSspConfig};
+
+    let wallet_config = spark_wallet::SparkWalletConfig::default_config(network.into());
+
+    let coordinator_identifier = hex::encode(
+        wallet_config
+            .operator_pool
+            .get_coordinator()
+            .identifier
+            .serialize(),
+    );
+
+    let signing_operators = wallet_config
+        .operator_pool
+        .get_all_operators()
+        .map(|op| SparkSigningOperator {
+            id: u32::try_from(op.id).expect("operator id fits in u32"),
+            identifier: hex::encode(op.identifier.serialize()),
+            address: op.address.clone(),
+            identity_public_key: hex::encode(op.identity_public_key.serialize()),
+        })
+        .collect();
+
+    let ssp = &wallet_config.service_provider_config;
+
+    crate::models::SparkConfig {
+        coordinator_identifier,
+        threshold: wallet_config.split_secret_threshold,
+        signing_operators,
+        ssp_config: SparkSspConfig {
+            base_url: ssp.base_url.clone(),
+            identity_public_key: hex::encode(ssp.identity_public_key.serialize()),
+            schema_endpoint: ssp.schema_endpoint.clone(),
+        },
+        expected_withdraw_bond_sats: wallet_config.tokens_config.expected_withdraw_bond_sats,
+        expected_withdraw_relative_block_locktime: wallet_config
+            .tokens_config
+            .expected_withdraw_relative_block_locktime,
     }
 }
 
