@@ -180,6 +180,18 @@ export interface PasskeyProviderOptions {
      * is not allowed there).
      */
     hints?: ('client-device' | 'security-key' | 'hybrid')[];
+
+    /**
+     * Default WebAuthn `timeout` (milliseconds) applied to every
+     * create() and get() ceremony. The value surfaces as a hint to
+     * the user agent; platforms still apply their own internal cap
+     * (60s on iOS, similar on Android Credential Manager). Pass a
+     * value 5 to 10 seconds under the platform cap so a host-side
+     * "looks like a timeout" heuristic can fire before the OS
+     * tears the prompt down. When undefined (default), the platform
+     * default applies.
+     */
+    defaultTimeoutMs?: number;
 }
 
 /**
@@ -214,6 +226,26 @@ export declare class PasskeyProvider {
      * credential matching the RP.
      */
     allowCredentialIds: Uint8Array[];
+
+    /**
+     * Settable `AbortSignal`. When set before a derivePrfSeed /
+     * derivePrfSeeds / createPasskey invocation, threaded into the
+     * underlying `navigator.credentials.{get,create}` call so the
+     * caller can abort an in-flight ceremony.
+     *
+     * Mirror of the `allowCredentialIds` / `onAssertionCredentialId`
+     * mutate-the-singleton pattern: per-call value, set before the
+     * call, optionally cleared after. Necessary because the SDK's
+     * Rust-side Passkey methods (setupWallet / getWallet) drive the
+     * provider via UniFFI without a generic signal-passing slot, so
+     * the host has no other place to attach the signal.
+     *
+     * Aborting unsettles the WebAuthn promise per spec; on iOS Safari
+     * the OS modal does NOT visually close in current versions, but
+     * the JS promise rejects with `AbortError` so the host can free
+     * its own state machine.
+     */
+    currentSignal?: AbortSignal;
 
     /**
      * Optional callback fired with the credential ID and user handle
