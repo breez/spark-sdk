@@ -327,7 +327,7 @@ impl SdkBuilder {
     /// Pass the same `Arc` to multiple `SdkBuilder` instances to reuse one set
     /// of gRPC channels to the Spark operators across many SDK instances. All
     /// SDKs sharing a connection manager must be configured for the same
-    /// network and operator pool. See [`ConnectionManager`] for details.
+    /// network and operator pool.
     ///
     /// # Arguments
     /// - `connection_manager`: The shared connection manager.

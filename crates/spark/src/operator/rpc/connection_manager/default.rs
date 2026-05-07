@@ -2,17 +2,11 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use crate::operator::{
-    OperatorConfig,
-    rpc::transport::grpc_client::{GrpcClient, Transport},
-};
+use crate::operator::OperatorConfig;
+use crate::operator::rpc::error::Result;
+use crate::operator::rpc::transport::grpc_client::{GrpcClient, Transport};
 
-use super::error::Result;
-
-#[macros::async_trait]
-pub trait ConnectionManager: Send + Sync {
-    async fn get_transport(&self, operator: &OperatorConfig) -> Result<Transport>;
-}
+use super::ConnectionManager;
 
 pub struct DefaultConnectionManager {
     connections_map: RwLock<HashMap<String, Transport>>,
@@ -33,7 +27,7 @@ impl DefaultConnectionManager {
                 .install_default()
                 .is_err()
             {
-                tracing::warn!("Failed to install rustls crypto provider, ignoring error");
+                tracing::debug!("Failed to install rustls crypto provider, ignoring error");
             }
         }
         Self {

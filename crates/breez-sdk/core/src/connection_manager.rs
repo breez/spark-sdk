@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use platform_utils::{HttpClient, create_http_client};
-use spark_wallet::{ConnectionManager as InnerConnectionManager, DefaultConnectionManager};
+use spark_wallet::{
+    BalancedConnectionManager, ConnectionManager as InnerConnectionManager,
+    DefaultConnectionManager,
+};
 
 use crate::default_user_agent;
 
@@ -46,14 +49,12 @@ pub fn new_ssp_connection_manager(user_agent: Option<String>) -> Arc<SspConnecti
 /// Construct one via [`new_connection_manager`] and pass the same `Arc` to
 /// multiple [`SdkBuilder`](crate::SdkBuilder)s via
 /// [`SdkBuilder::with_connection_manager`](crate::SdkBuilder::with_connection_manager).
-/// Every SDK that shares a `ConnectionManager` reuses the same HTTP/2-multiplexed
-/// channels to the operators, which is meaningful for server-side deployments
-/// hosting many wallets in one process.
+/// Connections close when the last `Arc<ConnectionManager>` is dropped;
+/// [`BreezSdk::disconnect`](crate::BreezSdk::disconnect) does not affect them.
 ///
 /// All SDK instances sharing a `ConnectionManager` must be configured for the
-/// same network and operator pool: the cache is keyed only by operator address,
-/// so the TLS settings and user agent of the first SDK to connect are reused
-/// for everyone afterwards.
+/// same network and operator pool. The TLS settings and user agent of the
+/// first SDK to connect to a given operator are reused for everyone afterwards.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct ConnectionManager {
     pub(crate) inner: Arc<dyn InnerConnectionManager>,
@@ -61,12 +62,16 @@ pub struct ConnectionManager {
 
 /// Creates a new shareable [`ConnectionManager`].
 ///
-/// Connections close when the last `Arc<ConnectionManager>` is dropped;
-/// [`BreezSdk::disconnect`](crate::BreezSdk::disconnect) does not affect it.
+/// `connections_per_operator` controls per-operator connection pooling:
+/// `None` keeps a single connection per operator (suitable for almost every
+/// deployment); `Some(n)` opens `n` connections per operator and balances
+/// requests across them.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[must_use]
-pub fn new_connection_manager() -> Arc<ConnectionManager> {
-    Arc::new(ConnectionManager {
-        inner: Arc::new(DefaultConnectionManager::new()),
-    })
+pub fn new_connection_manager(connections_per_operator: Option<u32>) -> Arc<ConnectionManager> {
+    let inner: Arc<dyn InnerConnectionManager> = match connections_per_operator {
+        Some(n) if n > 1 => Arc::new(BalancedConnectionManager::new(n)),
+        _ => Arc::new(DefaultConnectionManager::new()),
+    };
+    Arc::new(ConnectionManager { inner })
 }
