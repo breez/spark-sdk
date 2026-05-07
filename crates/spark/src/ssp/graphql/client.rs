@@ -34,7 +34,7 @@ use crate::ssp::{
 
 /// GraphQL client for interacting with the Spark server
 pub struct GraphQLClient {
-    client: Box<dyn HttpClient>,
+    client: Arc<dyn HttpClient>,
     base_url: String,
     schema_endpoint: String,
     signer: Arc<dyn Signer>,
@@ -44,19 +44,37 @@ pub struct GraphQLClient {
 }
 
 impl GraphQLClient {
-    /// Create a new GraphQLClient with the given configuration, and signer
+    /// Create a new GraphQLClient with the given configuration, and signer.
+    ///
+    /// Builds an internal HTTP client. Use [`GraphQLClient::new_with_client`] to
+    /// share a pooled HTTP client across SDK instances.
     pub fn new(
         config: GraphQLClientConfig,
         signer: Arc<dyn Signer>,
         session_manager: Arc<dyn SessionManager>,
     ) -> Self {
+        let user_agent = config.user_agent.clone().unwrap_or_else(default_user_agent);
+        let client = create_http_client(Some(&user_agent));
+        Self::new_with_client(config, signer, session_manager, client)
+    }
+
+    /// Create a new GraphQLClient using a shared HTTP client.
+    ///
+    /// All SDK instances built with the same `client` share its underlying
+    /// pooled `reqwest::Client`. The `user_agent` field on `config` is ignored
+    /// — the user-agent is whatever the shared client was constructed with.
+    pub fn new_with_client(
+        config: GraphQLClientConfig,
+        signer: Arc<dyn Signer>,
+        session_manager: Arc<dyn SessionManager>,
+        client: Arc<dyn HttpClient>,
+    ) -> Self {
         let schema_endpoint = config
             .schema_endpoint
             .unwrap_or_else(|| String::from("graphql/spark/2025-03-19"));
 
-        let user_agent = config.user_agent.unwrap_or_else(default_user_agent);
         Self {
-            client: create_http_client(Some(&user_agent)),
+            client,
             base_url: config.base_url,
             schema_endpoint,
             signer,
@@ -716,7 +734,7 @@ mod tests {
             .expect("set session");
 
         GraphQLClient {
-            client: Box::new(http),
+            client: Arc::new(http),
             base_url: "http://test.invalid".to_string(),
             schema_endpoint: "graphql".to_string(),
             signer: Arc::new(create_test_signer()),

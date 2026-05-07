@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use platform_utils::HttpClient;
 use spark::{
     operator::rpc::{ConnectionManager, DefaultConnectionManager},
     services::TransferObserver,
@@ -20,6 +21,7 @@ pub struct WalletBuilder {
     tree_store: Option<Arc<dyn TreeStore>>,
     token_output_store: Option<Arc<dyn TokenOutputStore>>,
     connection_manager: Option<Arc<dyn ConnectionManager>>,
+    ssp_http_client: Option<Arc<dyn HttpClient>>,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
     with_background_processing: bool,
 }
@@ -34,6 +36,7 @@ impl WalletBuilder {
             tree_store: None,
             token_output_store: None,
             connection_manager: None,
+            ssp_http_client: None,
             transfer_observer: None,
             with_background_processing: true,
         }
@@ -77,6 +80,15 @@ impl WalletBuilder {
         self
     }
 
+    /// Sets a shared HTTP client to use for SSP GraphQL traffic. When the same
+    /// client is passed to multiple wallets in one process, they share the
+    /// underlying `reqwest::Client` (and its h2 connection pool).
+    #[must_use]
+    pub fn with_ssp_http_client(mut self, ssp_http_client: Arc<dyn HttpClient>) -> Self {
+        self.ssp_http_client = Some(ssp_http_client);
+        self
+    }
+
     #[must_use]
     pub fn with_transfer_observer(mut self, transfer_observer: Arc<dyn TransferObserver>) -> Self {
         self.transfer_observer = Some(transfer_observer);
@@ -101,6 +113,7 @@ impl WalletBuilder {
                 .unwrap_or(Arc::new(InMemoryTokenOutputStore::default())),
             self.connection_manager
                 .unwrap_or(Arc::new(DefaultConnectionManager::new())),
+            self.ssp_http_client,
             self.transfer_observer,
             self.with_background_processing,
             self.cancellation_token,

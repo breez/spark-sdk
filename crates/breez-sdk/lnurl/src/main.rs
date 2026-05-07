@@ -239,6 +239,7 @@ where
             Arc::new(InMemoryTokenOutputStore::default()),
             Arc::clone(&connection_manager),
             None,
+            None,
             true,
             None,
         )

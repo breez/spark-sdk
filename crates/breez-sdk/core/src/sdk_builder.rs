@@ -75,6 +75,7 @@ pub struct SdkBuilder {
     payment_observer: Option<Arc<dyn PaymentObserver>>,
     tree_store: Option<Arc<dyn TreeStore>>,
     token_output_store: Option<Arc<dyn TokenOutputStore>>,
+    ssp_connection_manager: Option<Arc<crate::SspConnectionManager>>,
 }
 
 impl SdkBuilder {
@@ -108,6 +109,7 @@ impl SdkBuilder {
             payment_observer: None,
             tree_store: None,
             token_output_store: None,
+            ssp_connection_manager: None,
         }
     }
 
@@ -134,6 +136,7 @@ impl SdkBuilder {
             payment_observer: None,
             tree_store: None,
             token_output_store: None,
+            ssp_connection_manager: None,
         }
     }
 
@@ -230,7 +233,7 @@ impl SdkBuilder {
             url,
             self.config.network,
             5,
-            Box::new(DefaultHttpClient::default()),
+            Arc::new(DefaultHttpClient::default()),
             credentials.map(|c| BasicAuth::new(c.username, c.password)),
             api_type,
         )));
@@ -295,6 +298,23 @@ impl SdkBuilder {
         token_output_store: Arc<dyn TokenOutputStore>,
     ) -> Self {
         self.token_output_store = Some(token_output_store);
+        self
+    }
+
+    /// Reuses a shared SSP connection across SDK instances.
+    ///
+    /// Pass the same [`SspConnectionManager`](crate::SspConnectionManager) to every
+    /// `SdkBuilder` whose SSP traffic should share a single underlying
+    /// `reqwest::Client` (and its HTTP/2 connection pool). Useful for
+    /// multi-tenant servers running many SDK instances in one process.
+    ///
+    /// If not set, each SDK instance constructs its own internal HTTP client.
+    #[must_use]
+    pub fn with_ssp_connection_manager(
+        mut self,
+        manager: Arc<crate::SspConnectionManager>,
+    ) -> Self {
+        self.ssp_connection_manager = Some(manager);
         self
     }
 
@@ -392,13 +412,14 @@ impl SdkBuilder {
         let chain_service = if let Some(service) = self.chain_service {
             service
         } else {
-            let inner_client = DefaultHttpClient::default();
+            let inner_client: Arc<dyn platform_utils::HttpClient> =
+                Arc::new(DefaultHttpClient::default());
             match self.config.network {
                 Network::Mainnet => Arc::new(RestClientChainService::new(
                     "https://blockstream.info/api".to_string(),
                     self.config.network,
                     5,
-                    Box::new(inner_client),
+                    inner_client,
                     None,
                     ChainApiType::Esplora,
                 )),
@@ -406,7 +427,7 @@ impl SdkBuilder {
                     "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
                     self.config.network,
                     5,
-                    Box::new(inner_client),
+                    inner_client,
                     match (
                         std::env::var("CHAIN_SERVICE_USERNAME"),
                         std::env::var("CHAIN_SERVICE_PASSWORD"),
@@ -643,6 +664,10 @@ impl SdkBuilder {
         }
         if let Some(token_output_store) = token_output_store {
             wallet_builder = wallet_builder.with_token_output_store(token_output_store);
+        }
+        if let Some(ssp_connection_manager) = &self.ssp_connection_manager {
+            wallet_builder =
+                wallet_builder.with_ssp_http_client(ssp_connection_manager.client.clone());
         }
         let spark_wallet = Arc::new(wallet_builder.build().await?);
 

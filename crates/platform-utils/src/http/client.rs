@@ -12,10 +12,23 @@ pub struct ReqwestHttpClient {
 
 impl ReqwestHttpClient {
     /// Create a new `ReqwestHttpClient` with an optional user agent.
+    ///
+    /// On native targets the underlying `reqwest::Client` is built with conservative
+    /// pool tuning suited to long-lived shared use: uncapped idle keep-alive,
+    /// 90s idle timeout, 60s TCP keepalive, and `TCP_NODELAY`. On WASM the
+    /// browser owns connection management so these knobs aren't exposed.
     pub fn new(user_agent: Option<String>) -> Self {
         let mut builder = reqwest::Client::builder();
         if let Some(ua) = user_agent {
             builder = builder.user_agent(ua);
+        }
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        {
+            builder = builder
+                .pool_max_idle_per_host(usize::MAX)
+                .pool_idle_timeout(Duration::from_secs(90))
+                .tcp_keepalive(Some(Duration::from_mins(1)))
+                .tcp_nodelay(true);
         }
         let client = match builder.build() {
             Ok(client) => client,

@@ -3,6 +3,7 @@
 //! Uses reqwest on both native and WASM targets.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -135,6 +136,6 @@ pub trait HttpClient: Send + Sync {
 }
 
 /// Create a new HTTP client with the given user agent.
-pub fn create_http_client(user_agent: Option<&str>) -> Box<dyn HttpClient> {
-    Box::new(ReqwestHttpClient::new(user_agent.map(String::from)))
+pub fn create_http_client(user_agent: Option<&str>) -> Arc<dyn HttpClient> {
+    Arc::new(ReqwestHttpClient::new(user_agent.map(String::from)))
 }

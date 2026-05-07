@@ -226,6 +226,20 @@ impl SdkBuilder {
         self
     }
 
+    /// Reuses a shared SSP connection across SDK instances. Pass the same
+    /// manager to every `SdkBuilder` whose SSP traffic should share an
+    /// underlying HTTP client.
+    #[wasm_bindgen(js_name = "withSspConnectionManager")]
+    pub fn with_ssp_connection_manager(
+        mut self,
+        manager: &crate::connection_manager::SspConnectionManager,
+    ) -> Self {
+        self.builder = self
+            .builder
+            .with_ssp_connection_manager(manager.inner.clone());
+        self
+    }
+
     #[wasm_bindgen(js_name = "build")]
     pub async fn build(mut self) -> WasmResult<BreezSdk> {
         match (

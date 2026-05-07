@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
+use platform_utils::HttpClient;
 
 use crate::{
     session_manager::SessionManager,
@@ -21,7 +22,7 @@ pub struct ServiceProvider {
 }
 
 impl ServiceProvider {
-    /// Create a new GraphQLClient with the given configuration and signer
+    /// Create a new GraphQLClient with the given configuration and signer.
     pub fn new(
         config: ServiceProviderConfig,
         signer: Arc<dyn Signer>,
@@ -30,6 +31,26 @@ impl ServiceProvider {
         Self {
             identity_public_key: config.identity_public_key,
             gql_client: GraphQLClient::new(config.into(), signer, session_manager),
+        }
+    }
+
+    /// Like [`ServiceProvider::new`], but uses a shared HTTP client so the
+    /// underlying `reqwest::Client` (and its connection pool) is reused across
+    /// SDK instances.
+    pub fn new_with_client(
+        config: ServiceProviderConfig,
+        signer: Arc<dyn Signer>,
+        session_manager: Arc<dyn SessionManager>,
+        http_client: Arc<dyn HttpClient>,
+    ) -> Self {
+        Self {
+            identity_public_key: config.identity_public_key,
+            gql_client: GraphQLClient::new_with_client(
+                config.into(),
+                signer,
+                session_manager,
+                http_client,
+            ),
         }
     }
 

@@ -1,3 +1,4 @@
+mod connection_manager;
 mod error;
 mod event;
 mod issuer;
