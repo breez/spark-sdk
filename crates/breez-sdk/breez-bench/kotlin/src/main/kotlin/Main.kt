@@ -513,6 +513,7 @@ fun main(args: Array<String>) {
         "server" -> runServer(opts)
         "fund" -> fundTreasurer(opts)
         "seed-senders" -> seedSenders(opts)
+        "loadgen" -> runLoadGen(opts)
         null, "help" -> {
             println(
                 """
@@ -532,8 +533,11 @@ fun main(args: Array<String>) {
                   seed-senders  One-shot top-up of the K reserved sender wallets from
                                 the treasurer (Spark transfers). Idempotent — only
                                 refills senders whose balance is below --min-sats.
+                  loadgen       Open-loop HTTP load generator against the bench server.
+                                Dispatches at --target-rps regardless of completion;
+                                surfaces server backpressure as in-flight queue growth.
 
-                Options:
+                Options (server / fund / seed-senders modes):
                   --mysql-url=mysql://user:pass@host:port/db   MySQL endpoint, including database name
                   --master-secret=<string>                     Master secret for HMAC seed derivation
                                                                (or set MASTER_SECRET env var)
@@ -541,9 +545,23 @@ fun main(args: Array<String>) {
                   --port=<port>                                (server) HTTP listen port (default: 8080)
                   --target-sats=<N>                            (fund) Treasurer balance target (default: 5_000_000)
                                                                (seed-senders) Per-sender top-up target (default: 50_000)
-                  --senders=<K>                                (seed-senders) Number of sender wallets (default: 50)
+                  --senders=<K>                                (seed-senders, loadgen) Number of sender wallets (default: 50)
                   --min-sats=<N>                               (seed-senders) Refill threshold per sender (default: 10_000)
                   --parallelism=<N>                            (seed-senders) Concurrent top-ups (default: 5)
+
+                Options (loadgen mode):
+                  --base-url=<url>                             Bench server base URL (default: http://localhost:8080)
+                  --target-rps=<R>                             Required. Open-loop dispatch rate (e.g. 100, 250.5)
+                  --users=<N>                                  Workload pool size for /info+/receive user-ids (default: 10000)
+                  --mix=info=A,receive=B,send=C                Op weights (any positive numbers; default: info=40,receive=30,send=30)
+                  --user-distribution=uniform|zipf             Workload pool sampling (default: uniform)
+                  --zipf-skew=<s>                              Zipf exponent (default: 1.0)
+                  --duration=<10m|60s|1h|...>                  Required. Total run duration.
+                  --warmup-secs=<N>                            Mark first N seconds of samples as warmup (default: 60)
+                  --payment-sats=<N>                           Sats per /send (default: 1)
+                  --max-in-flight=<N>                          Hard cap; dispatch records 'dropped' if exceeded (default: 5000)
+                  --run-id=<id>                                Defaults to filesystem-safe ISO-8601 timestamp
+                  --out-dir=<path>                             Defaults to out/<run-id>/
                 """.trimIndent()
             )
         }

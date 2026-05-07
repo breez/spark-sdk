@@ -14,7 +14,10 @@ Sibling of `../js/concurrent_perf.js` (the WASM/Node version).
 - **Phase 3 (funding pipeline)**: implemented — `fund` (treasurer
   top-up via faucet) and `seed-senders` (one-shot top-up of K sender
   wallets from treasurer). Both validated end-to-end on regtest.
-- Phases 4–9: pending.
+- **Phase 4 (load generator)**: implemented — open-loop HTTP load
+  generator that dispatches at a target RPS regardless of completion,
+  emits per-request JSONL, prints periodic progress.
+- Phases 5–9: pending.
 
 ## Funding flow
 
@@ -183,6 +186,39 @@ SENDERS=50 MIN_SATS=10000 TARGET_SATS=50000 \
 ```
 
 Output: `[seed] OK  funded=N  skipped=M` summarises the work done.
+
+## Load generator (Phase 4)
+
+Open-loop HTTP load generator. Dispatches a new request every `1/RPS`
+seconds regardless of whether earlier requests have completed —
+deliberately chosen over closed-loop (fixed concurrency) so that
+backpressure surfaces as in-flight queue growth and elevated latency,
+which is the signal partners need to interpret the headline numbers.
+
+- Picks senders round-robin from `__sender_0__` … `__sender_{K-1}__`
+  for `/send`; the destination is the treasurer's Spark address
+  (fetched once from the bench server at startup).
+- Picks `/info` and `/receive` user-ids from the workload pool
+  (`u0` … `u{N-1}`) by uniform or zipf sampling.
+- Per-request JSONL written to `out/<run-id>/latency.jsonl` (per-line
+  flush so the file is readable while the run is in flight).
+- Hard cap on in-flight requests (default 5000); over-cap dispatches
+  are recorded as `dropped:true` in the JSONL — surfaces "load gen
+  itself can't keep up at this rate."
+- Periodic progress logger every 5s while dispatching + during drain.
+
+```bash
+TARGET_RPS=100 DURATION=2m \
+  USERS=10000 \
+  MIX='info=40,receive=30,send=30' \
+  DIST=uniform \
+  WARMUP_SECS=60 \
+  SENDERS=50 \
+  PAYMENT_SATS=1 \
+  make loadgen
+```
+
+End-of-run summary: `[loadgen] dispatched=N  dropped=M  actual_rps=R`.
 
 ## Notes
 
