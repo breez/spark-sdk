@@ -103,9 +103,14 @@ By implementing the Payment Observer interface you can be notified before a paym
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_connection_manager">API docs</a>
 </h2>
 
-A Connection Manager can be shared across SDK instances so they reuse the same gRPC connections to the Spark operators instead of opening a new set per user.
+A Connection Manager owns the gRPC channels to the Spark operators. By default each SDK instance builds its own. Server processes hosting many wallets at once can share a single Connection Manager between every SDK, so they reuse the same channels instead of each opening a fresh set.
 
-Construct one Connection Manager via {{#name new_connection_manager}} and pass it to each {{#name SdkBuilder}} via {{#name with_connection_manager}}. Connections close when the last reference to the Connection Manager is dropped; calling {{#name disconnect}} on an SDK instance does not affect it.
+Construct one via {{#name new_connection_manager}} and pass it to each {{#name SdkBuilder}} via {{#name with_connection_manager}}. Connections close when the last reference to the Connection Manager is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
+
+The `max_tenants_per_connection` argument decides how many SDKs share each underlying connection to a given operator:
+
+- `None` — one connection per operator, multiplexed across every SDK sharing this manager. The right choice for almost every deployment.
+- `Some(n)` — opens an additional connection for every `n` SDKs sharing this manager. Worth setting only if the single shared connection has become a bottleneck — for example, latency that climbs as more SDKs connect at once, or operators deployed behind an L7 load balancer where you want client-side fan-out across backend instances. `100` is a reasonable starting point. The pool grows as more SDKs register; it does not shrink when SDKs disconnect.
 
 <div class="warning">
 <h4>Developer note</h4>
@@ -113,3 +118,18 @@ Construct one Connection Manager via {{#name new_connection_manager}} and pass i
 All SDK instances sharing a Connection Manager must be configured for the same network and operator pool. The cache is keyed by operator address, so the TLS settings and user agent of the first SDK to connect to a given operator are reused for everyone afterwards.
 
 </div>
+
+### Browser
+
+The Connection Manager is not exposed in the browser. Browsers maintain a single HTTP/2 connection per origin and multiplex everything over it; the SDK cannot create or share more.
+
+### Node.js
+
+Node's global `fetch` (undici) negotiates HTTP/2 with the Spark operators automatically and opens additional connections per origin as needed, so most deployments need no tuning. If you do want to cap or expand the per-origin pool, configure undici globally before initialising the SDK:
+
+```js
+import { Agent, setGlobalDispatcher } from 'undici'
+setGlobalDispatcher(new Agent({ connections: 8 }))
+```
+
+This affects every `fetch` in the process, including the SDK's gRPC-web traffic.

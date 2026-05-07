@@ -9,6 +9,8 @@ pub use bitcoin::secp256k1::PublicKey;
 pub use config::*;
 pub use error::*;
 pub use model::*;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use spark::operator::rpc::BalancedConnectionManager;
 pub use spark::operator::{OperatorConfig, OperatorError, OperatorPoolConfig};
 pub use spark::{
     Identifier, Network,

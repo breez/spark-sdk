@@ -100,7 +100,7 @@ impl WalletBuilder {
             self.token_output_store
                 .unwrap_or(Arc::new(InMemoryTokenOutputStore::default())),
             self.connection_manager
-                .unwrap_or(Arc::new(DefaultConnectionManager::new())),
+                .unwrap_or_else(|| Arc::new(DefaultConnectionManager::default())),
             self.transfer_observer,
             self.with_background_processing,
             self.cancellation_token,

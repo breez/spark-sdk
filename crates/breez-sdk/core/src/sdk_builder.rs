@@ -584,7 +584,7 @@ impl SdkBuilder {
         }
         if let Some(connection_manager) = &self.connection_manager {
             wallet_builder =
-                wallet_builder.with_connection_manager(connection_manager.inner.clone());
+                wallet_builder.with_connection_manager(connection_manager.for_tenant().await);
         }
         let spark_wallet = Arc::new(wallet_builder.build().await?);
 

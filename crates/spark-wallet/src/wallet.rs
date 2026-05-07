@@ -205,7 +205,7 @@ impl SparkWallet {
             Arc::new(InMemorySessionManager::default()),
             Arc::new(InMemoryTreeStore::default()),
             Arc::new(InMemoryTokenOutputStore::default()),
-            Arc::new(DefaultConnectionManager::new()),
+            Arc::new(DefaultConnectionManager::default()),
             None,
             true,
             None,
