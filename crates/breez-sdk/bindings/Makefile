@@ -116,7 +116,11 @@ package-xcframework: build-ios-universal build-darwin-universal package-xcframew
 
 ## Kotlin Multiplatform
 KMP_BASE := langs/kotlin-multiplatform/breez-sdk-spark-kmp/src
+KMP_JVM_RESOURCES := $(KMP_BASE)/jvmMain/resources
 KOTLIN_PACKAGE := kotlin/breez_sdk_spark
+ifeq ($(UNAME), Linux)
+KMP_JVM_NATIVE_TARGETS := build-kotlin-multiplatform-jvm-linux-binaries
+endif
 
 # Build only the minimum needed for uniffi-bindgen (one Android arch)
 build-kotlin-multiplatform-bindgen-only: install-uniffi-bindgen-gobley build-ndk-release-target-aarch64-linux-android
@@ -149,13 +153,20 @@ build-kotlin-multiplatform-bindgen-android-arm64: install-uniffi-bindgen-gobley 
 # Build all binaries + run bindgen
 build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
 
+# Copy JVM native libraries into JNA's expected classpath resource locations.
+build-kotlin-multiplatform-jvm-linux-binaries: build-release-target-aarch64-unknown-linux-gnu build-release-target-x86_64-unknown-linux-gnu
+	mkdir -p $(KMP_JVM_RESOURCES)/linux-aarch64
+	mkdir -p $(KMP_JVM_RESOURCES)/linux-x86-64
+	cp $(TARGET_DIR)aarch64-unknown-linux-gnu/release/$(BIN_NAME).so $(KMP_JVM_RESOURCES)/linux-aarch64/$(BIN_NAME).so
+	cp $(TARGET_DIR)x86_64-unknown-linux-gnu/release/$(BIN_NAME).so $(KMP_JVM_RESOURCES)/linux-x86-64/$(BIN_NAME).so
+
 # Package with dummy binaries (useful for testing)
 package-kotlin-multiplatform-dummy-binaries: build-kotlin-multiplatform-bindgen-only
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
 	cd langs/kotlin-multiplatform && ./gradlew :breez-sdk-spark-kmp:assemble
 
 # Full package with all binaries
-package-kotlin-multiplatform: build-kotlin-multiplatform
+package-kotlin-multiplatform: build-kotlin-multiplatform $(KMP_JVM_NATIVE_TARGETS)
 	cp -r $(FFI_DIR)kmp/* $(KMP_BASE)/
 	rm -f $(FFI_DIR)kotlin/jniLibs/**/*spark.so
 	cp -r $(FFI_DIR)kotlin/jniLibs/ $(KMP_BASE)/androidMain/jniLibs/

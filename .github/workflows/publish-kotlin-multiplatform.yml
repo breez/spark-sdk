@@ -96,6 +96,18 @@ jobs:
           name: bindings-kotlin-multiplatform
           path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src
 
+      - name: Download JVM native library for Linux aarch64
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-aarch64-unknown-linux-gnu
+          path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/jvmMain/resources/linux-aarch64
+
+      - name: Download JVM native library for Linux x86_64
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-x86_64-unknown-linux-gnu
+          path: crates/breez-sdk/bindings/langs/kotlin-multiplatform/breez-sdk-spark-kmp/src/jvmMain/resources/linux-x86-64
+
       - name: Build Kotlin Multiplatform project
         working-directory: crates/breez-sdk/bindings/langs/kotlin-multiplatform
         env:
