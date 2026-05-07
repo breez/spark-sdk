@@ -143,6 +143,17 @@ export class PasskeyProvider {
         this.authenticatorAttachment = options.authenticatorAttachment;
         this.hints = options.hints;
         /**
+         * Default WebAuthn `timeout` (milliseconds) for both create()
+         * and get() ceremonies. Surfaced as a hint to the user agent;
+         * platforms still apply their own internal cap (60s on iOS,
+         * similar on Android Credential Manager). Pass a value 5 to 10s
+         * under the platform cap so a host-side "looks like a timeout"
+         * heuristic can fire before the OS tears the prompt down. When
+         * undefined (default), the platform default applies.
+         * @type {number | undefined}
+         */
+        this.defaultTimeoutMs = options.defaultTimeoutMs;
+        /**
          * Optional callback fired with the credential ID returned by
          * every successful WebAuthn assertion. Hosts can set this to
          * record which credential was just used so they can populate
@@ -161,6 +172,28 @@ export class PasskeyProvider {
          * @type {((credentialId: Uint8Array) => void) | undefined}
          */
         this.onAssertionCredentialId = undefined;
+
+        /**
+         * Settable `AbortSignal`. When set before a derivePrfSeed /
+         * derivePrfSeeds / createPasskey invocation, threaded into the
+         * underlying `navigator.credentials.{get,create}` call so the
+         * caller can abort an in-flight ceremony.
+         *
+         * Mirror of the `allowCredentialIds` / `onAssertionCredentialId`
+         * mutate-the-singleton pattern: per-call value, set before the
+         * call, optionally cleared after. Necessary because the SDK's
+         * Rust-side Passkey methods (setupWallet / getWallet) drive the
+         * provider via UniFFI without a generic signal-passing slot,
+         * so the host has no other place to attach the signal.
+         *
+         * Aborting unsettles the WebAuthn promise per spec; on iOS
+         * Safari the OS modal does NOT visually close, but the JS
+         * promise rejects with `AbortError` so the host can free its
+         * own state machine.
+         *
+         * @type {AbortSignal | undefined}
+         */
+        this.currentSignal = undefined;
 
         /**
          * Cached result of `PublicKeyCredential.getClientCapabilities()`
@@ -535,19 +568,12 @@ export class PasskeyProvider {
         if (allowCredentials.length === 0 && await this._supportsImmediateGet()) {
             this._applyImmediateOption(options);
         }
-
-        // [DEBUG] Surface the get() options so callers can verify
-        // hints and mediation are populated as expected on the
-        // sign-in path. Mirrors the create-side log.
-        console.log('[passkey-prf] sign-in get publicKeyOptions:', {
-            kind: 'single-salt',
-            rpId: options.publicKey.rpId,
-            allowCredentialsCount: options.publicKey.allowCredentials.length,
-            userVerification: options.publicKey.userVerification,
-            hints: options.publicKey.hints,
-            mediation: options.mediation,
-            uiMode: options.uiMode,
-        });
+        if (typeof this.defaultTimeoutMs === 'number' && this.defaultTimeoutMs > 0) {
+            options.publicKey.timeout = this.defaultTimeoutMs;
+        }
+        if (this.currentSignal instanceof AbortSignal) {
+            options.signal = this.currentSignal;
+        }
 
         let credential;
         try {
@@ -576,11 +602,6 @@ export class PasskeyProvider {
                 // password managers collapse in their picker).
                 const userHandleBuf = credential.response && credential.response.userHandle;
                 const userHandle = userHandleBuf ? new Uint8Array(userHandleBuf) : null;
-                console.log('[passkey-prf] sign-in onAssertionCredentialId:', {
-                    credentialIdLength: credential.rawId.byteLength,
-                    userHandleLength: userHandle ? userHandle.byteLength : null,
-                    userHandlePresent: userHandle !== null,
-                });
                 this.onAssertionCredentialId(new Uint8Array(credential.rawId), userHandle);
             } catch {
                 // best-effort
@@ -670,16 +691,12 @@ export class PasskeyProvider {
         if (allowCredentials.length === 0 && await this._supportsImmediateGet()) {
             this._applyImmediateOption(options);
         }
-
-        console.log('[passkey-prf] sign-in get publicKeyOptions:', {
-            kind: 'dual-salt',
-            rpId: options.publicKey.rpId,
-            allowCredentialsCount: options.publicKey.allowCredentials.length,
-            userVerification: options.publicKey.userVerification,
-            hints: options.publicKey.hints,
-            mediation: options.mediation,
-            uiMode: options.uiMode,
-        });
+        if (typeof this.defaultTimeoutMs === 'number' && this.defaultTimeoutMs > 0) {
+            options.publicKey.timeout = this.defaultTimeoutMs;
+        }
+        if (this.currentSignal instanceof AbortSignal) {
+            options.signal = this.currentSignal;
+        }
 
         let credential;
         try {
@@ -703,11 +720,6 @@ export class PasskeyProvider {
                 // password managers collapse in their picker).
                 const userHandleBuf = credential.response && credential.response.userHandle;
                 const userHandle = userHandleBuf ? new Uint8Array(userHandleBuf) : null;
-                console.log('[passkey-prf] sign-in onAssertionCredentialId:', {
-                    credentialIdLength: credential.rawId.byteLength,
-                    userHandleLength: userHandle ? userHandle.byteLength : null,
-                    userHandlePresent: userHandle !== null,
-                });
                 this.onAssertionCredentialId(new Uint8Array(credential.rawId), userHandle);
             } catch {
                 // best-effort
@@ -780,6 +792,13 @@ export class PasskeyProvider {
                 { type: 'public-key', alg: -257 },  // RS256
             ],
             authenticatorSelection,
+            // Explicit; matches spec default. Stated to make the
+            // intent unmistakable on a future security review: passkeys
+            // are bootstrapped without server-side attestation
+            // verification, so anything other than 'none' would be a
+            // protocol mismatch (and would also surface a different
+            // user-facing prompt on some platforms).
+            attestation: 'none',
             extensions: {
                 prf: {},
             },
@@ -799,26 +818,18 @@ export class PasskeyProvider {
             }));
         }
 
-        // [DEBUG] Surface the exact options we're about to hand the
-        // platform so callers can verify authenticatorAttachment +
-        // hints + user.{id,name,displayName} are populated as
-        // expected. Remove once the prototype is verified.
-        console.log('[passkey-prf] createPasskey publicKeyOptions:', {
-            rpId: publicKeyOptions.rp.id,
-            rpName: publicKeyOptions.rp.name,
-            userIdLength: publicKeyOptions.user.id.byteLength,
-            userName: publicKeyOptions.user.name,
-            userDisplayName: publicKeyOptions.user.displayName,
-            authenticatorAttachment: publicKeyOptions.authenticatorSelection.authenticatorAttachment,
-            residentKey: publicKeyOptions.authenticatorSelection.residentKey,
-            userVerification: publicKeyOptions.authenticatorSelection.userVerification,
-            hints: publicKeyOptions.hints,
-            excludeCount: (publicKeyOptions.excludeCredentials || []).length,
-        });
+        if (typeof this.defaultTimeoutMs === 'number' && this.defaultTimeoutMs > 0) {
+            publicKeyOptions.timeout = this.defaultTimeoutMs;
+        }
+
+        const createOptions = { publicKey: publicKeyOptions };
+        if (this.currentSignal instanceof AbortSignal) {
+            createOptions.signal = this.currentSignal;
+        }
 
         let credential;
         try {
-            credential = await navigator.credentials.create({ publicKey: publicKeyOptions });
+            credential = await navigator.credentials.create(createOptions);
         } catch (error) {
             // Surface the duplicate-prevention check as a typed error so
             // callers can route the user to sign-in instead of treating
