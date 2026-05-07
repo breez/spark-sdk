@@ -51,6 +51,7 @@ tonic = { workspace = true, features = [
     "tls-webpki-roots",
     "transport",
 ] }
+tower.workspace = true
 uuid.workspace = true
 
 # WASM dependencies

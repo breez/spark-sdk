@@ -2,6 +2,7 @@
 pub mod bindings;
 mod chain;
 mod common;
+mod connection_manager;
 mod error;
 mod events;
 mod issuer;
@@ -27,6 +28,7 @@ pub use chain::{
 };
 pub use common::rest::{RestClient, RestResponse};
 pub use common::{fiat::*, models::*, sync_storage};
+pub use connection_manager::{ConnectionManager, new_connection_manager};
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
 pub use issuer::*;

@@ -218,6 +218,8 @@ tokio-test = "0.4.4"
 tonic = { version = "0.12.3", default-features = false }
 tonic-build = { version = "0.12.3", features = ["prost"] }
 tonic-web-wasm-client = "0.6"
+# Major-version must match what tonic uses internally. Bump the major in lockstep with tonic upgrades.
+tower = { version = "0.4", default-features = false, features = ["discover"] }
 tower-service = "0.3.3"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"

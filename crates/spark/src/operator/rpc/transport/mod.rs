@@ -5,4 +5,4 @@
 pub mod grpc_client;
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-mod retry_channel;
+pub(crate) mod retry_channel;

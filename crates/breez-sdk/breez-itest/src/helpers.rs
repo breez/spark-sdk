@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Result;
@@ -185,6 +186,45 @@ pub async fn build_sdk_with_dir(
 /// An SdkInstance containing the SDK and event channel
 pub async fn build_sdk(storage_dir: String, seed_bytes: [u8; 32]) -> Result<SdkInstance> {
     build_sdk_with_dir(storage_dir, seed_bytes, None).await
+}
+
+/// Build and initialize a BreezSDK instance attached to a shared connection manager.
+pub async fn build_sdk_with_shared_connection_manager(
+    storage_dir: String,
+    seed_bytes: [u8; 32],
+    connection_manager: Arc<ConnectionManager>,
+    temp_dir: Option<tempfile::TempDir>,
+) -> Result<SdkInstance> {
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+
+    let seed = Seed::Entropy(seed_bytes.to_vec());
+    let builder = SdkBuilder::new(config, seed).with_connection_manager(connection_manager);
+    let builder = apply_storage(builder, storage_dir).await?;
+    let sdk = builder.build().await?;
+
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    let _ = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        span: tracing::Span::current(),
+        temp_dir,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
 }
 
 /// Build and initialize a BreezSDK instance with a custom config override
