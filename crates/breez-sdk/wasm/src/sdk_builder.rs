@@ -263,17 +263,34 @@ impl SdkBuilder {
                 // Create a single shared pool for all postgres stores
                 let pool = create_postgres_pool(config.clone())?;
 
+                // Derive tenant identity from the seed and pass to the JS storage so it
+                // can scope every read/write by `user_id`.
+                let key_set = KeySet::new(
+                    &self.seed.to_bytes()?,
+                    self.network.into(),
+                    self.key_set_type.into(),
+                    self.use_address_index,
+                    self.account_number,
+                )
+                .map_err(WasmError::new)?;
+                let identity_pub_key = key_set.identity_key_pair.public_key();
+                let identity_bytes = identity_pub_key.serialize();
+
                 let storage = Arc::new(WasmStorage {
-                    storage: create_postgres_storage_with_pool(&pool, logger_ref).await?,
+                    storage: create_postgres_storage_with_pool(&pool, &identity_bytes, logger_ref)
+                        .await?,
                 });
                 self.builder = self.builder.with_storage(storage);
 
-                let tree_store_js = create_postgres_tree_store_with_pool(&pool, logger_ref).await?;
+                let tree_store_js =
+                    create_postgres_tree_store_with_pool(&pool, &identity_bytes, logger_ref)
+                        .await?;
                 let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
                 self.builder = self.builder.with_tree_store(tree_store);
 
                 let token_store_js =
-                    create_postgres_token_store_with_pool(&pool, logger_ref).await?;
+                    create_postgres_token_store_with_pool(&pool, &identity_bytes, logger_ref)
+                        .await?;
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
             }
@@ -283,16 +300,32 @@ impl SdkBuilder {
                 // Create a single shared mysql2 pool for all stores.
                 let pool = create_mysql_pool(config.clone())?;
 
+                // Derive tenant identity from the seed and pass to the JS
+                // stores so they can scope every read/write by `user_id`.
+                let key_set = KeySet::new(
+                    &self.seed.to_bytes()?,
+                    self.network.into(),
+                    self.key_set_type.into(),
+                    self.use_address_index,
+                    self.account_number,
+                )
+                .map_err(WasmError::new)?;
+                let identity_pub_key = key_set.identity_key_pair.public_key();
+                let identity_bytes = identity_pub_key.serialize();
+
                 let storage = Arc::new(WasmStorage {
-                    storage: create_mysql_storage_with_pool(&pool, logger_ref).await?,
+                    storage: create_mysql_storage_with_pool(&pool, &identity_bytes, logger_ref)
+                        .await?,
                 });
                 self.builder = self.builder.with_storage(storage);
 
-                let tree_store_js = create_mysql_tree_store_with_pool(&pool, logger_ref).await?;
+                let tree_store_js =
+                    create_mysql_tree_store_with_pool(&pool, &identity_bytes, logger_ref).await?;
                 let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
                 self.builder = self.builder.with_tree_store(tree_store);
 
-                let token_store_js = create_mysql_token_store_with_pool(&pool, logger_ref).await?;
+                let token_store_js =
+                    create_mysql_token_store_with_pool(&pool, &identity_bytes, logger_ref).await?;
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
             }
@@ -352,18 +385,21 @@ extern "C" {
     #[wasm_bindgen(js_name = "createPostgresStorageWithPool", catch)]
     async fn create_postgres_storage_with_pool(
         pool: &JsPool,
+        identity: &[u8],
         logger: Option<&Logger>,
     ) -> Result<crate::persist::Storage, JsValue>;
 
     #[wasm_bindgen(js_name = "createPostgresTreeStoreWithPool", catch)]
     async fn create_postgres_tree_store_with_pool(
         pool: &JsPool,
+        identity: &[u8],
         logger: Option<&Logger>,
     ) -> Result<TreeStoreJs, JsValue>;
 
     #[wasm_bindgen(js_name = "createPostgresTokenStoreWithPool", catch)]
     async fn create_postgres_token_store_with_pool(
         pool: &JsPool,
+        identity: &[u8],
         logger: Option<&Logger>,
     ) -> Result<TokenStoreJs, JsValue>;
 
@@ -373,18 +409,21 @@ extern "C" {
     #[wasm_bindgen(js_name = "createMysqlStorageWithPool", catch)]
     async fn create_mysql_storage_with_pool(
         pool: &JsPool,
+        identity: &[u8],
         logger: Option<&Logger>,
     ) -> Result<crate::persist::Storage, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlTreeStoreWithPool", catch)]
     async fn create_mysql_tree_store_with_pool(
         pool: &JsPool,
+        identity: &[u8],
         logger: Option<&Logger>,
     ) -> Result<TreeStoreJs, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlTokenStoreWithPool", catch)]
     async fn create_mysql_token_store_with_pool(
         pool: &JsPool,
+        identity: &[u8],
         logger: Option<&Logger>,
     ) -> Result<TokenStoreJs, JsValue>;
 }

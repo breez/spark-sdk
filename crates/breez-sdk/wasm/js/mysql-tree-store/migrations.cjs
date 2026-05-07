@@ -8,12 +8,41 @@ const TREE_MIGRATIONS_TABLE = "tree_schema_migrations";
 const MIGRATION_LOCK_NAME = "breez_mysql_tree_store_migration_lock";
 const MIGRATION_LOCK_TIMEOUT = 60;
 
+/**
+ * Runs a single migration step. Plain strings are run as-is; tagged objects
+ * (`{ op: 'dropPrimaryKey', table }`) are guarded against partial-apply replay
+ * by checking `information_schema` first. MySQL DDL implicitly commits, so
+ * if the migration crashes between two DDL statements the version row never
+ * gets recorded — and on retry, an unguarded DROP PRIMARY KEY would fail
+ * (`ER_CANT_DROP_FIELD_OR_KEY`) because the PK is already gone.
+ */
+async function runMigrationStep(conn, step) {
+  if (typeof step === "string") {
+    await conn.query(step);
+    return;
+  }
+  if (step.op === "dropPrimaryKey") {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS c FROM information_schema.table_constraints
+       WHERE table_schema = DATABASE()
+         AND table_name = ?
+         AND constraint_type = 'PRIMARY KEY'`,
+      [step.table]
+    );
+    if (rows[0].c > 0) {
+      await conn.query(`ALTER TABLE \`${step.table}\` DROP PRIMARY KEY`);
+    }
+    return;
+  }
+  throw new Error(`Unknown migration step op: ${JSON.stringify(step)}`);
+}
+
 class MysqlTreeStoreMigrationManager {
   constructor(logger = null) {
     this.logger = logger;
   }
 
-  async migrate(pool) {
+  async migrate(pool, identity) {
     const conn = await pool.getConnection();
     try {
       const [lockRows] = await conn.query(
@@ -41,7 +70,7 @@ class MysqlTreeStoreMigrationManager {
         );
         const currentVersion = versionRows[0].version;
 
-        const migrations = this._getMigrations();
+        const migrations = this._getMigrations(identity);
 
         if (currentVersion >= migrations.length) {
           await conn.query("COMMIT");
@@ -51,8 +80,8 @@ class MysqlTreeStoreMigrationManager {
         for (let i = currentVersion; i < migrations.length; i++) {
           const migration = migrations[i];
           const version = i + 1;
-          for (const sql of migration.sql) {
-            await conn.query(sql);
+          for (const step of migration.sql) {
+            await runMigrationStep(conn, step);
           }
           await conn.query(
             `INSERT INTO \`${TREE_MIGRATIONS_TABLE}\` (version) VALUES (?)`,
@@ -77,7 +106,10 @@ class MysqlTreeStoreMigrationManager {
     }
   }
 
-  _getMigrations() {
+  _getMigrations(identity) {
+    const idHex = Buffer.from(identity).toString("hex");
+    const idLit = `UNHEX('${idHex}')`;
+
     return [
       {
         name: "Create tree store tables",
@@ -131,6 +163,55 @@ class MysqlTreeStoreMigrationManager {
             WHERE value = 0`,
           `CREATE INDEX idx_tree_leaves_slim
             ON tree_leaves(status, is_missing_from_operators, reservation_id, value)`,
+        ],
+      },
+      {
+        name: "Multi-tenant scoping: add user_id and rewrite primary keys / FKs",
+        sql: [
+          // Drop the existing FK so we can rewrite the parent PK.
+          `ALTER TABLE tree_leaves DROP FOREIGN KEY fk_tree_leaves_reservation`,
+
+          // tree_reservations: scope by user_id.
+          `ALTER TABLE tree_reservations ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE tree_reservations SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE tree_reservations MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE tree_reservations DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
+
+          // tree_leaves: scope by user_id, rekey, re-add composite FK.
+          `ALTER TABLE tree_leaves ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE tree_leaves SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE tree_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE tree_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
+          `ALTER TABLE tree_leaves
+             ADD CONSTRAINT fk_tree_leaves_reservation_user
+             FOREIGN KEY (user_id, reservation_id)
+             REFERENCES tree_reservations(user_id, id)`,
+          `DROP INDEX idx_tree_leaves_available ON tree_leaves`,
+          `DROP INDEX idx_tree_leaves_reservation ON tree_leaves`,
+          `DROP INDEX idx_tree_leaves_added_at ON tree_leaves`,
+          `DROP INDEX idx_tree_leaves_slim ON tree_leaves`,
+          `CREATE INDEX idx_tree_leaves_user_available
+             ON tree_leaves(user_id, status, is_missing_from_operators)`,
+          `CREATE INDEX idx_tree_leaves_user_reservation
+             ON tree_leaves(user_id, reservation_id)`,
+          `CREATE INDEX idx_tree_leaves_user_added_at ON tree_leaves(user_id, added_at)`,
+          `CREATE INDEX idx_tree_leaves_user_slim
+             ON tree_leaves(user_id, status, is_missing_from_operators, reservation_id, value)`,
+
+          // tree_spent_leaves: scope by user_id.
+          `ALTER TABLE tree_spent_leaves ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE tree_spent_leaves SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE tree_spent_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE tree_spent_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, leaf_id)`,
+
+          // tree_swap_status was a singleton (PK id=1, CHECK id=1). Drop the PK
+          // and the id column, then re-key by user_id.
+          { op: "dropPrimaryKey", table: "tree_swap_status" },
+          `ALTER TABLE tree_swap_status DROP COLUMN id`,
+          `ALTER TABLE tree_swap_status ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE tree_swap_status SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE tree_swap_status MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE tree_swap_status ADD PRIMARY KEY (user_id)`,
         ],
       },
     ];

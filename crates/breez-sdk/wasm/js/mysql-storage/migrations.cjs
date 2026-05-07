@@ -24,6 +24,35 @@ const MIGRATION_LOCK_NAME = "breez_mysql_migration_lock";
 /** Seconds to wait when acquiring the migration lock. */
 const MIGRATION_LOCK_TIMEOUT = 60;
 
+/**
+ * Runs a single migration step. Plain strings are run as-is; tagged objects
+ * (`{ op: 'dropPrimaryKey', table }`) are guarded against partial-apply replay
+ * by checking `information_schema` first. MySQL DDL implicitly commits, so
+ * if the migration crashes between two DDL statements the version row never
+ * gets recorded — and on retry, an unguarded DROP PRIMARY KEY would fail
+ * (`ER_CANT_DROP_FIELD_OR_KEY`) because the PK is already gone.
+ */
+async function runMigrationStep(conn, step) {
+  if (typeof step === "string") {
+    await conn.query(step);
+    return;
+  }
+  if (step.op === "dropPrimaryKey") {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS c FROM information_schema.table_constraints
+       WHERE table_schema = DATABASE()
+         AND table_name = ?
+         AND constraint_type = 'PRIMARY KEY'`,
+      [step.table]
+    );
+    if (rows[0].c > 0) {
+      await conn.query(`ALTER TABLE \`${step.table}\` DROP PRIMARY KEY`);
+    }
+    return;
+  }
+  throw new Error(`Unknown migration step op: ${JSON.stringify(step)}`);
+}
+
 class MysqlMigrationManager {
   constructor(logger = null) {
     this.logger = logger;
@@ -32,9 +61,14 @@ class MysqlMigrationManager {
   /**
    * Run all pending migrations. Holds a session-scoped GET_LOCK for the full
    * sequence so concurrent processes serialize.
+   *
    * @param {import('mysql2/promise').Pool} pool
+   * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+   *   identifying the tenant. Used to backfill `user_id` columns in the
+   *   multi-tenant migration so that pre-existing single-tenant data remains
+   *   readable.
    */
-  async migrate(pool) {
+  async migrate(pool, identity) {
     const conn = await pool.getConnection();
     try {
       const [lockRows] = await conn.query(
@@ -62,7 +96,7 @@ class MysqlMigrationManager {
         );
         const currentVersion = versionRows[0].version;
 
-        const migrations = this._getMigrations();
+        const migrations = this._getMigrations(identity);
 
         if (currentVersion >= migrations.length) {
           this._log("info", `Database is up to date (version ${currentVersion})`);
@@ -80,8 +114,8 @@ class MysqlMigrationManager {
           const version = i + 1;
           this._log("debug", `Running migration ${version}: ${migration.name}`);
 
-          for (const sql of migration.sql) {
-            await conn.query(sql);
+          for (const step of migration.sql) {
+            await runMigrationStep(conn, step);
           }
 
           await conn.query(
@@ -118,7 +152,26 @@ class MysqlMigrationManager {
     }
   }
 
-  _getMigrations() {
+  /**
+   * @param {Buffer|Uint8Array} identity - 33-byte tenant identity. Inlined as
+   *   an `UNHEX('...')` literal in the multi-tenant scoping migration. Safe
+   *   because the bytes come from a typed secp256k1 pubkey (character set
+   *   `[0-9a-f]{66}` after hex encoding) — not user-controlled input.
+   */
+  _getMigrations(identity) {
+    const idHex = Buffer.from(identity).toString("hex");
+    const idLit = `UNHEX('${idHex}')`;
+
+    // Per-table backfill: ADD COLUMN nullable -> UPDATE -> SET NOT NULL +
+    // drop/recreate PK. Returns an array of statements. Tables with backticked
+    // names (e.g. `settings` uses `key`) need the caller to backtick `pkCols`.
+    const scopeTable = (table, pkCols) => [
+      `ALTER TABLE \`${table}\` ADD COLUMN user_id VARBINARY(33) NULL`,
+      `UPDATE \`${table}\` SET user_id = ${idLit} WHERE user_id IS NULL`,
+      `ALTER TABLE \`${table}\` MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+      `ALTER TABLE \`${table}\` DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, ${pkCols})`,
+    ];
+
     return [
       {
         name: "Create all tables at final schema",
@@ -267,6 +320,64 @@ class MysqlMigrationManager {
         name: "Add conversion_status to payment_metadata",
         sql: [
           `ALTER TABLE payment_metadata ADD COLUMN conversion_status VARCHAR(64) NULL`,
+        ],
+      },
+      {
+        name: "Multi-tenant scoping: add user_id and rewrite primary keys",
+        sql: [
+          // Per-user tables.
+          ...scopeTable("payments", "id"),
+          `DROP INDEX idx_payments_timestamp ON payments`,
+          `DROP INDEX idx_payments_payment_type ON payments`,
+          `DROP INDEX idx_payments_status ON payments`,
+          `CREATE INDEX idx_payments_user_timestamp ON payments(user_id, timestamp)`,
+          `CREATE INDEX idx_payments_user_payment_type ON payments(user_id, payment_type)`,
+          `CREATE INDEX idx_payments_user_status ON payments(user_id, status)`,
+
+          ...scopeTable("payment_metadata", "payment_id"),
+          `DROP INDEX idx_payment_metadata_parent ON payment_metadata`,
+          `CREATE INDEX idx_payment_metadata_user_parent
+             ON payment_metadata(user_id, parent_payment_id)`,
+
+          ...scopeTable("payment_details_lightning", "payment_id"),
+          `DROP INDEX idx_payment_details_lightning_invoice ON payment_details_lightning`,
+          `DROP INDEX idx_payment_details_lightning_payment_hash ON payment_details_lightning`,
+          `CREATE INDEX idx_payment_details_lightning_user_invoice
+             ON payment_details_lightning(user_id, invoice(255))`,
+          `CREATE INDEX idx_payment_details_lightning_user_payment_hash
+             ON payment_details_lightning(user_id, payment_hash)`,
+
+          ...scopeTable("payment_details_token", "payment_id"),
+          ...scopeTable("payment_details_spark", "payment_id"),
+          ...scopeTable("lnurl_receive_metadata", "payment_hash"),
+          ...scopeTable("unclaimed_deposits", "txid, vout"),
+          ...scopeTable("contacts", "id"),
+          ...scopeTable("settings", "`key`"),
+
+          // sync_revision was a singleton (PK id=1, CHECK id=1). Drop the PK
+          // and the id column, then re-key by user_id.
+          { op: "dropPrimaryKey", table: "sync_revision" },
+          `ALTER TABLE sync_revision DROP COLUMN id`,
+          `ALTER TABLE sync_revision ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE sync_revision SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE sync_revision MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE sync_revision ADD PRIMARY KEY (user_id)`,
+
+          // sync_outgoing has no PK, only an index — just add user_id and
+          // rewrite the index.
+          `ALTER TABLE sync_outgoing ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE sync_outgoing SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE sync_outgoing MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `DROP INDEX idx_sync_outgoing_data_id_record_type ON sync_outgoing`,
+          `CREATE INDEX idx_sync_outgoing_user_record_type_data_id
+             ON sync_outgoing(user_id, record_type, data_id)`,
+
+          ...scopeTable("sync_state", "record_type, data_id"),
+
+          ...scopeTable("sync_incoming", "record_type, data_id, revision"),
+          `DROP INDEX idx_sync_incoming_revision ON sync_incoming`,
+          `CREATE INDEX idx_sync_incoming_user_revision
+             ON sync_incoming(user_id, revision)`,
         ],
       },
     ];

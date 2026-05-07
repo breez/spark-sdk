@@ -4983,7 +4983,9 @@ name = "spark-mysql"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bitcoin",
  "chrono",
+ "hex",
  "macros",
  "mysql_async",
  "platform-utils",
@@ -5004,9 +5006,11 @@ name = "spark-postgres"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bitcoin",
  "chrono",
  "deadpool",
  "deadpool-postgres",
+ "hex",
  "macros",
  "platform-utils",
  "rcgen",

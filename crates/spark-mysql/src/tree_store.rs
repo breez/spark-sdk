@@ -34,6 +34,7 @@ use tokio::sync::watch;
 use tracing::{debug, info, trace};
 use uuid::Uuid;
 
+use crate::advisory_lock::identity_lock_name;
 use crate::config::MysqlStorageConfig;
 use crate::error::MysqlError;
 use crate::migrations::{Migration, run_migrations};
@@ -42,10 +43,11 @@ use crate::pool::create_pool;
 /// Name of the schema migrations table for `MysqlTreeStore`.
 const TREE_MIGRATIONS_TABLE: &str = "tree_schema_migrations";
 
-/// Named lock used to serialize tree store write operations across connections.
-/// `MySQL` `GET_LOCK` is session-scoped, so we acquire it at the start of each
-/// write and release it explicitly before returning.
-const TREE_STORE_WRITE_LOCK_NAME: &str = "tree_store_write_lock";
+/// Domain prefix mixed into the per-tenant `GET_LOCK` name so the tree store's
+/// locks never collide with the token store's, even when two tenants share a
+/// database. The full lock name is `<prefix><hex(sha256(prefix||identity)[..8])>`,
+/// ensuring distinct tenants never serialize on each other's writes.
+const TREE_STORE_LOCK_PREFIX: &str = "breez-spark-sdk:tree:";
 
 /// Timeout (seconds) when waiting on the write lock. Long enough to outlast
 /// brief contention, short enough to surface true deadlocks instead of hanging.
@@ -81,11 +83,165 @@ impl LeafLike for SlimLeaf {
 /// `MySQL`-backed tree store implementation.
 ///
 /// Uses an application-level named lock to serialize writes (`GET_LOCK`) and
-/// row-level FK constraints to keep reservations and leaves in sync.
+/// row-level FK constraints to keep reservations and leaves in sync. Each
+/// instance is scoped to a single tenant identity so that multiple tenants
+/// can share one `MySQL` database without cross-pollinating tree state.
 pub struct MysqlTreeStore {
     pool: Pool,
+    /// 33-byte secp256k1 compressed pubkey identifying this tenant. All reads
+    /// and writes are filtered by `user_id = self.identity`.
+    identity: Vec<u8>,
+    /// Stable per-tenant `GET_LOCK` name derived from `identity`. Two tenants
+    /// don't serialize on each other's writes; same-tenant writes still
+    /// serialize on the same lock.
+    lock_name: String,
     balance_changed_tx: Arc<watch::Sender<()>>,
     balance_changed_rx: watch::Receiver<()>,
+}
+
+/// Builds the multi-tenant scoping migration for the tree store. Adds
+/// `user_id VARBINARY(33)` to every per-user table, backfills with the
+/// connecting tenant's identity, and rewrites primary keys / FKs to lead
+/// with `user_id`.
+#[allow(clippy::too_many_lines)]
+fn tree_store_multi_tenant_migration(identity: &[u8]) -> Vec<Migration> {
+    let id_hex = hex::encode(identity);
+    let id_lit = format!("UNHEX('{id_hex}')");
+
+    let mut stmts: Vec<Migration> = Vec::new();
+
+    // Drop the existing FK from tree_leaves(reservation_id) -> tree_reservations(id)
+    // FIRST, before we touch the parent's PK that it depends on. The `MySQL`
+    // FK was named via a CONSTRAINT clause on creation as
+    // `fk_tree_leaves_reservation`.
+    stmts.push(Migration::DropForeignKey {
+        name: "fk_tree_leaves_reservation",
+        table: "tree_leaves",
+    });
+
+    // tree_reservations: scope by user_id. Add the column nullable, backfill,
+    // make NOT NULL, and rewrite the PK to lead with user_id.
+    stmts.push(Migration::AddColumn {
+        table: "tree_reservations",
+        column: "user_id",
+        definition: "VARBINARY(33) NULL",
+    });
+    stmts.push(Migration::Sql(format!(
+        "UPDATE tree_reservations SET user_id = {id_lit} WHERE user_id IS NULL"
+    )));
+    stmts.push(Migration::sql(
+        "ALTER TABLE tree_reservations MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
+    ));
+    stmts.push(Migration::sql(
+        "ALTER TABLE tree_reservations DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)",
+    ));
+
+    // tree_leaves: same pattern, plus re-add the composite FK to the new
+    // tree_reservations PK. The composite FK uses the default ON DELETE NO
+    // ACTION instead of the previous `ON DELETE SET NULL`: a whole-row SET NULL
+    // would null `user_id` (NOT NULL) and `MySQL` doesn't support column-list
+    // SET NULL. Callers (`cleanup_stale_reservations`, `cancel_reservation`,
+    // `finalize_reservation`) explicitly clear `reservation_id` before
+    // deleting the parent reservation row.
+    stmts.push(Migration::AddColumn {
+        table: "tree_leaves",
+        column: "user_id",
+        definition: "VARBINARY(33) NULL",
+    });
+    stmts.push(Migration::Sql(format!(
+        "UPDATE tree_leaves SET user_id = {id_lit} WHERE user_id IS NULL"
+    )));
+    stmts.push(Migration::sql(
+        "ALTER TABLE tree_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
+    ));
+    stmts.push(Migration::sql(
+        "ALTER TABLE tree_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)",
+    ));
+    stmts.push(Migration::sql(
+        "ALTER TABLE tree_leaves \
+         ADD CONSTRAINT fk_tree_leaves_reservation_user \
+         FOREIGN KEY (user_id, reservation_id) \
+         REFERENCES tree_reservations(user_id, id)",
+    ));
+    stmts.push(Migration::DropIndex {
+        name: "idx_tree_leaves_available",
+        table: "tree_leaves",
+    });
+    stmts.push(Migration::DropIndex {
+        name: "idx_tree_leaves_reservation",
+        table: "tree_leaves",
+    });
+    stmts.push(Migration::DropIndex {
+        name: "idx_tree_leaves_added_at",
+        table: "tree_leaves",
+    });
+    stmts.push(Migration::DropIndex {
+        name: "idx_tree_leaves_slim",
+        table: "tree_leaves",
+    });
+    stmts.push(Migration::CreateIndex {
+        name: "idx_tree_leaves_user_available",
+        table: "tree_leaves",
+        columns: "(user_id, status, is_missing_from_operators)",
+    });
+    stmts.push(Migration::CreateIndex {
+        name: "idx_tree_leaves_user_reservation",
+        table: "tree_leaves",
+        columns: "(user_id, reservation_id)",
+    });
+    stmts.push(Migration::CreateIndex {
+        name: "idx_tree_leaves_user_added_at",
+        table: "tree_leaves",
+        columns: "(user_id, added_at)",
+    });
+    stmts.push(Migration::CreateIndex {
+        name: "idx_tree_leaves_user_slim",
+        table: "tree_leaves",
+        columns: "(user_id, status, is_missing_from_operators, reservation_id, value)",
+    });
+
+    // tree_spent_leaves: scope by user_id.
+    stmts.push(Migration::AddColumn {
+        table: "tree_spent_leaves",
+        column: "user_id",
+        definition: "VARBINARY(33) NULL",
+    });
+    stmts.push(Migration::Sql(format!(
+        "UPDATE tree_spent_leaves SET user_id = {id_lit} WHERE user_id IS NULL"
+    )));
+    stmts.push(Migration::sql(
+        "ALTER TABLE tree_spent_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
+    ));
+    stmts.push(Migration::sql(
+        "ALTER TABLE tree_spent_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, leaf_id)",
+    ));
+
+    // tree_swap_status was a singleton (PK id=1, CHECK id=1). Drop the PK and
+    // the id column, then re-key by user_id so each tenant has its own
+    // swap-status row.
+    stmts.push(Migration::DropPrimaryKey {
+        table: "tree_swap_status",
+    });
+    stmts.push(Migration::DropColumn {
+        table: "tree_swap_status",
+        column: "id",
+    });
+    stmts.push(Migration::AddColumn {
+        table: "tree_swap_status",
+        column: "user_id",
+        definition: "VARBINARY(33) NULL",
+    });
+    stmts.push(Migration::Sql(format!(
+        "UPDATE tree_swap_status SET user_id = {id_lit} WHERE user_id IS NULL"
+    )));
+    stmts.push(Migration::sql(
+        "ALTER TABLE tree_swap_status MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
+    ));
+    stmts.push(Migration::sql(
+        "ALTER TABLE tree_swap_status ADD PRIMARY KEY (user_id)",
+    ));
+
+    stmts
 }
 
 #[async_trait]
@@ -106,7 +262,7 @@ impl TreeStore for MysqlTreeStore {
         // No global write lock: `add_leaves` is scoped to inserting/updating
         // a known set of leaf rows; row-level locks + InnoDB MVCC are
         // sufficient. Mirrors the postgres impl's lock-removal change.
-        Self::add_leaves_inner(&mut conn, leaves).await?;
+        self.add_leaves_inner(&mut conn, leaves).await?;
         self.notify_balance_change();
         Ok(())
     }
@@ -118,13 +274,17 @@ impl TreeStore for MysqlTreeStore {
         // included). Avoids fetching every leaf's `data` JSON when callers
         // only need the spendable total.
         let row: Option<i64> = conn
-            .query_first(
+            .exec_first(
                 r"SELECT COALESCE(SUM(l.value), 0) AS balance
                   FROM tree_leaves l
-                  LEFT JOIN tree_reservations r ON l.reservation_id = r.id
-                  WHERE
-                      (l.reservation_id IS NULL AND l.status = 'Available')
-                      OR r.purpose = 'Swap'",
+                  LEFT JOIN tree_reservations r
+                    ON l.reservation_id = r.id AND l.user_id = r.user_id
+                  WHERE l.user_id = ?
+                    AND (
+                        (l.reservation_id IS NULL AND l.status = 'Available')
+                        OR r.purpose = 'Swap'
+                    )",
+                (self.identity.clone(),),
             )
             .await
             .map_err(map_err)?;
@@ -135,11 +295,14 @@ impl TreeStore for MysqlTreeStore {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
 
         let rows: Vec<(String, String, bool, String, Option<String>, Option<String>)> = conn
-            .query(
+            .exec(
                 r"SELECT l.id, l.status, l.is_missing_from_operators, l.data,
                          l.reservation_id, r.purpose
                   FROM tree_leaves l
-                  LEFT JOIN tree_reservations r ON l.reservation_id = r.id",
+                  LEFT JOIN tree_reservations r
+                    ON l.reservation_id = r.id AND l.user_id = r.user_id
+                  WHERE l.user_id = ?",
+                (self.identity.clone(),),
             )
             .await
             .map_err(map_err)?;
@@ -190,15 +353,16 @@ impl TreeStore for MysqlTreeStore {
         let refresh_timestamp: DateTime<Utc> = refresh_started_at.into();
 
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::acquire_write_lock(&mut conn).await?;
-        let result = Self::set_leaves_inner(
-            &mut conn,
-            leaves,
-            missing_operators_leaves,
-            refresh_timestamp,
-        )
-        .await;
-        Self::release_write_lock_quiet(&mut conn).await;
+        self.acquire_write_lock(&mut conn).await?;
+        let result = self
+            .set_leaves_inner(
+                &mut conn,
+                leaves,
+                missing_operators_leaves,
+                refresh_timestamp,
+            )
+            .await;
+        self.release_write_lock_quiet(&mut conn).await;
         result?;
         self.notify_balance_change();
         Ok(())
@@ -211,7 +375,8 @@ impl TreeStore for MysqlTreeStore {
     ) -> Result<(), TreeServiceError> {
         // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::cancel_reservation_inner(&mut conn, id, leaves_to_keep).await?;
+        self.cancel_reservation_inner(&mut conn, id, leaves_to_keep)
+            .await?;
         self.notify_balance_change();
         Ok(())
     }
@@ -227,9 +392,11 @@ impl TreeStore for MysqlTreeStore {
         // our marker and the upsert would write the just-spent leaf back as
         // Available.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::acquire_write_lock(&mut conn).await?;
-        let result = Self::finalize_reservation_inner(&mut conn, id, new_leaves).await;
-        Self::release_write_lock_quiet(&mut conn).await;
+        self.acquire_write_lock(&mut conn).await?;
+        let result = self
+            .finalize_reservation_inner(&mut conn, id, new_leaves)
+            .await;
+        self.release_write_lock_quiet(&mut conn).await;
         result?;
         trace!("Finalized reservation: {id}");
         self.notify_balance_change();
@@ -247,18 +414,19 @@ impl TreeStore for MysqlTreeStore {
         let reservation_id = Uuid::now_v7().to_string();
 
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        Self::acquire_write_lock(&mut conn).await?;
+        self.acquire_write_lock(&mut conn).await?;
 
-        let result = Self::try_reserve_leaves_inner(
-            &mut conn,
-            &reservation_id,
-            target_amounts,
-            target_amount,
-            exact_only,
-            purpose,
-        )
-        .await;
-        Self::release_write_lock_quiet(&mut conn).await;
+        let result = self
+            .try_reserve_leaves_inner(
+                &mut conn,
+                &reservation_id,
+                target_amounts,
+                target_amount,
+                exact_only,
+                purpose,
+            )
+            .await;
+        self.release_write_lock_quiet(&mut conn).await;
         let reserve_result = result?;
         if matches!(reserve_result, ReserveResult::Success(_)) {
             self.notify_balance_change();
@@ -287,13 +455,9 @@ impl TreeStore for MysqlTreeStore {
     ) -> Result<LeavesReservation, TreeServiceError> {
         // Scoped to a single `reservation_id`; row-level FK + MVCC suffice.
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        let reservation = Self::update_reservation_inner(
-            &mut conn,
-            reservation_id,
-            reserved_leaves,
-            change_leaves,
-        )
-        .await?;
+        let reservation = self
+            .update_reservation_inner(&mut conn, reservation_id, reserved_leaves, change_leaves)
+            .await?;
         trace!(
             "Updated reservation {}: reserved {} leaves, added {} change leaves",
             reservation_id,
@@ -307,21 +471,28 @@ impl TreeStore for MysqlTreeStore {
 
 impl MysqlTreeStore {
     /// Creates a new `MysqlTreeStore` from a configuration.
-    pub async fn from_config(config: MysqlStorageConfig) -> Result<Self, MysqlError> {
+    /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
+    pub async fn from_config(
+        config: MysqlStorageConfig,
+        identity: &[u8],
+    ) -> Result<Self, MysqlError> {
         let pool = create_pool(&config)?;
-        Self::init(pool).await
+        Self::init(pool, identity).await
     }
 
     /// Creates a new `MysqlTreeStore` from an existing connection pool.
-    pub async fn from_pool(pool: Pool) -> Result<Self, MysqlError> {
-        Self::init(pool).await
+    /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
+    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
+        Self::init(pool, identity).await
     }
 
-    async fn init(pool: Pool) -> Result<Self, MysqlError> {
+    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
         let store = Self {
             pool,
+            identity: identity.to_vec(),
+            lock_name: identity_lock_name(TREE_STORE_LOCK_PREFIX, identity),
             balance_changed_tx: Arc::new(balance_changed_tx),
             balance_changed_rx,
         };
@@ -333,17 +504,22 @@ impl MysqlTreeStore {
     }
 
     async fn migrate(&self) -> Result<(), MysqlError> {
-        run_migrations(&self.pool, TREE_MIGRATIONS_TABLE, &Self::migrations()).await
+        run_migrations(
+            &self.pool,
+            TREE_MIGRATIONS_TABLE,
+            &Self::migrations(&self.identity),
+        )
+        .await
     }
 
-    fn migrations() -> Vec<&'static [Migration]> {
+    fn migrations(identity: &[u8]) -> Vec<Vec<Migration>> {
         vec![
             // Migration 1: Initial tree tables.
             //
             // Reservations are referenced via FK so that ON DELETE SET NULL
             // releases the leaves automatically when a reservation is dropped.
-            &[
-                Migration::Sql(
+            vec![
+                Migration::sql(
                     "CREATE TABLE IF NOT EXISTS tree_reservations (
                         id VARCHAR(255) NOT NULL PRIMARY KEY,
                         purpose VARCHAR(64) NOT NULL,
@@ -351,7 +527,7 @@ impl MysqlTreeStore {
                         created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                     )",
                 ),
-                Migration::Sql(
+                Migration::sql(
                     "CREATE TABLE IF NOT EXISTS tree_leaves (
                         id VARCHAR(255) NOT NULL PRIMARY KEY,
                         status VARCHAR(64) NOT NULL,
@@ -364,7 +540,7 @@ impl MysqlTreeStore {
                             REFERENCES tree_reservations(id) ON DELETE SET NULL
                     )",
                 ),
-                Migration::Sql(
+                Migration::sql(
                     "CREATE TABLE IF NOT EXISTS tree_spent_leaves (
                         leaf_id VARCHAR(255) NOT NULL PRIMARY KEY,
                         spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
@@ -387,15 +563,15 @@ impl MysqlTreeStore {
                 },
             ],
             // Migration 2: Swap status tracking.
-            &[
-                Migration::Sql(
+            vec![
+                Migration::sql(
                     "CREATE TABLE IF NOT EXISTS tree_swap_status (
                         id INT NOT NULL PRIMARY KEY DEFAULT 1,
                         last_completed_at DATETIME(6) NULL,
                         CHECK (id = 1)
                     )",
                 ),
-                Migration::Sql(
+                Migration::sql(
                     "INSERT INTO tree_swap_status (id) VALUES (1)
                      ON DUPLICATE KEY UPDATE id = id",
                 ),
@@ -406,7 +582,7 @@ impl MysqlTreeStore {
             // `(data->>'value')::bigint` expression. Also adds a composite index
             // `(status, is_missing_from_operators, reservation_id, value)` so
             // the slim selection in `try_reserve_leaves` is index-only.
-            &[
+            vec![
                 Migration::AddColumn {
                     table: "tree_leaves",
                     column: "value",
@@ -415,7 +591,7 @@ impl MysqlTreeStore {
                 // Backfill existing rows from the JSON. Re-running this is a
                 // no-op because by then `value` is already populated and the
                 // `WHERE value = 0` predicate filters everything out.
-                Migration::Sql(
+                Migration::sql(
                     "UPDATE tree_leaves
                         SET value = CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
                         WHERE value = 0",
@@ -426,6 +602,12 @@ impl MysqlTreeStore {
                     columns: "(status, is_missing_from_operators, reservation_id, value)",
                 },
             ],
+            // Migration 4: Multi-tenant scoping. Adds user_id to every tree-
+            // store table, backfills with the connecting tenant's identity, and
+            // rewrites primary keys / FKs / indexes to lead with user_id. The
+            // `tree_swap_status` singleton is restructured the same way as
+            // `sync_revision` in the SDK-core storage.
+            tree_store_multi_tenant_migration(identity),
         ]
     }
 
@@ -433,13 +615,14 @@ impl MysqlTreeStore {
         let _ = self.balance_changed_tx.send(());
     }
 
-    /// Acquires the write lock for this connection. Held until `release_write_lock`
-    /// is called or the connection is returned to the pool.
-    async fn acquire_write_lock(conn: &mut Conn) -> Result<(), TreeServiceError> {
+    /// Acquires the per-tenant write lock for this connection. Held until
+    /// `release_write_lock_quiet` is called or the connection is returned to
+    /// the pool.
+    async fn acquire_write_lock(&self, conn: &mut Conn) -> Result<(), TreeServiceError> {
         let acquired: Option<i64> = conn
             .exec_first(
                 "SELECT GET_LOCK(?, ?)",
-                (TREE_STORE_WRITE_LOCK_NAME, WRITE_LOCK_TIMEOUT_SECS),
+                (self.lock_name.as_str(), WRITE_LOCK_TIMEOUT_SECS),
             )
             .await
             .map_err(map_err)?;
@@ -453,9 +636,9 @@ impl MysqlTreeStore {
 
     /// Releases the write lock, swallowing any error so it doesn't mask the
     /// caller's actual result.
-    async fn release_write_lock_quiet(conn: &mut Conn) {
+    async fn release_write_lock_quiet(&self, conn: &mut Conn) {
         let _ = conn
-            .exec_drop("SELECT RELEASE_LOCK(?)", (TREE_STORE_WRITE_LOCK_NAME,))
+            .exec_drop("SELECT RELEASE_LOCK(?)", (self.lock_name.as_str(),))
             .await;
     }
 
@@ -470,6 +653,7 @@ impl MysqlTreeStore {
     }
 
     async fn add_leaves_inner(
+        &self,
         conn: &mut Conn,
         leaves: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
@@ -479,8 +663,9 @@ impl MysqlTreeStore {
             .map_err(map_err)?;
 
         let leaf_ids: Vec<String> = leaves.iter().map(|l| l.id.to_string()).collect();
-        Self::batch_remove_spent_leaves(&mut tx, &leaf_ids).await?;
-        Self::batch_upsert_leaves(&mut tx, leaves, false, None).await?;
+        self.batch_remove_spent_leaves(&mut tx, &leaf_ids).await?;
+        self.batch_upsert_leaves(&mut tx, leaves, false, None)
+            .await?;
 
         tx.commit().await.map_err(map_err)?;
         tracing::trace!(
@@ -491,6 +676,7 @@ impl MysqlTreeStore {
     }
 
     async fn set_leaves_inner(
+        &self,
         conn: &mut Conn,
         leaves: &[TreeNode],
         missing_operators_leaves: &[TreeNode],
@@ -501,19 +687,23 @@ impl MysqlTreeStore {
             .await
             .map_err(map_err)?;
 
-        Self::cleanup_stale_reservations(&mut tx).await?;
+        self.cleanup_stale_reservations(&mut tx).await?;
 
         // Check if any swap reservation is currently active, or if a swap completed
         // after this refresh started (making the refresh data potentially inconsistent).
         let row: Option<(i64, i64)> = tx
             .exec_first(
                 r"SELECT
-                    (SELECT EXISTS(SELECT 1 FROM tree_reservations WHERE purpose = 'Swap')) AS has_active_swap,
+                    (SELECT EXISTS(SELECT 1 FROM tree_reservations WHERE user_id = ? AND purpose = 'Swap')) AS has_active_swap,
                     COALESCE(
-                        (SELECT (last_completed_at >= ?) FROM tree_swap_status WHERE id = 1),
+                        (SELECT (last_completed_at >= ?) FROM tree_swap_status WHERE user_id = ?),
                         0
                     ) AS swap_completed_during_refresh",
-                (refresh_timestamp.naive_utc(),),
+                (
+                    self.identity.clone(),
+                    refresh_timestamp.naive_utc(),
+                    self.identity.clone(),
+                ),
             )
             .await
             .map_err(map_err)?;
@@ -527,19 +717,16 @@ impl MysqlTreeStore {
                 "leaf_lifecycle set_leaves: SKIP active_swap={} swap_completed_during_refresh={} refresh_timestamp={:?}",
                 has_active_swap, swap_completed_during_refresh, refresh_timestamp
             );
-            // Drop the in-flight cleanup work by letting the transaction roll
-            // back on drop, matching the postgres impl. The
-            // `cleanup_stale_reservations` DELETE is idempotent so the next
-            // refresh re-runs it harmlessly.
             return Ok(());
         }
 
-        Self::cleanup_spent_markers(&mut tx, refresh_timestamp).await?;
+        self.cleanup_spent_markers(&mut tx, refresh_timestamp)
+            .await?;
 
         let spent_rows: Vec<String> = tx
             .exec(
-                "SELECT leaf_id FROM tree_spent_leaves WHERE spent_at >= ?",
-                (refresh_timestamp.naive_utc(),),
+                "SELECT leaf_id FROM tree_spent_leaves WHERE user_id = ? AND spent_at >= ?",
+                (self.identity.clone(), refresh_timestamp.naive_utc()),
             )
             .await
             .map_err(map_err)?;
@@ -551,16 +738,20 @@ impl MysqlTreeStore {
             spent_ids
         );
 
-        // Delete non-reserved leaves added before refresh started.
+        // Delete non-reserved leaves added before refresh started. Includes
+        // leaves released earlier in this transaction by
+        // `cleanup_stale_reservations` (which clears `reservation_id`
+        // explicitly because the composite FK uses NO ACTION).
         tx.exec_drop(
-            "DELETE FROM tree_leaves WHERE reservation_id IS NULL AND added_at < ?",
-            (refresh_timestamp.naive_utc(),),
+            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
+            (self.identity.clone(), refresh_timestamp.naive_utc()),
         )
         .await
         .map_err(map_err)?;
 
-        Self::batch_upsert_leaves(&mut tx, leaves, false, Some(&spent_ids)).await?;
-        Self::batch_upsert_leaves(&mut tx, missing_operators_leaves, true, Some(&spent_ids))
+        self.batch_upsert_leaves(&mut tx, leaves, false, Some(&spent_ids))
+            .await?;
+        self.batch_upsert_leaves(&mut tx, missing_operators_leaves, true, Some(&spent_ids))
             .await?;
 
         tx.commit().await.map_err(map_err)?;
@@ -568,6 +759,7 @@ impl MysqlTreeStore {
     }
 
     async fn cancel_reservation_inner(
+        &self,
         conn: &mut Conn,
         id: &LeavesReservationId,
         leaves_to_keep: &[TreeNode],
@@ -578,7 +770,10 @@ impl MysqlTreeStore {
             .map_err(map_err)?;
 
         let exists: Option<String> = tx
-            .exec_first("SELECT id FROM tree_reservations WHERE id = ?", (id,))
+            .exec_first(
+                "SELECT id FROM tree_reservations WHERE user_id = ? AND id = ?",
+                (self.identity.clone(), id),
+            )
             .await
             .map_err(map_err)?;
         if exists.is_none() {
@@ -587,7 +782,10 @@ impl MysqlTreeStore {
         }
 
         let prior_leaf_ids: Vec<String> = tx
-            .exec("SELECT id FROM tree_leaves WHERE reservation_id = ?", (id,))
+            .exec(
+                "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+                (self.identity.clone(), id),
+            )
             .await
             .map_err(map_err)?;
         let keep_ids: Vec<String> = leaves_to_keep.iter().map(|l| l.id.to_string()).collect();
@@ -600,21 +798,29 @@ impl MysqlTreeStore {
             id, prior_leaf_ids, keep_ids, dropped_ids
         );
 
-        tx.exec_drop("DELETE FROM tree_leaves WHERE reservation_id = ?", (id,))
-            .await
-            .map_err(map_err)?;
+        tx.exec_drop(
+            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            (self.identity.clone(), id),
+        )
+        .await
+        .map_err(map_err)?;
 
-        tx.exec_drop("DELETE FROM tree_reservations WHERE id = ?", (id,))
-            .await
-            .map_err(map_err)?;
+        tx.exec_drop(
+            "DELETE FROM tree_reservations WHERE user_id = ? AND id = ?",
+            (self.identity.clone(), id),
+        )
+        .await
+        .map_err(map_err)?;
 
-        Self::batch_upsert_leaves(&mut tx, leaves_to_keep, false, None).await?;
+        self.batch_upsert_leaves(&mut tx, leaves_to_keep, false, None)
+            .await?;
 
         tx.commit().await.map_err(map_err)?;
         Ok(())
     }
 
     async fn finalize_reservation_inner(
+        &self,
         conn: &mut Conn,
         id: &LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
@@ -625,14 +831,20 @@ impl MysqlTreeStore {
             .map_err(map_err)?;
 
         let purpose: Option<String> = tx
-            .exec_first("SELECT purpose FROM tree_reservations WHERE id = ?", (id,))
+            .exec_first(
+                "SELECT purpose FROM tree_reservations WHERE user_id = ? AND id = ?",
+                (self.identity.clone(), id),
+            )
             .await
             .map_err(map_err)?;
 
         let (is_swap, reserved_leaf_ids) = if let Some(purpose) = purpose {
             let is_swap = purpose == "Swap";
             let leaf_ids: Vec<String> = tx
-                .exec("SELECT id FROM tree_leaves WHERE reservation_id = ?", (id,))
+                .exec(
+                    "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+                    (self.identity.clone(), id),
+                )
                 .await
                 .map_err(map_err)?;
             (is_swap, leaf_ids)
@@ -647,15 +859,22 @@ impl MysqlTreeStore {
             reserved_leaf_ids,
             new_leaves.map_or(0, <[TreeNode]>::len)
         );
-        Self::batch_insert_spent_leaves(&mut tx, &reserved_leaf_ids).await?;
+        self.batch_insert_spent_leaves(&mut tx, &reserved_leaf_ids)
+            .await?;
 
-        tx.exec_drop("DELETE FROM tree_leaves WHERE reservation_id = ?", (id,))
-            .await
-            .map_err(map_err)?;
+        tx.exec_drop(
+            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            (self.identity.clone(), id),
+        )
+        .await
+        .map_err(map_err)?;
 
-        tx.exec_drop("DELETE FROM tree_reservations WHERE id = ?", (id,))
-            .await
-            .map_err(map_err)?;
+        tx.exec_drop(
+            "DELETE FROM tree_reservations WHERE user_id = ? AND id = ?",
+            (self.identity.clone(), id),
+        )
+        .await
+        .map_err(map_err)?;
 
         if let Some(leaves) = new_leaves {
             for l in leaves {
@@ -664,13 +883,21 @@ impl MysqlTreeStore {
                     l.id, l.value, id
                 );
             }
-            Self::batch_upsert_leaves(&mut tx, leaves, false, None).await?;
+            self.batch_upsert_leaves(&mut tx, leaves, false, None)
+                .await?;
         }
 
+        // If swap with new leaves, update last_completed_at. UPSERT so a
+        // tenant that joined after the multi-tenant migration (and thus has
+        // no row) gets one created lazily.
         if is_swap && new_leaves.is_some() {
-            tx.query_drop("UPDATE tree_swap_status SET last_completed_at = NOW(6) WHERE id = 1")
-                .await
-                .map_err(map_err)?;
+            tx.exec_drop(
+                "INSERT INTO tree_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
+                 ON DUPLICATE KEY UPDATE last_completed_at = VALUES(last_completed_at)",
+                (self.identity.clone(),),
+            )
+            .await
+            .map_err(map_err)?;
         }
 
         tx.commit().await.map_err(map_err)?;
@@ -679,6 +906,7 @@ impl MysqlTreeStore {
 
     #[allow(clippy::arithmetic_side_effects, clippy::too_many_lines)]
     async fn try_reserve_leaves_inner(
+        &self,
         conn: &mut Conn,
         reservation_id: &str,
         target_amounts: Option<&TargetAmounts>,
@@ -697,28 +925,27 @@ impl MysqlTreeStore {
         // WaitForPending decision. Must NOT be derived from the prefiltered
         // slim set since the prefilter excludes big leaves.
         let total_row: Option<i64> = tx
-            .query_first(
+            .exec_first(
                 r"SELECT COALESCE(SUM(value), 0) AS total
                   FROM tree_leaves
-                  WHERE status = 'Available'
+                  WHERE user_id = ?
+                    AND status = 'Available'
                     AND is_missing_from_operators = 0
                     AND reservation_id IS NULL",
+                (self.identity.clone(),),
             )
             .await
             .map_err(map_err)?;
         let available: u64 = u64::try_from(total_row.unwrap_or(0)).unwrap_or(0);
 
         // Slim projection of selection candidates: id + value only.
-        // Includes all leaves with value <= max_target (covers exact-match +
-        // minimum-amount accumulators) plus the smallest leaf with value >
-        // max_target (covers the minimum-amount fallback case where one larger
-        // leaf is sufficient).
         let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
         let slim_rows: Vec<(String, i64)> = tx
             .exec(
                 r"SELECT id, value
                   FROM tree_leaves
-                  WHERE status = 'Available'
+                  WHERE user_id = ?
+                    AND status = 'Available'
                     AND is_missing_from_operators = 0
                     AND reservation_id IS NULL
                     AND (
@@ -726,7 +953,8 @@ impl MysqlTreeStore {
                       OR id = (
                         SELECT id FROM (
                           SELECT id FROM tree_leaves
-                          WHERE status = 'Available'
+                          WHERE user_id = ?
+                            AND status = 'Available'
                             AND is_missing_from_operators = 0
                             AND reservation_id IS NULL
                             AND value > ?
@@ -735,7 +963,12 @@ impl MysqlTreeStore {
                         ) AS smallest_over
                       )
                     )",
-                (max_target_signed, max_target_signed),
+                (
+                    self.identity.clone(),
+                    max_target_signed,
+                    self.identity.clone(),
+                    max_target_signed,
+                ),
             )
             .await
             .map_err(map_err)?;
@@ -748,7 +981,7 @@ impl MysqlTreeStore {
             })
             .collect();
 
-        let pending = Self::calculate_pending_balance(&mut tx).await?;
+        let pending = self.calculate_pending_balance(&mut tx).await?;
 
         // Try exact selection on the slim set — uses the same generic
         // `select_helper` algorithm as the in-memory store.
@@ -765,8 +998,8 @@ impl MysqlTreeStore {
                 if selected_ids.is_empty() {
                     return Err(TreeServiceError::NonReservableLeaves);
                 }
-                let selected_leaves = Self::resolve_full_leaves(&mut tx, &selected_ids).await?;
-                Self::create_reservation(&mut tx, reservation_id, &selected_leaves, purpose, 0)
+                let selected_leaves = self.resolve_full_leaves(&mut tx, &selected_ids).await?;
+                self.create_reservation(&mut tx, reservation_id, &selected_leaves, purpose, 0)
                     .await?;
                 tx.commit().await.map_err(map_err)?;
                 Ok(ReserveResult::Success(LeavesReservation::new(
@@ -777,14 +1010,14 @@ impl MysqlTreeStore {
             Err(_) if !exact_only => {
                 if let Ok(Some(min_slim)) = select_leaves_by_minimum_amount(&slim, target_amount) {
                     let min_ids: Vec<String> = min_slim.iter().map(|l| l.id.clone()).collect();
-                    let selected_leaves = Self::resolve_full_leaves(&mut tx, &min_ids).await?;
+                    let selected_leaves = self.resolve_full_leaves(&mut tx, &min_ids).await?;
                     let reserved_amount: u64 = selected_leaves.iter().map(|l| l.value).sum();
                     let pending_change = if reserved_amount > target_amount && target_amount > 0 {
                         reserved_amount - target_amount
                     } else {
                         0
                     };
-                    Self::create_reservation(
+                    self.create_reservation(
                         &mut tx,
                         reservation_id,
                         &selected_leaves,
@@ -859,6 +1092,7 @@ impl MysqlTreeStore {
     /// picked, preserving the algorithm's selection order. Typically 1-3 rows
     /// even when the slim candidate set was thousands.
     async fn resolve_full_leaves(
+        &self,
         tx: &mut mysql_async::Transaction<'_>,
         ids: &[String],
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
@@ -866,8 +1100,12 @@ impl MysqlTreeStore {
             return Ok(Vec::new());
         }
         let placeholders = build_placeholders(ids.len());
-        let sql = format!("SELECT id, data FROM tree_leaves WHERE id IN ({placeholders})");
-        let params: Vec<Value> = ids.iter().cloned().map(Value::from).collect();
+        let sql = format!(
+            "SELECT id, data FROM tree_leaves WHERE user_id = ? AND id IN ({placeholders})"
+        );
+        let mut params: Vec<Value> = Vec::with_capacity(ids.len().saturating_add(1));
+        params.push(Value::from(self.identity.clone()));
+        params.extend(ids.iter().cloned().map(Value::from));
         let rows: Vec<(String, String)> = tx
             .exec(&sql, Params::Positional(params))
             .await
@@ -889,6 +1127,7 @@ impl MysqlTreeStore {
     }
 
     async fn update_reservation_inner(
+        &self,
         conn: &mut Conn,
         reservation_id: &LeavesReservationId,
         reserved_leaves: &[TreeNode],
@@ -901,8 +1140,8 @@ impl MysqlTreeStore {
 
         let exists: Option<String> = tx
             .exec_first(
-                "SELECT id FROM tree_reservations WHERE id = ?",
-                (reservation_id,),
+                "SELECT id FROM tree_reservations WHERE user_id = ? AND id = ?",
+                (self.identity.clone(), reservation_id),
             )
             .await
             .map_err(map_err)?;
@@ -915,29 +1154,33 @@ impl MysqlTreeStore {
 
         let old_reserved_leaf_ids: Vec<String> = tx
             .exec(
-                "SELECT id FROM tree_leaves WHERE reservation_id = ?",
-                (reservation_id,),
+                "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+                (self.identity.clone(), reservation_id),
             )
             .await
             .map_err(map_err)?;
 
-        Self::batch_insert_spent_leaves(&mut tx, &old_reserved_leaf_ids).await?;
+        self.batch_insert_spent_leaves(&mut tx, &old_reserved_leaf_ids)
+            .await?;
         tx.exec_drop(
-            "DELETE FROM tree_leaves WHERE reservation_id = ?",
-            (reservation_id,),
+            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            (self.identity.clone(), reservation_id),
         )
         .await
         .map_err(map_err)?;
 
-        Self::batch_upsert_leaves(&mut tx, change_leaves, false, None).await?;
-        Self::batch_upsert_leaves(&mut tx, reserved_leaves, false, None).await?;
+        self.batch_upsert_leaves(&mut tx, change_leaves, false, None)
+            .await?;
+        self.batch_upsert_leaves(&mut tx, reserved_leaves, false, None)
+            .await?;
 
         let leaf_ids: Vec<String> = reserved_leaves.iter().map(|l| l.id.to_string()).collect();
-        Self::batch_set_reservation_id(&mut tx, reservation_id, &leaf_ids).await?;
+        self.batch_set_reservation_id(&mut tx, reservation_id, &leaf_ids)
+            .await?;
 
         tx.exec_drop(
-            "UPDATE tree_reservations SET pending_change_amount = 0 WHERE id = ?",
-            (reservation_id,),
+            "UPDATE tree_reservations SET pending_change_amount = 0 WHERE user_id = ? AND id = ?",
+            (self.identity.clone(), reservation_id),
         )
         .await
         .map_err(map_err)?;
@@ -951,10 +1194,14 @@ impl MysqlTreeStore {
     }
 
     async fn calculate_pending_balance(
+        &self,
         tx: &mut mysql_async::Transaction<'_>,
     ) -> Result<u64, TreeServiceError> {
         let row: Option<i64> = tx
-            .query_first("SELECT COALESCE(SUM(pending_change_amount), 0) FROM tree_reservations")
+            .exec_first(
+                "SELECT COALESCE(SUM(pending_change_amount), 0) FROM tree_reservations WHERE user_id = ?",
+                (self.identity.clone(),),
+            )
             .await
             .map_err(map_err)?;
 
@@ -966,6 +1213,7 @@ impl MysqlTreeStore {
     /// Uses `ON DUPLICATE KEY UPDATE` to replace existing leaves.
     #[allow(clippy::arithmetic_side_effects)] // `len * 4` for params capacity, bounded by leaves slice
     async fn batch_upsert_leaves(
+        &self,
         tx: &mut mysql_async::Transaction<'_>,
         leaves: &[TreeNode],
         is_missing_from_operators: bool,
@@ -993,18 +1241,19 @@ impl MysqlTreeStore {
             return Ok(());
         }
 
-        // Build VALUES (?, ?, ?, ?, ?, NOW(6)), …
+        // Build VALUES (?, ?, ?, ?, ?, ?, NOW(6)), … with user_id as the first column.
         let mut sql = String::from(
-            "INSERT INTO tree_leaves (id, status, is_missing_from_operators, data, value, added_at) VALUES ",
+            "INSERT INTO tree_leaves (user_id, id, status, is_missing_from_operators, data, value, added_at) VALUES ",
         );
-        let mut params: Vec<Value> = Vec::with_capacity(filtered.len() * 5);
+        let mut params: Vec<Value> = Vec::with_capacity(filtered.len() * 6);
         for (i, leaf) in filtered.iter().enumerate() {
             if i > 0 {
                 sql.push_str(", ");
             }
-            sql.push_str("(?, ?, ?, ?, ?, NOW(6))");
+            sql.push_str("(?, ?, ?, ?, ?, ?, NOW(6))");
             #[allow(clippy::cast_possible_wrap)]
             let value_i64 = leaf.value as i64;
+            params.push(Value::from(self.identity.clone()));
             params.push(Value::from(leaf.id.to_string()));
             params.push(Value::from(leaf.status.to_string()));
             params.push(Value::from(is_missing_from_operators));
@@ -1027,8 +1276,9 @@ impl MysqlTreeStore {
         Ok(())
     }
 
-    #[allow(clippy::arithmetic_side_effects)] // `len + 1` for params capacity
+    #[allow(clippy::arithmetic_side_effects)] // `len + 2` for params capacity
     async fn batch_set_reservation_id(
+        &self,
         tx: &mut mysql_async::Transaction<'_>,
         reservation_id: &str,
         leaf_ids: &[String],
@@ -1038,10 +1288,13 @@ impl MysqlTreeStore {
         }
 
         let placeholders = build_placeholders(leaf_ids.len());
-        let sql = format!("UPDATE tree_leaves SET reservation_id = ? WHERE id IN ({placeholders})");
+        let sql = format!(
+            "UPDATE tree_leaves SET reservation_id = ? WHERE user_id = ? AND id IN ({placeholders})"
+        );
 
-        let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len() + 1);
+        let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len() + 2);
         params.push(Value::from(reservation_id));
+        params.push(Value::from(self.identity.clone()));
         for id in leaf_ids {
             params.push(Value::from(id.clone()));
         }
@@ -1054,6 +1307,7 @@ impl MysqlTreeStore {
     }
 
     async fn batch_insert_spent_leaves(
+        &self,
         tx: &mut mysql_async::Transaction<'_>,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
@@ -1061,13 +1315,14 @@ impl MysqlTreeStore {
             return Ok(());
         }
 
-        let mut sql = String::from("INSERT INTO tree_spent_leaves (leaf_id) VALUES ");
-        let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len());
+        let mut sql = String::from("INSERT INTO tree_spent_leaves (user_id, leaf_id) VALUES ");
+        let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len().saturating_mul(2));
         for (i, id) in leaf_ids.iter().enumerate() {
             if i > 0 {
                 sql.push_str(", ");
             }
-            sql.push_str("(?)");
+            sql.push_str("(?, ?)");
+            params.push(Value::from(self.identity.clone()));
             params.push(Value::from(id.clone()));
         }
         // Suppress duplicate-PK errors only — unlike INSERT IGNORE, real
@@ -1083,6 +1338,7 @@ impl MysqlTreeStore {
     }
 
     async fn batch_remove_spent_leaves(
+        &self,
         tx: &mut mysql_async::Transaction<'_>,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
@@ -1091,9 +1347,13 @@ impl MysqlTreeStore {
         }
 
         let placeholders = build_placeholders(leaf_ids.len());
-        let sql = format!("DELETE FROM tree_spent_leaves WHERE leaf_id IN ({placeholders})");
+        let sql = format!(
+            "DELETE FROM tree_spent_leaves WHERE user_id = ? AND leaf_id IN ({placeholders})"
+        );
 
-        let params: Vec<Value> = leaf_ids.iter().cloned().map(Value::from).collect();
+        let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len().saturating_add(1));
+        params.push(Value::from(self.identity.clone()));
+        params.extend(leaf_ids.iter().cloned().map(Value::from));
         let mut result = tx
             .exec_iter(&sql, Params::Positional(params))
             .await
@@ -1112,14 +1372,39 @@ impl MysqlTreeStore {
         Ok(())
     }
 
+    /// Cleans up stale reservations for THIS tenant. Releases dependent leaves
+    /// by clearing their `reservation_id` first, then deletes the parent
+    /// reservation rows — the composite FK uses NO ACTION because column-list
+    /// SET NULL would null `user_id` (NOT NULL).
     async fn cleanup_stale_reservations(
+        &self,
         tx: &mut mysql_async::Transaction<'_>,
     ) -> Result<u64, TreeServiceError> {
+        // Release dependent leaves before dropping the parent rows.
+        tx.exec_drop(
+            r"UPDATE tree_leaves SET reservation_id = NULL
+              WHERE user_id = ?
+                AND reservation_id IN (
+                    SELECT id FROM (
+                        SELECT id FROM tree_reservations
+                        WHERE user_id = ?
+                          AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)
+                    ) AS stale
+                )",
+            (
+                self.identity.clone(),
+                self.identity.clone(),
+                RESERVATION_TIMEOUT_SECS,
+            ),
+        )
+        .await
+        .map_err(map_err)?;
+
         let mut result = tx
             .exec_iter(
                 "DELETE FROM tree_reservations
-                 WHERE created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)",
-                (RESERVATION_TIMEOUT_SECS,),
+                 WHERE user_id = ? AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)",
+                (self.identity.clone(), RESERVATION_TIMEOUT_SECS),
             )
             .await
             .map_err(map_err)?;
@@ -1134,6 +1419,7 @@ impl MysqlTreeStore {
     }
 
     async fn cleanup_spent_markers(
+        &self,
         tx: &mut mysql_async::Transaction<'_>,
         refresh_timestamp: DateTime<Utc>,
     ) -> Result<u64, TreeServiceError> {
@@ -1144,8 +1430,8 @@ impl MysqlTreeStore {
 
         let mut result = tx
             .exec_iter(
-                "DELETE FROM tree_spent_leaves WHERE spent_at < ?",
-                (cleanup_cutoff.naive_utc(),),
+                "DELETE FROM tree_spent_leaves WHERE user_id = ? AND spent_at < ?",
+                (self.identity.clone(), cleanup_cutoff.naive_utc()),
             )
             .await
             .map_err(map_err)?;
@@ -1160,6 +1446,7 @@ impl MysqlTreeStore {
     }
 
     async fn create_reservation(
+        &self,
         tx: &mut mysql_async::Transaction<'_>,
         reservation_id: &str,
         leaves: &[TreeNode],
@@ -1170,8 +1457,8 @@ impl MysqlTreeStore {
         let pending_i64 = pending_change as i64;
 
         tx.exec_drop(
-            "INSERT INTO tree_reservations (id, purpose, pending_change_amount) VALUES (?, ?, ?)",
-            (reservation_id, purpose.to_string(), pending_i64),
+            "INSERT INTO tree_reservations (user_id, id, purpose, pending_change_amount) VALUES (?, ?, ?, ?)",
+            (self.identity.clone(), reservation_id, purpose.to_string(), pending_i64),
         )
         .await
         .map_err(map_err)?;
@@ -1181,7 +1468,8 @@ impl MysqlTreeStore {
             "leaf_lifecycle reserve: reservation={} purpose={:?} leaf_ids={:?}",
             reservation_id, purpose, leaf_ids
         );
-        Self::batch_set_reservation_id(tx, reservation_id, &leaf_ids).await?;
+        self.batch_set_reservation_id(tx, reservation_id, &leaf_ids)
+            .await?;
 
         Ok(())
     }
@@ -1204,17 +1492,25 @@ fn map_err<E: std::fmt::Display>(e: E) -> TreeServiceError {
 }
 
 /// Creates a `MysqlTreeStore` instance from a configuration.
+///
+/// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
 pub async fn create_mysql_tree_store(
     config: MysqlStorageConfig,
+    identity: &[u8],
 ) -> Result<Arc<dyn TreeStore>, MysqlError> {
-    Ok(Arc::new(MysqlTreeStore::from_config(config).await?))
+    Ok(Arc::new(
+        MysqlTreeStore::from_config(config, identity).await?,
+    ))
 }
 
 /// Creates a `MysqlTreeStore` instance from an existing connection pool.
+///
+/// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
 pub async fn create_mysql_tree_store_from_pool(
     pool: Pool,
+    identity: &[u8],
 ) -> Result<Arc<dyn TreeStore>, MysqlError> {
-    Ok(Arc::new(MysqlTreeStore::from_pool(pool).await?))
+    Ok(Arc::new(MysqlTreeStore::from_pool(pool, identity).await?))
 }
 
 #[cfg(test)]
@@ -1224,6 +1520,14 @@ mod tests {
     use std::sync::Arc;
     use testcontainers::{ContainerAsync, runners::AsyncRunner};
     use testcontainers_modules::mysql::Mysql;
+
+    /// Fixed 33-byte test identity. Tests run in their own ephemeral container,
+    /// so a single shared identity is fine — the schema still gets exercised.
+    pub(super) const TEST_IDENTITY: [u8; 33] = [
+        0x02, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+        0x1e, 0x1f, 0x20,
+    ];
 
     /// Helper struct that holds the container and store together.
     /// The container must be kept alive for the duration of the test.
@@ -1249,10 +1553,12 @@ mod tests {
             // and no password.
             let connection_string = format!("mysql://root@127.0.0.1:{host_port}/test");
 
-            let store =
-                MysqlTreeStore::from_config(MysqlStorageConfig::with_defaults(connection_string))
-                    .await
-                    .expect("Failed to create MysqlTreeStore");
+            let store = MysqlTreeStore::from_config(
+                MysqlStorageConfig::with_defaults(connection_string),
+                &TEST_IDENTITY,
+            )
+            .await
+            .expect("Failed to create MysqlTreeStore");
 
             Self { store, container }
         }
@@ -1743,12 +2049,14 @@ mod tests {
         .await
         .unwrap();
 
-        // Hold the named lock on a separate connection so finalize must wait.
+        // Hold the per-tenant named lock on a separate connection so finalize
+        // must wait. Must use the same lock name as `acquire_write_lock`.
+        let lock_name = fixture.store.lock_name.clone();
         let mut holder = fixture.store.pool.get_conn().await.unwrap();
         let acquired: Option<i64> = holder
             .exec_first(
                 "SELECT GET_LOCK(?, ?)",
-                (TREE_STORE_WRITE_LOCK_NAME, WRITE_LOCK_TIMEOUT_SECS),
+                (lock_name.as_str(), WRITE_LOCK_TIMEOUT_SECS),
             )
             .await
             .unwrap();
@@ -1771,7 +2079,7 @@ mod tests {
 
         // Release the lock — finalize should complete shortly.
         holder
-            .exec_drop("SELECT RELEASE_LOCK(?)", (TREE_STORE_WRITE_LOCK_NAME,))
+            .exec_drop("SELECT RELEASE_LOCK(?)", (lock_name.as_str(),))
             .await
             .unwrap();
         drop(holder);
@@ -1790,5 +2098,506 @@ mod tests {
                 .any(|l| l.id.to_string() == "locked_leaf"),
             "Spent leaf should not be Available"
         );
+    }
+
+    #[tokio::test]
+    async fn test_fresh_reservation_not_cleaned_up() {
+        // Test that fresh (non-stale) reservations are NOT cleaned up during set_leaves
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        fixture.store.add_leaves(&leaves).await.unwrap();
+
+        // Create a reservation (this will have a fresh created_at timestamp)
+        let _reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+
+        // Verify the reservation exists
+        let all_leaves = fixture.store.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.reserved_for_payment.len(), 1);
+
+        // Call set_leaves - should NOT clean up fresh reservation
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let refresh_start = SystemTime::now();
+        let refresh_leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        fixture
+            .store
+            .set_leaves(&refresh_leaves, &[], refresh_start)
+            .await
+            .unwrap();
+
+        // Verify the fresh reservation was NOT cleaned up
+        let all_leaves = fixture.store.get_leaves().await.unwrap();
+        assert_eq!(
+            all_leaves.reserved_for_payment.len(),
+            1,
+            "Fresh reservation should NOT be cleaned up"
+        );
+        assert_eq!(all_leaves.available.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_stale_swap_reservation_does_not_block_set_leaves() {
+        // Regression test: a stale Swap reservation must be cleaned up before
+        // has_active_swap is evaluated, otherwise the reservation pins itself in
+        // place — set_leaves early-returns on has_active_swap, never reaches the
+        // cleanup, and the wallet's leaf set freezes at the snapshot when the swap
+        // started.
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        let leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+        ];
+        fixture.store.add_leaves(&leaves).await.unwrap();
+
+        let reservation = reserve_leaves(
+            &fixture.store,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Swap,
+        )
+        .await
+        .unwrap();
+
+        let all_leaves = fixture.store.get_leaves().await.unwrap();
+        assert_eq!(all_leaves.reserved_for_swap.len(), 1);
+        assert_eq!(all_leaves.available.len(), 1);
+
+        // Backdate the swap reservation past the 5-minute timeout.
+        let mut conn = fixture.store.pool.get_conn().await.unwrap();
+        conn.exec_drop(
+            "UPDATE tree_reservations SET created_at = DATE_SUB(NOW(6), INTERVAL 10 MINUTE) WHERE id = ?",
+            (&reservation.id,),
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        // set_leaves brings fresh data from the operator that includes both leaves
+        // plus a new one. Pre-fix: skipped on has_active_swap, the new leaf is lost
+        // and the reservation lingers forever. Post-fix: cleanup runs first, the
+        // stale reservation is dropped, has_active_swap is false, set_leaves applies.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let refresh_start = SystemTime::now();
+        let refresh_leaves = vec![
+            create_test_tree_node("node1", 100),
+            create_test_tree_node("node2", 200),
+            create_test_tree_node("node3", 300),
+        ];
+        fixture
+            .store
+            .set_leaves(&refresh_leaves, &[], refresh_start)
+            .await
+            .unwrap();
+
+        let all_leaves = fixture.store.get_leaves().await.unwrap();
+        assert!(
+            all_leaves.reserved_for_swap.is_empty(),
+            "Stale swap reservation should be cleaned up"
+        );
+        assert_eq!(
+            all_leaves.available.len(),
+            3,
+            "set_leaves should have proceeded and applied the operator's view (3 leaves)"
+        );
+        assert!(
+            all_leaves
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "node3"),
+            "node3 from the refresh should be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_reserve_cancel_cycle() {
+        // Test rapid reserve/cancel cycles don't deadlock
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        let store = Arc::new(fixture.store);
+
+        // Add leaves
+        let mut leaves = Vec::new();
+        for i in 0..20 {
+            leaves.push(create_test_tree_node(&format!("node{i}"), 10));
+        }
+        store.add_leaves(&leaves).await.unwrap();
+
+        // Spawn concurrent reserve/cancel cycles using JoinSet
+        let mut join_set = tokio::task::JoinSet::new();
+        for i in 0..5 {
+            let store_clone = Arc::clone(&store);
+            join_set.spawn(async move {
+                for cycle in 0..3 {
+                    let result = store_clone
+                        .try_reserve_leaves(
+                            Some(&TargetAmounts::new_amount_and_fee(10, None)),
+                            true,
+                            ReservationPurpose::Payment,
+                        )
+                        .await?;
+
+                    if let ReserveResult::Success(reservation) = result {
+                        store_clone
+                            .cancel_reservation(&reservation.id, &reservation.leaves)
+                            .await?;
+                    }
+                    tracing::debug!("Task {i} cycle {cycle} complete");
+                }
+                Ok::<_, TreeServiceError>((i, "completed cycles"))
+            });
+        }
+
+        // Wait for all with global timeout
+        tokio::time::timeout(std::time::Duration::from_mins(1), async {
+            while let Some(result) = join_set.join_next().await {
+                match result {
+                    Ok(Ok((i, msg))) => tracing::info!("Task {i}: {msg}"),
+                    Ok(Err(e)) => panic!("Task failed with error: {e:?}"),
+                    Err(e) => panic!("Task panicked: {e:?}"),
+                }
+            }
+        })
+        .await
+        .expect("Test timed out - possible deadlock");
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_set_leaves_and_reserve() {
+        // Test that concurrent set_leaves and reserve operations don't deadlock
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        let store = Arc::new(fixture.store);
+
+        // Add initial leaves
+        let mut leaves = Vec::new();
+        for i in 0..50 {
+            leaves.push(create_test_tree_node(&format!("node{i}"), 10));
+        }
+        store.add_leaves(&leaves).await.unwrap();
+
+        // Small delay to ensure leaves are added
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Spawn concurrent operations using JoinSet
+        let mut join_set = tokio::task::JoinSet::new();
+
+        // Spawn set_leaves tasks
+        for i in 0..2 {
+            let store_clone = Arc::clone(&store);
+            join_set.spawn(async move {
+                let refresh_start = SystemTime::now();
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+                let mut new_leaves = Vec::new();
+                for j in 0..50 {
+                    new_leaves.push(create_test_tree_node(&format!("node{j}"), 10));
+                }
+
+                store_clone
+                    .set_leaves(&new_leaves, &[], refresh_start)
+                    .await
+                    .map(|()| (i, "set_leaves complete"))
+            });
+        }
+
+        // Spawn reserve tasks
+        for i in 0..5 {
+            let store_clone = Arc::clone(&store);
+            join_set.spawn(async move {
+                let result = store_clone
+                    .try_reserve_leaves(
+                        Some(&TargetAmounts::new_amount_and_fee(10, None)),
+                        true,
+                        ReservationPurpose::Payment,
+                    )
+                    .await;
+
+                match result {
+                    Ok(ReserveResult::Success(reservation)) => {
+                        store_clone
+                            .cancel_reservation(&reservation.id, &reservation.leaves)
+                            .await?;
+                        Ok((100 + i, "reserve success"))
+                    }
+                    Ok(_) => Ok((100 + i, "no leaves available")),
+                    Err(e) => Err(e),
+                }
+            });
+        }
+
+        // Wait for all with global timeout
+        tokio::time::timeout(std::time::Duration::from_mins(1), async {
+            while let Some(result) = join_set.join_next().await {
+                match result {
+                    Ok(Ok((i, msg))) => tracing::info!("Task {i}: {msg}"),
+                    Ok(Err(e)) => panic!("Task failed with error: {e:?}"),
+                    Err(e) => panic!("Task panicked: {e:?}"),
+                }
+            }
+        })
+        .await
+        .expect("Test timed out - possible deadlock");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::arithmetic_side_effects)]
+    async fn test_high_concurrency_reserve_finalize() {
+        // Stress test: 50 concurrent payment-like operations (reserve -> finalize)
+        // This simulates the parallel_perf benchmark scenario.
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        let store = Arc::new(fixture.store);
+
+        // Add many small leaves
+        let mut leaves = Vec::new();
+        for i in 0..200 {
+            leaves.push(create_test_tree_node(&format!("leaf{i}"), 1));
+        }
+        store.add_leaves(&leaves).await.unwrap();
+
+        // Spawn 50 concurrent reserve->finalize operations
+        let start_time = std::time::Instant::now();
+        let mut join_set: tokio::task::JoinSet<Result<(i32, &'static str), TreeServiceError>> =
+            tokio::task::JoinSet::new();
+        for i in 0..50 {
+            let store_clone = Arc::clone(&store);
+            join_set.spawn(async move {
+                // Reserve 1 sat
+                let result = store_clone
+                    .try_reserve_leaves(
+                        Some(&TargetAmounts::new_amount_and_fee(1, None)),
+                        true,
+                        ReservationPurpose::Payment,
+                    )
+                    .await?;
+
+                match result {
+                    ReserveResult::Success(reservation) => {
+                        // Finalize immediately (simulating successful payment)
+                        store_clone
+                            .finalize_reservation(&reservation.id, None)
+                            .await?;
+                        Ok((i, "success"))
+                    }
+                    ReserveResult::InsufficientFunds => Ok((i, "insufficient")),
+                    ReserveResult::WaitForPending { .. } => Ok((i, "wait_pending")),
+                }
+            });
+        }
+
+        // Wait for all with timeout
+        let mut successes = 0;
+        let mut insufficient = 0;
+        let timeout_result = tokio::time::timeout(std::time::Duration::from_mins(2), async {
+            while let Some(result) = join_set.join_next().await {
+                match result {
+                    Ok(Ok((i, status))) => {
+                        tracing::debug!("Task {i}: {status}");
+                        if status == "success" {
+                            successes += 1;
+                        } else if status == "insufficient" {
+                            insufficient += 1;
+                        }
+                    }
+                    Ok(Err(e)) => panic!("Task failed with error: {e:?}"),
+                    Err(e) => panic!("Task panicked: {e:?}"),
+                }
+            }
+            (successes, insufficient)
+        })
+        .await
+        .expect("Test timed out after 120s - possible deadlock");
+
+        let elapsed = start_time.elapsed();
+        eprintln!(
+            "50 concurrent reserve+finalize completed in {:?} ({} successes, {} insufficient)",
+            elapsed, timeout_result.0, timeout_result.1
+        );
+
+        // With 200 leaves and 50 concurrent requests for 1 sat each,
+        // we should have at least some successes
+        assert!(
+            timeout_result.0 > 0,
+            "Expected at least one successful reservation"
+        );
+    }
+
+    // ==================== Multi-tenant isolation ====================
+
+    /// A second 33-byte test identity (must differ from `TEST_IDENTITY`).
+    const TEST_IDENTITY_B: [u8; 33] = [
+        0x03, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae,
+        0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd,
+        0xbe, 0xbf, 0xc0,
+    ];
+
+    /// Two `MysqlTreeStore` instances with distinct identities sharing one
+    /// connection pool / DB. The container must be kept alive for the test.
+    struct TwoTenantTreeFixture {
+        a: MysqlTreeStore,
+        b: MysqlTreeStore,
+        #[allow(dead_code)]
+        container: ContainerAsync<Mysql>,
+    }
+
+    impl TwoTenantTreeFixture {
+        async fn new() -> Self {
+            let container = Mysql::default()
+                .start()
+                .await
+                .expect("Failed to start MySQL container");
+
+            let host_port = container
+                .get_host_port_ipv4(3306)
+                .await
+                .expect("Failed to get host port");
+
+            let connection_string = format!("mysql://root@127.0.0.1:{host_port}/test");
+
+            let config = MysqlStorageConfig::with_defaults(connection_string);
+            let pool = create_pool(&config).expect("Failed to create pool");
+
+            let a = MysqlTreeStore::from_pool(pool.clone(), &TEST_IDENTITY)
+                .await
+                .expect("Failed to create tenant A");
+            let b = MysqlTreeStore::from_pool(pool, &TEST_IDENTITY_B)
+                .await
+                .expect("Failed to create tenant B");
+
+            Self { a, b, container }
+        }
+    }
+
+    /// End-to-end isolation: every `TreeStore` method must keep tenants A and B
+    /// from observing each other's data. Exercises leaves, reservations, the
+    /// finalize→spent path, and the per-tenant swap-status row, asserting that
+    /// writes by A are invisible to B (and vice versa). Uses identical leaf
+    /// IDs across tenants to also confirm the composite primary keys land.
+    #[tokio::test]
+    async fn test_two_tenant_isolation() {
+        let fx = TwoTenantTreeFixture::new().await;
+
+        // --- add_leaves: same IDs, different per-tenant values ---
+        let leaves_a = vec![
+            create_test_tree_node("shared_leaf_1", 100),
+            create_test_tree_node("shared_leaf_2", 200),
+        ];
+        let leaves_b = vec![
+            create_test_tree_node("shared_leaf_1", 1_000),
+            create_test_tree_node("shared_leaf_2", 2_000),
+            create_test_tree_node("only_b_leaf", 500),
+        ];
+        fx.a.add_leaves(&leaves_a).await.unwrap();
+        fx.b.add_leaves(&leaves_b).await.unwrap();
+
+        let view_a = fx.a.get_leaves().await.unwrap();
+        let view_b = fx.b.get_leaves().await.unwrap();
+        assert_eq!(view_a.available.len(), 2, "A sees its 2 leaves");
+        assert_eq!(view_b.available.len(), 3, "B sees its 3 leaves");
+        assert!(
+            !view_a
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "only_b_leaf")
+        );
+        assert_eq!(
+            view_a.available.iter().map(|l| l.value).sum::<u64>(),
+            300,
+            "A's total reflects A's amounts only"
+        );
+        assert_eq!(
+            view_b.available.iter().map(|l| l.value).sum::<u64>(),
+            3_500,
+            "B's total reflects B's amounts only"
+        );
+
+        assert_eq!(fx.a.get_available_balance().await.unwrap(), 300);
+        assert_eq!(fx.b.get_available_balance().await.unwrap(), 3_500);
+
+        // --- reserve_leaves on A must not consume B's leaves ---
+        let res_a = shared_tests::reserve_leaves(
+            &fx.a,
+            Some(&TargetAmounts::new_amount_and_fee(100, None)),
+            true,
+            ReservationPurpose::Payment,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res_a.leaves.len(), 1);
+
+        let view_b = fx.b.get_leaves().await.unwrap();
+        assert!(view_b.reserved_for_payment.is_empty());
+        assert_eq!(view_b.available.len(), 3);
+        assert_eq!(fx.b.get_available_balance().await.unwrap(), 3_500);
+
+        let view_a = fx.a.get_leaves().await.unwrap();
+        assert_eq!(view_a.reserved_for_payment.len(), 1);
+        assert_eq!(view_a.available.len(), 1);
+
+        // --- finalize on A (spent marker) does not touch B's identical-ID leaf ---
+        fx.a.finalize_reservation(&res_a.id, None).await.unwrap();
+
+        let view_a = fx.a.get_leaves().await.unwrap();
+        assert!(
+            !view_a
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "shared_leaf_1")
+        );
+        let view_b = fx.b.get_leaves().await.unwrap();
+        assert!(
+            view_b
+                .available
+                .iter()
+                .any(|l| l.id.to_string() == "shared_leaf_1"),
+            "B's shared_leaf_1 must survive A's finalize"
+        );
+
+        // --- set_leaves on A must not touch B's data ---
+        let refresh_start = SystemTime::now();
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let refresh_a = vec![create_test_tree_node("a_only_post_refresh", 42)];
+        fx.a.set_leaves(&refresh_a, &[], refresh_start)
+            .await
+            .unwrap();
+
+        let view_a = fx.a.get_leaves().await.unwrap();
+        assert_eq!(view_a.available.len(), 1);
+        assert_eq!(view_a.available[0].id.to_string(), "a_only_post_refresh");
+        let view_b = fx.b.get_leaves().await.unwrap();
+        assert_eq!(view_b.available.len(), 3, "B unaffected by A's set_leaves");
+
+        // --- B can perform a swap-finalize without A's swap-status row ever
+        // existing (lazy upsert per tenant). B's reservation must not block A. ---
+        let res_b_swap = shared_tests::reserve_leaves(
+            &fx.b,
+            Some(&TargetAmounts::new_amount_and_fee(1_000, None)),
+            true,
+            ReservationPurpose::Swap,
+        )
+        .await
+        .unwrap();
+        let view_a = fx.a.get_leaves().await.unwrap();
+        assert!(
+            view_a.reserved_for_swap.is_empty(),
+            "A must not see B's swap reservation"
+        );
+        let new_b_leaf = create_test_tree_node("b_swap_change", 600);
+        fx.b.finalize_reservation(&res_b_swap.id, Some(&[new_b_leaf]))
+            .await
+            .unwrap();
+
+        let view_a = fx.a.get_leaves().await.unwrap();
+        assert_eq!(view_a.available.len(), 1);
+        assert_eq!(view_a.available[0].id.to_string(), "a_only_post_refresh");
     }
 }

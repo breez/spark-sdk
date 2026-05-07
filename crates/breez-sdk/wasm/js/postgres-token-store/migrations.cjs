@@ -22,8 +22,16 @@ class TokenStoreMigrationManager {
   /**
    * Run all pending migrations inside a single transaction with an advisory lock.
    * @param {import('pg').Pool} pool
+   * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+   *   identifying the tenant. Used to backfill `user_id` columns in the
+   *   multi-tenant scoping migration. Required.
    */
-  async migrate(pool) {
+  async migrate(pool, identity) {
+    if (!identity || identity.length !== 33) {
+      throw new TokenStoreError(
+        "tenant identity (33-byte secp256k1 pubkey) is required"
+      );
+    }
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -45,7 +53,7 @@ class TokenStoreMigrationManager {
       );
       const currentVersion = versionResult.rows[0].version;
 
-      const migrations = this._getMigrations();
+      const migrations = this._getMigrations(identity);
 
       if (currentVersion >= migrations.length) {
         this._log("info", `Token store database is up to date (version ${currentVersion})`);
@@ -96,8 +104,16 @@ class TokenStoreMigrationManager {
 
   /**
    * Migrations matching the Rust PostgresTokenStore schema exactly.
+   *
+   * @param {Buffer|Uint8Array} identity - tenant identity inlined as a hex
+   *   BYTEA literal in the multi-tenant scoping migration. Safe because the
+   *   bytes come from a typed secp256k1 pubkey (`[0-9a-f]{66}` after hex
+   *   encoding) — not user-controlled input.
    */
-  _getMigrations() {
+  _getMigrations(identity) {
+    const idHex = Buffer.from(identity).toString("hex");
+    const idLit = `'\\x${idHex}'::bytea`;
+
     return [
       {
         name: "Create token store tables with race condition protection",
@@ -154,6 +170,79 @@ class TokenStoreMigrationManager {
           )`,
 
           `INSERT INTO token_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING`,
+        ],
+      },
+      {
+        // Mirrors Rust migration 2 in spark-postgres/src/token_store.rs.
+        // Adds user_id to every token-store table (including token_metadata —
+        // per-tenant to avoid 0-balance leakage for tokens a tenant never
+        // owned), backfills with the connecting tenant, and rewrites primary
+        // keys / FKs / indexes to lead with user_id. Composite FKs use NO
+        // ACTION because column-list SET NULL is PG15+ and a whole-row SET
+        // NULL would null user_id (NOT NULL).
+        name: "Multi-tenant scoping: add user_id and rewrite primary keys",
+        sql: [
+          // Drop dependent FKs FIRST so we can rebuild parent PKs they
+          // reference. Inline `REFERENCES` clauses get auto-named
+          // `<table>_<column>_fkey`.
+          `ALTER TABLE token_outputs
+             DROP CONSTRAINT IF EXISTS token_outputs_reservation_id_fkey`,
+          `ALTER TABLE token_outputs
+             DROP CONSTRAINT IF EXISTS token_outputs_token_identifier_fkey`,
+
+          // token_metadata: per-tenant scoping (privacy — see header).
+          `ALTER TABLE token_metadata ADD COLUMN user_id BYTEA`,
+          `UPDATE token_metadata SET user_id = ${idLit}`,
+          `ALTER TABLE token_metadata
+             ALTER COLUMN user_id SET NOT NULL,
+             DROP CONSTRAINT IF EXISTS token_metadata_pkey,
+             ADD PRIMARY KEY (user_id, identifier)`,
+          `DROP INDEX IF EXISTS idx_token_metadata_issuer_pk`,
+          `CREATE INDEX idx_token_metadata_user_issuer_pk
+             ON token_metadata (user_id, issuer_public_key)`,
+
+          // token_reservations: scope by user_id.
+          `ALTER TABLE token_reservations ADD COLUMN user_id BYTEA`,
+          `UPDATE token_reservations SET user_id = ${idLit}`,
+          `ALTER TABLE token_reservations
+             ALTER COLUMN user_id SET NOT NULL,
+             DROP CONSTRAINT IF EXISTS token_reservations_pkey,
+             ADD PRIMARY KEY (user_id, id)`,
+
+          // token_outputs: scope by user_id, rekey, re-add composite FKs.
+          `ALTER TABLE token_outputs ADD COLUMN user_id BYTEA`,
+          `UPDATE token_outputs SET user_id = ${idLit}`,
+          `ALTER TABLE token_outputs
+             ALTER COLUMN user_id SET NOT NULL,
+             DROP CONSTRAINT IF EXISTS token_outputs_pkey,
+             ADD PRIMARY KEY (user_id, id),
+             ADD FOREIGN KEY (user_id, token_identifier)
+                REFERENCES token_metadata(user_id, identifier),
+             ADD FOREIGN KEY (user_id, reservation_id)
+                REFERENCES token_reservations(user_id, id)`,
+          `DROP INDEX IF EXISTS idx_token_outputs_identifier`,
+          `DROP INDEX IF EXISTS idx_token_outputs_reservation`,
+          `CREATE INDEX idx_token_outputs_user_identifier
+             ON token_outputs (user_id, token_identifier)`,
+          `CREATE INDEX idx_token_outputs_user_reservation
+             ON token_outputs (user_id, reservation_id)
+             WHERE reservation_id IS NOT NULL`,
+
+          // token_spent_outputs: scope by user_id.
+          `ALTER TABLE token_spent_outputs ADD COLUMN user_id BYTEA`,
+          `UPDATE token_spent_outputs SET user_id = ${idLit}`,
+          `ALTER TABLE token_spent_outputs
+             ALTER COLUMN user_id SET NOT NULL,
+             DROP CONSTRAINT IF EXISTS token_spent_outputs_pkey,
+             ADD PRIMARY KEY (user_id, output_id)`,
+
+          // token_swap_status: drop the singleton id, rekey by user_id.
+          `ALTER TABLE token_swap_status DROP COLUMN id CASCADE`,
+          `ALTER TABLE token_swap_status ADD COLUMN user_id BYTEA`,
+          `UPDATE token_swap_status SET user_id = ${idLit}`,
+          `ALTER TABLE token_swap_status
+             ALTER COLUMN user_id SET NOT NULL,
+             ADD PRIMARY KEY (user_id)`,
         ],
       },
     ];

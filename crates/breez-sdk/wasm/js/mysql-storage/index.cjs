@@ -76,11 +76,11 @@ const SELECT_PAYMENT_SQL = `
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id
       FROM payments p
-      LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
-      LEFT JOIN payment_details_token t ON p.id = t.payment_id
-      LEFT JOIN payment_details_spark s ON p.id = s.payment_id
-      LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
-      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash`;
+      LEFT JOIN payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
+      LEFT JOIN payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
+      LEFT JOIN payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
+      LEFT JOIN payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
+      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id`;
 
 /**
  * mysql2 may return JSON columns as either parsed objects or raw strings
@@ -100,8 +100,19 @@ function toBool(value) {
 }
 
 class MysqlStorage {
-  constructor(pool, logger = null) {
+  /**
+   * @param {import('mysql2/promise').Pool} pool - Connection pool (may be shared with other tenants).
+   * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+   *   uniquely identifying this tenant. All reads and writes are scoped to it
+   *   so that multiple instances with distinct identities can share one DB.
+   * @param {object} [logger]
+   */
+  constructor(pool, identity, logger = null) {
+    if (!identity) {
+      throw new StorageError("MysqlStorage requires a tenant identity");
+    }
     this.pool = pool;
+    this.identity = Buffer.from(identity);
     this.logger = logger;
   }
 
@@ -109,7 +120,7 @@ class MysqlStorage {
   async initialize() {
     try {
       const migrationManager = new MysqlMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool);
+      await migrationManager.migrate(this.pool, this.identity);
       return this;
     } catch (error) {
       throw new StorageError(
@@ -153,8 +164,8 @@ class MysqlStorage {
   async getCachedItem(key) {
     try {
       const [rows] = await this.pool.query(
-        "SELECT value FROM settings WHERE `key` = ?",
-        [key]
+        "SELECT value FROM settings WHERE user_id = ? AND `key` = ?",
+        [this.identity, key]
       );
       return rows.length > 0 ? rows[0].value : null;
     } catch (error) {
@@ -168,9 +179,9 @@ class MysqlStorage {
   async setCachedItem(key, value) {
     try {
       await this.pool.query(
-        "INSERT INTO settings (`key`, value) VALUES (?, ?) " +
+        "INSERT INTO settings (user_id, `key`, value) VALUES (?, ?, ?) " +
           "ON DUPLICATE KEY UPDATE value = VALUES(value)",
-        [key, value]
+        [this.identity, key, value]
       );
     } catch (error) {
       throw new StorageError(
@@ -182,7 +193,10 @@ class MysqlStorage {
 
   async deleteCachedItem(key) {
     try {
-      await this.pool.query("DELETE FROM settings WHERE `key` = ?", [key]);
+      await this.pool.query(
+        "DELETE FROM settings WHERE user_id = ? AND `key` = ?",
+        [this.identity, key]
+      );
     } catch (error) {
       throw new StorageError(
         `Failed to delete cached item '${key}': ${error.message}`,
@@ -199,8 +213,10 @@ class MysqlStorage {
       const actualLimit =
         request.limit != null ? request.limit : 4294967295;
 
-      const whereClauses = [];
-      const params = [];
+      // Tenant scoping is always the first WHERE clause; subsequent dynamic
+      // filters add more clauses and parameters.
+      const whereClauses = ["p.user_id = ?"];
+      const params = [this.identity];
 
       if (request.typeFilter && request.typeFilter.length > 0) {
         const placeholders = request.typeFilter.map(() => "?");
@@ -354,8 +370,8 @@ class MysqlStorage {
         const spark = payment.details?.type === "spark" ? 1 : null;
 
         await conn.query(
-          `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              payment_type=VALUES(payment_type),
              status=VALUES(status),
@@ -367,6 +383,7 @@ class MysqlStorage {
              deposit_tx_id=VALUES(deposit_tx_id),
              spark=VALUES(spark)`,
           [
+            this.identity,
             payment.id,
             payment.paymentType,
             payment.status,
@@ -386,12 +403,13 @@ class MysqlStorage {
             payment.details.htlcDetails != null)
         ) {
           await conn.query(
-            `INSERT INTO payment_details_spark (payment_id, invoice_details, htlc_details)
-             VALUES (?, ?, ?)
+            `INSERT INTO payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
+             VALUES (?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                invoice_details=COALESCE(VALUES(invoice_details), invoice_details),
                htlc_details=COALESCE(VALUES(htlc_details), htlc_details)`,
             [
+              this.identity,
               payment.id,
               payment.details.invoiceDetails
                 ? JSON.stringify(payment.details.invoiceDetails)
@@ -406,8 +424,8 @@ class MysqlStorage {
         if (payment.details?.type === "lightning") {
           await conn.query(
             `INSERT INTO payment_details_lightning
-              (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON DUPLICATE KEY UPDATE
                 invoice=VALUES(invoice),
                 payment_hash=VALUES(payment_hash),
@@ -417,6 +435,7 @@ class MysqlStorage {
                 htlc_status=COALESCE(VALUES(htlc_status), htlc_status),
                 htlc_expiry_time=COALESCE(VALUES(htlc_expiry_time), htlc_expiry_time)`,
             [
+              this.identity,
               payment.id,
               payment.details.invoice,
               payment.details.htlcDetails.paymentHash,
@@ -432,14 +451,15 @@ class MysqlStorage {
         if (payment.details?.type === "token") {
           await conn.query(
             `INSERT INTO payment_details_token
-              (payment_id, metadata, tx_hash, tx_type, invoice_details)
-              VALUES (?, ?, ?, ?, ?)
+              (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
+              VALUES (?, ?, ?, ?, ?, ?)
               ON DUPLICATE KEY UPDATE
                 metadata=VALUES(metadata),
                 tx_hash=VALUES(tx_hash),
                 tx_type=VALUES(tx_type),
                 invoice_details=COALESCE(VALUES(invoice_details), invoice_details)`,
             [
+              this.identity,
               payment.id,
               JSON.stringify(payment.details.metadata),
               payment.details.txHash,
@@ -467,8 +487,8 @@ class MysqlStorage {
       }
 
       const [rows] = await this.pool.query(
-        `${SELECT_PAYMENT_SQL} WHERE p.id = ?`,
-        [id]
+        `${SELECT_PAYMENT_SQL} WHERE p.user_id = ? AND p.id = ?`,
+        [this.identity, id]
       );
 
       if (rows.length === 0) {
@@ -492,8 +512,8 @@ class MysqlStorage {
       }
 
       const [rows] = await this.pool.query(
-        `${SELECT_PAYMENT_SQL} WHERE l.invoice = ?`,
-        [invoice]
+        `${SELECT_PAYMENT_SQL} WHERE p.user_id = ? AND l.invoice = ?`,
+        [this.identity, invoice]
       );
 
       if (rows.length === 0) {
@@ -516,18 +536,19 @@ class MysqlStorage {
         return {};
       }
 
-      // Early exit if no related payments exist. mysql2 returns EXISTS as 0/1.
+      // Early exit if no related payments exist for this tenant. mysql2 returns EXISTS as 0/1.
       const [hasRelatedRows] = await this.pool.query(
-        "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE parent_payment_id IS NOT NULL LIMIT 1) AS has_related"
+        "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE user_id = ? AND parent_payment_id IS NOT NULL LIMIT 1) AS has_related",
+        [this.identity]
       );
       if (!hasRelatedRows[0].has_related) {
         return {};
       }
 
       const placeholders = parentPaymentIds.map(() => "?");
-      const query = `${SELECT_PAYMENT_SQL} WHERE pm.parent_payment_id IN (${placeholders.join(", ")}) ORDER BY p.timestamp ASC`;
+      const query = `${SELECT_PAYMENT_SQL} WHERE p.user_id = ? AND pm.parent_payment_id IN (${placeholders.join(", ")}) ORDER BY p.timestamp ASC`;
 
-      const [rows] = await this.pool.query(query, parentPaymentIds);
+      const [rows] = await this.pool.query(query, [this.identity, ...parentPaymentIds]);
 
       const result = {};
       for (const row of rows) {
@@ -551,8 +572,8 @@ class MysqlStorage {
   async insertPaymentMetadata(paymentId, metadata) {
     try {
       await this.pool.query(
-        `INSERT INTO payment_metadata (payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            parent_payment_id = COALESCE(VALUES(parent_payment_id), parent_payment_id),
            lnurl_pay_info = COALESCE(VALUES(lnurl_pay_info), lnurl_pay_info),
@@ -561,6 +582,7 @@ class MysqlStorage {
            conversion_info = COALESCE(VALUES(conversion_info), conversion_info),
            conversion_status = COALESCE(VALUES(conversion_status), conversion_status)`,
         [
+          this.identity,
           paymentId,
           metadata.parentPaymentId,
           metadata.lnurlPayInfo
@@ -589,10 +611,10 @@ class MysqlStorage {
   async addDeposit(txid, vout, amountSats, isMature) {
     try {
       await this.pool.query(
-        `INSERT INTO unclaimed_deposits (txid, vout, amount_sats, is_mature)
-         VALUES (?, ?, ?, ?)
+        `INSERT INTO unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
+         VALUES (?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE is_mature = VALUES(is_mature), amount_sats = VALUES(amount_sats)`,
-        [txid, vout, amountSats, isMature ? 1 : 0]
+        [this.identity, txid, vout, amountSats, isMature ? 1 : 0]
       );
     } catch (error) {
       throw new StorageError(
@@ -605,8 +627,8 @@ class MysqlStorage {
   async deleteDeposit(txid, vout) {
     try {
       await this.pool.query(
-        "DELETE FROM unclaimed_deposits WHERE txid = ? AND vout = ?",
-        [txid, vout]
+        "DELETE FROM unclaimed_deposits WHERE user_id = ? AND txid = ? AND vout = ?",
+        [this.identity, txid, vout]
       );
     } catch (error) {
       throw new StorageError(
@@ -619,7 +641,8 @@ class MysqlStorage {
   async listDeposits() {
     try {
       const [rows] = await this.pool.query(
-        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits"
+        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits WHERE user_id = ?",
+        [this.identity]
       );
 
       return rows.map((row) => ({
@@ -646,15 +669,15 @@ class MysqlStorage {
         await this.pool.query(
           `UPDATE unclaimed_deposits
            SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL
-           WHERE txid = ? AND vout = ?`,
-          [JSON.stringify(payload.error), txid, vout]
+           WHERE user_id = ? AND txid = ? AND vout = ?`,
+          [JSON.stringify(payload.error), this.identity, txid, vout]
         );
       } else if (payload.type === "refund") {
         await this.pool.query(
           `UPDATE unclaimed_deposits
            SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL
-           WHERE txid = ? AND vout = ?`,
-          [payload.refundTx, payload.refundTxid, txid, vout]
+           WHERE user_id = ? AND txid = ? AND vout = ?`,
+          [payload.refundTx, payload.refundTxid, this.identity, txid, vout]
         );
       } else {
         throw new StorageError(`Unknown payload type: ${payload.type}`);
@@ -673,13 +696,14 @@ class MysqlStorage {
       await this._withTransaction(async (conn) => {
         for (const item of metadata) {
           await conn.query(
-            `INSERT INTO lnurl_receive_metadata (payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
-             VALUES (?, ?, ?, ?)
+            `INSERT INTO lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+             VALUES (?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                nostr_zap_request = VALUES(nostr_zap_request),
                nostr_zap_receipt = VALUES(nostr_zap_receipt),
                sender_comment = VALUES(sender_comment)`,
             [
+              this.identity,
               item.paymentHash,
               item.nostrZapRequest || null,
               item.nostrZapReceipt || null,
@@ -801,9 +825,10 @@ class MysqlStorage {
       const [rows] = await this.pool.query(
         `SELECT id, name, payment_identifier, created_at, updated_at
          FROM contacts
+         WHERE user_id = ?
          ORDER BY name ASC
          LIMIT ? OFFSET ?`,
-        [limit, offset]
+        [this.identity, limit, offset]
       );
 
       return rows.map((row) => ({
@@ -826,8 +851,8 @@ class MysqlStorage {
       const [rows] = await this.pool.query(
         `SELECT id, name, payment_identifier, created_at, updated_at
          FROM contacts
-         WHERE id = ?`,
-        [id]
+         WHERE user_id = ? AND id = ?`,
+        [this.identity, id]
       );
 
       if (rows.length === 0) {
@@ -850,13 +875,14 @@ class MysqlStorage {
   async insertContact(contact) {
     try {
       await this.pool.query(
-        `INSERT INTO contacts (id, name, payment_identifier, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO contacts (user_id, id, name, payment_identifier, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            name = VALUES(name),
            payment_identifier = VALUES(payment_identifier),
            updated_at = VALUES(updated_at)`,
         [
+          this.identity,
           contact.id,
           contact.name,
           contact.paymentIdentifier,
@@ -874,7 +900,10 @@ class MysqlStorage {
 
   async deleteContact(id) {
     try {
-      await this.pool.query("DELETE FROM contacts WHERE id = ?", [id]);
+      await this.pool.query(
+        "DELETE FROM contacts WHERE user_id = ? AND id = ?",
+        [this.identity, id]
+      );
     } catch (error) {
       throw new StorageError(
         `Failed to delete contact: ${error.message}`,
@@ -888,21 +917,25 @@ class MysqlStorage {
   async syncAddOutgoingChange(record) {
     try {
       return await this._withTransaction(async (conn) => {
+        // The local queue revision is per-tenant — two tenants don't share a queue.
         const [revisionRows] = await conn.query(
-          "SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM sync_outgoing"
+          "SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM sync_outgoing WHERE user_id = ?",
+          [this.identity]
         );
         const revision = BigInt(revisionRows[0].revision);
 
         await conn.query(
           `INSERT INTO sync_outgoing (
+            user_id,
             record_type,
             data_id,
             schema_version,
             commit_time,
             updated_fields_json,
             revision
-          ) VALUES (?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
+            this.identity,
             record.id.type,
             record.id.dataId,
             record.schemaVersion,
@@ -927,8 +960,8 @@ class MysqlStorage {
     try {
       await this._withTransaction(async (conn) => {
         const [deleteResult] = await conn.query(
-          "DELETE FROM sync_outgoing WHERE record_type = ? AND data_id = ? AND revision = ?",
-          [record.id.type, record.id.dataId, localRevision.toString()]
+          "DELETE FROM sync_outgoing WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?",
+          [this.identity, record.id.type, record.id.dataId, localRevision.toString()]
         );
 
         if (deleteResult.affectedRows === 0) {
@@ -943,19 +976,21 @@ class MysqlStorage {
 
         await conn.query(
           `INSERT INTO sync_state (
+            user_id,
             record_type,
             data_id,
             revision,
             schema_version,
             commit_time,
             data
-          ) VALUES (?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             schema_version = VALUES(schema_version),
             commit_time = VALUES(commit_time),
             data = VALUES(data),
             revision = VALUES(revision)`,
           [
+            this.identity,
             record.id.type,
             record.id.dataId,
             record.revision.toString(),
@@ -965,9 +1000,11 @@ class MysqlStorage {
           ]
         );
 
+        // Upsert this tenant's revision row; fresh tenants without a row get one.
         await conn.query(
-          "UPDATE sync_revision SET revision = GREATEST(revision, ?)",
-          [record.revision.toString()]
+          `INSERT INTO sync_revision (user_id, revision) VALUES (?, ?)
+           ON DUPLICATE KEY UPDATE revision = GREATEST(revision, VALUES(revision))`,
+          [this.identity, record.revision.toString()]
         );
       });
     } catch (error) {
@@ -996,10 +1033,12 @@ class MysqlStorage {
         FROM sync_outgoing o
         LEFT JOIN sync_state e ON
           o.record_type = e.record_type AND
-          o.data_id = e.data_id
+          o.data_id = e.data_id AND
+          o.user_id = e.user_id
+        WHERE o.user_id = ?
         ORDER BY o.revision ASC
         LIMIT ?`,
-        [limit]
+        [this.identity, limit]
       );
 
       return rows.map((row) => {
@@ -1032,8 +1071,10 @@ class MysqlStorage {
 
   async syncGetLastRevision() {
     try {
+      // A tenant that hasn't synced anything yet may have no row; treat as 0.
       const [rows] = await this.pool.query(
-        "SELECT revision FROM sync_revision"
+        "SELECT revision FROM sync_revision WHERE user_id = ?",
+        [this.identity]
       );
       return rows.length > 0 ? BigInt(rows[0].revision) : BigInt(0);
     } catch (error) {
@@ -1054,18 +1095,20 @@ class MysqlStorage {
         for (const record of records) {
           await conn.query(
             `INSERT INTO sync_incoming (
+              user_id,
               record_type,
               data_id,
               schema_version,
               commit_time,
               data,
               revision
-            ) VALUES (?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
               schema_version = VALUES(schema_version),
               commit_time = VALUES(commit_time),
               data = VALUES(data)`,
             [
+              this.identity,
               record.id.type,
               record.id.dataId,
               record.schemaVersion,
@@ -1089,10 +1132,11 @@ class MysqlStorage {
     try {
       await this.pool.query(
         `DELETE FROM sync_incoming
-         WHERE record_type = ?
+         WHERE user_id = ?
+         AND record_type = ?
          AND data_id = ?
          AND revision = ?`,
-        [record.id.type, record.id.dataId, record.revision.toString()]
+        [this.identity, record.id.type, record.id.dataId, record.revision.toString()]
       );
     } catch (error) {
       throw new StorageError(
@@ -1115,10 +1159,11 @@ class MysqlStorage {
                 e.data AS existing_data,
                 e.revision AS existing_revision
          FROM sync_incoming i
-         LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id
+         LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
+         WHERE i.user_id = ?
          ORDER BY i.revision ASC
          LIMIT ?`,
-        [limit]
+        [this.identity, limit]
       );
 
       return rows.map((row) => {
@@ -1166,9 +1211,12 @@ class MysqlStorage {
         FROM sync_outgoing o
         LEFT JOIN sync_state e ON
           o.record_type = e.record_type AND
-          o.data_id = e.data_id
+          o.data_id = e.data_id AND
+          o.user_id = e.user_id
+        WHERE o.user_id = ?
         ORDER BY o.revision DESC
-        LIMIT 1`
+        LIMIT 1`,
+        [this.identity]
       );
 
       if (rows.length === 0) {
@@ -1208,19 +1256,21 @@ class MysqlStorage {
       await this._withTransaction(async (conn) => {
         await conn.query(
           `INSERT INTO sync_state (
+            user_id,
             record_type,
             data_id,
             revision,
             schema_version,
             commit_time,
             data
-          ) VALUES (?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             schema_version = VALUES(schema_version),
             commit_time = VALUES(commit_time),
             data = VALUES(data),
             revision = VALUES(revision)`,
           [
+            this.identity,
             record.id.type,
             record.id.dataId,
             record.revision.toString(),
@@ -1231,8 +1281,9 @@ class MysqlStorage {
         );
 
         await conn.query(
-          "UPDATE sync_revision SET revision = GREATEST(revision, ?)",
-          [record.revision.toString()]
+          `INSERT INTO sync_revision (user_id, revision) VALUES (?, ?)
+           ON DUPLICATE KEY UPDATE revision = GREATEST(revision, VALUES(revision))`,
+          [this.identity, record.revision.toString()]
         );
       });
     } catch (error) {
@@ -1281,9 +1332,13 @@ function createMysqlPool(config) {
 
 /**
  * Create a MysqlStorage instance from an existing mysql2 pool.
+ *
+ * @param {import('mysql2/promise').Pool} pool - An existing connection pool
+ * @param {Buffer|Uint8Array} identity - 33-byte tenant identity (secp256k1 pubkey)
+ * @param {object} [logger]
  */
-async function createMysqlStorageWithPool(pool, logger = null) {
-  const storage = new MysqlStorage(pool, logger);
+async function createMysqlStorageWithPool(pool, identity, logger = null) {
+  const storage = new MysqlStorage(pool, identity, logger);
   await storage.initialize();
   return storage;
 }
@@ -1291,10 +1346,14 @@ async function createMysqlStorageWithPool(pool, logger = null) {
 /**
  * Create a MysqlStorage instance from a config object.
  * Use defaultMysqlStorageConfig to create a config with sensible defaults.
+ *
+ * @param {object} config - MySQL storage config
+ * @param {Buffer|Uint8Array} identity - 33-byte tenant identity (secp256k1 pubkey)
+ * @param {object} [logger]
  */
-async function createMysqlStorage(config, logger = null) {
+async function createMysqlStorage(config, identity, logger = null) {
   const pool = createMysqlPool(config);
-  return createMysqlStorageWithPool(pool, logger);
+  return createMysqlStorageWithPool(pool, identity, logger);
 }
 
 module.exports = {

@@ -111,7 +111,7 @@ pub(crate) fn create_pool(config: &MysqlStorageConfig) -> Result<mysql_async::Po
 pub(super) async fn run_migrations(
     pool: &mysql_async::Pool,
     migrations_table: &str,
-    migrations: &[&[Migration]],
+    migrations: &[Vec<Migration>],
 ) -> Result<(), StorageError> {
     spark_mysql::run_migrations(pool, migrations_table, migrations)
         .await
@@ -123,8 +123,9 @@ pub(super) async fn run_migrations(
 /// Creates a `MysqlTreeStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_mysql_tree_store(
     pool: mysql_async::Pool,
+    identity: &[u8],
 ) -> Result<Arc<dyn TreeStore>, StorageError> {
-    spark_mysql::create_mysql_tree_store_from_pool(pool)
+    spark_mysql::create_mysql_tree_store_from_pool(pool, identity)
         .await
         .map_err(StorageError::from)
 }
@@ -132,8 +133,9 @@ pub(crate) async fn create_mysql_tree_store(
 /// Creates a `MysqlTokenStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_mysql_token_store(
     pool: mysql_async::Pool,
+    identity: &[u8],
 ) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
-    spark_mysql::create_mysql_token_store_from_pool(pool)
+    spark_mysql::create_mysql_token_store_from_pool(pool, identity)
         .await
         .map_err(StorageError::from)
 }

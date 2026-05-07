@@ -27,11 +27,28 @@ try {
 const { TokenStoreError } = require("./errors.cjs");
 const { MysqlTokenStoreMigrationManager } = require("./migrations.cjs");
 
-const TOKEN_STORE_WRITE_LOCK_NAME = "token_store_write_lock";
+/**
+ * Domain prefix mixed into the per-tenant `GET_LOCK` name. Distinct prefixes
+ * guarantee that tree-store and token-store locks never collide.
+ */
+const TOKEN_STORE_LOCK_PREFIX = "breez-spark-sdk:token:";
+/** Seconds to wait when acquiring the write lock. */
 const WRITE_LOCK_TIMEOUT_SECS = 30;
 
 const SPENT_MARKER_CLEANUP_THRESHOLD_MS = 5 * 60 * 1000;
 const RESERVATION_TIMEOUT_SECS = 300;
+
+/**
+ * Derive a stable per-tenant lock name from a tenant identity pubkey. Hashes
+ * a domain prefix together with the identity (SHA-256, first 8 bytes hex).
+ */
+function _identityLockName(prefix, identity) {
+  const crypto = require("crypto");
+  const hash = crypto.createHash("sha256");
+  hash.update(prefix);
+  hash.update(Buffer.from(identity));
+  return prefix + hash.digest("hex").slice(0, 16);
+}
 
 function parseJson(value) {
   if (value == null) return null;
@@ -50,15 +67,28 @@ function buildPlaceholders(n) {
 }
 
 class MysqlTokenStore {
-  constructor(pool, logger = null) {
+  /**
+   * @param {import('mysql2/promise').Pool} pool
+   * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+   *   identifying the tenant. All reads and writes are scoped by this.
+   * @param {object} [logger]
+   */
+  constructor(pool, identity, logger = null) {
+    if (!identity || identity.length !== 33) {
+      throw new TokenStoreError(
+        "tenant identity (33-byte secp256k1 pubkey) is required"
+      );
+    }
     this.pool = pool;
+    this.identity = Buffer.from(identity);
+    this.lockName = _identityLockName(TOKEN_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
   }
 
   async initialize() {
     try {
       const migrationManager = new MysqlTokenStoreMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool);
+      await migrationManager.migrate(this.pool, this.identity);
       return this;
     } catch (error) {
       throw new TokenStoreError(
@@ -89,7 +119,7 @@ class MysqlTokenStore {
     try {
       const [lockRows] = await conn.query(
         "SELECT GET_LOCK(?, ?) AS acquired",
-        [TOKEN_STORE_WRITE_LOCK_NAME, WRITE_LOCK_TIMEOUT_SECS]
+        [this.lockName, WRITE_LOCK_TIMEOUT_SECS]
       );
       if (!lockRows || lockRows[0].acquired !== 1) {
         throw new TokenStoreError(
@@ -108,7 +138,7 @@ class MysqlTokenStore {
     } finally {
       if (lockAcquired) {
         await conn
-          .query("SELECT RELEASE_LOCK(?)", [TOKEN_STORE_WRITE_LOCK_NAME])
+          .query("SELECT RELEASE_LOCK(?)", [this.lockName])
           .catch(() => {});
       }
       conn.release();
@@ -146,16 +176,21 @@ class MysqlTokenStore {
       const refreshTimestamp = new Date(refreshStartedAtMs);
 
       await this._withWriteTransaction(async (conn) => {
+        // Drop expired reservations BEFORE evaluating has_active_swap, otherwise a stale
+        // Swap reservation (from a crashed client or a swap whose finalize/cancel never
+        // ran) keeps has_active_swap true forever, which makes setTokensOutputs
+        // early-return and never reach any subsequent reconciliation. The reservation
+        // pins itself in place and the local token-output set freezes.
         await this._cleanupStaleReservations(conn);
 
         const [swapRows] = await conn.query(
           `SELECT
-            (SELECT EXISTS(SELECT 1 FROM token_reservations WHERE purpose = 'Swap')) AS has_active_swap,
+            (SELECT EXISTS(SELECT 1 FROM token_reservations WHERE user_id = ? AND purpose = 'Swap')) AS has_active_swap,
             COALESCE(
-              (SELECT (last_completed_at >= ?) FROM token_swap_status WHERE id = 1),
+              (SELECT (last_completed_at >= ?) FROM token_swap_status WHERE user_id = ?),
               0
             ) AS swap_completed`,
-          [refreshTimestamp]
+          [this.identity, refreshTimestamp, this.identity]
         );
         const hasActiveSwap = !!swapRows[0].has_active_swap;
         const swapCompleted = !!swapRows[0].swap_completed;
@@ -167,19 +202,19 @@ class MysqlTokenStore {
           refreshTimestamp.getTime() - SPENT_MARKER_CLEANUP_THRESHOLD_MS
         );
         await conn.query(
-          "DELETE FROM token_spent_outputs WHERE spent_at < ?",
-          [cleanupCutoff]
+          "DELETE FROM token_spent_outputs WHERE user_id = ? AND spent_at < ?",
+          [this.identity, cleanupCutoff]
         );
 
         const [spentRows] = await conn.query(
-          "SELECT output_id FROM token_spent_outputs WHERE spent_at >= ?",
-          [refreshTimestamp]
+          "SELECT output_id FROM token_spent_outputs WHERE user_id = ? AND spent_at >= ?",
+          [this.identity, refreshTimestamp]
         );
         const spentIds = new Set(spentRows.map((r) => r.output_id));
 
         await conn.query(
-          "DELETE FROM token_outputs WHERE reservation_id IS NULL AND added_at < ?",
-          [refreshTimestamp]
+          "DELETE FROM token_outputs WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
+          [this.identity, refreshTimestamp]
         );
 
         const incomingOutputIds = new Set();
@@ -192,7 +227,10 @@ class MysqlTokenStore {
         const [reservedRows] = await conn.query(
           `SELECT r.id, o.id AS output_id
            FROM token_reservations r
-           JOIN token_outputs o ON o.reservation_id = r.id`
+           JOIN token_outputs o
+             ON o.reservation_id = r.id AND o.user_id = r.user_id
+           WHERE r.user_id = ?`,
+          [this.identity]
         );
 
         const reservationOutputs = new Map();
@@ -221,12 +259,12 @@ class MysqlTokenStore {
         if (reservationsToDelete.length > 0) {
           const placeholders = buildPlaceholders(reservationsToDelete.length);
           await conn.query(
-            `DELETE FROM token_outputs WHERE reservation_id IN (${placeholders})`,
-            reservationsToDelete
+            `DELETE FROM token_outputs WHERE user_id = ? AND reservation_id IN (${placeholders})`,
+            [this.identity, ...reservationsToDelete]
           );
           await conn.query(
-            `DELETE FROM token_reservations WHERE id IN (${placeholders})`,
-            reservationsToDelete
+            `DELETE FROM token_reservations WHERE user_id = ? AND id IN (${placeholders})`,
+            [this.identity, ...reservationsToDelete]
           );
         }
 
@@ -235,35 +273,40 @@ class MysqlTokenStore {
             outputsToRemoveFromReservation.length
           );
           await conn.query(
-            `DELETE FROM token_outputs WHERE id IN (${placeholders})`,
-            outputsToRemoveFromReservation
+            `DELETE FROM token_outputs WHERE user_id = ? AND id IN (${placeholders})`,
+            [this.identity, ...outputsToRemoveFromReservation]
           );
 
           const [emptyRows] = await conn.query(
             `SELECT r.id FROM token_reservations r
-             LEFT JOIN token_outputs o ON o.reservation_id = r.id
-             WHERE o.id IS NULL`
+             LEFT JOIN token_outputs o
+               ON o.reservation_id = r.id AND o.user_id = r.user_id
+             WHERE r.user_id = ? AND o.id IS NULL`,
+            [this.identity]
           );
           const emptyIds = emptyRows.map((r) => r.id);
           if (emptyIds.length > 0) {
             const emptyPlaceholders = buildPlaceholders(emptyIds.length);
             await conn.query(
-              `DELETE FROM token_reservations WHERE id IN (${emptyPlaceholders})`,
-              emptyIds
+              `DELETE FROM token_reservations WHERE user_id = ? AND id IN (${emptyPlaceholders})`,
+              [this.identity, ...emptyIds]
             );
           }
         }
 
         const [reservedOutputRows] = await conn.query(
-          "SELECT id FROM token_outputs WHERE reservation_id IS NOT NULL"
+          "SELECT id FROM token_outputs WHERE user_id = ? AND reservation_id IS NOT NULL",
+          [this.identity]
         );
         const reservedOutputIds = new Set(reservedOutputRows.map((r) => r.id));
 
         await conn.query(
           `DELETE FROM token_metadata
-           WHERE identifier NOT IN (
-             SELECT DISTINCT token_identifier FROM token_outputs
-           )`
+           WHERE user_id = ?
+             AND identifier NOT IN (
+               SELECT DISTINCT token_identifier FROM token_outputs WHERE user_id = ?
+             )`,
+          [this.identity, this.identity]
         );
 
         for (const to of tokenOutputs) {
@@ -302,22 +345,26 @@ class MysqlTokenStore {
    */
   async getTokenBalances() {
     try {
-      const [rows] = await this.pool.query(`
-        SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
-               m.max_supply, m.is_freezable, m.creation_entity_public_key,
-               CAST(COALESCE(SUM(
-                 CASE
-                   WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
-                   WHEN r.purpose = 'Swap' THEN CAST(o.token_amount AS DECIMAL(65,0))
-                   ELSE 0
-                 END
-               ), 0) AS CHAR) AS balance
-        FROM token_metadata m
-        JOIN token_outputs o ON o.token_identifier = m.identifier
-        LEFT JOIN token_reservations r ON o.reservation_id = r.id
-        GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
-                 m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key
-      `);
+      const [rows] = await this.pool.query(
+        `SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
+                m.max_supply, m.is_freezable, m.creation_entity_public_key,
+                CAST(COALESCE(SUM(
+                  CASE
+                    WHEN o.reservation_id IS NULL THEN CAST(o.token_amount AS DECIMAL(65,0))
+                    WHEN r.purpose = 'Swap' THEN CAST(o.token_amount AS DECIMAL(65,0))
+                    ELSE 0
+                  END
+                ), 0) AS CHAR) AS balance
+         FROM token_metadata m
+         JOIN token_outputs o
+           ON o.token_identifier = m.identifier AND o.user_id = m.user_id
+         LEFT JOIN token_reservations r
+           ON o.reservation_id = r.id AND o.user_id = r.user_id
+         WHERE m.user_id = ?
+         GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
+                  m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key`,
+        [this.identity]
+      );
       return rows.map((row) => ({
         metadata: {
           identifier: row.identifier,
@@ -350,9 +397,13 @@ class MysqlTokenStore {
                 o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
                 r.purpose
          FROM token_metadata m
-         LEFT JOIN token_outputs o ON o.token_identifier = m.identifier
-         LEFT JOIN token_reservations r ON o.reservation_id = r.id
-         ORDER BY m.identifier, CAST(o.token_amount AS DECIMAL(65,0)) ASC`
+         LEFT JOIN token_outputs o
+           ON o.token_identifier = m.identifier AND o.user_id = m.user_id
+         LEFT JOIN token_reservations r
+           ON o.reservation_id = r.id AND o.user_id = r.user_id
+         WHERE m.user_id = ?
+         ORDER BY m.identifier, CAST(o.token_amount AS DECIMAL(65,0)) ASC`,
+        [this.identity]
       );
 
       const map = new Map();
@@ -418,11 +469,13 @@ class MysqlTokenStore {
                 o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
                 r.purpose
          FROM token_metadata m
-         LEFT JOIN token_outputs o ON o.token_identifier = m.identifier
-         LEFT JOIN token_reservations r ON o.reservation_id = r.id
-         WHERE ${whereClause}
+         LEFT JOIN token_outputs o
+           ON o.token_identifier = m.identifier AND o.user_id = m.user_id
+         LEFT JOIN token_reservations r
+           ON o.reservation_id = r.id AND o.user_id = r.user_id
+         WHERE m.user_id = ? AND ${whereClause}
          ORDER BY CAST(o.token_amount AS DECIMAL(65,0)) ASC`,
-        [param]
+        [this.identity, param]
       );
 
       if (rows.length === 0) {
@@ -475,8 +528,8 @@ class MysqlTokenStore {
         if (outputIds.length > 0) {
           const placeholders = buildPlaceholders(outputIds.length);
           await conn.query(
-            `DELETE FROM token_spent_outputs WHERE output_id IN (${placeholders})`,
-            outputIds
+            `DELETE FROM token_spent_outputs WHERE user_id = ? AND output_id IN (${placeholders})`,
+            [this.identity, ...outputIds]
           );
         }
 
@@ -531,8 +584,8 @@ class MysqlTokenStore {
         }
 
         const [metadataRows] = await conn.query(
-          "SELECT * FROM token_metadata WHERE identifier = ?",
-          [tokenIdentifier]
+          "SELECT * FROM token_metadata WHERE user_id = ? AND identifier = ?",
+          [this.identity, tokenIdentifier]
         );
 
         if (metadataRows.length === 0) {
@@ -549,8 +602,8 @@ class MysqlTokenStore {
                   o.token_public_key, o.token_amount, o.token_identifier,
                   o.prev_tx_hash, o.prev_tx_vout
            FROM token_outputs o
-           WHERE o.token_identifier = ? AND o.reservation_id IS NULL`,
-          [tokenIdentifier]
+           WHERE o.user_id = ? AND o.token_identifier = ? AND o.reservation_id IS NULL`,
+          [this.identity, tokenIdentifier]
         );
 
         let outputs = outputRows.map((row) => this._outputFromRow(row));
@@ -635,16 +688,16 @@ class MysqlTokenStore {
         const reservationId = this._generateId();
 
         await conn.query(
-          "INSERT INTO token_reservations (id, purpose) VALUES (?, ?)",
-          [reservationId, purpose]
+          "INSERT INTO token_reservations (user_id, id, purpose) VALUES (?, ?, ?)",
+          [this.identity, reservationId, purpose]
         );
 
         const selectedIds = selectedOutputs.map((o) => o.output.id);
         if (selectedIds.length > 0) {
           const placeholders = buildPlaceholders(selectedIds.length);
           await conn.query(
-            `UPDATE token_outputs SET reservation_id = ? WHERE id IN (${placeholders})`,
-            [reservationId, ...selectedIds]
+            `UPDATE token_outputs SET reservation_id = ? WHERE user_id = ? AND id IN (${placeholders})`,
+            [reservationId, this.identity, ...selectedIds]
           );
         }
 
@@ -665,11 +718,16 @@ class MysqlTokenStore {
   async cancelReservation(id) {
     try {
       await this._withTransaction(async (conn) => {
+        // Clear reservation_id from outputs first — the composite FK uses NO
+        // ACTION (a whole-row SET NULL would null user_id, which is NOT NULL).
         await conn.query(
-          "UPDATE token_outputs SET reservation_id = NULL WHERE reservation_id = ?",
-          [id]
+          "UPDATE token_outputs SET reservation_id = NULL WHERE user_id = ? AND reservation_id = ?",
+          [this.identity, id]
         );
-        await conn.query("DELETE FROM token_reservations WHERE id = ?", [id]);
+        await conn.query(
+          "DELETE FROM token_reservations WHERE user_id = ? AND id = ?",
+          [this.identity, id]
+        );
       });
     } catch (error) {
       if (error instanceof TokenStoreError) throw error;
@@ -688,8 +746,8 @@ class MysqlTokenStore {
       // the just-spent output as Available.
       await this._withWriteTransaction(async (conn) => {
         const [reservationRows] = await conn.query(
-          "SELECT purpose FROM token_reservations WHERE id = ?",
-          [id]
+          "SELECT purpose FROM token_reservations WHERE user_id = ? AND id = ?",
+          [this.identity, id]
         );
         if (reservationRows.length === 0) {
           return;
@@ -697,39 +755,53 @@ class MysqlTokenStore {
         const isSwap = reservationRows[0].purpose === "Swap";
 
         const [reservedRows] = await conn.query(
-          "SELECT id FROM token_outputs WHERE reservation_id = ?",
-          [id]
+          "SELECT id FROM token_outputs WHERE user_id = ? AND reservation_id = ?",
+          [this.identity, id]
         );
         const reservedOutputIds = reservedRows.map((r) => r.id);
 
         if (reservedOutputIds.length > 0) {
           const valueClauses = new Array(reservedOutputIds.length)
-            .fill("(?)")
+            .fill("(?, ?)")
             .join(", ");
+          const params = [];
+          for (const outputId of reservedOutputIds) {
+            params.push(this.identity, outputId);
+          }
           // Suppress duplicate-PK errors only.
           await conn.query(
-            `INSERT INTO token_spent_outputs (output_id) VALUES ${valueClauses}
+            `INSERT INTO token_spent_outputs (user_id, output_id) VALUES ${valueClauses}
              ON DUPLICATE KEY UPDATE output_id = output_id`,
-            reservedOutputIds
+            params
           );
         }
 
-        await conn.query("DELETE FROM token_outputs WHERE reservation_id = ?", [
-          id,
-        ]);
-        await conn.query("DELETE FROM token_reservations WHERE id = ?", [id]);
+        await conn.query(
+          "DELETE FROM token_outputs WHERE user_id = ? AND reservation_id = ?",
+          [this.identity, id]
+        );
+        await conn.query(
+          "DELETE FROM token_reservations WHERE user_id = ? AND id = ?",
+          [this.identity, id]
+        );
 
+        // UPSERT so a tenant that joined after the multi-tenant migration
+        // (and thus has no row) gets one created lazily.
         if (isSwap) {
           await conn.query(
-            "UPDATE token_swap_status SET last_completed_at = NOW(6) WHERE id = 1"
+            `INSERT INTO token_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
+             ON DUPLICATE KEY UPDATE last_completed_at = VALUES(last_completed_at)`,
+            [this.identity]
           );
         }
 
         await conn.query(
           `DELETE FROM token_metadata
-           WHERE identifier NOT IN (
-             SELECT DISTINCT token_identifier FROM token_outputs
-           )`
+           WHERE user_id = ?
+             AND identifier NOT IN (
+               SELECT DISTINCT token_identifier FROM token_outputs WHERE user_id = ?
+             )`,
+          [this.identity, this.identity]
         );
       });
     } catch (error) {
@@ -769,20 +841,36 @@ class MysqlTokenStore {
     });
   }
 
+  /// Cleans up stale reservations for THIS tenant. Releases dependent outputs
+  /// by clearing reservation_id first, then deletes the parent rows — the
+  /// composite FK uses NO ACTION because column-list SET NULL would null
+  /// user_id (NOT NULL).
   async _cleanupStaleReservations(conn) {
     await conn.query(
+      `UPDATE token_outputs SET reservation_id = NULL
+       WHERE user_id = ?
+         AND reservation_id IN (
+           SELECT id FROM (
+             SELECT id FROM token_reservations
+             WHERE user_id = ?
+               AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)
+           ) AS stale
+         )`,
+      [this.identity, this.identity, RESERVATION_TIMEOUT_SECS]
+    );
+    await conn.query(
       `DELETE FROM token_reservations
-       WHERE created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)`,
-      [RESERVATION_TIMEOUT_SECS]
+       WHERE user_id = ? AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)`,
+      [this.identity, RESERVATION_TIMEOUT_SECS]
     );
   }
 
   async _upsertMetadata(conn, metadata) {
     await conn.query(
       `INSERT INTO token_metadata
-        (identifier, issuer_public_key, name, ticker, decimals, max_supply,
+        (user_id, identifier, issuer_public_key, name, ticker, decimals, max_supply,
          is_freezable, creation_entity_public_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          issuer_public_key = VALUES(issuer_public_key),
          name = VALUES(name),
@@ -792,6 +880,7 @@ class MysqlTokenStore {
          is_freezable = VALUES(is_freezable),
          creation_entity_public_key = VALUES(creation_entity_public_key)`,
       [
+        this.identity,
         metadata.identifier,
         metadata.issuerPublicKey,
         metadata.name,
@@ -805,17 +894,18 @@ class MysqlTokenStore {
   }
 
   async _insertSingleOutput(conn, tokenIdentifier, output) {
-    // ON DUPLICATE KEY UPDATE id = id no-ops on the (id) primary key
+    // ON DUPLICATE KEY UPDATE id = id no-ops on the (user_id, id) primary key
     // conflict only — unlike INSERT IGNORE, FK / NOT NULL / type errors
     // still propagate.
     await conn.query(
       `INSERT INTO token_outputs
-        (id, token_identifier, owner_public_key, revocation_commitment,
+        (user_id, id, token_identifier, owner_public_key, revocation_commitment,
          withdraw_bond_sats, withdraw_relative_block_locktime,
          token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6))
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6))
        ON DUPLICATE KEY UPDATE id = id`,
       [
+        this.identity,
         output.output.id,
         tokenIdentifier,
         output.output.ownerPublicKey,
@@ -873,13 +963,19 @@ function createMysqlPool(config) {
   });
 }
 
-async function createMysqlTokenStore(config, logger = null) {
+/**
+ * @param {object} config - MySQL configuration
+ * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+ *   identifying the tenant. All reads and writes are scoped by this.
+ * @param {object} [logger]
+ */
+async function createMysqlTokenStore(config, identity, logger = null) {
   const pool = createMysqlPool(config);
-  return createMysqlTokenStoreWithPool(pool, logger);
+  return createMysqlTokenStoreWithPool(pool, identity, logger);
 }
 
-async function createMysqlTokenStoreWithPool(pool, logger = null) {
-  const store = new MysqlTokenStore(pool, logger);
+async function createMysqlTokenStoreWithPool(pool, identity, logger = null) {
+  const store = new MysqlTokenStore(pool, identity, logger);
   await store.initialize();
   return store;
 }
