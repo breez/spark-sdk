@@ -118,6 +118,9 @@ package-xcframework: build-ios-universal build-darwin-universal package-xcframew
 KMP_BASE := langs/kotlin-multiplatform/breez-sdk-spark-kmp/src
 KMP_JVM_RESOURCES := $(KMP_BASE)/jvmMain/resources
 KOTLIN_PACKAGE := kotlin/breez_sdk_spark
+ifeq ($(UNAME), Darwin)
+KMP_JVM_NATIVE_TARGETS := build-kotlin-multiplatform-jvm-darwin-binaries
+endif
 ifeq ($(UNAME), Linux)
 KMP_JVM_NATIVE_TARGETS := build-kotlin-multiplatform-jvm-linux-binaries
 endif
@@ -154,6 +157,12 @@ build-kotlin-multiplatform-bindgen-android-arm64: install-uniffi-bindgen-gobley 
 build-kotlin-multiplatform: build-kotlin-multiplatform-bindgen-only build-ndk-release-target-armv7-linux-androideabi build-ndk-release-target-i686-linux-android build-ndk-release-target-x86_64-linux-android
 
 # Copy JVM native libraries into JNA's expected classpath resource locations.
+build-kotlin-multiplatform-jvm-darwin-binaries: build-aarch64-apple-darwin build-x86_64-apple-darwin
+	mkdir -p $(KMP_JVM_RESOURCES)/darwin-aarch64
+	mkdir -p $(KMP_JVM_RESOURCES)/darwin-x86-64
+	cp $(TARGET_DIR)aarch64-apple-darwin/release/$(BIN_NAME).dylib $(KMP_JVM_RESOURCES)/darwin-aarch64/$(BIN_NAME).dylib
+	cp $(TARGET_DIR)x86_64-apple-darwin/release/$(BIN_NAME).dylib $(KMP_JVM_RESOURCES)/darwin-x86-64/$(BIN_NAME).dylib
+
 build-kotlin-multiplatform-jvm-linux-binaries: build-release-target-aarch64-unknown-linux-gnu build-release-target-x86_64-unknown-linux-gnu
 	mkdir -p $(KMP_JVM_RESOURCES)/linux-aarch64
 	mkdir -p $(KMP_JVM_RESOURCES)/linux-x86-64
