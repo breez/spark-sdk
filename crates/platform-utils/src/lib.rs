@@ -1,7 +1,7 @@
 //! Platform utilities for cross-platform abstractions.
 //!
 //! This crate provides platform-agnostic utilities, including HTTP client abstractions
-//! that work on both native (using bitreq) and WASM (using reqwest) platforms.
+//! built on reqwest that work on both native and WASM platforms.
 
 mod auth;
 pub mod http;

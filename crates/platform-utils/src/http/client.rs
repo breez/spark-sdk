@@ -1,11 +1,11 @@
-//! WASM HTTP client using reqwest.
+//! HTTP client using reqwest for both native and WASM targets.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use super::{HttpClient, HttpError, HttpResponse, REQUEST_TIMEOUT};
 
-/// HTTP client implementation using reqwest for WASM platforms.
+/// HTTP client implementation backed by reqwest.
 pub struct ReqwestHttpClient {
     client: reqwest::Client,
 }
