@@ -53,3 +53,5 @@ breez-sdk-spark-kmp/src/jvmMain/kotlin/breez_sdk_spark
 breez-sdk-spark-kmp/src/androidMain/kotlin/breez_sdk_spark
 breez-sdk-spark-kmp/src/nativeMain/kotlin/breez_sdk_spark
 breez-sdk-spark-kmp/src/nativeInterop/cinterop/headers/*
+
+breez-sdk-spark-kmp/src/jvmMain/resources/
