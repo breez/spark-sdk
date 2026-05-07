@@ -4782,9 +4782,9 @@ dependencies = [
 
 [[package]]
 name = "spark-token-primitives"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d155f13255bbe0b53214979bce25ef6b92a7179b2370f67f37ae5ff1abaa67f"
+checksum = "8de059d7cbb2b65fe6c8831ff57ae0408a7624b65a74b5a31a3109707bb9f86c"
 dependencies = [
  "bech32",
  "prost",
