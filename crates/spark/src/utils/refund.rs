@@ -116,7 +116,14 @@ pub async fn sign_refunds(
 
     for (i, leaf) in leaves.iter().enumerate() {
         let node_tx = &leaf.node.node_tx;
-        let direct_tx = leaf.node.direct_tx.as_ref();
+        // Zero-timelock nodes must not have a direct refund tx (SO enforces this).
+        // During renew_zero_timelock, the direct refund tx is intentionally omitted,
+        // so we must also omit it during transfers to avoid server rejection.
+        let direct_tx = if leaf.node.is_zero_timelock() {
+            None
+        } else {
+            leaf.node.direct_tx.as_ref()
+        };
 
         let old_sequence = leaf
             .node
@@ -489,9 +496,15 @@ pub fn prepare_refund_so_signing_jobs(
                 receiving_pubkey,
                 ..
             } = refund_tx_constructor;
+            // Zero-timelock nodes must not have a direct refund tx.
+            let direct_tx = if node.is_zero_timelock() {
+                None
+            } else {
+                node.direct_tx.as_ref()
+            };
             create_refund_txs(
                 &node.node_tx,
-                node.direct_tx.as_ref(),
+                direct_tx,
                 cpfp_sequence,
                 direct_sequence,
                 receiving_pubkey,
