@@ -205,6 +205,16 @@ impl TreeNode {
         let sequence_num = self.node_sequence().to_consensus_u32() as u16;
         sequence_num == 0
     }
+
+    pub fn direct_refund_tx(&self) -> Option<&Transaction> {
+        // Zero-timelock nodes must not have a direct refund tx (SO enforces this).
+        // During renew_zero_timelock, the direct refund tx is intentionally omitted,
+        // so we must also omit it during transfers to avoid server rejection.
+        match self.is_zero_timelock() {
+            true => None,
+            false => self.direct_tx.as_ref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -398,7 +398,7 @@ impl CoopExitService {
                     cpfp_sequence: refund_tx_constructor.cpfp_sequence,
                     direct_sequence: refund_tx_constructor.direct_sequence,
                     node_tx: &refund_tx_constructor.node.node_tx,
-                    direct_tx: refund_tx_constructor.node.direct_tx.as_ref(),
+                    direct_tx: refund_tx_constructor.node.direct_refund_tx(),
                     connector_outpoint: OutPoint {
                         txid: connector_txid,
                         vout: refund_tx_constructor.vout,
