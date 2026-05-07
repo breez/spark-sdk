@@ -11,7 +11,11 @@ import breez_sdk_spark.SendPaymentRequest
 import breez_sdk_spark.defaultConfig
 import breez_sdk_spark.defaultMysqlStorageConfig
 
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 import com.ionspin.kotlin.bignum.integer.BigInteger
 
@@ -251,6 +255,150 @@ private suspend fun waitForBalanceIncrease(sdk: BreezSdk, currentBalance: ULong,
     error("Balance did not increase within ${timeoutMs}ms (was $currentBalance sats)")
 }
 
+// --- seed-senders mode (top up sender pool from treasurer) ----------------
+
+/**
+ * One-shot seeding pass for the K reserved sender wallets
+ * (`__sender_0__` … `__sender_{K-1}__`). For each sender, if its
+ * balance is below `minSats`, the treasurer Spark-transfers enough to
+ * bring it up to `targetSats`.
+ *
+ * In the closed-loop bench design (load generator's `/send` always
+ * targets the treasurer), senders barely drain — only by per-transfer
+ * fees. So a single seeding pass before a long run is enough; no
+ * background replenisher is needed. Re-running this is idempotent.
+ *
+ * Senders are processed in parallel with bounded concurrency so the
+ * treasurer SDK isn't hit by K simultaneous sendPayment calls.
+ */
+fun seedSenders(opts: Map<String, String>) = runBlocking {
+    val mysqlUrl = opts["mysql-url"]
+        ?: error("--mysql-url=mysql://user:pass@host:port/dbname is required")
+    val masterSecret = opts["master-secret"]
+        ?: System.getenv("MASTER_SECRET")
+        ?: error("--master-secret=<hex-or-string> or MASTER_SECRET env var is required")
+    val senderCount = opts["senders"]?.toIntOrNull() ?: 50
+    val minSats = opts["min-sats"]?.toLongOrNull() ?: 10_000L
+    val targetSats = opts["target-sats"]?.toLongOrNull() ?: 50_000L
+    val parallelism = opts["parallelism"]?.toIntOrNull() ?: 5
+
+    require(senderCount > 0) { "--senders must be > 0" }
+    require(minSats in 1..targetSats) { "--min-sats must be in [1, --target-sats]" }
+    require(parallelism > 0) { "--parallelism must be > 0" }
+
+    println(
+        "[seed] senders=$senderCount  min=$minSats  target=$targetSats  parallel=$parallelism  " +
+            "mysql=${maskPassword(mysqlUrl)}"
+    )
+
+    val config = defaultConfig(Network.REGTEST)
+    val storageCfg = defaultMysqlStorageConfig(mysqlUrl)
+
+    val treasurerSeed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, TREASURER_USER_ID))
+    val treasurer = SdkBuilder(config, treasurerSeed)
+        .also { it.withMysqlBackend(storageCfg) }
+        .build()
+
+    try {
+        val treasurerInfo = treasurer.getInfo(GetInfoRequest(ensureSynced = true))
+        val treasurerBalance = treasurerInfo.balanceSats.toLong()
+        println("[seed] treasurer balance: $treasurerBalance sats")
+        // Worst-case spend if every sender is at zero. We only warn —
+        // partial seeding is still useful for diagnostics.
+        val maxSpend = senderCount.toLong() * targetSats
+        if (treasurerBalance < maxSpend) {
+            System.err.println(
+                "[seed] warning: treasurer has $treasurerBalance sats; up to $maxSpend may be needed " +
+                    "if all senders are empty. Run 'make fund' first."
+            )
+        }
+
+        val sem = Semaphore(parallelism)
+        var fundedCount = 0
+        var skippedCount = 0
+        coroutineScope {
+            for (i in 0 until senderCount) {
+                launch {
+                    sem.withPermit {
+                        val outcome = seedOneSender(
+                            treasurer = treasurer,
+                            senderIdx = i,
+                            masterSecret = masterSecret,
+                            config = config,
+                            storageCfg = storageCfg,
+                            minSats = minSats,
+                            targetSats = targetSats,
+                        )
+                        synchronized(this@runBlocking) {
+                            when (outcome) {
+                                SeedOutcome.FUNDED -> fundedCount++
+                                SeedOutcome.SKIPPED -> skippedCount++
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        println("[seed] OK  funded=$fundedCount  skipped=$skippedCount")
+    } finally {
+        try {
+            treasurer.disconnect()
+        } catch (e: Exception) {
+            System.err.println("[seed] treasurer disconnect warn: ${e.message}")
+        }
+    }
+}
+
+private enum class SeedOutcome { FUNDED, SKIPPED }
+
+private suspend fun seedOneSender(
+    treasurer: BreezSdk,
+    senderIdx: Int,
+    masterSecret: String,
+    config: breez_sdk_spark.Config,
+    storageCfg: breez_sdk_spark.MysqlStorageConfig,
+    minSats: Long,
+    targetSats: Long,
+): SeedOutcome {
+    val userId = senderUserId(senderIdx)
+    val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
+    val sender = SdkBuilder(config, seed).also { it.withMysqlBackend(storageCfg) }.build()
+
+    return try {
+        val info = sender.getInfo(GetInfoRequest(ensureSynced = true))
+        val balance = info.balanceSats.toLong()
+        if (balance >= minSats) {
+            println("[seed] sender $senderIdx: $balance sats (≥ $minSats, skip)")
+            return SeedOutcome.SKIPPED
+        }
+        val sparkAddr = sender.receivePayment(
+            ReceivePaymentRequest(paymentMethod = ReceivePaymentMethod.SparkAddress)
+        ).paymentRequest
+        val toSend = targetSats - balance
+        println("[seed] sender $senderIdx: $balance sats → topping up by $toSend to $targetSats")
+
+        val prepared = treasurer.prepareSendPayment(
+            PrepareSendPaymentRequest(
+                paymentRequest = sparkAddr,
+                amount = BigInteger.fromLong(toSend),
+            )
+        )
+        treasurer.sendPayment(SendPaymentRequest(prepareResponse = prepared))
+
+        // Verify the receiver sees the transfer. Spark transfers are
+        // typically sub-second, but the receiver's SDK still has to
+        // sync to surface the new balance.
+        waitForBalanceIncrease(sender, balance.toULong(), timeoutMs = 60_000)
+        SeedOutcome.FUNDED
+    } finally {
+        try {
+            sender.disconnect()
+        } catch (e: Exception) {
+            System.err.println("[seed] sender $senderIdx disconnect warn: ${e.message}")
+        }
+    }
+}
+
 // --- server mode ----------------------------------------------------------
 
 fun runServer(opts: Map<String, String>) {
@@ -364,6 +512,7 @@ fun main(args: Array<String>) {
         "smoke" -> smokeTest(opts)
         "server" -> runServer(opts)
         "fund" -> fundTreasurer(opts)
+        "seed-senders" -> seedSenders(opts)
         null, "help" -> {
             println(
                 """
@@ -372,14 +521,17 @@ fun main(args: Array<String>) {
                 Usage: ./gradlew run --args="--mode=<mode> [options]"
 
                 Modes:
-                  smoke      Single-request flow check: derive seed for one user-id,
-                             connect, getInfo, disconnect.
-                  server     HTTP server with /users/{userId}/{info,send,receive}
-                             endpoints. Each request spins up a fresh SDK instance
-                             (per-request lifecycle, v1 baseline).
-                  fund       Top up the reserved treasurer wallet via the Lightspark
-                             regtest faucet. Idempotent. Requires FAUCET_USERNAME +
-                             FAUCET_PASSWORD env vars (FAUCET_URL is optional).
+                  smoke         Single-request flow check: derive seed for one user-id,
+                                connect, getInfo, disconnect.
+                  server        HTTP server with /users/{userId}/{info,send,receive}
+                                endpoints. Each request spins up a fresh SDK instance
+                                (per-request lifecycle, v1 baseline).
+                  fund          Top up the reserved treasurer wallet via the Lightspark
+                                regtest faucet. Idempotent. Requires FAUCET_USERNAME +
+                                FAUCET_PASSWORD env vars (FAUCET_URL is optional).
+                  seed-senders  One-shot top-up of the K reserved sender wallets from
+                                the treasurer (Spark transfers). Idempotent — only
+                                refills senders whose balance is below --min-sats.
 
                 Options:
                   --mysql-url=mysql://user:pass@host:port/db   MySQL endpoint, including database name
@@ -388,6 +540,10 @@ fun main(args: Array<String>) {
                   --user-id=<id>                               (smoke) User id to derive seed for (default: smoke-default)
                   --port=<port>                                (server) HTTP listen port (default: 8080)
                   --target-sats=<N>                            (fund) Treasurer balance target (default: 5_000_000)
+                                                               (seed-senders) Per-sender top-up target (default: 50_000)
+                  --senders=<K>                                (seed-senders) Number of sender wallets (default: 50)
+                  --min-sats=<N>                               (seed-senders) Refill threshold per sender (default: 10_000)
+                  --parallelism=<N>                            (seed-senders) Concurrent top-ups (default: 5)
                 """.trimIndent()
             )
         }

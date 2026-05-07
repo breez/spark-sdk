@@ -11,9 +11,46 @@ Sibling of `../js/concurrent_perf.js` (the WASM/Node version).
 
 - **Phase 1 (per-request smoke)**: implemented.
 - **Phase 2 (HTTP server, 3 endpoints, per-request lifecycle)**: implemented.
-- **Phase 3a (faucet client + treasurer top-up)**: implemented; needs
-  `FAUCET_USERNAME` + `FAUCET_PASSWORD` to validate end-to-end.
-- Phases 3b–9: pending.
+- **Phase 3 (funding pipeline)**: implemented — `fund` (treasurer
+  top-up via faucet) and `seed-senders` (one-shot top-up of K sender
+  wallets from treasurer). Both validated end-to-end on regtest.
+- Phases 4–9: pending.
+
+## Funding flow
+
+The bench runs a closed loop: load generator's `/send` always targets
+the treasurer's Spark address, so funds circulate
+treasurer → sender → treasurer. The closed loop keeps the
+**total system sats constant** (regtest fees are 0), but **per-wallet**
+the senders still drain at the full payment amount per send. The
+treasurer fills up by the same amount.
+
+```
+faucet  ───────►  treasurer  ◄─── (load gen `/send` destination)
+                     │
+                     ▼ (one-shot via `make seed-senders`)
+              senders pool (K wallets)  ───── (load gen `/send` source)
+```
+
+**Sender pool runway** (how long a single seeding pass lasts before
+senders are empty):
+
+```
+runway_seconds = (K × TARGET_SATS) / (RPS × payment_sats)
+```
+
+With defaults K=50, TARGET=50_000, payment=1 sat:
+
+| RPS  | runway   |
+|------|----------|
+| 100  | ~7 hours |
+| 500  | ~1.4 h   |
+| 1000 | ~42 min  |
+
+This is enough for the Phase 6 RPS sweep (~5 min per step). For
+Phase 8 (24h leak run at sustained RPS), the prefund model isn't
+enough — a continuous replenisher (treasurer→senders at the drain
+rate) is needed and will be added before that phase.
 
 Run outputs (per-request JSONL, metrics samples, summaries, and the
 human-readable `RESULTS.md` digest) are written to `out/<run-id>/` and
@@ -126,8 +163,26 @@ MYSQL_URL='mysql://root:password@127.0.0.1:3306/breez_bench' \
 ```
 
 The treasurer is the on-ramp for the bench's funding pipeline; the
-sender pool top-up (Phase 3b) draws from it to keep the K active sender
+sender pool top-up below draws from it to keep the K active sender
 wallets above their minimum threshold.
+
+## Sender pool top-up (Phase 3b)
+
+One-shot top-up: for each of K sender wallets (`__sender_0__` …
+`__sender_{K-1}__`), if the wallet's balance is below `MIN_SATS`, the
+treasurer Spark-transfers enough to bring it to `TARGET_SATS`. Run
+once before a long bench run. Idempotent — re-running skips already-
+funded senders. Bounded concurrency (default 5) so the treasurer SDK
+isn't hammered with K simultaneous sendPayment calls.
+
+```bash
+SENDERS=50 MIN_SATS=10000 TARGET_SATS=50000 \
+  MASTER_SECRET=any-string \
+  MYSQL_URL='mysql://root:password@127.0.0.1:3306/breez_bench' \
+  make seed-senders
+```
+
+Output: `[seed] OK  funded=N  skipped=M` summarises the work done.
 
 ## Notes
 

@@ -1,7 +1,7 @@
 GRADLE := ./gradlew
 KMP_CLI_DIR := ../../bindings/examples/cli/langs/kotlin-multiplatform
 
-.PHONY: help setup build smoke-test run-server fund clean
+.PHONY: help setup build smoke-test run-server fund seed-senders clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -20,6 +20,9 @@ run-server: build ## Start the HTTP server (PORT defaults to 8080; needs MYSQL_U
 
 fund: build ## Top up the treasurer (TARGET_SATS defaults to 5000000; needs MYSQL_URL + MASTER_SECRET + FAUCET_USERNAME + FAUCET_PASSWORD)
 	$(GRADLE) run --console=plain --args="--mode=fund --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --target-sats=$${TARGET_SATS:-5000000}"
+
+seed-senders: build ## Top up the K sender wallets from the treasurer (SENDERS=50 MIN_SATS=10000 TARGET_SATS=50000 by default)
+	$(GRADLE) run --console=plain --args="--mode=seed-senders --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --senders=$${SENDERS:-50} --min-sats=$${MIN_SATS:-10000} --target-sats=$${TARGET_SATS:-50000}"
 
 clean: ## Remove build artifacts
 	$(GRADLE) clean
