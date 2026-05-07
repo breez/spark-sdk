@@ -9,7 +9,7 @@ use std::sync::Arc;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use macros::async_trait;
 use mysql_async::prelude::*;
-use mysql_async::{Conn, Params, Pool, Row, TxOpts, Value};
+use mysql_async::{Conn, Params, Pool, Row, Value};
 use platform_utils::time::SystemTime;
 use spark_wallet::{
     GetTokenOutputsFilter, ReservationTarget, SelectionStrategy, TokenMetadata, TokenOutput,
@@ -24,7 +24,7 @@ use crate::advisory_lock::identity_lock_name;
 use crate::config::MysqlStorageConfig;
 use crate::error::MysqlError;
 use crate::migrations::{Migration, run_migrations};
-use crate::pool::create_pool;
+use crate::pool::{create_pool, tx_opts};
 
 const TOKEN_MIGRATIONS_TABLE: &str = "token_schema_migrations";
 
@@ -412,10 +412,7 @@ impl TokenOutputStore for MysqlTokenStore {
         token_outputs: &TokenOutputs,
     ) -> Result<(), TokenOutputServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         self.upsert_metadata(&mut tx, &token_outputs.metadata)
             .await?;
@@ -675,10 +672,7 @@ impl MysqlTokenStore {
         token_outputs: &[TokenOutputs],
         refresh_timestamp: DateTime<Utc>,
     ) -> Result<(), TokenOutputServiceError> {
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         self.cleanup_stale_reservations(&mut tx).await?;
 
@@ -891,10 +885,7 @@ impl MysqlTokenStore {
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenOutputsReservation, TokenOutputServiceError> {
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         let metadata_row: Option<Row> = tx
             .exec_first(
@@ -1026,10 +1017,7 @@ impl MysqlTokenStore {
         conn: &mut Conn,
         id: &TokenOutputsReservationId,
     ) -> Result<(), TokenOutputServiceError> {
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         tx.exec_drop(
             "UPDATE token_outputs SET reservation_id = NULL WHERE user_id = ? AND reservation_id = ?",
@@ -1054,10 +1042,7 @@ impl MysqlTokenStore {
         conn: &mut Conn,
         id: &TokenOutputsReservationId,
     ) -> Result<(), TokenOutputServiceError> {
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         let purpose: Option<String> = tx
             .exec_first(
