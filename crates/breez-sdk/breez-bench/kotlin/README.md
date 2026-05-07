@@ -11,7 +11,9 @@ Sibling of `../js/concurrent_perf.js` (the WASM/Node version).
 
 - **Phase 1 (per-request smoke)**: implemented.
 - **Phase 2 (HTTP server, 3 endpoints, per-request lifecycle)**: implemented.
-- Phases 3–9: pending.
+- **Phase 3a (faucet client + treasurer top-up)**: implemented; needs
+  `FAUCET_USERNAME` + `FAUCET_PASSWORD` to validate end-to-end.
+- Phases 3b–9: pending.
 
 Run outputs (per-request JSONL, metrics samples, summaries, and the
 human-readable `RESULTS.md` digest) are written to `out/<run-id>/` and
@@ -105,6 +107,27 @@ The server runs on regtest by default (Network.REGTEST). The `/info` and
 `/receive` endpoints work without funding; `/send` will fail until the user
 has been funded — Phase 3 adds the funding tooling (treasurer + sender pool
 + replenisher).
+
+## Treasurer top-up (Phase 3a)
+
+Walks the reserved treasurer wallet's (`__treasurer__`) balance up to
+`TARGET_SATS` by repeatedly hitting the Lightspark regtest faucet and
+waiting for each on-chain deposit to be claimed. Faucet caps each call
+at 50_000 sats, so larger targets are split into chunks. Idempotent:
+re-running with an already-funded treasurer exits without calling the
+faucet.
+
+```bash
+export MASTER_SECRET=any-string
+export FAUCET_USERNAME=...   # request from Lightspark
+export FAUCET_PASSWORD=...
+MYSQL_URL='mysql://root:password@127.0.0.1:3306/breez_bench' \
+  TARGET_SATS=5000000 make fund
+```
+
+The treasurer is the on-ramp for the bench's funding pipeline; the
+sender pool top-up (Phase 3b) draws from it to keep the K active sender
+wallets above their minimum threshold.
 
 ## Notes
 

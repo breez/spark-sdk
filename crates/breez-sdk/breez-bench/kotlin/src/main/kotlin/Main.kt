@@ -11,6 +11,8 @@ import breez_sdk_spark.SendPaymentRequest
 import breez_sdk_spark.defaultConfig
 import breez_sdk_spark.defaultMysqlStorageConfig
 
+import kotlinx.coroutines.delay
+
 import com.ionspin.kotlin.bignum.integer.BigInteger
 
 import io.ktor.http.HttpStatusCode
@@ -127,6 +129,12 @@ data class ReceiveResult(val paymentRequest: String, val feeSats: String)
 @Serializable
 data class ErrorBody(val error: String)
 
+// --- reserved user-ids (funding pipeline) ---------------------------------
+
+const val TREASURER_USER_ID = "__treasurer__"
+
+fun senderUserId(idx: Int): String = "__sender_${idx}__"
+
 // --- smoke mode -----------------------------------------------------------
 
 fun smokeTest(opts: Map<String, String>) = runBlocking {
@@ -161,6 +169,86 @@ fun smokeTest(opts: Map<String, String>) = runBlocking {
         }
     }
     println("[smoke] OK")
+}
+
+// --- fund mode (treasurer top-up via Lightspark regtest faucet) -----------
+
+/**
+ * Idempotent treasurer top-up: walks the treasurer's balance up to
+ * `targetSats` by repeatedly hitting the faucet (capped at
+ * [Faucet.MAX_PER_CALL_SATS] per call) and waiting for each on-chain
+ * deposit to be claimed before requesting the next chunk.
+ *
+ * If the treasurer is already at or above `targetSats`, exits without
+ * calling the faucet — safe to re-run.
+ */
+fun fundTreasurer(opts: Map<String, String>) = runBlocking {
+    val mysqlUrl = opts["mysql-url"]
+        ?: error("--mysql-url=mysql://user:pass@host:port/dbname is required")
+    val masterSecret = opts["master-secret"]
+        ?: System.getenv("MASTER_SECRET")
+        ?: error("--master-secret=<hex-or-string> or MASTER_SECRET env var is required")
+    val targetSats = opts["target-sats"]?.toLongOrNull() ?: 5_000_000L
+
+    // Fail fast if creds are missing — otherwise we'd build the SDK,
+    // request a deposit address, and only then discover we can't fund.
+    System.getenv("FAUCET_USERNAME") ?: error("FAUCET_USERNAME env var is required")
+    System.getenv("FAUCET_PASSWORD") ?: error("FAUCET_PASSWORD env var is required")
+
+    println("[fund] treasurer top-up to $targetSats sats  mysql=${maskPassword(mysqlUrl)}")
+
+    val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, TREASURER_USER_ID))
+    val builder = SdkBuilder(defaultConfig(Network.REGTEST), seed)
+    builder.withMysqlBackend(defaultMysqlStorageConfig(mysqlUrl))
+    val sdk = builder.build()
+
+    try {
+        // Reuse an existing deposit address if the treasurer has one.
+        val depositAddr = sdk.receivePayment(
+            ReceivePaymentRequest(paymentMethod = ReceivePaymentMethod.BitcoinAddress(newAddress = false))
+        ).paymentRequest
+        println("[fund] deposit address: $depositAddr")
+
+        var chunkIdx = 0
+        while (true) {
+            val info = sdk.getInfo(GetInfoRequest(ensureSynced = true))
+            val balance = info.balanceSats.toLong()
+            if (balance >= targetSats) {
+                println("[fund] treasurer balance: $balance sats (target reached)")
+                break
+            }
+            val remaining = targetSats - balance
+            var chunk = remaining.coerceAtMost(Faucet.MAX_PER_CALL_SATS)
+            if (chunk < Faucet.MIN_PER_CALL_SATS) chunk = Faucet.MIN_PER_CALL_SATS
+            chunkIdx++
+            println("[fund] chunk #$chunkIdx: requesting $chunk sats (balance $balance/$targetSats)")
+            val txid = Faucet.fundBitcoinAddress(depositAddr, chunk)
+            println("[fund] chunk #$chunkIdx faucet txid: $txid")
+            waitForBalanceIncrease(sdk, balance.toULong(), timeoutMs = 240_000)
+        }
+        println("[fund] OK")
+    } finally {
+        try {
+            sdk.disconnect()
+        } catch (e: Exception) {
+            System.err.println("[fund] disconnect warn: ${e.message}")
+        }
+    }
+}
+
+/**
+ * Polls `getInfo({ensureSynced=true})` every 5s until balance moves
+ * above `currentBalance`. Throws if the deadline passes without
+ * progress — the caller's loop decides whether to retry the faucet.
+ */
+private suspend fun waitForBalanceIncrease(sdk: BreezSdk, currentBalance: ULong, timeoutMs: Long) {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+        delay(5_000)
+        val info = sdk.getInfo(GetInfoRequest(ensureSynced = true))
+        if (info.balanceSats > currentBalance) return
+    }
+    error("Balance did not increase within ${timeoutMs}ms (was $currentBalance sats)")
 }
 
 // --- server mode ----------------------------------------------------------
@@ -275,6 +363,7 @@ fun main(args: Array<String>) {
     when (opts["mode"]) {
         "smoke" -> smokeTest(opts)
         "server" -> runServer(opts)
+        "fund" -> fundTreasurer(opts)
         null, "help" -> {
             println(
                 """
@@ -288,6 +377,9 @@ fun main(args: Array<String>) {
                   server     HTTP server with /users/{userId}/{info,send,receive}
                              endpoints. Each request spins up a fresh SDK instance
                              (per-request lifecycle, v1 baseline).
+                  fund       Top up the reserved treasurer wallet via the Lightspark
+                             regtest faucet. Idempotent. Requires FAUCET_USERNAME +
+                             FAUCET_PASSWORD env vars (FAUCET_URL is optional).
 
                 Options:
                   --mysql-url=mysql://user:pass@host:port/db   MySQL endpoint, including database name
@@ -295,6 +387,7 @@ fun main(args: Array<String>) {
                                                                (or set MASTER_SECRET env var)
                   --user-id=<id>                               (smoke) User id to derive seed for (default: smoke-default)
                   --port=<port>                                (server) HTTP listen port (default: 8080)
+                  --target-sats=<N>                            (fund) Treasurer balance target (default: 5_000_000)
                 """.trimIndent()
             )
         }
