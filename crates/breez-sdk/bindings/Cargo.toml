@@ -4,9 +4,11 @@ edition = "2024"
 version.workspace = true
 
 [features]
-default = ["postgres"]
+default = ["postgres", "mysql"]
 # PostgreSQL storage backend (disable for mobile builds to reduce binary size)
 postgres = ["breez-sdk-spark/postgres"]
+# MySQL storage backend (disable for mobile builds to reduce binary size)
+mysql = ["breez-sdk-spark/mysql"]
 uniffi-cli = ["uniffi/bindgen-tests", "uniffi/cli"]
 
 [[bin]]

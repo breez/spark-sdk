@@ -124,3 +124,19 @@ impl SdkBuilder {
         *builder = builder.clone().with_postgres_backend(config);
     }
 }
+
+#[cfg(all(
+    feature = "mysql",
+    not(all(target_family = "wasm", target_os = "unknown"))
+))]
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+impl SdkBuilder {
+    /// Sets `MySQL` as the backend for all stores (storage, tree store, and token store).
+    /// The store instances will be created during `build()`.
+    /// Arguments:
+    /// - `config`: The `MySQL` storage configuration.
+    pub async fn with_mysql_backend(&self, config: crate::persist::mysql::MysqlStorageConfig) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_mysql_backend(config);
+    }
+}
