@@ -108,7 +108,7 @@ pub trait PrfProvider: Send + Sync {
     /// # When to call
     ///
     /// - **First launch / onboarding**: call once to catch misconfiguration
-    ///   early, before the first WebAuthn ceremony.
+    ///   early, before the first `WebAuthn` ceremony.
     /// - **Error recovery**: if `derivePrfSeed` returns `CredentialNotFound`
     ///   but you expect a credential to exist, call this to distinguish
     ///   "genuinely no credential" from "platform configuration is broken."
@@ -126,13 +126,13 @@ pub trait PrfProvider: Send + Sync {
     ///   stale if the AASA file was recently updated.
     /// - **Android**: queries the Digital Asset Links API for a matching
     ///   `get_login_creds` statement. Returns `Skipped` (not `NotAssociated`)
-    ///   on mismatch, because Android's CredentialManager performs its own
+    ///   on mismatch, because Android's `CredentialManager` performs its own
     ///   internal verification that may be more up-to-date than the public API.
     /// - **Browser**: checks that `rpId` is a registrable suffix of
     ///   `window.location.hostname` (the same rule the browser enforces
-    ///   at WebAuthn call time). No network request needed.
+    ///   at `WebAuthn` call time). No network request needed.
     ///
-    /// Custom providers (YubiKey, FIDO2, file-backed) that have no platform
+    /// Custom providers (`YubiKey`, `FIDO2`, file-backed) that have no platform
     /// verification source should inherit the default, which returns
     /// `Skipped`.
     ///
