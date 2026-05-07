@@ -1,12 +1,42 @@
+import breez_sdk_spark.BreezSdk
 import breez_sdk_spark.GetInfoRequest
 import breez_sdk_spark.Network
+import breez_sdk_spark.PrepareSendPaymentRequest
+import breez_sdk_spark.ReceivePaymentMethod
+import breez_sdk_spark.ReceivePaymentRequest
 import breez_sdk_spark.SdkBuilder
 import breez_sdk_spark.Seed
+import breez_sdk_spark.SendPaymentMethod
+import breez_sdk_spark.SendPaymentRequest
 import breez_sdk_spark.defaultConfig
 import breez_sdk_spark.defaultMysqlStorageConfig
+
+import com.ionspin.kotlin.bignum.integer.BigInteger
+
+import io.ktor.http.HttpStatusCode
+import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.application.call
+import io.ktor.server.application.install
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.request.receive
+import io.ktor.server.response.respond
+import io.ktor.server.routing.get
+import io.ktor.server.routing.post
+import io.ktor.server.routing.routing
+
+import java.util.concurrent.ConcurrentHashMap
+
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.Serializable
+
+// --- arg parsing -----------------------------------------------------------
 
 fun parseArgs(args: Array<String>): Map<String, String> {
     val out = mutableMapOf<String, String>()
@@ -40,6 +70,64 @@ fun deriveSeedBytes(masterSecret: String, userId: String): ByteArray {
     mac.init(SecretKeySpec(masterSecret.toByteArray(Charsets.UTF_8), "HmacSHA512"))
     return mac.doFinal(userId.toByteArray(Charsets.UTF_8))
 }
+
+// --- per-request SDK lifecycle --------------------------------------------
+
+/**
+ * Spins up a fresh SDK instance per call and tears it down after `op`. Same-
+ * `userId` calls serialize through a per-userId mutex so concurrent requests
+ * never race two SDK instances against the same MySQL identity rows.
+ *
+ * The mutex map grows unboundedly with distinct user-ids. For v1 (bench
+ * lifetime is bounded) that's acceptable. Phase 7 (LRU SDK pool) revisits
+ * this together with instance reuse.
+ */
+class BenchSdkProvider(
+    private val masterSecret: String,
+    mysqlUrl: String,
+) {
+    private val config = defaultConfig(Network.REGTEST)
+    private val storageCfg = defaultMysqlStorageConfig(mysqlUrl)
+    private val mutexes = ConcurrentHashMap<String, Mutex>()
+
+    suspend fun <T> withUser(userId: String, op: suspend (BreezSdk) -> T): T {
+        val mutex = mutexes.computeIfAbsent(userId) { Mutex() }
+        return mutex.withLock {
+            val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
+            val builder = SdkBuilder(config, seed)
+            builder.withMysqlBackend(storageCfg)
+            val sdk = builder.build()
+            try {
+                op(sdk)
+            } finally {
+                try {
+                    sdk.disconnect()
+                } catch (e: Exception) {
+                    System.err.println("[server] disconnect warn (user=$userId): ${e.message}")
+                }
+            }
+        }
+    }
+}
+
+// --- HTTP request/response shapes -----------------------------------------
+
+@Serializable
+data class InfoResponse(val balanceSats: Long)
+
+@Serializable
+data class SendBody(val destination: String, val amountSats: Long)
+
+@Serializable
+data class SendResult(val paymentId: String, val feeSats: String)
+
+@Serializable
+data class ReceiveResult(val paymentRequest: String, val feeSats: String)
+
+@Serializable
+data class ErrorBody(val error: String)
+
+// --- smoke mode -----------------------------------------------------------
 
 fun smokeTest(opts: Map<String, String>) = runBlocking {
     val mysqlUrl = opts["mysql-url"]
@@ -75,10 +163,118 @@ fun smokeTest(opts: Map<String, String>) = runBlocking {
     println("[smoke] OK")
 }
 
+// --- server mode ----------------------------------------------------------
+
+fun runServer(opts: Map<String, String>) {
+    val mysqlUrl = opts["mysql-url"]
+        ?: error("--mysql-url=mysql://user:pass@host:port/dbname is required")
+    val masterSecret = opts["master-secret"]
+        ?: System.getenv("MASTER_SECRET")
+        ?: error("--master-secret=<hex-or-string> or MASTER_SECRET env var is required")
+    val port = opts["port"]?.toIntOrNull() ?: 8080
+
+    val provider = BenchSdkProvider(masterSecret, mysqlUrl)
+
+    println("[server] listening on :$port  mysql=${maskPassword(mysqlUrl)}")
+
+    embeddedServer(Netty, port = port) {
+        install(ContentNegotiation) { json() }
+        routing {
+            // GET /users/{userId}/info → InfoResponse
+            //
+            // ensureSynced=true: balance against fresh per-request SDK state
+            // is meaningless without forcing a sync. v1 (per-request lifecycle)
+            // pays the full sync cost on every call; Phase 7 (pooled SDK) will
+            // amortize it to once-per-pool-admission.
+            get("/users/{userId}/info") {
+                val userId = call.parameters["userId"]!!
+                handle(call) {
+                    provider.withUser(userId) { sdk ->
+                        val info = sdk.getInfo(GetInfoRequest(ensureSynced = true))
+                        InfoResponse(balanceSats = info.balanceSats.toLong())
+                    }
+                }
+            }
+
+            // POST /users/{userId}/send  body=SendBody → SendResult
+            //
+            // Spans both prepareSendPayment + sendPayment. The plan reports
+            // /send latency as a single number; /send-by-stage breakdown can
+            // be added later if a partner wants it.
+            post("/users/{userId}/send") {
+                val userId = call.parameters["userId"]!!
+                val body = call.receive<SendBody>()
+                handle(call) {
+                    provider.withUser(userId) { sdk ->
+                        val prepared = sdk.prepareSendPayment(
+                            PrepareSendPaymentRequest(
+                                paymentRequest = body.destination,
+                                amount = BigInteger.fromLong(body.amountSats),
+                            )
+                        )
+                        val sendResp = sdk.sendPayment(SendPaymentRequest(prepareResponse = prepared))
+                        SendResult(
+                            paymentId = sendResp.payment.id,
+                            feeSats = feeOf(prepared.paymentMethod),
+                        )
+                    }
+                }
+            }
+
+            // POST /users/{userId}/receive → ReceiveResult
+            //
+            // Address generation only — no funds are landing during the
+            // measurement window. This number is the cost of producing a
+            // deposit destination, not the end-to-end cost of a payment
+            // arriving. Worth flagging in RESULTS.md so partners don't
+            // misread the number.
+            post("/users/{userId}/receive") {
+                val userId = call.parameters["userId"]!!
+                handle(call) {
+                    provider.withUser(userId) { sdk ->
+                        val resp = sdk.receivePayment(
+                            ReceivePaymentRequest(paymentMethod = ReceivePaymentMethod.SparkAddress)
+                        )
+                        ReceiveResult(
+                            paymentRequest = resp.paymentRequest,
+                            feeSats = resp.fee.toString(),
+                        )
+                    }
+                }
+            }
+        }
+    }.start(wait = true)
+}
+
+private fun feeOf(pm: SendPaymentMethod): String = when (pm) {
+    is SendPaymentMethod.SparkAddress -> pm.fee.toString()
+    is SendPaymentMethod.SparkInvoice -> pm.fee.toString()
+    is SendPaymentMethod.Bolt11Invoice -> pm.lightningFeeSats.toString()
+    is SendPaymentMethod.BitcoinAddress -> {
+        val q = pm.feeQuote.speedFast
+        (q.userFeeSat + q.l1BroadcastFeeSat).toString()
+    }
+}
+
+private suspend inline fun <reified T : Any> handle(
+    call: io.ktor.server.application.ApplicationCall,
+    crossinline op: suspend () -> T,
+) {
+    try {
+        call.respond(op())
+    } catch (e: Throwable) {
+        System.err.println("[server] handler error: ${e.message}")
+        call.respond(HttpStatusCode.InternalServerError, ErrorBody(error = e.message ?: e::class.qualifiedName ?: "error"))
+    }
+}
+
+// --- CLI dispatch ---------------------------------------------------------
+
 fun main(args: Array<String>) {
     val opts = parseArgs(args)
     when (opts["mode"]) {
         "smoke" -> smokeTest(opts)
+        "server" -> runServer(opts)
         null, "help" -> {
             println(
                 """
@@ -88,13 +284,17 @@ fun main(args: Array<String>) {
 
                 Modes:
                   smoke      Single-request flow check: derive seed for one user-id,
-                             connect, getInfo, disconnect. No HTTP server yet (Phase 2).
+                             connect, getInfo, disconnect.
+                  server     HTTP server with /users/{userId}/{info,send,receive}
+                             endpoints. Each request spins up a fresh SDK instance
+                             (per-request lifecycle, v1 baseline).
 
                 Options:
                   --mysql-url=mysql://user:pass@host:port/db   MySQL endpoint, including database name
                   --master-secret=<string>                     Master secret for HMAC seed derivation
                                                                (or set MASTER_SECRET env var)
-                  --user-id=<id>                               User id to derive seed for (default: smoke-default)
+                  --user-id=<id>                               (smoke) User id to derive seed for (default: smoke-default)
+                  --port=<port>                                (server) HTTP listen port (default: 8080)
                 """.trimIndent()
             )
         }

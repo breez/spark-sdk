@@ -9,10 +9,9 @@ Sibling of `../js/concurrent_perf.js` (the WASM/Node version).
 
 ## Status
 
-- **Phase 1 (per-request smoke)**: implemented — single-shot run of the
-  per-request flow, validates the SDK + MySQL + KMP path before HTTP is
-  added in Phase 2.
-- Phases 2–9: pending.
+- **Phase 1 (per-request smoke)**: implemented.
+- **Phase 2 (HTTP server, 3 endpoints, per-request lifecycle)**: implemented.
+- Phases 3–9: pending.
 
 Run outputs (per-request JSONL, metrics samples, summaries, and the
 human-readable `RESULTS.md` digest) are written to `out/<run-id>/` and
@@ -71,6 +70,41 @@ Expected output:
 [smoke] balance=0 sats
 [smoke] OK
 ```
+
+## Server (Phase 2)
+
+Ktor + Netty HTTP server with three endpoints:
+
+| Endpoint | Body | Maps to |
+|---|---|---|
+| `GET /users/{userId}/info` | — | `getInfo({ ensureSynced: true })` |
+| `POST /users/{userId}/send` | `{ "destination": "<spark addr>", "amountSats": <int> }` | `prepareSendPayment` + `sendPayment` |
+| `POST /users/{userId}/receive` | `{}` | `receivePayment(SparkAddress)` (address generation only) |
+
+Per-request flow: HMAC-derive seed → `SdkBuilder().withMysqlBackend().build()`
+→ op → `disconnect()`. Same-`userId` requests serialize through a per-userId
+mutex; different user-ids run in parallel.
+
+```bash
+export MASTER_SECRET=any-string
+MYSQL_URL='mysql://root:password@127.0.0.1:3306/breez_bench' \
+  PORT=8080 make run-server
+```
+
+Manual smoke (in another shell):
+
+```bash
+curl -s http://localhost:8080/users/alice/info
+curl -s -X POST http://localhost:8080/users/alice/receive -H 'content-type: application/json' -d '{}'
+curl -s -X POST http://localhost:8080/users/alice/send \
+  -H 'content-type: application/json' \
+  -d '{"destination":"<spark addr>","amountSats":1000}'
+```
+
+The server runs on regtest by default (Network.REGTEST). The `/info` and
+`/receive` endpoints work without funding; `/send` will fail until the user
+has been funded — Phase 3 adds the funding tooling (treasurer + sender pool
++ replenisher).
 
 ## Notes
 

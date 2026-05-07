@@ -1,7 +1,7 @@
 GRADLE := ./gradlew
 KMP_CLI_DIR := ../../bindings/examples/cli/langs/kotlin-multiplatform
 
-.PHONY: help setup build smoke-test clean
+.PHONY: help setup build smoke-test run-server clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -14,6 +14,9 @@ build: ## Compile the benchmark harness
 
 smoke-test: build ## Run per-request smoke (requires MYSQL_URL + MASTER_SECRET env vars)
 	$(GRADLE) run --console=plain --args="--mode=smoke --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET"
+
+run-server: build ## Start the HTTP server (PORT defaults to 8080; needs MYSQL_URL + MASTER_SECRET)
+	$(GRADLE) run --console=plain --args="--mode=server --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --port=$${PORT:-8080}"
 
 clean: ## Remove build artifacts
 	$(GRADLE) clean
