@@ -65,9 +65,9 @@ pub struct SdkBuilder {
     storage_dir: Option<String>,
     storage: Option<Arc<dyn Storage>>,
     #[cfg(feature = "postgres")]
-    postgres_backend_config: Option<crate::persist::postgres::PostgresStorageConfig>,
+    postgres_pool: Option<Arc<crate::persist::postgres::PostgresConnectionPool>>,
     #[cfg(feature = "mysql")]
-    mysql_backend_config: Option<crate::persist::mysql::MysqlStorageConfig>,
+    mysql_pool: Option<Arc<crate::persist::mysql::MysqlConnectionPool>>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn platform_utils::HttpClient>>,
@@ -98,9 +98,9 @@ impl SdkBuilder {
             storage_dir: None,
             storage: None,
             #[cfg(feature = "postgres")]
-            postgres_backend_config: None,
+            postgres_pool: None,
             #[cfg(feature = "mysql")]
-            mysql_backend_config: None,
+            mysql_pool: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -124,9 +124,9 @@ impl SdkBuilder {
             storage_dir: None,
             storage: None,
             #[cfg(feature = "postgres")]
-            postgres_backend_config: None,
+            postgres_pool: None,
             #[cfg(feature = "mysql")]
-            mysql_backend_config: None,
+            mysql_pool: None,
             chain_service: None,
             fiat_service: None,
             lnurl_client: None,
@@ -180,28 +180,43 @@ impl SdkBuilder {
         self
     }
 
-    /// Sets `PostgreSQL` as the backend for all stores (storage, tree store, and token store).
-    /// The store instances will be created during `build()`.
-    /// Arguments:
-    /// - `config`: The `PostgreSQL` storage configuration.
+    /// Sets a shared `PostgreSQL` connection pool as the backend for all
+    /// stores (storage, tree store, and token store).
+    ///
+    /// Construct the pool once via
+    /// [`create_postgres_connection_pool`](crate::create_postgres_connection_pool) and pass the same
+    /// `Arc` to multiple `SdkBuilder` instances to share connections across
+    /// SDKs. Per-tenant scoping is derived from each SDK's seed.
+    ///
+    /// # Arguments
+    /// - `pool`: The shared `PostgreSQL` connection pool.
     #[must_use]
     #[cfg(feature = "postgres")]
-    pub fn with_postgres_backend(
+    pub fn with_postgres_connection_pool(
         mut self,
-        config: crate::persist::postgres::PostgresStorageConfig,
+        pool: Arc<crate::persist::postgres::PostgresConnectionPool>,
     ) -> Self {
-        self.postgres_backend_config = Some(config);
+        self.postgres_pool = Some(pool);
         self
     }
 
-    /// Sets `MySQL` as the backend for all stores (storage, tree store, and token store).
-    /// The store instances will be created during `build()`.
-    /// Arguments:
-    /// - `config`: The `MySQL` storage configuration.
+    /// Sets a shared `MySQL` connection pool as the backend for all stores
+    /// (storage, tree store, and token store).
+    ///
+    /// Construct the pool once via [`create_mysql_connection_pool`](crate::create_mysql_connection_pool)
+    /// and pass the same `Arc` to multiple `SdkBuilder` instances to share
+    /// connections across SDKs. Per-tenant scoping is derived from each
+    /// SDK's seed.
+    ///
+    /// # Arguments
+    /// - `pool`: The shared `MySQL` connection pool.
     #[must_use]
     #[cfg(feature = "mysql")]
-    pub fn with_mysql_backend(mut self, config: crate::persist::mysql::MysqlStorageConfig) -> Self {
-        self.mysql_backend_config = Some(config);
+    pub fn with_mysql_connection_pool(
+        mut self,
+        pool: Arc<crate::persist::mysql::MysqlConnectionPool>,
+    ) -> Self {
+        self.mysql_pool = Some(pool);
         self
     }
 
@@ -424,12 +439,12 @@ impl SdkBuilder {
 
         // Validate storage configuration
         #[cfg(feature = "postgres")]
-        let has_postgres = self.postgres_backend_config.is_some();
+        let has_postgres = self.postgres_pool.is_some();
         #[cfg(not(feature = "postgres"))]
         let has_postgres = false;
 
         #[cfg(feature = "mysql")]
-        let has_mysql = self.mysql_backend_config.is_some();
+        let has_mysql = self.mysql_pool.is_some();
         #[cfg(not(feature = "mysql"))]
         let has_mysql = false;
 
@@ -452,36 +467,34 @@ impl SdkBuilder {
             _ => {}
         }
 
-        // Create a shared PostgreSQL pool if postgres backend is configured,
-        // bundled with the tenant identity used to scope every read/write so
-        // storage, tree store, and token store share the same scope.
+        // Read the shared PostgreSQL pool if configured, bundled with the
+        // tenant identity used to scope every read/write so storage, tree
+        // store, and token store share the same scope. The pool itself is
+        // owned by the integrator and may be shared with other SDK instances.
         #[cfg(feature = "postgres")]
-        let postgres_backend = if let Some(ref postgres_config) = self.postgres_backend_config {
-            let pool = crate::persist::postgres::create_pool(postgres_config)
-                .map_err(|e| SdkError::Generic(e.to_string()))?;
+        let postgres_backend = if let Some(ref pool) = self.postgres_pool {
             let identity = spark_signer
                 .get_identity_public_key()
                 .await
                 .map_err(|e| SdkError::Generic(e.to_string()))?
                 .serialize();
-            Some((pool, identity))
+            Some((pool.inner.clone(), identity))
         } else {
             None
         };
 
-        // Create a shared MySQL pool if mysql backend is configured, bundled
-        // with the tenant identity used to scope every read/write so storage,
-        // tree store, and token store share the same scope.
+        // Read the shared MySQL pool if configured, bundled with the tenant
+        // identity used to scope every read/write so storage, tree store, and
+        // token store share the same scope. The pool itself is owned by the
+        // integrator and may be shared with other SDK instances.
         #[cfg(feature = "mysql")]
-        let mysql_backend = if let Some(ref mysql_config) = self.mysql_backend_config {
-            let pool = crate::persist::mysql::create_pool(mysql_config)
-                .map_err(|e| SdkError::Generic(e.to_string()))?;
+        let mysql_backend = if let Some(ref pool) = self.mysql_pool {
             let identity = spark_signer
                 .get_identity_public_key()
                 .await
                 .map_err(|e| SdkError::Generic(e.to_string()))?
                 .serialize();
-            Some((pool, identity))
+            Some((pool.inner.clone(), identity))
         } else {
             None
         };

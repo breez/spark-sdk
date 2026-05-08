@@ -1,4 +1,9 @@
-import { SdkBuilder, defaultConfig, defaultPostgresStorageConfig } from '@breeztech/breez-sdk-spark'
+import {
+  SdkBuilder,
+  defaultConfig,
+  defaultPostgresStorageConfig,
+  createPostgresConnectionPool
+} from '@breeztech/breez-sdk-spark'
 import type {
   ProvisionalPayment,
   Seed,
@@ -68,9 +73,14 @@ const exampleWithPostgresStorage = async () => {
   pgConfig.createTimeoutSecs = 30 // Timeout for establishing a new connection
   pgConfig.recycleTimeoutSecs = 30 // Timeout for recycling an idle connection
 
+  // Construct the connection pool. The same pool handle can be passed to
+  // multiple SdkBuilders to share connections across SDKs; per-tenant
+  // scoping (rows isolated by seed identity) is preserved.
+  const pool = createPostgresConnectionPool(pgConfig)
+
   // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
   let builder = SdkBuilder.new(config, seed)
-  builder = builder.withPostgresBackend(pgConfig)
+  builder = builder.withPostgresConnectionPool(pool)
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-postgres
 }

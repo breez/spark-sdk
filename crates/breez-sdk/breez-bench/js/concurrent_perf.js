@@ -12,6 +12,8 @@ const {
   defaultConfig,
   defaultPostgresStorageConfig,
   defaultMysqlStorageConfig,
+  createPostgresConnectionPool,
+  createMysqlConnectionPool,
   initLogging,
 } = require('@breeztech/breez-sdk-spark/nodejs')
 
@@ -187,9 +189,11 @@ async function buildSdk(opts, role, mnemonic, dataDir, storage) {
   let builder = SdkBuilder.new(config, seed)
   const { postgres, mysql } = storage || {}
   if (postgres) {
-    builder = builder.withPostgresBackend(defaultPostgresStorageConfig(postgres))
+    const pool = createPostgresConnectionPool(defaultPostgresStorageConfig(postgres))
+    builder = builder.withPostgresConnectionPool(pool)
   } else if (mysql) {
-    builder = builder.withMysqlBackend(defaultMysqlStorageConfig(mysql))
+    const pool = createMysqlConnectionPool(defaultMysqlStorageConfig(mysql))
+    builder = builder.withMysqlConnectionPool(pool)
   } else {
     builder = await builder.withDefaultStorage(dataDir)
   }

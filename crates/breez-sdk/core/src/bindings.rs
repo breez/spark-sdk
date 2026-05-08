@@ -112,16 +112,16 @@ impl SdkBuilder {
 ))]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl SdkBuilder {
-    /// Sets `PostgreSQL` as the backend for all stores (storage, tree store, and token store).
-    /// The store instances will be created during `build()`.
-    /// Arguments:
-    /// - `config`: The `PostgreSQL` storage configuration.
-    pub async fn with_postgres_backend(
+    /// Sets a shared `PostgreSQL` connection pool as the backend for all
+    /// stores (storage, tree store, and token store). Construct the pool
+    /// via [`create_postgres_connection_pool`](crate::create_postgres_connection_pool) and pass the
+    /// same `Arc` to multiple builders to share connections across SDKs.
+    pub async fn with_postgres_connection_pool(
         &self,
-        config: crate::persist::postgres::PostgresStorageConfig,
+        pool: Arc<crate::persist::postgres::PostgresConnectionPool>,
     ) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_postgres_backend(config);
+        *builder = builder.clone().with_postgres_connection_pool(pool);
     }
 }
 
@@ -131,12 +131,15 @@ impl SdkBuilder {
 ))]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl SdkBuilder {
-    /// Sets `MySQL` as the backend for all stores (storage, tree store, and token store).
-    /// The store instances will be created during `build()`.
-    /// Arguments:
-    /// - `config`: The `MySQL` storage configuration.
-    pub async fn with_mysql_backend(&self, config: crate::persist::mysql::MysqlStorageConfig) {
+    /// Sets a shared `MySQL` connection pool as the backend for all stores
+    /// (storage, tree store, and token store). Construct the pool via
+    /// [`create_mysql_connection_pool`](crate::create_mysql_connection_pool) and pass the same `Arc`
+    /// to multiple builders to share connections across SDKs.
+    pub async fn with_mysql_connection_pool(
+        &self,
+        pool: Arc<crate::persist::mysql::MysqlConnectionPool>,
+    ) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_mysql_backend(config);
+        *builder = builder.clone().with_mysql_connection_pool(pool);
     }
 }

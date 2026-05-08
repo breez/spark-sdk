@@ -104,9 +104,14 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     postgres_config.max_pool_size = 8; // Max connections in pool
     postgres_config.wait_timeout_secs = Some(30); // Timeout waiting for connection
 
+    // Construct the connection pool. The same `Arc<PostgresConnectionPool>`
+    // can be passed to multiple SdkBuilders to share connections across SDKs;
+    // per-tenant scoping (rows isolated by seed identity) is preserved.
+    let pool = create_postgres_connection_pool(&postgres_config)?;
+
     // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
     let sdk = SdkBuilder::new(config, seed)
-        .with_postgres_backend(postgres_config)
+        .with_postgres_connection_pool(pool)
         .build()
         .await?;
     // ANCHOR_END: init-sdk-postgres

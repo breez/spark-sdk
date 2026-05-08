@@ -23,6 +23,10 @@ path = "src/bin/claim_perf.rs"
 name = "concurrent-perf"
 path = "src/bin/concurrent_perf.rs"
 
+[[bin]]
+name = "pool-share-perf"
+path = "src/bin/pool_share_perf.rs"
+
 [dependencies]
 # Reuse all test infrastructure from breez-itest
 breez-sdk-itest = { path = "../breez-itest" }
@@ -52,4 +56,7 @@ bip39 = { workspace = true, features = ["rand"] }
 anyhow.workspace = true
 tempfile = "3"
 dirs.workspace = true
+
+# pool-share-perf only: snapshot pg_stat_activity from a fresh connection
+tokio-postgres.workspace = true
 
