@@ -106,11 +106,10 @@ public class PasskeyProvider: PrfProvider {
     ///     the entitlement lookup fails.
     ///   - urlSession: Optional custom URLSession for the AASA CDN fetch.
     ///     Defaults to `.shared`. Override in tests to mock the HTTP layer.
-    ///   - autoRegister: When `true` (default), `deriveSeed` automatically
-    ///     creates a new passkey if none exists for this RP ID, then retries
-    ///     the assertion. When `false`, `deriveSeed` throws
-    ///     `PrfProviderError.CredentialNotFound` instead, letting the caller
-    ///     control registration separately via `createPasskey()`.
+    ///   - autoRegister: When `true`, `deriveSeed` automatically creates
+    ///     a new passkey if none exists, then retries the assertion.
+    ///     When `false` (default), throws `PrfProviderError.CredentialNotFound`
+    ///     and the caller drives registration via `createPasskey()`.
     ///   - allowCredentialIds: When non-empty, restricts assertion (sign-in)
     ///     to one of the listed credential IDs. iOS will refuse any other
     ///     credential for this RP. Use this to bind sign-in to a specific
@@ -128,7 +127,7 @@ public class PasskeyProvider: PrfProvider {
         anchorProvider: PresentationAnchorProvider? = nil,
         teamId: String? = nil,
         urlSession: URLSession = .shared,
-        autoRegister: Bool = true,
+        autoRegister: Bool = false,
         allowCredentialIds: [Data] = []
     ) {
         self.rpId = rpId

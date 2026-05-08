@@ -197,10 +197,11 @@ export class PasskeyProvider {
      * @param {string} [options.userDisplayName] - User display name shown as the
      *   primary label in the passkey picker. Defaults to userName. Only used during
      *   registration; changing it does not affect existing credentials.
-     * @param {boolean} [options.autoRegister=true] - When true (default),
-     *   `deriveSeed` automatically creates a new passkey if none exists for
-     *   this RP ID, then retries the assertion. When false, throws an error
-     *   instead, letting the caller control registration separately via
+     * @param {boolean} [options.autoRegister=false] - When `true`,
+     *   `deriveSeed` automatically creates a new passkey if none exists
+     *   for this RP ID, then retries the assertion. When `false`
+     *   (default), throws on missing credential — hosts drive
+     *   registration explicitly via `PasskeyClient.register` /
      *   `createPasskey()`.
      * @param {'platform'|'cross-platform'} [options.authenticatorAttachment]
      *   When set, narrows the create-time UI to the chosen authenticator
@@ -227,7 +228,7 @@ export class PasskeyProvider {
         this.rpName = options.rpName || DEFAULT_RP_NAME;
         this.userName = options.userName || this.rpName;
         this.userDisplayName = options.userDisplayName || this.userName;
-        this.autoRegister = options.autoRegister !== false;
+        this.autoRegister = options.autoRegister === true;
         this.authenticatorAttachment = options.authenticatorAttachment;
         this.hints = options.hints;
         /**

@@ -52,11 +52,10 @@ import technology.breez.spark.passkey.core.RegisteredCredential as CoreRegistere
  * @param userDisplayName User display name shown in the passkey picker.
  *   Defaults to [userName] (or [rpName] if [userName] is null). Only used
  *   during registration.
- * @param autoRegister When `true` (default), [deriveSeed] automatically
- *   creates a new passkey if none exists for this RP ID, then retries the
- *   assertion. When `false`, [deriveSeed] throws
- *   [PrfProviderException.CredentialNotFound] instead, letting the caller
- *   control registration separately via [createPasskey].
+ * @param autoRegister When `true`, [deriveSeed] automatically creates
+ *   a new passkey if none exists, then retries the assertion. When
+ *   `false` (default), throws [PrfProviderException.CredentialNotFound]
+ *   and the caller drives registration via [createPasskey].
  * @param allowCredentialIds When non-empty, restricts assertion (sign-in)
  *   to one of the listed credential IDs. The platform refuses any other
  *   credential for this RP. Use this to bind sign-in to a specific
@@ -72,7 +71,7 @@ public class PasskeyProvider(
     private val rpName: String = CredentialManagerPrfCore.DEFAULT_RP_NAME,
     userName: String? = null,
     userDisplayName: String? = null,
-    private val autoRegister: Boolean = true,
+    private val autoRegister: Boolean = false,
     private val allowCredentialIds: List<ByteArray> = emptyList(),
 ) : PrfProvider {
 
