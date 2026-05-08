@@ -350,13 +350,3 @@ export declare class PasskeyProvider {
      */
     checkDomainAssociation(): Promise<DomainAssociation>;
 }
-
-/**
- * @deprecated Use PasskeyProviderOptions instead. This alias will be removed in a future release.
- */
-export type PasskeyPrfProviderOptions = PasskeyProviderOptions;
-
-/**
- * @deprecated Use PasskeyProvider instead. This alias will be removed in a future release.
- */
-export { PasskeyProvider as PasskeyPrfProvider };
