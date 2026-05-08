@@ -91,8 +91,13 @@ class PasskeyProviderOptions {
 /// Provides a structured [code] for programmatic handling.
 class PasskeyPrfException implements Exception {
   /// Machine-readable error code:
-  /// - `userCancelled`, `prfNotSupported`, `noCredential`, `configuration`,
-  ///   `credentialAlreadyExists`, `unknown`.
+  /// - `userCancelled`, `userTimedOut`, `prfNotSupported`, `noCredential`,
+  ///   `configuration`, `credentialAlreadyExists`, `unknown`.
+  ///
+  /// `userTimedOut` distinguishes the OS biometric inactivity timeout
+  /// (~55s+ with no user interaction) from `userCancelled` (the user
+  /// actively dismissed the prompt). Hosts may auto-retry on
+  /// `userTimedOut` without treating it as user intent to abandon.
   final String code;
   final String message;
 
@@ -247,6 +252,7 @@ class PasskeyProvider {
     final message = e.message ?? 'Unknown passkey error';
     return switch (e.code) {
       'ERR_USER_CANCELLED' => PasskeyPrfException(code: 'userCancelled', message: message),
+      'ERR_USER_TIMED_OUT' => PasskeyPrfException(code: 'userTimedOut', message: message),
       'ERR_PRF_NOT_SUPPORTED' => PasskeyPrfException(code: 'prfNotSupported', message: message),
       'ERR_NO_CREDENTIAL' => PasskeyPrfException(code: 'noCredential', message: message),
       'ERR_CONFIGURATION' => PasskeyPrfException(code: 'configuration', message: message),

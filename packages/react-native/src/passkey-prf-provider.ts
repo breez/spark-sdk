@@ -153,8 +153,13 @@ export interface PasskeyProviderOptions {
  * Error thrown by [PasskeyProvider] when a passkey operation fails.
  * Provides a structured `code` for programmatic handling.
  *
- * `code` values: `userCancelled`, `prfNotSupported`, `noCredential`,
- * `configuration`, `credentialAlreadyExists`, `unknown`.
+ * `code` values: `userCancelled`, `userTimedOut`, `prfNotSupported`,
+ * `noCredential`, `configuration`, `credentialAlreadyExists`, `unknown`.
+ *
+ * `userTimedOut` distinguishes the OS biometric inactivity timeout
+ * (~55s+ with no user interaction) from `userCancelled` (the user
+ * actively dismissed the prompt). Hosts may auto-retry on
+ * `userTimedOut` without treating it as user intent to abandon.
  */
 export class PasskeyPrfException extends Error {
   readonly code: string;
@@ -178,6 +183,8 @@ function mapNativeError(err: unknown): PasskeyPrfException {
   switch (anyErr?.code) {
     case 'ERR_USER_CANCELLED':
       return new PasskeyPrfException('userCancelled', message);
+    case 'ERR_USER_TIMED_OUT':
+      return new PasskeyPrfException('userTimedOut', message);
     case 'ERR_PRF_NOT_SUPPORTED':
       return new PasskeyPrfException('prfNotSupported', message);
     case 'ERR_NO_CREDENTIAL':

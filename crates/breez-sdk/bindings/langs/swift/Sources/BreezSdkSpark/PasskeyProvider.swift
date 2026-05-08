@@ -288,6 +288,8 @@ public class PasskeyProvider: PrfProvider {
         switch err {
         case .userCancelled:
             return .UserCancelled
+        case .userTimedOut:
+            return .UserTimedOut
         case .credentialNotFound:
             return .CredentialNotFound
         case .credentialAlreadyExists(let msg):

@@ -37,6 +37,17 @@ const DEFAULT_RP_NAME = 'Breez SDK';
 const NO_CRED_FAST_FAIL_MS = 250;
 
 /**
+ * Wall-clock threshold (ms) above which a NotAllowedError is
+ * reclassified as the OS biometric inactivity timeout instead of a
+ * user-dismissed prompt. iOS and Android both tear the biometric
+ * sheet down around 55s of inactivity and surface the same generic
+ * NotAllowedError; the duration of the call is the only in-process
+ * signal that distinguishes "the user walked away" from "the user
+ * tapped Cancel".
+ */
+const BIOMETRIC_TIMEOUT_MS = 55_000;
+
+/**
  * Module-level caches. Survive `PasskeyProvider` reconstruction
  * (e.g. host signs out and signs back in within the same tab), so
  * the capability probes only run once per page load.
@@ -98,6 +109,21 @@ export class PasskeyAlreadyExistsError extends Error {
     constructor(message = 'A passkey for this RP already exists on this device') {
         super(message);
         this.name = 'PasskeyAlreadyExistsError';
+    }
+}
+
+/**
+ * Thrown when the OS biometric prompt tears down without the user
+ * approving or dismissing it: the platform's inactivity timeout
+ * (typically ~55 seconds) fired before any user interaction. Distinct
+ * from a cancel: the user did not actively abandon the flow, so hosts
+ * may auto-retry or surface a re-prompt UI without treating it as
+ * user intent to abandon.
+ */
+export class PasskeyTimedOutError extends Error {
+    constructor(message = 'Authenticator timed out') {
+        super(message);
+        this.name = 'PasskeyTimedOutError';
     }
 }
 
@@ -707,6 +733,9 @@ export class PasskeyProvider {
         const createOptions = { publicKey: publicKeyOptions };
 
         let credential;
+        const createStartedAt = (typeof performance !== 'undefined' && performance.now)
+            ? performance.now()
+            : Date.now();
         try {
             credential = await navigator.credentials.create(createOptions);
         } catch (error) {
@@ -719,7 +748,10 @@ export class PasskeyProvider {
             if (error instanceof DOMException && error.name === 'InvalidStateError') {
                 throw new PasskeyAlreadyExistsError(error.message);
             }
-            throw this._mapError(error);
+            const elapsed = ((typeof performance !== 'undefined' && performance.now)
+                ? performance.now()
+                : Date.now()) - createStartedAt;
+            throw this._mapError(error, elapsed);
         }
 
         if (!credential) {
@@ -827,9 +859,13 @@ export class PasskeyProvider {
     _mapAssertionError(error, elapsedMs) {
         if (!error) return new Error('Unknown WebAuthn error');
         if (error.name === 'NotAllowedError') {
-            return elapsedMs < NO_CRED_FAST_FAIL_MS
-                ? new Error('Credential not found')
-                : new Error('User cancelled authentication');
+            if (elapsedMs < NO_CRED_FAST_FAIL_MS) {
+                return new Error('Credential not found');
+            }
+            if (elapsedMs >= BIOMETRIC_TIMEOUT_MS) {
+                return new PasskeyTimedOutError();
+            }
+            return new Error('User cancelled authentication');
         }
         return this._mapError(error);
     }
@@ -837,13 +873,21 @@ export class PasskeyProvider {
     /**
      * Map non-assertion WebAuthn errors (registration path).
      * @param {Error} error
+     * @param {number} [elapsedMs] Wall-clock duration of the failed
+     *   ceremony, when available. Used to reclassify a long-running
+     *   NotAllowedError as the OS biometric inactivity timeout
+     *   (`PasskeyTimedOutError`) instead of a user-cancel; without it
+     *   the historical substring heuristic applies.
      * @returns {Error}
      * @private
      */
-    _mapError(error) {
+    _mapError(error, elapsedMs) {
         if (!error) return new Error('Unknown WebAuthn error');
         switch (error.name) {
             case 'NotAllowedError':
+                if (typeof elapsedMs === 'number' && elapsedMs >= BIOMETRIC_TIMEOUT_MS) {
+                    return new PasskeyTimedOutError();
+                }
                 // Registration NotAllowedError isn't usefully timed
                 // (no fast-fail equivalent), so keep the substring
                 // heuristic and fall back to the raw error.
