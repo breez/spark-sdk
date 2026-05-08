@@ -325,6 +325,7 @@ class BreezSdkSparkPasskeyModule(
     private val CredentialManagerPrfCoreException.errorCode: String
         get() = when (kind) {
             CredentialManagerPrfCore.Kind.UserCancelled -> "ERR_USER_CANCELLED"
+            CredentialManagerPrfCore.Kind.UserTimedOut -> "ERR_USER_TIMED_OUT"
             CredentialManagerPrfCore.Kind.CredentialNotFound -> "ERR_NO_CREDENTIAL"
             CredentialManagerPrfCore.Kind.PrfNotSupported -> "ERR_PRF_NOT_SUPPORTED"
             CredentialManagerPrfCore.Kind.Configuration -> "ERR_CONFIGURATION"
@@ -335,6 +336,7 @@ class BreezSdkSparkPasskeyModule(
     private val CredentialManagerPrfCoreException.defaultMessage: String
         get() = when (kind) {
             CredentialManagerPrfCore.Kind.UserCancelled -> "User cancelled the passkey operation"
+            CredentialManagerPrfCore.Kind.UserTimedOut -> "Authenticator timed out"
             CredentialManagerPrfCore.Kind.CredentialNotFound -> "No passkey credential found for this domain"
             CredentialManagerPrfCore.Kind.PrfNotSupported -> "PRF not supported by authenticator"
             CredentialManagerPrfCore.Kind.AuthenticationFailed -> "Passkey authentication failed"

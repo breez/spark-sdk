@@ -144,6 +144,7 @@ public object CredentialManagerPrfCore {
         allowCredentialIds: List<ByteArray> = emptyList(),
         onAssertionCredentialId: ((ByteArray) -> Unit)? = null,
     ): ByteArray = withContext(Dispatchers.Main) {
+        val startedAtMs = System.currentTimeMillis()
         try {
             try {
                 getAssertionWithPrf(activity, salt, rpId, allowCredentialIds, onAssertionCredentialId)
@@ -165,7 +166,7 @@ public object CredentialManagerPrfCore {
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
         } catch (e: Exception) {
-            throw e.toCoreException()
+            throw e.toCoreException(System.currentTimeMillis() - startedAtMs)
         }
     }
 
@@ -272,7 +273,7 @@ public object CredentialManagerPrfCore {
                 } catch (e: CredentialManagerPrfCoreException) {
                     throw e
                 } catch (e: Exception) {
-                    throw e.toCoreException()
+                    throw e.toCoreException(null)
                 }
             }
 
@@ -499,6 +500,7 @@ public object CredentialManagerPrfCore {
         excludeCredentialIds: List<ByteArray> = emptyList(),
         userIdOverride: ByteArray? = null,
     ): RegisteredCredential = withContext(Dispatchers.Main) {
+        val startedAtMs = System.currentTimeMillis()
         try {
             registerCredential(
                 activity, rpId, rpName, userName, userDisplayName,
@@ -507,7 +509,7 @@ public object CredentialManagerPrfCore {
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
         } catch (e: Exception) {
-            throw e.toCoreException()
+            throw e.toCoreException(System.currentTimeMillis() - startedAtMs)
         }
     }
 
@@ -552,6 +554,7 @@ public object CredentialManagerPrfCore {
         allowCredentialIds: List<ByteArray>,
         onAssertionCredentialId: ((ByteArray) -> Unit)?,
     ): Pair<ByteArray, ByteArray?> {
+        val startedAtMs = System.currentTimeMillis()
         return try {
             getDualSaltAssertionWithPrf(
                 activity, salt1, salt2, rpId, allowCredentialIds, onAssertionCredentialId,
@@ -567,6 +570,10 @@ public object CredentialManagerPrfCore {
             getDualSaltAssertionWithPrf(
                 activity, salt1, salt2, rpId, allowCredentialIds, onAssertionCredentialId,
             )
+        } catch (e: CredentialManagerPrfCoreException) {
+            throw e
+        } catch (e: Exception) {
+            throw e.toCoreException(System.currentTimeMillis() - startedAtMs)
         }
     }
 
@@ -859,10 +866,22 @@ public object CredentialManagerPrfCore {
         return encodeBase64Url(bytes)
     }
 
-    private fun Exception.toCoreException(): CredentialManagerPrfCoreException = when (this) {
+    /**
+     * Map an arbitrary exception thrown by Credential Manager into the
+     * typed core exception. `elapsedMs` is the wall-clock time between
+     * the start of the ceremony and this error firing; when supplied,
+     * a "cancellation" that took longer than ~55s is reclassified as
+     * [Kind.UserTimedOut] (the OS biometric inactivity timeout) rather
+     * than [Kind.UserCancelled] (the user actively dismissed the
+     * prompt). Pass `null` when timing is unknown to preserve the
+     * historical mapping (`UserCancelled`).
+     */
+    private fun Exception.toCoreException(
+        elapsedMs: Long? = null,
+    ): CredentialManagerPrfCoreException = when (this) {
         is GetCredentialCancellationException,
         is CreateCredentialCancellationException ->
-            CredentialManagerPrfCoreException(Kind.UserCancelled)
+            CredentialManagerPrfCoreException(classifyCancellation(elapsedMs))
 
         is NoCredentialException ->
             CredentialManagerPrfCoreException(Kind.CredentialNotFound)
@@ -918,12 +937,36 @@ public object CredentialManagerPrfCore {
         }
     }
 
+    /**
+     * Discriminate between a user-dismissed prompt and the OS biometric
+     * inactivity timeout. AndroidX surfaces both as the same
+     * `*CancellationException`. The wall-clock between ceremony start
+     * and the throw is the only in-process signal available:
+     * Credential Manager tears the prompt down at the platform's
+     * biometric inactivity timeout (~55s+), so anything at or beyond
+     * that is reclassified as [Kind.UserTimedOut].
+     */
+    private fun classifyCancellation(elapsedMs: Long?): Kind {
+        if (elapsedMs != null && elapsedMs >= 55_000L) {
+            return Kind.UserTimedOut
+        }
+        return Kind.UserCancelled
+    }
+
     /** Discriminator for [CredentialManagerPrfCoreException]. */
     public enum class Kind {
         /** The authenticator does not support the WebAuthn PRF extension. */
         PrfNotSupported,
         /** The user dismissed the passkey prompt or cancelled the operation. */
         UserCancelled,
+        /**
+         * The OS biometric prompt timed out without user interaction
+         * (~55s+ inactivity). Distinct from [UserCancelled], which means
+         * the user actively dismissed the prompt; hosts may auto-retry
+         * or surface a re-prompt UI without treating this as user
+         * intent to abandon.
+         */
+        UserTimedOut,
         /** No credential exists for the RP and auto-registration was not attempted. */
         CredentialNotFound,
         /** Credential Manager reported an authentication / registration failure. */

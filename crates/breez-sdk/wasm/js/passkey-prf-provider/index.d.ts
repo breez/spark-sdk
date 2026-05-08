@@ -36,6 +36,17 @@ export declare class PasskeyAlreadyExistsError extends Error {
 }
 
 /**
+ * Thrown when the OS biometric prompt tears down without the user
+ * approving or dismissing it: the platform's inactivity timeout
+ * (typically ~55 seconds) fired before any user interaction. Distinct
+ * from a cancel: hosts may auto-retry or surface a re-prompt UI
+ * without treating this as user intent to abandon.
+ */
+export declare class PasskeyTimedOutError extends Error {
+    constructor(message?: string);
+}
+
+/**
  * Per-call overrides for `createPasskey`. All fields are optional;
  * omitted fields fall back to the corresponding constructor option,
  * then to the spec default (random 16-byte `userId`, ctor `userName`,

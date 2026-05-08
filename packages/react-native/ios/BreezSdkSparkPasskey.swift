@@ -162,6 +162,8 @@ class BreezSdkSparkPasskey: NSObject {
         switch err {
         case .userCancelled:
             reject("ERR_USER_CANCELLED", defaultMessage, nil)
+        case .userTimedOut:
+            reject("ERR_USER_TIMED_OUT", "Authenticator timed out", nil)
         case .credentialNotFound:
             reject("ERR_NO_CREDENTIAL", "No matching passkey credential found", nil)
         case .credentialAlreadyExists(let msg):

@@ -20,6 +20,12 @@ pub enum ErrorKind {
     /// `excludeCredentialIds` matched an existing credential. Route the
     /// user to the sign-in path.
     AlreadyExists,
+    /// The OS biometric prompt timed out (the user did not interact
+    /// within the platform's inactivity window, typically ~55 seconds).
+    /// Distinct from `Cancel`: the user did not actively dismiss the
+    /// prompt. Hosts may auto-retry or surface a re-prompt UI without
+    /// treating it as user intent to abandon.
+    Timeout,
     /// Platform or library failure the caller can't act on. Surface a
     /// generic "try again" UI; diagnostic detail is in the variant
     /// payload for logs.
@@ -38,6 +44,16 @@ pub enum PrfProviderError {
     /// User cancelled the authentication
     #[error("User cancelled authentication")]
     UserCancelled,
+
+    /// The OS biometric prompt timed out without user interaction.
+    /// On iOS / Android this is the platform's biometric inactivity
+    /// timeout (typically ~55 seconds): the prompt was up but the
+    /// user neither approved nor dismissed it. Distinct from
+    /// `UserCancelled`, which means the user actively dismissed the
+    /// prompt. Hosts can use this signal to auto-retry or surface a
+    /// re-prompt UI without treating it as user intent to abandon.
+    #[error("Authenticator timed out")]
+    UserTimedOut,
 
     /// No credential found
     #[error("Credential not found")]
@@ -74,6 +90,7 @@ impl PrfProviderError {
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::UserCancelled => ErrorKind::Cancel,
+            Self::UserTimedOut => ErrorKind::Timeout,
             Self::CredentialNotFound => ErrorKind::NoCredential,
             Self::PrfNotSupported | Self::PrfEvaluationFailed(_) => ErrorKind::PrfUnsupported,
             Self::Configuration(_) => ErrorKind::Configuration,

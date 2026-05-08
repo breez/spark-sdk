@@ -65,6 +65,7 @@ pub enum _SessionManagerError {
 pub enum _PrfProviderError {
     PrfNotSupported,
     UserCancelled,
+    UserTimedOut,
     CredentialNotFound,
     AuthenticationFailed(String),
     PrfEvaluationFailed(String),

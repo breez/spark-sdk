@@ -56,6 +56,10 @@ public actor PostCreateGraceTracker {
 @available(iOS 18.0, macOS 15.0, *)
 public enum PasskeyAssertionError: Error {
     case userCancelled
+    /// The OS biometric prompt timed out without user interaction
+    /// (~55s+ inactivity on iOS). Distinct from `userCancelled`, which
+    /// means the user actively dismissed the prompt.
+    case userTimedOut
     case credentialNotFound
     case credentialAlreadyExists(String)
     case prfNotSupported
@@ -591,6 +595,7 @@ public final class PasskeyAssertionCore {
         return try await withCheckedThrowingContinuation { continuation in
             delegate.continuation = continuation
             delegate.extractPrf = true
+            delegate.ceremonyStartedAt = Date()
             DispatchQueue.main.async {
                 Self.performAssertionRequest(controller)
             }
@@ -621,6 +626,7 @@ public final class PasskeyAssertionCore {
             delegate.dualSaltContinuation = continuation
             delegate.extractPrf = true
             delegate.extractSecondPrf = true
+            delegate.ceremonyStartedAt = Date()
             DispatchQueue.main.async {
                 Self.performAssertionRequest(controller)
             }
@@ -724,6 +730,7 @@ public final class PasskeyAssertionCore {
         let credential: IosRegisteredCredential = try await withCheckedThrowingContinuation { continuation in
             delegate.registrationContinuation = continuation
             delegate.extractPrf = false
+            delegate.ceremonyStartedAt = Date()
             DispatchQueue.main.async {
                 controller.performRequests()
             }
@@ -832,6 +839,12 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
     /// on registration (the credential ID flows out via the
     /// registrationContinuation).
     var onAssertionCredentialId: ((Data) -> Void)?
+    /// Wall-clock timestamp at the moment `controller.performRequests()`
+    /// fires. Used by `mapPasskeyError` to discriminate the OS biometric
+    /// inactivity timeout (~55s+, surfaced as `.canceled`) from a
+    /// user-dismissed prompt. Set on every ceremony before the controller
+    /// is started.
+    var ceremonyStartedAt: Date?
 
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
         return anchor
@@ -901,7 +914,9 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
         controller: ASAuthorizationController,
         didCompleteWithError error: Error
     ) {
-        let mapped = mapPasskeyError(error)
+        let elapsedMs: Double? = ceremonyStartedAt
+            .map { Date().timeIntervalSince($0) * 1000.0 }
+        let mapped = mapPasskeyError(error, elapsedMs: elapsedMs)
         continuation?.resume(throwing: mapped)
         dualSaltContinuation?.resume(throwing: mapped)
         registrationContinuation?.resume(throwing: mapped)
@@ -910,18 +925,37 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
 
 /// Map an `ASAuthorizationError` to `PasskeyAssertionError`.
 ///
-/// `.canceled` covers both user-dismissed and no-credential because
-/// `preferImmediatelyAvailableCredentials` collapses them and Apple
-/// exposes no in-process signal to disambiguate. Hosts that need the
-/// distinction can wall-clock the call: fast-fail < 200ms vs a
-/// dismissed sheet that takes seconds.
+/// `.canceled` covers three distinct cases that the OS collapses into
+/// the same error code (`preferImmediatelyAvailableCredentials`
+/// suppresses the QR / hybrid sheet, so there is no in-process signal
+/// to disambiguate):
+///
+///   1. No matching credential available: fast-fail before any UI is
+///      shown. Resolves in well under 300ms.
+///   2. User dismissed the visible prompt: anywhere from a fraction of
+///      a second up to a few tens of seconds, depending on user.
+///   3. OS biometric inactivity timeout: the prompt was up but the user
+///      neither approved nor dismissed. iOS tears the sheet down at
+///      ~55s and reports the same `.canceled`.
+///
+/// The wall-clock time between starting the ceremony and receiving the
+/// error tells (1) from (2 / 3), and (2) from (3). Thresholds:
+///   - `< 300ms`         → `.credentialNotFound`
+///   - `>= 55_000ms`     → `.userTimedOut`
+///   - in between        → `.userCancelled`
+///
+/// Hosts can branch on the typed variant instead of timing the call
+/// themselves.
 @available(iOS 18.0, macOS 15.0, *)
-public func mapPasskeyError(_ error: Error) -> PasskeyAssertionError {
+public func mapPasskeyError(
+    _ error: Error,
+    elapsedMs: Double? = nil
+) -> PasskeyAssertionError {
     let nsError = error as NSError
     if nsError.domain == ASAuthorizationError.errorDomain {
         switch ASAuthorizationError.Code(rawValue: nsError.code) {
         case .canceled:
-            return .userCancelled
+            return classifyCanceled(elapsedMs: elapsedMs)
         case .unknown:
             if nsError.localizedDescription.contains("no credential")
                 || nsError.localizedDescription.contains("No credentials")
@@ -944,4 +978,22 @@ public func mapPasskeyError(_ error: Error) -> PasskeyAssertionError {
         }
     }
     return .generic(error.localizedDescription)
+}
+
+/// Wall-clock thresholds used to discriminate the three flavors of
+/// `ASAuthorizationError.canceled`. See `mapPasskeyError` for the
+/// rationale behind each cutoff.
+@available(iOS 18.0, macOS 15.0, *)
+private func classifyCanceled(elapsedMs: Double?) -> PasskeyAssertionError {
+    guard let elapsed = elapsedMs else {
+        // No timing context: preserve the historical mapping.
+        return .userCancelled
+    }
+    if elapsed < 300 {
+        return .credentialNotFound
+    }
+    if elapsed >= 55_000 {
+        return .userTimedOut
+    }
+    return .userCancelled
 }

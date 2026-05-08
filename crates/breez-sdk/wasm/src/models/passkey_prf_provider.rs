@@ -7,20 +7,27 @@ use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 use breez_sdk_spark::passkey::{CreatePasskeyRequest, PrfProviderError, RegisteredCredential};
 
 pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderError {
-    // Map the typed `PasskeyAlreadyExistsError` thrown by the bundled
-    // JS provider back to the typed Rust variant so callers don't have
-    // to substring-match `error.message`. Other errors fall through to
+    // Map typed JS error classes thrown by the bundled JS provider
+    // back to the typed Rust variant so callers don't have to
+    // substring-match `error.message`. Other errors fall through to
     // `Generic`.
     if let Some(name) = js_sys::Reflect::get(&js_error, &JsValue::from_str("name"))
         .ok()
         .and_then(|v| v.as_string())
-        && name == "PasskeyAlreadyExistsError"
     {
-        let message = js_sys::Reflect::get(&js_error, &JsValue::from_str("message"))
-            .ok()
-            .and_then(|v| v.as_string())
-            .unwrap_or_else(|| "credential already exists".to_string());
-        return PrfProviderError::CredentialAlreadyExists(message);
+        match name.as_str() {
+            "PasskeyAlreadyExistsError" => {
+                let message = js_sys::Reflect::get(&js_error, &JsValue::from_str("message"))
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or_else(|| "credential already exists".to_string());
+                return PrfProviderError::CredentialAlreadyExists(message);
+            }
+            "PasskeyTimedOutError" => {
+                return PrfProviderError::UserTimedOut;
+            }
+            _ => {}
+        }
     }
 
     let error_message = js_error
