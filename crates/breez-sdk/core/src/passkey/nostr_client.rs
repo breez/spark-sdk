@@ -58,23 +58,6 @@ impl NostrSaltClient {
         }
     }
 
-    /// Publish a label to Nostr relays.
-    ///
-    /// The label is published as a kind-1 text note event, signed by the provided keys.
-    /// Per the seedless-restore spec, the content is plain text (the label itself).
-    ///
-    /// # Arguments
-    /// * `keys` - The Nostr keypair derived from the account master
-    /// * `label` - The label string to publish
-    ///
-    /// # Returns
-    /// * `Ok(())` - Label was published successfully
-    /// * `Err(PasskeyError)` - Publication failed
-    pub async fn publish_label(&self, keys: &nostr::Keys, label: &str) -> Result<(), PasskeyError> {
-        let builder = nostr::EventBuilder::text_note(label);
-        self.write_event(keys, builder).await
-    }
-
     /// Query all labels published by the given Nostr identity.
     ///
     /// Returns all kind-1 text note events authored by the pubkey.
@@ -111,9 +94,8 @@ impl NostrSaltClient {
     /// Idempotently ensure `label` is published for `keys`. Opens a
     /// single client connection, queries existing events on a relay
     /// batch, and writes the new event to the same connection if the
-    /// label is missing. Halves the round-trip count compared to
-    /// `label_exists` + `publish_label`, and avoids the cold NIP-65
-    /// fetch that `create_write_client` would otherwise trigger.
+    /// label is missing. One round trip; avoids the cold NIP-65 fetch
+    /// that `create_write_client` would otherwise trigger.
     ///
     /// Triggers the one-time background NIP-65 relay sync (same as
     /// `query_labels`), keyed off the events fetched here.
@@ -567,10 +549,6 @@ impl LabelStore for NostrSaltClient {
         label: &str,
     ) -> Result<(), PasskeyError> {
         NostrSaltClient::ensure_label_published(self, &identity.keys, label).await
-    }
-
-    async fn store_label(&self, identity: &Identity, label: &str) -> Result<(), PasskeyError> {
-        self.publish_label(&identity.keys, label).await
     }
 }
 
