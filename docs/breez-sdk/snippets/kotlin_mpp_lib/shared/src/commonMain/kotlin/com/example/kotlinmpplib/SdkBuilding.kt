@@ -94,10 +94,15 @@ class SdkBuilding {
         postgresConfig.maxPoolSize = 8u // Max connections in pool
         postgresConfig.waitTimeoutSecs = 30u // Timeout waiting for connection
 
+        // Construct the connection pool. The same pool can be passed to
+        // multiple SdkBuilders to share connections across SDKs; per-tenant
+        // scoping (rows isolated by seed identity) is preserved.
+        val pool = createPostgresConnectionPool(postgresConfig)
+
         try {
             // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
             val builder = SdkBuilder(config, seed)
-            builder.withPostgresBackend(postgresConfig)
+            builder.withPostgresConnectionPool(pool)
             val sdk = builder.build()
         } catch (e: Exception) {
             // handle error

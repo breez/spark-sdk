@@ -103,9 +103,17 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	waitTimeoutSecs := uint64(30)
 	postgresConfig.WaitTimeoutSecs = &waitTimeoutSecs // Timeout waiting for connection
 
+	// Construct the connection pool. The same pool can be passed to multiple
+	// SdkBuilders to share connections across SDKs; per-tenant scoping (rows
+	// isolated by seed identity) is preserved.
+	pool, err := breez_sdk_spark.CreatePostgresConnectionPool(postgresConfig)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build the SDK with PostgreSQL backend (storage, tree store, and token store)
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithPostgresBackend(postgresConfig)
+	builder.WithPostgresConnectionPool(pool)
 	sdk, err := builder.Build()
 	if err != nil {
 		return nil, err

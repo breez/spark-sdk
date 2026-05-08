@@ -256,7 +256,8 @@ suspend fun runInteractiveMode(
     val builder = SdkBuilder(config, seed)
     if (postgresConnectionString != null) {
         val pgConfig = defaultPostgresStorageConfig(postgresConnectionString)
-        builder.withPostgresBackend(pgConfig)
+        val pool = createPostgresConnectionPool(pgConfig)
+        builder.withPostgresConnectionPool(pool)
     } else {
         builder.withDefaultStorage(dataDir)
     }

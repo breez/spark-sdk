@@ -3,7 +3,7 @@
 Using the SDK Builder gives you more control over the initialization and modular components used when the SDK is running. Below you can find examples of initializing the SDK using the SDK Builder and implementing modular components:
 
 - [Storage](#with-storage) to manage stored data
-- [PostgreSQL Backend](#with-postgres-backend) as an alternative storage backend
+- [PostgreSQL Connection Pool](#with-postgres-connection-pool) as an alternative storage backend
 - [Bitcoin Chain Service](#with-chain-service) to provide network data
 - [LNURL Client](#with-lnurl-client) to make REST requests
 - [Fiat Service](#with-fiat-service) to provide Fiat currencies and exchange rates
@@ -23,12 +23,12 @@ When using the SDK Builder, you either have to provide a Storage implementation 
 
 **Note:** Flutter currently only supports using the default storage.
 
-<h2 id="with-postgres-backend">
-    <a class="header" href="#with-postgres-backend">With PostgreSQL Backend</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_backend">API docs</a>
+<h2 id="with-postgres-connection-pool">
+    <a class="header" href="#with-postgres-connection-pool">With PostgreSQL Connection Pool</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_connection_pool">API docs</a>
 </h2>
 
-The SDK includes a PostgreSQL backend as an alternative to file-based storage. A single {{#name with_postgres_backend}} call configures PostgreSQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling.
+The SDK includes a PostgreSQL backend as an alternative to file-based storage. Construct a connection pool once with {{#name create_postgres_connection_pool}} and pass it to the builder via {{#name with_postgres_connection_pool}} — this configures PostgreSQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. The same pool can be shared across multiple `SdkBuilder` instances; per-tenant scoping (rows isolated by seed identity) is preserved.
 
 **Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 

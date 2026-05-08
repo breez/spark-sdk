@@ -10,6 +10,7 @@ const { parse: parseShell } = require('shell-quote')
 
 const {
   SdkBuilder,
+  createPostgresConnectionPool,
   defaultConfig,
   defaultPostgresStorageConfig,
   initLogging,
@@ -242,9 +243,10 @@ async function main() {
   let sdkBuilder = SdkBuilder.new(config, seed)
 
   if (opts.postgresConnectionString) {
-    sdkBuilder = sdkBuilder.withPostgresBackend(
+    const pool = createPostgresConnectionPool(
       defaultPostgresStorageConfig(opts.postgresConnectionString)
     )
+    sdkBuilder = sdkBuilder.withPostgresConnectionPool(pool)
   } else {
     sdkBuilder = await sdkBuilder.withDefaultStorage(dataDir)
   }

@@ -15,7 +15,9 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use breez_sdk_itest::{RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database};
+use breez_sdk_itest::{
+    PostgresTreeStore, RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database,
+};
 use breez_sdk_spark::{
     BreezSdk, GetInfoRequest, ListPaymentsRequest, Network, PaymentStatus, PaymentType,
     PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent,
@@ -167,7 +169,7 @@ async fn run_single_claim_benchmark(
         sender_config,
         None,
         true,
-        sender_postgres,
+        sender_postgres.map(PostgresTreeStore::ConnectionString),
         None,
     )
     .await?;
@@ -186,7 +188,9 @@ async fn run_single_claim_benchmark(
         temp_receiver_config,
         None,
         true,
-        receiver_postgres.clone(),
+        receiver_postgres
+            .clone()
+            .map(PostgresTreeStore::ConnectionString),
         None,
     )
     .await?;
@@ -299,7 +303,7 @@ async fn run_single_claim_benchmark(
         receiver_config,
         None,
         true,
-        receiver_postgres,
+        receiver_postgres.map(PostgresTreeStore::ConnectionString),
         None,
     )
     .await?;

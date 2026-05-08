@@ -107,9 +107,14 @@ namespace BreezSdkSnippets
                 waitTimeoutSecs = 30ul   // Timeout waiting for connection
             };
 
+            // Construct the connection pool. The same pool can be passed to
+            // multiple SdkBuilders to share connections across SDKs; per-tenant
+            // scoping (rows isolated by seed identity) is preserved.
+            var pool = BreezSdkSparkMethods.CreatePostgresConnectionPool(config: postgresConfig);
+
             // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
             var builder = new SdkBuilder(config: config, seed: seed);
-            await builder.WithPostgresBackend(config: postgresConfig);
+            await builder.WithPostgresConnectionPool(pool: pool);
             var sdk = await builder.Build();
             // ANCHOR_END: init-sdk-postgres
         }

@@ -1,3 +1,5 @@
+pub mod pool;
+
 #[cfg(test)]
 mod tests;
 

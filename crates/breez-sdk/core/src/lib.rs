@@ -48,14 +48,18 @@ pub use spark_wallet::KeySet;
     not(all(target_family = "wasm", target_os = "unknown"))
 ))]
 pub use persist::postgres::{
-    PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config,
+    PoolQueueMode, PostgresConnectionPool, PostgresStorageConfig, create_postgres_connection_pool,
+    default_postgres_storage_config,
 };
 
 #[cfg(all(
     feature = "mysql",
     not(all(target_family = "wasm", target_os = "unknown"))
 ))]
-pub use persist::mysql::{MysqlStorageConfig, default_mysql_storage_config};
+pub use persist::mysql::{
+    MysqlConnectionPool, MysqlStorageConfig, create_mysql_connection_pool,
+    default_mysql_storage_config,
+};
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use {
