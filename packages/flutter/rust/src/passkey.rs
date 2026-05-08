@@ -16,11 +16,10 @@ fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "Dart callback panicked".to_string())
 }
 
-/// Wraps Dart callbacks as a [`PrfProvider`] implementation. Only the
-/// two required trait methods are exposed to Dart; bulk PRF and domain
-/// association use the trait defaults (looped derive / `Skipped`).
-/// Bulk PRF override on Flutter is blocked on flutter_rust_bridge
-/// supporting `Option<impl Fn(...) -> DartFnFuture<...>>` parameters.
+/// Wraps Dart callbacks as a [`PrfProvider`] implementation. The Dart
+/// callback handles a single salt; this loops it for the bulk-PRF
+/// trait surface. A native dual-salt fast path is blocked on
+/// flutter_rust_bridge supporting `Option<impl Fn(...) -> DartFnFuture<...>>`.
 struct CallbackPrfProvider {
     derive_seed_fn: Arc<dyn Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync>,
     is_supported_fn: Arc<dyn Fn() -> DartFnFuture<bool> + Send + Sync>,
@@ -28,11 +27,16 @@ struct CallbackPrfProvider {
 
 #[async_trait::async_trait]
 impl PrfProvider for CallbackPrfProvider {
-    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
-        AssertUnwindSafe((self.derive_seed_fn)(salt))
-            .catch_unwind()
-            .await
-            .map_err(|e| PrfProviderError::Generic(panic_message(e)))
+    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        let mut out = Vec::with_capacity(salts.len());
+        for salt in salts {
+            let seed = AssertUnwindSafe((self.derive_seed_fn)(salt))
+                .catch_unwind()
+                .await
+                .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
+            out.push(seed);
+        }
+        Ok(out)
     }
 
     async fn is_supported(&self) -> Result<bool, PrfProviderError> {
@@ -130,24 +134,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_derive_seed_success() {
+    async fn test_derive_seeds_success() {
         let expected = vec![42u8; 32];
         let expected_clone = expected.clone();
         let provider = make_provider(
             move |_salt| ready(expected_clone.clone()),
             || ready(true),
         );
-        let result = provider.derive_seed("test".to_string()).await;
-        assert_eq!(result.unwrap(), expected);
+        let seeds = provider.derive_seeds(vec!["test".into()]).await.unwrap();
+        assert_eq!(seeds, vec![expected]);
     }
 
     #[tokio::test]
-    async fn test_derive_seed_panic_caught() {
+    async fn test_derive_seeds_panic_caught() {
         let provider = make_provider(
             |_salt| panicking("Dart threw an exception"),
             || ready(true),
         );
-        let err = provider.derive_seed("test".to_string()).await.unwrap_err();
+        let err = provider.derive_seeds(vec!["test".into()]).await.unwrap_err();
         assert!(
             matches!(err, PrfProviderError::Generic(ref msg) if msg.contains("Dart threw an exception")),
             "Expected Generic error with panic message, got: {err:?}"

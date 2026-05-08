@@ -183,28 +183,20 @@ impl Fido2PrfProvider {
     }
 }
 
-#[async_trait::async_trait]
-impl PrfProvider for Fido2PrfProvider {
-    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
+impl Fido2PrfProvider {
+    async fn derive_one(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
         let rp_id = self.rp_id.clone();
         let rp_name = self.rp_name.clone();
         let cache = Arc::clone(&self.cache);
-
-        // Transform salt for WebAuthn compatibility
         let transformed_salt = Self::transform_salt(salt.as_bytes());
 
-        // Use spawn_blocking for HID operations
         tokio::task::spawn_blocking(move || {
             let pin = Self::get_pin(&cache)?;
-
-            // Try to get assertion first (credential may already exist)
             match Self::get_assertion_with_prf(&rp_id, transformed_salt, &pin) {
                 Ok(output) => Ok(output),
                 Err(PrfProviderError::CredentialNotFound) => {
-                    // No credential for this rpId - register one
                     eprintln!("No passkey found for {rp_id}.");
                     Self::register_discoverable_credential(&rp_id, &rp_name, &pin)?;
-                    // Now try again
                     Self::get_assertion_with_prf(&rp_id, transformed_salt, &pin)
                 }
                 Err(e) => Err(e),
@@ -212,6 +204,17 @@ impl PrfProvider for Fido2PrfProvider {
         })
         .await
         .map_err(|e| PrfProviderError::Generic(format!("Task join error: {e}")))?
+    }
+}
+
+#[async_trait::async_trait]
+impl PrfProvider for Fido2PrfProvider {
+    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        let mut out = Vec::with_capacity(salts.len());
+        for salt in salts {
+            out.push(self.derive_one(salt).await?);
+        }
+        Ok(out)
     }
 
     async fn is_supported(&self) -> Result<bool, PrfProviderError> {

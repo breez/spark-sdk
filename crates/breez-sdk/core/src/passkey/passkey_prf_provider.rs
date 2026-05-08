@@ -76,37 +76,29 @@ pub enum DomainAssociation {
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait PrfProvider: Send + Sync {
-    /// Derive a 32-byte seed from passkey PRF with the given salt.
+    /// Derive 32-byte PRF outputs for one or more salts in as few
+    /// authenticator ceremonies as the platform supports.
     ///
-    /// The platform authenticates the user via passkey and evaluates the PRF extension.
-    /// The salt is used as input to the PRF to derive a deterministic output.
+    /// Implementors handle any salt count — single-salt callers pass a
+    /// one-element `Vec` and unwrap the single result. The trait
+    /// deliberately exposes only the bulk shape because nearly every
+    /// consumer benefits from collapsing multiple derivations into one
+    /// user prompt where possible.
     ///
-    /// # Arguments
-    /// * `salt` - The salt string to use for PRF evaluation
-    ///
-    /// # Returns
-    /// * `Ok(Vec<u8>)` - The 32-byte PRF output
-    /// * `Err(PrfProviderError)` - If authentication fails or PRF is not supported
-    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError>;
-
-    /// Derive multiple 32-byte PRF outputs in as few authenticator
-    /// ceremonies as the platform supports.
-    ///
-    /// The default implementation loops over [`Self::derive_seed`],
-    /// producing N user prompts for N salts. Built-in `PasskeyProvider`
-    /// implementations on iOS, Android, and the browser SHOULD override
-    /// this with the platform's dual-salt fast path: the `WebAuthn` PRF
-    /// extension supports up to two salts per assertion via
-    /// `prf.eval.first` + `prf.eval.second`, collapsing two derivations
-    /// into a single user prompt.
+    /// Built-in `PasskeyProvider` implementations on iOS, Android, and
+    /// the browser use the dual-salt fast path: the `WebAuthn` PRF
+    /// extension accepts up to two salts per assertion via
+    /// `prf.eval.first` + `prf.eval.second`, halving the prompt count
+    /// for two-salt callers. Implementors without a bulk fast path
+    /// should loop internally — single-call ceremonies are still the
+    /// correct shape.
     ///
     /// Salt count semantics:
-    /// - 0 salts: returns an empty vec without prompting.
-    /// - 1 salt: equivalent to `derive_seed(salt)`.
+    /// - 0 salts: return an empty vec without prompting.
+    /// - 1 salt: one ceremony; equivalent to a single PRF call.
     /// - 2 salts: ideally one ceremony on platforms that support dual-salt.
     /// - 3+ salts: implementations should chunk into ceremonies of two
-    ///   (e.g. 3 salts -> 2 ceremonies). The default loop implementation
-    ///   simply produces N ceremonies.
+    ///   (e.g. 3 salts → 2 ceremonies) where possible.
     ///
     /// Output ordering matches input ordering: `output[i]` is the PRF
     /// output for `salts[i]`.
@@ -119,13 +111,7 @@ pub trait PrfProvider: Send + Sync {
     /// * `Err(PrfProviderError)` - If authentication fails, PRF is not
     ///   supported, or fewer outputs than salts are returned by the
     ///   platform.
-    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-        let mut out = Vec::with_capacity(salts.len());
-        for salt in salts {
-            out.push(self.derive_seed(salt).await?);
-        }
-        Ok(out)
-    }
+    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError>;
 
     /// Check if a PRF-capable passkey is available on this device.
     ///
@@ -152,7 +138,7 @@ pub trait PrfProvider: Send + Sync {
     ///   to drive the OS registration ceremony. They are the only providers
     ///   that surface `credential_id` back to the host.
     /// - **CLI / hardware providers** (FIDO2 hmac-secret, `YubiKey`, file-backed):
-    ///   these implementations register lazily inside [`Self::derive_seed`]
+    ///   these implementations register lazily inside [`Self::derive_seeds`]
     ///   when no credential exists, and do not expose explicit creation. The
     ///   default impl returns [`PrfProviderError::PrfNotSupported`] to signal
     ///   that callers should rely on the implicit registration path.
