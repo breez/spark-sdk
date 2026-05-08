@@ -55,9 +55,10 @@ mod passkey_prf_provider;
 pub use derivation::ACCOUNT_MASTER_SALT;
 use derivation::prf_to_mnemonic;
 pub use error::{PasskeyError, PasskeyPrfError};
-pub use models::{NostrRelayConfig, Wallet};
+pub use models::{NamedSalt, NostrRelayConfig, SetupWalletRequest, Wallet, WalletSetup};
 pub use passkey_prf_provider::{DomainAssociation, PrfProvider};
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use platform_utils::tokio;
@@ -73,6 +74,10 @@ const DEFAULT_LABEL: &str = "Default";
 
 /// Maximum allowed label length in bytes.
 const MAX_LABEL_LENGTH: usize = 1024;
+
+/// Wire prefix for caller-supplied [`NamedSalt`] entries. Keeps the
+/// host-controlled namespace separate from existing label salts.
+const APP_SALT_PREFIX: &str = "app.";
 
 /// Validate a user-provided label string.
 fn validate_label(label: &str) -> Result<(), PasskeyError> {
@@ -165,91 +170,65 @@ impl Passkey {
         })
     }
 
-    /// Single-prompt setup: derive the Nostr identity and the wallet
-    /// seed for `label` in one PRF ceremony, prime the Nostr identity
-    /// cache, and (when `publish_label` is true) ensure the label is
-    /// published to Nostr.
+    /// Single-prompt setup: derive the Nostr identity, the wallet seed
+    /// for `request.label`, and any caller-supplied [`NamedSalt`]s, all
+    /// in one PRF ceremony where the platform supports it. Primes the
+    /// Nostr identity cache; conditionally publishes the label.
     ///
     /// On platforms whose [`PrfProvider`] implements the dual-salt fast
-    /// path ([`PrfProvider::derive_prf_seeds`]), this collapses the
-    /// typical onboarding pattern of `store_label + get_wallet` (and the
-    /// sign-in pattern of `list_labels + get_wallet` for known labels)
-    /// into a single user prompt. On platforms that fall back to the
-    /// loop default, the prompt count matches the legacy `store_label +
-    /// get_wallet` sequence.
+    /// path, N inputs cost ⌈N / 2⌉ user prompts. The default trait
+    /// impl loops, so on platforms without that override the prompt
+    /// count equals N. Built-in `PasskeyProvider`s override.
     ///
-    /// The Nostr identity is cached after this call, so subsequent
+    /// The Nostr identity is cached after this call; subsequent
     /// [`Self::list_labels`] / [`Self::store_label`] calls on the same
-    /// `Passkey` instance do not require additional PRF interactions.
+    /// `Passkey` instance need no additional PRF interactions.
     ///
-    /// # `publish_label`
+    /// `publish_label = false` enables **speculative cold-restore**:
+    /// derive a candidate wallet for a guessed label without polluting
+    /// the user's Nostr label set if the guess is wrong. After this
+    /// call, the caller runs [`Self::list_labels`] (free, cached) and
+    /// either keeps the candidate wallet on a match or re-derives via
+    /// [`Self::get_wallet`] for the right label.
     ///
-    /// - `true`: publishes the label to Nostr (idempotent: skipped if
-    ///   already published for this Nostr identity). Use this for the
-    ///   onboarding create flow and any explicit "save this new label"
-    ///   user action.
-    /// - `false`: derives the wallet seed + Nostr identity but does not
-    ///   touch Nostr. Use this for **speculative cold-restore**: the
-    ///   caller dual-salts a guessed label (e.g. [`DEFAULT_LABEL`])
-    ///   to prime the Nostr cache and pre-derive a candidate wallet,
-    ///   then calls [`Self::list_labels`] to confirm whether the guess
-    ///   matches. If the guess is right, the speculative wallet is
-    ///   used directly (no extra prompt). If it's wrong (the user has
-    ///   different labels), the caller falls back to [`Self::get_wallet`]
-    ///   for the actual label, paying a second prompt. Setting
-    ///   `publish_label = true` here would silently create an unwanted
-    ///   "Default" Nostr label for users whose labels are something
-    ///   else, so the speculative path must use `false`.
-    ///
-    /// For multi-label flows where the caller doesn't know the label
-    /// up front, use [`Self::list_labels`] then [`Self::get_wallet`]
-    /// instead, or this method with `publish_label = false`.
-    ///
-    /// # Arguments
-    /// * `label` - A user-chosen label. Defaults to [`DEFAULT_LABEL`]
-    ///   when `None`.
-    /// * `publish_label` - Whether to publish `label` to Nostr after
-    ///   deriving. Pass `false` for speculative derivations.
+    /// `extra_salts` accepts caller-supplied salts (e.g. a local-DB
+    /// encryption key, a server-auth token) that ride the same
+    /// ceremony as the wallet seed. Outputs are returned keyed by name
+    /// in [`WalletSetup::extra_seeds`].
     pub async fn setup_wallet(
         &self,
-        label: Option<String>,
-        publish_label: bool,
-    ) -> Result<Wallet, PasskeyError> {
-        let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_string());
+        request: SetupWalletRequest,
+    ) -> Result<WalletSetup, PasskeyError> {
+        let label = request.label.unwrap_or_else(|| DEFAULT_LABEL.to_string());
         validate_label(&label)?;
 
-        // Derive both seeds in (ideally) a single PRF ceremony. The
-        // default trait impl loops, so this returns Ok with N derivations
-        // even on platforms without dual-salt support; built-in
-        // PasskeyProviders override with the WebAuthn PRF dual-salt fast
-        // path to deliver the single-prompt UX.
-        let seeds = self
-            .prf_provider
-            .derive_prf_seeds(vec![ACCOUNT_MASTER_SALT.to_string(), label.clone()])
-            .await?;
+        // Compose: [account_master, label, app.<name1>, app.<name2>, ...].
+        // The first two are the existing wire-format salts (preserved
+        // for backward compat). Caller salts are app-namespaced so
+        // they can never collide with future SDK-internal additions.
+        let extra_count = request.extra_salts.len();
+        let expected = extra_count.saturating_add(2);
+        let mut salts = Vec::with_capacity(expected);
+        salts.push(ACCOUNT_MASTER_SALT.to_string());
+        salts.push(label.clone());
+        for s in &request.extra_salts {
+            salts.push(format!("{APP_SALT_PREFIX}{}", s.name));
+        }
 
-        // Defensive bounds check: the contract is "one output per input,
-        // in order". A malformed implementation could return fewer (or
-        // more); fail loudly rather than silently mis-deriving.
-        if seeds.len() != 2 {
+        let seeds = self.prf_provider.derive_prf_seeds(salts).await?;
+        if seeds.len() != expected {
             return Err(PasskeyError::PrfError(PasskeyPrfError::Generic(format!(
-                "derive_prf_seeds returned {} outputs, expected 2",
+                "derive_prf_seeds returned {} outputs, expected {expected}",
                 seeds.len()
             ))));
         }
 
-        let account_master = &seeds[0];
-        let root_key = &seeds[1];
-
-        // Prime the Nostr identity cache (idempotent; deterministic keys).
-        let nostr_keys = derive_nostr_keypair(account_master)?;
+        let nostr_keys = derive_nostr_keypair(&seeds[0])?;
         let _ = self.nostr_keys.set(nostr_keys.clone());
 
-        // Build the wallet first so a transient relay failure on the
-        // publish leg below doesn't burn the PRF ceremony. Phase 2's
-        // WalletSetup { wallet, sync_error } will surface that failure
-        // structurally instead of just logging.
-        let mnemonic = prf_to_mnemonic(root_key)?;
+        // Build the wallet before reaching out to Nostr so a transient
+        // relay failure on the publish leg can't burn the PRF ceremony.
+        let mnemonic = prf_to_mnemonic(&seeds[1])?;
         let wallet = Wallet {
             seed: Seed::Mnemonic {
                 mnemonic,
@@ -258,9 +237,16 @@ impl Passkey {
             label: label.clone(),
         };
 
-        if publish_label {
+        let extra_seeds: HashMap<String, Vec<u8>> = request
+            .extra_salts
+            .iter()
+            .zip(seeds.into_iter().skip(2))
+            .map(|(salt, seed)| (salt.name.clone(), seed))
+            .collect();
+
+        if request.publish_label {
             match self.nostr_client.label_exists(&nostr_keys, &label).await {
-                Ok(true) => { /* already published; no-op */ }
+                Ok(true) => {}
                 Ok(false) => {
                     if let Err(e) = self.nostr_client.publish_label(&nostr_keys, &label).await {
                         warn!("setup_wallet: label publish failed, returning wallet anyway: {e}");
@@ -272,7 +258,10 @@ impl Passkey {
             }
         }
 
-        Ok(wallet)
+        Ok(WalletSetup {
+            wallet,
+            extra_seeds,
+        })
     }
 
     /// List all labels published to Nostr for this passkey's identity.

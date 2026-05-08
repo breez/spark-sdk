@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use wasm_bindgen::prelude::*;
@@ -29,6 +30,28 @@ pub struct Wallet {
     pub seed: Seed,
     /// The label used for derivation.
     pub label: String,
+}
+
+/// Caller-supplied salt for `setupWallet({ extraSalts })`. Yields a
+/// 32-byte output keyed by `name` in the `WalletSetup.extraSeeds` map.
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::NamedSalt)]
+pub struct NamedSalt {
+    pub name: String,
+}
+
+/// Request shape for `Passkey.setupWallet`.
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::SetupWalletRequest)]
+pub struct SetupWalletRequest {
+    pub label: Option<String>,
+    pub publish_label: bool,
+    pub extra_salts: Vec<NamedSalt>,
+}
+
+/// Response shape for `Passkey.setupWallet`.
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::WalletSetup)]
+pub struct WalletSetup {
+    pub wallet: Wallet,
+    pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
 /// Passkey-based wallet operations using WebAuthn PRF extension.
@@ -70,28 +93,15 @@ impl Passkey {
         Ok(self.inner.get_wallet(label).await?.into())
     }
 
-    /// Single-prompt setup: derive the Nostr identity AND the wallet
-    /// seed for `label` in one PRF ceremony, prime the Nostr identity
-    /// cache, and (when `publishLabel` is true) publish the label to
-    /// Nostr (idempotent).
-    ///
-    /// Replaces the legacy `storeLabel(label) + getWallet(label)`
-    /// two-call sequence with a single bulk PRF derivation: 1 prompt
-    /// where the authenticator supports `prf.eval.first` +
-    /// `prf.eval.second`, falling back to 2 prompts otherwise.
-    ///
-    /// Pass `publishLabel = false` for speculative cold-restore
-    /// (derive + prime Nostr cache without writing a guessed label).
-    ///
-    /// @param label - Optional label string (defaults to "Default")
-    /// @param publishLabel - Whether to publish the label to Nostr
+    /// Single-prompt setup. See the `SetupWalletRequest` /
+    /// `WalletSetup` shape for full semantics. ⌈N / 2⌉ prompts where
+    /// the authenticator supports `prf.eval.first` + `.second`, N
+    /// otherwise. Pass `publishLabel: false` for speculative
+    /// cold-restore. Pass `extraSalts` to derive caller-named seeds in
+    /// the same ceremony.
     #[wasm_bindgen(js_name = "setupWallet")]
-    pub async fn setup_wallet(
-        &self,
-        label: Option<String>,
-        publish_label: bool,
-    ) -> WasmResult<Wallet> {
-        Ok(self.inner.setup_wallet(label, publish_label).await?.into())
+    pub async fn setup_wallet(&self, request: SetupWalletRequest) -> WasmResult<WalletSetup> {
+        Ok(self.inner.setup_wallet(request.into()).await?.into())
     }
 
     /// List all labels published to Nostr for this passkey's identity.
