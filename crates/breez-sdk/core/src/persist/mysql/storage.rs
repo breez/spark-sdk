@@ -8,8 +8,8 @@ use std::collections::HashMap;
 
 use macros::async_trait;
 use mysql_async::prelude::*;
-use mysql_async::{Params, Pool, Row, TxOpts, Value};
-use spark_mysql::mysql_async;
+use mysql_async::{Params, Pool, Row, Value};
+use spark_mysql::{mysql_async, tx_opts};
 use tracing::warn;
 
 use crate::{
@@ -708,7 +708,7 @@ impl Storage for MysqlStorage {
     async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         let mut tx = conn
-            .start_transaction(TxOpts::default())
+            .start_transaction(tx_opts())
             .await
             .map_err(map_db_error)?;
 
@@ -1223,7 +1223,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
 
         let mut tx = conn
-            .start_transaction(TxOpts::default())
+            .start_transaction(tx_opts())
             .await
             .map_err(map_db_error)?;
 
@@ -1269,7 +1269,7 @@ impl Storage for MysqlStorage {
     ) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         let mut tx = conn
-            .start_transaction(TxOpts::default())
+            .start_transaction(tx_opts())
             .await
             .map_err(map_db_error)?;
 
@@ -1550,7 +1550,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
 
         let mut tx = conn
-            .start_transaction(TxOpts::default())
+            .start_transaction(tx_opts())
             .await
             .map_err(map_db_error)?;
 
