@@ -334,8 +334,11 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for MockProvider {
-        async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
-            Ok(self.output_for(&salt))
+        async fn derive_seeds(
+            &self,
+            salts: Vec<String>,
+        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+            Ok(salts.into_iter().map(|s| self.output_for(&s)).collect())
         }
 
         async fn is_supported(&self) -> Result<bool, PrfProviderError> {

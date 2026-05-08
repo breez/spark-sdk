@@ -32,43 +32,48 @@ impl YubiKeyPrfProvider {
     }
 }
 
+impl YubiKeyPrfProvider {
+    fn derive_one_blocking(salt: &str) -> Result<Vec<u8>, PrfProviderError> {
+        let mut cr = ChallengeResponse::new()
+            .map_err(|e| PrfProviderError::Generic(format!("YubiKey init failed: {e}")))?;
+        let device = cr
+            .find_device()
+            .map_err(|_| PrfProviderError::CredentialNotFound)?;
+
+        let config = Config::new_from(device)
+            .set_mode(Mode::Sha1)
+            .set_slot(Slot::Slot2);
+
+        let hmac_result = cr.challenge_response_hmac(salt.as_bytes(), config).map_err(|e| {
+            let msg = format!("{e}");
+            if msg.contains("Wrong CRC") {
+                PrfProviderError::PrfEvaluationFailed(
+                    "YubiKey Slot 2 is not configured for HMAC challenge-response. \
+                         Program it with: ykman otp chalresp -g 2"
+                        .to_string(),
+                )
+            } else {
+                PrfProviderError::PrfEvaluationFailed(format!("HMAC failed: {e}"))
+            }
+        })?;
+
+        // Expand 20-byte HMAC-SHA1 output to 32 bytes via SHA256
+        Ok(sha256::Hash::hash(&hmac_result).to_byte_array().to_vec())
+    }
+}
+
 #[async_trait::async_trait]
 impl PrfProvider for YubiKeyPrfProvider {
-    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
-        eprintln!("Touch your YubiKey (if configured)...");
-
-        tokio::task::spawn_blocking(move || {
-            let mut cr = ChallengeResponse::new()
-                .map_err(|e| PrfProviderError::Generic(format!("YubiKey init failed: {e}")))?;
-            let device = cr
-                .find_device()
-                .map_err(|_| PrfProviderError::CredentialNotFound)?;
-
-            let config = Config::new_from(device)
-                .set_mode(Mode::Sha1)
-                .set_slot(Slot::Slot2);
-
-            let challenge = salt.as_bytes();
-            let hmac_result = cr.challenge_response_hmac(challenge, config).map_err(|e| {
-                let msg = format!("{e}");
-                if msg.contains("Wrong CRC") {
-                    PrfProviderError::PrfEvaluationFailed(
-                        "YubiKey Slot 2 is not configured for HMAC challenge-response. \
-                             Program it with: ykman otp chalresp -g 2"
-                            .to_string(),
-                    )
-                } else {
-                    PrfProviderError::PrfEvaluationFailed(format!("HMAC failed: {e}"))
-                }
-            })?;
-
-            // Expand 20-byte HMAC-SHA1 output to 32 bytes via SHA256
-            let hash = sha256::Hash::hash(&hmac_result);
-
-            Ok(hash.to_byte_array().to_vec())
-        })
-        .await
-        .map_err(|e| PrfProviderError::Generic(format!("Task join error: {e}")))?
+    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        let mut out = Vec::with_capacity(salts.len());
+        for salt in salts {
+            eprintln!("Touch your YubiKey (if configured)...");
+            let seed = tokio::task::spawn_blocking(move || Self::derive_one_blocking(&salt))
+                .await
+                .map_err(|e| PrfProviderError::Generic(format!("Task join error: {e}")))??;
+            out.push(seed);
+        }
+        Ok(out)
     }
 
     async fn is_supported(&self) -> Result<bool, PrfProviderError> {

@@ -127,10 +127,13 @@ impl Passkey {
     async fn derive_identity(&self) -> Result<Identity, PasskeyError> {
         self.identity
             .get_or_try_init(|| async {
-                let account_master = self
+                let mut seeds = self
                     .prf_provider
-                    .derive_seed(ACCOUNT_MASTER_SALT.to_string())
+                    .derive_seeds(vec![ACCOUNT_MASTER_SALT.to_string()])
                     .await?;
+                let account_master = seeds.pop().ok_or_else(|| {
+                    PrfProviderError::Generic("derive_seeds returned no output".to_string())
+                })?;
                 let keys = derive_nostr_keypair(&account_master)?;
                 Ok(Identity { keys })
             })
@@ -327,8 +330,11 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for MockPrfProvider {
-        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PrfProviderError> {
-            Ok(self.seed.to_vec())
+        async fn derive_seeds(
+            &self,
+            salts: Vec<String>,
+        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+            Ok(salts.into_iter().map(|_| self.seed.to_vec()).collect())
         }
 
         async fn is_supported(&self) -> Result<bool, PrfProviderError> {
@@ -351,12 +357,11 @@ mod tests {
         }
     }
 
-    #[macros::async_trait]
-    impl PrfProvider for SaltAwareMockProvider {
-        async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
+    impl SaltAwareMockProvider {
+        fn derive_one(&self, salt: String) -> Vec<u8> {
             let mut outputs = self.salt_outputs.lock().unwrap();
             if let Some(output) = outputs.get(&salt) {
-                return Ok(output.clone());
+                return output.clone();
             }
 
             let salt_bytes = salt.as_bytes();
@@ -372,7 +377,17 @@ mod tests {
             }
 
             outputs.insert(salt, output.to_vec());
-            Ok(output.to_vec())
+            output.to_vec()
+        }
+    }
+
+    #[macros::async_trait]
+    impl PrfProvider for SaltAwareMockProvider {
+        async fn derive_seeds(
+            &self,
+            salts: Vec<String>,
+        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+            Ok(salts.into_iter().map(|s| self.derive_one(s)).collect())
         }
 
         async fn is_supported(&self) -> Result<bool, PrfProviderError> {
@@ -393,7 +408,10 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for FailingPrfProvider {
-        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PrfProviderError> {
+        async fn derive_seeds(
+            &self,
+            _salts: Vec<String>,
+        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
             Err(self.error.clone())
         }
 
@@ -402,12 +420,14 @@ mod tests {
         }
     }
 
-    // Mock that returns PRF not available
     struct UnavailablePrfProvider;
 
     #[macros::async_trait]
     impl PrfProvider for UnavailablePrfProvider {
-        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PrfProviderError> {
+        async fn derive_seeds(
+            &self,
+            _salts: Vec<String>,
+        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
             Err(PrfProviderError::PrfNotSupported)
         }
 

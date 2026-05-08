@@ -31,10 +31,8 @@ pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderEr
 
 pub struct WasmPrfProvider {
     pub inner: PrfProvider,
-    /// Cached `deriveSeeds` presence probe; the JS provider's
-    /// method set doesn't change between calls.
-    supports_bulk: OnceLock<bool>,
-    /// Cached `createPasskey` presence probe.
+    /// Cached `createPasskey` presence probe — JS providers may omit
+    /// it (only platform passkey backends implement registration).
     supports_create: OnceLock<bool>,
 }
 
@@ -42,14 +40,12 @@ impl WasmPrfProvider {
     pub fn new(inner: PrfProvider) -> Self {
         Self {
             inner,
-            supports_bulk: OnceLock::new(),
             supports_create: OnceLock::new(),
         }
     }
 
     /// Probe whether the JS provider exposes a method named `name`.
-    /// One reflective lookup; the result is cached in `cell` so
-    /// subsequent calls are free.
+    /// Cached in `cell` so subsequent calls are free.
     fn js_has_method(&self, name: &str, cell: &OnceLock<bool>) -> bool {
         let target: &JsValue = self.inner.as_ref();
         let key = JsValue::from_str(name);
@@ -68,31 +64,7 @@ unsafe impl Sync for WasmPrfProvider {}
 
 #[macros::async_trait]
 impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
-    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
-        let promise = self
-            .inner
-            .derive_seed(salt)
-            .map_err(js_error_to_prf_provider_error)?;
-        let future = JsFuture::from(promise);
-        let result = future.await.map_err(js_error_to_prf_provider_error)?;
-
-        // Convert Uint8Array to Vec<u8>
-        let array = js_sys::Uint8Array::new(&result);
-        Ok(array.to_vec())
-    }
-
     async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-        // Custom providers that only implement legacy `deriveSeed`
-        // fall back to the trait's default loop (N prompts for N salts).
-        if !self.js_has_method("deriveSeeds", &self.supports_bulk) {
-            let mut out = Vec::with_capacity(salts.len());
-            for salt in salts {
-                out.push(self.derive_seed(salt).await?);
-            }
-            return Ok(out);
-        }
-
-        // Build a JS array of strings to pass to deriveSeeds.
         let salts_array = js_sys::Array::new();
         for salt in &salts {
             salts_array.push(&JsValue::from_str(salt));
@@ -116,7 +88,6 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
             .await
             .map_err(js_error_to_prf_provider_error)?;
 
-        // Result should be Uint8Array[]. Convert each entry.
         let array = js_sys::Array::from(&result);
         let len = array.length() as usize;
         if len != salts.len() {
@@ -129,8 +100,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         let mut out = Vec::with_capacity(len);
         for i in 0..array.length() {
             let item = array.get(i);
-            let bytes = js_sys::Uint8Array::new(&item).to_vec();
-            out.push(bytes);
+            out.push(js_sys::Uint8Array::new(&item).to_vec());
         }
         Ok(out)
     }
@@ -268,19 +238,23 @@ const PRF_PROVIDER_INTERFACE: &'static str = r#"/**
  * @example
  * ```typescript
  * class BrowserPasskeyProvider implements PrfProvider {
- *     async deriveSeed(salt: string): Promise<Uint8Array> {
- *         const credential = await navigator.credentials.get({
- *             publicKey: {
- *                 challenge: new Uint8Array(32),
- *                 rpId: window.location.hostname,
- *                 allowCredentials: [], // or specific credential IDs
- *                 extensions: {
- *                     prf: { eval: { first: new TextEncoder().encode(salt) } }
+ *     async deriveSeeds(salts: string[]): Promise<Uint8Array[]> {
+ *         const out: Uint8Array[] = [];
+ *         for (const salt of salts) {
+ *             const credential = await navigator.credentials.get({
+ *                 publicKey: {
+ *                     challenge: new Uint8Array(32),
+ *                     rpId: window.location.hostname,
+ *                     allowCredentials: [],
+ *                     extensions: {
+ *                         prf: { eval: { first: new TextEncoder().encode(salt) } }
+ *                     }
  *                 }
- *             }
- *         });
- *         const results = credential.getClientExtensionResults();
- *         return new Uint8Array(results.prf.results.first);
+ *             });
+ *             const ext = credential.getClientExtensionResults();
+ *             out.push(new Uint8Array(ext.prf.results.first));
+ *         }
+ *         return out;
  *     }
  *
  *     async isSupported(): Promise<boolean> {
@@ -291,40 +265,24 @@ const PRF_PROVIDER_INTERFACE: &'static str = r#"/**
  */
 export interface PrfProvider {
     /**
-     * Derive a 32-byte seed from PRF with the given salt.
-     *
-     * The platform authenticates the user (typically via passkey) and
-     * evaluates the PRF extension or equivalent. The salt is used as input
-     * to the PRF to derive a deterministic output.
-     *
-     * @param salt - The salt string to use for PRF evaluation
-     * @returns A Promise resolving to the 32-byte PRF output
-     * @throws If authentication fails or PRF is not supported
-     */
-    deriveSeed(salt: string): Promise<Uint8Array>;
-
-    /**
-     * Optional bulk PRF derivation. Implementations that can collapse
-     * multiple derivations into a single user prompt (e.g. WebAuthn PRF
-     * with `prf.eval.first` + `prf.eval.second`) should override this.
-     * The SDK detects the presence of this method at runtime and falls
-     * back to looping `deriveSeed` when absent or unavailable.
-     *
-     * Output ordering matches input ordering.
+     * Derive 32-byte PRF outputs for one or more salts. Implementations
+     * with bulk capability (e.g. WebAuthn dual-salt via
+     * `prf.eval.first` + `prf.eval.second`) should pack two salts per
+     * ceremony where supported; otherwise loop the single-salt path
+     * internally. Output ordering matches input ordering.
      *
      * @param salts - Salt strings in caller order
      * @returns A Promise resolving to one 32-byte output per salt
      */
-    deriveSeeds?(salts: string[]): Promise<Uint8Array[]>;
+    deriveSeeds(salts: string[]): Promise<Uint8Array[]>;
 
     /**
-     * Optional explicit registration. Platform passkey providers (browser
-     * WebAuthn, iOS / Android) implement this to drive the OS create
-     * ceremony and return credential metadata (`credentialId`, optional
-     * `aaguid`, optional `backupEligible`) that callers need for
-     * `excludeCredentialIds` bookkeeping. Custom providers without an
-     * explicit creation step (CLI / hardware backends that auto-register
-     * inside `deriveSeed`) can omit this method.
+     * Optional explicit registration. Platform passkey providers
+     * (browser WebAuthn, iOS / Android) implement this to drive the OS
+     * create ceremony and return credential metadata (`credentialId`,
+     * optional `aaguid`, optional `backupEligible`) that callers need
+     * for `excludeCredentialIds` bookkeeping. Custom providers without
+     * an explicit creation step can omit this method.
      *
      * @throws `PasskeyAlreadyExistsError` when an entry in
      *   `excludeCredentialIds` matches a credential already on the
@@ -333,11 +291,8 @@ export interface PrfProvider {
     createPasskey?(request: CreatePasskeyRequestJSON): Promise<RegisteredCredentialJSON>;
 
     /**
-     * Check if a PRF-capable source is available on this device.
-     *
-     * This allows applications to gracefully degrade if passkey PRF is not supported.
-     *
-     * @returns A Promise resolving to true if a PRF-capable source is available
+     * Whether this provider can produce PRF outputs on the current
+     * device. Hosts gate UX on the result.
      */
     isSupported(): Promise<boolean>;
 }
@@ -370,9 +325,6 @@ export interface RegisteredCredentialJSON {
 extern "C" {
     #[wasm_bindgen(typescript_type = "PrfProvider")]
     pub type PrfProvider;
-
-    #[wasm_bindgen(structural, method, js_name = "deriveSeed", catch)]
-    pub fn derive_seed(this: &PrfProvider, salt: String) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "isSupported", catch)]
     pub fn is_supported(this: &PrfProvider) -> Result<Promise, JsValue>;
