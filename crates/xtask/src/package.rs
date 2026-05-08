@@ -192,9 +192,11 @@ fn package_wasm_target(
         copy_postgres_storage_files(crate_dir, &out_path)?;
         copy_postgres_tree_store_files(crate_dir, &out_path)?;
         copy_postgres_token_store_files(crate_dir, &out_path)?;
+        copy_postgres_session_manager_files(crate_dir, &out_path)?;
         copy_mysql_storage_files(crate_dir, &out_path)?;
         copy_mysql_tree_store_files(crate_dir, &out_path)?;
         copy_mysql_token_store_files(crate_dir, &out_path)?;
+        copy_mysql_session_manager_files(crate_dir, &out_path)?;
     }
 
     if target == "web" || target == "bundler" {
@@ -655,6 +657,64 @@ fn copy_postgres_token_store_files(crate_dir: &Path, out_path: &Path) -> Result<
     Ok(())
 }
 
+fn copy_postgres_session_manager_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let js_session_manager_src = crate_dir.join("js/postgres-session-manager");
+
+    if !js_session_manager_src.exists() {
+        println!(
+            "Warning: PostgreSQL session manager source directory not found at {:?}",
+            js_session_manager_src
+        );
+        return Ok(());
+    }
+
+    let session_manager_dest = out_path.join("postgres-session-manager");
+    std::fs::create_dir_all(&session_manager_dest)?;
+
+    let files_to_copy = ["index.cjs", "errors.cjs", "migrations.cjs"];
+    for file_name in files_to_copy {
+        let src_file = js_session_manager_src.join(file_name);
+        let dest_file = session_manager_dest.join(file_name);
+        if src_file.exists() {
+            std::fs::copy(&src_file, &dest_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_file.display(),
+                    dest_file.display()
+                )
+            })?;
+            println!("Copied PostgreSQL session manager file: {}", file_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "PostgreSQL session manager file not found: {}",
+                src_file.display()
+            ));
+        }
+    }
+
+    let session_manager_package_json = serde_json::json!({
+        "name": "@breez-sdk/postgres-session-manager",
+        "version": "1.0.0",
+        "description": "Node.js PostgreSQL session manager implementation for Breez SDK WASM (CommonJS)",
+        "main": "index.cjs",
+        "dependencies": {
+            "pg": "^8.18.0"
+        }
+    });
+    let dest_package_json = session_manager_dest.join("package.json");
+    let package_content = serde_json::to_string_pretty(&session_manager_package_json)
+        .with_context(|| "Failed to serialize postgres session manager package.json")?;
+    std::fs::write(&dest_package_json, package_content)
+        .with_context(|| "Failed to write postgres session manager package.json".to_string())?;
+    println!("Created PostgreSQL session manager package.json");
+
+    println!(
+        "Successfully copied PostgreSQL session manager files to {}",
+        session_manager_dest.display()
+    );
+    Ok(())
+}
+
 fn copy_mysql_storage_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
     let js_storage_src = crate_dir.join("js/mysql-storage");
 
@@ -829,6 +889,64 @@ fn copy_mysql_token_store_files(crate_dir: &Path, out_path: &Path) -> Result<()>
     Ok(())
 }
 
+fn copy_mysql_session_manager_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let js_session_manager_src = crate_dir.join("js/mysql-session-manager");
+
+    if !js_session_manager_src.exists() {
+        println!(
+            "Warning: MySQL session manager source directory not found at {:?}",
+            js_session_manager_src
+        );
+        return Ok(());
+    }
+
+    let session_manager_dest = out_path.join("mysql-session-manager");
+    std::fs::create_dir_all(&session_manager_dest)?;
+
+    let files_to_copy = ["index.cjs", "errors.cjs", "migrations.cjs"];
+    for file_name in files_to_copy {
+        let src_file = js_session_manager_src.join(file_name);
+        let dest_file = session_manager_dest.join(file_name);
+        if src_file.exists() {
+            std::fs::copy(&src_file, &dest_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_file.display(),
+                    dest_file.display()
+                )
+            })?;
+            println!("Copied MySQL session manager file: {}", file_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "MySQL session manager file not found: {}",
+                src_file.display()
+            ));
+        }
+    }
+
+    let session_manager_package_json = serde_json::json!({
+        "name": "@breez-sdk/mysql-session-manager",
+        "version": "1.0.0",
+        "description": "Node.js MySQL session manager implementation for Breez SDK WASM (CommonJS)",
+        "main": "index.cjs",
+        "dependencies": {
+            "mysql2": "^3.11.0"
+        }
+    });
+    let dest_package_json = session_manager_dest.join("package.json");
+    let package_content = serde_json::to_string_pretty(&session_manager_package_json)
+        .with_context(|| "Failed to serialize mysql session manager package.json")?;
+    std::fs::write(&dest_package_json, package_content)
+        .with_context(|| "Failed to write mysql session manager package.json".to_string())?;
+    println!("Created MySQL session manager package.json");
+
+    println!(
+        "Successfully copied MySQL session manager files to {}",
+        session_manager_dest.display()
+    );
+    Ok(())
+}
+
 fn create_nodejs_entry_point(out_path: &Path) -> Result<()> {
     let entry_content = r#"// Node.js entry point for Breez SDK with automatic storage support
 const wasmModule = require('./breez_sdk_spark_wasm.js');
@@ -880,6 +998,17 @@ try {
     }
 }
 
+// Automatically import and set up the PostgreSQL session manager for Node.js
+try {
+    const { createPostgresSessionManager, createPostgresSessionManagerWithPool } = require('./postgres-session-manager/index.cjs');
+    global.createPostgresSessionManager = createPostgresSessionManager;
+    global.createPostgresSessionManagerWithPool = createPostgresSessionManagerWithPool;
+} catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        console.warn('Breez SDK: Failed to load PostgreSQL session manager:', error.message);
+    }
+}
+
 // Automatically import and set up the MySQL storage for Node.js
 try {
     const { createMysqlStorage, createMysqlPool, createMysqlStorageWithPool } = require('./mysql-storage/index.cjs');
@@ -911,6 +1040,17 @@ try {
 } catch (error) {
     if (error.code !== 'MODULE_NOT_FOUND') {
         console.warn('Breez SDK: Failed to load MySQL token store:', error.message);
+    }
+}
+
+// Automatically import and set up the MySQL session manager for Node.js
+try {
+    const { createMysqlSessionManager, createMysqlSessionManagerWithPool } = require('./mysql-session-manager/index.cjs');
+    global.createMysqlSessionManager = createMysqlSessionManager;
+    global.createMysqlSessionManagerWithPool = createMysqlSessionManagerWithPool;
+} catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+        console.warn('Breez SDK: Failed to load MySQL session manager:', error.message);
     }
 }
 
@@ -971,9 +1111,15 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
             files_array.push(serde_json::Value::String(
                 "postgres-token-store/".to_string(),
             ));
+            files_array.push(serde_json::Value::String(
+                "postgres-session-manager/".to_string(),
+            ));
             files_array.push(serde_json::Value::String("mysql-storage/".to_string()));
             files_array.push(serde_json::Value::String("mysql-tree-store/".to_string()));
             files_array.push(serde_json::Value::String("mysql-token-store/".to_string()));
+            files_array.push(serde_json::Value::String(
+                "mysql-session-manager/".to_string(),
+            ));
             files_array.push(serde_json::Value::String("index.js".to_string()));
             files_array.push(serde_json::Value::String("index.mjs".to_string()));
         }
@@ -986,6 +1132,8 @@ fn update_nodejs_package_json(out_path: &Path) -> Result<()> {
             "postgres-storage/",
             "postgres-tree-store/",
             "postgres-token-store/",
+            "postgres-session-manager/",
+            "mysql-session-manager/",
             "index.js",
             "index.mjs"
         ]);
