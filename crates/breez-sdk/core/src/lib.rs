@@ -9,6 +9,7 @@ mod issuer;
 mod lnurl;
 mod logger;
 mod models;
+mod partner_header_provider;
 #[cfg(feature = "passkey")]
 pub mod passkey;
 mod persist;
@@ -41,7 +42,10 @@ pub use persist::{
 };
 pub use sdk::{BreezSdk, default_config, get_spark_status, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;
-pub use spark_wallet::KeySet;
+pub use session_manager::{Session, SessionManager, SessionManagerError};
+pub use spark_wallet::{
+    CombinedHeaderProvider, HeaderProvider, HeaderProviderError, KeySet, PublicKey,
+};
 
 #[cfg(all(
     feature = "postgres",

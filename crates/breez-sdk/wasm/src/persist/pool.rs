@@ -5,6 +5,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::logger::Logger;
+use crate::models::session_manager::SessionManager;
 use crate::sdk_builder::{MysqlStorageConfig, PostgresStorageConfig};
 use crate::token_store::TokenStoreJs;
 use crate::tree_store::TreeStoreJs;
@@ -38,6 +39,13 @@ extern "C" {
         logger: Option<&Logger>,
     ) -> Result<TokenStoreJs, JsValue>;
 
+    #[wasm_bindgen(js_name = "createPostgresSessionManagerWithPool", catch)]
+    pub async fn create_postgres_session_manager_with_pool(
+        pool: &JsPool,
+        identity: &[u8],
+        logger: Option<&Logger>,
+    ) -> Result<SessionManager, JsValue>;
+
     #[wasm_bindgen(js_name = "createMysqlPool", catch)]
     pub fn create_mysql_pool(config: MysqlStorageConfig) -> Result<JsPool, JsValue>;
 
@@ -61,4 +69,11 @@ extern "C" {
         identity: &[u8],
         logger: Option<&Logger>,
     ) -> Result<TokenStoreJs, JsValue>;
+
+    #[wasm_bindgen(js_name = "createMysqlSessionManagerWithPool", catch)]
+    pub async fn create_mysql_session_manager_with_pool(
+        pool: &JsPool,
+        identity: &[u8],
+        logger: Option<&Logger>,
+    ) -> Result<SessionManager, JsValue>;
 }

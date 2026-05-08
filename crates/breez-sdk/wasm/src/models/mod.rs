@@ -7,6 +7,7 @@ pub mod passkey_prf_provider;
 pub mod payment_observer;
 pub mod postgres_pool;
 pub mod rest_client;
+pub mod session_manager;
 
 use std::collections::HashMap;
 
@@ -1146,6 +1147,18 @@ pub struct GetTokensMetadataRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::GetTokensMetadataResponse)]
 pub struct GetTokensMetadataResponse {
     pub tokens_metadata: Vec<TokenMetadata>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::Session)]
+pub struct Session {
+    pub token: String,
+    pub expiration: u64,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SessionManagerError)]
+pub enum SessionManagerError {
+    NotFound,
+    Generic(String),
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ProvisionalPayment)]

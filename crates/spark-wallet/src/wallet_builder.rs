@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use platform_utils::HttpClient;
 use spark::{
+    header_provider::HeaderProvider,
     operator::rpc::{ConnectionManager, DefaultConnectionManager},
     services::TransferObserver,
     session_manager::{InMemorySessionManager, SessionManager},
@@ -23,6 +24,8 @@ pub struct WalletBuilder {
     connection_manager: Option<Arc<dyn ConnectionManager>>,
     ssp_http_client: Option<Arc<dyn HttpClient>>,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
+    ssp_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
+    so_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     with_background_processing: bool,
 }
 
@@ -38,6 +41,8 @@ impl WalletBuilder {
             connection_manager: None,
             ssp_http_client: None,
             transfer_observer: None,
+            ssp_extra_header_provider: None,
+            so_extra_header_provider: None,
             with_background_processing: true,
         }
     }
@@ -95,6 +100,23 @@ impl WalletBuilder {
         self
     }
 
+    /// Adds an extra header provider whose headers are attached to every
+    /// outgoing SSP request alongside the built-in auth headers.
+    #[must_use]
+    pub fn with_ssp_extra_header_provider(mut self, provider: Arc<dyn HeaderProvider>) -> Self {
+        self.ssp_extra_header_provider = Some(provider);
+        self
+    }
+
+    /// Adds an extra header provider whose headers are attached to every
+    /// outgoing Spark Operator (gRPC) request alongside the built-in auth
+    /// headers.
+    #[must_use]
+    pub fn with_so_extra_header_provider(mut self, provider: Arc<dyn HeaderProvider>) -> Self {
+        self.so_extra_header_provider = Some(provider);
+        self
+    }
+
     #[must_use]
     pub fn with_background_processing(mut self, with_background_processing: bool) -> Self {
         self.with_background_processing = with_background_processing;
@@ -115,6 +137,8 @@ impl WalletBuilder {
                 .unwrap_or(Arc::new(DefaultConnectionManager::new())),
             self.ssp_http_client,
             self.transfer_observer,
+            self.ssp_extra_header_provider,
+            self.so_extra_header_provider,
             self.with_background_processing,
             self.cancellation_token,
         )

@@ -69,7 +69,6 @@ use crate::ssp::graphql::queries::user_request::{
     TransferFragmentUserRequest as UserRequestTransferFragmentUserRequest,
     TransferFragmentUserRequestOn as UserRequestTransferFragmentUserRequestOn,
 };
-use bitcoin::secp256k1::PublicKey;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -87,9 +86,6 @@ pub(crate) struct GraphQLClientConfig {
     pub base_url: String,
     /// Schema endpoint path (defaults to "graphql/spark/2025-03-19")
     pub schema_endpoint: Option<String>,
-
-    pub ssp_identity_public_key: PublicKey,
-    pub user_agent: Option<String>,
     pub retry_config: crate::ssp::RetryConfig,
 }
 

@@ -4,8 +4,8 @@ use tokio::sync::Mutex;
 
 use crate::{
     BitcoinChainService, BreezSdk, Config, ConnectionManager, Credentials, FiatService,
-    KeySetConfig, PaymentObserver, RestClient, SdkError, Seed, SspConnectionManager, Storage,
-    chain::rest_client::ChainApiType,
+    KeySetConfig, PaymentObserver, RestClient, SdkError, Seed, SessionManager,
+    SspConnectionManager, Storage, chain::rest_client::ChainApiType,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -115,6 +115,16 @@ impl SdkBuilder {
     pub async fn with_connection_manager(&self, connection_manager: Arc<ConnectionManager>) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_connection_manager(connection_manager);
+    }
+
+    /// Sets a custom session manager used to persist authentication sessions.
+    ///
+    /// Provide a shared, persistent implementation (e.g. backed by `PostgreSQL`
+    /// or Redis) to let multiple SDK instances share authentication state and
+    /// bootstrap quickly. If not set, an in-memory session manager is used.
+    pub async fn with_session_manager(&self, session_manager: Arc<dyn SessionManager>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_session_manager(session_manager);
     }
 
     /// Builds the `BreezSdk` instance with the configured components.

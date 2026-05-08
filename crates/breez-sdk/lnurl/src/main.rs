@@ -227,6 +227,7 @@ where
         spark_config.service_provider_config.clone(),
         signer.clone(),
         session_manager.clone(),
+        None,
     ));
 
     // Create wallet using shared signer
@@ -238,6 +239,8 @@ where
             Arc::new(InMemoryTreeStore::default()),
             Arc::new(InMemoryTokenOutputStore::default()),
             Arc::clone(&connection_manager),
+            None,
+            None,
             None,
             None,
             true,

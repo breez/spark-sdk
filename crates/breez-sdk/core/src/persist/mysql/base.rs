@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 pub use spark_mysql::Migration;
 use spark_mysql::mysql_async;
-use spark_wallet::{TokenOutputStore, TreeStore};
+use spark_wallet::{SessionManager, TokenOutputStore, TreeStore};
 
 use crate::persist::StorageError;
 
@@ -136,6 +136,16 @@ pub(crate) async fn create_mysql_token_store(
     identity: &[u8],
 ) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
     spark_mysql::create_mysql_token_store_from_pool(pool, identity)
+        .await
+        .map_err(StorageError::from)
+}
+
+/// Creates a `MysqlSessionManager` instance for use with the SDK, using an existing pool.
+pub(crate) async fn create_mysql_session_manager(
+    pool: mysql_async::Pool,
+    identity: &[u8],
+) -> Result<Arc<dyn SessionManager>, StorageError> {
+    spark_mysql::create_mysql_session_manager_from_pool(pool, identity)
         .await
         .map_err(StorageError::from)
 }

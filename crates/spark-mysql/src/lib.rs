@@ -1,8 +1,8 @@
 //! `MySQL` storage implementations for the Spark protocol.
 //!
-//! This crate provides `MySQL`-backed implementations of the `TreeStore` and
-//! `TokenOutputStore` traits from `spark-wallet`, suitable for server-side or
-//! multi-instance deployments.
+//! This crate provides `MySQL`-backed implementations of the `TreeStore`,
+//! `TokenOutputStore`, and `SessionManager` traits from `spark-wallet`,
+//! suitable for server-side or multi-instance deployments.
 //!
 //! It also exposes shared `MySQL` infrastructure (connection pooling and a generic
 //! migration runner) that can be reused by downstream crates for their own `MySQL`
@@ -16,11 +16,15 @@ pub mod config;
 pub mod error;
 pub mod migrations;
 pub mod pool;
+mod session_manager;
 mod token_store;
 mod tree_store;
 
 pub use config::{MysqlStorageConfig, default_mysql_storage_config};
 pub use error::MysqlError;
+pub use session_manager::{
+    MysqlSessionManager, create_mysql_session_manager, create_mysql_session_manager_from_pool,
+};
 pub use token_store::{
     MysqlTokenStore, create_mysql_token_store, create_mysql_token_store_from_pool,
 };

@@ -1,26 +1,22 @@
-use base64::Engine;
-use bitcoin::secp256k1::PublicKey;
 use graphql_client::{GraphQLQuery, Response};
 use rand::Rng;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, warn};
+use tracing::warn;
 
 use platform_utils::tokio;
-use platform_utils::{ContentType, HttpClient, add_content_type_header, create_http_client};
+use platform_utils::{ContentType, HttpClient, add_content_type_header};
 use tokio::time::sleep;
 
-use crate::default_user_agent;
-use crate::session_manager::{Session, SessionManager};
-use crate::signer::Signer;
+use crate::header_provider::HeaderProvider;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
     self, claim_static_deposit, complete_coop_exit, coop_exit_fee_quote, delete_wallet_webhook,
-    get_challenge, leaves_swap_fee_estimate, lightning_send_fee_estimate, register_wallet_webhook,
+    leaves_swap_fee_estimate, lightning_send_fee_estimate, register_wallet_webhook,
     request_coop_exit, request_lightning_receive, request_lightning_send, request_swap,
-    static_deposit_quote, transfers, user_request, verify_challenge, wallet_webhooks,
+    static_deposit_quote, transfers, user_request, wallet_webhooks,
 };
 use crate::ssp::graphql::{
     BitcoinNetwork, ClaimStaticDeposit, CoopExitRequest, CurrencyAmount, GraphQLClientConfig,
@@ -32,41 +28,67 @@ use crate::ssp::{
     RequestLightningSendInput, RequestSwapInput, RetryConfig, SspTransfer,
 };
 
+pub(crate) async fn post_graphql_query<Q: GraphQLQuery, T>(
+    client: &dyn HttpClient,
+    url: &str,
+    headers: &HashMap<String, String>,
+    variables: T,
+) -> GraphQLResult<Q::ResponseData>
+where
+    T: Serialize + Clone + Into<Q::Variables>,
+{
+    let body = Q::build_query(variables.into());
+    let body_str =
+        serde_json::to_string(&body).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
+
+    let mut all_headers = headers.clone();
+    add_content_type_header(&mut all_headers, ContentType::Json);
+
+    let response = client
+        .post(url.to_string(), Some(all_headers), Some(body_str))
+        .await?;
+
+    let status_code = response.status;
+    let text = &response.body;
+    tracing::trace!("Response: {text:?}");
+    if !response.is_success() {
+        return Err(GraphQLError::Network {
+            reason: text.clone(),
+            code: Some(status_code),
+        });
+    }
+
+    let json: Response<Q::ResponseData> = response
+        .json()
+        .map_err(|e| GraphQLError::Serialization(e.to_string()))?;
+    if let Some(errors) = json.errors
+        && !errors.is_empty()
+    {
+        return Err(GraphQLError::from_graphql_errors(&errors));
+    }
+
+    json.data.ok_or(GraphQLError::serialization(
+        "Unable to deserialize response",
+    ))
+}
+
 /// GraphQL client for interacting with the Spark server
 pub struct GraphQLClient {
     client: Arc<dyn HttpClient>,
     base_url: String,
     schema_endpoint: String,
-    signer: Arc<dyn Signer>,
-    session_manager: Arc<dyn SessionManager>,
-    ssp_identity_public_key: PublicKey,
     retry_config: RetryConfig,
+    header_provider: Arc<dyn HeaderProvider>,
 }
 
 impl GraphQLClient {
-    /// Create a new GraphQLClient with the given configuration, and signer.
-    ///
-    /// Builds an internal HTTP client. Use [`GraphQLClient::new_with_client`] to
-    /// share a pooled HTTP client across SDK instances.
-    pub fn new(
-        config: GraphQLClientConfig,
-        signer: Arc<dyn Signer>,
-        session_manager: Arc<dyn SessionManager>,
-    ) -> Self {
-        let user_agent = config.user_agent.clone().unwrap_or_else(default_user_agent);
-        let client = create_http_client(Some(&user_agent));
-        Self::new_with_client(config, signer, session_manager, client)
-    }
-
-    /// Create a new GraphQLClient using a shared HTTP client.
+    /// Create a new GraphQLClient using the supplied HTTP client.
     ///
     /// All SDK instances built with the same `client` share its underlying
-    /// pooled `reqwest::Client`. The `user_agent` field on `config` is ignored
-    /// — the user-agent is whatever the shared client was constructed with.
+    /// pooled `reqwest::Client` and its baked-in user-agent.
     pub fn new_with_client(
         config: GraphQLClientConfig,
-        signer: Arc<dyn Signer>,
-        session_manager: Arc<dyn SessionManager>,
+        header_provider: Arc<dyn HeaderProvider>,
         client: Arc<dyn HttpClient>,
     ) -> Self {
         let schema_endpoint = config
@@ -77,10 +99,8 @@ impl GraphQLClient {
             client,
             base_url: config.base_url,
             schema_endpoint,
-            signer,
-            session_manager,
-            ssp_identity_public_key: config.ssp_identity_public_key,
             retry_config: config.retry_config,
+            header_provider,
         }
     }
 
@@ -97,46 +117,12 @@ impl GraphQLClient {
     where
         T: Serialize + Clone + Into<Q::Variables>,
     {
-        let body = Q::build_query(variables.into());
-        let body_str =
-            serde_json::to_string(&body).map_err(|e| GraphQLError::Serialization(e.to_string()))?;
-
-        // Merge Content-Type header with provided headers
-        let mut all_headers = headers.clone();
-        add_content_type_header(&mut all_headers, ContentType::Json);
-
-        let response = self
-            .client
-            .post(url.to_string(), Some(all_headers), Some(body_str))
-            .await?;
-
-        let status_code = response.status;
-        let text = &response.body;
-        tracing::trace!("Response: {text:?}");
-        if !response.is_success() {
-            return Err(GraphQLError::Network {
-                reason: text.clone(),
-                code: Some(status_code),
-            });
-        }
-
-        let json: Response<Q::ResponseData> = response
-            .json()
-            .map_err(|e| GraphQLError::Serialization(e.to_string()))?;
-        if let Some(errors) = json.errors
-            && !errors.is_empty()
-        {
-            return Err(GraphQLError::from_graphql_errors(&errors));
-        }
-
-        json.data.ok_or(GraphQLError::serialization(
-            "Unable to deserialize response",
-        ))
+        post_graphql_query::<Q, _>(self.client.as_ref(), url, headers, variables).await
     }
 
     /// Execute a raw GraphQL query.
     ///
-    /// Retries once on a 401 (after re-authenticating) and up to
+    /// Retries once on a 401 (after re-fetching auth headers) and up to
     /// `retry_config.max_retries` times on transient 5xx responses with
     /// exponential backoff and jitter.
     pub async fn post_query<Q: GraphQLQuery, T>(
@@ -151,9 +137,11 @@ impl GraphQLClient {
         let mut server_attempt: u32 = 0;
 
         loop {
-            let session = self.get_session().await?;
-            let mut headers = HashMap::new();
-            self.add_auth_headers(&session, &mut headers)?;
+            let headers = self
+                .header_provider
+                .headers()
+                .await
+                .map_err(|e| GraphQLError::Authentication(e.to_string()))?;
 
             let err = match self
                 .post_query_inner::<Q, T>(&full_url, &headers, variables.clone())
@@ -200,71 +188,6 @@ impl GraphQLClient {
 
             return Err(err);
         }
-    }
-
-    /// Authenticate with the server using challenge-response
-    async fn authenticate(&self) -> GraphQLResult<Session> {
-        tracing::debug!("Authenticating with ssp");
-
-        // Get the identity public key
-        let identity_public_key =
-            hex::encode(self.signer.get_identity_public_key().await?.serialize());
-
-        // Get a challenge from the server
-        let challenge_vars = get_challenge::Variables {
-            input: get_challenge::GetChallengeInput {
-                public_key: identity_public_key.clone(),
-            },
-        };
-
-        let full_url = self.get_full_url();
-        let headers = HashMap::new();
-
-        let challenge_response = self
-            .post_query_inner::<queries::GetChallenge, _>(&full_url, &headers, challenge_vars)
-            .await?;
-
-        tracing::debug!("Received challenge from ssp");
-        // Decode the base64 protected challenge
-        let challenge_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&challenge_response.get_challenge.protected_challenge)
-            .map_err(|e| GraphQLError::serialization(e.to_string()))?;
-
-        tracing::debug!("Decoded challenge bytes length: {}", challenge_bytes.len());
-        // Sign the challenge with the identity key
-        let signature = self
-            .signer
-            .sign_message_ecdsa_with_identity_key(&challenge_bytes)
-            .await?
-            .serialize_der()
-            .to_vec();
-
-        // Verify the challenge
-        let verify_vars = verify_challenge::Variables {
-            input: verify_challenge::VerifyChallengeInput {
-                protected_challenge: challenge_response.get_challenge.protected_challenge,
-                signature: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&signature),
-                identity_public_key,
-                provider: None, // No provider specified
-            },
-        };
-
-        let verify_response = self
-            .post_query_inner::<queries::VerifyChallenge, _>(&full_url, &headers, verify_vars)
-            .await?;
-
-        Ok(Session {
-            token: verify_response.verify_challenge.session_token,
-            expiration: verify_response
-                .verify_challenge
-                .valid_until
-                .timestamp()
-                .try_into()
-                .map_err(|_| {
-                    GraphQLError::Authentication("Invalid expiration timestamp".to_string())
-                })?,
-            headers: HashMap::new(),
-        })
     }
 
     /// Get a swap fee estimate
@@ -580,51 +503,6 @@ impl GraphQLClient {
             })
             .collect())
     }
-
-    async fn get_session(&self) -> GraphQLResult<Session> {
-        let current_session = self
-            .session_manager
-            .get_session(&self.ssp_identity_public_key)
-            .await;
-        let valid_session = match current_session {
-            Ok(session) => {
-                if session.is_valid() {
-                    session
-                } else {
-                    self.authenticate().await?
-                }
-            }
-            Err(e) => {
-                match e {
-                    crate::session_manager::SessionManagerError::NotFound => {
-                        debug!("Operator session not found, authenticating")
-                    }
-                    crate::session_manager::SessionManagerError::Generic(e) => {
-                        error!("Failed to get operator session from session manager: {}", e)
-                    }
-                };
-                self.authenticate().await?
-            }
-        };
-        self.session_manager
-            .set_session(&self.ssp_identity_public_key, valid_session.clone())
-            .await?;
-        Ok(valid_session)
-    }
-
-    fn add_auth_headers(
-        &self,
-        session: &Session,
-        headers: &mut HashMap<String, String>,
-    ) -> Result<(), GraphQLError> {
-        add_content_type_header(headers, ContentType::Json);
-        headers.insert(
-            "Authorization".to_string(),
-            format!("Bearer {}", session.token),
-        );
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -633,13 +511,11 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
     use macros::async_test_all;
     use platform_utils::HttpError;
 
     use super::*;
-    use crate::session_manager::InMemorySessionManager;
-    use crate::signer::create_test_signer;
+    use crate::header_provider::HeaderProviderError;
 
     /// Empty-list response for the `WalletWebhooks` query — used as a stand-in
     /// for "any successful GraphQL response" in the retry tests.
@@ -709,38 +585,30 @@ mod tests {
         }
     }
 
-    fn dummy_pubkey() -> PublicKey {
-        let secp = Secp256k1::new();
-        let sk = SecretKey::from_slice(&[7u8; 32]).expect("valid secret key");
-        PublicKey::from_secret_key(&secp, &sk)
+    /// Static header provider that returns a fixed Bearer header — stand-in
+    /// for the real challenge-response auth provider in retry tests.
+    struct StaticHeaderProvider;
+
+    #[macros::async_trait]
+    impl HeaderProvider for StaticHeaderProvider {
+        async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
+            Ok(HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer test-token".to_string(),
+            )]))
+        }
     }
 
     /// Build a `GraphQLClient` wired up with the mock HTTP client and a
-    /// pre-populated valid session so `post_query` never triggers an
-    /// `authenticate()` round-trip.
+    /// static header provider so `post_query` never triggers an
+    /// authentication round-trip.
     async fn build_test_client(http: MockHttpClient, retry_config: RetryConfig) -> GraphQLClient {
-        let ssp_pk = dummy_pubkey();
-        let session_manager = Arc::new(InMemorySessionManager::default());
-        session_manager
-            .set_session(
-                &ssp_pk,
-                Session {
-                    token: "test-token".to_string(),
-                    expiration: u64::MAX,
-                    headers: HashMap::new(),
-                },
-            )
-            .await
-            .expect("set session");
-
         GraphQLClient {
             client: Arc::new(http),
             base_url: "http://test.invalid".to_string(),
             schema_endpoint: "graphql".to_string(),
-            signer: Arc::new(create_test_signer()),
-            session_manager,
-            ssp_identity_public_key: ssp_pk,
             retry_config,
+            header_provider: Arc::new(StaticHeaderProvider),
         }
     }
 

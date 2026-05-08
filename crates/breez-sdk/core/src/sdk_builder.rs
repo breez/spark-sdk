@@ -28,11 +28,12 @@ use crate::{
     error::SdkError,
     lnurl::{DefaultLnurlServerClient, LnurlServerClient},
     models::Config,
+    partner_header_provider::BreezPartnerHeaderProvider,
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams, SyncCoordinator},
-    session_manager::BreezSessionManager,
+    session_manager::{SessionManager, SessionManagerAdapter},
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
         spark::SparkSigner,
@@ -78,6 +79,7 @@ pub struct SdkBuilder {
     token_output_store: Option<Arc<dyn TokenOutputStore>>,
     ssp_connection_manager: Option<Arc<crate::SspConnectionManager>>,
     connection_manager: Option<Arc<ConnectionManager>>,
+    session_manager: Option<Arc<dyn SessionManager>>,
 }
 
 impl SdkBuilder {
@@ -113,6 +115,7 @@ impl SdkBuilder {
             token_output_store: None,
             ssp_connection_manager: None,
             connection_manager: None,
+            session_manager: None,
         }
     }
 
@@ -141,6 +144,7 @@ impl SdkBuilder {
             token_output_store: None,
             ssp_connection_manager: None,
             connection_manager: None,
+            session_manager: None,
         }
     }
 
@@ -389,6 +393,23 @@ impl SdkBuilder {
     #[must_use]
     pub fn with_connection_manager(mut self, connection_manager: Arc<ConnectionManager>) -> Self {
         self.connection_manager = Some(connection_manager);
+        self
+    }
+
+    /// Sets a custom session manager implementation.
+    ///
+    /// The session manager is used to persist authentication sessions for the
+    /// Spark Service Provider and the Spark Operators. Providing a shared
+    /// implementation (e.g. backed by `PostgreSQL` or Redis) allows multiple SDK
+    /// instances to share authentication state and bootstrap quickly.
+    ///
+    /// If not set, an in-memory session manager is used.
+    ///
+    /// # Arguments
+    /// - `session_manager`: The session manager implementation to use.
+    #[must_use]
+    pub fn with_session_manager(mut self, session_manager: Arc<dyn SessionManager>) -> Self {
+        self.session_manager = Some(session_manager);
         self
     }
 
@@ -715,13 +736,51 @@ impl SdkBuilder {
             );
         }
 
-        let session_manager = Arc::new(BreezSessionManager::new(Arc::new(
-            InMemorySessionManager::default(),
-        )));
+        #[allow(unused_mut)]
+        let mut inner_session_manager: Option<Arc<dyn spark_wallet::SessionManager>> = self
+            .session_manager
+            .map(|sm| Arc::new(SessionManagerAdapter(sm)) as Arc<dyn spark_wallet::SessionManager>);
+
+        #[cfg(feature = "postgres")]
+        if inner_session_manager.is_none()
+            && let Some((ref pool, ref identity)) = postgres_backend
+        {
+            inner_session_manager = Some(
+                crate::persist::postgres::create_postgres_session_manager(pool.clone(), identity)
+                    .await?,
+            );
+        }
+
+        #[cfg(feature = "mysql")]
+        if inner_session_manager.is_none()
+            && let Some((ref pool, ref identity)) = mysql_backend
+        {
+            inner_session_manager = Some(
+                crate::persist::mysql::create_mysql_session_manager(pool.clone(), identity).await?,
+            );
+        }
+
+        let inner_session_manager =
+            inner_session_manager.unwrap_or_else(|| Arc::new(InMemorySessionManager::default()));
+        let inner_session_manager: Arc<dyn spark_wallet::SessionManager> = Arc::new(
+            crate::session_manager::EncryptingSessionManager::new(
+                inner_session_manager,
+                signer.clone(),
+                self.config.network,
+            )
+            .map_err(|e| {
+                SdkError::Generic(format!("failed to set up session token encryption: {e}"))
+            })?,
+        );
+        let inner_session_manager: Arc<dyn spark_wallet::SessionManager> = Arc::new(
+            crate::session_manager::CachingSessionManager::new(inner_session_manager),
+        );
+        let partner_headers = Arc::new(BreezPartnerHeaderProvider::new());
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
                 .with_cancellation_token(shutdown_sender.subscribe())
-                .with_session_manager(session_manager.clone());
+                .with_session_manager(inner_session_manager)
+                .with_so_extra_header_provider(partner_headers.clone());
         if let Some(observer) = self.payment_observer {
             let observer: Arc<dyn spark_wallet::TransferObserver> =
                 Arc::new(SparkTransferObserver::new(observer));
@@ -848,7 +907,7 @@ impl SdkBuilder {
             token_converter,
             stable_balance,
             sync_coordinator,
-            session_manager,
+            partner_headers,
         })?;
         debug!("Initialized and started breez sdk.");
 

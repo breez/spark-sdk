@@ -730,7 +730,7 @@ mod jwt {
         }
 
         pub(super) async fn set_and_save_jwt(&self, token: String) {
-            self.session_manager.set_token(token.clone()).await;
+            self.partner_headers.set_token(token.clone()).await;
             if let Err(err) = self
                 .storage
                 .set_cached_item(KEY_BREEZ_JWT.to_string(), token)
@@ -780,7 +780,7 @@ mod jwt {
             if !self.enable_jwt() {
                 return std::future::pending::<()>().await;
             }
-            let token = self.session_manager.get_token().await;
+            let token = self.partner_headers.get_token().await;
             let duration = Duration::from_secs(match token {
                 None => JWT_REFRESH_RETRY_SECS,
                 Some(token) => jwt_exp(&token).map_or(JWT_REFRESH_RETRY_SECS, calculate_expiry),

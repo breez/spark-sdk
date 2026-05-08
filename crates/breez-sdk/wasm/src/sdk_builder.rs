@@ -11,13 +11,15 @@ use crate::{
         payment_observer::{PaymentObserver, WasmPaymentObserver},
         postgres_pool::PostgresConnectionPool,
         rest_client::{RestClient, WasmRestClient},
+        session_manager::{SessionManager, WasmSessionManager},
     },
     persist::{
         Storage, WasmStorage,
         pool::{
-            JsPool, create_mysql_pool, create_mysql_storage_with_pool,
-            create_mysql_token_store_with_pool, create_mysql_tree_store_with_pool,
-            create_postgres_pool, create_postgres_storage_with_pool,
+            JsPool, create_mysql_pool, create_mysql_session_manager_with_pool,
+            create_mysql_storage_with_pool, create_mysql_token_store_with_pool,
+            create_mysql_tree_store_with_pool, create_postgres_pool,
+            create_postgres_session_manager_with_pool, create_postgres_storage_with_pool,
             create_postgres_token_store_with_pool, create_postgres_tree_store_with_pool,
         },
     },
@@ -100,6 +102,11 @@ pub struct SdkBuilder {
     storage: Option<Storage>,
     postgres_pool: Option<Rc<JsPool>>,
     mysql_pool: Option<Rc<JsPool>>,
+    /// Tracks whether the integrator supplied a session manager via
+    /// [`with_session_manager`]. When `true`, the postgres / mysql pool
+    /// branches in `build()` skip auto-creating one so they don't override
+    /// the user's choice.
+    user_session_manager: bool,
     key_set_type: breez_sdk_spark::KeySetType,
     use_address_index: bool,
     account_number: Option<u32>,
@@ -120,6 +127,7 @@ impl SdkBuilder {
             storage: None,
             postgres_pool: None,
             mysql_pool: None,
+            user_session_manager: false,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
             account_number: None,
@@ -143,6 +151,7 @@ impl SdkBuilder {
             storage: None,
             postgres_pool: None,
             mysql_pool: None,
+            user_session_manager: false,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
             account_number: None,
@@ -272,6 +281,20 @@ impl SdkBuilder {
         self
     }
 
+    /// Sets a custom session manager used to persist authentication sessions.
+    ///
+    /// Provide a shared, persistent implementation (e.g. backed by `PostgreSQL`
+    /// or Redis) to let multiple SDK instances share authentication state and
+    /// bootstrap quickly. If not set, an in-memory session manager is used.
+    #[wasm_bindgen(js_name = "withSessionManager")]
+    pub fn with_session_manager(mut self, session_manager: SessionManager) -> Self {
+        self.builder = self
+            .builder
+            .with_session_manager(Arc::new(WasmSessionManager { session_manager }));
+        self.user_session_manager = true;
+        self
+    }
+
     #[wasm_bindgen(js_name = "build")]
     pub async fn build(mut self) -> WasmResult<BreezSdk> {
         match (
@@ -336,6 +359,19 @@ impl SdkBuilder {
                         .await?;
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
+
+                if !self.user_session_manager {
+                    let session_manager_js = create_postgres_session_manager_with_pool(
+                        pool,
+                        &identity_bytes,
+                        logger_ref,
+                    )
+                    .await?;
+                    let session_manager = Arc::new(WasmSessionManager {
+                        session_manager: session_manager_js,
+                    });
+                    self.builder = self.builder.with_session_manager(session_manager);
+                }
             }
             (None, None, None, Some(pool_rc)) => {
                 let pool: &JsPool = pool_rc;
@@ -369,6 +405,16 @@ impl SdkBuilder {
                     create_mysql_token_store_with_pool(pool, &identity_bytes, logger_ref).await?;
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
+
+                if !self.user_session_manager {
+                    let session_manager_js =
+                        create_mysql_session_manager_with_pool(pool, &identity_bytes, logger_ref)
+                            .await?;
+                    let session_manager = Arc::new(WasmSessionManager {
+                        session_manager: session_manager_js,
+                    });
+                    self.builder = self.builder.with_session_manager(session_manager);
+                }
             }
             _ => {
                 return Err(WasmError::new(
