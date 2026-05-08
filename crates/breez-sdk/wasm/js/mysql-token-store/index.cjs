@@ -71,9 +71,19 @@ class MysqlTokenStore {
    * @param {import('mysql2/promise').Pool} pool
    * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
    *   identifying the tenant. All reads and writes are scoped by this.
+   * @param {"Enforced"|"Disabled"} [foreignKeyMode="Enforced"] - whether
+   *   migrations create database-enforced foreign keys.
    * @param {object} [logger]
+   * @param {boolean} [runMigration=true] - whether to run schema migrations
+   *   on initialize.
    */
-  constructor(pool, identity, logger = null, runMigration = true) {
+  constructor(
+    pool,
+    identity,
+    foreignKeyMode = "Enforced",
+    logger = null,
+    runMigration = true
+  ) {
     if (!identity || identity.length !== 33) {
       throw new TokenStoreError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -82,6 +92,7 @@ class MysqlTokenStore {
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.lockName = _identityLockName(TOKEN_STORE_LOCK_PREFIX, identity);
+    this.foreignKeyMode = foreignKeyMode;
     this.logger = logger;
     this.runMigration = runMigration;
   }
@@ -89,7 +100,10 @@ class MysqlTokenStore {
   async initialize() {
     try {
       if (this.runMigration) {
-        const migrationManager = new MysqlTokenStoreMigrationManager(this.logger);
+        const migrationManager = new MysqlTokenStoreMigrationManager(
+          this.logger,
+          this.foreignKeyMode
+        );
         await migrationManager.migrate(this.pool, this.identity);
       }
       return this;
@@ -969,6 +983,7 @@ async function createMysqlTokenStore(config, identity, logger = null) {
   return createMysqlTokenStoreWithPool(
     pool,
     identity,
+    config.foreignKeyMode || "Enforced",
     logger,
     config.runMigration !== false
   );
@@ -977,12 +992,14 @@ async function createMysqlTokenStore(config, identity, logger = null) {
 async function createMysqlTokenStoreWithPool(
   pool,
   identity,
+  foreignKeyMode = "Enforced",
   logger = null,
   runMigration = true
 ) {
   const store = new MysqlTokenStore(
     pool,
     identity,
+    foreignKeyMode,
     logger,
     runMigration
   );

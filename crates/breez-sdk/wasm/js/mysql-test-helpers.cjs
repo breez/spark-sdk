@@ -100,4 +100,42 @@ async function createTestConnectionString(testName) {
   return `mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@${host}:${port}/${dbName}`;
 }
 
-module.exports = { ensureContainer, createTestConnectionString };
+/**
+ * Count foreign-key constraints on the given tables in the database referenced
+ * by `connectionString`. Used by foreign-key-mode tests to assert that
+ * `Disabled` migrations don't leave any FK constraints behind.
+ *
+ * @param {string} connectionString
+ * @param {string[]} tables
+ * @returns {Promise<number>}
+ */
+async function countMysqlForeignKeys(connectionString, tables) {
+  const url = new URL(connectionString);
+  const conn = await mysql.createConnection({
+    host: url.hostname,
+    port: Number(url.port),
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    database: url.pathname.replace(/^\//, ""),
+  });
+  try {
+    const placeholders = tables.map(() => "?").join(",");
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS c
+       FROM information_schema.table_constraints
+       WHERE constraint_schema = DATABASE()
+         AND constraint_type = 'FOREIGN KEY'
+         AND table_name IN (${placeholders})`,
+      tables
+    );
+    return Number(rows[0].c);
+  } finally {
+    await conn.end();
+  }
+}
+
+module.exports = {
+  ensureContainer,
+  createTestConnectionString,
+  countMysqlForeignKeys,
+};

@@ -72,6 +72,27 @@ pub fn default_postgres_storage_config(connection_string: &str) -> PostgresStora
     }
 }
 
+/// Controls whether MySQL migrations create database-enforced foreign keys.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    tsify_next::Tsify,
+)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+pub enum MysqlForeignKeyMode {
+    /// Create foreign-key constraints in the managed schema.
+    #[default]
+    Enforced,
+    /// Omit foreign-key constraints from the managed schema.
+    Disabled,
+}
+
 /// Configuration for MySQL storage connection pool. Targets MySQL 8.0+.
 #[derive(Clone, serde::Serialize, serde::Deserialize, tsify_next::Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
@@ -90,6 +111,13 @@ pub struct MysqlStorageConfig {
     /// schema. Defaults to `true`.
     #[serde(default = "default_run_migration")]
     pub run_migration: bool,
+    /// Whether migrations should create database-enforced foreign keys.
+    ///
+    /// Use `Disabled` for environments that manage relationships in
+    /// application code and require schema changes without foreign-key
+    /// constraints.
+    #[serde(default)]
+    pub foreign_key_mode: MysqlForeignKeyMode,
 }
 
 /// Creates a default MySQL storage configuration with sensible defaults.
@@ -98,6 +126,7 @@ pub struct MysqlStorageConfig {
 /// - `maxPoolSize`: 10
 /// - `createTimeoutSecs`: 0 (no timeout)
 /// - `recycleTimeoutSecs`: 10
+/// - `foreignKeyMode`: `Enforced`
 #[wasm_bindgen(js_name = "defaultMysqlStorageConfig")]
 pub fn default_mysql_storage_config(connection_string: &str) -> MysqlStorageConfig {
     MysqlStorageConfig {
@@ -106,6 +135,7 @@ pub fn default_mysql_storage_config(connection_string: &str) -> MysqlStorageConf
         create_timeout_secs: 0,
         recycle_timeout_secs: 10,
         run_migration: true,
+        foreign_key_mode: MysqlForeignKeyMode::Enforced,
     }
 }
 
@@ -117,7 +147,7 @@ pub struct SdkBuilder {
     default_storage_dir: Option<String>,
     storage: Option<Storage>,
     postgres_pool: Option<(Rc<JsPool>, bool)>,
-    mysql_pool: Option<(Rc<JsPool>, bool)>,
+    mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
     /// Tracks whether the integrator supplied a session manager via
     /// [`with_session_manager`]. When `true`, the postgres / mysql pool
     /// branches in `build()` skip auto-creating one so they don't override
@@ -200,7 +230,11 @@ impl SdkBuilder {
     /// `SdkBuilder`s to share connections across SDKs.
     #[wasm_bindgen(js_name = "withMysqlConnectionPool")]
     pub fn with_mysql_connection_pool(mut self, pool: &MysqlConnectionPool) -> Self {
-        self.mysql_pool = Some((pool.cloned_inner(), pool.run_migration()));
+        self.mysql_pool = Some((
+            pool.cloned_inner(),
+            pool.run_migration(),
+            pool.foreign_key_mode(),
+        ));
         self
     }
 
@@ -217,8 +251,9 @@ impl SdkBuilder {
     #[wasm_bindgen(js_name = "withMysqlBackend")]
     pub fn with_mysql_backend(mut self, config: MysqlStorageConfig) -> WasmResult<Self> {
         let run_migration = config.run_migration;
+        let foreign_key_mode = config.foreign_key_mode;
         let pool = create_mysql_pool(config)?;
-        self.mysql_pool = Some((Rc::new(pool), run_migration));
+        self.mysql_pool = Some((Rc::new(pool), run_migration, foreign_key_mode));
         Ok(self)
     }
 
@@ -406,8 +441,10 @@ impl SdkBuilder {
                     self.builder = self.builder.with_session_manager(session_manager);
                 }
             }
-            (None, None, None, Some((pool_rc, run_migration))) => {
+            (None, None, None, Some((pool_rc, run_migration, foreign_key_mode))) => {
                 let pool: &JsPool = pool_rc;
+                let run_migration = *run_migration;
+                let foreign_key_mode = *foreign_key_mode;
                 let logger_ref = get_wasm_logger_ref();
 
                 // Derive tenant identity from the seed and pass to the JS
@@ -428,7 +465,7 @@ impl SdkBuilder {
                         pool,
                         &identity_bytes,
                         logger_ref,
-                        *run_migration,
+                        run_migration,
                     )
                     .await?,
                 });
@@ -437,8 +474,9 @@ impl SdkBuilder {
                 let tree_store_js = create_mysql_tree_store_with_pool(
                     pool,
                     &identity_bytes,
+                    foreign_key_mode,
                     logger_ref,
-                    *run_migration,
+                    run_migration,
                 )
                 .await?;
                 let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
@@ -447,8 +485,9 @@ impl SdkBuilder {
                 let token_store_js = create_mysql_token_store_with_pool(
                     pool,
                     &identity_bytes,
+                    foreign_key_mode,
                     logger_ref,
-                    *run_migration,
+                    run_migration,
                 )
                 .await?;
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
@@ -459,7 +498,7 @@ impl SdkBuilder {
                         pool,
                         &identity_bytes,
                         logger_ref,
-                        *run_migration,
+                        run_migration,
                     )
                     .await?;
                     let session_manager = Arc::new(WasmSessionManager {

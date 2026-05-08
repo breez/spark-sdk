@@ -10,11 +10,13 @@ const MIGRATION_LOCK_TIMEOUT = 60;
 
 /**
  * Runs a single migration step. Plain strings are run as-is; tagged objects
- * (`{ op: 'dropPrimaryKey', table }`) are guarded against partial-apply replay
- * by checking `information_schema` first. MySQL DDL implicitly commits, so
- * if the migration crashes between two DDL statements the version row never
- * gets recorded — and on retry, an unguarded DROP PRIMARY KEY would fail
- * (`ER_CANT_DROP_FIELD_OR_KEY`) because the PK is already gone.
+ * (`{ op: 'dropPrimaryKey', table }`, `{ op: 'dropForeignKey', table, name }`)
+ * are guarded against partial-apply replay (and against the `Disabled`
+ * foreign-key mode where the FK was never created) by checking
+ * `information_schema` first. MySQL DDL implicitly commits, so if the
+ * migration crashes between two DDL statements the version row never gets
+ * recorded — and on retry, an unguarded DROP would fail because the
+ * constraint is already gone.
  */
 async function runMigrationStep(conn, step) {
   if (typeof step === "string") {
@@ -34,12 +36,29 @@ async function runMigrationStep(conn, step) {
     }
     return;
   }
+  if (step.op === "dropForeignKey") {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS c FROM information_schema.table_constraints
+       WHERE table_schema = DATABASE()
+         AND table_name = ?
+         AND constraint_type = 'FOREIGN KEY'
+         AND constraint_name = ?`,
+      [step.table, step.name]
+    );
+    if (rows[0].c > 0) {
+      await conn.query(
+        `ALTER TABLE \`${step.table}\` DROP FOREIGN KEY \`${step.name}\``
+      );
+    }
+    return;
+  }
   throw new Error(`Unknown migration step op: ${JSON.stringify(step)}`);
 }
 
 class MysqlTreeStoreMigrationManager {
-  constructor(logger = null) {
+  constructor(logger = null, foreignKeyMode = "Enforced") {
     this.logger = logger;
+    this.foreignKeyMode = foreignKeyMode;
   }
 
   async migrate(pool, identity) {
@@ -109,6 +128,29 @@ class MysqlTreeStoreMigrationManager {
   _getMigrations(identity) {
     const idHex = Buffer.from(identity).toString("hex");
     const idLit = `UNHEX('${idHex}')`;
+    const foreignKeyModeEnforced = this.foreignKeyMode === "Enforced";
+
+    const treeLeavesCreate = foreignKeyModeEnforced
+      ? `CREATE TABLE IF NOT EXISTS tree_leaves (
+            id VARCHAR(255) NOT NULL PRIMARY KEY,
+            status VARCHAR(64) NOT NULL,
+            is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
+            reservation_id VARCHAR(255) NULL,
+            data JSON NOT NULL,
+            created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            CONSTRAINT fk_tree_leaves_reservation FOREIGN KEY (reservation_id)
+                REFERENCES tree_reservations(id) ON DELETE SET NULL
+          )`
+      : `CREATE TABLE IF NOT EXISTS tree_leaves (
+            id VARCHAR(255) NOT NULL PRIMARY KEY,
+            status VARCHAR(64) NOT NULL,
+            is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
+            reservation_id VARCHAR(255) NULL,
+            data JSON NOT NULL,
+            created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+          )`;
 
     return [
       {
@@ -120,17 +162,7 @@ class MysqlTreeStoreMigrationManager {
             pending_change_amount BIGINT NOT NULL DEFAULT 0,
             created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
           )`,
-          `CREATE TABLE IF NOT EXISTS tree_leaves (
-            id VARCHAR(255) NOT NULL PRIMARY KEY,
-            status VARCHAR(64) NOT NULL,
-            is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
-            reservation_id VARCHAR(255) NULL,
-            data JSON NOT NULL,
-            created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            CONSTRAINT fk_tree_leaves_reservation FOREIGN KEY (reservation_id)
-                REFERENCES tree_reservations(id) ON DELETE SET NULL
-          )`,
+          treeLeavesCreate,
           `CREATE TABLE IF NOT EXISTS tree_spent_leaves (
             leaf_id VARCHAR(255) NOT NULL PRIMARY KEY,
             spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
@@ -168,8 +200,14 @@ class MysqlTreeStoreMigrationManager {
       {
         name: "Multi-tenant scoping: add user_id and rewrite primary keys / FKs",
         sql: [
-          // Drop the existing FK so we can rewrite the parent PK.
-          `ALTER TABLE tree_leaves DROP FOREIGN KEY fk_tree_leaves_reservation`,
+          // Drop the existing FK so we can rewrite the parent PK. Guarded so
+          // that databases created with `Disabled` foreign-key mode (where the
+          // FK was never created) skip the DROP rather than erroring.
+          {
+            op: "dropForeignKey",
+            table: "tree_leaves",
+            name: "fk_tree_leaves_reservation",
+          },
 
           // tree_reservations: scope by user_id.
           `ALTER TABLE tree_reservations ADD COLUMN user_id VARBINARY(33) NULL`,
@@ -177,15 +215,19 @@ class MysqlTreeStoreMigrationManager {
           `ALTER TABLE tree_reservations MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
           `ALTER TABLE tree_reservations DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
 
-          // tree_leaves: scope by user_id, rekey, re-add composite FK.
+          // tree_leaves: scope by user_id, rekey, optionally re-add composite FK.
           `ALTER TABLE tree_leaves ADD COLUMN user_id VARBINARY(33) NULL`,
           `UPDATE tree_leaves SET user_id = ${idLit} WHERE user_id IS NULL`,
           `ALTER TABLE tree_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
           `ALTER TABLE tree_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
-          `ALTER TABLE tree_leaves
-             ADD CONSTRAINT fk_tree_leaves_reservation_user
-             FOREIGN KEY (user_id, reservation_id)
-             REFERENCES tree_reservations(user_id, id)`,
+          ...(foreignKeyModeEnforced
+            ? [
+                `ALTER TABLE tree_leaves
+                   ADD CONSTRAINT fk_tree_leaves_reservation_user
+                   FOREIGN KEY (user_id, reservation_id)
+                   REFERENCES tree_reservations(user_id, id)`,
+              ]
+            : []),
           `DROP INDEX idx_tree_leaves_available ON tree_leaves`,
           `DROP INDEX idx_tree_leaves_reservation ON tree_leaves`,
           `DROP INDEX idx_tree_leaves_added_at ON tree_leaves`,

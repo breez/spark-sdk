@@ -78,9 +78,19 @@ class MysqlTreeStore {
    * @param {import('mysql2/promise').Pool} pool
    * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
    *   identifying the tenant. All reads and writes are scoped by this.
+   * @param {"Enforced"|"Disabled"} [foreignKeyMode="Enforced"] - whether
+   *   migrations create database-enforced foreign keys.
    * @param {object} [logger]
+   * @param {boolean} [runMigration=true] - whether to run schema migrations
+   *   on initialize.
    */
-  constructor(pool, identity, logger = null, runMigration = true) {
+  constructor(
+    pool,
+    identity,
+    foreignKeyMode = "Enforced",
+    logger = null,
+    runMigration = true
+  ) {
     if (!identity || identity.length !== 33) {
       throw new TreeStoreError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -89,6 +99,7 @@ class MysqlTreeStore {
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.lockName = _identityLockName(TREE_STORE_LOCK_PREFIX, identity);
+    this.foreignKeyMode = foreignKeyMode;
     this.logger = logger;
     this.runMigration = runMigration;
   }
@@ -96,7 +107,10 @@ class MysqlTreeStore {
   async initialize() {
     try {
       if (this.runMigration) {
-        const migrationManager = new MysqlTreeStoreMigrationManager(this.logger);
+        const migrationManager = new MysqlTreeStoreMigrationManager(
+          this.logger,
+          this.foreignKeyMode
+        );
         await migrationManager.migrate(this.pool, this.identity);
       }
       return this;
@@ -930,6 +944,7 @@ async function createMysqlTreeStore(config, identity, logger = null) {
   return createMysqlTreeStoreWithPool(
     pool,
     identity,
+    config.foreignKeyMode || "Enforced",
     logger,
     config.runMigration !== false
   );
@@ -938,12 +953,14 @@ async function createMysqlTreeStore(config, identity, logger = null) {
 async function createMysqlTreeStoreWithPool(
   pool,
   identity,
+  foreignKeyMode = "Enforced",
   logger = null,
   runMigration = true
 ) {
   const store = new MysqlTreeStore(
     pool,
     identity,
+    foreignKeyMode,
     logger,
     runMigration
   );
