@@ -1,7 +1,7 @@
 use breez_sdk_spark::{
-    default_config, BreezSdk, CheckLightningAddressRequest, Config, GetPaymentRequest,
-    LightningAddressTransfer, Network, PaymentDetails, RegisterLightningAddressRequest,
-    SignMessageRequest,
+    default_config, AcceptLightningAddressTransferRequest, BreezSdk, CheckLightningAddressRequest,
+    Config, GetPaymentRequest, LightningAddressTransfer, Network, PaymentDetails,
+    RegisterLightningAddressRequest,
 };
 
 pub fn configure_lightning_address() -> Config {
@@ -49,28 +49,14 @@ pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(Strin
 // the new owner needs to take over the username in a single atomic call.
 pub async fn sign_lightning_address_transfer(
     current_owner_sdk: &BreezSdk,
-    current_owner_pubkey: &str,
-    username: &str,
-    new_owner_pubkey: &str,
+    transferee_pubkey: &str,
 ) -> anyhow::Result<LightningAddressTransfer> {
     // ANCHOR: sign-lightning-address-transfer
-    // `username` must be lowercased and trimmed.
-    // `current_owner_pubkey` and `new_owner_pubkey` are the hex-encoded
-    // secp256k1 compressed pubkeys of the two wallets (via GetInfoRequest).
-    let message = format!(
-        "transfer:{current_owner_pubkey}-{username}-{new_owner_pubkey}"
-    );
-    let signed = current_owner_sdk
-        .sign_message(SignMessageRequest {
-            message,
-            compact: false,
+    let transfer = current_owner_sdk
+        .accept_lightning_address_transfer(AcceptLightningAddressTransferRequest {
+            transferee_pubkey: transferee_pubkey.to_string(),
         })
         .await?;
-
-    let transfer = LightningAddressTransfer {
-        pubkey: signed.pubkey,
-        signature: signed.signature,
-    };
     // ANCHOR_END: sign-lightning-address-transfer
     Ok(transfer)
 }

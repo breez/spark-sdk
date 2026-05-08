@@ -116,21 +116,17 @@ impl crate::repository::LnurlRepository for LnurlRepository {
             .map_err(|e| LnurlRepositoryError::General(e.into()))?;
 
         let source_name: Option<(String,)> =
-            sqlx::query_as("SELECT name FROM users WHERE domain = $1 AND pubkey = $2")
+            sqlx::query_as("DELETE FROM users WHERE domain = $1 AND pubkey = $2 RETURNING name")
                 .bind(domain)
                 .bind(from_pubkey)
                 .fetch_optional(&mut *tx)
                 .await?;
         match source_name {
             Some((name,)) if name == username => {}
+            // Source pubkey doesn't currently own this username. The tx is
+            // rolled back on drop, so the speculative DELETE is undone.
             _ => return Err(LnurlRepositoryError::SourceNotOwner),
         }
-
-        sqlx::query("DELETE FROM users WHERE domain = $1 AND pubkey = $2")
-            .bind(domain)
-            .bind(from_pubkey)
-            .execute(&mut *tx)
-            .await?;
 
         sqlx::query(
             "INSERT INTO users (domain, pubkey, name, description, updated_at)

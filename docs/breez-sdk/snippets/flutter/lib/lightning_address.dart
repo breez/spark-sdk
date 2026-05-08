@@ -63,22 +63,13 @@ Future<(String, String, String, String, String)> getLightningAddress(
 // new owner needs to take over the username in a single atomic call.
 Future<LightningAddressTransfer> signLightningAddressTransfer(
   BreezSdk currentOwnerSdk,
-  String currentOwnerPubkey,
-  String newOwnerPubkey,
+  String transfereePubkey,
 ) async {
-  final username = 'myusername';
-
   // ANCHOR: sign-lightning-address-transfer
-  // `username` must be lowercased and trimmed.
-  // pubkeys are hex-encoded secp256k1 compressed (via getInfo().identityPubkey).
-  final message = 'transfer:$currentOwnerPubkey-$username-$newOwnerPubkey';
-  final signed = await currentOwnerSdk.signMessage(
-    request: SignMessageRequest(message: message, compact: false),
-  );
-
-  final transfer = LightningAddressTransfer(
-    pubkey: signed.pubkey,
-    signature: signed.signature,
+  final transfer = await currentOwnerSdk.acceptLightningAddressTransfer(
+    request: AcceptLightningAddressTransferRequest(
+      transfereePubkey: transfereePubkey,
+    ),
   );
   // ANCHOR_END: sign-lightning-address-transfer
   return transfer;

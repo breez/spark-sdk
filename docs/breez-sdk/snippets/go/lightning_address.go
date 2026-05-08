@@ -95,26 +95,16 @@ func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Lightn
 // new owner needs to take over the username in a single atomic call.
 func SignLightningAddressTransfer(
 	currentOwnerSdk *breez_sdk_spark.BreezSdk,
-	currentOwnerPubkey string,
-	newOwnerPubkey string,
+	transfereePubkey string,
 ) (*breez_sdk_spark.LightningAddressTransfer, error) {
-	username := "myusername"
-
 	// ANCHOR: sign-lightning-address-transfer
-	// `username` must be lowercased and trimmed.
-	// pubkeys are hex-encoded secp256k1 compressed (via GetInfo().IdentityPubkey).
-	message := "transfer:" + currentOwnerPubkey + "-" + username + "-" + newOwnerPubkey
-	signed, err := currentOwnerSdk.SignMessage(breez_sdk_spark.SignMessageRequest{
-		Message: message,
-		Compact: false,
-	})
+	transfer, err := currentOwnerSdk.AcceptLightningAddressTransfer(
+		breez_sdk_spark.AcceptLightningAddressTransferRequest{
+			TransfereePubkey: transfereePubkey,
+		},
+	)
 	if err != nil {
 		return nil, err
-	}
-
-	transfer := breez_sdk_spark.LightningAddressTransfer{
-		Pubkey:    signed.Pubkey,
-		Signature: signed.Signature,
 	}
 	// ANCHOR_END: sign-lightning-address-transfer
 	return &transfer, nil

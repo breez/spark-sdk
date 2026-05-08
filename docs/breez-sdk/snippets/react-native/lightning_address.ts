@@ -57,24 +57,12 @@ const exampleGetLightningAddress = async (sdk: BreezSdk) => {
 // new owner needs to take over the username in a single atomic call.
 const exampleSignLightningAddressTransfer = async (
   currentOwnerSdk: BreezSdk,
-  currentOwnerPubkey: string,
-  newOwnerPubkey: string
+  transfereePubkey: string
 ) => {
-  const username = 'myusername'
-
   // ANCHOR: sign-lightning-address-transfer
-  // `username` must be lowercased and trimmed.
-  // pubkeys are hex-encoded secp256k1 compressed (via getInfo().identityPubkey).
-  const message = `transfer:${currentOwnerPubkey}-${username}-${newOwnerPubkey}`
-  const signed = await currentOwnerSdk.signMessage({
-    message,
-    compact: false
+  const transfer = await currentOwnerSdk.acceptLightningAddressTransfer({
+    transfereePubkey
   })
-
-  const transfer = {
-    pubkey: signed.pubkey,
-    signature: signed.signature
-  }
   // ANCHOR_END: sign-lightning-address-transfer
   return transfer
 }

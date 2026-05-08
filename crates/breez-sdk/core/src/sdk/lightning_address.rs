@@ -1,8 +1,10 @@
+use bitcoin::hex::DisplayHex;
 use lnurl_models::sanitize_username;
 
 use crate::{
-    CheckLightningAddressRequest, LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest,
-    error::SdkError, persist::ObjectCacheRepository,
+    AcceptLightningAddressTransferRequest, CheckLightningAddressRequest, LightningAddressInfo,
+    LightningAddressTransfer, LnurlInfo, RegisterLightningAddressRequest, error::SdkError,
+    persist::ObjectCacheRepository,
 };
 
 use super::BreezSdk;
@@ -72,6 +74,41 @@ impl BreezSdk {
         };
         cache.save_lightning_address(&address_info, false).await?;
         Ok(address_info)
+    }
+
+    /// Produce a transfer authorization for the username currently registered
+    /// on this SDK, granting the right to take it over to `transferee_pubkey`.
+    /// Run this on the *current owner's* SDK; share the returned [`LightningAddressTransfer`]
+    /// with the new owner out-of-band, and the new owner passes it as the
+    /// `transfer` field to [`BreezSdk::register_lightning_address`] to complete
+    /// the transfer in a single atomic server operation.
+    ///
+    /// Errors with [`SdkError::Generic`] if no lightning address is
+    /// registered on this SDK.
+    ///
+    /// The signed intent (`"transfer:{self_pubkey}-{username}-{transferee_pubkey}"`)
+    /// has no timestamp — it is a persistent capability bound to that
+    /// specific A → B → username triple.
+    pub async fn accept_lightning_address_transfer(
+        &self,
+        request: AcceptLightningAddressTransferRequest,
+    ) -> Result<LightningAddressTransfer, SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let Some(address_info) = cache.fetch_lightning_address().await?.flatten() else {
+            return Err(SdkError::Generic(
+                "No lightning address registered to transfer".to_string(),
+            ));
+        };
+        let self_pubkey = self.spark_wallet.get_identity_public_key().to_string();
+        let message = format!(
+            "transfer:{self_pubkey}-{}-{}",
+            address_info.username, request.transferee_pubkey,
+        );
+        let signature = self.spark_wallet.sign_message(&message).await?;
+        Ok(LightningAddressTransfer {
+            pubkey: self_pubkey,
+            signature: signature.serialize_der().to_lower_hex_string(),
+        })
     }
 
     pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {

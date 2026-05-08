@@ -1,4 +1,5 @@
 from breez_sdk_spark import (
+    AcceptLightningAddressTransferRequest,
     BreezSdk,
     CheckLightningAddressRequest,
     GetPaymentRequest,
@@ -6,7 +7,6 @@ from breez_sdk_spark import (
     Network,
     PaymentDetails,
     RegisterLightningAddressRequest,
-    SignMessageRequest,
     default_config
 )
 
@@ -63,22 +63,13 @@ async def get_lightning_address(sdk: BreezSdk):
 # new owner needs to take over the username in a single atomic call.
 async def sign_lightning_address_transfer(
     current_owner_sdk: BreezSdk,
-    current_owner_pubkey: str,
-    new_owner_pubkey: str,
+    transferee_pubkey: str,
 ) -> LightningAddressTransfer:
-    username = "myusername"
-
     # ANCHOR: sign-lightning-address-transfer
-    # `username` must be lowercased and trimmed.
-    # pubkeys are hex-encoded secp256k1 compressed (via get_info().identity_pubkey).
-    message = f"transfer:{current_owner_pubkey}-{username}-{new_owner_pubkey}"
-    signed = await current_owner_sdk.sign_message(
-        SignMessageRequest(message=message, compact=False)
-    )
-
-    transfer = LightningAddressTransfer(
-        pubkey=signed.pubkey,
-        signature=signed.signature,
+    transfer = await current_owner_sdk.accept_lightning_address_transfer(
+        AcceptLightningAddressTransferRequest(
+            transferee_pubkey=transferee_pubkey,
+        )
     )
     # ANCHOR_END: sign-lightning-address-transfer
     return transfer

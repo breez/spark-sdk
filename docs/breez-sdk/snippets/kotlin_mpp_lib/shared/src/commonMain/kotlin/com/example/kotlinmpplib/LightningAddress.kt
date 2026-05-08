@@ -59,22 +59,13 @@ class LightningAddress {
     // new owner needs to take over the username in a single atomic call.
     suspend fun signLightningAddressTransfer(
         currentOwnerSdk: BreezSdk,
-        currentOwnerPubkey: String,
-        newOwnerPubkey: String,
+        transfereePubkey: String,
     ): LightningAddressTransfer {
-        val username = "myusername"
-
         // ANCHOR: sign-lightning-address-transfer
-        // `username` must be lowercased and trimmed.
-        // pubkeys are hex-encoded secp256k1 compressed (via getInfo().identityPubkey).
-        val message = "transfer:$currentOwnerPubkey-$username-$newOwnerPubkey"
-        val signed = currentOwnerSdk.signMessage(
-            SignMessageRequest(message = message, compact = false)
-        )
-
-        val transfer = LightningAddressTransfer(
-            pubkey = signed.pubkey,
-            signature = signed.signature,
+        val transfer = currentOwnerSdk.acceptLightningAddressTransfer(
+            AcceptLightningAddressTransferRequest(
+                transfereePubkey = transfereePubkey,
+            )
         )
         // ANCHOR_END: sign-lightning-address-transfer
         return transfer
