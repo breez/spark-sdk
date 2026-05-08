@@ -1,5 +1,13 @@
+use std::sync::Arc;
+
+use platform_utils::{DefaultHttpClient, HttpClient};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::{
+    Credentials, Network,
+    chain::rest_client::{BasicAuth, ChainApiType, RestClientChainService},
+};
 
 pub mod rest_client;
 
@@ -61,4 +69,32 @@ pub struct RecommendedFees {
     pub hour_fee: u64,
     pub economy_fee: u64,
     pub minimum_fee: u64,
+}
+
+/// Constructs a shareable REST-based [`BitcoinChainService`].
+///
+/// Pass the returned `Arc` to multiple [`SdkBuilder`](crate::SdkBuilder)s via
+/// [`SdkBuilder::with_chain_service`](crate::SdkBuilder::with_chain_service)
+/// to reuse a single underlying HTTP client (and its connection pool) across
+/// SDK instances. All SDKs sharing the service must use the same `network`.
+///
+/// For one-off, non-shared use, prefer
+/// [`SdkBuilder::with_rest_chain_service`](crate::SdkBuilder::with_rest_chain_service).
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[must_use]
+pub fn new_rest_chain_service(
+    url: String,
+    network: Network,
+    api_type: ChainApiType,
+    credentials: Option<Credentials>,
+) -> Arc<dyn BitcoinChainService> {
+    let http_client: Arc<dyn HttpClient> = Arc::new(DefaultHttpClient::default());
+    Arc::new(RestClientChainService::new(
+        url,
+        network,
+        5,
+        http_client,
+        credentials.map(|c| BasicAuth::new(c.username, c.password)),
+        api_type,
+    ))
 }

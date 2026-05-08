@@ -4,8 +4,8 @@ use breez_sdk_spark::{ChainApiType, Config, Credentials, SdkError, Seed, Session
 use flutter_rust_bridge::{DartFnFuture, frb};
 
 use crate::{
-    connection_manager::ConnectionManager, sdk::BreezSdk,
-    session_manager::CallbackSessionManager, ssp_connection_manager::SspConnectionManager,
+    chain_service::BitcoinChainServiceHandle, connection_manager::ConnectionManager,
+    sdk::BreezSdk, session_manager::CallbackSessionManager, ssp_connection_manager::SspConnectionManager,
 };
 
 pub struct SdkBuilder {
@@ -47,6 +47,18 @@ impl SdkBuilder {
     ) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
             .with_rest_chain_service(url, api_type, credentials);
+        Self {
+            inner: Arc::new(builder),
+        }
+    }
+
+    /// Sets a Rust-built chain service. Pass a handle from
+    /// [`new_rest_chain_service`](crate::chain_service::new_rest_chain_service)
+    /// to multiple `SdkBuilder`s to share one HTTP client across SDK instances.
+    #[frb(sync)]
+    pub fn with_chain_service(self, handle: &BitcoinChainServiceHandle) -> Self {
+        let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
+            .with_chain_service(handle.inner.clone());
         Self {
             inner: Arc::new(builder),
         }

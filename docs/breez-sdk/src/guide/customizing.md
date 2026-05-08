@@ -5,6 +5,7 @@ Using the SDK Builder gives you more control over the initialization and modular
 - [Storage](#with-storage) to manage stored data
 - [PostgreSQL Connection Pool](#with-postgres-connection-pool) as an alternative storage backend
 - [Bitcoin Chain Service](#with-chain-service) to provide network data
+- [Shared REST Chain Service](#with-shared-rest-chain-service) to share the chain service HTTP client across SDK instances
 - [LNURL Client](#with-lnurl-client) to make REST requests
 - [Fiat Service](#with-fiat-service) to provide Fiat currencies and exchange rates
 - Change the [Key Set](#with-key-set) to alter the derivation path used
@@ -58,6 +59,15 @@ The SDK provides a default Bitcoin Chain Service implementation. If you want to 
 The SDK provides a default Bitcoin Chain Service implementation. If you want to use your own, you can provide it either by using [With Chain Service](#with-chain-service) or by providing a URL and optional credentials.
 
 {{#tabs sdk_building:with-rest-chain-service}}
+
+<h2 id="with-shared-rest-chain-service">
+    <a class="header" href="#with-shared-rest-chain-service">With Shared REST Chain Service</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/fn.new_rest_chain_service.html">API docs</a>
+</h2>
+
+[With REST Chain Service](#with-rest-chain-service) builds a fresh chain service inside each SDK instance. Server processes hosting many wallets at once can share a single REST chain service between every SDK, so they reuse the same pooled HTTP client (and its HTTP/2 connection pool) instead of each opening a fresh one.
+
+Construct one via {{#name new_rest_chain_service}} and pass it to each {{#name SdkBuilder}} via {{#name with_chain_service}}. All SDK instances sharing the chain service must be configured for the same network.
 
 <h2 id="with-fiat-service">
     <a class="header" href="#with-fiat-service">With Fiat Service</a>
