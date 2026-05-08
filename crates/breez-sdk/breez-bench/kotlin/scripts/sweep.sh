@@ -47,6 +47,34 @@ TREASURER_MIN_FLOOR="${TREASURER_MIN_FLOOR:-50000}"
 SWEEP_DIR="out/$SWEEP_ID"
 mkdir -p "$SWEEP_DIR"
 
+# Step duration in seconds for ETA computation. Falls back to 0 if the
+# duration string is malformed; ETA just won't be useful in that case.
+parse_duration_secs() {
+    local s="${1,,}"  # lowercase
+    case "$s" in
+        *h) echo $(( ${s%h} * 3600 )) ;;
+        *m) echo $(( ${s%m} * 60 )) ;;
+        *s) echo "${s%s}" ;;
+        *)  echo "$s" ;;
+    esac
+}
+STEP_DUR_S=$(parse_duration_secs "$DURATION" 2>/dev/null || echo 0)
+
+# Run a long-lived gradle command with both file capture and live
+# stdout filtering. Tees full output to $logfile, then surfaces lines
+# matching $pattern (e.g. ^\[fund\]) to the controlling terminal.
+# Returns the underlying command's exit code (not grep's).
+stream_filtered() {
+    local logfile="$1"
+    local pattern="$2"
+    shift 2
+    set +e
+    "$@" 2>&1 | tee "$logfile" | grep --line-buffered -E "$pattern"
+    local rc=${PIPESTATUS[0]}
+    set -e
+    return $rc
+}
+
 echo "[sweep] sweep-id=$SWEEP_ID  rps=[$SWEEP_RPS]  duration=$DURATION  out=$SWEEP_DIR"
 
 # --- workload-sized funding ----------------------------------------------
@@ -98,18 +126,20 @@ cat > "$SWEEP_DIR/manifest.json" <<EOF
 EOF
 
 # --- pre-sweep fund + seed (idempotent) -----------------------------------
-# Both are no-ops if treasurer/senders already at-or-above target. Output
-# trimmed to the bench's own status lines; full Gradle output goes to log.
+# Both are no-ops if treasurer/senders already at-or-above target. The
+# stream_filtered helper writes full output to <logfile> while surfacing
+# the bench's own status lines (^\[fund\] / ^\[seed\]) live to the
+# terminal — including the new every-10s "still waiting" lines from
+# waitForBalanceIncrease, so a slow faucet is visible.
 echo
 echo "[sweep] === fund treasurer (target=$TREASURER_TARGET) ==="
 fund_log="$SWEEP_DIR/fund.log"
-./gradlew run --console=plain --args="--mode=fund \
+stream_filtered "$fund_log" '^\[fund\]' \
+    ./gradlew run --console=plain --args="--mode=fund \
     --mysql-url=$MYSQL_URL \
     --master-secret=$MASTER_SECRET \
-    --target-sats=$TREASURER_TARGET" \
-    > "$fund_log" 2>&1
+    --target-sats=$TREASURER_TARGET"
 fund_rc=$?
-grep -E '^\[fund\]' "$fund_log" || true
 if [ "$fund_rc" -ne 0 ]; then
     echo "[sweep] fund failed (rc=$fund_rc); see $fund_log"
     exit "$fund_rc"
@@ -119,14 +149,13 @@ if [ "$PER_SENDER_SATS" -gt 0 ]; then
     echo
     echo "[sweep] === seed senders (per-sender=$PER_SENDER_SATS, K=$SENDERS) ==="
     seed_log="$SWEEP_DIR/seed.log"
-    ./gradlew run --console=plain --args="--mode=seed-senders \
+    stream_filtered "$seed_log" '^\[seed\]' \
+        ./gradlew run --console=plain --args="--mode=seed-senders \
         --mysql-url=$MYSQL_URL \
         --master-secret=$MASTER_SECRET \
         --senders=$SENDERS \
-        --per-sender-sats=$PER_SENDER_SATS" \
-        > "$seed_log" 2>&1
+        --per-sender-sats=$PER_SENDER_SATS"
     seed_rc=$?
-    grep -E '^\[seed\]' "$seed_log" | tail -10 || true
     if [ "$seed_rc" -ne 0 ]; then
         echo "[sweep] seed-senders failed (rc=$seed_rc); see $seed_log"
         exit "$seed_rc"
@@ -182,8 +211,14 @@ for raw_rps in "${RPS_LIST[@]}"; do
     step_dir="$SWEEP_DIR/rps-$rps"
     mkdir -p "$step_dir"
 
+    # ETA: per-step duration plus the inter-step drain, times the
+    # number of steps remaining (including this one).
+    remaining_steps=$((STEP_COUNT - i + 1))
+    eta_s=$(( remaining_steps * STEP_DUR_S + (remaining_steps - 1) * INTER_STEP_SLEEP_SECS ))
+    eta_min=$(( eta_s / 60 ))
+    step_start_ts=$(date +%s)
     echo
-    echo "[sweep] === step $i/$STEP_COUNT  rps=$rps  out=$step_dir ==="
+    echo "[sweep] === step $i/$STEP_COUNT  rps=$rps  out=$step_dir  (~${eta_min}m sweep remaining) ==="
 
     # The Gradle wrapper writes a lot of its own boilerplate to stdout
     # which we don't want in the run log; --console=plain trims it but
@@ -209,10 +244,11 @@ for raw_rps in "${RPS_LIST[@]}"; do
     fi
     echo "[sweep] server ready"
 
-    # Loadgen runs in the foreground; on success it produces latency.jsonl
-    # in $step_dir alongside the server's requests.jsonl + metrics.jsonl.
-    set +e
-    ./gradlew run --console=plain --args="\
+    # Loadgen produces a [loadgen] +Xs progress line every 5s; surface
+    # those live so the user sees dispatched / in_flight / errors as
+    # they grow rather than waiting for $DURATION of silence.
+    stream_filtered "$step_dir/loadgen.log" '^\[loadgen\]' \
+        ./gradlew run --console=plain --args="\
         --mode=loadgen \
         --base-url=http://localhost:$PORT \
         --target-rps=$rps \
@@ -224,13 +260,14 @@ for raw_rps in "${RPS_LIST[@]}"; do
         --senders=$SENDERS \
         --payment-sats=$PAYMENT_SATS \
         --run-id=$SWEEP_ID/rps-$rps \
-        --out-dir=$step_dir" \
-        > "$step_dir/loadgen.log" 2>&1
+        --out-dir=$step_dir"
     loadgen_rc=$?
-    set -e
 
     stop_server "$server_pid"
     trap - INT TERM
+
+    step_elapsed=$(( $(date +%s) - step_start_ts ))
+    echo "[sweep] step $i/$STEP_COUNT done in ${step_elapsed}s"
 
     if [ "$loadgen_rc" -ne 0 ]; then
         echo "[sweep] loadgen exited rc=$loadgen_rc — see $step_dir/loadgen.log"

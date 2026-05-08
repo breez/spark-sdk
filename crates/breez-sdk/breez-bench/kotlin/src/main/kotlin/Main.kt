@@ -248,7 +248,12 @@ fun fundTreasurer(opts: Map<String, String>) = runBlocking {
             println("[fund] chunk #$chunkIdx: requesting $chunk sats (balance $balance/$targetSats)")
             val txid = Faucet.fundBitcoinAddress(depositAddr, chunk)
             println("[fund] chunk #$chunkIdx faucet txid: $txid")
-            waitForBalanceIncrease(sdk, balance.toULong(), timeoutMs = 240_000)
+            waitForBalanceIncrease(
+                sdk,
+                balance.toULong(),
+                timeoutMs = 240_000,
+                pollLabel = "[fund] chunk #$chunkIdx",
+            )
         }
         println("[fund] OK")
     } finally {
@@ -262,15 +267,30 @@ fun fundTreasurer(opts: Map<String, String>) = runBlocking {
 
 /**
  * Polls `getInfo({ensureSynced=true})` every 5s until balance moves
- * above `currentBalance`. Throws if the deadline passes without
- * progress — the caller's loop decides whether to retry the faucet.
+ * above `currentBalance`. Prints a status line every 10s so a slow
+ * faucet / regtest blip is visible instead of looking like a hang.
+ * Throws if the deadline passes without progress.
  */
-private suspend fun waitForBalanceIncrease(sdk: BreezSdk, currentBalance: ULong, timeoutMs: Long) {
-    val deadline = System.currentTimeMillis() + timeoutMs
+private suspend fun waitForBalanceIncrease(
+    sdk: BreezSdk,
+    currentBalance: ULong,
+    timeoutMs: Long,
+    pollLabel: String,
+) {
+    val startMs = System.currentTimeMillis()
+    val deadline = startMs + timeoutMs
+    var nextLogAtMs = startMs + 10_000
     while (System.currentTimeMillis() < deadline) {
         delay(5_000)
         val info = sdk.getInfo(GetInfoRequest(ensureSynced = true))
         if (info.balanceSats > currentBalance) return
+        val now = System.currentTimeMillis()
+        if (now >= nextLogAtMs) {
+            val elapsedSec = (now - startMs) / 1000
+            val timeoutSec = timeoutMs / 1000
+            println("$pollLabel waiting for balance increase… elapsed=${elapsedSec}s/${timeoutSec}s (still $currentBalance sats)")
+            nextLogAtMs = now + 10_000
+        }
     }
     error("Balance did not increase within ${timeoutMs}ms (was $currentBalance sats)")
 }
@@ -409,7 +429,12 @@ private suspend fun seedOneSender(
         // Verify the receiver sees the transfer. Spark transfers are
         // typically sub-second, but the receiver's SDK still has to
         // sync to surface the new balance.
-        waitForBalanceIncrease(sender, balance.toULong(), timeoutMs = 60_000)
+        waitForBalanceIncrease(
+            sender,
+            balance.toULong(),
+            timeoutMs = 60_000,
+            pollLabel = "[seed] sender $senderIdx",
+        )
         SeedOutcome.FUNDED
     } finally {
         try {
