@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use spark_postgres::deadpool_postgres;
 use spark_postgres::tokio_postgres;
-use spark_wallet::{TokenOutputStore, TreeStore};
+use spark_wallet::{SessionManager, TokenOutputStore, TreeStore};
 
 use crate::persist::StorageError;
 
@@ -206,6 +206,16 @@ pub(crate) async fn create_postgres_token_store(
     identity: &[u8],
 ) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
     spark_postgres::create_postgres_token_store_from_pool(pool, identity)
+        .await
+        .map_err(StorageError::from)
+}
+
+/// Creates a `PostgresSessionManager` instance for use with the SDK, using an existing pool.
+pub(crate) async fn create_postgres_session_manager(
+    pool: deadpool_postgres::Pool,
+    identity: &[u8],
+) -> Result<Arc<dyn SessionManager>, StorageError> {
+    spark_postgres::create_postgres_session_manager_from_pool(pool, identity)
         .await
         .map_err(StorageError::from)
 }

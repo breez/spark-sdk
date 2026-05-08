@@ -736,11 +736,32 @@ impl SdkBuilder {
             );
         }
 
-        let inner_session_manager: Arc<dyn spark_wallet::SessionManager> =
-            match self.session_manager {
-                Some(sm) => Arc::new(SessionManagerAdapter(sm)),
-                None => Arc::new(InMemorySessionManager::default()),
-            };
+        #[allow(unused_mut)]
+        let mut inner_session_manager: Option<Arc<dyn spark_wallet::SessionManager>> = self
+            .session_manager
+            .map(|sm| Arc::new(SessionManagerAdapter(sm)) as Arc<dyn spark_wallet::SessionManager>);
+
+        #[cfg(feature = "postgres")]
+        if inner_session_manager.is_none()
+            && let Some((ref pool, ref identity)) = postgres_backend
+        {
+            inner_session_manager = Some(
+                crate::persist::postgres::create_postgres_session_manager(pool.clone(), identity)
+                    .await?,
+            );
+        }
+
+        #[cfg(feature = "mysql")]
+        if inner_session_manager.is_none()
+            && let Some((ref pool, ref identity)) = mysql_backend
+        {
+            inner_session_manager = Some(
+                crate::persist::mysql::create_mysql_session_manager(pool.clone(), identity).await?,
+            );
+        }
+
+        let inner_session_manager =
+            inner_session_manager.unwrap_or_else(|| Arc::new(InMemorySessionManager::default()));
         let partner_headers = Arc::new(BreezPartnerHeaderProvider::new());
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
