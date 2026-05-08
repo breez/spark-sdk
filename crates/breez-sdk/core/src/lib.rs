@@ -77,3 +77,11 @@ pub(crate) mod built_info {
     // The file has been placed there by the build script.
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
+
+pub(crate) fn default_user_agent() -> String {
+    format!(
+        "{}/{}",
+        crate::built_info::PKG_NAME,
+        crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
+    )
+}

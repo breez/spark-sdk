@@ -9,6 +9,7 @@ Using the SDK Builder gives you more control over the initialization and modular
 - [Fiat Service](#with-fiat-service) to provide Fiat currencies and exchange rates
 - Change the [Key Set](#with-key-set) to alter the derivation path used
 - [Payment Observer](#with-payment-observer) to be notified before payments occur
+- [SSP Connection Manager](#with-ssp-connection-manager) to share the SSP HTTP client across SDK instances
 
 {{#tabs sdk_building:init-sdk-advanced}}
 
@@ -96,3 +97,19 @@ By implementing the Payment Observer interface you can be notified before a paym
 **Note:** Flutter currently does not support this.
 
 {{#tabs sdk_building:with-payment-observer}}
+
+<h2 id="with-ssp-connection-manager">
+    <a class="header" href="#with-ssp-connection-manager">With SSP Connection Manager</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_ssp_connection_manager">API docs</a>
+</h2>
+
+An SSP Connection Manager owns the HTTP client used for SSP GraphQL traffic. By default each SDK instance builds its own. Server processes hosting many wallets at once can share a single SSP Connection Manager between every SDK, so they reuse the same pooled HTTP client (and its HTTP/2 connection pool) instead of each opening a fresh one.
+
+Construct one via {{#name new_ssp_connection_manager}} and pass it to each {{#name SdkBuilder}} via {{#name with_ssp_connection_manager}}. Connections close when the last reference to the SSP Connection Manager is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
+
+<div class="warning">
+<h4>Developer note</h4>
+
+The user agent of the first SDK to construct the SSP Connection Manager is reused for all subsequent instances.
+
+</div>

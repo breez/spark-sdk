@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use platform_utils::{HttpClient, create_http_client};
 
+use crate::default_user_agent;
+
 /// A shared HTTP transport for SSP GraphQL traffic.
 ///
 /// All SDK instances that are built with the same `SspConnectionManager` send
@@ -31,9 +33,9 @@ pub struct SspConnectionManager {
 /// when building each SDK instance that should share the underlying HTTP
 /// connection pool.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-#[allow(clippy::needless_pass_by_value)]
 pub fn new_ssp_connection_manager(user_agent: Option<String>) -> Arc<SspConnectionManager> {
+    let user_agent = user_agent.unwrap_or_else(default_user_agent);
     Arc::new(SspConnectionManager {
-        client: create_http_client(user_agent.as_deref()),
+        client: create_http_client(Some(&user_agent)),
     })
 }

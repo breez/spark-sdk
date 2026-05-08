@@ -564,11 +564,7 @@ impl SdkBuilder {
             s.ok_or_else(|| SdkError::Generic("No storage configured".to_string()))?
         };
 
-        let user_agent = format!(
-            "{}/{}",
-            crate::built_info::PKG_NAME,
-            crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
-        );
+        let user_agent = crate::default_user_agent();
         info!("Building sdk with user agent: {}", user_agent);
 
         let breez_server = Arc::new(
