@@ -1,5 +1,5 @@
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_spark::passkey::{PasskeyPrfError, PrfProvider};
+use breez_sdk_spark::passkey::{PrfProviderError, PrfProvider};
 use challenge_response::ChallengeResponse;
 use challenge_response::config::{Config, Mode, Slot};
 
@@ -22,27 +22,27 @@ impl YubiKeyPrfProvider {
     /// Verifies that a `YubiKey` is connected during construction.
     ///
     /// # Errors
-    /// Returns `PasskeyPrfError::CredentialNotFound` if no `YubiKey` is connected.
-    pub fn new() -> Result<Self, PasskeyPrfError> {
+    /// Returns `PrfProviderError::CredentialNotFound` if no `YubiKey` is connected.
+    pub fn new() -> Result<Self, PrfProviderError> {
         let mut cr = ChallengeResponse::new()
-            .map_err(|e| PasskeyPrfError::Generic(format!("Failed to init YubiKey: {e}")))?;
+            .map_err(|e| PrfProviderError::Generic(format!("Failed to init YubiKey: {e}")))?;
         cr.find_device()
-            .map_err(|_| PasskeyPrfError::CredentialNotFound)?;
+            .map_err(|_| PrfProviderError::CredentialNotFound)?;
         Ok(Self)
     }
 }
 
 #[async_trait::async_trait]
 impl PrfProvider for YubiKeyPrfProvider {
-    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
         eprintln!("Touch your YubiKey (if configured)...");
 
         tokio::task::spawn_blocking(move || {
             let mut cr = ChallengeResponse::new()
-                .map_err(|e| PasskeyPrfError::Generic(format!("YubiKey init failed: {e}")))?;
+                .map_err(|e| PrfProviderError::Generic(format!("YubiKey init failed: {e}")))?;
             let device = cr
                 .find_device()
-                .map_err(|_| PasskeyPrfError::CredentialNotFound)?;
+                .map_err(|_| PrfProviderError::CredentialNotFound)?;
 
             let config = Config::new_from(device)
                 .set_mode(Mode::Sha1)
@@ -52,13 +52,13 @@ impl PrfProvider for YubiKeyPrfProvider {
             let hmac_result = cr.challenge_response_hmac(challenge, config).map_err(|e| {
                 let msg = format!("{e}");
                 if msg.contains("Wrong CRC") {
-                    PasskeyPrfError::PrfEvaluationFailed(
+                    PrfProviderError::PrfEvaluationFailed(
                         "YubiKey Slot 2 is not configured for HMAC challenge-response. \
                              Program it with: ykman otp chalresp -g 2"
                             .to_string(),
                     )
                 } else {
-                    PasskeyPrfError::PrfEvaluationFailed(format!("HMAC failed: {e}"))
+                    PrfProviderError::PrfEvaluationFailed(format!("HMAC failed: {e}"))
                 }
             })?;
 
@@ -68,12 +68,12 @@ impl PrfProvider for YubiKeyPrfProvider {
             Ok(hash.to_byte_array().to_vec())
         })
         .await
-        .map_err(|e| PasskeyPrfError::Generic(format!("Task join error: {e}")))?
+        .map_err(|e| PrfProviderError::Generic(format!("Task join error: {e}")))?
     }
 
-    async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
+    async fn is_supported(&self) -> Result<bool, PrfProviderError> {
         let mut cr = ChallengeResponse::new()
-            .map_err(|_| PasskeyPrfError::Generic("YubiKey init failed".into()))?;
+            .map_err(|_| PrfProviderError::Generic("YubiKey init failed".into()))?;
         Ok(cr.find_device().is_ok())
     }
 }

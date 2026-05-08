@@ -2,7 +2,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    DeriveRequest, DeriveResponse, NostrRelayConfig, PasskeyError, PasskeyPrfError, PrfProvider,
+    DeriveRequest, DeriveResponse, NostrRelayConfig, PasskeyError, PrfProviderError, PrfProvider,
     RegisterRequest, RegisterResponse, RestoreRequest, RestoreResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
@@ -28,18 +28,18 @@ struct CallbackPrfProvider {
 
 #[async_trait::async_trait]
 impl PrfProvider for CallbackPrfProvider {
-    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
         AssertUnwindSafe((self.derive_seed_fn)(salt))
             .catch_unwind()
             .await
-            .map_err(|e| PasskeyPrfError::Generic(panic_message(e)))
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))
     }
 
-    async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
+    async fn is_supported(&self) -> Result<bool, PrfProviderError> {
         AssertUnwindSafe((self.is_supported_fn)())
             .catch_unwind()
             .await
-            .map_err(|e| PasskeyPrfError::Generic(panic_message(e)))
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))
     }
 }
 
@@ -47,7 +47,7 @@ impl PrfProvider for CallbackPrfProvider {
 /// docs for the register / restore / derive semantics.
 ///
 /// Currently `register` will fail with
-/// [`PasskeyPrfError::PrfNotSupported`] on Flutter because the Dart-side
+/// [`PrfProviderError::PrfNotSupported`] on Flutter because the Dart-side
 /// `PrfProvider` callbacks don't yet expose `createPasskey` (blocked on
 /// flutter_rust_bridge supporting `Option<impl Fn(...) -> DartFnFuture<...>>`
 /// trait callbacks). `derive` and `restore` use only `derivePrfSeed` and
@@ -155,7 +155,7 @@ mod tests {
         );
         let err = provider.derive_seed("test".to_string()).await.unwrap_err();
         assert!(
-            matches!(err, PasskeyPrfError::Generic(ref msg) if msg.contains("Dart threw an exception")),
+            matches!(err, PrfProviderError::Generic(ref msg) if msg.contains("Dart threw an exception")),
             "Expected Generic error with panic message, got: {err:?}"
         );
     }
@@ -174,7 +174,7 @@ mod tests {
         );
         let err = provider.is_supported().await.unwrap_err();
         assert!(
-            matches!(err, PasskeyPrfError::Generic(ref msg) if msg.contains("device check failed")),
+            matches!(err, PrfProviderError::Generic(ref msg) if msg.contains("device check failed")),
             "Expected Generic error with panic message, got: {err:?}"
         );
     }

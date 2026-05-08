@@ -1,6 +1,6 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
-    NostrRelayConfig, PasskeyPrfError, PrfProvider, Passkey,
+    NostrRelayConfig, PrfProviderError, PrfProvider, Passkey,
 };
 use breez_sdk_spark::{connect, default_config, ConnectRequest, Network};
 use std::sync::Arc;
@@ -11,13 +11,13 @@ struct CustomPrfProvider;
 
 #[async_trait::async_trait]
 impl PrfProvider for CustomPrfProvider {
-    async fn derive_prf_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+    async fn derive_prf_seed(&self, _salt: String) -> Result<Vec<u8>, PrfProviderError> {
         // Call platform passkey API with PRF extension
         // Returns 32-byte PRF output
         todo!("Implement using WebAuthn or native passkey APIs")
     }
 
-    async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+    async fn is_prf_available(&self) -> Result<bool, PrfProviderError> {
         // Check if PRF-capable passkey exists
         todo!("Check platform passkey availability")
     }

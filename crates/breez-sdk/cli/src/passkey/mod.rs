@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::Seed;
 use breez_sdk_spark::passkey::{
-    DeriveRequest, NostrRelayConfig, PasskeyClient, PasskeyPrfError, PrfProvider, RestoreRequest,
+    DeriveRequest, NostrRelayConfig, PasskeyClient, PrfProviderError, PrfProvider, RestoreRequest,
 };
 
 #[cfg(feature = "fido2")]
@@ -72,7 +72,7 @@ impl PasskeyProvider {
         self,
         data_dir: &PathBuf,
         fido2_rp_id: Option<String>,
-    ) -> Result<Arc<dyn PrfProvider>, PasskeyPrfError> {
+    ) -> Result<Arc<dyn PrfProvider>, PrfProviderError> {
         match self {
             PasskeyProvider::File => Ok(Arc::new(FilePrfProvider::new(data_dir)?)),
             PasskeyProvider::YubiKey => Ok(Arc::new(YubiKeyPrfProvider::new()?)),

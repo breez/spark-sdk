@@ -35,7 +35,7 @@ pub struct RegisterRequest {
 
     /// Forwarded to [`PrfProvider::create_passkey`]; routes "this
     /// device already has a credential" to
-    /// [`crate::passkey::PasskeyPrfError::CredentialAlreadyExists`]
+    /// [`crate::passkey::PrfProviderError::CredentialAlreadyExists`]
     /// so the host can flip to the sign-in path.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub exclude_credential_ids: Vec<Vec<u8>>,
@@ -315,7 +315,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use super::super::error::PasskeyPrfError;
+    use super::super::error::PrfProviderError;
 
     /// Salt-aware mock that produces deterministic per-salt PRF
     /// outputs so multi-salt ceremonies can round-trip through tests.
@@ -365,20 +365,20 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for MockProvider {
-        async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
             Ok(self.output_for(&salt))
         }
 
-        async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
+        async fn is_supported(&self) -> Result<bool, PrfProviderError> {
             Ok(true)
         }
 
         async fn create_passkey(
             &self,
             _request: CreatePasskeyRequest,
-        ) -> Result<RegisteredCredential, PasskeyPrfError> {
+        ) -> Result<RegisteredCredential, PrfProviderError> {
             if self.fail_create {
-                return Err(PasskeyPrfError::PrfNotSupported);
+                return Err(PrfProviderError::PrfNotSupported);
             }
             *self.create_calls.lock().unwrap() += 1;
             Ok(RegisteredCredential {
@@ -413,7 +413,7 @@ mod tests {
         let result = client.register(RegisterRequest::default()).await;
         assert!(matches!(
             result.unwrap_err(),
-            PasskeyError::PrfError(PasskeyPrfError::PrfNotSupported)
+            PasskeyError::Prf(PrfProviderError::PrfNotSupported)
         ));
     }
 
