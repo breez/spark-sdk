@@ -767,7 +767,6 @@ impl SdkBuilder {
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
                 .with_cancellation_token(shutdown_sender.subscribe())
                 .with_session_manager(inner_session_manager)
-                .with_ssp_extra_header_provider(partner_headers.clone())
                 .with_so_extra_header_provider(partner_headers.clone());
         if let Some(observer) = self.payment_observer {
             let observer: Arc<dyn spark_wallet::TransferObserver> =
