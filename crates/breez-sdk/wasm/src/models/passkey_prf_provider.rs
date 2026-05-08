@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
@@ -13,6 +15,18 @@ pub(crate) fn js_error_to_passkey_prf_error(js_error: JsValue) -> PasskeyPrfErro
 
 pub struct WasmPrfProvider {
     pub inner: PrfProvider,
+    /// Cached `derivePrfSeeds` presence probe; the JS provider's
+    /// method set doesn't change between calls.
+    supports_bulk: OnceLock<bool>,
+}
+
+impl WasmPrfProvider {
+    pub fn new(inner: PrfProvider) -> Self {
+        Self {
+            inner,
+            supports_bulk: OnceLock::new(),
+        }
+    }
 }
 
 // This assumes that we'll always be running in a single thread (true for Wasm environments)
@@ -35,17 +49,17 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
     }
 
     async fn derive_prf_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
-        // Probe the JS side: if the foreign object exposes
-        // `derivePrfSeeds`, prefer the bulk fast path. Custom JS
-        // providers that only implement the legacy `derivePrfSeed`
-        // method fall back to the trait's default loop, which
-        // produces N prompts for N salts.
+        // Probe once for `derivePrfSeeds`; custom providers that only
+        // implement legacy `derivePrfSeed` fall back to the trait's
+        // default loop (N prompts for N salts).
         let target: &wasm_bindgen::JsValue = self.inner.as_ref();
         let key = wasm_bindgen::JsValue::from_str("derivePrfSeeds");
-        let supports_bulk = js_sys::Reflect::has(target, &key).unwrap_or(false)
-            && js_sys::Reflect::get(target, &key)
-                .map(|v| v.is_function())
-                .unwrap_or(false);
+        let supports_bulk = *self.supports_bulk.get_or_init(|| {
+            js_sys::Reflect::has(target, &key).unwrap_or(false)
+                && js_sys::Reflect::get(target, &key)
+                    .map(|v| v.is_function())
+                    .unwrap_or(false)
+        });
 
         if !supports_bulk {
             let mut out = Vec::with_capacity(salts.len());

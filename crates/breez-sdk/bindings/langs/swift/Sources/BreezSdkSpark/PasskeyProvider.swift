@@ -436,7 +436,10 @@ public class PasskeyProvider: PrfProvider {
     /// Returns nil when auto-detection fails; the caller then falls back
     /// to the `teamId` constructor argument, or reports `.skipped` if
     /// neither source yields an ID.
-    private static func detectTeamId() -> String? {
+    /// Cached at first read. The team ID is stable for the lifetime
+    /// of the installed binary and detection is non-trivial
+    /// (provisioning-profile parse on iOS, entitlement copy on macOS).
+    private static let cachedTeamId: String? = {
         #if os(macOS)
         return detectTeamIdFromSecTask()
         #elseif os(iOS)
@@ -444,6 +447,10 @@ public class PasskeyProvider: PrfProvider {
         #else
         return nil
         #endif
+    }()
+
+    private static func detectTeamId() -> String? {
+        return cachedTeamId
     }
 
     #if os(macOS)

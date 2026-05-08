@@ -72,9 +72,7 @@ impl Passkey {
     /// @param relayConfig - Optional configuration for Nostr relay connections
     #[wasm_bindgen(constructor)]
     pub fn new(prf_provider: PrfProvider, relay_config: Option<NostrRelayConfig>) -> Self {
-        let wasm_provider = WasmPrfProvider {
-            inner: prf_provider,
-        };
+        let wasm_provider = WasmPrfProvider::new(prf_provider);
         Self {
             inner: breez_sdk_spark::passkey::Passkey::new(
                 Arc::new(wasm_provider),

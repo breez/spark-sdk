@@ -78,6 +78,24 @@ public object CredentialManagerPrfCore {
     /** Default Relying Party display name shown during passkey registration. */
     public const val DEFAULT_RP_NAME: String = "Breez SDK"
 
+    /** Lazily initialised; first-use entropy gathering can dominate the cold path. */
+    private val secureRandom: SecureRandom by lazy { SecureRandom() }
+
+    /**
+     * Cached `CredentialManager`. The factory is cheap but each call
+     * still allocates; held as a singleton against the application
+     * context (lifecycle-safe across activity rotation).
+     */
+    @Volatile
+    private var cachedCredentialManager: CredentialManager? = null
+
+    private fun credentialManager(activity: Activity): CredentialManager =
+        cachedCredentialManager ?: synchronized(this) {
+            cachedCredentialManager ?: CredentialManager.create(activity.applicationContext).also {
+                cachedCredentialManager = it
+            }
+        }
+
     /**
      * Returns `true` if this device's OS version could support passkey PRF.
      *
@@ -625,7 +643,7 @@ public object CredentialManagerPrfCore {
             .addCredentialOption(option)
             .setPreferImmediatelyAvailableCredentials(true)
             .build()
-        val response = CredentialManager.create(activity).getCredential(activity, request)
+        val response = credentialManager(activity).getCredential(activity, request)
 
         val authResponseJson = response.credential.data.getString(
             "androidx.credentials.BUNDLE_KEY_AUTHENTICATION_RESPONSE_JSON",
@@ -668,7 +686,7 @@ public object CredentialManagerPrfCore {
         userDisplayName: String,
         excludeCredentialIds: List<ByteArray> = emptyList(),
     ): RegisteredCredential {
-        val credentialManager = CredentialManager.create(activity)
+        val credentialManager = credentialManager(activity)
         val challenge = randomBase64Url(32)
         val userId = randomBase64Url(16)
 
@@ -813,11 +831,8 @@ public object CredentialManagerPrfCore {
 
     private fun randomBase64Url(byteCount: Int): String {
         val bytes = ByteArray(byteCount)
-        SecureRandom().nextBytes(bytes)
-        return Base64.encodeToString(
-            bytes,
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-        )
+        secureRandom.nextBytes(bytes)
+        return encodeBase64Url(bytes)
     }
 
     private fun Exception.toCoreException(): CredentialManagerPrfCoreException = when (this) {
