@@ -310,6 +310,28 @@ def fmt_kb_as_mib(v):
     return f"{v / 1024.0:.1f}"
 
 
+def render_table(headers, rows):
+    """Render a markdown table with cells padded to a consistent column
+    width so the raw source is also readable (not just the GitHub render).
+
+    Width = max(len(header), max(len(cell))) per column, with at least 3
+    dashes in the separator (markdown spec minimum). All cells are
+    right-padded with spaces. Returns a list of lines (header, sep, …rows).
+    """
+    cols = list(zip(headers, *rows)) if rows else [(h,) for h in headers]
+    widths = [max(len(str(x)) for x in col) for col in cols]
+    sep_widths = [max(w, 3) for w in widths]
+
+    def fmt_row(values):
+        return "| " + " | ".join(str(v).ljust(w) for v, w in zip(values, widths)) + " |"
+
+    out = [fmt_row(headers)]
+    out.append("|" + "|".join("-" * (w + 2) for w in sep_widths) + "|")
+    for row in rows:
+        out.append(fmt_row(row))
+    return out
+
+
 def render_results_md(sweep_id, manifest, steps_summary, headline):
     lines = []
     lines.append(f"# Bench RPS sweep — `{sweep_id}`")
@@ -339,16 +361,14 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
     lines.append("")
 
     ops = ["info", "send", "receive"]
-    lat_header = "| RPS | dispatched | dropped | errors | " + " | ".join(
-        f"{op} p50 | {op} p95 | {op} p99" for op in ops
-    ) + " |"
-    lat_sep = "|" + "---|" * (4 + 3 * len(ops))
+    lat_headers = ["RPS", "dispatched", "dropped", "errors"]
+    for op in ops:
+        lat_headers += [f"{op} p50", f"{op} p95", f"{op} p99"]
 
     def render_lat_table(title, latency_key):
         lines.append(title)
         lines.append("")
-        lines.append(lat_header)
-        lines.append(lat_sep)
+        rows = []
         for rps, s in steps_summary:
             cells = [
                 str(rps),
@@ -361,7 +381,8 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
                 cells.append(fmt_ms(stats.get("p50")))
                 cells.append(fmt_ms(stats.get("p95")))
                 cells.append(fmt_ms(stats.get("p99")))
-            lines.append("| " + " | ".join(cells) + " |")
+            rows.append(cells)
+        lines.extend(render_table(lat_headers, rows))
         lines.append("")
 
     render_lat_table(
@@ -383,12 +404,12 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
     if cpu_cores:
         lines.append(f"Host: {cpu_cores} logical CPU cores.")
         lines.append("")
-    lines.append(
-        "| RPS | RSS mean (MiB) | RSS max (MiB) | heap used mean (MiB) | "
-        "process CPU mean | process CPU max | RPS / core | "
-        "mysql_conns max | remote_tcp_sockets max | fds max | threads max |"
-    )
-    lines.append("|" + "---|" * 11)
+    metrics_headers = [
+        "RPS", "RSS mean (MiB)", "RSS max (MiB)", "heap used mean (MiB)",
+        "process CPU mean", "process CPU max", "RPS / core",
+        "mysql_conns max", "remote_tcp_sockets max", "fds max", "threads max",
+    ]
+    metrics_rows = []
     for rps, s in steps_summary:
         m = s.get("metrics", {})
         rss = m.get("rss_kb", {})
@@ -406,7 +427,7 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
             if cores_used > 0:
                 rps_per_core = rps / cores_used
 
-        cells = [
+        metrics_rows.append([
             str(rps),
             fmt_kb_as_mib(rss.get("mean")),
             fmt_kb_as_mib(rss.get("max")),
@@ -418,8 +439,8 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
             "—" if sock.get("max") is None else str(int(sock["max"])),
             "—" if fds.get("max") is None else str(int(fds["max"])),
             "—" if thr.get("max") is None else str(int(thr["max"])),
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
+        ])
+    lines.extend(render_table(metrics_headers, metrics_rows))
     lines.append("")
 
     server_categories = sorted({
@@ -430,17 +451,16 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
     if server_categories:
         lines.append("## Errors by category (server-side)")
         lines.append("")
-        ec_header = "| RPS | total | " + " | ".join(server_categories) + " |"
-        ec_sep = "|" + "---|" * (2 + len(server_categories))
-        lines.append(ec_header)
-        lines.append(ec_sep)
+        ec_headers = ["RPS", "total"] + list(server_categories)
+        ec_rows = []
         for rps, s in steps_summary:
             cats = s.get("errors_by_category_server", {})
             total = sum(cats.values())
-            cells = [str(rps), str(total)]
+            row = [str(rps), str(total)]
             for cat in server_categories:
-                cells.append(str(cats.get(cat, 0)))
-            lines.append("| " + " | ".join(cells) + " |")
+                row.append(str(cats.get(cat, 0)))
+            ec_rows.append(row)
+        lines.extend(render_table(ec_headers, ec_rows))
         lines.append("")
 
     return "\n".join(lines)
