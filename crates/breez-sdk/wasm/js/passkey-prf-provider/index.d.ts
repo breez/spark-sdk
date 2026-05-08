@@ -135,6 +135,41 @@ export interface DerivePrfSeedOptions {
 }
 
 /**
+ * Persisted set of credential IDs the host has registered against
+ * each RP. The SDK reads it before `createPasskey` to populate
+ * `excludeCredentials` (so the platform refuses to create a duplicate
+ * even after a localStorage wipe / app reinstall) and writes new IDs
+ * to it when assertions or registrations succeed.
+ *
+ * The default backend in the SDK is {@link LocalStorageCredentialRegistry}.
+ * Hosts that want cross-device or server-mirrored persistence should
+ * implement this interface against their backend.
+ *
+ * IDs are stored as raw `Uint8Array`s; encoding to wire format is the
+ * implementation's responsibility.
+ */
+export interface CredentialRegistry {
+    list(rpId: string): Promise<Uint8Array[]>;
+    add(rpId: string, credentialId: Uint8Array): Promise<void>;
+    remove(rpId: string, credentialId: Uint8Array): Promise<void>;
+    clear(rpId: string): Promise<void>;
+}
+
+/**
+ * Default {@link CredentialRegistry} backed by `window.localStorage`.
+ * One JSON-encoded array of base64url credential IDs per RP. Cleared
+ * by the browser when the user clears site data; not synced across
+ * devices.
+ */
+export declare class LocalStorageCredentialRegistry implements CredentialRegistry {
+    constructor(keyPrefix?: string);
+    list(rpId: string): Promise<Uint8Array[]>;
+    add(rpId: string, credentialId: Uint8Array): Promise<void>;
+    remove(rpId: string, credentialId: Uint8Array): Promise<void>;
+    clear(rpId: string): Promise<void>;
+}
+
+/**
  * Options for constructing a PasskeyProvider.
  */
 export interface PasskeyProviderOptions {
@@ -217,6 +252,19 @@ export interface PasskeyProviderOptions {
      * default applies.
      */
     defaultTimeoutMs?: number;
+
+    /**
+     * When set, the provider auto-populates `excludeCredentials` on
+     * `createPasskey` from this store and writes successful create /
+     * assertion credential IDs back into it. Lets the platform
+     * refuse to create duplicates after a localStorage wipe / app
+     * reinstall — provided the registry survives. Default backend
+     * is {@link LocalStorageCredentialRegistry}; pass a custom one
+     * for cross-device / server-mirrored persistence. Omit to
+     * disable auto-population (the host manages excludeCredentialIds
+     * manually).
+     */
+    credentialRegistry?: CredentialRegistry;
 }
 
 /**

@@ -117,6 +117,82 @@ export class PasskeyCreateAbortedError extends Error {
     }
 }
 
+function _bytesToBase64Url(bytes) {
+    let s = '';
+    for (const b of bytes) s += String.fromCharCode(b);
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function _base64UrlToBytes(s) {
+    const pad = s.length % 4 === 0 ? 0 : 4 - (s.length % 4);
+    const b64 = s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(pad);
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+}
+
+/**
+ * Default `CredentialRegistry` backed by `window.localStorage`. One
+ * JSON-encoded array of base64url credential IDs per RP, keyed
+ * `<keyPrefix><rpId>`. Cleared by the browser on site-data clear;
+ * not synced across devices.
+ */
+export class LocalStorageCredentialRegistry {
+    constructor(keyPrefix = 'breez.spark.passkey.knownCredentials.') {
+        this._prefix = keyPrefix;
+    }
+
+    _key(rpId) {
+        return this._prefix + rpId;
+    }
+
+    _read(rpId) {
+        try {
+            const raw = globalThis.localStorage?.getItem(this._key(rpId));
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? parsed.filter((s) => typeof s === 'string') : [];
+        } catch {
+            return [];
+        }
+    }
+
+    _write(rpId, ids) {
+        try {
+            if (ids.length === 0) {
+                globalThis.localStorage?.removeItem(this._key(rpId));
+            } else {
+                globalThis.localStorage?.setItem(this._key(rpId), JSON.stringify(ids));
+            }
+        } catch {
+            // best-effort: localStorage quota / disabled
+        }
+    }
+
+    async list(rpId) {
+        return this._read(rpId).map(_base64UrlToBytes);
+    }
+
+    async add(rpId, credentialId) {
+        const encoded = _bytesToBase64Url(credentialId);
+        const ids = this._read(rpId);
+        if (ids.includes(encoded)) return;
+        ids.push(encoded);
+        this._write(rpId, ids);
+    }
+
+    async remove(rpId, credentialId) {
+        const encoded = _bytesToBase64Url(credentialId);
+        const ids = this._read(rpId).filter((s) => s !== encoded);
+        this._write(rpId, ids);
+    }
+
+    async clear(rpId) {
+        this._write(rpId, []);
+    }
+}
+
 /**
  * Built-in passkey-based PRF provider for browser environments.
  */
@@ -179,6 +255,16 @@ export class PasskeyProvider {
          * @type {number | undefined}
          */
         this.defaultTimeoutMs = options.defaultTimeoutMs;
+
+        /**
+         * Optional persistence for known credential IDs. When set,
+         * the provider auto-merges its contents into
+         * `excludeCredentials` on create and writes successful
+         * create / assert IDs back. Omit to disable
+         * auto-population entirely.
+         * @type {CredentialRegistry | undefined}
+         */
+        this.credentialRegistry = options.credentialRegistry;
 
         /** @private shared Promise so concurrent auto-register paths fire one ceremony */
         this._autoRegisterInFlight = null;
@@ -574,13 +660,21 @@ export class PasskeyProvider {
             throw new Error('Credential not found');
         }
 
+        const credentialIdBytes = new Uint8Array(credential.rawId);
         if (typeof options.onCredentialId === 'function') {
             try {
                 const userHandleBuf = credential.response && credential.response.userHandle;
                 const userHandle = userHandleBuf ? new Uint8Array(userHandleBuf) : null;
-                options.onCredentialId(new Uint8Array(credential.rawId), userHandle);
+                options.onCredentialId(credentialIdBytes, userHandle);
             } catch {
                 // best-effort: bookkeeping must not block seed return
+            }
+        }
+        if (this.credentialRegistry) {
+            try {
+                await this.credentialRegistry.add(this.rpId, credentialIdBytes);
+            } catch {
+                // best-effort: registry write must not block seed return
             }
         }
         return credential;
@@ -668,8 +762,10 @@ export class PasskeyProvider {
             publicKeyOptions.hints = [...this.hints];
         }
 
-        if (excludeCredentialIds.length > 0) {
-            publicKeyOptions.excludeCredentials = excludeCredentialIds.map(id => ({
+        // Merge caller-supplied IDs with the registry, dedupe by base64url.
+        const mergedExcludeIds = await this._buildExcludeCredentialIds(excludeCredentialIds);
+        if (mergedExcludeIds.length > 0) {
+            publicKeyOptions.excludeCredentials = mergedExcludeIds.map((id) => ({
                 type: 'public-key',
                 id,
             }));
@@ -738,11 +834,48 @@ export class PasskeyProvider {
         }
 
         const meta = extractRegistrationMetadata(credential);
+        const credentialIdBytes = new Uint8Array(credential.rawId);
+        if (this.credentialRegistry) {
+            try {
+                await this.credentialRegistry.add(this.rpId, credentialIdBytes);
+            } catch {
+                // best-effort; registry write must not block return
+            }
+        }
         return {
-            credentialId: new Uint8Array(credential.rawId),
+            credentialId: credentialIdBytes,
             aaguid: meta ? meta.aaguid : null,
             backupEligible: meta ? meta.backupEligible : null,
         };
+    }
+
+    /**
+     * Merge caller-supplied excludeCredentialIds with whatever the
+     * registry has stored for `this.rpId`. Dedupes by base64url
+     * encoding so the same credential isn't sent twice.
+     * @private
+     */
+    async _buildExcludeCredentialIds(callerIds) {
+        if (!this.credentialRegistry) {
+            return Array.isArray(callerIds) ? [...callerIds] : [];
+        }
+        let stored;
+        try {
+            stored = await this.credentialRegistry.list(this.rpId);
+        } catch {
+            stored = [];
+        }
+        const seen = new Set();
+        const out = [];
+        const push = (id) => {
+            const key = _bytesToBase64Url(id);
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push(id);
+        };
+        if (Array.isArray(callerIds)) for (const id of callerIds) push(id);
+        for (const id of stored) push(id);
+        return out;
     }
 
     /**
