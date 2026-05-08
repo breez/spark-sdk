@@ -450,6 +450,7 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
         ..addOption('comment', abbr: 'c')
         ..addOption('validate', abbr: 'v')
         ..addOption('idempotency-key', abbr: 'i')
+        ..addOption('token-identifier', abbr: 't')
         ..addOption('from-token')
         ..addOption('convert-max-slippage-bps', abbr: 's')
         ..addFlag('fees-included', defaultsTo: false);
@@ -463,6 +464,7 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
   }
   final lnurl = results.rest.first;
 
+  final tokenIdentifier = results.option('token-identifier');
   final fromToken = results.option('from-token');
   final slippageStr = results.option('convert-max-slippage-bps');
   final slippage = slippageStr != null ? int.parse(slippageStr) : null;
@@ -494,7 +496,11 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
   final k = BigInt.from(1000);
   final minSendable = (payRequest.minSendable + k - BigInt.one) ~/ k;
   final maxSendable = payRequest.maxSendable ~/ k;
-  final amountStr = prompt('Amount to pay (min $minSendable sat, max $maxSendable sat): ');
+  final promptText =
+      tokenIdentifier == null
+          ? 'Amount to pay (min $minSendable sat, max $maxSendable sat): '
+          : 'Amount to pay (min $minSendable sat, max $maxSendable sat) in token base units: ';
+  final amountStr = prompt(promptText);
   final amountSats = BigInt.parse(amountStr);
 
   final prepareResponse = await sdk.prepareLnurlPay(
@@ -503,6 +509,7 @@ Future<void> _handleLnurlPay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String>
       comment: results.option('comment'),
       payRequest: payRequest,
       validateSuccessActionUrl: _parseBool(results.option('validate')),
+      tokenIdentifier: tokenIdentifier,
       conversionOptions: conversionOptions,
       feePolicy: feePolicy,
     ),
