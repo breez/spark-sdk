@@ -14,8 +14,56 @@ matplotlib for charts.
 import argparse
 import json
 import math
+import re
 import sys
 from pathlib import Path
+
+
+# --- error categorization -------------------------------------------------
+
+# Order matters: most specific patterns first. The error string we get
+# back is usually the full chained Rust error, so port-exhaustion or
+# MySQL-pool-exhausted root causes show up nested inside SparkException
+# / StorageException — we want to attribute to the root, not the wrapper,
+# so the root-cause patterns are checked before the wrapper types.
+ERROR_PATTERNS = [
+    ("mysql_pool_exhausted", re.compile(r"Too many connections|ERROR HY000 \(1040\)")),
+    ("port_exhaustion",      re.compile(r"Can't assign requested address|os error 49")),
+    ("connect_timeout",      re.compile(r"Operation timed out|os error 60")),
+    ("operator_unreachable", re.compile(r"Operator RPC error|tcp connect error|status:\s*Unavailable")),
+    ("operator_other",       re.compile(r"SparkException|Tree service error")),
+    ("storage_other",        re.compile(r"StorageException")),
+    ("request_timeout",      re.compile(r"HttpTimeoutException|request timed out|timed out")),
+    ("connect_refused",      re.compile(r"ConnectException|Connection refused")),
+    ("http_5xx",             re.compile(r"^http_5\d\d$")),
+    ("http_4xx",             re.compile(r"^http_4\d\d$")),
+]
+
+
+def categorize_error(err):
+    """Bucket a raw error string into a category. None → no error."""
+    if not err:
+        return None
+    for name, pattern in ERROR_PATTERNS:
+        if pattern.search(err):
+            return name
+    return "other"
+
+
+def bucket_errors(rows):
+    """Returns {category: count} from rows that have a non-null error.
+    Drops `dropped` rows (those are loadgen-side over-cap, not server failures)."""
+    out = {}
+    for r in rows:
+        if r.get("dropped"):
+            continue
+        cat = categorize_error(r.get("error"))
+        if cat is None:
+            continue
+        out[cat] = out.get(cat, 0) + 1
+    return out
+
+
 
 
 # --- I/O helpers ----------------------------------------------------------
@@ -101,6 +149,8 @@ def warmup_cutoff(latency_rows):
 def metrics_window(metrics_rows, ts_lo, ts_hi):
     """Slice metrics samples to [ts_lo, ts_hi]; -1 sentinels are filtered."""
     rss, heap_used, mysql, sockets, fds, threads = [], [], [], [], [], []
+    proc_cpu, host_cpu = [], []
+    cpu_count = -1
     for m in metrics_rows:
         ts = m.get("ts")
         if ts is None or ts < ts_lo or ts > ts_hi:
@@ -112,10 +162,17 @@ def metrics_window(metrics_rows, ts_lo, ts_hi):
             ("remote_tcp_sockets", sockets),
             ("fd_count", fds),
             ("thread_count", threads),
+            ("process_cpu_load", proc_cpu),
+            ("host_cpu_load", host_cpu),
         ):
             v = m.get(src)
+            # CPU loads are floats in [0,1]; -1.0 is the sentinel like
+            # the integer -1 sentinel used elsewhere.
             if v is not None and v >= 0:
                 dst.append(v)
+        ap = m.get("available_processors")
+        if ap is not None and ap > 0:
+            cpu_count = ap
     return {
         "rss_kb": summary_stats(rss),
         "heap_used_bytes": summary_stats(heap_used),
@@ -123,6 +180,9 @@ def metrics_window(metrics_rows, ts_lo, ts_hi):
         "remote_tcp_sockets": summary_stats(sockets),
         "fd_count": summary_stats(fds),
         "thread_count": summary_stats(threads),
+        "process_cpu_load": summary_stats(proc_cpu),
+        "host_cpu_load": summary_stats(host_cpu),
+        "available_processors": cpu_count,
     }
 
 
@@ -154,6 +214,11 @@ def aggregate_step(step_dir):
     total_errors = sum(
         1 for r in latency_rows if r.get("error") is not None and not r.get("dropped")
     )
+    # Error breakdown by category. Server-side is the more useful view
+    # (actual exception types from the SDK); client-side is mostly
+    # transport-layer issues + http_5xx wrappers around server errors.
+    client_errors_by_category = bucket_errors(latency_rows)
+    server_errors_by_category = bucket_errors(requests_rows)
 
     # --- post-warmup latency per op (client + server view) --------------
     client_lat = per_op_latency(
@@ -182,6 +247,8 @@ def aggregate_step(step_dir):
         "client_latency_ms": client_lat,
         "server_latency_ms": server_lat,
         "metrics": metrics,
+        "errors_by_category_client": client_errors_by_category,
+        "errors_by_category_server": server_errors_by_category,
     }
 
 
@@ -247,13 +314,6 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
     lines = []
     lines.append(f"# Bench RPS sweep — `{sweep_id}`")
     lines.append("")
-    lines.append("**Worst-case (Phase 6) baseline.** Per-request SDK lifecycle, no")
-    lines.append("pooling, no shared MySQL pool, no shared operator pool. Two SDK-")
-    lines.append("level optimisations in flight (shared MySQL pool, shared operator")
-    lines.append("pool) and Phase 7 (LRU SDK-instance pool) push these numbers")
-    lines.append("favourably. Treat as upper bound on latency / lower bound on")
-    lines.append("capacity.")
-    lines.append("")
     lines.append("## Sweep config")
     lines.append("")
     lines.append(f"- host: `{manifest.get('host', '?')}`")
@@ -264,62 +324,71 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
     lines.append(f"- distribution: `{manifest.get('distribution', '?')}`")
     lines.append("")
 
-    lines.append("## Headline 3")
+    lines.append("## Headline")
     lines.append("")
     max_safe, baseline_rps, baseline_p99, crossed_at = headline
     if max_safe is None:
-        lines.append("- **Max RPS before p99(send) doubles**: insufficient `send` data — check funding / errors.")
+        lines.append("- max_safe_rps: insufficient `send` data")
     else:
-        baseline_str = f"{baseline_p99:.1f} ms @ {baseline_rps} RPS"
-        lines.append(f"- **Max RPS before p99(send) doubles**: `{max_safe}` RPS (baseline `{baseline_str}`)")
+        lines.append(f"- max_safe_rps: `{max_safe}` (highest swept RPS with client p99(send) < 2× baseline)")
+        lines.append(f"- baseline: `{baseline_p99:.1f}` ms p99(send) @ `{baseline_rps}` RPS")
         if crossed_at is not None:
-            lines.append(f"  - Threshold crossed at `{crossed_at}` RPS.")
+            lines.append(f"- threshold crossed at: `{crossed_at}` RPS")
         else:
-            lines.append(f"  - Threshold not crossed within sweep range — sweep should extend higher.")
-    lines.append("- **Per-op latency** at each RPS: see *Client-side latency* table below.")
-    lines.append("- **Memory at sustained RPS**: see *Process metrics* table below.")
+            lines.append("- threshold not crossed within sweep range")
     lines.append("")
 
-    lines.append("## Client-side latency (ms; post-warmup; successful requests only)")
-    lines.append("")
     ops = ["info", "send", "receive"]
-    header = "| RPS | dispatched | dropped | errors | " + " | ".join(
+    lat_header = "| RPS | dispatched | dropped | errors | " + " | ".join(
         f"{op} p50 | {op} p95 | {op} p99" for op in ops
     ) + " |"
-    sep = "|" + "---|" * (4 + 3 * len(ops))
-    lines.append(header)
-    lines.append(sep)
-    for rps, s in steps_summary:
-        cells = [str(rps), str(s["total_dispatched"]), str(s["total_dropped"]), str(s["total_errors_post_dispatch"])]
-        for op in ops:
-            stats = s["client_latency_ms"].get(op, {})
-            cells.append(fmt_ms(stats.get("p50")))
-            cells.append(fmt_ms(stats.get("p95")))
-            cells.append(fmt_ms(stats.get("p99")))
-        lines.append("| " + " | ".join(cells) + " |")
-    lines.append("")
+    lat_sep = "|" + "---|" * (4 + 3 * len(ops))
 
-    lines.append("## Server-side latency (ms; handler-only; post-warmup)")
-    lines.append("")
-    lines.append("Server handler time excludes network and any pre-handler queueing")
-    lines.append("at Netty. Gap vs. client-side latency is queue + transport.")
-    lines.append("")
-    lines.append(header)
-    lines.append(sep)
-    for rps, s in steps_summary:
-        cells = [str(rps), str(s["total_dispatched"]), str(s["total_dropped"]), str(s["total_errors_post_dispatch"])]
-        for op in ops:
-            stats = s["server_latency_ms"].get(op, {})
-            cells.append(fmt_ms(stats.get("p50")))
-            cells.append(fmt_ms(stats.get("p95")))
-            cells.append(fmt_ms(stats.get("p99")))
-        lines.append("| " + " | ".join(cells) + " |")
-    lines.append("")
+    def render_lat_table(title, latency_key):
+        lines.append(title)
+        lines.append("")
+        lines.append(lat_header)
+        lines.append(lat_sep)
+        for rps, s in steps_summary:
+            cells = [
+                str(rps),
+                str(s["total_dispatched"]),
+                str(s["total_dropped"]),
+                str(s["total_errors_post_dispatch"]),
+            ]
+            for op in ops:
+                stats = s[latency_key].get(op, {})
+                cells.append(fmt_ms(stats.get("p50")))
+                cells.append(fmt_ms(stats.get("p95")))
+                cells.append(fmt_ms(stats.get("p99")))
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+
+    render_lat_table(
+        "## Client-side latency (ms; post-warmup; successful requests only)",
+        "client_latency_ms",
+    )
+    render_lat_table(
+        "## Server-side latency (ms; handler-only; post-warmup)",
+        "server_latency_ms",
+    )
 
     lines.append("## Process metrics (post-warmup window)")
     lines.append("")
-    lines.append("| RPS | RSS mean (MiB) | RSS max (MiB) | heap used mean (MiB) | mysql_conns max | remote_tcp_sockets max | fds max | threads max |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    cpu_cores = next(
+        (s["metrics"]["available_processors"] for _, s in steps_summary
+         if s.get("metrics", {}).get("available_processors", -1) > 0),
+        None,
+    )
+    if cpu_cores:
+        lines.append(f"Host: {cpu_cores} logical CPU cores.")
+        lines.append("")
+    lines.append(
+        "| RPS | RSS mean (MiB) | RSS max (MiB) | heap used mean (MiB) | "
+        "process CPU mean | process CPU max | RPS / core | "
+        "mysql_conns max | remote_tcp_sockets max | fds max | threads max |"
+    )
+    lines.append("|" + "---|" * 11)
     for rps, s in steps_summary:
         m = s.get("metrics", {})
         rss = m.get("rss_kb", {})
@@ -328,11 +397,23 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
         sock = m.get("remote_tcp_sockets", {})
         fds = m.get("fd_count", {})
         thr = m.get("thread_count", {})
+        proc_cpu = m.get("process_cpu_load", {})
+        cores = m.get("available_processors", -1)
+
+        rps_per_core = None
+        if cores > 0 and proc_cpu.get("mean") is not None and proc_cpu["mean"] > 0:
+            cores_used = proc_cpu["mean"] * cores
+            if cores_used > 0:
+                rps_per_core = rps / cores_used
+
         cells = [
             str(rps),
             fmt_kb_as_mib(rss.get("mean")),
             fmt_kb_as_mib(rss.get("max")),
             "—" if heap.get("mean") is None else f"{heap['mean'] / (1024*1024):.1f}",
+            "—" if proc_cpu.get("mean") is None else f"{proc_cpu['mean'] * 100:.1f}%",
+            "—" if proc_cpu.get("max") is None else f"{proc_cpu['max'] * 100:.1f}%",
+            "—" if rps_per_core is None else f"{rps_per_core:.1f}",
             "—" if mysql.get("max") is None else str(int(mysql["max"])),
             "—" if sock.get("max") is None else str(int(sock["max"])),
             "—" if fds.get("max") is None else str(int(fds["max"])),
@@ -341,16 +422,27 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
         lines.append("| " + " | ".join(cells) + " |")
     lines.append("")
 
-    lines.append("## Framing")
-    lines.append("")
-    lines.append("If the latency cliff coincides with local resource saturation")
-    lines.append("(RSS climbing fast, FDs near limit, mysql_conns saturated, CPU pegged)")
-    lines.append("the headline is **SDK-bounded**. If local resources stay idle")
-    lines.append("through the cliff, the headline is **regtest-bounded** — the")
-    lines.append("Lightspark public regtest operators are throttling. Real partner")
-    lines.append("deployments on dedicated infrastructure should expect higher")
-    lines.append("ceilings.")
-    lines.append("")
+    server_categories = sorted({
+        cat
+        for _, s in steps_summary
+        for cat in s.get("errors_by_category_server", {})
+    })
+    if server_categories:
+        lines.append("## Errors by category (server-side)")
+        lines.append("")
+        ec_header = "| RPS | total | " + " | ".join(server_categories) + " |"
+        ec_sep = "|" + "---|" * (2 + len(server_categories))
+        lines.append(ec_header)
+        lines.append(ec_sep)
+        for rps, s in steps_summary:
+            cats = s.get("errors_by_category_server", {})
+            total = sum(cats.values())
+            cells = [str(rps), str(total)]
+            for cat in server_categories:
+                cells.append(str(cats.get(cat, 0)))
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+
     return "\n".join(lines)
 
 

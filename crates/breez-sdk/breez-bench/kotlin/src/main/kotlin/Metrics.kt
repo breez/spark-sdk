@@ -40,6 +40,18 @@ data class MetricSample(
     @SerialName("fd_count") val fdCount: Long,
     @SerialName("mysql_conns") val mysqlConns: Int,
     @SerialName("remote_tcp_sockets") val remoteTcpSockets: Int,
+    /** Fraction of total host CPU (summed across cores) used by this
+     *  JVM process, in [0.0, 1.0]. A value of 1.0 means the process is
+     *  pegging every core. -1.0 if the JVM hasn't sampled yet (typical
+     *  for the first ~1 sec) or the platform doesn't expose it. */
+    @SerialName("process_cpu_load") val processCpuLoad: Double = -1.0,
+    /** Whole-host CPU usage in [0.0, 1.0], for context (other processes
+     *  + ours). -1.0 if unavailable. */
+    @SerialName("host_cpu_load") val hostCpuLoad: Double = -1.0,
+    /** Number of logical CPUs visible to the JVM. Constant across the
+     *  run; included per-sample so aggregators don't need a separate
+     *  source. -1 if unavailable. */
+    @SerialName("available_processors") val availableProcessors: Int = -1,
 )
 
 // --- mysql url parsing ----------------------------------------------------
@@ -297,6 +309,9 @@ class MetricsSampler(
 ) {
     private val osMx = ManagementFactory.getOperatingSystemMXBean() as? UnixOperatingSystemMXBean
     private val threadMx = ManagementFactory.getThreadMXBean()
+    // availableProcessors() can change at runtime in containerised envs;
+    // sample once here since MetricsSampler is created once per server run.
+    private val cpuCount: Int = Runtime.getRuntime().availableProcessors()
 
     @Volatile private var thread: Thread? = null
 
@@ -329,6 +344,11 @@ class MetricsSampler(
 
     private fun sampleNow(): MetricSample {
         val rt = Runtime.getRuntime()
+        // CPU load returns -1.0 if not yet sampled (typical for the
+        // first second after JVM start) — pass that through unchanged
+        // since it shares the same "unavailable" semantics as the rest.
+        val procCpu = osMx?.processCpuLoad ?: -1.0
+        val hostCpu = osMx?.cpuLoad ?: -1.0
         return MetricSample(
             ts = System.currentTimeMillis(),
             rssKb = collector.rssKb(),
@@ -338,6 +358,9 @@ class MetricsSampler(
             fdCount = osMx?.openFileDescriptorCount ?: -1L,
             mysqlConns = mysqlPoller.count(),
             remoteTcpSockets = collector.remoteTcpSocketCount(),
+            processCpuLoad = procCpu,
+            hostCpuLoad = hostCpu,
+            availableProcessors = cpuCount,
         )
     }
 }
