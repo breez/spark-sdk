@@ -35,30 +35,39 @@ MySQL + operator round-trips dominate, and protocol overhead is small
 and similar across all three. HTTP/Ktor is the path of least
 friction in Kotlin/JVM.
 
-## Per-request SDK lifecycle (no pooling — worst-case baseline)
+## Per-request SDK lifecycle (no SDK pool — worst-case baseline)
 
 Each request runs the same flow:
 
 ```
 1. Acquire per-userId lock
 2. Derive seed: HMAC-SHA512(MASTER_SECRET, userId) → 64 bytes
-3. SdkBuilder(config, Seed.Entropy(…)).withMysqlBackend(SHARED_CONFIG).build()
+3. SdkBuilder(config, Seed.Entropy(…))
+     .withMysqlConnectionPool(SHARED_POOL)
+     .withSspConnectionManager(SHARED_SSP)
+     .withConnectionManager(SHARED_OPERATORS)
+     .build()
 4. sdk.<op>(…)
 5. sdk.disconnect()
 6. Release lock; respond
 ```
 
-A single shared `MysqlStorageConfig` is reused across requests;
-multi-tenancy in the SDK scopes each instance to its own identity
-inside the DB.
+Three process-wide handlers (`MysqlConnectionPool`, `SspConnectionManager`,
+`ConnectionManager`) are constructed once at server startup and threaded
+into every `SdkBuilder` call. Without sharing them, each request would
+open its own MySQL pool, redo TCP+TLS+HTTP/2 to the SSP, and dial every
+operator from scratch — multiplied by per-request SDK build, that
+dominates latency and exhausts FDs / ephemeral ports under load.
 
-This is deliberately the **worst case**: every request pays cold-
-start (SDK build + initial sync + operator TLS handshakes). Pinning
-this baseline gives a defensible **lower bound for capacity, upper
-bound for latency**. SDK-level optimizations in flight upstream
-(shared MySQL pool, shared operator connections) push these numbers
-favorably without any harness change; an in-process SDK pool would
-push them further.
+Multi-tenancy in the SDK scopes each instance to its own identity inside
+the DB even when the underlying pool is shared.
+
+This is still the **worst case** for SDK lifecycle: every request pays
+cold-start (SDK build + initial sync + per-tenant migration check).
+Pinning this baseline gives a defensible **lower bound for capacity,
+upper bound for latency**. An in-process SDK pool would push these
+numbers further; the shared transports are the floor that pool-bench
+results sit on top of.
 
 ## Per-userId lock (multi-tenancy safety)
 

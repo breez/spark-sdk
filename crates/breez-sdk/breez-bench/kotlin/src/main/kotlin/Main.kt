@@ -1,5 +1,7 @@
 import breez_sdk_spark.BreezSdk
+import breez_sdk_spark.ConnectionManager
 import breez_sdk_spark.GetInfoRequest
+import breez_sdk_spark.MysqlConnectionPool
 import breez_sdk_spark.Network
 import breez_sdk_spark.PrepareSendPaymentRequest
 import breez_sdk_spark.ReceivePaymentMethod
@@ -8,9 +10,13 @@ import breez_sdk_spark.SdkBuilder
 import breez_sdk_spark.Seed
 import breez_sdk_spark.SendPaymentMethod
 import breez_sdk_spark.SendPaymentRequest
+import breez_sdk_spark.SspConnectionManager
+import breez_sdk_spark.createMysqlConnectionPool
 import breez_sdk_spark.defaultConfig
 import breez_sdk_spark.defaultMysqlStorageConfig
 import breez_sdk_spark.initLogging
+import breez_sdk_spark.newConnectionManager
+import breez_sdk_spark.newSspConnectionManager
 
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -72,31 +78,72 @@ fun deriveSeedBytes(masterSecret: String, userId: String): ByteArray {
     return mac.doFinal(userId.toByteArray(Charsets.UTF_8))
 }
 
+// --- shared SDK transports ------------------------------------------------
+
+/**
+ * Bundle of process-wide SDK transports. Construct once and pass the same
+ * instance to every `SdkBuilder` so all SDKs share one MySQL pool, one SSP
+ * `reqwest::Client`, and one set of gRPC channels to the Spark operators.
+ *
+ * Without sharing, each SDK build would open its own MySQL pool + reopen
+ * TCP/TLS+HTTP/2 to the SSP + dial every operator anew — multiplied by every
+ * request on the server, that dominates latency and exhausts file
+ * descriptors / ephemeral ports under load.
+ */
+class SharedHandlers private constructor(
+    val mysqlPool: MysqlConnectionPool,
+    val ssp: SspConnectionManager,
+    val operators: ConnectionManager,
+) {
+    companion object {
+        fun create(mysqlUrl: String): SharedHandlers = SharedHandlers(
+            mysqlPool = createMysqlConnectionPool(defaultMysqlStorageConfig(mysqlUrl)),
+            ssp = newSspConnectionManager(null),
+            operators = newConnectionManager(null),
+        )
+    }
+}
+
+/**
+ * Builds an SDK for [seed] wired to the shared transports. All callers in
+ * this harness go through here so we never accidentally drop one of the
+ * three handlers.
+ */
+suspend fun buildSdk(
+    config: breez_sdk_spark.Config,
+    seed: Seed,
+    handlers: SharedHandlers,
+): BreezSdk {
+    val builder = SdkBuilder(config, seed)
+    builder.withMysqlConnectionPool(handlers.mysqlPool)
+    builder.withSspConnectionManager(handlers.ssp)
+    builder.withConnectionManager(handlers.operators)
+    return builder.build()
+}
+
 // --- per-request SDK lifecycle --------------------------------------------
 
 /**
- * Builds a fresh SDK per call and tears it down after `op`. Same-`userId`
- * calls serialize through a per-userId mutex so concurrent requests never
- * race two SDK instances against the same MySQL identity rows.
+ * Builds a fresh SDK per call (sharing transports via [handlers]) and tears
+ * it down after `op`. Same-`userId` calls serialize through a per-userId
+ * mutex so concurrent requests never race two SDK instances against the
+ * same MySQL identity rows.
  *
  * The mutex map grows unboundedly with distinct user-ids — fine for the
  * bounded bench lifetime.
  */
 class BenchSdkProvider(
     private val masterSecret: String,
-    mysqlUrl: String,
+    private val handlers: SharedHandlers,
 ) {
     private val config = defaultConfig(Network.REGTEST)
-    private val storageCfg = defaultMysqlStorageConfig(mysqlUrl)
     private val mutexes = ConcurrentHashMap<String, Mutex>()
 
     suspend fun <T> withUser(userId: String, op: suspend (BreezSdk) -> T): T {
         val mutex = mutexes.computeIfAbsent(userId) { Mutex() }
         return mutex.withLock {
             val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
-            val builder = SdkBuilder(config, seed)
-            builder.withMysqlBackend(storageCfg)
-            val sdk = builder.build()
+            val sdk = buildSdk(config, seed, handlers)
             try {
                 op(sdk)
             } finally {
@@ -157,13 +204,11 @@ fun smokeTest(opts: Map<String, String>) = runBlocking {
 
     val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
     val config = defaultConfig(Network.REGTEST)
-
-    val builder = SdkBuilder(config, seed)
-    builder.withMysqlBackend(defaultMysqlStorageConfig(mysqlUrl))
+    val handlers = SharedHandlers.create(mysqlUrl)
 
     println("[smoke] building SDK")
     val tConnect = System.currentTimeMillis()
-    val sdk = builder.build()
+    val sdk = buildSdk(config, seed, handlers)
     println("[smoke] connect=${System.currentTimeMillis() - tConnect}ms")
 
     try {
@@ -207,12 +252,11 @@ fun traceSync(opts: Map<String, String>) = runBlocking {
     initLogging(logDir, null, logFilter)
 
     val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
-    val builder = SdkBuilder(defaultConfig(Network.REGTEST), seed)
-    builder.withMysqlBackend(defaultMysqlStorageConfig(mysqlUrl))
+    val handlers = SharedHandlers.create(mysqlUrl)
 
     println("[trace] building SDK …")
     val tBuild = System.currentTimeMillis()
-    val sdk = builder.build()
+    val sdk = buildSdk(defaultConfig(Network.REGTEST), seed, handlers)
     println("[trace] build took ${System.currentTimeMillis() - tBuild}ms")
 
     try {
@@ -260,9 +304,8 @@ fun fundTreasurer(opts: Map<String, String>) = runBlocking {
     println("[fund] treasurer top-up to $targetSats sats  mysql=${maskPassword(mysqlUrl)}")
 
     val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, TREASURER_USER_ID))
-    val builder = SdkBuilder(defaultConfig(Network.REGTEST), seed)
-    builder.withMysqlBackend(defaultMysqlStorageConfig(mysqlUrl))
-    val sdk = builder.build()
+    val handlers = SharedHandlers.create(mysqlUrl)
+    val sdk = buildSdk(defaultConfig(Network.REGTEST), seed, handlers)
 
     try {
         // Fast path: if the locally-cached balance is already at-or-above
@@ -376,12 +419,10 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
     )
 
     val config = defaultConfig(Network.REGTEST)
-    val storageCfg = defaultMysqlStorageConfig(mysqlUrl)
+    val handlers = SharedHandlers.create(mysqlUrl)
 
     val treasurerSeed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, TREASURER_USER_ID))
-    val treasurer = SdkBuilder(config, treasurerSeed)
-        .also { it.withMysqlBackend(storageCfg) }
-        .build()
+    val treasurer = buildSdk(config, treasurerSeed, handlers)
 
     try {
         // Cached: lower bound on true balance (sync only adds incoming).
@@ -410,7 +451,7 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
                             senderIdx = i,
                             masterSecret = masterSecret,
                             config = config,
-                            storageCfg = storageCfg,
+                            handlers = handlers,
                             perSenderSats = perSenderSats,
                         )
                         synchronized(this@runBlocking) {
@@ -440,12 +481,12 @@ private suspend fun seedOneSender(
     senderIdx: Int,
     masterSecret: String,
     config: breez_sdk_spark.Config,
-    storageCfg: breez_sdk_spark.MysqlStorageConfig,
+    handlers: SharedHandlers,
     perSenderSats: Long,
 ): SeedOutcome {
     val userId = senderUserId(senderIdx)
     val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
-    val sender = SdkBuilder(config, seed).also { it.withMysqlBackend(storageCfg) }.build()
+    val sender = buildSdk(config, seed, handlers)
 
     return try {
         val info = sender.getInfo(GetInfoRequest(ensureSynced = true))
@@ -497,7 +538,8 @@ fun runServer(opts: Map<String, String>) {
     val runId = opts["run-id"] ?: defaultRunId()
     val outDir = Path.of(opts["out-dir"] ?: "out/$runId").also { Files.createDirectories(it) }
 
-    val provider = BenchSdkProvider(masterSecret, mysqlUrl)
+    val handlers = SharedHandlers.create(mysqlUrl)
+    val provider = BenchSdkProvider(masterSecret, handlers)
 
     val requestsWriter = JsonlWriter(outDir.resolve("requests.jsonl"), ServerRequestLogEntry.serializer())
     val metricsWriter = JsonlWriter(outDir.resolve("metrics.jsonl"), MetricSample.serializer())

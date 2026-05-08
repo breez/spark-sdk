@@ -93,6 +93,8 @@ The server exposes three:
 | `POST /users/{userId}/send` | `{"destination":"<spark addr>","amountSats":N}` | `prepareSendPayment` + `sendPayment` |
 | `POST /users/{userId}/receive` | `{}` | `receivePayment(SparkAddress)` (address generation only) |
 
-Each request does a fresh `connect → op → disconnect` against the
-shared MySQL backend. Same-`userId` requests serialize on a per-user
-mutex; different user-ids run in parallel.
+Each request does a fresh `connect → op → disconnect`, sharing one
+process-wide MySQL pool, one SSP HTTP client, and one set of gRPC
+channels to the Spark operators across every SDK instance. Same-`userId`
+requests serialize on a per-user mutex; different user-ids run in
+parallel.
