@@ -1,3 +1,4 @@
+mod chain_service;
 mod connection_manager;
 mod error;
 mod event;

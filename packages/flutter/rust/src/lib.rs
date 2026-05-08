@@ -1,3 +1,4 @@
+pub mod chain_service;
 pub mod connection_manager;
 pub mod errors;
 pub mod events;
