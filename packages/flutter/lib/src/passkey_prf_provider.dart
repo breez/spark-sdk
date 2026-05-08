@@ -1,57 +1,37 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
-/// Authenticator data captured at registration. [aaguid] is the 16-byte
-/// Authenticator Attestation GUID (provider identifier); [backupEligible]
-/// is the BE flag indicating whether the credential can sync across
-/// devices. Both are null when the attestation can't be parsed. AAGUID is
-/// unverified attestation: display hint only, never a trust decision.
-class RegisteredCredential {
-  final Uint8List credentialId;
-  final Uint8List? aaguid;
-  final bool? backupEligible;
-
-  const RegisteredCredential({
-    required this.credentialId,
-    required this.aaguid,
-    required this.backupEligible,
-  });
-}
+import 'rust/models.dart' show CreatePasskeyRequest, RegisteredCredential;
 
 /// Options for constructing a [PasskeyProvider].
 class PasskeyProviderOptions {
   /// Relying Party ID. Must match the domain configured for cross-platform
-  /// credential sharing.
-  ///
-  /// Changing this after users have registered passkeys will make their existing
-  /// credentials undiscoverable — they would need to create new passkeys.
+  /// credential sharing. Changing this after users have registered passkeys
+  /// will make their existing credentials undiscoverable.
   ///
   /// Defaults to `'keys.breez.technology'`.
   final String rpId;
 
   /// RP display name shown during credential registration. Only used when
-  /// creating new passkeys; changing it does not affect existing credentials.
+  /// creating new passkeys.
   ///
   /// Defaults to `'Breez SDK'`.
   final String rpName;
 
-  /// User name stored with the credential, shown as a secondary label in some
-  /// passkey managers. Defaults to [rpName]. Only used during registration;
-  /// changing it does not affect existing credentials.
+  /// User name stored with the credential, shown as a secondary label in
+  /// some passkey managers. Defaults to [rpName]. Only used during
+  /// registration.
   final String? userName;
 
   /// User display name shown as the primary label in the passkey picker.
-  /// Defaults to [userName]. Only used during registration; changing it does
-  /// not affect existing credentials.
+  /// Defaults to [userName]. Only used during registration.
   final String? userDisplayName;
 
-  /// When true (default), [PasskeyProvider.derivePrfSeed] automatically creates
-  /// a new passkey if none exists for this RP ID, then retries the assertion.
-  /// When false, throws a [PasskeyPrfException] with code `noCredential`
-  /// instead, letting the caller control registration separately via
-  /// [PasskeyProvider.createPasskey].
+  /// When `true`, [PasskeyProvider.deriveSeed] automatically creates a
+  /// new passkey if none exists, then retries the assertion. When `false`
+  /// (default), throws [PasskeyPrfException] with code `noCredential` and
+  /// the caller drives registration via [PasskeyProvider.createPasskey].
   final bool autoRegister;
 
   const PasskeyProviderOptions({
@@ -59,28 +39,17 @@ class PasskeyProviderOptions {
     this.rpName = 'Breez SDK',
     this.userName,
     this.userDisplayName,
-    this.autoRegister = true,
+    this.autoRegister = false,
   });
 }
 
 /// Error thrown by [PasskeyProvider] when a passkey operation fails.
-///
-/// Provides a structured [code] that maps to native error codes and a
-/// human-readable [message]. The [code] can be used for programmatic
-/// error handling without parsing message strings.
+/// Provides a structured [code] for programmatic handling.
 class PasskeyPrfException implements Exception {
-  /// Machine-readable error code matching the native error codes.
-  ///
-  /// Known codes:
-  /// - `userCancelled` — user dismissed the passkey prompt
-  /// - `prfNotSupported` — authenticator doesn't support PRF
-  /// - `noCredential` — no passkey found for this RP ID
-  /// - `authenticationFailed` — passkey assertion failed
-  /// - `registrationFailed` — passkey creation failed
-  /// - `unknown` — unrecognized error
+  /// Machine-readable error code:
+  /// - `userCancelled`, `prfNotSupported`, `noCredential`, `configuration`,
+  ///   `credentialAlreadyExists`, `unknown`.
   final String code;
-
-  /// Human-readable error description.
   final String message;
 
   const PasskeyPrfException({required this.code, required this.message});
@@ -89,27 +58,17 @@ class PasskeyPrfException implements Exception {
   String toString() => 'PasskeyPrfException($code): $message';
 }
 
-/// Flutter passkey PRF provider using platform-native APIs.
-///
-/// Implements passkey PRF operations using:
-/// - iOS: AuthenticationServices framework (iOS 18+)
-/// - Android: Credential Manager API (Android 14+)
-///
-/// On first use, if no credential exists for the RP ID, a new passkey is
-/// automatically created (registered), then the assertion is retried.
-///
-/// The [derivePrfSeed] and [isPrfAvailable] methods can be passed directly
-/// to the [Passkey] constructor as callbacks.
+/// Flutter passkey PRF provider using platform-native APIs (iOS
+/// AuthenticationServices, Android Credential Manager). Wires directly
+/// into the [PasskeyClient] constructor:
 ///
 /// ```dart
-/// import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
-///
-/// final prfProvider = PasskeyProvider();
-/// final passkey = Passkey(
-///   derivePrfSeed: prfProvider.derivePrfSeed,
-///   isPrfAvailable: prfProvider.isPrfAvailable,
+/// final provider = PasskeyProvider();
+/// final client = PasskeyClient(
+///   deriveSeed: provider.deriveSeed,
+///   isSupported: provider.isSupported,
+///   createPasskey: provider.createPasskey,
 /// );
-/// final wallet = await passkey.getWallet(label: 'personal');
 /// ```
 class PasskeyProvider {
   static const _channel = MethodChannel('breez_sdk_spark_passkey');
@@ -124,17 +83,13 @@ class PasskeyProvider {
     : _rpId = options?.rpId ?? 'keys.breez.technology',
       _rpName = options?.rpName ?? 'Breez SDK',
       _userName = options?.userName ?? (options?.rpName ?? 'Breez SDK'),
-      _userDisplayName = options?.userDisplayName ?? (options?.userName ?? (options?.rpName ?? 'Breez SDK')),
-      _autoRegister = options?.autoRegister ?? true;
+      _userDisplayName =
+          options?.userDisplayName ?? (options?.userName ?? (options?.rpName ?? 'Breez SDK')),
+      _autoRegister = options?.autoRegister ?? false;
 
   /// Derive a 32-byte seed from passkey PRF with the given salt.
-  ///
-  /// Authenticates the user via a platform passkey and evaluates the PRF
-  /// extension. If no credential exists for this RP ID, a new passkey is
-  /// created automatically.
-  ///
-  /// Throws [PasskeyPrfException] with a structured error code on failure.
-  Future<Uint8List> derivePrfSeed(String salt) async {
+  /// Throws [PasskeyPrfException] on failure.
+  Future<Uint8List> deriveSeed(String salt) async {
     try {
       final result = await _channel.invokeMethod<String>('derivePrfSeed', {
         'salt': salt,
@@ -150,46 +105,40 @@ class PasskeyProvider {
     }
   }
 
-  /// Create a new passkey with PRF support.
-  ///
-  /// Only registers the credential, no seed derivation. Triggers exactly
-  /// 1 platform prompt. Use this to separate credential creation from
-  /// derivation in multi-step onboarding flows.
-  ///
-  /// [excludeCredentialIds] is an optional list of credential IDs to exclude.
-  /// Pass previously created credential IDs to prevent the authenticator from
-  /// creating a duplicate on the same device.
-  ///
-  /// Returns the credential ID plus AAGUID and backup-eligibility parsed
-  /// from the attestation object. AAGUID and `backupEligible` are null
-  /// when the attestation can't be parsed.
-  ///
-  /// Throws [PasskeyPrfException] if the user cancels or PRF is not supported.
-  Future<RegisteredCredential> createPasskey({List<Uint8List>? excludeCredentialIds}) async {
+  /// Register a new passkey with PRF support. Per-call overrides on
+  /// `request` (excludeCredentialIds, userId, userName, userDisplayName)
+  /// fall back to the constructor values when omitted. Throws
+  /// [PasskeyPrfException] on failure.
+  Future<RegisteredCredential> createPasskey(CreatePasskeyRequest request) async {
     try {
-      final result = await _channel.invokeMethod<Map<Object?, Object?>>('createPasskey', {
+      final args = <String, Object?>{
         'rpId': _rpId,
         'rpName': _rpName,
-        'userName': _userName,
-        'userDisplayName': _userDisplayName,
-        if (excludeCredentialIds != null && excludeCredentialIds.isNotEmpty)
-          'excludeCredentialIds': excludeCredentialIds.map((id) => base64Encode(id)).toList(),
-      });
+        'userName': request.userName ?? _userName,
+        'userDisplayName': request.userDisplayName ?? _userDisplayName,
+      };
+      if (request.excludeCredentialIds.isNotEmpty) {
+        args['excludeCredentialIds'] =
+            request.excludeCredentialIds.map((id) => base64Encode(id)).toList();
+      }
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>('createPasskey', args);
       final map = result!;
       final credentialId = base64Decode(map['credentialId'] as String);
       final aaguidB64 = map['aaguid'] as String?;
       final aaguid = aaguidB64 == null ? null : base64Decode(aaguidB64);
       final backupEligible = map['backupEligible'] as bool?;
-      return RegisteredCredential(credentialId: credentialId, aaguid: aaguid, backupEligible: backupEligible);
+      return RegisteredCredential(
+        credentialId: credentialId,
+        aaguid: aaguid,
+        backupEligible: backupEligible,
+      );
     } on PlatformException catch (e) {
       throw _mapPlatformException(e);
     }
   }
 
-  /// Check if a PRF-capable passkey is available on this device.
-  ///
-  /// Returns `true` if the platform supports passkeys with PRF extension.
-  Future<bool> isPrfAvailable() async {
+  /// Whether this device supports passkey PRF.
+  Future<bool> isSupported() async {
     final result = await _channel.invokeMethod<bool>('isPrfAvailable');
     return result ?? false;
   }
@@ -202,13 +151,9 @@ class PasskeyProvider {
       'ERR_PRF_NOT_SUPPORTED' => PasskeyPrfException(code: 'prfNotSupported', message: message),
       'ERR_NO_CREDENTIAL' => PasskeyPrfException(code: 'noCredential', message: message),
       'ERR_CONFIGURATION' => PasskeyPrfException(code: 'configuration', message: message),
+      'ERR_CREDENTIAL_ALREADY_EXISTS' =>
+        PasskeyPrfException(code: 'credentialAlreadyExists', message: message),
       _ => PasskeyPrfException(code: 'unknown', message: message),
     };
   }
 }
-
-/// @Deprecated('Use PasskeyProviderOptions instead.')
-typedef PasskeyPrfProviderOptions = PasskeyProviderOptions;
-
-/// @Deprecated('Use PasskeyProvider instead.')
-typedef PasskeyPrfProvider = PasskeyProvider;

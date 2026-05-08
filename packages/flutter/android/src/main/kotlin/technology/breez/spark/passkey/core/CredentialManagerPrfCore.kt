@@ -497,9 +497,13 @@ public object CredentialManagerPrfCore {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: List<ByteArray> = emptyList(),
+        userIdOverride: ByteArray? = null,
     ): RegisteredCredential = withContext(Dispatchers.Main) {
         try {
-            registerCredential(activity, rpId, rpName, userName, userDisplayName, excludeCredentialIds)
+            registerCredential(
+                activity, rpId, rpName, userName, userDisplayName,
+                excludeCredentialIds, userIdOverride,
+            )
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
         } catch (e: Exception) {
@@ -685,10 +689,13 @@ public object CredentialManagerPrfCore {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: List<ByteArray> = emptyList(),
+        userIdOverride: ByteArray? = null,
     ): RegisteredCredential {
         val credentialManager = credentialManager(activity)
         val challenge = randomBase64Url(32)
-        val userId = randomBase64Url(16)
+        val userId = userIdOverride
+            ?.let { Base64.encodeToString(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) }
+            ?: randomBase64Url(16)
 
         // Build request via JSONObject so integrator-provided strings
         // (rpId, rpName, userName, userDisplayName) are escaped correctly.
