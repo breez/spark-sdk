@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 use super::derivation::derive_nip42_keypair;
 use super::error::PasskeyError;
+use super::label_store::{Identity, LabelStore};
 use super::models::NostrRelayConfig;
 
 /// Public relays used as fallback when NIP-65 lists cannot be fetched.
@@ -105,25 +106,6 @@ impl NostrSaltClient {
         self.spawn_relay_sync(keys, events_vec);
 
         Ok(labels)
-    }
-
-    /// Check if a specific label has already been published.
-    ///
-    /// # Arguments
-    /// * `keys` - The Nostr keypair
-    /// * `label` - The label to check for
-    ///
-    /// # Returns
-    /// * `Ok(true)` - Label already exists
-    /// * `Ok(false)` - Label not found
-    /// * `Err(PasskeyError)` - Query failed
-    pub async fn label_exists(
-        &self,
-        keys: &nostr::Keys,
-        label: &str,
-    ) -> Result<bool, PasskeyError> {
-        let labels = self.query_labels(keys).await?;
-        Ok(labels.iter().any(|l| l == label))
     }
 
     /// Idempotently ensure `label` is published for `keys`. Opens a
@@ -570,6 +552,25 @@ impl NostrSaltClient {
         } else {
             Client::new(keys.clone())
         })
+    }
+}
+
+#[macros::async_trait]
+impl LabelStore for NostrSaltClient {
+    async fn list_labels(&self, identity: &Identity) -> Result<Vec<String>, PasskeyError> {
+        self.query_labels(&identity.keys).await
+    }
+
+    async fn ensure_label_published(
+        &self,
+        identity: &Identity,
+        label: &str,
+    ) -> Result<(), PasskeyError> {
+        NostrSaltClient::ensure_label_published(self, &identity.keys, label).await
+    }
+
+    async fn store_label(&self, identity: &Identity, label: &str) -> Result<(), PasskeyError> {
+        self.publish_label(&identity.keys, label).await
     }
 }
 
