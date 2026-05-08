@@ -2,8 +2,8 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    DeriveRequest, DeriveResponse, NostrRelayConfig, PasskeyError, PrfProviderError, PrfProvider,
-    RegisterRequest, RegisterResponse, RestoreRequest, RestoreResponse,
+    NostrRelayConfig, PasskeyError, PrfProvider, PrfProviderError, RegisterRequest,
+    RegisterResponse, SignInRequest, SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -44,14 +44,13 @@ impl PrfProvider for CallbackPrfProvider {
 }
 
 /// High-level orchestrator. See the [`breez_sdk_spark::passkey::PasskeyClient`]
-/// docs for the register / restore / derive semantics.
+/// docs for the register / sign_in semantics.
 ///
 /// Currently `register` will fail with
 /// [`PrfProviderError::PrfNotSupported`] on Flutter because the Dart-side
 /// `PrfProvider` callbacks don't yet expose `createPasskey` (blocked on
 /// flutter_rust_bridge supporting `Option<impl Fn(...) -> DartFnFuture<...>>`
-/// trait callbacks). `derive` and `restore` use only `derivePrfSeed` and
-/// work today.
+/// trait callbacks). `sign_in` uses only `derive_seed` and works today.
 #[derive(Clone)]
 #[frb(opaque)]
 pub struct PasskeyClient {
@@ -83,18 +82,13 @@ impl PasskeyClient {
         self.inner.register(request).await
     }
 
-    /// Speculative cold-restore for returning users without local
-    /// state.
-    pub async fn restore(
+    /// Returning-user sign-in. Fast path with `label` set; cold-restore
+    /// with discovery when `label` is `None`.
+    pub async fn sign_in(
         &self,
-        request: RestoreRequest,
-    ) -> Result<RestoreResponse, PasskeyError> {
-        self.inner.restore(request).await
-    }
-
-    /// Returning user with the correct label cached locally.
-    pub async fn derive(&self, request: DeriveRequest) -> Result<DeriveResponse, PasskeyError> {
-        self.inner.derive(request).await
+        request: SignInRequest,
+    ) -> Result<SignInResponse, PasskeyError> {
+        self.inner.sign_in(request).await
     }
 
     /// List labels published for this passkey's identity.

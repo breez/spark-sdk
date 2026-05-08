@@ -1336,28 +1336,15 @@ pub struct _RegisterResponse {
     pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
 }
 
-#[frb(mirror(RestoreRequest))]
-pub struct _RestoreRequest {
-    pub candidate_label: Option<String>,
-    pub extra_salts: Vec<NamedSalt>,
-}
-
-#[frb(mirror(RestoreResponse))]
-pub struct _RestoreResponse {
-    pub wallet: Wallet,
-    pub candidate_matched: bool,
-    pub labels: Vec<String>,
-    pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
-}
-
-#[frb(mirror(DeriveRequest))]
-pub struct _DeriveRequest {
+#[frb(mirror(SignInRequest))]
+pub struct _SignInRequest {
     pub label: Option<String>,
     pub extra_salts: Vec<NamedSalt>,
 }
 
-#[frb(mirror(DeriveResponse))]
-pub struct _DeriveResponse {
+#[frb(mirror(SignInResponse))]
+pub struct _SignInResponse {
     pub wallet: Wallet,
+    pub labels: Vec<String>,
     pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
 }

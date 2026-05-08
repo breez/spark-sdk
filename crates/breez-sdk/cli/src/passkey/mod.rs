@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::Seed;
 use breez_sdk_spark::passkey::{
-    DeriveRequest, NostrRelayConfig, PasskeyClient, PrfProviderError, PrfProvider, RestoreRequest,
+    NostrRelayConfig, PasskeyClient, PrfProvider, PrfProviderError, SignInRequest,
 };
 
 #[cfg(feature = "fido2")]
@@ -93,14 +93,13 @@ pub async fn resolve_passkey_seed(
     let relay_config = NostrRelayConfig { breez_api_key };
     let client = PasskeyClient::new(provider, Some(relay_config));
 
-    // --list-labels: cold-restore via Nostr, prompt user to select.
-    // Uses the candidate label as a hint; the actual seed comes from the
-    // user's pick below, since restore() exposes the discovered label set.
+    // --list-labels: discovery sign-in (no cached label) returns the
+    // discovered label set; prompt user to pick.
     let label = if list_labels {
         println!("Querying Nostr for available labels...");
         let response = client
-            .restore(RestoreRequest {
-                candidate_label: label,
+            .sign_in(SignInRequest {
+                label: None,
                 extra_salts: vec![],
             })
             .await
@@ -133,7 +132,7 @@ pub async fn resolve_passkey_seed(
         label
     };
 
-    // --store-label: publish before deriving so a fresh client can
+    // --store-label: publish before signing in so a fresh client can
     // discover the label later.
     if store_label && let Some(label) = &label {
         println!("Publishing label '{label}' to Nostr...");
@@ -145,7 +144,7 @@ pub async fn resolve_passkey_seed(
     }
 
     let response = client
-        .derive(DeriveRequest {
+        .sign_in(SignInRequest {
             label,
             extra_salts: vec![],
         })

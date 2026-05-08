@@ -68,39 +68,24 @@ pub struct RegisterResponse {
     pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
-/// Request shape for `PasskeyClient.restore`.
-#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::RestoreRequest)]
-pub struct RestoreRequest {
-    pub candidate_label: Option<String>,
-    pub extra_salts: Vec<NamedSalt>,
-}
-
-/// Response shape for `PasskeyClient.restore`.
-#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::RestoreResponse)]
-pub struct RestoreResponse {
-    pub wallet: Wallet,
-    pub candidate_matched: bool,
-    pub labels: Vec<String>,
-    pub extra_seeds: HashMap<String, Vec<u8>>,
-}
-
-/// Request shape for `PasskeyClient.derive`.
-#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::DeriveRequest)]
-pub struct DeriveRequest {
+/// Request shape for `PasskeyClient.signIn`.
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::SignInRequest)]
+pub struct SignInRequest {
     pub label: Option<String>,
     pub extra_salts: Vec<NamedSalt>,
 }
 
-/// Response shape for `PasskeyClient.derive`.
-#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::DeriveResponse)]
-pub struct DeriveResponse {
+/// Response shape for `PasskeyClient.signIn`.
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::SignInResponse)]
+pub struct SignInResponse {
     pub wallet: Wallet,
+    pub labels: Vec<String>,
     pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
-/// High-level orchestrator that collapses register / restore / derive
-/// flows into single calls. See the matching Rust types for full
-/// semantics; the JS surface is a thin wasm-bindgen wrapper.
+/// High-level orchestrator that collapses register / sign-in flows
+/// into single calls. See the matching Rust types for full semantics;
+/// the JS surface is a thin wasm-bindgen wrapper.
 #[wasm_bindgen]
 pub struct PasskeyClient {
     inner: breez_sdk_spark::passkey::PasskeyClient,
@@ -129,21 +114,14 @@ impl PasskeyClient {
         Ok(self.inner.register(request.into()).await?.into())
     }
 
-    /// Speculative cold-restore. Derives a wallet for
-    /// `candidateLabel` without publishing it, then runs `listLabels`
-    /// off the cached identity (no extra prompts). Pass-through
-    /// failure of the label-store query leaves `labels` empty.
-    #[wasm_bindgen(js_name = "restore")]
-    pub async fn restore(&self, request: RestoreRequest) -> WasmResult<RestoreResponse> {
-        Ok(self.inner.restore(request.into()).await?.into())
-    }
-
-    /// Returning user with the correct label cached locally.
-    /// `publishLabel` is implicit `false`; if the label is not yet
-    /// published, call `storeLabel` separately.
-    #[wasm_bindgen(js_name = "derive")]
-    pub async fn derive(&self, request: DeriveRequest) -> WasmResult<DeriveResponse> {
-        Ok(self.inner.derive(request.into()).await?.into())
+    /// Returning-user sign-in. With `label` set, uses the fast path
+    /// (one ceremony, no Nostr round-trip). With `label` omitted,
+    /// derives the default-label wallet and discovers the user's
+    /// label set in the same ceremony — host shows a picker if the
+    /// default isn't the one they want.
+    #[wasm_bindgen(js_name = "signIn")]
+    pub async fn sign_in(&self, request: SignInRequest) -> WasmResult<SignInResponse> {
+        Ok(self.inner.sign_in(request.into()).await?.into())
     }
 
     /// List labels published for this passkey's identity.
