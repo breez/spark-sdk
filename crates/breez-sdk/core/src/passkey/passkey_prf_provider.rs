@@ -1,4 +1,5 @@
 use super::error::PasskeyPrfError;
+use super::models::{CreatePasskeyRequest, RegisteredCredential};
 
 /// Result of a domain-association verification check against the platform's
 /// well-known configuration source.
@@ -135,6 +136,43 @@ pub trait PrfProvider: Send + Sync {
     /// * `Ok(false)` - No PRF-capable passkey available
     /// * `Err(PasskeyPrfError)` - If the check fails
     async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError>;
+
+    /// Register a new passkey on the authenticator and return its
+    /// metadata.
+    ///
+    /// This is the explicit registration entry point for callers that
+    /// need credential metadata (`credential_id`, `aaguid`, `backup_eligible`)
+    /// to populate `excludeCredentialIds` on subsequent registrations or
+    /// to display authenticator hints in the UI.
+    ///
+    /// # Provider expectations
+    ///
+    /// - **Platform passkey providers** (browser `WebAuthn`, iOS/macOS
+    ///   `ASAuthorization*`, Android `CredentialManager`) override this
+    ///   to drive the OS registration ceremony. They are the only providers
+    ///   that surface `credential_id` back to the host.
+    /// - **CLI / hardware providers** (FIDO2 hmac-secret, `YubiKey`, file-backed):
+    ///   these implementations register lazily inside [`Self::derive_prf_seed`]
+    ///   when no credential exists, and do not expose explicit creation. The
+    ///   default impl returns [`PasskeyPrfError::PrfNotSupported`] to signal
+    ///   that callers should rely on the implicit registration path.
+    ///
+    /// # Returns
+    /// * `Ok(RegisteredCredential)` with the new credential's identifier
+    ///   and any platform-supplied metadata (AAGUID, BE flag).
+    /// * `Err(PasskeyPrfError::CredentialAlreadyExists)` when the
+    ///   authenticator refused registration because an entry in
+    ///   `request.exclude_credential_ids` matched a credential already
+    ///   on the device.
+    /// * `Err(PasskeyPrfError::PrfNotSupported)` from the default impl
+    ///   when the provider does not implement explicit registration.
+    async fn create_passkey(
+        &self,
+        request: CreatePasskeyRequest,
+    ) -> Result<RegisteredCredential, PasskeyPrfError> {
+        let _ = request;
+        Err(PasskeyPrfError::PrfNotSupported)
+    }
 
     /// Diagnostic check: verify the app's identity against the platform's
     /// domain verification source (iOS AASA / Android assetlinks / browser
