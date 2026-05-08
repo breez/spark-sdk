@@ -135,9 +135,9 @@ impl Passkey {
 impl Passkey {
     /// Create a new `Passkey` instance.
     ///
-    /// # Arguments
-    /// * `prf_provider` - Platform implementation of passkey PRF operations
-    /// * `relay_config` - Optional configuration for Nostr relay connections (uses default if None)
+    /// `relay_config` is `None` for callers that don't sync labels via
+    /// Nostr; a default-constructed `NostrRelayConfig` is used in that
+    /// case (no api key, default timeout).
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new(prf_provider: Arc<dyn PrfProvider>, relay_config: Option<NostrRelayConfig>) -> Self {
         Self {
@@ -299,6 +299,26 @@ impl Passkey {
             .is_prf_available()
             .await
             .map_err(PasskeyError::from)
+    }
+}
+
+/// Convenience constructors that don't cross the `UniFFI` boundary.
+/// Bindings that expose `Passkey` via `UniFFI` use [`Passkey::new`]
+/// from the exported impl above; native Rust callers that already
+/// have the SDK [`crate::Config`] in hand can use
+/// [`Passkey::from_config`] to avoid re-stating `api_key`.
+impl Passkey {
+    /// Build a `Passkey` from the SDK [`crate::Config`] the rest of
+    /// the app passes to [`crate::connect`]. Reads `config.api_key`
+    /// into the default Nostr-backed label store.
+    pub fn from_config(prf_provider: Arc<dyn PrfProvider>, config: &crate::Config) -> Self {
+        Self::new(
+            prf_provider,
+            Some(NostrRelayConfig {
+                breez_api_key: config.api_key.clone(),
+                timeout_secs: None,
+            }),
+        )
     }
 }
 
