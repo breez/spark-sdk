@@ -93,10 +93,10 @@ export interface CreatePasskeyRequest {
 }
 
 /**
- * Per-call options for {@link PasskeyProvider.derivePrfSeed} and
- * {@link PasskeyProvider.derivePrfSeeds}. All fields optional.
+ * Per-call options for {@link PasskeyProvider.deriveSeed} and
+ * {@link PasskeyProvider.deriveSeeds}. All fields optional.
  */
-export interface DerivePrfSeedOptions {
+export interface DeriveSeedOptions {
     /**
      * Restrict assertion to one of these credential IDs. The browser
      * refuses any other credential for this RP. Use to pin sign-in to
@@ -186,7 +186,7 @@ export interface PasskeyProviderOptions {
     userDisplayName?: string;
 
     /**
-     * When true (default), `derivePrfSeed` automatically creates a new passkey
+     * When true (default), `deriveSeed` automatically creates a new passkey
      * if none exists for this RP ID, then retries the assertion. When false,
      * throws an error instead, letting the caller control registration
      * separately via `createPasskey()`.
@@ -277,7 +277,7 @@ export declare class PasskeyProvider {
      *
      * @throws If authentication fails, PRF is not supported, or the user cancels.
      */
-    derivePrfSeed(salt: string, options?: DerivePrfSeedOptions): Promise<Uint8Array>;
+    deriveSeed(salt: string, options?: DeriveSeedOptions): Promise<Uint8Array>;
 
     /**
      * Derive multiple 32-byte PRF outputs in as few user prompts as the
@@ -285,9 +285,9 @@ export declare class PasskeyProvider {
      * `prf.eval.second` per ceremony where the platform honors it.
      * Authenticators that drop `second` fall back to single-salt for
      * the affected salt; worst case prompt count matches looping
-     * `derivePrfSeed`. Output order matches input order.
+     * `deriveSeed`. Output order matches input order.
      */
-    derivePrfSeeds(salts: string[], options?: DerivePrfSeedOptions): Promise<Uint8Array[]>;
+    deriveSeeds(salts: string[], options?: DeriveSeedOptions): Promise<Uint8Array[]>;
 
     /**
      * Create a new passkey with PRF support.
@@ -304,7 +304,7 @@ export declare class PasskeyProvider {
      *
      * @returns true if WebAuthn with PRF extension is likely supported.
      */
-    isPrfAvailable(): Promise<boolean>;
+    isSupported(): Promise<boolean>;
 
     /**
      * Verify the configured `rpId` is a valid scope for WebAuthn from the

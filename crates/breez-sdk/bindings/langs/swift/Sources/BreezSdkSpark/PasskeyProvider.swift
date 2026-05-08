@@ -47,7 +47,7 @@ public class PasskeyProvider: PrfProvider {
     /// and the platform-level "already exists" check can fire on
     /// future create attempts.
     ///
-    /// Must be set before calling `derivePrfSeed`. Not invoked on
+    /// Must be set before calling `deriveSeed`. Not invoked on
     /// registration (see `createPasskey`'s return value for that).
     public var onAssertionCredentialId: ((Data) -> Void)?
 
@@ -106,9 +106,9 @@ public class PasskeyProvider: PrfProvider {
     ///     the entitlement lookup fails.
     ///   - urlSession: Optional custom URLSession for the AASA CDN fetch.
     ///     Defaults to `.shared`. Override in tests to mock the HTTP layer.
-    ///   - autoRegister: When `true` (default), `derivePrfSeed` automatically
+    ///   - autoRegister: When `true` (default), `deriveSeed` automatically
     ///     creates a new passkey if none exists for this RP ID, then retries
-    ///     the assertion. When `false`, `derivePrfSeed` throws
+    ///     the assertion. When `false`, `deriveSeed` throws
     ///     `PasskeyPrfError.CredentialNotFound` instead, letting the caller
     ///     control registration separately via `createPasskey()`.
     ///   - allowCredentialIds: When non-empty, restricts assertion (sign-in)
@@ -152,7 +152,7 @@ public class PasskeyProvider: PrfProvider {
     /// - Parameter salt: The salt string to use for PRF evaluation.
     /// - Returns: The 32-byte PRF output.
     /// - Throws: `PasskeyPrfError` if authentication fails, PRF is not supported, or the user cancels.
-    public func derivePrfSeed(salt: String) async throws -> Data {
+    public func deriveSeed(salt: String) async throws -> Data {
         guard let saltData = salt.data(using: .utf8) else {
             throw PasskeyPrfError.Generic("Failed to encode salt as UTF-8")
         }
@@ -186,7 +186,7 @@ public class PasskeyProvider: PrfProvider {
     ///
     /// Salt count semantics:
     /// - 0 salts: returns empty without prompting.
-    /// - 1 salt: equivalent to `derivePrfSeed`.
+    /// - 1 salt: equivalent to `deriveSeed`.
     /// - 2 salts: one ceremony.
     /// - 3+ salts: pairs are batched (N+1)/2 ceremonies; a trailing odd
     ///   salt uses the single-salt path.
@@ -195,12 +195,12 @@ public class PasskeyProvider: PrfProvider {
     /// - Returns: One 32-byte output per salt, in input order.
     /// - Throws: `PasskeyPrfError` if any underlying ceremony fails. The
     ///   first failing ceremony aborts the rest.
-    public func derivePrfSeeds(salts: [String]) async throws -> [Data] {
+    public func deriveSeeds(salts: [String]) async throws -> [Data] {
         if salts.isEmpty {
             return []
         }
         if salts.count == 1 {
-            return [try await derivePrfSeed(salt: salts[0])]
+            return [try await deriveSeed(salt: salts[0])]
         }
 
         var out: [Data] = []
@@ -217,12 +217,12 @@ public class PasskeyProvider: PrfProvider {
                     out.append(prfSecond)
                 } else {
                     // Authenticator dropped saltInput2; recover via single-salt.
-                    out.append(try await derivePrfSeed(salt: salts[idx + 1]))
+                    out.append(try await deriveSeed(salt: salts[idx + 1]))
                 }
                 idx += 2
             } else {
                 // Odd trailing salt — single-salt fallback.
-                out.append(try await derivePrfSeed(salt: salts[idx]))
+                out.append(try await deriveSeed(salt: salts[idx]))
                 idx += 1
             }
         }
@@ -237,7 +237,7 @@ public class PasskeyProvider: PrfProvider {
         }
 
         // Try assertion. Auto-register on missing-credential, mirroring
-        // `derivePrfSeed`.
+        // `deriveSeed`.
         do {
             return try await performDualSaltAssertionInner(salt1Data: salt1Data, salt2Data: salt2Data)
         } catch let error as PasskeyPrfError where error.isCredentialNotFound {
@@ -285,16 +285,16 @@ public class PasskeyProvider: PrfProvider {
     /// - Does **not** verify that the user has Face ID / Touch ID /
     ///   a device passcode enrolled, or that iCloud Keychain / a third-party
     ///   credential provider is configured. Those states are handled by the
-    ///   system at call time: when `derivePrfSeed` runs, the OS surfaces
+    ///   system at call time: when `deriveSeed` runs, the OS surfaces
     ///   its own "set up biometrics / pick a credential provider" prompts
     ///   and the call either succeeds or fails with a `PasskeyPrfError`
     ///   (e.g. `.userCancelled`, `.authenticationFailed`).
     ///
     /// Callers that need a stronger "ready to derive" signal should try a
-    /// real `derivePrfSeed` and handle the error, rather than pre-checking.
+    /// real `deriveSeed` and handle the error, rather than pre-checking.
     ///
     /// - Returns: `true` on supported OS versions.
-    public func isPrfAvailable() async throws -> Bool {
+    public func isSupported() async throws -> Bool {
         return true
     }
 

@@ -75,7 +75,7 @@ impl FilePrfProvider {
 
 #[async_trait::async_trait]
 impl PrfProvider for FilePrfProvider {
-    async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
         // Use HMAC-SHA256(secret, salt) as the PRF output
         let mut engine = HmacEngine::<sha256::Hash>::new(&self.secret);
         engine.input(salt.as_bytes());
@@ -84,7 +84,7 @@ impl PrfProvider for FilePrfProvider {
         Ok(hmac.to_byte_array().to_vec())
     }
 
-    async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+    async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
         // File-based PRF is always available once initialized
         Ok(true)
     }

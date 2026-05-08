@@ -50,9 +50,9 @@ import technology.breez.spark.passkey.core.RegisteredCredential
  * @param userDisplayName User display name shown in the passkey picker.
  *   Defaults to [userName] (or [rpName] if [userName] is null). Only used
  *   during registration.
- * @param autoRegister When `true` (default), [derivePrfSeed] automatically
+ * @param autoRegister When `true` (default), [deriveSeed] automatically
  *   creates a new passkey if none exists for this RP ID, then retries the
- *   assertion. When `false`, [derivePrfSeed] throws
+ *   assertion. When `false`, [deriveSeed] throws
  *   [PasskeyPrfException.CredentialNotFound] instead, letting the caller
  *   control registration separately via [createPasskey].
  * @param allowCredentialIds When non-empty, restricts assertion (sign-in)
@@ -90,12 +90,12 @@ public class PasskeyProvider(
      * platform-level "already exists" check can fire on future create
      * attempts.
      *
-     * Set before calling [derivePrfSeed]. Not invoked on registration
+     * Set before calling [deriveSeed]. Not invoked on registration
      * (see [createPasskey]'s return value for that).
      */
     public var onAssertionCredentialId: ((ByteArray) -> Unit)? = null
 
-    override suspend fun derivePrfSeed(salt: String): ByteArray {
+    override suspend fun deriveSeed(salt: String): ByteArray {
         try {
             return CredentialManagerPrfCore.deriveSeedOrRegister(
                 activity = activityProvider(),
@@ -125,7 +125,7 @@ public class PasskeyProvider(
      *
      * Output ordering matches input ordering.
      */
-    override suspend fun derivePrfSeeds(salts: List<String>): List<ByteArray> {
+    override suspend fun deriveSeeds(salts: List<String>): List<ByteArray> {
         try {
             return CredentialManagerPrfCore.deriveSeedsOrRegister(
                 activity = activityProvider(),
@@ -143,8 +143,8 @@ public class PasskeyProvider(
         }
     }
 
-    override suspend fun isPrfAvailable(): Boolean =
-        CredentialManagerPrfCore.isPrfAvailable()
+    override suspend fun isSupported(): Boolean =
+        CredentialManagerPrfCore.isSupported()
 
     override suspend fun checkDomainAssociation(): DomainAssociation {
         val activity = activityProvider()

@@ -17,11 +17,11 @@ public extension PrfProvider {
     /// into a single ceremony.
     ///
     /// Output ordering matches input ordering.
-    func derivePrfSeeds(salts: [String]) async throws -> [Data] {
+    func deriveSeeds(salts: [String]) async throws -> [Data] {
         var out: [Data] = []
         out.reserveCapacity(salts.count)
         for salt in salts {
-            let seed = try await derivePrfSeed(salt: salt)
+            let seed = try await deriveSeed(salt: salt)
             out.append(seed)
         }
         return out
