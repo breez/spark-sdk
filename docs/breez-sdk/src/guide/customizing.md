@@ -32,6 +32,8 @@ When using the SDK Builder, you either have to provide a Storage implementation 
 
 The SDK includes a PostgreSQL backend as an alternative to file-based storage. Construct a connection pool once with {{#name create_postgres_connection_pool}} and pass it to the builder via {{#name with_postgres_connection_pool}} — this configures PostgreSQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. The same pool can be shared across multiple `SdkBuilder` instances; per-tenant scoping (rows isolated by seed identity) is preserved.
 
+If your service owns the database schema and applies SDK-compatible migrations externally, set `schema_managed_externally`/`schemaManagedExternally` on the storage config before creating the pool. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
+
 **Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
 {{#tabs sdk_building:init-sdk-postgres}}

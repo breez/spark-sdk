@@ -579,7 +579,7 @@ impl SdkBuilder {
                 .await
                 .map_err(|e| SdkError::Generic(e.to_string()))?
                 .serialize();
-            Some((pool.inner.clone(), identity))
+            Some((pool.inner.clone(), identity, pool.schema_managed_externally))
         } else {
             None
         };
@@ -595,7 +595,7 @@ impl SdkBuilder {
                 .await
                 .map_err(|e| SdkError::Generic(e.to_string()))?
                 .serialize();
-            Some((pool.inner.clone(), identity))
+            Some((pool.inner.clone(), identity, pool.schema_managed_externally))
         } else {
             None
         };
@@ -628,16 +628,21 @@ impl SdkBuilder {
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
             if s.is_none()
-                && let Some((ref pool, ref identity)) = postgres_backend
+                && let Some((ref pool, ref identity, schema_managed_externally)) = postgres_backend
             {
-                s = Some(Arc::new(
-                    crate::persist::postgres::PostgresStorage::new_with_pool(
+                let storage = if schema_managed_externally {
+                    crate::persist::postgres::PostgresStorage::new_with_pool_and_schema_management(
                         pool.clone(),
                         identity,
+                        true,
                     )
                     .await
-                    .map_err(|e| SdkError::Generic(e.to_string()))?,
-                ));
+                } else {
+                    crate::persist::postgres::PostgresStorage::new_with_pool(pool.clone(), identity)
+                        .await
+                }
+                .map_err(|e| SdkError::Generic(e.to_string()))?;
+                s = Some(Arc::new(storage));
             }
 
             #[cfg(all(
@@ -645,13 +650,20 @@ impl SdkBuilder {
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
             if s.is_none()
-                && let Some((ref pool, ref identity)) = mysql_backend
+                && let Some((ref pool, ref identity, schema_managed_externally)) = mysql_backend
             {
-                s = Some(Arc::new(
-                    crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone(), identity)
-                        .await
-                        .map_err(|e| SdkError::Generic(e.to_string()))?,
-                ));
+                let storage = if schema_managed_externally {
+                    crate::persist::mysql::MysqlStorage::new_with_pool_and_schema_management(
+                        pool.clone(),
+                        identity,
+                        true,
+                    )
+                    .await
+                } else {
+                    crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone(), identity).await
+                }
+                .map_err(|e| SdkError::Generic(e.to_string()))?;
+                s = Some(Arc::new(storage));
             }
 
             s.ok_or_else(|| SdkError::Generic("No storage configured".to_string()))?
@@ -697,20 +709,30 @@ impl SdkBuilder {
 
         #[cfg(feature = "postgres")]
         if tree_store.is_none()
-            && let Some((ref pool, ref identity)) = postgres_backend
+            && let Some((ref pool, ref identity, schema_managed_externally)) = postgres_backend
         {
             tree_store = Some(
-                crate::persist::postgres::create_postgres_tree_store(pool.clone(), identity)
-                    .await?,
+                crate::persist::postgres::create_postgres_tree_store(
+                    pool.clone(),
+                    identity,
+                    schema_managed_externally,
+                )
+                .await?,
             );
         }
 
         #[cfg(feature = "mysql")]
         if tree_store.is_none()
-            && let Some((ref pool, ref identity)) = mysql_backend
+            && let Some((ref pool, ref identity, schema_managed_externally)) = mysql_backend
         {
-            tree_store =
-                Some(crate::persist::mysql::create_mysql_tree_store(pool.clone(), identity).await?);
+            tree_store = Some(
+                crate::persist::mysql::create_mysql_tree_store(
+                    pool.clone(),
+                    identity,
+                    schema_managed_externally,
+                )
+                .await?,
+            );
         }
 
         // Create token output store if configured
@@ -719,20 +741,29 @@ impl SdkBuilder {
 
         #[cfg(feature = "postgres")]
         if token_output_store.is_none()
-            && let Some((ref pool, ref identity)) = postgres_backend
+            && let Some((ref pool, ref identity, schema_managed_externally)) = postgres_backend
         {
             token_output_store = Some(
-                crate::persist::postgres::create_postgres_token_store(pool.clone(), identity)
-                    .await?,
+                crate::persist::postgres::create_postgres_token_store(
+                    pool.clone(),
+                    identity,
+                    schema_managed_externally,
+                )
+                .await?,
             );
         }
 
         #[cfg(feature = "mysql")]
         if token_output_store.is_none()
-            && let Some((ref pool, ref identity)) = mysql_backend
+            && let Some((ref pool, ref identity, schema_managed_externally)) = mysql_backend
         {
             token_output_store = Some(
-                crate::persist::mysql::create_mysql_token_store(pool.clone(), identity).await?,
+                crate::persist::mysql::create_mysql_token_store(
+                    pool.clone(),
+                    identity,
+                    schema_managed_externally,
+                )
+                .await?,
             );
         }
 
@@ -743,20 +774,29 @@ impl SdkBuilder {
 
         #[cfg(feature = "postgres")]
         if inner_session_manager.is_none()
-            && let Some((ref pool, ref identity)) = postgres_backend
+            && let Some((ref pool, ref identity, schema_managed_externally)) = postgres_backend
         {
             inner_session_manager = Some(
-                crate::persist::postgres::create_postgres_session_manager(pool.clone(), identity)
-                    .await?,
+                crate::persist::postgres::create_postgres_session_manager(
+                    pool.clone(),
+                    identity,
+                    schema_managed_externally,
+                )
+                .await?,
             );
         }
 
         #[cfg(feature = "mysql")]
         if inner_session_manager.is_none()
-            && let Some((ref pool, ref identity)) = mysql_backend
+            && let Some((ref pool, ref identity, schema_managed_externally)) = mysql_backend
         {
             inner_session_manager = Some(
-                crate::persist::mysql::create_mysql_session_manager(pool.clone(), identity).await?,
+                crate::persist::mysql::create_mysql_session_manager(
+                    pool.clone(),
+                    identity,
+                    schema_managed_externally,
+                )
+                .await?,
             );
         }
 

@@ -34,6 +34,11 @@ pub struct MysqlStorageConfig {
     /// Only used when the connection string requests TLS
     /// (`ssl-mode=verify_ca` or `ssl-mode=verify_identity`).
     pub root_ca_pem: Option<String>,
+
+    /// If true, the SDK trusts that the database schema is managed by the
+    /// embedding service and skips all migrations, including writes to the
+    /// schema migrations tables.
+    pub schema_managed_externally: bool,
 }
 
 impl From<MysqlStorageConfig> for spark_mysql::MysqlStorageConfig {
@@ -43,6 +48,7 @@ impl From<MysqlStorageConfig> for spark_mysql::MysqlStorageConfig {
             max_pool_size: config.max_pool_size,
             recycle_timeout_secs: config.recycle_timeout_secs,
             root_ca_pem: config.root_ca_pem,
+            schema_managed_externally: config.schema_managed_externally,
         }
     }
 }
@@ -54,6 +60,7 @@ impl From<spark_mysql::MysqlStorageConfig> for MysqlStorageConfig {
             max_pool_size: config.max_pool_size,
             recycle_timeout_secs: config.recycle_timeout_secs,
             root_ca_pem: config.root_ca_pem,
+            schema_managed_externally: config.schema_managed_externally,
         }
     }
 }
@@ -124,28 +131,43 @@ pub(super) async fn run_migrations(
 pub(crate) async fn create_mysql_tree_store(
     pool: mysql_async::Pool,
     identity: &[u8],
+    schema_managed_externally: bool,
 ) -> Result<Arc<dyn TreeStore>, StorageError> {
-    spark_mysql::create_mysql_tree_store_from_pool(pool, identity)
-        .await
-        .map_err(StorageError::from)
+    spark_mysql::create_mysql_tree_store_from_pool_with_schema_management(
+        pool,
+        identity,
+        schema_managed_externally,
+    )
+    .await
+    .map_err(StorageError::from)
 }
 
 /// Creates a `MysqlTokenStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_mysql_token_store(
     pool: mysql_async::Pool,
     identity: &[u8],
+    schema_managed_externally: bool,
 ) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
-    spark_mysql::create_mysql_token_store_from_pool(pool, identity)
-        .await
-        .map_err(StorageError::from)
+    spark_mysql::create_mysql_token_store_from_pool_with_schema_management(
+        pool,
+        identity,
+        schema_managed_externally,
+    )
+    .await
+    .map_err(StorageError::from)
 }
 
 /// Creates a `MysqlSessionManager` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_mysql_session_manager(
     pool: mysql_async::Pool,
     identity: &[u8],
+    schema_managed_externally: bool,
 ) -> Result<Arc<dyn SessionManager>, StorageError> {
-    spark_mysql::create_mysql_session_manager_from_pool(pool, identity)
-        .await
-        .map_err(StorageError::from)
+    spark_mysql::create_mysql_session_manager_from_pool_with_schema_management(
+        pool,
+        identity,
+        schema_managed_externally,
+    )
+    .await
+    .map_err(StorageError::from)
 }

@@ -33,7 +33,7 @@ class MysqlSessionManager {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, schemaManagedExternally = false) {
     if (!identity || identity.length !== 33) {
       throw new SessionManagerError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -42,12 +42,15 @@ class MysqlSessionManager {
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.logger = logger;
+    this.schemaManagedExternally = schemaManagedExternally;
   }
 
   async initialize() {
     try {
-      const migrationManager = new MysqlSessionManagerMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool);
+      if (!this.schemaManagedExternally) {
+        const migrationManager = new MysqlSessionManagerMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool);
+      }
       return this;
     } catch (error) {
       throw new SessionManagerError(
@@ -125,13 +128,28 @@ function _decodePubkey(hex) {
 
 async function createMysqlSessionManager(poolConfig, identity, logger = null) {
   const pool = mysql.createPool(poolConfig);
-  const manager = new MysqlSessionManager(pool, identity, logger);
+  const manager = new MysqlSessionManager(
+    pool,
+    identity,
+    logger,
+    poolConfig.schemaManagedExternally === true
+  );
   await manager.initialize();
   return manager;
 }
 
-async function createMysqlSessionManagerWithPool(pool, identity, logger = null) {
-  const manager = new MysqlSessionManager(pool, identity, logger);
+async function createMysqlSessionManagerWithPool(
+  pool,
+  identity,
+  logger = null,
+  schemaManagedExternally = false
+) {
+  const manager = new MysqlSessionManager(
+    pool,
+    identity,
+    logger,
+    schemaManagedExternally
+  );
   await manager.initialize();
   return manager;
 }

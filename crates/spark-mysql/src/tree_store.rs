@@ -476,17 +476,34 @@ impl MysqlTreeStore {
         config: MysqlStorageConfig,
         identity: &[u8],
     ) -> Result<Self, MysqlError> {
+        let schema_managed_externally = config.schema_managed_externally;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::init(pool, identity, schema_managed_externally).await
     }
 
     /// Creates a new `MysqlTreeStore` from an existing connection pool.
     /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
     pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
-        Self::init(pool, identity).await
+        Self::init(pool, identity, false).await
     }
 
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
+    /// Creates a new `MysqlTreeStore` from an existing connection pool.
+    ///
+    /// When `schema_managed_externally` is true, initialization trusts the
+    /// existing schema and skips tree store migrations entirely.
+    pub async fn from_pool_with_schema_management(
+        pool: Pool,
+        identity: &[u8],
+        schema_managed_externally: bool,
+    ) -> Result<Self, MysqlError> {
+        Self::init(pool, identity, schema_managed_externally).await
+    }
+
+    async fn init(
+        pool: Pool,
+        identity: &[u8],
+        schema_managed_externally: bool,
+    ) -> Result<Self, MysqlError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
         let store = Self {
@@ -497,7 +514,9 @@ impl MysqlTreeStore {
             balance_changed_rx,
         };
 
-        store.migrate().await?;
+        if !schema_managed_externally {
+            store.migrate().await?;
+        }
         store.notify_balance_change();
 
         Ok(store)
@@ -1493,6 +1512,21 @@ pub async fn create_mysql_tree_store_from_pool(
     identity: &[u8],
 ) -> Result<Arc<dyn TreeStore>, MysqlError> {
     Ok(Arc::new(MysqlTreeStore::from_pool(pool, identity).await?))
+}
+
+/// Creates a `MysqlTreeStore` instance from an existing connection pool.
+///
+/// If `schema_managed_externally` is true, skips SDK-managed schema
+/// migrations and trusts that all required tables, columns, and indexes exist.
+pub async fn create_mysql_tree_store_from_pool_with_schema_management(
+    pool: Pool,
+    identity: &[u8],
+    schema_managed_externally: bool,
+) -> Result<Arc<dyn TreeStore>, MysqlError> {
+    Ok(Arc::new(
+        MysqlTreeStore::from_pool_with_schema_management(pool, identity, schema_managed_externally)
+            .await?,
+    ))
 }
 
 #[cfg(test)]

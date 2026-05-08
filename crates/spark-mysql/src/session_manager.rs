@@ -91,21 +91,40 @@ impl MysqlSessionManager {
         config: MysqlStorageConfig,
         identity: &[u8],
     ) -> Result<Self, MysqlError> {
+        let schema_managed_externally = config.schema_managed_externally;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::init(pool, identity, schema_managed_externally).await
     }
 
     /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
     pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
-        Self::init(pool, identity).await
+        Self::init(pool, identity, false).await
     }
 
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
+    /// Creates a new `MysqlSessionManager` from an existing connection pool.
+    ///
+    /// When `schema_managed_externally` is true, initialization trusts the
+    /// existing schema and skips session manager migrations entirely.
+    pub async fn from_pool_with_schema_management(
+        pool: Pool,
+        identity: &[u8],
+        schema_managed_externally: bool,
+    ) -> Result<Self, MysqlError> {
+        Self::init(pool, identity, schema_managed_externally).await
+    }
+
+    async fn init(
+        pool: Pool,
+        identity: &[u8],
+        schema_managed_externally: bool,
+    ) -> Result<Self, MysqlError> {
         let store = Self {
             pool,
             identity: identity.to_vec(),
         };
-        store.migrate().await?;
+        if !schema_managed_externally {
+            store.migrate().await?;
+        }
         Ok(store)
     }
 
@@ -151,6 +170,25 @@ pub async fn create_mysql_session_manager_from_pool(
 ) -> Result<Arc<dyn SessionManager>, MysqlError> {
     Ok(Arc::new(
         MysqlSessionManager::from_pool(pool, identity).await?,
+    ))
+}
+
+/// Creates a `MysqlSessionManager` from an existing connection pool.
+///
+/// If `schema_managed_externally` is true, skips SDK-managed schema
+/// migrations and trusts that the `sessions` table already exists.
+pub async fn create_mysql_session_manager_from_pool_with_schema_management(
+    pool: Pool,
+    identity: &[u8],
+    schema_managed_externally: bool,
+) -> Result<Arc<dyn SessionManager>, MysqlError> {
+    Ok(Arc::new(
+        MysqlSessionManager::from_pool_with_schema_management(
+            pool,
+            identity,
+            schema_managed_externally,
+        )
+        .await?,
     ))
 }
 

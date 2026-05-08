@@ -102,6 +102,8 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	postgresConfig.MaxPoolSize = 8 // Max connections in pool
 	waitTimeoutSecs := uint64(30)
 	postgresConfig.WaitTimeoutSecs = &waitTimeoutSecs // Timeout waiting for connection
+	// If your service owns SDK-compatible schema migrations:
+	postgresConfig.SchemaManagedExternally = true
 
 	// Construct the connection pool. The same pool can be passed to multiple
 	// SdkBuilders to share connections across SDKs; per-tenant scoping (rows

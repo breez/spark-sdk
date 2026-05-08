@@ -107,20 +107,23 @@ class MysqlStorage {
    *   so that multiple instances with distinct identities can share one DB.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, schemaManagedExternally = false) {
     if (!identity) {
       throw new StorageError("MysqlStorage requires a tenant identity");
     }
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.logger = logger;
+    this.schemaManagedExternally = schemaManagedExternally;
   }
 
   /** Initialize the database (run migrations). */
   async initialize() {
     try {
-      const migrationManager = new MysqlMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool, this.identity);
+      if (!this.schemaManagedExternally) {
+        const migrationManager = new MysqlMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool, this.identity);
+      }
       return this;
     } catch (error) {
       throw new StorageError(
@@ -1314,6 +1317,7 @@ function defaultMysqlStorageConfig(connectionString) {
     maxPoolSize: 10,
     createTimeoutSecs: 0,
     recycleTimeoutSecs: 10,
+    schemaManagedExternally: false,
   };
 }
 
@@ -1338,8 +1342,18 @@ function createMysqlPool(config) {
  * @param {Buffer|Uint8Array} identity - 33-byte tenant identity (secp256k1 pubkey)
  * @param {object} [logger]
  */
-async function createMysqlStorageWithPool(pool, identity, logger = null) {
-  const storage = new MysqlStorage(pool, identity, logger);
+async function createMysqlStorageWithPool(
+  pool,
+  identity,
+  logger = null,
+  schemaManagedExternally = false
+) {
+  const storage = new MysqlStorage(
+    pool,
+    identity,
+    logger,
+    schemaManagedExternally
+  );
   await storage.initialize();
   return storage;
 }
@@ -1354,7 +1368,12 @@ async function createMysqlStorageWithPool(pool, identity, logger = null) {
  */
 async function createMysqlStorage(config, identity, logger = null) {
   const pool = createMysqlPool(config);
-  return createMysqlStorageWithPool(pool, identity, logger);
+  return createMysqlStorageWithPool(
+    pool,
+    identity,
+    logger,
+    config.schemaManagedExternally === true
+  );
 }
 
 module.exports = {

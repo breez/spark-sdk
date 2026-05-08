@@ -24,6 +24,11 @@ pub struct MysqlStorageConfig {
     /// Only used when the connection string requests TLS (`ssl-mode=verify_ca`,
     /// `ssl-mode=verify_identity`).
     pub root_ca_pem: Option<String>,
+
+    /// If true, the SDK trusts that the database schema is managed by the
+    /// embedding service and skips all migrations, including writes to the
+    /// schema migrations tables.
+    pub schema_managed_externally: bool,
 }
 
 impl MysqlStorageConfig {
@@ -35,6 +40,7 @@ impl MysqlStorageConfig {
             max_pool_size: DEFAULT_MAX_POOL_SIZE,
             recycle_timeout_secs: None,
             root_ca_pem: None,
+            schema_managed_externally: false,
         }
     }
 }

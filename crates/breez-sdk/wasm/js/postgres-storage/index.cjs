@@ -77,13 +77,14 @@ class PostgresStorage {
    *   so that multiple instances with distinct identities can share one DB.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, schemaManagedExternally = false) {
     if (!identity) {
       throw new StorageError("PostgresStorage requires a tenant identity");
     }
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.logger = logger;
+    this.schemaManagedExternally = schemaManagedExternally;
   }
 
   /**
@@ -91,8 +92,10 @@ class PostgresStorage {
    */
   async initialize() {
     try {
-      const migrationManager = new PostgresMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool, this.identity);
+      if (!this.schemaManagedExternally) {
+        const migrationManager = new PostgresMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool, this.identity);
+      }
       return this;
     } catch (error) {
       throw new StorageError(
@@ -1390,6 +1393,7 @@ function defaultPostgresStorageConfig(connectionString) {
     maxPoolSize: 10,
     createTimeoutSecs: 0,
     recycleTimeoutSecs: 10,
+    schemaManagedExternally: false,
   };
 }
 
@@ -1409,7 +1413,12 @@ function defaultPostgresStorageConfig(connectionString) {
  */
 async function createPostgresStorage(config, identity, logger = null) {
   const pool = createPostgresPool(config);
-  return createPostgresStorageWithPool(pool, identity, logger);
+  return createPostgresStorageWithPool(
+    pool,
+    identity,
+    logger,
+    config.schemaManagedExternally === true
+  );
 }
 
 /**
@@ -1436,8 +1445,18 @@ function createPostgresPool(config) {
  * @param {object} [logger] - Optional logger
  * @returns {Promise<PostgresStorage>}
  */
-async function createPostgresStorageWithPool(pool, identity, logger = null) {
-  const storage = new PostgresStorage(pool, identity, logger);
+async function createPostgresStorageWithPool(
+  pool,
+  identity,
+  logger = null,
+  schemaManagedExternally = false
+) {
+  const storage = new PostgresStorage(
+    pool,
+    identity,
+    logger,
+    schemaManagedExternally
+  );
   await storage.initialize();
   return storage;
 }

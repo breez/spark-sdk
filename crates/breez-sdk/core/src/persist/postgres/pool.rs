@@ -22,6 +22,7 @@ use super::{PostgresStorageConfig, base::create_pool};
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct PostgresConnectionPool {
     pub(crate) inner: deadpool_postgres::Pool,
+    pub(crate) schema_managed_externally: bool,
 }
 
 /// Creates a shareable Postgres connection pool from the given configuration.
@@ -34,7 +35,10 @@ pub fn create_postgres_connection_pool(
     config: &PostgresStorageConfig,
 ) -> Result<Arc<PostgresConnectionPool>, SdkError> {
     let inner = create_pool(config).map_err(SdkError::from)?;
-    Ok(Arc::new(PostgresConnectionPool { inner }))
+    Ok(Arc::new(PostgresConnectionPool {
+        inner,
+        schema_managed_externally: config.schema_managed_externally,
+    }))
 }
 
 #[cfg(test)]

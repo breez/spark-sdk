@@ -39,7 +39,7 @@ class PostgresSessionManager {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, schemaManagedExternally = false) {
     if (!identity || identity.length !== 33) {
       throw new SessionManagerError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -48,12 +48,15 @@ class PostgresSessionManager {
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.logger = logger;
+    this.schemaManagedExternally = schemaManagedExternally;
   }
 
   async initialize() {
     try {
-      const migrationManager = new SessionManagerMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool);
+      if (!this.schemaManagedExternally) {
+        const migrationManager = new SessionManagerMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool);
+      }
       return this;
     } catch (error) {
       throw new SessionManagerError(
@@ -142,7 +145,12 @@ function _decodePubkey(hex) {
  */
 async function createPostgresSessionManager(poolConfig, identity, logger = null) {
   const pool = new pg.Pool(poolConfig);
-  const manager = new PostgresSessionManager(pool, identity, logger);
+  const manager = new PostgresSessionManager(
+    pool,
+    identity,
+    logger,
+    poolConfig.schemaManagedExternally === true
+  );
   await manager.initialize();
   return manager;
 }
@@ -151,8 +159,18 @@ async function createPostgresSessionManager(poolConfig, identity, logger = null)
  * Wraps an existing pool — useful when sharing the pool with the storage,
  * tree store, and token store implementations.
  */
-async function createPostgresSessionManagerWithPool(pool, identity, logger = null) {
-  const manager = new PostgresSessionManager(pool, identity, logger);
+async function createPostgresSessionManagerWithPool(
+  pool,
+  identity,
+  logger = null,
+  schemaManagedExternally = false
+) {
+  const manager = new PostgresSessionManager(
+    pool,
+    identity,
+    logger,
+    schemaManagedExternally
+  );
   await manager.initialize();
   return manager;
 }

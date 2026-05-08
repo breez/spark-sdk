@@ -73,6 +73,11 @@ pub struct PostgresStorageConfig {
     /// If `None`, uses Mozilla's root certificate store (via webpki-roots).
     /// Only used with `sslmode=verify-ca` or `sslmode=verify-full`.
     pub root_ca_pem: Option<String>,
+
+    /// If true, the SDK trusts that the database schema is managed by the
+    /// embedding service and skips all migrations, including writes to the
+    /// schema migrations tables.
+    pub schema_managed_externally: bool,
 }
 
 impl PostgresStorageConfig {
@@ -95,6 +100,7 @@ impl PostgresStorageConfig {
             recycle_timeout_secs: defaults.timeouts.recycle.map(|d| d.as_secs()),
             queue_mode: defaults.queue_mode.into(),
             root_ca_pem: None,
+            schema_managed_externally: false,
         }
     }
 }
@@ -111,6 +117,7 @@ impl PostgresStorageConfig {
 /// - `recycle_timeout_secs`: `None` (no timeout)
 /// - `queue_mode`: FIFO
 /// - `root_ca_pem`: `None` (uses Mozilla's root certificate store)
+/// - `schema_managed_externally`: `false` (SDK runs migrations)
 #[must_use]
 pub fn default_postgres_storage_config(connection_string: String) -> PostgresStorageConfig {
     PostgresStorageConfig::with_defaults(connection_string)

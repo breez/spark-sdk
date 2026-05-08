@@ -64,7 +64,7 @@ class PostgresTokenStore {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, schemaManagedExternally = false) {
     if (!identity || identity.length !== 33) {
       throw new TokenStoreError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -74,6 +74,7 @@ class PostgresTokenStore {
     this.identity = Buffer.from(identity);
     this.lockKey = _identityLockKey(TOKEN_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
+    this.schemaManagedExternally = schemaManagedExternally;
   }
 
   /**
@@ -81,8 +82,10 @@ class PostgresTokenStore {
    */
   async initialize() {
     try {
-      const migrationManager = new TokenStoreMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool, this.identity);
+      if (!this.schemaManagedExternally) {
+        const migrationManager = new TokenStoreMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool, this.identity);
+      }
       return this;
     } catch (error) {
       throw new TokenStoreError(
@@ -1015,7 +1018,12 @@ async function createPostgresTokenStore(config, identity, logger = null) {
     connectionTimeoutMillis: config.createTimeoutSecs * 1000,
     idleTimeoutMillis: config.recycleTimeoutSecs * 1000,
   });
-  return createPostgresTokenStoreWithPool(pool, identity, logger);
+  return createPostgresTokenStoreWithPool(
+    pool,
+    identity,
+    logger,
+    config.schemaManagedExternally === true
+  );
 }
 
 /**
@@ -1026,8 +1034,18 @@ async function createPostgresTokenStore(config, identity, logger = null) {
  * @param {object} [logger] - Optional logger
  * @returns {Promise<PostgresTokenStore>}
  */
-async function createPostgresTokenStoreWithPool(pool, identity, logger = null) {
-  const store = new PostgresTokenStore(pool, identity, logger);
+async function createPostgresTokenStoreWithPool(
+  pool,
+  identity,
+  logger = null,
+  schemaManagedExternally = false
+) {
+  const store = new PostgresTokenStore(
+    pool,
+    identity,
+    logger,
+    schemaManagedExternally
+  );
   await store.initialize();
   return store;
 }
