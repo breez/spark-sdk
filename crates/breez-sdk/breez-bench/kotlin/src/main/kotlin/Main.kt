@@ -78,6 +78,20 @@ fun deriveSeedBytes(masterSecret: String, userId: String): ByteArray {
     return mac.doFinal(userId.toByteArray(Charsets.UTF_8))
 }
 
+// --- bench config ---------------------------------------------------------
+
+/**
+ * Regtest defaults with real-time sync disabled. Per-request SDK
+ * lifecycle can't act on RT sync deltas (the SDK is destroyed before
+ * they arrive), and every build paying for a fresh websocket dial to
+ * `datasync.breez.technology` was burning ephemeral ports under load.
+ */
+fun benchConfig(): breez_sdk_spark.Config {
+    val c = defaultConfig(Network.REGTEST)
+    c.realTimeSyncServerUrl = null
+    return c
+}
+
 // --- shared SDK transports ------------------------------------------------
 
 /**
@@ -136,7 +150,7 @@ class BenchSdkProvider(
     private val masterSecret: String,
     private val handlers: SharedHandlers,
 ) {
-    private val config = defaultConfig(Network.REGTEST)
+    private val config = benchConfig()
     private val mutexes = ConcurrentHashMap<String, Mutex>()
 
     suspend fun <T> withUser(userId: String, op: suspend (BreezSdk) -> T): T {
@@ -203,7 +217,7 @@ fun smokeTest(opts: Map<String, String>) = runBlocking {
     println("[smoke] user-id=$userId  mysql=${maskPassword(mysqlUrl)}")
 
     val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
-    val config = defaultConfig(Network.REGTEST)
+    val config = benchConfig()
     val handlers = SharedHandlers.create(mysqlUrl)
 
     println("[smoke] building SDK")
@@ -256,7 +270,7 @@ fun traceSync(opts: Map<String, String>) = runBlocking {
 
     println("[trace] building SDK …")
     val tBuild = System.currentTimeMillis()
-    val sdk = buildSdk(defaultConfig(Network.REGTEST), seed, handlers)
+    val sdk = buildSdk(benchConfig(), seed, handlers)
     println("[trace] build took ${System.currentTimeMillis() - tBuild}ms")
 
     try {
@@ -305,7 +319,7 @@ fun fundTreasurer(opts: Map<String, String>) = runBlocking {
 
     val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, TREASURER_USER_ID))
     val handlers = SharedHandlers.create(mysqlUrl)
-    val sdk = buildSdk(defaultConfig(Network.REGTEST), seed, handlers)
+    val sdk = buildSdk(benchConfig(), seed, handlers)
 
     try {
         // Fast path: if the locally-cached balance is already at-or-above
@@ -418,7 +432,7 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
             "mysql=${maskPassword(mysqlUrl)}"
     )
 
-    val config = defaultConfig(Network.REGTEST)
+    val config = benchConfig()
     val handlers = SharedHandlers.create(mysqlUrl)
 
     val treasurerSeed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, TREASURER_USER_ID))
