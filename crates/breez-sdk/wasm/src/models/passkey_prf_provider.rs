@@ -184,7 +184,9 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
 /// per `index.d.ts#CreatePasskeyRequest`. `Vec<u8>` payloads cross as
 /// `Uint8Array` (not plain arrays) to match what the JS provider's
 /// `navigator.credentials.create` call expects.
-fn build_create_passkey_request(request: &CreatePasskeyRequest) -> Result<JsValue, PasskeyPrfError> {
+fn build_create_passkey_request(
+    request: &CreatePasskeyRequest,
+) -> Result<JsValue, PasskeyPrfError> {
     let obj = js_sys::Object::new();
 
     if !request.exclude_credential_ids.is_empty() {
