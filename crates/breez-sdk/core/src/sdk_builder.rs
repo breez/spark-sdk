@@ -220,6 +220,46 @@ impl SdkBuilder {
         self
     }
 
+    /// Sets a shared `PostgreSQL` connection pool as the backend for all
+    /// stores (storage, tree store, and token store).
+    ///
+    /// Construct the pool once via
+    /// [`create_postgres_connection_pool`](crate::create_postgres_connection_pool) and pass the same
+    /// `Arc` to multiple `SdkBuilder` instances to share connections across
+    /// SDKs. Per-tenant scoping is derived from each SDK's seed.
+    ///
+    /// # Arguments
+    /// - `pool`: The shared `PostgreSQL` connection pool.
+    #[cfg(feature = "postgres")]
+    #[deprecated(
+        note = "Call `create_postgres_connection_pool(&config)` and `with_postgres_connection_pool(pool)` instead."
+    )]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn with_postgres_backend(
+        self,
+        config: crate::persist::postgres::PostgresStorageConfig,
+    ) -> Result<Self, SdkError> {
+        let pool = crate::persist::postgres::create_postgres_connection_pool(&config)?;
+        Ok(self.with_postgres_connection_pool(pool))
+    }
+
+    /// Sets `MySQL` as the backend for all stores (storage, tree store, and token store).
+    /// The store instances will be created during `build()`.
+    /// Arguments:
+    /// - `config`: The `MySQL` storage configuration.
+    #[cfg(feature = "mysql")]
+    #[deprecated(
+        note = "Call `create_mysql_connection_pool(&config)` and `with_mysql_connection_pool(pool)` instead."
+    )]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn with_mysql_backend(
+        self,
+        config: crate::persist::mysql::MysqlStorageConfig,
+    ) -> Result<Self, SdkError> {
+        let pool = crate::persist::mysql::create_mysql_connection_pool(&config)?;
+        Ok(self.with_mysql_connection_pool(pool))
+    }
+
     /// Sets the chain service to be used by the SDK.
     /// Arguments:
     /// - `chain_service`: The chain service to be used.

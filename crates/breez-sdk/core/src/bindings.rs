@@ -123,6 +123,22 @@ impl SdkBuilder {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_postgres_connection_pool(pool);
     }
+
+    /// **Deprecated.** Call `with_postgres_connection_pool(&config)` and `with_postgres_connection_pool(pool) instead`.
+    ///
+    /// Sets `PostgreSQL` as the backend for all stores (storage, tree store, and token store).
+    /// The store instances will be created during `build()`.
+    /// Arguments:
+    /// - `config`: The `PostgreSQL` storage configuration.
+    #[allow(deprecated)]
+    pub async fn with_postgres_backend(
+        &self,
+        config: crate::persist::postgres::PostgresStorageConfig,
+    ) -> Result<(), SdkError> {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_postgres_backend(config)?;
+        Ok(())
+    }
 }
 
 #[cfg(all(
@@ -141,5 +157,21 @@ impl SdkBuilder {
     ) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_mysql_connection_pool(pool);
+    }
+
+    /// **Deprecated.** Call `with_mysql_connection_pool(&config)` and `with_mysql_connection_pool(pool) instead`.
+    ///
+    /// Sets `MySQL` as the backend for all stores (storage, tree store, and token store).
+    /// The store instances will be created during `build()`.
+    /// Arguments:
+    /// - `config`: The `MySQL` storage configuration.
+    #[allow(deprecated)]
+    pub async fn with_mysql_backend(
+        &self,
+        config: crate::persist::mysql::MysqlStorageConfig,
+    ) -> Result<(), SdkError> {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_mysql_backend(config)?;
+        Ok(())
     }
 }

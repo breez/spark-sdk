@@ -15,8 +15,9 @@ use crate::{
     persist::{
         Storage, WasmStorage,
         pool::{
-            JsPool, create_mysql_storage_with_pool, create_mysql_token_store_with_pool,
-            create_mysql_tree_store_with_pool, create_postgres_storage_with_pool,
+            JsPool, create_mysql_pool, create_mysql_storage_with_pool,
+            create_mysql_token_store_with_pool, create_mysql_tree_store_with_pool,
+            create_postgres_pool, create_postgres_storage_with_pool,
             create_postgres_token_store_with_pool, create_postgres_tree_store_with_pool,
         },
     },
@@ -176,6 +177,22 @@ impl SdkBuilder {
     pub fn with_mysql_connection_pool(mut self, pool: &MysqlConnectionPool) -> Self {
         self.mysql_pool = Some(pool.cloned_inner());
         self
+    }
+
+    /// **Deprecated.** Call `withPostgresConnectionPool(config)` and `withPostgresConnectionPool(pool)` instead.
+    #[wasm_bindgen(js_name = "withPostgresBackend")]
+    pub fn with_postgres_backend(mut self, config: PostgresStorageConfig) -> WasmResult<Self> {
+        let pool = create_postgres_pool(config)?;
+        self.postgres_pool = Some(Rc::new(pool));
+        Ok(self)
+    }
+
+    /// **Deprecated.** Call `withMysqlConnectionPool(config)` and `withMysqlConnectionPool(pool)` instead.
+    #[wasm_bindgen(js_name = "withMysqlBackend")]
+    pub fn with_mysql_backend(mut self, config: MysqlStorageConfig) -> WasmResult<Self> {
+        let pool = create_mysql_pool(config)?;
+        self.mysql_pool = Some(Rc::new(pool));
+        Ok(self)
     }
 
     #[wasm_bindgen(js_name = "withKeySet")]
