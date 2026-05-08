@@ -43,8 +43,4 @@ pub trait LabelStore: Send + Sync {
         identity: &Identity,
         label: &str,
     ) -> Result<(), PasskeyError>;
-
-    /// Publish `label` unconditionally. Used by callers that
-    /// already know the label is new.
-    async fn store_label(&self, identity: &Identity, label: &str) -> Result<(), PasskeyError>;
 }
