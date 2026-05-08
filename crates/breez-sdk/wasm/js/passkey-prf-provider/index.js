@@ -198,7 +198,7 @@ export class PasskeyProvider {
      *   primary label in the passkey picker. Defaults to userName. Only used during
      *   registration; changing it does not affect existing credentials.
      * @param {boolean} [options.autoRegister=true] - When true (default),
-     *   `derivePrfSeed` automatically creates a new passkey if none exists for
+     *   `deriveSeed` automatically creates a new passkey if none exists for
      *   this RP ID, then retries the assertion. When false, throws an error
      *   instead, letting the caller control registration separately via
      *   `createPasskey()`.
@@ -306,10 +306,10 @@ export class PasskeyProvider {
      * Derive a 32-byte seed from passkey PRF.
      *
      * @param {string} salt
-     * @param {DerivePrfSeedOptions} [options]
+     * @param {DeriveSeedOptions} [options]
      * @returns {Promise<Uint8Array>}
      */
-    async derivePrfSeed(salt, options = {}) {
+    async deriveSeed(salt, options = {}) {
         const saltBytes = new TextEncoder().encode(salt);
         try {
             return await this._getAssertionWithPrf(saltBytes, options);
@@ -328,18 +328,18 @@ export class PasskeyProvider {
      * `prf.eval.second` per ceremony where the platform honors it;
      * authenticators that silently drop `second` trigger a single-salt
      * fallback for the affected salt. Worst case is the same prompt
-     * count as looping `derivePrfSeed`.
+     * count as looping `deriveSeed`.
      *
      * @param {string[]} salts - Caller-ordered.
-     * @param {DerivePrfSeedOptions} [options]
+     * @param {DeriveSeedOptions} [options]
      * @returns {Promise<Uint8Array[]>} One 32-byte output per salt, in input order.
      */
-    async derivePrfSeeds(salts, options = {}) {
+    async deriveSeeds(salts, options = {}) {
         if (!Array.isArray(salts) || salts.length === 0) {
             return [];
         }
         if (salts.length === 1) {
-            return [await this.derivePrfSeed(salts[0], options)];
+            return [await this.deriveSeed(salts[0], options)];
         }
 
         const out = [];
@@ -353,10 +353,10 @@ export class PasskeyProvider {
                     idx += 2;
                     continue;
                 }
-                out.push(await this.derivePrfSeed(salts[idx + 1], options));
+                out.push(await this.deriveSeed(salts[idx + 1], options));
                 idx += 2;
             } else {
-                out.push(await this.derivePrfSeed(salts[idx], options));
+                out.push(await this.deriveSeed(salts[idx], options));
                 idx += 1;
             }
         }
@@ -428,7 +428,7 @@ export class PasskeyProvider {
      *
      * @returns {Promise<boolean>} true if WebAuthn with PRF extension is likely supported.
      */
-    async isPrfAvailable() {
+    async isSupported() {
         try {
             if (typeof window === 'undefined' || !window.PublicKeyCredential) {
                 return false;
@@ -519,7 +519,7 @@ export class PasskeyProvider {
 
     /**
      * @param {Uint8Array} saltBytes
-     * @param {DerivePrfSeedOptions} options
+     * @param {DeriveSeedOptions} options
      * @returns {Promise<Uint8Array>}
      * @private
      */
@@ -542,7 +542,7 @@ export class PasskeyProvider {
      *
      * @param {string} salt1
      * @param {string} salt2
-     * @param {DerivePrfSeedOptions} options
+     * @param {DeriveSeedOptions} options
      * @returns {Promise<[Uint8Array, Uint8Array|null]>}
      * @private
      */
@@ -564,7 +564,7 @@ export class PasskeyProvider {
     /**
      * @param {Uint8Array} salt1Bytes
      * @param {Uint8Array} salt2Bytes
-     * @param {DerivePrfSeedOptions} options
+     * @param {DeriveSeedOptions} options
      * @returns {Promise<[Uint8Array, Uint8Array|null]>}
      * @private
      */
@@ -589,7 +589,7 @@ export class PasskeyProvider {
      * onCredentialId callback. Shared by single- and dual-salt paths.
      *
      * @param {{ first: Uint8Array, second?: Uint8Array }} prfEval
-     * @param {DerivePrfSeedOptions} options
+     * @param {DeriveSeedOptions} options
      * @returns {Promise<PublicKeyCredential>}
      * @private
      */

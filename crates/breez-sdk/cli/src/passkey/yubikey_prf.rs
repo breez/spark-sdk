@@ -34,7 +34,7 @@ impl YubiKeyPrfProvider {
 
 #[async_trait::async_trait]
 impl PrfProvider for YubiKeyPrfProvider {
-    async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
         eprintln!("Touch your YubiKey (if configured)...");
 
         tokio::task::spawn_blocking(move || {
@@ -71,7 +71,7 @@ impl PrfProvider for YubiKeyPrfProvider {
         .map_err(|e| PasskeyPrfError::Generic(format!("Task join error: {e}")))?
     }
 
-    async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+    async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
         let mut cr = ChallengeResponse::new()
             .map_err(|_| PasskeyPrfError::Generic("YubiKey init failed".into()))?;
         Ok(cr.find_device().is_ok())

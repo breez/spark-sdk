@@ -31,7 +31,7 @@ pub(crate) fn js_error_to_passkey_prf_error(js_error: JsValue) -> PasskeyPrfErro
 
 pub struct WasmPrfProvider {
     pub inner: PrfProvider,
-    /// Cached `derivePrfSeeds` presence probe; the JS provider's
+    /// Cached `deriveSeeds` presence probe; the JS provider's
     /// method set doesn't change between calls.
     supports_bulk: OnceLock<bool>,
     /// Cached `createPasskey` presence probe.
@@ -68,10 +68,10 @@ unsafe impl Sync for WasmPrfProvider {}
 
 #[macros::async_trait]
 impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
-    async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
         let promise = self
             .inner
-            .derive_prf_seed(salt)
+            .derive_seed(salt)
             .map_err(js_error_to_passkey_prf_error)?;
         let future = JsFuture::from(promise);
         let result = future.await.map_err(js_error_to_passkey_prf_error)?;
@@ -81,36 +81,36 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         Ok(array.to_vec())
     }
 
-    async fn derive_prf_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
-        // Custom providers that only implement legacy `derivePrfSeed`
+    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
+        // Custom providers that only implement legacy `deriveSeed`
         // fall back to the trait's default loop (N prompts for N salts).
-        if !self.js_has_method("derivePrfSeeds", &self.supports_bulk) {
+        if !self.js_has_method("deriveSeeds", &self.supports_bulk) {
             let mut out = Vec::with_capacity(salts.len());
             for salt in salts {
-                out.push(self.derive_prf_seed(salt).await?);
+                out.push(self.derive_seed(salt).await?);
             }
             return Ok(out);
         }
 
-        // Build a JS array of strings to pass to derivePrfSeeds.
+        // Build a JS array of strings to pass to deriveSeeds.
         let salts_array = js_sys::Array::new();
         for salt in &salts {
             salts_array.push(&JsValue::from_str(salt));
         }
 
         let target: &JsValue = self.inner.as_ref();
-        let func = js_sys::Reflect::get(target, &JsValue::from_str("derivePrfSeeds"))
+        let func = js_sys::Reflect::get(target, &JsValue::from_str("deriveSeeds"))
             .map_err(js_error_to_passkey_prf_error)?
             .dyn_into::<js_sys::Function>()
             .map_err(|_| {
-                PasskeyPrfError::Generic("derivePrfSeeds is not a function".to_string())
+                PasskeyPrfError::Generic("deriveSeeds is not a function".to_string())
             })?;
         let result_promise = func
             .call1(target, &salts_array)
             .map_err(js_error_to_passkey_prf_error)?
             .dyn_into::<Promise>()
             .map_err(|_| {
-                PasskeyPrfError::Generic("derivePrfSeeds did not return a Promise".to_string())
+                PasskeyPrfError::Generic("deriveSeeds did not return a Promise".to_string())
             })?;
         let result = JsFuture::from(result_promise)
             .await
@@ -121,7 +121,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         let len = array.length() as usize;
         if len != salts.len() {
             return Err(PasskeyPrfError::Generic(format!(
-                "derivePrfSeeds returned {} outputs, expected {}",
+                "deriveSeeds returned {} outputs, expected {}",
                 len,
                 salts.len()
             )));
@@ -135,10 +135,10 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         Ok(out)
     }
 
-    async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+    async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
         let promise = self
             .inner
-            .is_prf_available()
+            .is_supported()
             .map_err(js_error_to_passkey_prf_error)?;
         let future = JsFuture::from(promise);
         let result = future.await.map_err(js_error_to_passkey_prf_error)?;
@@ -268,7 +268,7 @@ const PRF_PROVIDER_INTERFACE: &'static str = r#"/**
  * @example
  * ```typescript
  * class BrowserPasskeyProvider implements PrfProvider {
- *     async derivePrfSeed(salt: string): Promise<Uint8Array> {
+ *     async deriveSeed(salt: string): Promise<Uint8Array> {
  *         const credential = await navigator.credentials.get({
  *             publicKey: {
  *                 challenge: new Uint8Array(32),
@@ -283,7 +283,7 @@ const PRF_PROVIDER_INTERFACE: &'static str = r#"/**
  *         return new Uint8Array(results.prf.results.first);
  *     }
  *
- *     async isPrfAvailable(): Promise<boolean> {
+ *     async isSupported(): Promise<boolean> {
  *         return window.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable?.() ?? false;
  *     }
  * }
@@ -301,21 +301,21 @@ export interface PrfProvider {
      * @returns A Promise resolving to the 32-byte PRF output
      * @throws If authentication fails or PRF is not supported
      */
-    derivePrfSeed(salt: string): Promise<Uint8Array>;
+    deriveSeed(salt: string): Promise<Uint8Array>;
 
     /**
      * Optional bulk PRF derivation. Implementations that can collapse
      * multiple derivations into a single user prompt (e.g. WebAuthn PRF
      * with `prf.eval.first` + `prf.eval.second`) should override this.
      * The SDK detects the presence of this method at runtime and falls
-     * back to looping `derivePrfSeed` when absent or unavailable.
+     * back to looping `deriveSeed` when absent or unavailable.
      *
      * Output ordering matches input ordering.
      *
      * @param salts - Salt strings in caller order
      * @returns A Promise resolving to one 32-byte output per salt
      */
-    derivePrfSeeds?(salts: string[]): Promise<Uint8Array[]>;
+    deriveSeeds?(salts: string[]): Promise<Uint8Array[]>;
 
     /**
      * Optional explicit registration. Platform passkey providers (browser
@@ -324,7 +324,7 @@ export interface PrfProvider {
      * `aaguid`, optional `backupEligible`) that callers need for
      * `excludeCredentialIds` bookkeeping. Custom providers without an
      * explicit creation step (CLI / hardware backends that auto-register
-     * inside `derivePrfSeed`) can omit this method.
+     * inside `deriveSeed`) can omit this method.
      *
      * @throws `PasskeyAlreadyExistsError` when an entry in
      *   `excludeCredentialIds` matches a credential already on the
@@ -339,7 +339,7 @@ export interface PrfProvider {
      *
      * @returns A Promise resolving to true if a PRF-capable source is available
      */
-    isPrfAvailable(): Promise<boolean>;
+    isSupported(): Promise<boolean>;
 }
 
 /**
@@ -371,9 +371,9 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "PrfProvider")]
     pub type PrfProvider;
 
-    #[wasm_bindgen(structural, method, js_name = "derivePrfSeed", catch)]
-    pub fn derive_prf_seed(this: &PrfProvider, salt: String) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(structural, method, js_name = "deriveSeed", catch)]
+    pub fn derive_seed(this: &PrfProvider, salt: String) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = "isPrfAvailable", catch)]
-    pub fn is_prf_available(this: &PrfProvider) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(structural, method, js_name = "isSupported", catch)]
+    pub fn is_supported(this: &PrfProvider) -> Result<Promise, JsValue>;
 }

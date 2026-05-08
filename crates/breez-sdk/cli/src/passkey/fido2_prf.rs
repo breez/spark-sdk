@@ -185,7 +185,7 @@ impl Fido2PrfProvider {
 
 #[async_trait::async_trait]
 impl PrfProvider for Fido2PrfProvider {
-    async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
         let rp_id = self.rp_id.clone();
         let rp_name = self.rp_name.clone();
         let cache = Arc::clone(&self.cache);
@@ -214,7 +214,7 @@ impl PrfProvider for Fido2PrfProvider {
         .map_err(|e| PasskeyPrfError::Generic(format!("Task join error: {e}")))?
     }
 
-    async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+    async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
         // Check if a FIDO2 device is connected
         match FidoKeyHidFactory::create(&fido2_cfg()) {
             Ok(device) => {

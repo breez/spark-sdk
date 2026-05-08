@@ -22,21 +22,21 @@ fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
 /// Bulk PRF override on Flutter is blocked on flutter_rust_bridge
 /// supporting `Option<impl Fn(...) -> DartFnFuture<...>>` parameters.
 struct CallbackPrfProvider {
-    derive_prf_seed_fn: Arc<dyn Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync>,
-    is_prf_available_fn: Arc<dyn Fn() -> DartFnFuture<bool> + Send + Sync>,
+    derive_seed_fn: Arc<dyn Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync>,
+    is_supported_fn: Arc<dyn Fn() -> DartFnFuture<bool> + Send + Sync>,
 }
 
 #[async_trait::async_trait]
 impl PrfProvider for CallbackPrfProvider {
-    async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
-        AssertUnwindSafe((self.derive_prf_seed_fn)(salt))
+    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        AssertUnwindSafe((self.derive_seed_fn)(salt))
             .catch_unwind()
             .await
             .map_err(|e| PasskeyPrfError::Generic(panic_message(e)))
     }
 
-    async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
-        AssertUnwindSafe((self.is_prf_available_fn)())
+    async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
+        AssertUnwindSafe((self.is_supported_fn)())
             .catch_unwind()
             .await
             .map_err(|e| PasskeyPrfError::Generic(panic_message(e)))
@@ -62,13 +62,13 @@ impl PasskeyClient {
     /// Construct using Dart callbacks for the underlying `PrfProvider`.
     #[frb(sync)]
     pub fn new(
-        derive_prf_seed: impl Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
-        is_prf_available: impl Fn() -> DartFnFuture<bool> + Send + Sync + 'static,
+        derive_seed: impl Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
+        is_supported: impl Fn() -> DartFnFuture<bool> + Send + Sync + 'static,
         relay_config: Option<NostrRelayConfig>,
     ) -> Self {
         let provider = Arc::new(CallbackPrfProvider {
-            derive_prf_seed_fn: Arc::new(derive_prf_seed),
-            is_prf_available_fn: Arc::new(is_prf_available),
+            derive_seed_fn: Arc::new(derive_seed),
+            is_supported_fn: Arc::new(is_supported),
         });
         Self {
             inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, relay_config),
@@ -130,30 +130,30 @@ mod tests {
         is_available: impl Fn() -> DartFnFuture<bool> + Send + Sync + 'static,
     ) -> CallbackPrfProvider {
         CallbackPrfProvider {
-            derive_prf_seed_fn: Arc::new(derive),
-            is_prf_available_fn: Arc::new(is_available),
+            derive_seed_fn: Arc::new(derive),
+            is_supported_fn: Arc::new(is_available),
         }
     }
 
     #[tokio::test]
-    async fn test_derive_prf_seed_success() {
+    async fn test_derive_seed_success() {
         let expected = vec![42u8; 32];
         let expected_clone = expected.clone();
         let provider = make_provider(
             move |_salt| ready(expected_clone.clone()),
             || ready(true),
         );
-        let result = provider.derive_prf_seed("test".to_string()).await;
+        let result = provider.derive_seed("test".to_string()).await;
         assert_eq!(result.unwrap(), expected);
     }
 
     #[tokio::test]
-    async fn test_derive_prf_seed_panic_caught() {
+    async fn test_derive_seed_panic_caught() {
         let provider = make_provider(
             |_salt| panicking("Dart threw an exception"),
             || ready(true),
         );
-        let err = provider.derive_prf_seed("test".to_string()).await.unwrap_err();
+        let err = provider.derive_seed("test".to_string()).await.unwrap_err();
         assert!(
             matches!(err, PasskeyPrfError::Generic(ref msg) if msg.contains("Dart threw an exception")),
             "Expected Generic error with panic message, got: {err:?}"
@@ -161,18 +161,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_is_prf_available_success() {
+    async fn test_is_supported_success() {
         let provider = make_provider(|_salt| ready(vec![]), || ready(false));
-        assert!(!provider.is_prf_available().await.unwrap());
+        assert!(!provider.is_supported().await.unwrap());
     }
 
     #[tokio::test]
-    async fn test_is_prf_available_panic_caught() {
+    async fn test_is_supported_panic_caught() {
         let provider = make_provider(
             |_salt| ready(vec![]),
             || panicking("device check failed"),
         );
-        let err = provider.is_prf_available().await.unwrap_err();
+        let err = provider.is_supported().await.unwrap_err();
         assert!(
             matches!(err, PasskeyPrfError::Generic(ref msg) if msg.contains("device check failed")),
             "Expected Generic error with panic message, got: {err:?}"
@@ -180,13 +180,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_derive_prf_seeds_falls_back_to_loop() {
+    async fn test_derive_seeds_falls_back_to_loop() {
         let provider = make_provider(
             move |salt| ready(format!("seed:{salt}").into_bytes()),
             || ready(true),
         );
         let seeds = provider
-            .derive_prf_seeds(vec!["a".into(), "b".into()])
+            .derive_seeds(vec!["a".into(), "b".into()])
             .await
             .unwrap();
         assert_eq!(seeds, vec![b"seed:a".to_vec(), b"seed:b".to_vec()]);

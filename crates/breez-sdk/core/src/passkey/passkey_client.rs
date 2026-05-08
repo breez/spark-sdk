@@ -365,11 +365,11 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for MockProvider {
-        async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
             Ok(self.output_for(&salt))
         }
 
-        async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+        async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
             Ok(true)
         }
 

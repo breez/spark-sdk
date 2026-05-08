@@ -133,7 +133,7 @@ impl Passkey {
             .get_or_try_init(|| async {
                 let account_master = self
                     .prf_provider
-                    .derive_prf_seed(ACCOUNT_MASTER_SALT.to_string())
+                    .derive_seed(ACCOUNT_MASTER_SALT.to_string())
                     .await?;
                 let keys = derive_nostr_keypair(&account_master)?;
                 Ok(Identity { keys })
@@ -199,10 +199,10 @@ impl Passkey {
             salts.push(format!("{APP_SALT_PREFIX}{}", s.name));
         }
 
-        let seeds = self.prf_provider.derive_prf_seeds(salts).await?;
+        let seeds = self.prf_provider.derive_seeds(salts).await?;
         if seeds.len() != expected {
             return Err(PasskeyError::PrfError(PasskeyPrfError::Generic(format!(
-                "derive_prf_seeds returned {} outputs, expected {expected}",
+                "derive_seeds returned {} outputs, expected {expected}",
                 seeds.len()
             ))));
         }
@@ -268,7 +268,7 @@ impl Passkey {
     /// Delegates to the platform's `PrfProvider` implementation.
     pub async fn is_available(&self) -> Result<bool, PasskeyError> {
         self.prf_provider
-            .is_prf_available()
+            .is_supported()
             .await
             .map_err(PasskeyError::from)
     }
@@ -331,11 +331,11 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for MockPrfProvider {
-        async fn derive_prf_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
             Ok(self.seed.to_vec())
         }
 
-        async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+        async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
             Ok(true)
         }
     }
@@ -357,7 +357,7 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for SaltAwareMockProvider {
-        async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
             let mut outputs = self.salt_outputs.lock().unwrap();
             if let Some(output) = outputs.get(&salt) {
                 return Ok(output.clone());
@@ -379,7 +379,7 @@ mod tests {
             Ok(output.to_vec())
         }
 
-        async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+        async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
             Ok(true)
         }
     }
@@ -397,11 +397,11 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for FailingPrfProvider {
-        async fn derive_prf_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
             Err(self.error.clone())
         }
 
-        async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+        async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
             Err(self.error.clone())
         }
     }
@@ -411,11 +411,11 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for UnavailablePrfProvider {
-        async fn derive_prf_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
             Err(PasskeyPrfError::PrfNotSupported)
         }
 
-        async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+        async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
             Ok(false)
         }
     }
