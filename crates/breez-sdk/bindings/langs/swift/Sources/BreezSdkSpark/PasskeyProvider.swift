@@ -213,7 +213,15 @@ public class PasskeyProvider: PrfProvider {
                     salt2: salts[idx + 1]
                 )
                 out.append(pair.0)
-                out.append(pair.1)
+                if let prfSecond = pair.1 {
+                    out.append(prfSecond)
+                } else {
+                    // Authenticator dropped saltInput2; fall back to a
+                    // separate single-salt assertion for the second
+                    // salt. Mirrors the Android `dualSaltSupportVerdict`
+                    // recovery path.
+                    out.append(try await derivePrfSeed(salt: salts[idx + 1]))
+                }
                 idx += 2
             } else {
                 // Odd trailing salt — single-salt fallback.
@@ -224,7 +232,7 @@ public class PasskeyProvider: PrfProvider {
         return out
     }
 
-    private func performDualSaltAssertion(salt1: String, salt2: String) async throws -> (Data, Data) {
+    private func performDualSaltAssertion(salt1: String, salt2: String) async throws -> (Data, Data?) {
         guard let salt1Data = salt1.data(using: .utf8),
               let salt2Data = salt2.data(using: .utf8)
         else {
@@ -566,7 +574,7 @@ public class PasskeyProvider: PrfProvider {
         }
     }
 
-    private func performDualSaltAssertionInner(salt1Data: Data, salt2Data: Data) async throws -> (Data, Data) {
+    private func performDualSaltAssertionInner(salt1Data: Data, salt2Data: Data) async throws -> (Data, Data?) {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = randomBytes(count: 32)
         let assertionRequest = provider.createCredentialAssertionRequest(challenge: challenge)
@@ -857,7 +865,7 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
 private class DualSaltAuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate,
     ASAuthorizationControllerPresentationContextProviding
 {
-    var continuation: CheckedContinuation<(Data, Data), Error>?
+    var continuation: CheckedContinuation<(Data, Data?), Error>?
     var anchor: ASPresentationAnchor = ASPresentationAnchor()
     /// Invoked with the credential ID extracted from a successful
     /// dual-salt assertion before the continuation resolves. Same
@@ -881,14 +889,9 @@ private class DualSaltAuthorizationDelegate: NSObject, ASAuthorizationController
             return
         }
 
-        guard let prfFirst = PasskeyPRFHelper.extractPRFOutput(from: credential),
-              let prfSecond = PasskeyPRFHelper.extractSecondPRFOutput(from: credential)
-        else {
-            // The authenticator did not return both PRF outputs. This
-            // can happen on older iOS versions or on third-party
-            // credential providers that don't fully support the PRF
-            // spec. Surface it cleanly so the host can fall back to
-            // sequential single-salt assertions if needed.
+        guard let prfFirst = PasskeyPRFHelper.extractPRFOutput(from: credential) else {
+            // No PRF output at all — the authenticator doesn't support
+            // the extension. Hard error.
             continuation?.resume(throwing: PasskeyPrfError.PrfNotSupported)
             return
         }
@@ -897,6 +900,11 @@ private class DualSaltAuthorizationDelegate: NSObject, ASAuthorizationController
         // it (synced keychain, server-side allowlist, etc.).
         onAssertionCredentialId?(credential.credentialID)
 
+        // Second PRF output may be missing on older iOS versions or
+        // third-party credential providers that drop `saltInput2`. The
+        // caller falls back to a single-salt assertion for the dropped
+        // salt, mirroring the Android `dualSaltSupportVerdict` path.
+        let prfSecond = PasskeyPRFHelper.extractSecondPRFOutput(from: credential)
         continuation?.resume(returning: (prfFirst, prfSecond))
     }
 
