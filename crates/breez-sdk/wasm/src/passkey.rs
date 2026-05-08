@@ -30,26 +30,12 @@ pub struct Wallet {
     pub label: String,
 }
 
-/// Caller-supplied salt for `setupWallet({ extraSalts })`. Yields a
-/// 32-byte output keyed by `name` in the `WalletSetup.extraSeeds` map.
+/// Caller-supplied salt for `extraSalts` on `PasskeyClient.register`,
+/// `restore`, and `derive`. Yields a 32-byte output keyed by `name` in
+/// the response's `extraSeeds` map.
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::NamedSalt)]
 pub struct NamedSalt {
     pub name: String,
-}
-
-/// Request shape for `Passkey.setupWallet`.
-#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::SetupWalletRequest)]
-pub struct SetupWalletRequest {
-    pub label: Option<String>,
-    pub publish_label: bool,
-    pub extra_salts: Vec<NamedSalt>,
-}
-
-/// Response shape for `Passkey.setupWallet`.
-#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::WalletSetup)]
-pub struct WalletSetup {
-    pub wallet: Wallet,
-    pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
 /// Authenticator metadata returned by `PasskeyClient.register`.
@@ -110,68 +96,6 @@ pub struct DeriveRequest {
 pub struct DeriveResponse {
     pub wallet: Wallet,
     pub extra_seeds: HashMap<String, Vec<u8>>,
-}
-
-/// Passkey-based wallet operations using WebAuthn PRF extension.
-///
-/// Wraps a `PrfProvider` and optional relay configuration to provide
-/// wallet derivation and label management via Nostr relays.
-#[wasm_bindgen]
-pub struct Passkey {
-    inner: breez_sdk_spark::passkey::Passkey,
-}
-
-#[wasm_bindgen]
-impl Passkey {
-    /// Create a new `Passkey` instance.
-    ///
-    /// @param prfProvider - Implementation of PRF operations (typically the
-    ///                      built-in `PasskeyProvider`, or a custom `PrfProvider`)
-    /// @param relayConfig - Optional configuration for Nostr relay connections
-    #[wasm_bindgen(constructor)]
-    pub fn new(prf_provider: PrfProvider, relay_config: Option<NostrRelayConfig>) -> Self {
-        let wasm_provider = WasmPrfProvider::new(prf_provider);
-        Self {
-            inner: breez_sdk_spark::passkey::Passkey::new(
-                Arc::new(wasm_provider),
-                relay_config.map(|rc| rc.into()),
-            ),
-        }
-    }
-
-    /// Single-prompt setup. See the `SetupWalletRequest` /
-    /// `WalletSetup` shape for full semantics. ⌈N / 2⌉ prompts where
-    /// the authenticator supports `prf.eval.first` + `.second`, N
-    /// otherwise. Pass `publishLabel: false` for speculative
-    /// cold-restore. Pass `extraSalts` to derive caller-named seeds in
-    /// the same ceremony.
-    #[wasm_bindgen(js_name = "setupWallet")]
-    pub async fn setup_wallet(&self, request: SetupWalletRequest) -> WasmResult<WalletSetup> {
-        Ok(self.inner.setup_wallet(request.into()).await?.into())
-    }
-
-    /// List all labels published to Nostr for this passkey's identity.
-    ///
-    /// Requires 1 PRF call (for Nostr identity derivation).
-    #[wasm_bindgen(js_name = "listLabels")]
-    pub async fn list_labels(&self) -> WasmResult<Vec<String>> {
-        Ok(self.inner.list_labels().await?)
-    }
-
-    /// Publish a label to Nostr relays for this passkey's identity.
-    ///
-    /// Idempotent: if the label already exists, it is not published again.
-    /// Requires 1 PRF call.
-    #[wasm_bindgen(js_name = "storeLabel")]
-    pub async fn store_label(&self, label: String) -> WasmResult<()> {
-        Ok(self.inner.store_label(label).await?)
-    }
-
-    /// Check if passkey PRF is available on this device.
-    #[wasm_bindgen(js_name = "isAvailable")]
-    pub async fn is_available(&self) -> WasmResult<bool> {
-        Ok(self.inner.is_available().await?)
-    }
 }
 
 /// High-level orchestrator that collapses register / restore / derive

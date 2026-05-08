@@ -12,5 +12,5 @@ pub mod sdk_builder;
 pub mod session_manager;
 pub mod ssp_connection_manager;
 
-pub use passkey::Passkey;
+pub use passkey::PasskeyClient;
 pub use sdk::BreezSdk;
