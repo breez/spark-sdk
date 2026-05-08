@@ -664,6 +664,9 @@ fun main(args: Array<String>) {
                   --warmup-secs=<N>                            Mark first N seconds of samples as warmup (default: 60)
                   --payment-sats=<N>                           Sats per /send (default: 1)
                   --max-in-flight=<N>                          Hard cap; dispatch records 'dropped' if exceeded (default: 5000)
+                  --treasurer-spark-addr=<addr>                Skip the bootstrap /receive call and use this address
+                                                               as the /send destination. Sweep driver populates this
+                                                               from a master-secret-scoped cache.
                 """.trimIndent()
             )
         }

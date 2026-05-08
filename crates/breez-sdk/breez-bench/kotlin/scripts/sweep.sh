@@ -47,15 +47,17 @@ TREASURER_MIN_FLOOR="${TREASURER_MIN_FLOOR:-50000}"
 SWEEP_DIR="out/$SWEEP_ID"
 mkdir -p "$SWEEP_DIR"
 
-# Step duration in seconds for ETA computation. Falls back to 0 if the
-# duration string is malformed; ETA just won't be useful in that case.
+# Step duration in seconds for ETA computation. Match both upper and
+# lower case suffixes since macOS ships bash 3.2 which has no native
+# lowercase parameter expansion. Falls back to passing the raw value
+# through if the suffix is unrecognised — ETA just won't be meaningful.
 parse_duration_secs() {
-    local s="${1,,}"  # lowercase
+    local s="$1"
     case "$s" in
-        *h) echo $(( ${s%h} * 3600 )) ;;
-        *m) echo $(( ${s%m} * 60 )) ;;
-        *s) echo "${s%s}" ;;
-        *)  echo "$s" ;;
+        *h|*H) echo $(( ${s%[hH]} * 3600 )) ;;
+        *m|*M) echo $(( ${s%[mM]} * 60 )) ;;
+        *s|*S) echo "${s%[sS]}" ;;
+        *)     echo "$s" ;;
     esac
 }
 STEP_DUR_S=$(parse_duration_secs "$DURATION" 2>/dev/null || echo 0)
@@ -63,16 +65,22 @@ STEP_DUR_S=$(parse_duration_secs "$DURATION" 2>/dev/null || echo 0)
 # Run a long-lived gradle command with both file capture and live
 # stdout filtering. Tees full output to $logfile, then surfaces lines
 # matching $pattern (e.g. ^\[fund\]) to the controlling terminal.
-# Returns the underlying command's exit code (not grep's).
+# Stores the command's exit code in $STREAM_RC for the caller to read.
+# Returns 0 always — set -e in the caller MUST NOT abort on a failed
+# gradle command. Caller is responsible for handling STREAM_RC.
+#
+# (Returning $rc here would trip set -e at the call site BEFORE the
+# caller can capture it, which silently kills the whole sweep on the
+# first step where loadgen exits non-zero.)
 stream_filtered() {
     local logfile="$1"
     local pattern="$2"
     shift 2
     set +e
     "$@" 2>&1 | tee "$logfile" | grep --line-buffered -E "$pattern"
-    local rc=${PIPESTATUS[0]}
+    STREAM_RC=${PIPESTATUS[0]}
     set -e
-    return $rc
+    return 0
 }
 
 echo "[sweep] sweep-id=$SWEEP_ID  rps=[$SWEEP_RPS]  duration=$DURATION  out=$SWEEP_DIR"
@@ -139,10 +147,9 @@ stream_filtered "$fund_log" '^\[fund\]' \
     --mysql-url=$MYSQL_URL \
     --master-secret=$MASTER_SECRET \
     --target-sats=$TREASURER_TARGET"
-fund_rc=$?
-if [ "$fund_rc" -ne 0 ]; then
-    echo "[sweep] fund failed (rc=$fund_rc); see $fund_log"
-    exit "$fund_rc"
+if [ "$STREAM_RC" -ne 0 ]; then
+    echo "[sweep] fund failed (rc=$STREAM_RC); see $fund_log"
+    exit "$STREAM_RC"
 fi
 
 if [ "$PER_SENDER_SATS" -gt 0 ]; then
@@ -155,14 +162,69 @@ if [ "$PER_SENDER_SATS" -gt 0 ]; then
         --master-secret=$MASTER_SECRET \
         --senders=$SENDERS \
         --per-sender-sats=$PER_SENDER_SATS"
-    seed_rc=$?
-    if [ "$seed_rc" -ne 0 ]; then
-        echo "[sweep] seed-senders failed (rc=$seed_rc); see $seed_log"
-        exit "$seed_rc"
+    if [ "$STREAM_RC" -ne 0 ]; then
+        echo "[sweep] seed-senders failed (rc=$STREAM_RC); see $seed_log"
+        exit "$STREAM_RC"
     fi
 else
     echo "[sweep] no /send in mix — skipping seed-senders"
 fi
+
+# --- treasurer address cache ---------------------------------------------
+# The treasurer's Spark address is deterministic from the seed, but the
+# only way to read it without rebuilding the SDK is via the server's
+# /receive endpoint — and a fresh per-step server build pays the full
+# `ensureSynced=true` cost for the treasurer wallet, which scales with
+# its on-chain history (multi-minute on a wallet with several deposits).
+#
+# So we fetch it ONCE per master secret, cache to disk, and pass it
+# through to every loadgen invocation. Cache file is keyed by a hash of
+# MASTER_SECRET so swapping wallets invalidates automatically.
+secret_hash() {
+    printf '%s' "$MASTER_SECRET" | shasum -a 256 | cut -c1-16
+}
+TREASURER_ADDR_CACHE="$ROOT_DIR/out/.cache/treasurer-spark-addr.$(secret_hash).txt"
+mkdir -p "$(dirname "$TREASURER_ADDR_CACHE")"
+
+ensure_treasurer_addr() {
+    if [ -s "$TREASURER_ADDR_CACHE" ]; then
+        TREASURER_ADDR=$(cat "$TREASURER_ADDR_CACHE")
+        echo "[sweep] using cached treasurer Spark addr: $TREASURER_ADDR"
+        return 0
+    fi
+    echo "[sweep] no cached treasurer addr — fetching once (this can take several minutes the first time per master secret)"
+    local warmup_log="$SWEEP_DIR/treasurer-warmup.log"
+    ./gradlew run --console=plain --args="\
+        --mode=server \
+        --mysql-url=$MYSQL_URL \
+        --master-secret=$MASTER_SECRET \
+        --port=$PORT \
+        --out-dir=$SWEEP_DIR/.warmup" \
+        > "$warmup_log" 2>&1 &
+    local warmup_pid=$!
+    trap 'echo "[sweep] interrupted during treasurer warmup"; stop_server "$warmup_pid"; exit 130' INT TERM
+    if ! wait_for_server 120; then
+        echo "[sweep] treasurer-warmup server did not become ready (see $warmup_log)"
+        stop_server "$warmup_pid"
+        trap - INT TERM
+        return 1
+    fi
+    # No HTTP timeout — the treasurer cold-start is whatever it is.
+    local addr
+    addr=$(curl -sS --max-time 0 -X POST -H 'content-type: application/json' \
+        -d '{}' "http://localhost:$PORT/users/__treasurer__/receive" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["paymentRequest"])')
+    stop_server "$warmup_pid"
+    trap - INT TERM
+    if [ -z "$addr" ]; then
+        echo "[sweep] failed to fetch treasurer Spark addr (see $warmup_log)"
+        return 1
+    fi
+    printf '%s\n' "$addr" > "$TREASURER_ADDR_CACHE"
+    TREASURER_ADDR="$addr"
+    echo "[sweep] cached treasurer Spark addr → $TREASURER_ADDR_CACHE"
+    echo "[sweep] treasurer destination: $TREASURER_ADDR"
+}
 
 # --- helpers --------------------------------------------------------------
 
@@ -178,26 +240,53 @@ wait_for_server() {
     return 1
 }
 
-# Stop the server cleanly. SIGTERM lets the shutdown hook flush
-# metrics.jsonl + requests.jsonl; we only escalate to SIGKILL if it
-# refuses to die.
+# Stop the server cleanly.
+#
+# `./gradlew run &` launches the gradle wrapper, which forks a separate
+# JVM for the application. SIGTERM-ing the gradle wrapper does NOT
+# reliably propagate to the JVM child — on macOS it commonly orphans,
+# leaving the JVM listening on $PORT after the script "stopped" the
+# server. To make this robust we (a) SIGTERM gradle, (b) actively look
+# for any process still holding $PORT and SIGTERM it (giving the JVM's
+# shutdown hook a chance to flush requests.jsonl + metrics.jsonl), then
+# (c) escalate to SIGKILL if anything is still alive after a grace period.
 stop_server() {
     local pid="$1"
-    if ! kill -0 "$pid" 2>/dev/null; then
-        return 0
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null || true
     fi
-    kill -TERM "$pid" 2>/dev/null || true
+    # Find any JVM still bound to $PORT (the application JVM that's a
+    # child of gradle, plus anything else that happens to be there).
+    local lingering
+    lingering=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)
+    if [ -n "$lingering" ]; then
+        kill -TERM $lingering 2>/dev/null || true
+    fi
+    # Wait up to 15s for everything to release the port. The shutdown
+    # hook drains the JSONL writers (per-write flush + 10s join), so we
+    # need at least that much before escalating.
     local deadline=$(( $(date +%s) + 15 ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        if ! kill -0 "$pid" 2>/dev/null; then
+        local still
+        still=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)
+        if [ -z "$still" ] && ! kill -0 "$pid" 2>/dev/null; then
             return 0
         fi
         sleep 1
     done
-    echo "[sweep] server pid=$pid did not exit in 15s — sending SIGKILL"
+    echo "[sweep] server didn't release :$PORT in 15s — sending SIGKILL"
     kill -KILL "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
+    local still
+    still=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)
+    if [ -n "$still" ]; then
+        kill -KILL $still 2>/dev/null || true
+    fi
 }
+
+# Fetch (or load cached) treasurer Spark address now that helpers are
+# defined. Done after fund + seed so the wallet is guaranteed to exist.
+ensure_treasurer_addr || exit 1
 
 # --- main loop ------------------------------------------------------------
 
@@ -260,14 +349,21 @@ for raw_rps in "${RPS_LIST[@]}"; do
         --senders=$SENDERS \
         --payment-sats=$PAYMENT_SATS \
         --run-id=$SWEEP_ID/rps-$rps \
-        --out-dir=$step_dir"
-    loadgen_rc=$?
+        --out-dir=$step_dir \
+        --treasurer-spark-addr=$TREASURER_ADDR"
+    loadgen_rc=$STREAM_RC
 
     stop_server "$server_pid"
     trap - INT TERM
 
     step_elapsed=$(( $(date +%s) - step_start_ts ))
-    echo "[sweep] step $i/$STEP_COUNT done in ${step_elapsed}s"
+    if [ "$loadgen_rc" -ne 0 ]; then
+        # Don't abort the sweep — the aggregator will skip steps with
+        # missing/empty data, and the next RPS step might be cleaner.
+        echo "[sweep] step $i/$STEP_COUNT FAILED in ${step_elapsed}s (loadgen rc=$loadgen_rc; see $step_dir/loadgen.log) — continuing"
+    else
+        echo "[sweep] step $i/$STEP_COUNT done in ${step_elapsed}s"
+    fi
 
     if [ "$loadgen_rc" -ne 0 ]; then
         echo "[sweep] loadgen exited rc=$loadgen_rc — see $step_dir/loadgen.log"

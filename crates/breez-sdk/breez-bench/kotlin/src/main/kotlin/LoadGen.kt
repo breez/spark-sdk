@@ -215,8 +215,16 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
         .connectTimeout(Duration.ofSeconds(10))
         .build()
 
-    println("[loadgen] fetching treasurer Spark address from $baseUrl …")
-    val treasurerAddr = fetchTreasurerSparkAddress(httpClient, baseUrl)
+    // Treasurer Spark address: prefer the caller-provided value (sweep
+    // driver caches it once per master secret to avoid paying treasurer
+    // SDK cold-start sync on every per-step server restart). Fall back
+    // to fetching via /receive only if not provided — useful for ad-hoc
+    // single-step runs but ill-suited to a sweep where the cold-start
+    // can take many minutes.
+    val treasurerAddr = opts["treasurer-spark-addr"]?.takeIf { it.isNotBlank() } ?: run {
+        println("[loadgen] fetching treasurer Spark address from $baseUrl …")
+        fetchTreasurerSparkAddress(httpClient, baseUrl)
+    }
     println("[loadgen] treasurer destination: $treasurerAddr")
 
     val writer = JsonlWriter(outDir.resolve("latency.jsonl"), LogEntry.serializer())
