@@ -35,7 +35,7 @@ use tracing::{debug, info, trace};
 use uuid::Uuid;
 
 use crate::advisory_lock::identity_lock_name;
-use crate::config::MysqlStorageConfig;
+use crate::config::{MysqlForeignKeyMode, MysqlStorageConfig};
 use crate::error::MysqlError;
 use crate::migrations::{Migration, run_migrations};
 use crate::pool::{create_pool, tx_opts};
@@ -82,10 +82,11 @@ impl LeafLike for SlimLeaf {
 
 /// `MySQL`-backed tree store implementation.
 ///
-/// Uses an application-level named lock to serialize writes (`GET_LOCK`) and
-/// row-level FK constraints to keep reservations and leaves in sync. Each
-/// instance is scoped to a single tenant identity so that multiple tenants
-/// can share one `MySQL` database without cross-pollinating tree state.
+/// Uses an application-level named lock to serialize writes (`GET_LOCK`) and,
+/// when configured to create foreign keys, row-level FK constraints to keep
+/// reservations and leaves in sync. Each instance is scoped to a single tenant
+/// identity so that multiple tenants can share one `MySQL` database without
+/// cross-pollinating tree state.
 pub struct MysqlTreeStore {
     pool: Pool,
     /// 33-byte secp256k1 compressed pubkey identifying this tenant. All reads
@@ -95,16 +96,20 @@ pub struct MysqlTreeStore {
     /// don't serialize on each other's writes; same-tenant writes still
     /// serialize on the same lock.
     lock_name: String,
+    foreign_key_mode: MysqlForeignKeyMode,
     balance_changed_tx: Arc<watch::Sender<()>>,
     balance_changed_rx: watch::Receiver<()>,
 }
 
 /// Builds the multi-tenant scoping migration for the tree store. Adds
 /// `user_id VARBINARY(33)` to every per-user table, backfills with the
-/// connecting tenant's identity, and rewrites primary keys / FKs to lead
-/// with `user_id`.
+/// connecting tenant's identity, and rewrites primary keys / optional FKs /
+/// indexes to lead with `user_id`.
 #[allow(clippy::too_many_lines)]
-fn tree_store_multi_tenant_migration(identity: &[u8]) -> Vec<Migration> {
+fn tree_store_multi_tenant_migration(
+    identity: &[u8],
+    foreign_key_mode: MysqlForeignKeyMode,
+) -> Vec<Migration> {
     let id_hex = hex::encode(identity);
     let id_lit = format!("UNHEX('{id_hex}')");
 
@@ -137,10 +142,11 @@ fn tree_store_multi_tenant_migration(identity: &[u8]) -> Vec<Migration> {
     ));
 
     // tree_leaves: same pattern, plus re-add the composite FK to the new
-    // tree_reservations PK. The composite FK uses the default ON DELETE NO
-    // ACTION instead of the previous `ON DELETE SET NULL`: a whole-row SET NULL
-    // would null `user_id` (NOT NULL) and `MySQL` doesn't support column-list
-    // SET NULL. Callers (`cleanup_stale_reservations`, `cancel_reservation`,
+    // tree_reservations PK when foreign keys are enabled. The composite FK
+    // uses the default ON DELETE NO ACTION instead of the previous `ON DELETE
+    // SET NULL`: a whole-row SET NULL would null `user_id` (NOT NULL) and
+    // `MySQL` doesn't support column-list SET NULL. Callers
+    // (`cleanup_stale_reservations`, `cancel_reservation`,
     // `finalize_reservation`) explicitly clear `reservation_id` before
     // deleting the parent reservation row.
     stmts.push(Migration::AddColumn {
@@ -157,12 +163,14 @@ fn tree_store_multi_tenant_migration(identity: &[u8]) -> Vec<Migration> {
     stmts.push(Migration::sql(
         "ALTER TABLE tree_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)",
     ));
-    stmts.push(Migration::sql(
-        "ALTER TABLE tree_leaves \
-         ADD CONSTRAINT fk_tree_leaves_reservation_user \
-         FOREIGN KEY (user_id, reservation_id) \
-         REFERENCES tree_reservations(user_id, id)",
-    ));
+    if foreign_key_mode.creates_constraints() {
+        stmts.push(Migration::sql(
+            "ALTER TABLE tree_leaves \
+             ADD CONSTRAINT fk_tree_leaves_reservation_user \
+             FOREIGN KEY (user_id, reservation_id) \
+             REFERENCES tree_reservations(user_id, id)",
+        ));
+    }
     stmts.push(Migration::DropIndex {
         name: "idx_tree_leaves_available",
         table: "tree_leaves",
@@ -477,8 +485,9 @@ impl MysqlTreeStore {
         identity: &[u8],
     ) -> Result<Self, MysqlError> {
         let run_migration = config.run_migration;
+        let foreign_key_mode = config.foreign_key_mode;
         let pool = create_pool(&config)?;
-        Self::from_pool(pool, identity, run_migration).await
+        Self::from_pool(pool, identity, run_migration, foreign_key_mode).await
     }
 
     /// Creates a new `MysqlTreeStore` from an existing connection pool.
@@ -490,6 +499,7 @@ impl MysqlTreeStore {
         pool: Pool,
         identity: &[u8],
         run_migration: bool,
+        foreign_key_mode: MysqlForeignKeyMode,
     ) -> Result<Self, MysqlError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
@@ -497,6 +507,7 @@ impl MysqlTreeStore {
             pool,
             identity: identity.to_vec(),
             lock_name: identity_lock_name(TREE_STORE_LOCK_PREFIX, identity),
+            foreign_key_mode,
             balance_changed_tx: Arc::new(balance_changed_tx),
             balance_changed_rx,
         };
@@ -513,17 +524,18 @@ impl MysqlTreeStore {
         run_migrations(
             &self.pool,
             TREE_MIGRATIONS_TABLE,
-            &Self::migrations(&self.identity),
+            &Self::migrations(&self.identity, self.foreign_key_mode),
         )
         .await
     }
 
-    fn migrations(identity: &[u8]) -> Vec<Vec<Migration>> {
+    fn migrations(identity: &[u8], foreign_key_mode: MysqlForeignKeyMode) -> Vec<Vec<Migration>> {
         vec![
             // Migration 1: Initial tree tables.
             //
             // Reservations are referenced via FK so that ON DELETE SET NULL
             // releases the leaves automatically when a reservation is dropped.
+            // This FK is omitted when foreign keys are disabled.
             vec![
                 Migration::sql(
                     "CREATE TABLE IF NOT EXISTS tree_reservations (
@@ -533,19 +545,7 @@ impl MysqlTreeStore {
                         created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                     )",
                 ),
-                Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS tree_leaves (
-                        id VARCHAR(255) NOT NULL PRIMARY KEY,
-                        status VARCHAR(64) NOT NULL,
-                        is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
-                        reservation_id VARCHAR(255) NULL,
-                        data JSON NOT NULL,
-                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                        added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                        CONSTRAINT fk_tree_leaves_reservation FOREIGN KEY (reservation_id)
-                            REFERENCES tree_reservations(id) ON DELETE SET NULL
-                    )",
-                ),
+                Migration::sql(tree_leaves_create_table_sql(foreign_key_mode)),
                 Migration::sql(
                     "CREATE TABLE IF NOT EXISTS tree_spent_leaves (
                         leaf_id VARCHAR(255) NOT NULL PRIMARY KEY,
@@ -610,10 +610,10 @@ impl MysqlTreeStore {
             ],
             // Migration 4: Multi-tenant scoping. Adds user_id to every tree-
             // store table, backfills with the connecting tenant's identity, and
-            // rewrites primary keys / FKs / indexes to lead with user_id. The
-            // `tree_swap_status` singleton is restructured the same way as
-            // `sync_revision` in the SDK-core storage.
-            tree_store_multi_tenant_migration(identity),
+            // rewrites primary keys / optional FKs / indexes to lead with
+            // user_id. The `tree_swap_status` singleton is restructured the
+            // same way as `sync_revision` in the SDK-core storage.
+            tree_store_multi_tenant_migration(identity, foreign_key_mode),
         ]
     }
 
@@ -1475,6 +1475,35 @@ fn build_placeholders(n: usize) -> String {
     s
 }
 
+fn tree_leaves_create_table_sql(foreign_key_mode: MysqlForeignKeyMode) -> &'static str {
+    match foreign_key_mode {
+        MysqlForeignKeyMode::Enforced => {
+            "CREATE TABLE IF NOT EXISTS tree_leaves (
+                        id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        status VARCHAR(64) NOT NULL,
+                        is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
+                        reservation_id VARCHAR(255) NULL,
+                        data JSON NOT NULL,
+                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                        added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                        CONSTRAINT fk_tree_leaves_reservation FOREIGN KEY (reservation_id)
+                            REFERENCES tree_reservations(id) ON DELETE SET NULL
+                    )"
+        }
+        MysqlForeignKeyMode::Disabled => {
+            "CREATE TABLE IF NOT EXISTS tree_leaves (
+                        id VARCHAR(255) NOT NULL PRIMARY KEY,
+                        status VARCHAR(64) NOT NULL,
+                        is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
+                        reservation_id VARCHAR(255) NULL,
+                        data JSON NOT NULL,
+                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                        added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                    )"
+        }
+    }
+}
+
 fn map_err<E: std::fmt::Display>(e: E) -> TreeServiceError {
     TreeServiceError::Generic(e.to_string())
 }
@@ -1500,9 +1529,10 @@ pub async fn create_mysql_tree_store_from_pool(
     pool: Pool,
     identity: &[u8],
     run_migration: bool,
+    foreign_key_mode: MysqlForeignKeyMode,
 ) -> Result<Arc<dyn TreeStore>, MysqlError> {
     Ok(Arc::new(
-        MysqlTreeStore::from_pool(pool, identity, run_migration).await?,
+        MysqlTreeStore::from_pool(pool, identity, run_migration, foreign_key_mode).await?,
     ))
 }
 
@@ -1522,6 +1552,41 @@ mod tests {
         0x1e, 0x1f, 0x20,
     ];
 
+    fn migration_sql_contains(migrations: &[Vec<Migration>], needle: &str) -> bool {
+        migrations
+            .iter()
+            .flatten()
+            .any(|migration| matches!(migration, Migration::Sql(sql) if sql.contains(needle)))
+    }
+
+    #[test]
+    fn enforced_foreign_key_mode_includes_tree_constraints() {
+        let migrations = MysqlTreeStore::migrations(&TEST_IDENTITY, MysqlForeignKeyMode::Enforced);
+
+        assert!(migration_sql_contains(
+            &migrations,
+            "fk_tree_leaves_reservation FOREIGN KEY"
+        ));
+        assert!(migration_sql_contains(
+            &migrations,
+            "fk_tree_leaves_reservation_user"
+        ));
+    }
+
+    #[test]
+    fn disabled_foreign_key_mode_omits_tree_constraints() {
+        let migrations = MysqlTreeStore::migrations(&TEST_IDENTITY, MysqlForeignKeyMode::Disabled);
+
+        assert!(!migration_sql_contains(&migrations, "FOREIGN KEY"));
+        assert!(migrations.iter().flatten().any(|migration| matches!(
+            migration,
+            Migration::DropForeignKey {
+                name: "fk_tree_leaves_reservation",
+                table: "tree_leaves"
+            }
+        )));
+    }
+
     /// Helper struct that holds the container and store together.
     /// The container must be kept alive for the duration of the test.
     struct MysqlTreeStoreTestFixture {
@@ -1532,6 +1597,10 @@ mod tests {
 
     impl MysqlTreeStoreTestFixture {
         async fn new() -> Self {
+            Self::new_with_foreign_key_mode(MysqlForeignKeyMode::default()).await
+        }
+
+        async fn new_with_foreign_key_mode(foreign_key_mode: MysqlForeignKeyMode) -> Self {
             let container = Mysql::default()
                 .start()
                 .await
@@ -1546,12 +1615,11 @@ mod tests {
             // and no password.
             let connection_string = format!("mysql://root@127.0.0.1:{host_port}/test");
 
-            let store = MysqlTreeStore::from_config(
-                MysqlStorageConfig::with_defaults(connection_string),
-                &TEST_IDENTITY,
-            )
-            .await
-            .expect("Failed to create MysqlTreeStore");
+            let mut config = MysqlStorageConfig::with_defaults(connection_string);
+            config.foreign_key_mode = foreign_key_mode;
+            let store = MysqlTreeStore::from_config(config, &TEST_IDENTITY)
+                .await
+                .expect("Failed to create MysqlTreeStore");
 
             Self { store, container }
         }
@@ -1576,6 +1644,38 @@ mod tests {
     async fn test_new() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_new(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_new_with_disabled_foreign_key_mode() {
+        let fixture =
+            MysqlTreeStoreTestFixture::new_with_foreign_key_mode(MysqlForeignKeyMode::Disabled)
+                .await;
+        shared_tests::test_new(&fixture.store).await;
+
+        let mut conn = fixture
+            .store
+            .pool
+            .get_conn()
+            .await
+            .expect("Failed to get MySQL connection");
+        let count: Option<u64> = conn
+            .query_first(
+                "SELECT COUNT(*)
+                 FROM information_schema.table_constraints
+                 WHERE constraint_schema = DATABASE()
+                   AND constraint_type = 'FOREIGN KEY'
+                   AND table_name IN (
+                       'tree_leaves',
+                       'tree_reservations',
+                       'tree_spent_leaves',
+                       'tree_swap_status'
+                   )",
+            )
+            .await
+            .expect("Failed to count tree store foreign keys");
+
+        assert_eq!(count, Some(0));
     }
 
     #[tokio::test]
@@ -2459,12 +2559,22 @@ mod tests {
             let config = MysqlStorageConfig::with_defaults(connection_string);
             let pool = create_pool(&config).expect("Failed to create pool");
 
-            let a = MysqlTreeStore::from_pool(pool.clone(), &TEST_IDENTITY, true)
-                .await
-                .expect("Failed to create tenant A");
-            let b = MysqlTreeStore::from_pool(pool, &TEST_IDENTITY_B, true)
-                .await
-                .expect("Failed to create tenant B");
+            let a = MysqlTreeStore::from_pool(
+                pool.clone(),
+                &TEST_IDENTITY,
+                true,
+                MysqlForeignKeyMode::default(),
+            )
+            .await
+            .expect("Failed to create tenant A");
+            let b = MysqlTreeStore::from_pool(
+                pool,
+                &TEST_IDENTITY_B,
+                true,
+                MysqlForeignKeyMode::default(),
+            )
+            .await
+            .expect("Failed to create tenant B");
 
             Self { a, b, container }
         }

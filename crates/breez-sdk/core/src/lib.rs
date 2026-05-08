@@ -62,7 +62,7 @@ pub use persist::postgres::{
     not(all(target_family = "wasm", target_os = "unknown"))
 ))]
 pub use persist::mysql::{
-    MysqlConnectionPool, MysqlStorageConfig, create_mysql_connection_pool,
+    MysqlConnectionPool, MysqlForeignKeyMode, MysqlStorageConfig, create_mysql_connection_pool,
     default_mysql_storage_config,
 };
 
