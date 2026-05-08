@@ -500,102 +500,17 @@ public object CredentialManagerPrfCore {
         allowCredentialIds: List<ByteArray> = emptyList(),
         onAssertionCredentialId: ((ByteArray) -> Unit)? = null,
     ): ByteArray {
-        val credentialManager = CredentialManager.create(activity)
-
-        val saltBase64 = Base64.encodeToString(
-            salt.toByteArray(Charsets.UTF_8),
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-        )
-        val challenge = randomBase64Url(32)
-
-        // Build request via JSONObject so integrator-provided strings (rpId)
-        // are escaped correctly. Raw template interpolation would break on
-        // rpId values containing quotes / backslashes / control chars and
-        // surface as opaque JSONException deep in Credential Manager.
-        val requestJson = JSONObject().apply {
-            put("challenge", challenge)
-            put("rpId", rpId)
-            // When non-empty, constrains assertion to one of the listed
-            // credential IDs. Without this, the platform picks any
-            // credential matching the RP, which produces non-deterministic
-            // seeds when multiple credentials exist for the same RP.
-            put("allowCredentials", JSONArray().apply {
-                for (credId in allowCredentialIds) {
-                    put(JSONObject().apply {
-                        put("type", "public-key")
-                        put("id", Base64.encodeToString(
-                            credId,
-                            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                        ))
-                    })
-                }
-            })
-            put("userVerification", "required")
-            put("extensions", JSONObject().apply {
-                put("prf", JSONObject().apply {
-                    put("eval", JSONObject().apply {
-                        put("first", saltBase64)
-                    })
-                })
-            })
-        }.toString()
-
-        val option = GetPublicKeyCredentialOption(requestJson)
-        // Suppress the cross-device QR sheet so a missing local
-        // credential surfaces immediately as NoCredentialException
-        // instead of routing the user into a hybrid flow they'll
-        // never use for a wallet passkey.
-        val request = GetCredentialRequest.Builder()
-            .addCredentialOption(option)
-            .setPreferImmediatelyAvailableCredentials(true)
-            .build()
-        val response = credentialManager.getCredential(activity, request)
-
-        val authResponseJson = response.credential.data.getString(
-            "androidx.credentials.BUNDLE_KEY_AUTHENTICATION_RESPONSE_JSON",
-        ) ?: throw CredentialManagerPrfCoreException(
-            Kind.AuthenticationFailed,
-            "No credential response",
-        )
-
-        val responseJson = JSONObject(authResponseJson)
-
-        // Surface the asserted credential ID before the PRF result so
-        // hosts can record it (synced storage, server-side allowlist).
-        // Failures inside the callback must not block seed return: the
-        // assertion already succeeded.
-        if (onAssertionCredentialId != null) {
-            val rawIdEncoded = responseJson.optString("rawId", "")
-            if (rawIdEncoded.isNotEmpty()) {
-                try {
-                    val rawId = Base64.decode(
-                        rawIdEncoded,
-                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                    )
-                    onAssertionCredentialId(rawId)
-                } catch (_: Exception) {
-                    // Best-effort: malformed rawId is non-fatal here.
-                }
-            }
+        val prfEval = JSONObject().apply {
+            put("first", encodeBase64Url(salt.toByteArray(Charsets.UTF_8)))
         }
-
-        val extensions = responseJson.optJSONObject("clientExtensionResults")
-            ?: throw CredentialManagerPrfCoreException(Kind.PrfNotSupported)
-        val prf = extensions.optJSONObject("prf")
-            ?: throw CredentialManagerPrfCoreException(Kind.PrfNotSupported)
-        val results = prf.optJSONObject("results")
-            ?: throw CredentialManagerPrfCoreException(
-                Kind.PrfEvaluationFailed,
-                "no results",
-            )
+        val results = runAssertion(
+            activity, rpId, allowCredentialIds, prfEval, onAssertionCredentialId,
+        )
         val first = results.optString("first")
         if (first.isNullOrEmpty()) {
-            throw CredentialManagerPrfCoreException(
-                Kind.PrfEvaluationFailed,
-                "empty result",
-            )
+            throw CredentialManagerPrfCoreException(Kind.PrfEvaluationFailed, "empty result")
         }
-        return Base64.decode(first, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        return decodeBase64Url(first)
     }
 
     /**
@@ -641,72 +556,93 @@ public object CredentialManagerPrfCore {
         allowCredentialIds: List<ByteArray>,
         onAssertionCredentialId: ((ByteArray) -> Unit)?,
     ): Pair<ByteArray, ByteArray?> {
-        val credentialManager = CredentialManager.create(activity)
-
-        val salt1Base64 = Base64.encodeToString(
-            salt1.toByteArray(Charsets.UTF_8),
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        val prfEval = JSONObject().apply {
+            put("first", encodeBase64Url(salt1.toByteArray(Charsets.UTF_8)))
+            put("second", encodeBase64Url(salt2.toByteArray(Charsets.UTF_8)))
+        }
+        val results = runAssertion(
+            activity, rpId, allowCredentialIds, prfEval, onAssertionCredentialId,
         )
-        val salt2Base64 = Base64.encodeToString(
-            salt2.toByteArray(Charsets.UTF_8),
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-        )
-        val challenge = randomBase64Url(32)
+        val first = results.optString("first")
+        if (first.isNullOrEmpty()) {
+            throw CredentialManagerPrfCoreException(Kind.PrfEvaluationFailed, "empty first result")
+        }
+        val firstBytes = decodeBase64Url(first)
 
+        // saltInput2 may be silently dropped by older Credential Manager
+        // implementations or third-party providers; surface as null so
+        // the caller falls back to a single-salt assertion for it.
+        val second = results.optString("second", "")
+        if (second.isEmpty()) return Pair(firstBytes, null)
+        val secondBytes = try {
+            decodeBase64Url(second)
+        } catch (_: Exception) {
+            return Pair(firstBytes, null)
+        }
+        return Pair(firstBytes, secondBytes)
+    }
+
+    /**
+     * Build the WebAuthn assertion JSON, run the ceremony with
+     * cross-device hybrid suppressed, fire `onAssertionCredentialId`
+     * on success, and return the parsed `prf.results` JSONObject.
+     * `prfEval` is the caller's `{ first, second? }` shape.
+     */
+    private suspend fun runAssertion(
+        activity: Activity,
+        rpId: String,
+        allowCredentialIds: List<ByteArray>,
+        prfEval: JSONObject,
+        onAssertionCredentialId: ((ByteArray) -> Unit)?,
+    ): JSONObject {
+        // JSONObject so integrator-supplied rpId is escaped correctly;
+        // raw template interpolation would break on quotes / backslashes
+        // and surface as opaque JSONException deep in Credential Manager.
         val requestJson = JSONObject().apply {
-            put("challenge", challenge)
+            put("challenge", randomBase64Url(32))
             put("rpId", rpId)
             put("allowCredentials", JSONArray().apply {
                 for (credId in allowCredentialIds) {
                     put(JSONObject().apply {
                         put("type", "public-key")
-                        put("id", Base64.encodeToString(
-                            credId,
-                            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                        ))
+                        put("id", encodeBase64Url(credId))
                     })
                 }
             })
             put("userVerification", "required")
             put("extensions", JSONObject().apply {
                 put("prf", JSONObject().apply {
-                    put("eval", JSONObject().apply {
-                        put("first", salt1Base64)
-                        put("second", salt2Base64)
-                    })
+                    put("eval", prfEval)
                 })
             })
         }.toString()
 
         val option = GetPublicKeyCredentialOption(requestJson)
-        // See single-salt path for rationale.
+        // Suppress the cross-device QR sheet so a missing local
+        // credential surfaces as NoCredentialException, not a hybrid
+        // flow the wallet user will never use.
         val request = GetCredentialRequest.Builder()
             .addCredentialOption(option)
             .setPreferImmediatelyAvailableCredentials(true)
             .build()
-        val response = credentialManager.getCredential(activity, request)
+        val response = CredentialManager.create(activity).getCredential(activity, request)
 
         val authResponseJson = response.credential.data.getString(
             "androidx.credentials.BUNDLE_KEY_AUTHENTICATION_RESPONSE_JSON",
         ) ?: throw CredentialManagerPrfCoreException(
-            Kind.AuthenticationFailed,
-            "No credential response",
+            Kind.AuthenticationFailed, "No credential response",
         )
-
         val responseJson = JSONObject(authResponseJson)
 
+        // Surface the asserted credential ID before the PRF result.
+        // Best-effort: a malformed rawId or a throwing callback must
+        // not block the seed return.
         if (onAssertionCredentialId != null) {
             val rawIdEncoded = responseJson.optString("rawId", "")
             if (rawIdEncoded.isNotEmpty()) {
                 try {
-                    val rawId = Base64.decode(
-                        rawIdEncoded,
-                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                    )
-                    onAssertionCredentialId(rawId)
-                } catch (_: Exception) {
-                    // Best-effort: malformed rawId is non-fatal.
-                }
+                    onAssertionCredentialId(decodeBase64Url(rawIdEncoded))
+                } catch (_: Exception) {}
             }
         }
 
@@ -714,38 +650,15 @@ public object CredentialManagerPrfCore {
             ?: throw CredentialManagerPrfCoreException(Kind.PrfNotSupported)
         val prf = extensions.optJSONObject("prf")
             ?: throw CredentialManagerPrfCoreException(Kind.PrfNotSupported)
-        val results = prf.optJSONObject("results")
-            ?: throw CredentialManagerPrfCoreException(
-                Kind.PrfEvaluationFailed,
-                "no results",
-            )
-        val first = results.optString("first")
-        if (first.isNullOrEmpty()) {
-            throw CredentialManagerPrfCoreException(
-                Kind.PrfEvaluationFailed,
-                "empty first result",
-            )
-        }
-        val firstBytes = Base64.decode(
-            first,
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-        )
-
-        // The second salt may be silently dropped by the authenticator
-        // (third-party password managers, older Credential Manager
-        // implementations). Detect this and let the caller fall back
-        // to a sequential single-salt assertion for the missing one.
-        val second = results.optString("second", "")
-        if (second.isEmpty()) {
-            return Pair(firstBytes, null)
-        }
-        val secondBytes = try {
-            Base64.decode(second, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        } catch (_: Exception) {
-            return Pair(firstBytes, null)
-        }
-        return Pair(firstBytes, secondBytes)
+        return prf.optJSONObject("results")
+            ?: throw CredentialManagerPrfCoreException(Kind.PrfEvaluationFailed, "no results")
     }
+
+    private fun encodeBase64Url(bytes: ByteArray): String =
+        Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+
+    private fun decodeBase64Url(s: String): ByteArray =
+        Base64.decode(s, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
 
     private suspend fun registerCredential(
         activity: Activity,
