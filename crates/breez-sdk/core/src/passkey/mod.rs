@@ -62,6 +62,7 @@ use std::sync::Arc;
 
 use platform_utils::tokio;
 use tokio::sync::OnceCell;
+use tracing::warn;
 
 use crate::Seed;
 use derivation::derive_nostr_keypair;
@@ -247,24 +248,39 @@ impl Passkey {
         let nostr_keys = derive_nostr_keypair(account_master)?;
         let _ = self.nostr_keys.set(nostr_keys.clone());
 
-        // Publish the label to Nostr (idempotent: skip if it already
-        // exists for this identity). Skipped entirely when the caller
-        // is performing a speculative derivation.
-        if publish_label {
-            let exists = self.nostr_client.label_exists(&nostr_keys, &label).await?;
-            if !exists {
-                self.nostr_client.publish_label(&nostr_keys, &label).await?;
-            }
-        }
-
+        // Derive the mnemonic before reaching out to Nostr. The PRF
+        // ceremony already cost the user a biometric prompt; a
+        // transient relay outage on the publish leg shouldn't burn
+        // that. Phase 2's `WalletSetup { wallet, sync_error }` shape
+        // will surface the failure to the caller as a structured
+        // warning; for now we log the error and proceed.
         let mnemonic = prf_to_mnemonic(root_key)?;
-        Ok(Wallet {
+        let wallet = Wallet {
             seed: Seed::Mnemonic {
                 mnemonic,
                 passphrase: None,
             },
-            label,
-        })
+            label: label.clone(),
+        };
+
+        // Publish the label to Nostr (idempotent: skip if it already
+        // exists for this identity). Skipped entirely when the caller
+        // is performing a speculative derivation.
+        if publish_label {
+            match self.nostr_client.label_exists(&nostr_keys, &label).await {
+                Ok(true) => { /* already published; no-op */ }
+                Ok(false) => {
+                    if let Err(e) = self.nostr_client.publish_label(&nostr_keys, &label).await {
+                        warn!("setup_wallet: label publish failed, returning wallet anyway: {e}");
+                    }
+                }
+                Err(e) => {
+                    warn!("setup_wallet: label_exists check failed, skipping publish: {e}");
+                }
+            }
+        }
+
+        Ok(wallet)
     }
 
     /// List all labels published to Nostr for this passkey's identity.
