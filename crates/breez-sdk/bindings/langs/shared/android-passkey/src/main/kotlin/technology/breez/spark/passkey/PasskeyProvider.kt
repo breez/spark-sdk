@@ -1,13 +1,15 @@
 package technology.breez.spark.passkey
 
 import android.app.Activity
+import breez_sdk_spark.CreatePasskeyRequest
 import breez_sdk_spark.DomainAssociation
-import breez_sdk_spark.PrfProviderException
 import breez_sdk_spark.PrfProvider
+import breez_sdk_spark.PrfProviderException
+import breez_sdk_spark.RegisteredCredential
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
 import technology.breez.spark.passkey.core.DomainAssociationResult
-import technology.breez.spark.passkey.core.RegisteredCredential
+import technology.breez.spark.passkey.core.RegisteredCredential as CoreRegisteredCredential
 
 /**
  * Built-in [PrfProvider] that uses the AndroidX Credential Manager +
@@ -95,7 +97,9 @@ public class PasskeyProvider(
      */
     public var onAssertionCredentialId: ((ByteArray) -> Unit)? = null
 
-    override suspend fun deriveSeed(salt: String): ByteArray {
+    /// Single-salt convenience. Not part of the [PrfProvider] protocol;
+    /// hosts that drive [deriveSeeds] from Rust never reach this.
+    public suspend fun deriveSeed(salt: String): ByteArray {
         try {
             return CredentialManagerPrfCore.deriveSeedOrRegister(
                 activity = activityProvider(),
@@ -196,28 +200,22 @@ public class PasskeyProvider(
     }
 
     /**
-     * Register a new passkey without deriving a seed.
-     *
-     * Triggers exactly one platform prompt. Use this to separate credential
-     * creation from derivation in multi-step onboarding flows.
-     *
-     * @param excludeCredentialIds Optional list of credential IDs to exclude.
-     *   Pass previously created credential IDs to prevent the authenticator
-     *   from creating a duplicate on the same device.
-     * @return Credential ID plus AAGUID and backup-eligibility parsed from
-     *   the attestation object. AAGUID and backupEligible are null when
-     *   the attestation can't be parsed.
+     * Register a new passkey with PRF support. One ceremony, no seed
+     * derivation. Per-call overrides on `request` (userId, userName,
+     * userDisplayName) fall back to constructor values when omitted.
      */
-    public suspend fun createPasskey(excludeCredentialIds: List<ByteArray> = emptyList()): RegisteredCredential {
+    override suspend fun createPasskey(request: CreatePasskeyRequest): RegisteredCredential {
         try {
-            return CredentialManagerPrfCore.createCredential(
+            val core = CredentialManagerPrfCore.createCredential(
                 activity = activityProvider(),
                 rpId = rpId,
                 rpName = rpName,
-                userName = userName,
-                userDisplayName = userDisplayName,
-                excludeCredentialIds = excludeCredentialIds,
+                userName = request.userName ?: userName,
+                userDisplayName = request.userDisplayName ?: userDisplayName,
+                excludeCredentialIds = request.excludeCredentialIds,
+                userIdOverride = request.userId,
             )
+            return RegisteredCredential(core.credentialId, core.aaguid, core.backupEligible)
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()
         }
