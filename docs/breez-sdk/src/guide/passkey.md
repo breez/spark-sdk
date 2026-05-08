@@ -162,6 +162,8 @@ These run by default. Hosts that need to override (e.g. for a custom credential-
 
 {{#name check_domain_association}} performs an Apple-app-site-association probe (iOS) or Digital Asset Links lookup (Android) against the configured RP and returns a typed {{#name DomainAssociation}} — `Associated`, `NotAssociated { source, reason }`, or `Skipped { reason }`. Use it to surface configuration mistakes (entitlement missing, AASA file not deployed) before a WebAuthn ceremony fails opaquely. The SDK never blocks on this check; treat `Skipped` as advisory.
 
+{{#tabs passkey:domain-association}}
+
 ## Checking passkey availability
 
 Use {{#name is_available}} to gate passkey UI elements. This returns `false` on unsupported platforms (e.g., Android < 9, iOS < 18), allowing you to fall back to mnemonic-based onboarding gracefully:
@@ -178,6 +180,8 @@ To connect with a passkey, instantiate the built-in `PasskeyProvider`, pass it t
 {{#tabs passkey:connect-with-passkey}}
 
 For a brand-new user with no existing passkey, call {{#name PasskeyClient.register}} instead — it creates the credential AND derives the wallet seed in one orchestrated call. Hosts that want a single-CTA onboarding can try `sign_in` first and fall through to `register` when the SDK returns {{#enum PrfProviderError::CredentialNotFound}}; on iOS+Android with `preferImmediatelyAvailableCredentials` this fast-fails (sub-300ms, no UI) when no credential exists, so the silent probe is cheap.
+
+{{#tabs passkey:signin-fallback-register}}
 
 <h2 id="listing-labels">
     <a class="header" href="#listing-labels">Listing labels</a>
@@ -196,6 +200,20 @@ Discover labels associated to the passkey using Nostr. {{#name PasskeyClient.sig
 Publish a label to Nostr so it can be discovered later. {{#name PasskeyClient.register}} publishes the label automatically on registration; use {{#name PasskeyClient.store_label}} only when adding a new label to an existing identity (e.g. a "create a new wallet" path on a returning user).
 
 {{#tabs passkey:store-label}}
+
+## Error recovery
+
+Two error variants on {{#name PrfProviderError}} carry recovery actions hosts should branch on:
+
+- {{#enum PrfProviderError::CredentialAlreadyExists}}: the OS rejected `register` because the user's password manager already holds a matching credential. Flip to {{#name PasskeyClient.sign_in}} so the OS picker surfaces the existing credential. Web emits a typed `PasskeyAlreadyExistsError`; native bindings emit the `CredentialAlreadyExists` variant.
+
+{{#tabs passkey:recover-already-exists}}
+
+- {{#enum PrfProviderError::UserTimedOut}}: the OS biometric inactivity timeout (~55 seconds) tore down the prompt without user intent. Distinct from a real cancel — surface a sticky retry UI with timeout-specific copy. Do not auto-retry without user input. Web emits a typed `PasskeyTimedOutError`; native bindings emit the `UserTimedOut` variant.
+
+{{#tabs passkey:handle-timeout}}
+
+For the full recovery-path table (`UserCancelled` vs `CredentialNotFound` vs `Configuration`, plus the iOS sub-300ms fast-fail nuance), see the [UX guide](./uxguide_passkey.md).
 
 ## Custom PrfProvider (advanced)
 
