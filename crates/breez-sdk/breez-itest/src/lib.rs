@@ -3,6 +3,7 @@ pub mod faucet;
 pub mod fixtures;
 pub mod helpers;
 mod log;
+pub mod session_manager_scenarios;
 
 use std::sync::Arc;
 
@@ -14,6 +15,7 @@ pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};
 pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
+pub use session_manager_scenarios::{SessionRow, run_session_persistence_across_restart};
 
 use anyhow::Result;
 use breez_sdk_spark::{BreezSdk, Config, SdkEvent};
