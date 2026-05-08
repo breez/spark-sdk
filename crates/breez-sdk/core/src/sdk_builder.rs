@@ -772,6 +772,9 @@ impl SdkBuilder {
                 SdkError::Generic(format!("failed to set up session token encryption: {e}"))
             })?,
         );
+        let inner_session_manager: Arc<dyn spark_wallet::SessionManager> = Arc::new(
+            crate::session_manager::CachingSessionManager::new(inner_session_manager),
+        );
         let partner_headers = Arc::new(BreezPartnerHeaderProvider::new());
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
