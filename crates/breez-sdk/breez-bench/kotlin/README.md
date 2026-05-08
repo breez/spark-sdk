@@ -7,8 +7,8 @@ metrics + per-request latency, and emits a tabular `RESULTS.md`. Used
 to estimate per-pod capacity for partners running the SDK server-side
 at multi-tenant scale.
 
-Design rationale and the longer "why" live in `benchmark-plan.md` at
-the repo root; this file is just how to run it.
+Design rationale and the longer "why" live in `DESIGN.md` next to
+this file; this file is just how to run it.
 
 ## Quickstart
 
