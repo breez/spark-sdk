@@ -193,6 +193,48 @@ const PASSKEY_SYNC_FILES: &[(&str, &[&str])] = &[
             "packages/react-native/android/src/main/kotlin/technology/breez/spark/passkey/KnownCredentialsStore.kt",
         ],
     ),
+    (
+        // PasskeyAssertionCore: WebAuthn / PRF / dual-salt logic on iOS+macOS.
+        // The upstream Swift target ships the same file in its own Sources
+        // tree so SPM can compile PasskeyProvider.swift against it without
+        // editing Package.swift.
+        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/PasskeyAssertionCore.swift",
+        &[
+            "crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/PasskeyAssertionCore.swift",
+            "packages/flutter/ios/Classes/PasskeyAssertionCore.swift",
+            "packages/react-native/ios/PasskeyAssertionCore.swift",
+        ],
+    ),
+    (
+        // KnownCredentialsStore (iOS): iCloud-keychain credential ID store.
+        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/KnownCredentialsStore.swift",
+        &[
+            "crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/KnownCredentialsStore.swift",
+            "packages/flutter/ios/Classes/KnownCredentialsStore.swift",
+            "packages/react-native/ios/KnownCredentialsStore.swift",
+        ],
+    ),
+    (
+        // PasskeyPRFHelper.h: ObjC bridge header for NS_REFINED_FOR_SWIFT
+        // PRF types. Flat layout (no `include/`) so the same file works
+        // in the upstream SPM target (publicHeadersPath: ".") and the
+        // Flutter / React Native pods (which package files at the root).
+        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.h",
+        &[
+            "crates/breez-sdk/bindings/langs/swift/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.h",
+            "packages/flutter/ios/Classes/PasskeyPRFHelper.h",
+            "packages/react-native/ios/PasskeyPRFHelper.h",
+        ],
+    ),
+    (
+        // PasskeyPRFHelper.m: ObjC implementation matching the flat header layout.
+        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.m",
+        &[
+            "crates/breez-sdk/bindings/langs/swift/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.m",
+            "packages/flutter/ios/Classes/PasskeyPRFHelper.m",
+            "packages/react-native/ios/PasskeyPRFHelper.m",
+        ],
+    ),
 ];
 
 fn sync_passkey_core_cmd(check: bool) -> Result<()> {

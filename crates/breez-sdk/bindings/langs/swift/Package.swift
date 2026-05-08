@@ -17,11 +17,15 @@ let package = Package(
     ],
     targets: [
         .binaryTarget(name: "breez_sdk_sparkFFI", path: "./breez_sdk_sparkFFI.xcframework"),
-        // ObjC helper for passkey PRF types hidden by NS_REFINED_FOR_SWIFT
+        // ObjC helper for passkey PRF types hidden by NS_REFINED_FOR_SWIFT.
+        // Header lives flat alongside the .m so the canonical file in
+        // crates/breez-sdk/bindings/langs/shared/ios-passkey/ can be
+        // mirrored verbatim into Flutter and React Native ios trees
+        // (which package both files at the pod root).
         .target(
             name: "PasskeyPRFHelperObjC",
             path: "Sources/PasskeyPRFHelperObjC",
-            publicHeadersPath: "include",
+            publicHeadersPath: ".",
             linkerSettings: [
                 .linkedFramework("AuthenticationServices"),
             ]

@@ -1,4 +1,4 @@
-#import "include/PasskeyPRFHelper.h"
+#import "PasskeyPRFHelper.h"
 
 API_AVAILABLE(ios(18.0), macos(15.0))
 @implementation PasskeyPRFHelper
