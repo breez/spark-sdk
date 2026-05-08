@@ -11,6 +11,7 @@ use crate::{
         payment_observer::{PaymentObserver, WasmPaymentObserver},
         postgres_pool::PostgresConnectionPool,
         rest_client::{RestClient, WasmRestClient},
+        session_manager::{SessionManager, WasmSessionManager},
     },
     persist::{
         Storage, WasmStorage,
@@ -269,6 +270,19 @@ impl SdkBuilder {
         self.builder = self
             .builder
             .with_ssp_connection_manager(manager.inner.clone());
+        self
+    }
+
+    /// Sets a custom session manager used to persist authentication sessions.
+    ///
+    /// Provide a shared, persistent implementation (e.g. backed by `PostgreSQL`
+    /// or Redis) to let multiple SDK instances share authentication state and
+    /// bootstrap quickly. If not set, an in-memory session manager is used.
+    #[wasm_bindgen(js_name = "withSessionManager")]
+    pub fn with_session_manager(mut self, session_manager: SessionManager) -> Self {
+        self.builder = self
+            .builder
+            .with_session_manager(Arc::new(WasmSessionManager { session_manager }));
         self
     }
 
