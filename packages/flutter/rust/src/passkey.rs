@@ -16,46 +16,83 @@ fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "Dart callback panicked".to_string())
 }
 
-/// Wraps Dart callbacks as a [`PrfProvider`] implementation. The Dart
-/// `derive_seed` callback handles a single salt; this loops it for the
-/// bulk-PRF trait surface. Hosts that don't drive registration can
-/// have `create_passkey` throw on the Dart side.
+/// Wraps Dart callbacks as a [`PrfProvider`] implementation. Each
+/// callback returns a Result so Dart-side throws (e.g.
+/// `PasskeyPrfException`) propagate cleanly. frb panics on the Rust
+/// side if the callback is declared infallible and Dart throws.
+/// Hosts that don't drive registration can have `create_passkey`
+/// throw on the Dart side.
 struct CallbackPrfProvider {
-    derive_seed_fn: Arc<dyn Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync>,
-    is_supported_fn: Arc<dyn Fn() -> DartFnFuture<bool> + Send + Sync>,
-    create_passkey_fn:
-        Arc<dyn Fn(CreatePasskeyRequest) -> DartFnFuture<RegisteredCredential> + Send + Sync>,
+    /// Bulk PRF callback. Single OS ceremony for N salts on platforms
+    /// that support the WebAuthn dual-salt fast path (saltInput1 +
+    /// saltInput2 on iOS, prfFirst + prfSecond on Android); the Dart
+    /// side internally falls back to looping per-salt where the
+    /// platform doesn't expose the fast path. The unified bulk method
+    /// matches the trait contract: callers pass salts, the provider
+    /// returns one seed per salt in input order.
+    derive_seeds_fn:
+        Arc<dyn Fn(Vec<String>) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>> + Send + Sync>,
+    is_supported_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync>,
+    create_passkey_fn: Arc<
+        dyn Fn(CreatePasskeyRequest) -> DartFnFuture<anyhow::Result<RegisteredCredential>>
+            + Send
+            + Sync,
+    >,
+}
+
+/// Convert a Dart-thrown error into a [`PrfProviderError`]. The Dart
+/// side raises `PasskeyPrfException` with a structured `code` field
+/// embedded in the message; we substring-match it back to the typed
+/// variant so callers can pattern-match instead of parsing strings.
+fn dart_error_to_prf(err: anyhow::Error) -> PrfProviderError {
+    let msg = format!("{err}");
+    let lower = msg.to_lowercase();
+    if lower.contains("usercancelled") {
+        PrfProviderError::UserCancelled
+    } else if lower.contains("nocredential") {
+        PrfProviderError::CredentialNotFound
+    } else if lower.contains("prfnotsupported") {
+        PrfProviderError::PrfNotSupported
+    } else if lower.contains("credentialalreadyexists") {
+        PrfProviderError::CredentialAlreadyExists(msg)
+    } else if lower.contains("configuration") {
+        PrfProviderError::Configuration(msg)
+    } else {
+        PrfProviderError::Generic(msg)
+    }
 }
 
 #[async_trait::async_trait]
 impl PrfProvider for CallbackPrfProvider {
     async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-        let mut out = Vec::with_capacity(salts.len());
-        for salt in salts {
-            let seed = AssertUnwindSafe((self.derive_seed_fn)(salt))
-                .catch_unwind()
-                .await
-                .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
-            out.push(seed);
-        }
-        Ok(out)
+        // The Dart-side `deriveSeeds` callback is the single PRF entry
+        // point. It internally handles dual-salt-capable platforms (one
+        // OS ceremony for N salts) and falls back to looping per-salt
+        // where the platform can't pack two salts per assertion.
+        let bulk = AssertUnwindSafe((self.derive_seeds_fn)(salts))
+            .catch_unwind()
+            .await
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
+        bulk.map_err(dart_error_to_prf)
     }
 
     async fn is_supported(&self) -> Result<bool, PrfProviderError> {
-        AssertUnwindSafe((self.is_supported_fn)())
+        let result = AssertUnwindSafe((self.is_supported_fn)())
             .catch_unwind()
             .await
-            .map_err(|e| PrfProviderError::Generic(panic_message(e)))
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
+        result.map_err(dart_error_to_prf)
     }
 
     async fn create_passkey(
         &self,
         request: CreatePasskeyRequest,
     ) -> Result<RegisteredCredential, PrfProviderError> {
-        AssertUnwindSafe((self.create_passkey_fn)(request))
+        let result = AssertUnwindSafe((self.create_passkey_fn)(request))
             .catch_unwind()
             .await
-            .map_err(|e| PrfProviderError::Generic(panic_message(e)))
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
+        result.map_err(dart_error_to_prf)
     }
 }
 
@@ -73,16 +110,19 @@ impl PasskeyClient {
     /// throw `PrfProviderError.PrfNotSupported` on the Dart side.
     #[frb(sync)]
     pub fn new(
-        derive_seed: impl Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
-        is_supported: impl Fn() -> DartFnFuture<bool> + Send + Sync + 'static,
-        create_passkey: impl Fn(CreatePasskeyRequest) -> DartFnFuture<RegisteredCredential>
+        derive_seeds: impl Fn(Vec<String>) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
+            + Send
+            + Sync
+            + 'static,
+        is_supported: impl Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync + 'static,
+        create_passkey: impl Fn(CreatePasskeyRequest) -> DartFnFuture<anyhow::Result<RegisteredCredential>>
             + Send
             + Sync
             + 'static,
         relay_config: Option<NostrRelayConfig>,
     ) -> Self {
         let provider = Arc::new(CallbackPrfProvider {
-            derive_seed_fn: Arc::new(derive_seed),
+            derive_seeds_fn: Arc::new(derive_seeds),
             is_supported_fn: Arc::new(is_supported),
             create_passkey_fn: Arc::new(create_passkey),
         });
@@ -138,13 +178,16 @@ mod tests {
     }
 
     fn make_provider(
-        derive: impl Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
-        is_available: impl Fn() -> DartFnFuture<bool> + Send + Sync + 'static,
+        derive_bulk: impl Fn(Vec<String>) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
+            + Send
+            + Sync
+            + 'static,
+        is_available: impl Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync + 'static,
     ) -> CallbackPrfProvider {
         CallbackPrfProvider {
-            derive_seed_fn: Arc::new(derive),
+            derive_seeds_fn: Arc::new(derive_bulk),
             is_supported_fn: Arc::new(is_available),
-            create_passkey_fn: Arc::new(|_req| panicking::<RegisteredCredential>("create_passkey not used")),
+            create_passkey_fn: Arc::new(|_req| panicking::<anyhow::Result<RegisteredCredential>>("create_passkey not used")),
         }
     }
 
@@ -153,8 +196,8 @@ mod tests {
         let expected = vec![42u8; 32];
         let expected_clone = expected.clone();
         let provider = make_provider(
-            move |_salt| ready(expected_clone.clone()),
-            || ready(true),
+            move |_salts| ready(Ok(vec![expected_clone.clone()])),
+            || ready(Ok(true)),
         );
         let seeds = provider.derive_seeds(vec!["test".into()]).await.unwrap();
         assert_eq!(seeds, vec![expected]);
@@ -163,8 +206,8 @@ mod tests {
     #[tokio::test]
     async fn test_derive_seeds_panic_caught() {
         let provider = make_provider(
-            |_salt| panicking("Dart threw an exception"),
-            || ready(true),
+            |_salts| panicking("Dart threw an exception"),
+            || ready(Ok(true)),
         );
         let err = provider.derive_seeds(vec!["test".into()]).await.unwrap_err();
         assert!(
@@ -174,15 +217,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_derive_seeds_dart_error_mapped() {
+        let provider = make_provider(
+            |_salts| ready(Err(anyhow::anyhow!("PasskeyPrfException(noCredential): not found"))),
+            || ready(Ok(true)),
+        );
+        let err = provider.derive_seeds(vec!["test".into()]).await.unwrap_err();
+        assert!(
+            matches!(err, PrfProviderError::CredentialNotFound),
+            "Expected CredentialNotFound, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_is_supported_success() {
-        let provider = make_provider(|_salt| ready(vec![]), || ready(false));
+        let provider = make_provider(|_salts| ready(Ok(vec![])), || ready(Ok(false)));
         assert!(!provider.is_supported().await.unwrap());
     }
 
     #[tokio::test]
     async fn test_is_supported_panic_caught() {
         let provider = make_provider(
-            |_salt| ready(vec![]),
+            |_salts| ready(Ok(vec![])),
             || panicking("device check failed"),
         );
         let err = provider.is_supported().await.unwrap_err();
@@ -193,15 +249,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_derive_seeds_falls_back_to_loop() {
+    async fn test_derive_seeds_propagates_non_prf_errors() {
         let provider = make_provider(
-            move |salt| ready(format!("seed:{salt}").into_bytes()),
-            || ready(true),
+            move |_salts| {
+                ready(Err(anyhow::anyhow!(
+                    "PasskeyPrfException(userCancelled): user dismissed"
+                )))
+            },
+            || ready(Ok(true)),
         );
-        let seeds = provider
+        let err = provider
             .derive_seeds(vec!["a".into(), "b".into()])
             .await
-            .unwrap();
-        assert_eq!(seeds, vec![b"seed:a".to_vec(), b"seed:b".to_vec()]);
+            .unwrap_err();
+        assert!(
+            matches!(err, PrfProviderError::UserCancelled),
+            "expected UserCancelled, got {err:?}"
+        );
     }
 }

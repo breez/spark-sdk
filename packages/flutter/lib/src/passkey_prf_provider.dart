@@ -4,6 +4,40 @@ import 'package:flutter/services.dart';
 
 import 'rust/models.dart' show CreatePasskeyRequest, RegisteredCredential;
 
+/// Result of a domain-association verification check against the
+/// platform's well-known configuration source. Mirrors the Rust
+/// `DomainAssociation` enum shape one-to-one so callers can switch
+/// on `kind` regardless of which native plugin produced the result.
+sealed class DomainAssociation {
+  const DomainAssociation();
+}
+
+class DomainAssociationAssociated extends DomainAssociation {
+  const DomainAssociationAssociated();
+}
+
+class DomainAssociationNotAssociated extends DomainAssociation {
+  /// Names the verification origin (e.g. "Apple AASA CDN",
+  /// "Google Digital Asset Links API"). Diagnostic only.
+  final String source;
+
+  /// Human-readable explanation of what was missing. Surface this in
+  /// developer-facing diagnostics; end-user copy should be platform-
+  /// neutral.
+  final String reason;
+
+  const DomainAssociationNotAssociated({required this.source, required this.reason});
+}
+
+class DomainAssociationSkipped extends DomainAssociation {
+  /// Why the check was not performed (provider has no verification
+  /// source, or the probe itself could not complete). Not a negative
+  /// signal; the caller may proceed with the WebAuthn ceremony.
+  final String reason;
+
+  const DomainAssociationSkipped({required this.reason});
+}
+
 /// Options for constructing a [PasskeyProvider].
 class PasskeyProviderOptions {
   /// Relying Party ID. Must match the domain configured for cross-platform
@@ -28,11 +62,20 @@ class PasskeyProviderOptions {
   /// Defaults to [userName]. Only used during registration.
   final String? userDisplayName;
 
-  /// When `true`, [PasskeyProvider.deriveSeed] automatically creates a
+  /// When `true`, [PasskeyProvider.deriveSeeds] automatically creates a
   /// new passkey if none exists, then retries the assertion. When `false`
   /// (default), throws [PasskeyPrfException] with code `noCredential` and
   /// the caller drives registration via [PasskeyProvider.createPasskey].
   final bool autoRegister;
+
+  /// Restrict assertion (sign-in) to one of these credential IDs.
+  /// The platform refuses any other credential for this RP. Use this
+  /// to bind sign-in to a specific passkey the caller has registered,
+  /// instead of letting the platform pick any sibling credential that
+  /// happens to share the RP. When null or empty, the platform picks
+  /// any credential matching the RP. Critical for deterministic seed
+  /// derivation when multiple credentials might exist for the same RP.
+  final List<Uint8List>? allowCredentialIds;
 
   const PasskeyProviderOptions({
     this.rpId = 'keys.breez.technology',
@@ -40,6 +83,7 @@ class PasskeyProviderOptions {
     this.userName,
     this.userDisplayName,
     this.autoRegister = false,
+    this.allowCredentialIds,
   });
 }
 
@@ -65,7 +109,7 @@ class PasskeyPrfException implements Exception {
 /// ```dart
 /// final provider = PasskeyProvider();
 /// final client = PasskeyClient(
-///   deriveSeed: provider.deriveSeed,
+///   deriveSeeds: provider.deriveSeeds,
 ///   isSupported: provider.isSupported,
 ///   createPasskey: provider.createPasskey,
 /// );
@@ -78,6 +122,7 @@ class PasskeyProvider {
   final String _userName;
   final String _userDisplayName;
   final bool _autoRegister;
+  final List<Uint8List>? _allowCredentialIds;
 
   PasskeyProvider([PasskeyProviderOptions? options])
     : _rpId = options?.rpId ?? 'keys.breez.technology',
@@ -85,21 +130,37 @@ class PasskeyProvider {
       _userName = options?.userName ?? (options?.rpName ?? 'Breez SDK'),
       _userDisplayName =
           options?.userDisplayName ?? (options?.userName ?? (options?.rpName ?? 'Breez SDK')),
-      _autoRegister = options?.autoRegister ?? false;
+      _autoRegister = options?.autoRegister ?? false,
+      _allowCredentialIds = options?.allowCredentialIds;
 
-  /// Derive a 32-byte seed from passkey PRF with the given salt.
-  /// Throws [PasskeyPrfException] on failure.
-  Future<Uint8List> deriveSeed(String salt) async {
+  /// Derive multiple 32-byte seeds from passkey PRF with the given salts
+  /// in as few OS ceremonies as the platform supports (dual-salt
+  /// assertion where available). For the `salts.length == 1` case the
+  /// native plugin short-circuits to a single-salt assertion (one
+  /// prompt). Used by the SDK's `setup_wallet` orchestration to collapse
+  /// master + label derivation into one prompt.
+  Future<List<Uint8List>> deriveSeeds(List<String> salts) async {
     try {
-      final result = await _channel.invokeMethod<String>('derivePrfSeed', {
-        'salt': salt,
+      final args = <String, Object?>{
+        'salts': salts,
         'rpId': _rpId,
         'rpName': _rpName,
         'userName': _userName,
         'userDisplayName': _userDisplayName,
         'autoRegister': _autoRegister,
-      });
-      return base64Decode(result!);
+      };
+      final allow = _allowCredentialIds;
+      if (allow != null && allow.isNotEmpty) {
+        args['allowCredentialIds'] = allow.map(base64Encode).toList();
+      }
+      final result = await _channel.invokeMethod<List<Object?>>('deriveSeeds', args);
+      if (result == null) {
+        throw const PasskeyPrfException(
+          code: 'unknown',
+          message: 'deriveSeeds returned null',
+        );
+      }
+      return result.cast<String>().map((b64) => base64Decode(b64)).toList();
     } on PlatformException catch (e) {
       throw _mapPlatformException(e);
     }
@@ -121,6 +182,9 @@ class PasskeyProvider {
         args['excludeCredentialIds'] =
             request.excludeCredentialIds.map((id) => base64Encode(id)).toList();
       }
+      if (request.userId != null) {
+        args['userId'] = base64Encode(request.userId!);
+      }
       final result = await _channel.invokeMethod<Map<Object?, Object?>>('createPasskey', args);
       final map = result!;
       final credentialId = base64Decode(map['credentialId'] as String);
@@ -139,8 +203,43 @@ class PasskeyProvider {
 
   /// Whether this device supports passkey PRF.
   Future<bool> isSupported() async {
-    final result = await _channel.invokeMethod<bool>('isPrfAvailable');
+    final result = await _channel.invokeMethod<bool>('isSupported');
     return result ?? false;
+  }
+
+  /// Verify the configured `rpId` is a valid scope for WebAuthn from
+  /// the running app's identity. Returns a typed [DomainAssociation]:
+  /// `Associated` when verification succeeded, `NotAssociated` with a
+  /// concrete reason when it fails (iOS only; Android degrades to
+  /// `Skipped`), or `Skipped` when the probe couldn't complete (no
+  /// network, no signing certificate, etc.).
+  ///
+  /// The SDK never gates internally; hosts pick their own policy.
+  Future<DomainAssociation> checkDomainAssociation() async {
+    try {
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>(
+        'checkDomainAssociation',
+        {'rpId': _rpId},
+      );
+      final map = result ?? {};
+      final kind = map['kind'] as String?;
+      switch (kind) {
+        case 'Associated':
+          return const DomainAssociationAssociated();
+        case 'NotAssociated':
+          return DomainAssociationNotAssociated(
+            source: (map['source'] as String?) ?? 'unknown',
+            reason: (map['reason'] as String?) ?? '',
+          );
+        case 'Skipped':
+        default:
+          return DomainAssociationSkipped(reason: (map['reason'] as String?) ?? '');
+      }
+    } on PlatformException catch (e) {
+      // Treat platform exceptions as Skipped so the caller has a
+      // single contract to handle.
+      return DomainAssociationSkipped(reason: e.message ?? e.code);
+    }
   }
 
   /// Map native [PlatformException] error codes to [PasskeyPrfException].

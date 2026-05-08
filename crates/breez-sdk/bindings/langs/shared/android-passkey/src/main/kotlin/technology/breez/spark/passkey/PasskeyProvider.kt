@@ -97,26 +97,6 @@ public class PasskeyProvider(
      */
     public var onAssertionCredentialId: ((ByteArray) -> Unit)? = null
 
-    /// Single-salt convenience. Not part of the [PrfProvider] protocol;
-    /// hosts that drive [deriveSeeds] from Rust never reach this.
-    public suspend fun deriveSeed(salt: String): ByteArray {
-        try {
-            return CredentialManagerPrfCore.deriveSeedOrRegister(
-                activity = activityProvider(),
-                salt = salt,
-                rpId = rpId,
-                rpName = rpName,
-                userName = userName,
-                userDisplayName = userDisplayName,
-                autoRegister = autoRegister,
-                allowCredentialIds = allowCredentialIds,
-                onAssertionCredentialId = onAssertionCredentialId,
-            )
-        } catch (e: CredentialManagerPrfCoreException) {
-            throw e.toPrfProviderException()
-        }
-    }
-
     /**
      * Bulk PRF derivation backed by [CredentialManagerPrfCore.deriveSeedsOrRegister].
      *

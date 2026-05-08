@@ -13,10 +13,46 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import technology.breez.spark.passkey.KnownCredentialsStore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
+
+/**
+ * After a successful `createPasskey` the platform takes a moment to
+ * make the new credential PRF-ready. On Apple Passwords this surfaces
+ * as the dual-salt assertion dropping `prf.second`; on GPM the cred
+ * may briefly be invisible to the picker. Holding the next derive
+ * call for up to [POST_CREATE_GRACE_TOTAL_MS] lets the OS finish
+ * indexing. Mirrors the Capacitor plugin's `PostCreateGraceTracker`.
+ */
+private class PostCreateGraceTracker {
+    private val mutex = Mutex()
+    @Volatile private var deadlineMs: Long = 0L
+
+    suspend fun arm(durationMs: Long) {
+        mutex.withLock {
+            deadlineMs = System.currentTimeMillis() + durationMs
+        }
+    }
+
+    suspend fun consume() {
+        val waitMs = mutex.withLock {
+            val now = System.currentTimeMillis()
+            val remaining = deadlineMs - now
+            deadlineMs = 0L
+            if (remaining > 0L) remaining else 0L
+        }
+        if (waitMs > 0L) {
+            delay(waitMs)
+        }
+    }
+}
+
+private const val POST_CREATE_GRACE_TOTAL_MS: Long = 800L
 
 /**
  * Flutter plugin for passkey PRF operations on Android.
@@ -44,6 +80,8 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
      * branch fails, matching the per-call try/catch pattern below.
      */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    private val graceTracker = PostCreateGraceTracker()
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(binding.binaryMessenger, "breez_sdk_spark_passkey")
@@ -73,22 +111,24 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
 
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
-            "derivePrfSeed" -> handleDerivePrfSeed(call, result)
+            "deriveSeeds" -> handleDeriveSeeds(call, result)
             "createPasskey" -> handleCreatePasskey(call, result)
-            "isPrfAvailable" -> result.success(CredentialManagerPrfCore.isPrfAvailable())
+            "isSupported" -> result.success(CredentialManagerPrfCore.isSupported())
+            "checkDomainAssociation" -> handleCheckDomainAssociation(call, result)
             else -> result.notImplemented()
         }
     }
 
-    private fun handleDerivePrfSeed(call: MethodCall, result: Result) {
-        val salt = call.argument<String>("salt")
+    private fun handleDeriveSeeds(call: MethodCall, result: Result) {
+        @Suppress("UNCHECKED_CAST")
+        val salts = call.argument<List<String>>("salts")
         val rpId = call.argument<String>("rpId")
         val rpName = call.argument<String>("rpName")
         val userName = call.argument<String>("userName")
         val userDisplayName = call.argument<String>("userDisplayName")
         val autoRegister = call.argument<Boolean>("autoRegister") ?: false
 
-        if (salt == null || rpId == null || rpName == null || userName == null || userDisplayName == null) {
+        if (salts == null || rpId == null || rpName == null || userName == null || userDisplayName == null) {
             result.error("ERR_PASSKEY", "Invalid arguments", null)
             return
         }
@@ -97,22 +137,80 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             return
         }
 
+        // Caller-supplied allow-list (e.g. host-tracked credential IDs)
+        // takes precedence over the implicit KnownCredentialsStore set
+        // when present.
+        val callerAllow: List<ByteArray> =
+            (call.argument<List<String>>("allowCredentialIds") ?: emptyList()).map {
+                Base64.decode(it, Base64.NO_WRAP)
+            }
+        val allowIds = if (callerAllow.isNotEmpty()) {
+            callerAllow
+        } else {
+            readKnownCredentialIds(currentActivity.applicationContext, rpId)
+        }
+
         scope.launch {
             try {
-                val prfOutput = CredentialManagerPrfCore.deriveSeedOrRegister(
+                graceTracker.consume()
+                val seeds = CredentialManagerPrfCore.deriveSeedsOrRegister(
                     activity = currentActivity,
-                    salt = salt,
+                    salts = salts,
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
                     autoRegister = autoRegister,
+                    allowCredentialIds = allowIds,
                 )
-                result.success(Base64.encodeToString(prfOutput, Base64.NO_WRAP))
+                // Encode each seed as base64 so MethodChannel can carry
+                // it as a List<String>. Dart side base64-decodes back
+                // to Uint8List.
+                result.success(seeds.map { Base64.encodeToString(it, Base64.NO_WRAP) })
             } catch (e: CredentialManagerPrfCoreException) {
                 result.error(e.errorCode, e.message ?: e.defaultMessage, null)
             } catch (e: Exception) {
                 result.error("ERR_PASSKEY", e.message ?: e.toString(), null)
+            }
+        }
+    }
+
+    private fun handleCheckDomainAssociation(call: MethodCall, result: Result) {
+        val rpId = call.argument<String>("rpId")
+        if (rpId == null) {
+            result.error("ERR_PASSKEY", "Invalid arguments", null)
+            return
+        }
+        val currentActivity = activity ?: run {
+            result.error("ERR_PASSKEY", "No activity available", null)
+            return
+        }
+        scope.launch {
+            try {
+                val outcome = CredentialManagerPrfCore.checkDomainAssociation(
+                    context = currentActivity.applicationContext,
+                    rpId = rpId,
+                )
+                // Soft-fail to Skipped on Android: see the upstream
+                // PasskeyProvider for the rationale (CredentialManager
+                // runs its own DAL check internally and a public-API
+                // mismatch can be a stale-cache false negative).
+                result.success(when (outcome) {
+                    is technology.breez.spark.passkey.core.DomainAssociationResult.Associated ->
+                        mapOf("kind" to "Associated")
+                    is technology.breez.spark.passkey.core.DomainAssociationResult.NotAssociated ->
+                        mapOf(
+                            "kind" to "Skipped",
+                            "reason" to "[soft-fail on Android] ${outcome.reason}",
+                        )
+                    is technology.breez.spark.passkey.core.DomainAssociationResult.Skipped ->
+                        mapOf("kind" to "Skipped", "reason" to outcome.reason)
+                })
+            } catch (e: Exception) {
+                result.success(mapOf(
+                    "kind" to "Skipped",
+                    "reason" to "Domain association probe failed: ${e.message ?: e.toString()}",
+                ))
             }
         }
     }
@@ -136,6 +234,8 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             (call.argument<List<String>>("excludeCredentialIds") ?: emptyList()).map {
                 Base64.decode(it, Base64.NO_WRAP)
             }
+        val userIdOverride: ByteArray? =
+            call.argument<String>("userId")?.let { Base64.decode(it, Base64.NO_WRAP) }
         val context = currentActivity.applicationContext
 
         scope.launch {
@@ -150,6 +250,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                     userName = userName,
                     userDisplayName = userDisplayName,
                     excludeCredentialIds = merged,
+                    userIdOverride = userIdOverride,
                 )
                 KnownCredentialsStore.add(
                     context,
@@ -159,6 +260,10 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                     ),
                     rpId,
                 )
+                // Hold the next derive call for up to 800ms so the
+                // immediate post-register assertion doesn't race the
+                // credential's PRF-readiness window.
+                graceTracker.arm(POST_CREATE_GRACE_TOTAL_MS)
                 result.success(mapOf(
                     "credentialId" to Base64.encodeToString(credential.credentialId, Base64.NO_WRAP),
                     "aaguid" to credential.aaguid?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
@@ -177,9 +282,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
         rpId: String,
         caller: List<ByteArray>,
     ): List<ByteArray> {
-        val known = KnownCredentialsStore.read(context, rpId).map {
-            Base64.decode(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        }
+        val known = readKnownCredentialIds(context, rpId)
         if (known.isEmpty()) return caller
         val seen = caller.map { it.toList() }.toMutableSet()
         val out = caller.toMutableList()
@@ -189,6 +292,22 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             }
         }
         return out
+    }
+
+    /// Read all known credential IDs for [rpId] from the iCloud-Keychain
+    /// equivalent (encrypted SharedPreferences + Block Store). Used by
+    /// the derive paths to populate `allowCredentials` so the OS auto-
+    /// routes to the registering provider after a fresh `createPasskey`,
+    /// skipping the "select your passkey" picker. Without this the user
+    /// sees an extra prompt between create and the post-register PRF
+    /// assertion. Mirrors the Capacitor plugin's allowCredentialIds path.
+    private suspend fun readKnownCredentialIds(
+        context: android.content.Context,
+        rpId: String,
+    ): List<ByteArray> {
+        return KnownCredentialsStore.read(context, rpId).map {
+            Base64.decode(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        }
     }
 
     private val CredentialManagerPrfCoreException.errorCode: String
