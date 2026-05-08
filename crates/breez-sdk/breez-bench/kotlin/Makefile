@@ -7,7 +7,7 @@ KMP_CLI_DIR := ../../bindings/examples/cli/langs/kotlin-multiplatform
 export MASTER_SECRET ?= breez-bench
 export MYSQL_URL ?= mysql://root:password@127.0.0.1:3306/breez_bench
 
-.PHONY: help setup mysql-up build smoke-test run-server fund seed-senders loadgen sweep aggregate run clean
+.PHONY: help setup mysql-up build smoke-test run-server fund seed-senders loadgen sweep aggregate run trace-sync clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -51,6 +51,9 @@ sweep: build ## RPS sweep only (no aggregation). See scripts/sweep.sh for env kn
 aggregate: ## Aggregate a sweep into summary.json + RESULTS.md (SWEEP_ID required)
 	@test -n "$$SWEEP_ID" || (echo "SWEEP_ID is required (e.g. SWEEP_ID=2026-05-08T15-00-00)"; exit 2)
 	python3 scripts/aggregate.py --sweep-dir out/$$SWEEP_ID
+
+trace-sync: build ## Trace ensureSynced=true on a wallet with full Rust tracing (USER_ID defaults to __treasurer__; LOG_FILTER=debug)
+	$(GRADLE) run --console=plain --args="--mode=trace-sync --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --user-id=$${USER_ID:-__treasurer__} --log-filter=$${LOG_FILTER:-debug}"
 
 run: build ## Sweep + aggregate in one shot. Auto-funds treasurer + senders. Default fast pass (~7 min).
 	@SWEEP_ID=$${SWEEP_ID:-$$(date +%Y-%m-%dT%H-%M-%S)}; \

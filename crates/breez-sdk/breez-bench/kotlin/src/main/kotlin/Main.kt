@@ -10,6 +10,7 @@ import breez_sdk_spark.SendPaymentMethod
 import breez_sdk_spark.SendPaymentRequest
 import breez_sdk_spark.defaultConfig
 import breez_sdk_spark.defaultMysqlStorageConfig
+import breez_sdk_spark.initLogging
 
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -195,6 +196,62 @@ fun smokeTest(opts: Map<String, String>) = runBlocking {
     println("[smoke] OK")
 }
 
+// --- trace-sync mode (verbose ensureSynced=true with Rust tracing) --------
+
+/**
+ * Builds an SDK for a chosen user-id with full Rust-side tracing
+ * enabled, then times both `getInfo(ensureSynced=false)` (cached) and
+ * `getInfo(ensureSynced=true)` (full sync). The resulting log file is
+ * the SDK's view of what happens during a sync — useful for any
+ * "why is this wallet slow?" investigation.
+ *
+ * Default user-id is the treasurer; override with `--user-id=<id>`
+ * to inspect any other wallet (sender, user-pool entry, etc.).
+ */
+fun traceSync(opts: Map<String, String>) = runBlocking {
+    val mysqlUrl = opts["mysql-url"]
+        ?: error("--mysql-url=mysql://user:pass@host:port/dbname is required")
+    val masterSecret = opts["master-secret"]
+        ?: System.getenv("MASTER_SECRET")
+        ?: error("--master-secret=<hex-or-string> or MASTER_SECRET env var is required")
+    val userId = opts["user-id"] ?: TREASURER_USER_ID
+    val logDir = opts["log-dir"] ?: "out/.trace-logs/$userId-${System.currentTimeMillis()}"
+    val logFilter = opts["log-filter"] ?: "debug"
+    Files.createDirectories(Path.of(logDir))
+
+    println("[trace] user-id=$userId  mysql=${maskPassword(mysqlUrl)}")
+    println("[trace] init_logging dir=$logDir filter=$logFilter")
+    initLogging(logDir, null, logFilter)
+
+    val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
+    val builder = SdkBuilder(defaultConfig(Network.REGTEST), seed)
+    builder.withMysqlBackend(defaultMysqlStorageConfig(mysqlUrl))
+
+    println("[trace] building SDK …")
+    val tBuild = System.currentTimeMillis()
+    val sdk = builder.build()
+    println("[trace] build took ${System.currentTimeMillis() - tBuild}ms")
+
+    try {
+        val tCached = System.currentTimeMillis()
+        val cached = sdk.getInfo(GetInfoRequest(ensureSynced = false))
+        println("[trace] getInfo(cached) ${System.currentTimeMillis() - tCached}ms — balance=${cached.balanceSats}")
+
+        println("[trace] calling getInfo(ensureSynced=true) …")
+        val tSync = System.currentTimeMillis()
+        val synced = sdk.getInfo(GetInfoRequest(ensureSynced = true))
+        val syncMs = System.currentTimeMillis() - tSync
+        println("[trace] getInfo(synced) ${syncMs}ms — balance=${synced.balanceSats}")
+        println("[trace] log file: $logDir/sdk.log")
+    } finally {
+        try {
+            sdk.disconnect()
+        } catch (e: Exception) {
+            System.err.println("[trace] disconnect warn: ${e.message}")
+        }
+    }
+}
+
 // --- fund mode (treasurer top-up via Lightspark regtest faucet) -----------
 
 /**
@@ -227,6 +284,22 @@ fun fundTreasurer(opts: Map<String, String>) = runBlocking {
     val sdk = builder.build()
 
     try {
+        // Fast path: if the locally-cached balance is already at-or-above
+        // target, skip the full sync entirely. Closed-loop funding lands
+        // many small sender→treasurer transfers per sweep that pile up
+        // unclaimed on the treasurer; `ensureSynced=true` claims them via
+        // O(N) FROST roundtrips to every operator and can stall for
+        // minutes. Cached is a strict lower bound on true balance (sync
+        // only adds incoming), so cached ≥ target ⇒ true ≥ target — safe
+        // to skip.
+        val cachedBalance = sdk.getInfo(GetInfoRequest(ensureSynced = false)).balanceSats.toLong()
+        if (cachedBalance >= targetSats) {
+            println("[fund] cached balance: $cachedBalance sats (≥ $targetSats target, skipping sync)")
+            println("[fund] OK")
+            return@runBlocking
+        }
+        println("[fund] cached balance: $cachedBalance sats (below $targetSats; syncing to confirm)")
+
         // Reuse an existing deposit address if the treasurer has one.
         val depositAddr = sdk.receivePayment(
             ReceivePaymentRequest(paymentMethod = ReceivePaymentMethod.BitcoinAddress(newAddress = false))
@@ -343,9 +416,12 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
         .build()
 
     try {
-        val treasurerInfo = treasurer.getInfo(GetInfoRequest(ensureSynced = true))
+        // Cached: lower bound on true balance (sync only adds incoming).
+        // Sufficient for the "do we have enough?" warning below; avoids the
+        // multi-minute sync caused by the treasurer's pending-transfer backlog.
+        val treasurerInfo = treasurer.getInfo(GetInfoRequest(ensureSynced = false))
         val treasurerBalance = treasurerInfo.balanceSats.toLong()
-        println("[seed] treasurer balance: $treasurerBalance sats")
+        println("[seed] treasurer balance (cached): $treasurerBalance sats")
         // Worst case: every sender is at zero. Just a warning — partial
         // seeding is still useful for diagnostics.
         val maxSpend = senderCount.toLong() * perSenderSats
@@ -613,6 +689,7 @@ fun main(args: Array<String>) {
         "fund" -> fundTreasurer(opts)
         "seed-senders" -> seedSenders(opts)
         "loadgen" -> runLoadGen(opts)
+        "trace-sync" -> traceSync(opts)
         null, "help" -> {
             println(
                 """
