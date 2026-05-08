@@ -532,34 +532,34 @@ public class PasskeyProvider: PrfProvider {
 
     // MARK: - Private
 
-    private func performAssertionWithPrf(saltData: Data) async throws -> Data {
+    /// Build an assertion request with rpId, challenge, allow-credentials,
+    /// and the caller-supplied PRF setup. Shared by single- and dual-salt.
+    private func makeAssertionRequest(
+        configurePrf: (ASAuthorizationPlatformPublicKeyCredentialAssertionRequest) -> Void
+    ) -> ASAuthorizationPlatformPublicKeyCredentialAssertionRequest {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
-        let challenge = randomBytes(count: 32)
-        let assertionRequest = provider.createCredentialAssertionRequest(challenge: challenge)
-
-        // Constrain assertion to specific credential IDs when the caller
-        // provided them. Without this, iOS picks any credential for the
-        // RP, which produces non-deterministic seeds when multiple
-        // credentials exist (different PRF keys per passkey).
+        let request = provider.createCredentialAssertionRequest(challenge: randomBytes(count: 32))
         if !allowCredentialIds.isEmpty {
-            assertionRequest.allowedCredentials = allowCredentialIds.map {
+            request.allowedCredentials = allowCredentialIds.map {
                 ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
             }
         }
+        configurePrf(request)
+        return request
+    }
 
-        // Configure PRF extension via ObjC helper
-        // (PRF types are NS_REFINED_FOR_SWIFT with no accessible Swift initializers)
-        PasskeyPRFHelper.setAssertionPRFOn(assertionRequest, withSalt: saltData)
+    private func performAssertionWithPrf(saltData: Data) async throws -> Data {
+        // PRF types are NS_REFINED_FOR_SWIFT with no accessible Swift
+        // initializers; the ObjC helper sets them via runtime KVC.
+        let request = makeAssertionRequest { req in
+            PasskeyPRFHelper.setAssertionPRFOn(req, withSalt: saltData)
+        }
 
         let delegate = AuthorizationDelegate()
-        let controller = ASAuthorizationController(authorizationRequests: [assertionRequest])
+        let controller = ASAuthorizationController(authorizationRequests: [request])
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
-        // Forward the assertion's credential ID to the host's recorder
-        // (e.g. a synced-keychain store of "credentials we know about")
-        // before we resolve the seed. Lets hosts auto-discover their
-        // own existing credentials on first sign-in after a migration.
         delegate.onAssertionCredentialId = { [weak self] id in
             self?.onAssertionCredentialId?(id)
         }
@@ -572,29 +572,12 @@ public class PasskeyProvider: PrfProvider {
     }
 
     private func performDualSaltAssertionInner(salt1Data: Data, salt2Data: Data) async throws -> (Data, Data?) {
-        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
-        let challenge = randomBytes(count: 32)
-        let assertionRequest = provider.createCredentialAssertionRequest(challenge: challenge)
-
-        if !allowCredentialIds.isEmpty {
-            assertionRequest.allowedCredentials = allowCredentialIds.map {
-                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
-            }
+        let request = makeAssertionRequest { req in
+            PasskeyPRFHelper.setAssertionPRFOn(req, withSalt1: salt1Data, salt2: salt2Data)
         }
 
-        // Configure dual-salt PRF: iOS 18+ supports two salt inputs
-        // per assertion (saltInput1 + saltInput2), producing two PRF
-        // outputs in a single user prompt. Swift's ObjC bridge drops
-        // the `Request` suffix from the selector, so the call site
-        // uses the bridged name.
-        PasskeyPRFHelper.setAssertionPRFOn(
-            assertionRequest,
-            withSalt1: salt1Data,
-            salt2: salt2Data
-        )
-
         let delegate = DualSaltAuthorizationDelegate()
-        let controller = ASAuthorizationController(authorizationRequests: [assertionRequest])
+        let controller = ASAuthorizationController(authorizationRequests: [request])
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
@@ -810,50 +793,48 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
     func authorizationController(
         controller: ASAuthorizationController, didCompleteWithError error: Error
     ) {
-        let mapped = mapAuthorizationError(error)
+        let mapped = mapASAuthorizationError(error)
         continuation?.resume(throwing: mapped)
         registrationContinuation?.resume(throwing: mapped)
     }
+}
 
-    private func mapAuthorizationError(_ error: Error) -> PasskeyPrfError {
-        let nsError = error as NSError
-
-        if nsError.domain == ASAuthorizationError.errorDomain {
-            switch ASAuthorizationError.Code(rawValue: nsError.code) {
-            case .canceled:
-                // `preferImmediatelyAvailableCredentials` collapses
-                // both no-creds and user-dismissed into `.canceled`
-                // and Apple's APIs don't expose any in-process signal
-                // to disambiguate. Hosts that need to distinguish
-                // (e.g. to silently fall through to register on
-                // genuine no-creds) measure elapsed wall-clock time
-                // around the call: fast-fail returns in well under
-                // 200ms while a user-dismissed sheet takes seconds.
-                return .UserCancelled
-            case .unknown:
-                if nsError.localizedDescription.contains("no credential")
-                    || nsError.localizedDescription.contains("No credentials")
-                {
-                    return .CredentialNotFound
-                }
-                return .AuthenticationFailed(nsError.localizedDescription)
-            case .invalidResponse:
-                return .PrfEvaluationFailed(nsError.localizedDescription)
-            case .notHandled:
+/// Map an `ASAuthorizationError` to our typed PRF error.
+///
+/// `.canceled` covers both user-dismissed and no-credential because
+/// `preferImmediatelyAvailableCredentials` collapses them and Apple
+/// exposes no in-process signal to disambiguate. Hosts that need the
+/// distinction can wall-clock the call: fast-fail < 200ms vs a
+/// dismissed sheet that takes seconds.
+@available(iOS 18.0, macOS 15.0, *)
+private func mapASAuthorizationError(_ error: Error) -> PasskeyPrfError {
+    let nsError = error as NSError
+    if nsError.domain == ASAuthorizationError.errorDomain {
+        switch ASAuthorizationError.Code(rawValue: nsError.code) {
+        case .canceled:
+            return .UserCancelled
+        case .unknown:
+            if nsError.localizedDescription.contains("no credential")
+                || nsError.localizedDescription.contains("No credentials")
+            {
                 return .CredentialNotFound
-            case .failed:
-                return .AuthenticationFailed(nsError.localizedDescription)
-            case .notInteractive:
-                return .AuthenticationFailed("User interaction required")
-            case .matchedExcludedCredential:
-                return .CredentialAlreadyExists("Credential already registered")
-            default:
-                return .Generic(nsError.localizedDescription)
             }
+            return .AuthenticationFailed(nsError.localizedDescription)
+        case .invalidResponse:
+            return .PrfEvaluationFailed(nsError.localizedDescription)
+        case .notHandled:
+            return .CredentialNotFound
+        case .failed:
+            return .AuthenticationFailed(nsError.localizedDescription)
+        case .notInteractive:
+            return .AuthenticationFailed("User interaction required")
+        case .matchedExcludedCredential:
+            return .CredentialAlreadyExists("Credential already registered")
+        default:
+            return .Generic(nsError.localizedDescription)
         }
-
-        return .Generic(error.localizedDescription)
     }
+    return .Generic(error.localizedDescription)
 }
 
 // MARK: - Dual-Salt Authorization Delegate
@@ -903,48 +884,7 @@ private class DualSaltAuthorizationDelegate: NSObject, ASAuthorizationController
     func authorizationController(
         controller: ASAuthorizationController, didCompleteWithError error: Error
     ) {
-        let mapped = mapAuthorizationError(error)
-        continuation?.resume(throwing: mapped)
-    }
-
-    private func mapAuthorizationError(_ error: Error) -> PasskeyPrfError {
-        let nsError = error as NSError
-
-        if nsError.domain == ASAuthorizationError.errorDomain {
-            switch ASAuthorizationError.Code(rawValue: nsError.code) {
-            case .canceled:
-                // `preferImmediatelyAvailableCredentials` collapses
-                // both no-creds and user-dismissed into `.canceled`
-                // and Apple's APIs don't expose any in-process signal
-                // to disambiguate. Hosts that need to distinguish
-                // (e.g. to silently fall through to register on
-                // genuine no-creds) measure elapsed wall-clock time
-                // around the call: fast-fail returns in well under
-                // 200ms while a user-dismissed sheet takes seconds.
-                return .UserCancelled
-            case .unknown:
-                if nsError.localizedDescription.contains("no credential")
-                    || nsError.localizedDescription.contains("No credentials")
-                {
-                    return .CredentialNotFound
-                }
-                return .AuthenticationFailed(nsError.localizedDescription)
-            case .invalidResponse:
-                return .PrfEvaluationFailed(nsError.localizedDescription)
-            case .notHandled:
-                return .CredentialNotFound
-            case .failed:
-                return .AuthenticationFailed(nsError.localizedDescription)
-            case .notInteractive:
-                return .AuthenticationFailed("User interaction required")
-            case .matchedExcludedCredential:
-                return .CredentialAlreadyExists("Credential already registered")
-            default:
-                return .Generic(nsError.localizedDescription)
-            }
-        }
-
-        return .Generic(error.localizedDescription)
+        continuation?.resume(throwing: mapASAuthorizationError(error))
     }
 }
 
