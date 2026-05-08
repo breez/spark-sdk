@@ -29,23 +29,20 @@
 //! # Example
 //!
 //! ```ignore
-//! use breez_sdk_spark::passkey::{DeriveRequest, NostrRelayConfig, PasskeyClient};
+//! use breez_sdk_spark::passkey::{NostrRelayConfig, PasskeyClient, SignInRequest};
 //!
 //! // Platform provides a PrfProvider implementation
 //! let prf_provider = Arc::new(MyPrfProvider::new());
 //!
 //! let client = PasskeyClient::new(prf_provider, None);
 //!
-//! // Derive a wallet for a known label
+//! // Sign in for a known label (fast path; no label-store query)
 //! let response = client
-//!     .derive(DeriveRequest {
+//!     .sign_in(SignInRequest {
 //!         label: Some("my-wallet".to_string()),
 //!         extra_salts: vec![],
 //!     })
 //!     .await?;
-//!
-//! // List available labels for restore (off the cached identity, no extra prompt)
-//! let labels = client.list_labels().await?;
 //! ```
 
 mod derivation;
@@ -65,8 +62,7 @@ pub use models::{
     Wallet, WalletSetup,
 };
 pub use passkey_client::{
-    DeriveRequest, DeriveResponse, PasskeyClient, RegisterRequest, RegisterResponse,
-    RestoreRequest, RestoreResponse,
+    PasskeyClient, RegisterRequest, RegisterResponse, SignInRequest, SignInResponse,
 };
 pub use passkey_prf_provider::{DomainAssociation, PrfProvider};
 

@@ -8,14 +8,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::Passkey;
 use super::error::PasskeyError;
 use super::label_store::LabelStore;
 use super::models::{
     CreatePasskeyRequest, NamedSalt, NostrRelayConfig, RegisteredCredential, SetupWalletRequest,
-    Wallet, WalletSetup,
+    Wallet,
 };
 use super::passkey_prf_provider::PrfProvider;
-use super::{DEFAULT_LABEL, Passkey};
 
 /// Request shape for [`PasskeyClient::register`].
 #[derive(Debug, Default, Clone)]
@@ -70,50 +70,22 @@ pub struct RegisterResponse {
     pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
-/// Request shape for [`PasskeyClient::restore`].
+/// Request shape for [`PasskeyClient::sign_in`].
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct RestoreRequest {
-    /// Optimistic guess (e.g. last-used label cached locally). When
-    /// the guess matches a published label, the returned
-    /// [`RestoreResponse::wallet`] is final and the host can skip the
-    /// label picker. Defaults to [`DEFAULT_LABEL`] when `None`.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub candidate_label: Option<String>,
-
-    /// Same as [`RegisterRequest::extra_salts`].
-    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub extra_salts: Vec<NamedSalt>,
-}
-
-/// Response from [`PasskeyClient::restore`].
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct RestoreResponse {
-    /// Speculatively-derived wallet for
-    /// [`RestoreRequest::candidate_label`]. Only meaningful when
-    /// [`Self::candidate_matched`] is `true`; otherwise the host
-    /// should ignore this and re-derive via [`PasskeyClient::derive`]
-    /// for the correct label from [`Self::labels`].
-    pub wallet: Wallet,
-    /// Whether [`RestoreRequest::candidate_label`] is published in
-    /// the label store.
-    pub candidate_matched: bool,
-    /// All labels the user has published. Empty if the user has never
-    /// run [`PasskeyClient::register`] (or the equivalent), or if the
-    /// label store is unreachable.
-    pub labels: Vec<String>,
-    /// Same as [`RegisterResponse::extra_seeds`]. Always populated for
-    /// the candidate label, even when the candidate didn't match.
-    pub extra_seeds: HashMap<String, Vec<u8>>,
-}
-
-/// Request shape for [`PasskeyClient::derive`].
-#[derive(Debug, Default, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct DeriveRequest {
-    /// Label of an existing wallet. Defaults to [`DEFAULT_LABEL`] when
-    /// `None`. The label is **not** published as part of this call.
+pub struct SignInRequest {
+    /// If provided, derive directly for this label and skip the
+    /// label-store query (fast path; one ceremony, no Nostr round-trip).
+    /// Use when the host has the user's label cached locally from a
+    /// previous session.
+    ///
+    /// If `None`, the SDK derives a wallet for [`DEFAULT_LABEL`] **and**
+    /// queries the label store for the user's full label set in the
+    /// same ceremony. Use when the host has no local state — typically
+    /// a fresh install / new device. The host then checks
+    /// [`SignInResponse::labels`]: if it contains [`DEFAULT_LABEL`] the
+    /// returned wallet is final; otherwise show a picker and call
+    /// `sign_in` again with the chosen label.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
@@ -122,35 +94,32 @@ pub struct DeriveRequest {
     pub extra_salts: Vec<NamedSalt>,
 }
 
-/// Response from [`PasskeyClient::derive`].
+/// Response from [`PasskeyClient::sign_in`].
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct DeriveResponse {
+pub struct SignInResponse {
+    /// The derived wallet for the resolved label
+    /// ([`SignInRequest::label`] or [`DEFAULT_LABEL`]).
     pub wallet: Wallet,
+    /// All labels the user has published. **Empty** when
+    /// [`SignInRequest::label`] was provided (fast path; the SDK skips
+    /// the label-store query). **Populated** when `label` was `None`,
+    /// so the host can show a picker if the default-derived wallet
+    /// isn't the one the user wanted. Also empty if the label store
+    /// is unreachable on the discovery path.
+    pub labels: Vec<String>,
+    /// Same as [`RegisterResponse::extra_seeds`].
     pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
-impl From<WalletSetup> for DeriveResponse {
-    fn from(setup: WalletSetup) -> Self {
-        Self {
-            wallet: setup.wallet,
-            extra_seeds: setup.extra_seeds,
-        }
-    }
-}
-
 /// High-level orchestration over a [`PrfProvider`] and a
-/// [`LabelStore`]. Three named flows match the three real onboarding
-/// states:
+/// [`LabelStore`]. Two named flows match the real onboarding states:
 ///
 /// - [`Self::register`]: first-time setup (create credential + derive
 ///   wallet + publish label) in one ceremony where the platform
 ///   supports dual-salt PRF.
-/// - [`Self::restore`]: returning user with no local state
-///   (speculative derive on a guessed label, then list to confirm or
-///   surface a picker).
-/// - [`Self::derive`]: returning user with the correct label cached
-///   locally (single ceremony, no label-store round-trip).
+/// - [`Self::sign_in`]: returning user. Fast path when the host has
+///   the label cached locally; cold-restore-with-discovery when not.
 ///
 /// Construct via [`Self::new`] (default Nostr-backed label store) or
 /// [`Self::from_config`] (re-use the SDK's API key).
@@ -208,42 +177,31 @@ impl PasskeyClient {
         })
     }
 
-    /// Cold-restore. Derives a wallet for `candidate_label` without
-    /// publishing it, then runs [`Passkey::list_labels`] off the cached
-    /// identity (no extra prompts). The label store query is
-    /// best-effort: a transient failure leaves [`RestoreResponse::labels`]
-    /// empty rather than aborting the flow, since the speculative
-    /// wallet is still useful.
-    pub async fn restore(&self, request: RestoreRequest) -> Result<RestoreResponse, PasskeyError> {
-        let candidate_label = request
-            .candidate_label
-            .clone()
-            .unwrap_or_else(|| DEFAULT_LABEL.to_string());
+    /// Returning-user sign-in. Two modes based on whether the host
+    /// has the label cached locally:
+    ///
+    /// - **Fast path** ([`SignInRequest::label`] = `Some(...)`): one
+    ///   ceremony, no Nostr round-trip. [`SignInResponse::labels`] is
+    ///   empty.
+    /// - **Discovery path** ([`SignInRequest::label`] = `None`): one
+    ///   ceremony derives a wallet for [`DEFAULT_LABEL`] and the SDK
+    ///   queries the label store off the cached identity (no extra
+    ///   prompt). [`SignInResponse::labels`] carries the full set; the
+    ///   host shows a picker if [`DEFAULT_LABEL`] isn't in it and calls
+    ///   `sign_in` again with the chosen label.
+    ///
+    /// In both modes the label is **not** re-published. Call
+    /// [`Self::store_label`] separately if needed.
+    ///
+    /// The label-store query on the discovery path is best-effort: a
+    /// transient failure leaves `labels` empty rather than aborting,
+    /// since the speculative wallet is still useful.
+    pub async fn sign_in(
+        &self,
+        request: SignInRequest,
+    ) -> Result<SignInResponse, PasskeyError> {
+        let discovery = request.label.is_none();
 
-        let setup = self
-            .passkey
-            .setup_wallet(SetupWalletRequest {
-                label: request.candidate_label,
-                publish_label: false,
-                extra_salts: request.extra_salts,
-            })
-            .await?;
-
-        let labels = self.passkey.list_labels().await.unwrap_or_default();
-        let candidate_matched = labels.iter().any(|l| l == &candidate_label);
-
-        Ok(RestoreResponse {
-            wallet: setup.wallet,
-            candidate_matched,
-            labels,
-            extra_seeds: setup.extra_seeds,
-        })
-    }
-
-    /// Returning user with the correct label already known. The label
-    /// is **not** re-published; if it's missing from the label store,
-    /// call [`Self::store_label`] separately.
-    pub async fn derive(&self, request: DeriveRequest) -> Result<DeriveResponse, PasskeyError> {
         let setup = self
             .passkey
             .setup_wallet(SetupWalletRequest {
@@ -252,7 +210,18 @@ impl PasskeyClient {
                 extra_salts: request.extra_salts,
             })
             .await?;
-        Ok(setup.into())
+
+        let labels = if discovery {
+            self.passkey.list_labels().await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        Ok(SignInResponse {
+            wallet: setup.wallet,
+            labels,
+            extra_seeds: setup.extra_seeds,
+        })
     }
 
     /// List labels published for this passkey's identity. Pass-through
@@ -418,27 +387,29 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn derive_returns_wallet_for_label_without_publishing() {
+    async fn sign_in_fast_path_returns_wallet_without_listing() {
         let provider = Arc::new(MockProvider::new([0u8; 32]));
         let client = PasskeyClient::new(provider.clone(), None);
         let response = client
-            .derive(DeriveRequest {
+            .sign_in(SignInRequest {
                 label: Some("personal".to_string()),
                 ..Default::default()
             })
             .await
             .unwrap();
         assert_eq!(response.wallet.label, "personal");
-        // create_passkey is NOT called on the derive path.
+        // create_passkey is NOT called on the sign-in path.
         assert_eq!(*provider.create_calls.lock().unwrap(), 0);
+        // Fast path: no label-store query, so labels stays empty.
+        assert!(response.labels.is_empty());
     }
 
     #[macros::async_test_all]
-    async fn derive_propagates_extra_seeds() {
+    async fn sign_in_propagates_extra_seeds() {
         let provider = Arc::new(MockProvider::new([0u8; 32]));
         let client = PasskeyClient::new(provider, None);
         let response = client
-            .derive(DeriveRequest {
+            .sign_in(SignInRequest {
                 label: None,
                 extra_salts: vec![NamedSalt {
                     name: "db_key".to_string(),
