@@ -23,7 +23,7 @@ use std::sync::Arc;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use macros::async_trait;
 use mysql_async::prelude::*;
-use mysql_async::{Conn, Params, Pool, TxOpts, Value};
+use mysql_async::{Conn, Params, Pool, Value};
 use platform_utils::time::{Instant, SystemTime};
 use spark_wallet::{
     LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
@@ -38,7 +38,7 @@ use crate::advisory_lock::identity_lock_name;
 use crate::config::MysqlStorageConfig;
 use crate::error::MysqlError;
 use crate::migrations::{Migration, run_migrations};
-use crate::pool::create_pool;
+use crate::pool::{create_pool, tx_opts};
 
 /// Name of the schema migrations table for `MysqlTreeStore`.
 const TREE_MIGRATIONS_TABLE: &str = "tree_schema_migrations";
@@ -657,10 +657,7 @@ impl MysqlTreeStore {
         conn: &mut Conn,
         leaves: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         let leaf_ids: Vec<String> = leaves.iter().map(|l| l.id.to_string()).collect();
         self.batch_remove_spent_leaves(&mut tx, &leaf_ids).await?;
@@ -682,10 +679,7 @@ impl MysqlTreeStore {
         missing_operators_leaves: &[TreeNode],
         refresh_timestamp: DateTime<Utc>,
     ) -> Result<(), TreeServiceError> {
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         self.cleanup_stale_reservations(&mut tx).await?;
 
@@ -764,10 +758,7 @@ impl MysqlTreeStore {
         id: &LeavesReservationId,
         leaves_to_keep: &[TreeNode],
     ) -> Result<(), TreeServiceError> {
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         let exists: Option<String> = tx
             .exec_first(
@@ -825,10 +816,7 @@ impl MysqlTreeStore {
         id: &LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         let purpose: Option<String> = tx
             .exec_first(
@@ -916,10 +904,7 @@ impl MysqlTreeStore {
     ) -> Result<ReserveResult, TreeServiceError> {
         let total_start = Instant::now();
         let max_target = Self::slim_max_target(target_amounts);
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         // True total available across ALL eligible leaves — required for the
         // WaitForPending decision. Must NOT be derived from the prefiltered
@@ -1133,10 +1118,7 @@ impl MysqlTreeStore {
         reserved_leaves: &[TreeNode],
         change_leaves: &[TreeNode],
     ) -> Result<LeavesReservation, TreeServiceError> {
-        let mut tx = conn
-            .start_transaction(TxOpts::default())
-            .await
-            .map_err(map_err)?;
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
         let exists: Option<String> = tx
             .exec_first(

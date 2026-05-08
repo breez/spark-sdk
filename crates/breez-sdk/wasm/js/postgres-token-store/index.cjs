@@ -532,13 +532,9 @@ class PostgresTokenStore {
    */
   async insertTokenOutputs(tokenOutputs) {
     try {
-      const client = await this.pool.connect();
-      try {
-        await client.query("BEGIN");
-
+      await this._withTransaction(async (client) => {
         await this._upsertMetadata(client, tokenOutputs.metadata);
 
-        // Remove inserted output IDs from spent markers (output returned to us)
         const outputIds = tokenOutputs.outputs.map((o) => o.output.id);
         if (outputIds.length > 0) {
           await client.query(
@@ -554,14 +550,7 @@ class PostgresTokenStore {
             output
           );
         }
-
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw error;
-      } finally {
-        client.release();
-      }
+      });
     } catch (error) {
       if (error instanceof TokenStoreError) throw error;
       throw new TokenStoreError(

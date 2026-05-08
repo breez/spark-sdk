@@ -128,6 +128,7 @@ class MysqlTokenStore {
       }
       lockAcquired = true;
 
+      await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
       await conn.beginTransaction();
       const result = await fn(conn);
       await conn.commit();
@@ -157,6 +158,7 @@ class MysqlTokenStore {
   async _withTransaction(fn) {
     const conn = await this.pool.getConnection();
     try {
+      await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
       await conn.beginTransaction();
       const result = await fn(conn);
       await conn.commit();
@@ -518,10 +520,7 @@ class MysqlTokenStore {
 
   async insertTokenOutputs(tokenOutputs) {
     try {
-      const conn = await this.pool.getConnection();
-      try {
-        await conn.beginTransaction();
-
+      await this._withTransaction(async (conn) => {
         await this._upsertMetadata(conn, tokenOutputs.metadata);
 
         const outputIds = tokenOutputs.outputs.map((o) => o.output.id);
@@ -540,14 +539,7 @@ class MysqlTokenStore {
             output
           );
         }
-
-        await conn.commit();
-      } catch (error) {
-        await conn.rollback().catch(() => {});
-        throw error;
-      } finally {
-        conn.release();
-      }
+      });
     } catch (error) {
       if (error instanceof TokenStoreError) throw error;
       throw new TokenStoreError(

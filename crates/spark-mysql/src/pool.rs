@@ -6,10 +6,26 @@
 
 use std::time::Duration;
 
-use mysql_async::{Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
+use mysql_async::{
+    IsolationLevel, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts, TxOpts,
+};
 
 use crate::config::MysqlStorageConfig;
 use crate::error::MysqlError;
+
+/// `TxOpts` pinned to `READ COMMITTED` isolation. `InnoDB`'s default `REPEATABLE READ`
+/// applies next-key/gap locks across scanned ranges and even across non-existent
+/// rows in `IN`-list lookups, which expands every transaction's lock footprint
+/// far beyond the rows it actually touches and lets unrelated writers cycle
+/// through deadlock detection. `READ COMMITTED` keeps locks scoped to rows that
+/// match — matching the semantics the postgres backend already runs under, and
+/// what the per-tenant advisory `GET_LOCK` already assumes when it serializes
+/// writers.
+pub fn tx_opts() -> TxOpts {
+    let mut opts = TxOpts::default();
+    opts.with_isolation_level(IsolationLevel::ReadCommitted);
+    opts
+}
 
 /// Creates a `MySQL` connection pool from the given configuration.
 ///
