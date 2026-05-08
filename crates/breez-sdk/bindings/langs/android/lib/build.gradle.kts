@@ -59,6 +59,12 @@ dependencies {
     implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
     // Required for Dispatchers.Main on Android
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
+    // Required by the canonical KnownCredentialsStore (cross-device-synced
+    // store of registered credential IDs). Block Store is the primary
+    // store; EncryptedSharedPreferences is the local fallback.
+    implementation("com.google.android.gms:play-services-auth-blockstore:16.4.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 }
 
 val libraryVersion: String by project

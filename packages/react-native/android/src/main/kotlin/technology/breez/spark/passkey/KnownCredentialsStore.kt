@@ -171,13 +171,15 @@ public object KnownCredentialsStore {
 
     private fun espKey(rpId: String): String = "$ESP_KEY_PREFIX$rpId"
 
-    private fun readFromEsp(context: Context, rpId: String): List<String> = try {
-        val esp = encryptedPrefs(context)
-        val raw = esp.getString(espKey(rpId), null) ?: return emptyList()
-        decodeList(raw)
-    } catch (e: Exception) {
-        Log.w(TAG, "ESP read failed for rpId=$rpId: ${e.message}")
-        emptyList()
+    private fun readFromEsp(context: Context, rpId: String): List<String> {
+        return try {
+            val esp = encryptedPrefs(context)
+            val raw = esp.getString(espKey(rpId), null) ?: return emptyList()
+            decodeList(raw)
+        } catch (e: Exception) {
+            Log.w(TAG, "ESP read failed for rpId=$rpId: ${e.message}")
+            emptyList()
+        }
     }
 
     private fun writeToEsp(context: Context, rpId: String, encoded: String) {
