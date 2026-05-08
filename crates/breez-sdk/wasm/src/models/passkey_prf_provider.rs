@@ -344,9 +344,9 @@ export interface PrfProvider {
 
 /**
  * Plain-object shape passed to {@link PrfProvider.createPasskey}. The
- * bundled `PasskeyProvider` exposes a richer
- * `CreatePasskeyRequest` with extra fields (`signal`, etc.); the bridge
- * marshals only the fields the Rust core understands.
+ * bundled `PasskeyProvider` accepts the same shape under the name
+ * `CreatePasskeyRequest`; this name is reserved for the Rust-bridge
+ * boundary.
  */
 export interface CreatePasskeyRequestJSON {
     excludeCredentialIds?: Uint8Array[];
