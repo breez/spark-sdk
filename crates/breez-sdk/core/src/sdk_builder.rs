@@ -476,12 +476,13 @@ impl SdkBuilder {
         let mysql_backend = if let Some(ref mysql_config) = self.mysql_backend_config {
             let pool = crate::persist::mysql::create_pool(mysql_config)
                 .map_err(|e| SdkError::Generic(e.to_string()))?;
+            let foreign_key_mode = mysql_config.foreign_key_mode;
             let identity = spark_signer
                 .get_identity_public_key()
                 .await
                 .map_err(|e| SdkError::Generic(e.to_string()))?
                 .serialize();
-            Some((pool, identity))
+            Some((pool, identity, foreign_key_mode))
         } else {
             None
         };
@@ -531,7 +532,7 @@ impl SdkBuilder {
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
             if s.is_none()
-                && let Some((ref pool, ref identity)) = mysql_backend
+                && let Some((ref pool, ref identity, _)) = mysql_backend
             {
                 s = Some(Arc::new(
                     crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone(), identity)
@@ -597,10 +598,16 @@ impl SdkBuilder {
 
         #[cfg(feature = "mysql")]
         if tree_store.is_none()
-            && let Some((ref pool, ref identity)) = mysql_backend
+            && let Some((ref pool, ref identity, ref foreign_key_mode)) = mysql_backend
         {
-            tree_store =
-                Some(crate::persist::mysql::create_mysql_tree_store(pool.clone(), identity).await?);
+            tree_store = Some(
+                crate::persist::mysql::create_mysql_tree_store(
+                    pool.clone(),
+                    identity,
+                    *foreign_key_mode,
+                )
+                .await?,
+            );
         }
 
         // Create token output store if configured
@@ -619,10 +626,15 @@ impl SdkBuilder {
 
         #[cfg(feature = "mysql")]
         if token_output_store.is_none()
-            && let Some((ref pool, ref identity)) = mysql_backend
+            && let Some((ref pool, ref identity, ref foreign_key_mode)) = mysql_backend
         {
             token_output_store = Some(
-                crate::persist::mysql::create_mysql_token_store(pool.clone(), identity).await?,
+                crate::persist::mysql::create_mysql_token_store(
+                    pool.clone(),
+                    identity,
+                    *foreign_key_mode,
+                )
+                .await?,
             );
         }
 

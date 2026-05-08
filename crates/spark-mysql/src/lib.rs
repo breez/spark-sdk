@@ -19,12 +19,16 @@ pub mod pool;
 mod token_store;
 mod tree_store;
 
-pub use config::{MysqlStorageConfig, default_mysql_storage_config};
+pub use config::{MysqlForeignKeyMode, MysqlStorageConfig, default_mysql_storage_config};
 pub use error::MysqlError;
 pub use token_store::{
     MysqlTokenStore, create_mysql_token_store, create_mysql_token_store_from_pool,
+    create_mysql_token_store_from_pool_with_foreign_key_mode,
 };
-pub use tree_store::{MysqlTreeStore, create_mysql_tree_store, create_mysql_tree_store_from_pool};
+pub use tree_store::{
+    MysqlTreeStore, create_mysql_tree_store, create_mysql_tree_store_from_pool,
+    create_mysql_tree_store_from_pool_with_foreign_key_mode,
+};
 
 pub use migrations::{Migration, run_migrations};
 pub use pool::{create_pool, map_db_error};

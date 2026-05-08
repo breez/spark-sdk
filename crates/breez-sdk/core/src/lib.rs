@@ -51,7 +51,7 @@ pub use persist::postgres::{
     feature = "mysql",
     not(all(target_family = "wasm", target_os = "unknown"))
 ))]
-pub use persist::mysql::{MysqlStorageConfig, default_mysql_storage_config};
+pub use persist::mysql::{MysqlForeignKeyMode, MysqlStorageConfig, default_mysql_storage_config};
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use {

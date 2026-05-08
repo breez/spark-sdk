@@ -12,7 +12,7 @@ mod storage;
 
 // Re-export public configuration types and functions (with UniFFI annotations).
 #[allow(unused_imports)]
-pub use base::{MysqlStorageConfig, default_mysql_storage_config};
+pub use base::{MysqlForeignKeyMode, MysqlStorageConfig, default_mysql_storage_config};
 
 // Re-export pool factory and store factories
 pub(crate) use base::{create_mysql_token_store, create_mysql_tree_store, create_pool};

@@ -13,6 +13,35 @@ use spark_wallet::{TokenOutputStore, TreeStore};
 
 use crate::persist::StorageError;
 
+/// Controls whether `MySQL` migrations create database-enforced foreign keys.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum MysqlForeignKeyMode {
+    /// Create foreign-key constraints in the managed schema.
+    #[default]
+    Enforced,
+    /// Omit foreign-key constraints from the managed schema.
+    Disabled,
+}
+
+impl From<MysqlForeignKeyMode> for spark_mysql::MysqlForeignKeyMode {
+    fn from(mode: MysqlForeignKeyMode) -> Self {
+        match mode {
+            MysqlForeignKeyMode::Enforced => spark_mysql::MysqlForeignKeyMode::Enforced,
+            MysqlForeignKeyMode::Disabled => spark_mysql::MysqlForeignKeyMode::Disabled,
+        }
+    }
+}
+
+impl From<spark_mysql::MysqlForeignKeyMode> for MysqlForeignKeyMode {
+    fn from(mode: spark_mysql::MysqlForeignKeyMode) -> Self {
+        match mode {
+            spark_mysql::MysqlForeignKeyMode::Enforced => MysqlForeignKeyMode::Enforced,
+            spark_mysql::MysqlForeignKeyMode::Disabled => MysqlForeignKeyMode::Disabled,
+        }
+    }
+}
+
 /// Configuration for `MySQL` storage connection pool.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -34,6 +63,12 @@ pub struct MysqlStorageConfig {
     /// Only used when the connection string requests TLS
     /// (`ssl-mode=verify_ca` or `ssl-mode=verify_identity`).
     pub root_ca_pem: Option<String>,
+
+    /// Whether migrations should create database-enforced foreign keys.
+    ///
+    /// Use `Disabled` for environments that manage relationships in application
+    /// code and require schema changes without foreign-key constraints.
+    pub foreign_key_mode: MysqlForeignKeyMode,
 }
 
 impl From<MysqlStorageConfig> for spark_mysql::MysqlStorageConfig {
@@ -43,6 +78,7 @@ impl From<MysqlStorageConfig> for spark_mysql::MysqlStorageConfig {
             max_pool_size: config.max_pool_size,
             recycle_timeout_secs: config.recycle_timeout_secs,
             root_ca_pem: config.root_ca_pem,
+            foreign_key_mode: config.foreign_key_mode.into(),
         }
     }
 }
@@ -54,6 +90,7 @@ impl From<spark_mysql::MysqlStorageConfig> for MysqlStorageConfig {
             max_pool_size: config.max_pool_size,
             recycle_timeout_secs: config.recycle_timeout_secs,
             root_ca_pem: config.root_ca_pem,
+            foreign_key_mode: config.foreign_key_mode.into(),
         }
     }
 }
@@ -124,18 +161,28 @@ pub(super) async fn run_migrations(
 pub(crate) async fn create_mysql_tree_store(
     pool: mysql_async::Pool,
     identity: &[u8],
+    foreign_key_mode: MysqlForeignKeyMode,
 ) -> Result<Arc<dyn TreeStore>, StorageError> {
-    spark_mysql::create_mysql_tree_store_from_pool(pool, identity)
-        .await
-        .map_err(StorageError::from)
+    spark_mysql::create_mysql_tree_store_from_pool_with_foreign_key_mode(
+        pool,
+        identity,
+        foreign_key_mode.into(),
+    )
+    .await
+    .map_err(StorageError::from)
 }
 
 /// Creates a `MysqlTokenStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_mysql_token_store(
     pool: mysql_async::Pool,
     identity: &[u8],
+    foreign_key_mode: MysqlForeignKeyMode,
 ) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
-    spark_mysql::create_mysql_token_store_from_pool(pool, identity)
-        .await
-        .map_err(StorageError::from)
+    spark_mysql::create_mysql_token_store_from_pool_with_foreign_key_mode(
+        pool,
+        identity,
+        foreign_key_mode.into(),
+    )
+    .await
+    .map_err(StorageError::from)
 }
