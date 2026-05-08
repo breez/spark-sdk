@@ -73,6 +73,12 @@ pub struct PostgresStorageConfig {
     /// If `None`, uses Mozilla's root certificate store (via webpki-roots).
     /// Only used with `sslmode=verify-ca` or `sslmode=verify-full`.
     pub root_ca_pem: Option<String>,
+
+    /// Optional prefix applied to all SDK-owned `PostgreSQL` table names.
+    ///
+    /// This allows embedding the SDK tables in a shared application schema
+    /// without introducing generic table names such as `payments`.
+    pub table_prefix: Option<String>,
 }
 
 impl PostgresStorageConfig {
@@ -95,6 +101,7 @@ impl PostgresStorageConfig {
             recycle_timeout_secs: defaults.timeouts.recycle.map(|d| d.as_secs()),
             queue_mode: defaults.queue_mode.into(),
             root_ca_pem: None,
+            table_prefix: None,
         }
     }
 }

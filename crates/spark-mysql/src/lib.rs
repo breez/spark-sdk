@@ -21,12 +21,17 @@ mod tree_store;
 
 pub use config::{MysqlStorageConfig, default_mysql_storage_config};
 pub use error::MysqlError;
+pub use spark_storage::{TableNameRewriter as MysqlTableNames, validate_table_prefix};
 pub use token_store::{
     MysqlTokenStore, create_mysql_token_store, create_mysql_token_store_from_pool,
+    create_mysql_token_store_from_pool_with_table_prefix,
 };
-pub use tree_store::{MysqlTreeStore, create_mysql_tree_store, create_mysql_tree_store_from_pool};
+pub use tree_store::{
+    MysqlTreeStore, create_mysql_tree_store, create_mysql_tree_store_from_pool,
+    create_mysql_tree_store_from_pool_with_table_prefix,
+};
 
-pub use migrations::{Migration, run_migrations};
+pub use migrations::{Migration, run_migrations, run_migrations_with_table_prefix};
 pub use pool::{create_pool, map_db_error};
 
 pub use mysql_async;

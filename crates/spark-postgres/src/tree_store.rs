@@ -11,19 +11,20 @@ use platform_utils::time::{Instant, SystemTime};
 
 use deadpool_postgres::Pool;
 use macros::async_trait;
+use spark_storage::TableNameRewriter;
 use spark_wallet::{
     LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
     TargetAmounts, TreeNode, TreeNodeStatus, TreeServiceError, TreeStore,
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
+use tokio_postgres::types::ToSql;
 use tracing::{debug, info, trace};
 use uuid::Uuid;
 
 use crate::advisory_lock::identity_lock_key;
 use crate::config::PostgresStorageConfig;
 use crate::error::PostgresError;
-use crate::migrations::run_migrations;
 use crate::pool::create_pool;
 
 /// Name of the schema migrations table for `PostgresTreeStore`.
@@ -67,6 +68,7 @@ const SPENT_MARKER_CLEANUP_THRESHOLD_MS: i64 = 5 * 60 * 1000; // 5 minutes
 /// tree state.
 pub struct PostgresTreeStore {
     pool: Pool,
+    table_names: TableNameRewriter,
     /// 33-byte secp256k1 compressed pubkey identifying this tenant. All reads
     /// and writes are filtered by `user_id = self.identity`.
     identity: Vec<u8>,
@@ -187,8 +189,9 @@ impl TreeStore for PostgresTreeStore {
 
     async fn get_available_balance(&self) -> Result<u64, TreeServiceError> {
         let client = self.pool.get().await.map_err(map_err)?;
-        let row = client
+        let row = self
             .query_one(
+                &client,
                 r"
                 SELECT COALESCE(SUM((l.data->>'value')::bigint), 0)::bigint AS balance
                 FROM tree_leaves l
@@ -211,8 +214,9 @@ impl TreeStore for PostgresTreeStore {
     async fn get_leaves(&self) -> Result<Leaves, TreeServiceError> {
         let client = self.pool.get().await.map_err(map_err)?;
 
-        let rows = client
+        let rows = self
             .query(
+                &client,
                 r"
                 SELECT l.id, l.status, l.is_missing_from_operators, l.data,
                        l.reservation_id, r.purpose
@@ -290,8 +294,9 @@ impl TreeStore for PostgresTreeStore {
         // Check if any swap reservation is currently active, or if a swap completed
         // after this refresh started (making the refresh data potentially inconsistent).
         let (has_active_swap, swap_completed_during_refresh): (bool, bool) = {
-            let row = tx
+            let row = self
                 .query_one(
+                    &tx,
                     r"
                     SELECT
                         EXISTS(
@@ -322,8 +327,9 @@ impl TreeStore for PostgresTreeStore {
         self.cleanup_spent_markers(&tx, refresh_timestamp).await?;
 
         let spent_ids: HashSet<String> = {
-            let rows = tx
+            let rows = self
                 .query(
+                    &tx,
                     "SELECT leaf_id FROM tree_spent_leaves \
                      WHERE user_id = $1 AND spent_at >= $2",
                     &[&self.identity, &refresh_timestamp],
@@ -344,7 +350,8 @@ impl TreeStore for PostgresTreeStore {
         // Includes leaves released earlier in this transaction by cleanup_stale_reservations
         // (FK ON DELETE SET NULL) — those rows kept their old added_at, so they are
         // dropped here and re-fetched from the operator response in the upsert below.
-        tx.execute(
+        self.execute(
+            &tx,
             "DELETE FROM tree_leaves \
              WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
             &[&self.identity, &refresh_timestamp],
@@ -373,8 +380,9 @@ impl TreeStore for PostgresTreeStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        let reservation = tx
+        let reservation = self
             .query_opt(
+                &tx,
                 "SELECT id FROM tree_reservations WHERE user_id = $1 AND id = $2",
                 &[&self.identity, id],
             )
@@ -385,8 +393,9 @@ impl TreeStore for PostgresTreeStore {
             return Ok(());
         }
 
-        let prior_leaf_ids: Vec<String> = tx
+        let prior_leaf_ids: Vec<String> = self
             .query(
+                &tx,
                 "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
                 &[&self.identity, id],
             )
@@ -405,14 +414,16 @@ impl TreeStore for PostgresTreeStore {
             id, prior_leaf_ids, keep_ids, dropped_ids
         );
 
-        tx.execute(
+        self.execute(
+            &tx,
             "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
             &[&self.identity, id],
         )
         .await
         .map_err(map_err)?;
 
-        tx.execute(
+        self.execute(
+            &tx,
             "DELETE FROM tree_reservations WHERE user_id = $1 AND id = $2",
             &[&self.identity, id],
         )
@@ -443,8 +454,9 @@ impl TreeStore for PostgresTreeStore {
         self.acquire_write_lock(&tx).await?;
 
         // Check if reservation exists and get its purpose
-        let reservation = tx
+        let reservation = self
             .query_opt(
+                &tx,
                 "SELECT id, purpose FROM tree_reservations WHERE user_id = $1 AND id = $2",
                 &[&self.identity, id],
             )
@@ -453,8 +465,9 @@ impl TreeStore for PostgresTreeStore {
 
         let (is_swap, reserved_leaf_ids) = if let Some(row) = reservation {
             let is_swap = row.get::<_, String>("purpose") == "Swap";
-            let leaf_ids: Vec<String> = tx
+            let leaf_ids: Vec<String> = self
                 .query(
+                    &tx,
                     "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
                     &[&self.identity, id],
                 )
@@ -478,14 +491,16 @@ impl TreeStore for PostgresTreeStore {
         self.batch_insert_spent_leaves(&tx, &reserved_leaf_ids)
             .await?;
 
-        tx.execute(
+        self.execute(
+            &tx,
             "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
             &[&self.identity, id],
         )
         .await
         .map_err(map_err)?;
 
-        tx.execute(
+        self.execute(
+            &tx,
             "DELETE FROM tree_reservations WHERE user_id = $1 AND id = $2",
             &[&self.identity, id],
         )
@@ -507,7 +522,8 @@ impl TreeStore for PostgresTreeStore {
         // which would cause stale data to be applied. UPSERT so a tenant
         // that joined after migration 3 (and thus has no row) gets one created.
         if is_swap && new_leaves.is_some() {
-            tx.execute(
+            self.execute(
+                &tx,
                 "INSERT INTO tree_swap_status (user_id, last_completed_at) \
                  VALUES ($1, NOW()) \
                  ON CONFLICT (user_id) DO UPDATE SET last_completed_at = EXCLUDED.last_completed_at",
@@ -544,8 +560,9 @@ impl TreeStore for PostgresTreeStore {
         // True total available across ALL eligible leaves — required for the
         // WaitForPending decision. Must NOT be derived from the prefiltered
         // slim set since the prefilter excludes big leaves.
-        let total_row = tx
+        let total_row = self
             .query_one(
+                &tx,
                 r"
                 SELECT COALESCE(SUM((data->>'value')::bigint), 0)::bigint AS total
                 FROM tree_leaves
@@ -566,8 +583,9 @@ impl TreeStore for PostgresTreeStore {
         // max_target (covers the minimum-amount fallback case where one larger
         // leaf is sufficient).
         let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
-        let slim_rows = tx
+        let slim_rows = self
             .query(
+                &tx,
                 r"
                 SELECT id, (data->>'value')::bigint AS value
                 FROM tree_leaves
@@ -721,8 +739,9 @@ impl TreeStore for PostgresTreeStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        let reservation = tx
+        let reservation = self
             .query_opt(
+                &tx,
                 "SELECT id FROM tree_reservations WHERE user_id = $1 AND id = $2",
                 &[&self.identity, reservation_id],
             )
@@ -737,8 +756,9 @@ impl TreeStore for PostgresTreeStore {
 
         // Get old reserved leaf IDs and mark them as spent (they were consumed by the swap)
         let old_reserved_leaf_ids: Vec<String> = {
-            let rows = tx
+            let rows = self
                 .query(
+                    &tx,
                     "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
                     &[&self.identity, reservation_id],
                 )
@@ -750,7 +770,8 @@ impl TreeStore for PostgresTreeStore {
         // Mark old leaves as spent and delete them (they no longer exist after the swap)
         self.batch_insert_spent_leaves(&tx, &old_reserved_leaf_ids)
             .await?;
-        tx.execute(
+        self.execute(
+            &tx,
             "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
             &[&self.identity, reservation_id],
         )
@@ -771,7 +792,8 @@ impl TreeStore for PostgresTreeStore {
             .await?;
 
         // Clear pending change amount
-        tx.execute(
+        self.execute(
+            &tx,
             "UPDATE tree_reservations SET pending_change_amount = 0 \
              WHERE user_id = $1 AND id = $2",
             &[&self.identity, reservation_id],
@@ -805,8 +827,10 @@ impl PostgresTreeStore {
         config: PostgresStorageConfig,
         identity: &[u8],
     ) -> Result<Self, PostgresError> {
+        let table_names = TableNameRewriter::new(config.table_prefix.as_deref())
+            .map_err(|e| PostgresError::Initialization(e.to_string()))?;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::init(pool, identity, table_names).await
     }
 
     /// Creates a new `PostgresTreeStore` from an existing connection pool.
@@ -814,15 +838,32 @@ impl PostgresTreeStore {
     /// This reuses the provided pool and runs tree store migrations.
     /// Useful when sharing a pool with other components (e.g., `PostgresStorage`).
     pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
-        Self::init(pool, identity).await
+        Self::from_pool_with_table_prefix(pool, identity, None).await
+    }
+
+    /// Creates a new `PostgresTreeStore` from an existing connection pool with
+    /// an optional table prefix.
+    pub async fn from_pool_with_table_prefix(
+        pool: Pool,
+        identity: &[u8],
+        table_prefix: Option<&str>,
+    ) -> Result<Self, PostgresError> {
+        let table_names = TableNameRewriter::new(table_prefix)
+            .map_err(|e| PostgresError::Initialization(e.to_string()))?;
+        Self::init(pool, identity, table_names).await
     }
 
     /// Shared initialization logic for both constructors.
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
+    async fn init(
+        pool: Pool,
+        identity: &[u8],
+        table_names: TableNameRewriter,
+    ) -> Result<Self, PostgresError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
         let store = Self {
             pool,
+            table_names,
             identity: identity.to_vec(),
             lock_key: identity_lock_key(TREE_STORE_LOCK_PREFIX, identity),
             balance_changed_tx: Arc::new(balance_changed_tx),
@@ -837,12 +878,69 @@ impl PostgresTreeStore {
 
     /// Runs database migrations for tree store tables.
     async fn migrate(&self) -> Result<(), PostgresError> {
-        run_migrations(
+        crate::migrations::run_migrations_with_table_prefix(
             &self.pool,
             TREE_MIGRATIONS_TABLE,
             &Self::migrations(&self.identity),
+            self.table_names.prefix(),
         )
         .await
+    }
+
+    fn sql(&self, sql: &str) -> String {
+        self.table_names.sql(sql)
+    }
+
+    async fn query<C>(
+        &self,
+        client: &C,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<tokio_postgres::Row>, tokio_postgres::Error>
+    where
+        C: deadpool_postgres::GenericClient + Sync,
+    {
+        let sql = self.sql(sql);
+        client.query(&sql, params).await
+    }
+
+    async fn query_one<C>(
+        &self,
+        client: &C,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<tokio_postgres::Row, tokio_postgres::Error>
+    where
+        C: deadpool_postgres::GenericClient + Sync,
+    {
+        let sql = self.sql(sql);
+        client.query_one(&sql, params).await
+    }
+
+    async fn query_opt<C>(
+        &self,
+        client: &C,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Option<tokio_postgres::Row>, tokio_postgres::Error>
+    where
+        C: deadpool_postgres::GenericClient + Sync,
+    {
+        let sql = self.sql(sql);
+        client.query_opt(&sql, params).await
+    }
+
+    async fn execute<C>(
+        &self,
+        client: &C,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<u64, tokio_postgres::Error>
+    where
+        C: deadpool_postgres::GenericClient + Sync,
+    {
+        let sql = self.sql(sql);
+        client.execute(&sql, params).await
     }
 
     /// Returns the list of migrations for the tree store.
@@ -905,10 +1003,11 @@ impl PostgresTreeStore {
     /// Calculates the pending balance from in-flight swaps within a transaction.
     async fn calculate_pending_balance(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &deadpool_postgres::Transaction<'_>,
     ) -> Result<u64, TreeServiceError> {
-        let row = tx
+        let row = self
             .query_one(
+                tx,
                 "SELECT COALESCE(SUM(pending_change_amount), 0)::BIGINT \
                  FROM tree_reservations WHERE user_id = $1",
                 &[&self.identity],
@@ -937,7 +1036,7 @@ impl PostgresTreeStore {
     /// Uses ON CONFLICT DO UPDATE to replace existing leaves (matching `InMemoryTreeStore` behavior).
     async fn batch_upsert_leaves(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &deadpool_postgres::Transaction<'_>,
         leaves: &[TreeNode],
         is_missing_from_operators: bool,
         skip_ids: Option<&HashSet<String>>,
@@ -976,7 +1075,8 @@ impl PostgresTreeStore {
             data_values.push(Self::serialize_node(leaf)?);
         }
 
-        tx.execute(
+        self.execute(
+            tx,
             r"
             INSERT INTO tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
             SELECT $5, id, status, missing, data, NOW()
@@ -1005,7 +1105,7 @@ impl PostgresTreeStore {
     /// Batch sets `reservation_id` on leaves using UNNEST.
     async fn batch_set_reservation_id(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &deadpool_postgres::Transaction<'_>,
         reservation_id: &str,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
@@ -1013,7 +1113,8 @@ impl PostgresTreeStore {
             return Ok(());
         }
 
-        tx.execute(
+        self.execute(
+            tx,
             r"
             UPDATE tree_leaves
             SET reservation_id = $1
@@ -1030,14 +1131,15 @@ impl PostgresTreeStore {
     /// Batch inserts spent leaf markers using UNNEST.
     async fn batch_insert_spent_leaves(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &deadpool_postgres::Transaction<'_>,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
         if leaf_ids.is_empty() {
             return Ok(());
         }
 
-        tx.execute(
+        self.execute(
+            tx,
             r"
             INSERT INTO tree_spent_leaves (user_id, leaf_id)
             SELECT $2, leaf_id FROM UNNEST($1::text[]) AS t(leaf_id)
@@ -1056,15 +1158,16 @@ impl PostgresTreeStore {
     /// to clear the "spent" status from when we previously sent it.
     async fn batch_remove_spent_leaves(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &deadpool_postgres::Transaction<'_>,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
         if leaf_ids.is_empty() {
             return Ok(());
         }
 
-        let result = tx
+        let result = self
             .execute(
+                tx,
                 r"
                 DELETE FROM tree_spent_leaves
                 WHERE user_id = $2 AND leaf_id = ANY($1)
@@ -1104,14 +1207,15 @@ impl PostgresTreeStore {
     /// even when the slim candidate set was thousands.
     async fn resolve_full_leaves(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &deadpool_postgres::Transaction<'_>,
         ids: &[String],
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let rows = tx
+        let rows = self
             .query(
+                tx,
                 "SELECT id, data FROM tree_leaves WHERE user_id = $2 AND id = ANY($1)",
                 &[&ids, &self.identity],
             )
@@ -1141,7 +1245,7 @@ impl PostgresTreeStore {
     /// The lock is automatically released when the transaction commits or rolls back.
     async fn acquire_write_lock(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &deadpool_postgres::Transaction<'_>,
     ) -> Result<(), TreeServiceError> {
         tx.execute("SELECT pg_advisory_xact_lock($1)", &[&self.lock_key])
             .await
@@ -1157,11 +1261,12 @@ impl PostgresTreeStore {
     /// whole-row SET NULL would try to null `user_id` (NOT NULL).
     async fn cleanup_stale_reservations(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &deadpool_postgres::Transaction<'_>,
     ) -> Result<u64, TreeServiceError> {
         // Release leaves still pointing at any soon-to-be-deleted reservation,
         // matching the previous `ON DELETE SET NULL` behavior.
-        tx.execute(
+        self.execute(
+            tx,
             r"UPDATE tree_leaves SET reservation_id = NULL
               WHERE user_id = $2
                 AND reservation_id IN (
@@ -1174,8 +1279,9 @@ impl PostgresTreeStore {
         .await
         .map_err(map_err)?;
 
-        let result = tx
+        let result = self
             .execute(
+                tx,
                 r"DELETE FROM tree_reservations
                   WHERE user_id = $2
                     AND created_at < NOW() - make_interval(secs => $1)",
@@ -1198,7 +1304,7 @@ impl PostgresTreeStore {
     /// removed until they exceed this threshold.
     async fn cleanup_spent_markers(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &deadpool_postgres::Transaction<'_>,
         refresh_timestamp: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64, TreeServiceError> {
         let threshold = chrono::Duration::milliseconds(SPENT_MARKER_CLEANUP_THRESHOLD_MS);
@@ -1206,8 +1312,9 @@ impl PostgresTreeStore {
             .checked_sub_signed(threshold)
             .unwrap_or(refresh_timestamp);
 
-        let result = tx
+        let result = self
             .execute(
+                tx,
                 r"DELETE FROM tree_spent_leaves WHERE user_id = $2 AND spent_at < $1",
                 &[&cleanup_cutoff, &self.identity],
             )
@@ -1226,7 +1333,7 @@ impl PostgresTreeStore {
     /// Creates a reservation with the given leaves.
     async fn create_reservation(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &deadpool_postgres::Transaction<'_>,
         reservation_id: &str,
         leaves: &[TreeNode],
         purpose: ReservationPurpose,
@@ -1235,7 +1342,8 @@ impl PostgresTreeStore {
         #[allow(clippy::cast_possible_wrap)]
         let pending_i64 = pending_change as i64;
 
-        tx.execute(
+        self.execute(
+            tx,
             "INSERT INTO tree_reservations (user_id, id, purpose, pending_change_amount) \
              VALUES ($1, $2, $3, $4)",
             &[
@@ -1297,6 +1405,20 @@ pub async fn create_postgres_tree_store_from_pool(
 ) -> Result<Arc<dyn TreeStore>, PostgresError> {
     Ok(Arc::new(
         PostgresTreeStore::from_pool(pool, identity).await?,
+    ))
+}
+
+/// Creates a `PostgresTreeStore` instance from an existing connection pool
+/// with an optional table prefix.
+///
+/// * `identity` - 33-byte secp256k1 pubkey scoping all reads and writes
+pub async fn create_postgres_tree_store_from_pool_with_table_prefix(
+    pool: Pool,
+    identity: &[u8],
+    table_prefix: Option<&str>,
+) -> Result<Arc<dyn TreeStore>, PostgresError> {
+    Ok(Arc::new(
+        PostgresTreeStore::from_pool_with_table_prefix(pool, identity, table_prefix).await?,
     ))
 }
 

@@ -87,6 +87,9 @@ pub struct PostgresStorageConfig {
     /// If `None`, uses Mozilla's root certificate store (via webpki-roots).
     /// Only used with `sslmode=verify-ca` or `sslmode=verify-full`.
     pub root_ca_pem: Option<String>,
+
+    /// Optional prefix applied to all SDK-owned `PostgreSQL` table names.
+    pub table_prefix: Option<String>,
 }
 
 impl From<PostgresStorageConfig> for spark_postgres::PostgresStorageConfig {
@@ -99,6 +102,7 @@ impl From<PostgresStorageConfig> for spark_postgres::PostgresStorageConfig {
             recycle_timeout_secs: config.recycle_timeout_secs,
             queue_mode: config.queue_mode.into(),
             root_ca_pem: config.root_ca_pem,
+            table_prefix: config.table_prefix,
         }
     }
 }
@@ -113,6 +117,7 @@ impl From<spark_postgres::PostgresStorageConfig> for PostgresStorageConfig {
             recycle_timeout_secs: config.recycle_timeout_secs,
             queue_mode: config.queue_mode.into(),
             root_ca_pem: config.root_ca_pem,
+            table_prefix: config.table_prefix,
         }
     }
 }
@@ -167,7 +172,7 @@ pub(super) fn map_db_error(e: tokio_postgres::Error) -> StorageError {
     pg_err.into()
 }
 
-// ── Pool and migration wrappers ───────────────────────────────────────────────
+// ── Pool wrappers ─────────────────────────────────────────────────────────────
 
 /// Creates a `PostgreSQL` connection pool from the given configuration.
 pub(crate) fn create_pool(
@@ -177,35 +182,34 @@ pub(crate) fn create_pool(
     spark_postgres::create_pool(&sp_config).map_err(StorageError::from)
 }
 
-/// Runs database migrations with version tracking and concurrency control.
-pub(super) async fn run_migrations(
-    pool: &deadpool_postgres::Pool,
-    migrations_table: &str,
-    migrations: &[Vec<String>],
-) -> Result<(), StorageError> {
-    spark_postgres::run_migrations(pool, migrations_table, migrations)
-        .await
-        .map_err(StorageError::from)
-}
-
 // ── Store factories ───────────────────────────────────────────────────────────
 
 /// Creates a `PostgresTreeStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_postgres_tree_store(
     pool: deadpool_postgres::Pool,
     identity: &[u8],
+    table_prefix: Option<&str>,
 ) -> Result<Arc<dyn TreeStore>, StorageError> {
-    spark_postgres::create_postgres_tree_store_from_pool(pool, identity)
-        .await
-        .map_err(StorageError::from)
+    spark_postgres::create_postgres_tree_store_from_pool_with_table_prefix(
+        pool,
+        identity,
+        table_prefix,
+    )
+    .await
+    .map_err(StorageError::from)
 }
 
 /// Creates a `PostgresTokenStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_postgres_token_store(
     pool: deadpool_postgres::Pool,
     identity: &[u8],
+    table_prefix: Option<&str>,
 ) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
-    spark_postgres::create_postgres_token_store_from_pool(pool, identity)
-        .await
-        .map_err(StorageError::from)
+    spark_postgres::create_postgres_token_store_from_pool_with_table_prefix(
+        pool,
+        identity,
+        table_prefix,
+    )
+    .await
+    .map_err(StorageError::from)
 }

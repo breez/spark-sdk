@@ -19,15 +19,18 @@ mod tree_store;
 // Re-export main public API
 pub use config::{PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config};
 pub use error::PostgresError;
+pub use spark_storage::{TableNameRewriter as PostgresTableNames, validate_table_prefix};
 pub use token_store::{
     PostgresTokenStore, create_postgres_token_store, create_postgres_token_store_from_pool,
+    create_postgres_token_store_from_pool_with_table_prefix,
 };
 pub use tree_store::{
     PostgresTreeStore, create_postgres_tree_store, create_postgres_tree_store_from_pool,
+    create_postgres_tree_store_from_pool_with_table_prefix,
 };
 
 // Re-export pool infrastructure for downstream crates
-pub use migrations::run_migrations;
+pub use migrations::{run_migrations, run_migrations_with_table_prefix};
 pub use pool::{create_pool, map_db_error, map_pool_error};
 
 pub use deadpool_postgres;

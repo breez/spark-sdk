@@ -34,6 +34,9 @@ pub struct MysqlStorageConfig {
     /// Only used when the connection string requests TLS
     /// (`ssl-mode=verify_ca` or `ssl-mode=verify_identity`).
     pub root_ca_pem: Option<String>,
+
+    /// Optional prefix applied to all SDK-owned `MySQL` table names.
+    pub table_prefix: Option<String>,
 }
 
 impl From<MysqlStorageConfig> for spark_mysql::MysqlStorageConfig {
@@ -43,6 +46,7 @@ impl From<MysqlStorageConfig> for spark_mysql::MysqlStorageConfig {
             max_pool_size: config.max_pool_size,
             recycle_timeout_secs: config.recycle_timeout_secs,
             root_ca_pem: config.root_ca_pem,
+            table_prefix: config.table_prefix,
         }
     }
 }
@@ -54,6 +58,7 @@ impl From<spark_mysql::MysqlStorageConfig> for MysqlStorageConfig {
             max_pool_size: config.max_pool_size,
             recycle_timeout_secs: config.recycle_timeout_secs,
             root_ca_pem: config.root_ca_pem,
+            table_prefix: config.table_prefix,
         }
     }
 }
@@ -99,23 +104,12 @@ pub(super) fn map_db_error(e: mysql_async::Error) -> StorageError {
     my_err.into()
 }
 
-// ── Pool and migration wrappers ───────────────────────────────────────────────
+// ── Pool wrappers ─────────────────────────────────────────────────────────────
 
 /// Creates a `MySQL` connection pool from the given configuration.
 pub(crate) fn create_pool(config: &MysqlStorageConfig) -> Result<mysql_async::Pool, StorageError> {
     let sm_config: spark_mysql::MysqlStorageConfig = config.clone().into();
     spark_mysql::create_pool(&sm_config).map_err(StorageError::from)
-}
-
-/// Runs database migrations with version tracking and concurrency control.
-pub(super) async fn run_migrations(
-    pool: &mysql_async::Pool,
-    migrations_table: &str,
-    migrations: &[Vec<Migration>],
-) -> Result<(), StorageError> {
-    spark_mysql::run_migrations(pool, migrations_table, migrations)
-        .await
-        .map_err(StorageError::from)
 }
 
 // ── Store factories ───────────────────────────────────────────────────────────
@@ -124,8 +118,9 @@ pub(super) async fn run_migrations(
 pub(crate) async fn create_mysql_tree_store(
     pool: mysql_async::Pool,
     identity: &[u8],
+    table_prefix: Option<&str>,
 ) -> Result<Arc<dyn TreeStore>, StorageError> {
-    spark_mysql::create_mysql_tree_store_from_pool(pool, identity)
+    spark_mysql::create_mysql_tree_store_from_pool_with_table_prefix(pool, identity, table_prefix)
         .await
         .map_err(StorageError::from)
 }
@@ -134,8 +129,9 @@ pub(crate) async fn create_mysql_tree_store(
 pub(crate) async fn create_mysql_token_store(
     pool: mysql_async::Pool,
     identity: &[u8],
+    table_prefix: Option<&str>,
 ) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
-    spark_mysql::create_mysql_token_store_from_pool(pool, identity)
+    spark_mysql::create_mysql_token_store_from_pool_with_table_prefix(pool, identity, table_prefix)
         .await
         .map_err(StorageError::from)
 }

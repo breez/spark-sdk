@@ -37,8 +37,9 @@ use uuid::Uuid;
 use crate::advisory_lock::identity_lock_name;
 use crate::config::MysqlStorageConfig;
 use crate::error::MysqlError;
-use crate::migrations::{Migration, run_migrations};
+use crate::migrations::Migration;
 use crate::pool::create_pool;
+use spark_storage::TableNameRewriter;
 
 /// Name of the schema migrations table for `MysqlTreeStore`.
 const TREE_MIGRATIONS_TABLE: &str = "tree_schema_migrations";
@@ -88,6 +89,7 @@ impl LeafLike for SlimLeaf {
 /// can share one `MySQL` database without cross-pollinating tree state.
 pub struct MysqlTreeStore {
     pool: Pool,
+    table_names: TableNameRewriter,
     /// 33-byte secp256k1 compressed pubkey identifying this tenant. All reads
     /// and writes are filtered by `user_id = self.identity`.
     identity: Vec<u8>,
@@ -275,7 +277,8 @@ impl TreeStore for MysqlTreeStore {
         // only need the spendable total.
         let row: Option<i64> = conn
             .exec_first(
-                r"SELECT COALESCE(SUM(l.value), 0) AS balance
+                self.sql(
+                    r"SELECT COALESCE(SUM(l.value), 0) AS balance
                   FROM tree_leaves l
                   LEFT JOIN tree_reservations r
                     ON l.reservation_id = r.id AND l.user_id = r.user_id
@@ -284,6 +287,7 @@ impl TreeStore for MysqlTreeStore {
                         (l.reservation_id IS NULL AND l.status = 'Available')
                         OR r.purpose = 'Swap'
                     )",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -296,12 +300,14 @@ impl TreeStore for MysqlTreeStore {
 
         let rows: Vec<(String, String, bool, String, Option<String>, Option<String>)> = conn
             .exec(
-                r"SELECT l.id, l.status, l.is_missing_from_operators, l.data,
+                self.sql(
+                    r"SELECT l.id, l.status, l.is_missing_from_operators, l.data,
                          l.reservation_id, r.purpose
                   FROM tree_leaves l
                   LEFT JOIN tree_reservations r
                     ON l.reservation_id = r.id AND l.user_id = r.user_id
                   WHERE l.user_id = ?",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -476,21 +482,40 @@ impl MysqlTreeStore {
         config: MysqlStorageConfig,
         identity: &[u8],
     ) -> Result<Self, MysqlError> {
+        let table_names = TableNameRewriter::new(config.table_prefix.as_deref())
+            .map_err(|e| MysqlError::Initialization(e.to_string()))?;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::init(pool, identity, table_names).await
     }
 
     /// Creates a new `MysqlTreeStore` from an existing connection pool.
     /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
     pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
-        Self::init(pool, identity).await
+        Self::from_pool_with_table_prefix(pool, identity, None).await
     }
 
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
+    /// Creates a new `MysqlTreeStore` from an existing connection pool with an
+    /// optional table prefix.
+    pub async fn from_pool_with_table_prefix(
+        pool: Pool,
+        identity: &[u8],
+        table_prefix: Option<&str>,
+    ) -> Result<Self, MysqlError> {
+        let table_names = TableNameRewriter::new(table_prefix)
+            .map_err(|e| MysqlError::Initialization(e.to_string()))?;
+        Self::init(pool, identity, table_names).await
+    }
+
+    async fn init(
+        pool: Pool,
+        identity: &[u8],
+        table_names: TableNameRewriter,
+    ) -> Result<Self, MysqlError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
         let store = Self {
             pool,
+            table_names,
             identity: identity.to_vec(),
             lock_name: identity_lock_name(TREE_STORE_LOCK_PREFIX, identity),
             balance_changed_tx: Arc::new(balance_changed_tx),
@@ -504,12 +529,17 @@ impl MysqlTreeStore {
     }
 
     async fn migrate(&self) -> Result<(), MysqlError> {
-        run_migrations(
+        crate::migrations::run_migrations_with_table_prefix(
             &self.pool,
             TREE_MIGRATIONS_TABLE,
             &Self::migrations(&self.identity),
+            self.table_names.prefix(),
         )
         .await
+    }
+
+    fn sql(&self, sql: &str) -> String {
+        self.table_names.sql(sql)
     }
 
     fn migrations(identity: &[u8]) -> Vec<Vec<Migration>> {
@@ -693,12 +723,14 @@ impl MysqlTreeStore {
         // after this refresh started (making the refresh data potentially inconsistent).
         let row: Option<(i64, i64)> = tx
             .exec_first(
-                r"SELECT
+                self.sql(
+                    r"SELECT
                     (SELECT EXISTS(SELECT 1 FROM tree_reservations WHERE user_id = ? AND purpose = 'Swap')) AS has_active_swap,
                     COALESCE(
                         (SELECT (last_completed_at >= ?) FROM tree_swap_status WHERE user_id = ?),
                         0
                     ) AS swap_completed_during_refresh",
+                ),
                 (
                     self.identity.clone(),
                     refresh_timestamp.naive_utc(),
@@ -725,7 +757,9 @@ impl MysqlTreeStore {
 
         let spent_rows: Vec<String> = tx
             .exec(
-                "SELECT leaf_id FROM tree_spent_leaves WHERE user_id = ? AND spent_at >= ?",
+                self.sql(
+                    "SELECT leaf_id FROM tree_spent_leaves WHERE user_id = ? AND spent_at >= ?",
+                ),
                 (self.identity.clone(), refresh_timestamp.naive_utc()),
             )
             .await
@@ -743,7 +777,7 @@ impl MysqlTreeStore {
         // `cleanup_stale_reservations` (which clears `reservation_id`
         // explicitly because the composite FK uses NO ACTION).
         tx.exec_drop(
-            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
+            self.sql("DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?"),
             (self.identity.clone(), refresh_timestamp.naive_utc()),
         )
         .await
@@ -771,7 +805,7 @@ impl MysqlTreeStore {
 
         let exists: Option<String> = tx
             .exec_first(
-                "SELECT id FROM tree_reservations WHERE user_id = ? AND id = ?",
+                self.sql("SELECT id FROM tree_reservations WHERE user_id = ? AND id = ?"),
                 (self.identity.clone(), id),
             )
             .await
@@ -783,7 +817,7 @@ impl MysqlTreeStore {
 
         let prior_leaf_ids: Vec<String> = tx
             .exec(
-                "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+                self.sql("SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?"),
                 (self.identity.clone(), id),
             )
             .await
@@ -799,14 +833,14 @@ impl MysqlTreeStore {
         );
 
         tx.exec_drop(
-            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            self.sql("DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?"),
             (self.identity.clone(), id),
         )
         .await
         .map_err(map_err)?;
 
         tx.exec_drop(
-            "DELETE FROM tree_reservations WHERE user_id = ? AND id = ?",
+            self.sql("DELETE FROM tree_reservations WHERE user_id = ? AND id = ?"),
             (self.identity.clone(), id),
         )
         .await
@@ -832,7 +866,7 @@ impl MysqlTreeStore {
 
         let purpose: Option<String> = tx
             .exec_first(
-                "SELECT purpose FROM tree_reservations WHERE user_id = ? AND id = ?",
+                self.sql("SELECT purpose FROM tree_reservations WHERE user_id = ? AND id = ?"),
                 (self.identity.clone(), id),
             )
             .await
@@ -842,7 +876,7 @@ impl MysqlTreeStore {
             let is_swap = purpose == "Swap";
             let leaf_ids: Vec<String> = tx
                 .exec(
-                    "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+                    self.sql("SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?"),
                     (self.identity.clone(), id),
                 )
                 .await
@@ -863,14 +897,14 @@ impl MysqlTreeStore {
             .await?;
 
         tx.exec_drop(
-            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            self.sql("DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?"),
             (self.identity.clone(), id),
         )
         .await
         .map_err(map_err)?;
 
         tx.exec_drop(
-            "DELETE FROM tree_reservations WHERE user_id = ? AND id = ?",
+            self.sql("DELETE FROM tree_reservations WHERE user_id = ? AND id = ?"),
             (self.identity.clone(), id),
         )
         .await
@@ -892,8 +926,10 @@ impl MysqlTreeStore {
         // no row) gets one created lazily.
         if is_swap && new_leaves.is_some() {
             tx.exec_drop(
-                "INSERT INTO tree_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
+                self.sql(
+                    "INSERT INTO tree_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
                  ON DUPLICATE KEY UPDATE last_completed_at = VALUES(last_completed_at)",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -926,12 +962,14 @@ impl MysqlTreeStore {
         // slim set since the prefilter excludes big leaves.
         let total_row: Option<i64> = tx
             .exec_first(
-                r"SELECT COALESCE(SUM(value), 0) AS total
+                self.sql(
+                    r"SELECT COALESCE(SUM(value), 0) AS total
                   FROM tree_leaves
                   WHERE user_id = ?
                     AND status = 'Available'
                     AND is_missing_from_operators = 0
                     AND reservation_id IS NULL",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -942,7 +980,8 @@ impl MysqlTreeStore {
         let max_target_signed: i64 = i64::try_from(max_target).unwrap_or(i64::MAX);
         let slim_rows: Vec<(String, i64)> = tx
             .exec(
-                r"SELECT id, value
+                self.sql(
+                    r"SELECT id, value
                   FROM tree_leaves
                   WHERE user_id = ?
                     AND status = 'Available'
@@ -963,6 +1002,7 @@ impl MysqlTreeStore {
                         ) AS smallest_over
                       )
                     )",
+                ),
                 (
                     self.identity.clone(),
                     max_target_signed,
@@ -1103,6 +1143,7 @@ impl MysqlTreeStore {
         let sql = format!(
             "SELECT id, data FROM tree_leaves WHERE user_id = ? AND id IN ({placeholders})"
         );
+        let sql = self.sql(&sql);
         let mut params: Vec<Value> = Vec::with_capacity(ids.len().saturating_add(1));
         params.push(Value::from(self.identity.clone()));
         params.extend(ids.iter().cloned().map(Value::from));
@@ -1140,7 +1181,7 @@ impl MysqlTreeStore {
 
         let exists: Option<String> = tx
             .exec_first(
-                "SELECT id FROM tree_reservations WHERE user_id = ? AND id = ?",
+                self.sql("SELECT id FROM tree_reservations WHERE user_id = ? AND id = ?"),
                 (self.identity.clone(), reservation_id),
             )
             .await
@@ -1154,7 +1195,7 @@ impl MysqlTreeStore {
 
         let old_reserved_leaf_ids: Vec<String> = tx
             .exec(
-                "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+                self.sql("SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?"),
                 (self.identity.clone(), reservation_id),
             )
             .await
@@ -1163,7 +1204,7 @@ impl MysqlTreeStore {
         self.batch_insert_spent_leaves(&mut tx, &old_reserved_leaf_ids)
             .await?;
         tx.exec_drop(
-            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            self.sql("DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?"),
             (self.identity.clone(), reservation_id),
         )
         .await
@@ -1179,7 +1220,7 @@ impl MysqlTreeStore {
             .await?;
 
         tx.exec_drop(
-            "UPDATE tree_reservations SET pending_change_amount = 0 WHERE user_id = ? AND id = ?",
+            self.sql("UPDATE tree_reservations SET pending_change_amount = 0 WHERE user_id = ? AND id = ?"),
             (self.identity.clone(), reservation_id),
         )
         .await
@@ -1199,7 +1240,7 @@ impl MysqlTreeStore {
     ) -> Result<u64, TreeServiceError> {
         let row: Option<i64> = tx
             .exec_first(
-                "SELECT COALESCE(SUM(pending_change_amount), 0) FROM tree_reservations WHERE user_id = ?",
+                self.sql("SELECT COALESCE(SUM(pending_change_amount), 0) FROM tree_reservations WHERE user_id = ?"),
                 (self.identity.clone(),),
             )
             .await
@@ -1269,6 +1310,7 @@ impl MysqlTreeStore {
                 added_at = NOW(6)",
         );
 
+        let sql = self.sql(&sql);
         tx.exec_drop(&sql, Params::Positional(params))
             .await
             .map_err(map_err)?;
@@ -1291,6 +1333,7 @@ impl MysqlTreeStore {
         let sql = format!(
             "UPDATE tree_leaves SET reservation_id = ? WHERE user_id = ? AND id IN ({placeholders})"
         );
+        let sql = self.sql(&sql);
 
         let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len() + 2);
         params.push(Value::from(reservation_id));
@@ -1330,6 +1373,7 @@ impl MysqlTreeStore {
         // propagate.
         sql.push_str(" ON DUPLICATE KEY UPDATE leaf_id = leaf_id");
 
+        let sql = self.sql(&sql);
         tx.exec_drop(&sql, Params::Positional(params))
             .await
             .map_err(map_err)?;
@@ -1350,6 +1394,7 @@ impl MysqlTreeStore {
         let sql = format!(
             "DELETE FROM tree_spent_leaves WHERE user_id = ? AND leaf_id IN ({placeholders})"
         );
+        let sql = self.sql(&sql);
 
         let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len().saturating_add(1));
         params.push(Value::from(self.identity.clone()));
@@ -1382,7 +1427,8 @@ impl MysqlTreeStore {
     ) -> Result<u64, TreeServiceError> {
         // Release dependent leaves before dropping the parent rows.
         tx.exec_drop(
-            r"UPDATE tree_leaves SET reservation_id = NULL
+            self.sql(
+                r"UPDATE tree_leaves SET reservation_id = NULL
               WHERE user_id = ?
                 AND reservation_id IN (
                     SELECT id FROM (
@@ -1391,6 +1437,7 @@ impl MysqlTreeStore {
                           AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)
                     ) AS stale
                 )",
+            ),
             (
                 self.identity.clone(),
                 self.identity.clone(),
@@ -1402,8 +1449,10 @@ impl MysqlTreeStore {
 
         let mut result = tx
             .exec_iter(
-                "DELETE FROM tree_reservations
+                self.sql(
+                    "DELETE FROM tree_reservations
                  WHERE user_id = ? AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)",
+                ),
                 (self.identity.clone(), RESERVATION_TIMEOUT_SECS),
             )
             .await
@@ -1430,7 +1479,7 @@ impl MysqlTreeStore {
 
         let mut result = tx
             .exec_iter(
-                "DELETE FROM tree_spent_leaves WHERE user_id = ? AND spent_at < ?",
+                self.sql("DELETE FROM tree_spent_leaves WHERE user_id = ? AND spent_at < ?"),
                 (self.identity.clone(), cleanup_cutoff.naive_utc()),
             )
             .await
@@ -1457,7 +1506,7 @@ impl MysqlTreeStore {
         let pending_i64 = pending_change as i64;
 
         tx.exec_drop(
-            "INSERT INTO tree_reservations (user_id, id, purpose, pending_change_amount) VALUES (?, ?, ?, ?)",
+            self.sql("INSERT INTO tree_reservations (user_id, id, purpose, pending_change_amount) VALUES (?, ?, ?, ?)"),
             (self.identity.clone(), reservation_id, purpose.to_string(), pending_i64),
         )
         .await
@@ -1511,6 +1560,20 @@ pub async fn create_mysql_tree_store_from_pool(
     identity: &[u8],
 ) -> Result<Arc<dyn TreeStore>, MysqlError> {
     Ok(Arc::new(MysqlTreeStore::from_pool(pool, identity).await?))
+}
+
+/// Creates a `MysqlTreeStore` instance from an existing connection pool with an
+/// optional table prefix.
+///
+/// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
+pub async fn create_mysql_tree_store_from_pool_with_table_prefix(
+    pool: Pool,
+    identity: &[u8],
+    table_prefix: Option<&str>,
+) -> Result<Arc<dyn TreeStore>, MysqlError> {
+    Ok(Arc::new(
+        MysqlTreeStore::from_pool_with_table_prefix(pool, identity, table_prefix).await?,
+    ))
 }
 
 #[cfg(test)]

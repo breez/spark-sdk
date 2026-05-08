@@ -19,6 +19,7 @@ mysql_async = { workspace = true, features = ["chrono"] }
 platform-utils.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+spark-storage.workspace = true
 spark-wallet.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }

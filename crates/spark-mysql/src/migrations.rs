@@ -47,6 +47,7 @@
 
 use mysql_async::Pool;
 use mysql_async::prelude::*;
+use spark_storage::TableNameRewriter;
 
 use crate::error::MysqlError;
 use crate::pool::map_db_error;
@@ -149,11 +150,40 @@ pub async fn run_migrations(
     migrations_table: &str,
     migrations: &[Vec<Migration>],
 ) -> Result<(), MysqlError> {
+    run_migrations_with_table_names(
+        pool,
+        migrations_table,
+        migrations,
+        &TableNameRewriter::unprefixed(),
+    )
+    .await
+}
+
+/// Runs database migrations with an optional table prefix applied to all
+/// SDK-owned table names.
+pub async fn run_migrations_with_table_prefix(
+    pool: &Pool,
+    migrations_table: &str,
+    migrations: &[Vec<Migration>],
+    table_prefix: Option<&str>,
+) -> Result<(), MysqlError> {
+    let table_names = TableNameRewriter::new(table_prefix)
+        .map_err(|e| MysqlError::Initialization(e.to_string()))?;
+    run_migrations_with_table_names(pool, migrations_table, migrations, &table_names).await
+}
+
+async fn run_migrations_with_table_names(
+    pool: &Pool,
+    migrations_table: &str,
+    migrations: &[Vec<Migration>],
+    table_names: &TableNameRewriter,
+) -> Result<(), MysqlError> {
     let mut conn = pool
         .get_conn()
         .await
         .map_err(|e| MysqlError::Connection(e.to_string()))?;
 
+    let migrations_table = table_names.identifier(migrations_table);
     let lock_name = format!("migration_lock_{migrations_table}");
 
     // Acquire GET_LOCK on the session connection. Returns 1 if granted, 0 on
@@ -174,7 +204,7 @@ pub async fn run_migrations(
         )));
     }
 
-    let result = run_migrations_inner(&mut conn, migrations_table, migrations).await;
+    let result = run_migrations_inner(&mut conn, &migrations_table, migrations, table_names).await;
 
     // Always release the lock, even on failure. Ignore release errors so we
     // don't mask the underlying migration error.
@@ -188,6 +218,7 @@ async fn run_migrations_inner(
     conn: &mut mysql_async::Conn,
     migrations_table: &str,
     migrations: &[Vec<Migration>],
+    table_names: &TableNameRewriter,
 ) -> Result<(), MysqlError> {
     // Begin transaction. Migration table creation lives inside the transaction
     // for parity with the postgres impl, but note that DDL implicitly commits
@@ -222,7 +253,7 @@ async fn run_migrations_inner(
         let version = i32::try_from(i + 1).unwrap_or(i32::MAX);
         if version > current_version {
             for step in migration {
-                run_step(conn, version, step).await?;
+                run_step(conn, version, step, table_names).await?;
             }
             let insert_sql = format!("INSERT INTO `{migrations_table}` (version) VALUES (?)");
             conn.exec_drop(&insert_sql, (version,))
@@ -243,19 +274,23 @@ async fn run_step(
     conn: &mut mysql_async::Conn,
     version: i32,
     step: &Migration,
+    table_names: &TableNameRewriter,
 ) -> Result<(), MysqlError> {
     match step {
-        Migration::Sql(sql) => conn
-            .query_drop(sql.as_str())
-            .await
-            .map_err(|e| MysqlError::Database(format!("Migration {version} failed: {e}"))),
+        Migration::Sql(sql) => {
+            let sql = table_names.sql(sql);
+            conn.query_drop(sql.as_str())
+                .await
+                .map_err(|e| MysqlError::Database(format!("Migration {version} failed: {e}")))
+        }
 
         Migration::AddColumn {
             table,
             column,
             definition,
         } => {
-            if column_exists(conn, table, column).await? {
+            let table = table_names.identifier(table);
+            if column_exists(conn, &table, column).await? {
                 return Ok(());
             }
             let sql = format!("ALTER TABLE `{table}` ADD COLUMN `{column}` {definition}");
@@ -267,7 +302,8 @@ async fn run_step(
         }
 
         Migration::DropColumn { table, column } => {
-            if !column_exists(conn, table, column).await? {
+            let table = table_names.identifier(table);
+            if !column_exists(conn, &table, column).await? {
                 return Ok(());
             }
             let sql = format!("ALTER TABLE `{table}` DROP COLUMN `{column}`");
@@ -283,7 +319,9 @@ async fn run_step(
             table,
             columns,
         } => {
-            if index_exists(conn, table, name).await? {
+            let table = table_names.identifier(table);
+            let name = table_names.identifier(name);
+            if index_exists(conn, &table, &name).await? {
                 return Ok(());
             }
             let sql = format!("CREATE INDEX `{name}` ON `{table}` {columns}");
@@ -295,7 +333,9 @@ async fn run_step(
         }
 
         Migration::DropIndex { name, table } => {
-            if !index_exists(conn, table, name).await? {
+            let table = table_names.identifier(table);
+            let name = table_names.identifier(name);
+            if !index_exists(conn, &table, &name).await? {
                 return Ok(());
             }
             let sql = format!("DROP INDEX `{name}` ON `{table}`");
@@ -307,7 +347,9 @@ async fn run_step(
         }
 
         Migration::DropForeignKey { name, table } => {
-            if !foreign_key_exists(conn, table, name).await? {
+            let table = table_names.identifier(table);
+            let name = table_names.identifier(name);
+            if !foreign_key_exists(conn, &table, &name).await? {
                 return Ok(());
             }
             let sql = format!("ALTER TABLE `{table}` DROP FOREIGN KEY `{name}`");
@@ -319,7 +361,8 @@ async fn run_step(
         }
 
         Migration::DropPrimaryKey { table } => {
-            if !primary_key_exists(conn, table).await? {
+            let table = table_names.identifier(table);
+            if !primary_key_exists(conn, &table).await? {
                 return Ok(());
             }
             let sql = format!("ALTER TABLE `{table}` DROP PRIMARY KEY");

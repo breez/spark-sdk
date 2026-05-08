@@ -26,7 +26,7 @@ use crate::{
     },
 };
 
-use super::base::{Migration, map_db_error, run_migrations};
+use super::base::{Migration, map_db_error};
 #[cfg(test)]
 use super::base::{MysqlStorageConfig, create_pool};
 
@@ -40,6 +40,7 @@ const MIGRATIONS_TABLE: &str = "schema_migrations";
 /// without seeing each other's data.
 pub(crate) struct MysqlStorage {
     pool: Pool,
+    table_names: spark_mysql::MysqlTableNames,
     /// Tenant identity: 33-byte compressed secp256k1 pubkey. Stored as raw
     /// bytes for direct binding to VARBINARY columns.
     identity: Vec<u8>,
@@ -49,14 +50,29 @@ impl MysqlStorage {
     #[cfg(test)]
     pub async fn new(config: MysqlStorageConfig, identity: &[u8]) -> Result<Self, StorageError> {
         let pool = create_pool(&config)?;
-        Self::new_with_pool(pool, identity).await
+        Self::new_with_pool_and_table_prefix(pool, identity, config.table_prefix.as_deref()).await
     }
 
     /// Creates a new `MysqlStorage` using an existing connection pool. Each
     /// `MysqlStorage` is scoped to a single tenant `identity`.
+    #[allow(dead_code)]
     pub async fn new_with_pool(pool: Pool, identity: &[u8]) -> Result<Self, StorageError> {
+        Self::new_with_pool_and_table_prefix(pool, identity, None).await
+    }
+
+    /// Creates a new `MysqlStorage` using an existing connection pool and
+    /// optional table prefix. Each `MysqlStorage` is scoped to a single tenant
+    /// `identity`.
+    pub async fn new_with_pool_and_table_prefix(
+        pool: Pool,
+        identity: &[u8],
+        table_prefix: Option<&str>,
+    ) -> Result<Self, StorageError> {
+        let table_names = spark_mysql::MysqlTableNames::new(table_prefix)
+            .map_err(|e| StorageError::InitializationError(e.to_string()))?;
         let storage = Self {
             pool,
+            table_names,
             identity: identity.to_vec(),
         };
         storage.migrate().await?;
@@ -64,12 +80,18 @@ impl MysqlStorage {
     }
 
     async fn migrate(&self) -> Result<(), StorageError> {
-        run_migrations(
+        spark_mysql::run_migrations_with_table_prefix(
             &self.pool,
             MIGRATIONS_TABLE,
             &Self::migrations(&self.identity),
+            self.table_names.prefix(),
         )
         .await
+        .map_err(StorageError::from)
+    }
+
+    fn sql(&self, sql: &str) -> String {
+        self.table_names.sql(sql)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -686,7 +708,8 @@ impl Storage for MysqlStorage {
         let offset = i64::from(request.offset.unwrap_or(0));
 
         let query = format!(
-            "{SELECT_PAYMENT_SQL} {where_sql} ORDER BY p.timestamp {order_direction} LIMIT ? OFFSET ?"
+            "{} {where_sql} ORDER BY p.timestamp {order_direction} LIMIT ? OFFSET ?",
+            self.sql(SELECT_PAYMENT_SQL)
         );
 
         params.push(Value::from(limit));
@@ -721,7 +744,8 @@ impl Storage for MysqlStorage {
             };
 
         tx.exec_drop(
-            "INSERT INTO payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+            self.sql(
+                "INSERT INTO payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     payment_type = VALUES(payment_type),
@@ -733,6 +757,7 @@ impl Storage for MysqlStorage {
                     withdraw_tx_id = VALUES(withdraw_tx_id),
                     deposit_tx_id = VALUES(deposit_tx_id),
                     spark = VALUES(spark)",
+            ),
             (
                 self.identity.clone(),
                 &payment.id,
@@ -760,11 +785,13 @@ impl Storage for MysqlStorage {
                     let invoice_json = to_json_string_opt(invoice_details.as_ref())?;
                     let htlc_json = to_json_string_opt(htlc_details.as_ref())?;
                     tx.exec_drop(
-                        "INSERT INTO payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
+                        self.sql(
+                            "INSERT INTO payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
                              VALUES (?, ?, ?, ?)
                              ON DUPLICATE KEY UPDATE
                                 invoice_details = COALESCE(VALUES(invoice_details), invoice_details),
                                 htlc_details = COALESCE(VALUES(htlc_details), htlc_details)",
+                        ),
                         (self.identity.clone(), &payment.id, invoice_json, htlc_json),
                     )
                     .await
@@ -782,13 +809,15 @@ impl Storage for MysqlStorage {
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 let invoice_json = to_json_string_opt(invoice_details.as_ref())?;
                 tx.exec_drop(
-                    "INSERT INTO payment_details_token (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
+                    self.sql(
+                        "INSERT INTO payment_details_token (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
                          VALUES (?, ?, ?, ?, ?, ?)
                          ON DUPLICATE KEY UPDATE
                             metadata = VALUES(metadata),
                             tx_hash = VALUES(tx_hash),
                             tx_type = VALUES(tx_type),
                             invoice_details = COALESCE(VALUES(invoice_details), invoice_details)",
+                    ),
                     (
                         self.identity.clone(),
                         &payment.id,
@@ -813,7 +842,8 @@ impl Storage for MysqlStorage {
                 let htlc_status = htlc_details.status.to_string();
                 let htlc_expiry_time = i64::try_from(htlc_details.expiry_time)?;
                 tx.exec_drop(
-                    "INSERT INTO payment_details_lightning (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+                    self.sql(
+                        "INSERT INTO payment_details_lightning (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                          ON DUPLICATE KEY UPDATE
                             invoice = VALUES(invoice),
@@ -823,6 +853,7 @@ impl Storage for MysqlStorage {
                             preimage = COALESCE(VALUES(preimage), preimage),
                             htlc_status = COALESCE(VALUES(htlc_status), htlc_status),
                             htlc_expiry_time = COALESCE(VALUES(htlc_expiry_time), htlc_expiry_time)",
+                    ),
                     (
                         self.identity.clone(),
                         &payment.id,
@@ -861,7 +892,8 @@ impl Storage for MysqlStorage {
             .map(std::string::ToString::to_string);
 
         conn.exec_drop(
-            "INSERT INTO payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+            self.sql(
+                "INSERT INTO payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                 parent_payment_id = COALESCE(VALUES(parent_payment_id), parent_payment_id),
@@ -870,6 +902,7 @@ impl Storage for MysqlStorage {
                 lnurl_description = COALESCE(VALUES(lnurl_description), lnurl_description),
                 conversion_info = COALESCE(VALUES(conversion_info), conversion_info),
                 conversion_status = COALESCE(VALUES(conversion_status), conversion_status)",
+            ),
             (
                 self.identity.clone(),
                 payment_id,
@@ -891,8 +924,10 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
 
         conn.exec_drop(
-            "INSERT INTO settings (user_id, `key`, value) VALUES (?, ?, ?)
+            self.sql(
+                "INSERT INTO settings (user_id, `key`, value) VALUES (?, ?, ?)
              ON DUPLICATE KEY UPDATE value = VALUES(value)",
+            ),
             (self.identity.clone(), key, value),
         )
         .await
@@ -906,7 +941,7 @@ impl Storage for MysqlStorage {
 
         let row: Option<String> = conn
             .exec_first(
-                "SELECT value FROM settings WHERE user_id = ? AND `key` = ?",
+                self.sql("SELECT value FROM settings WHERE user_id = ? AND `key` = ?"),
                 (self.identity.clone(), key),
             )
             .await
@@ -919,7 +954,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
 
         conn.exec_drop(
-            "DELETE FROM settings WHERE user_id = ? AND `key` = ?",
+            self.sql("DELETE FROM settings WHERE user_id = ? AND `key` = ?"),
             (self.identity.clone(), key),
         )
         .await
@@ -930,7 +965,10 @@ impl Storage for MysqlStorage {
 
     async fn get_payment_by_id(&self, id: String) -> Result<Payment, StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
-        let query = format!("{SELECT_PAYMENT_SQL} WHERE p.user_id = ? AND p.id = ?");
+        let query = format!(
+            "{} WHERE p.user_id = ? AND p.id = ?",
+            self.sql(SELECT_PAYMENT_SQL)
+        );
         let row: Option<Row> = conn
             .exec_first(&query, (self.identity.clone(), id))
             .await
@@ -944,7 +982,10 @@ impl Storage for MysqlStorage {
         invoice: String,
     ) -> Result<Option<Payment>, StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
-        let query = format!("{SELECT_PAYMENT_SQL} WHERE p.user_id = ? AND l.invoice = ?");
+        let query = format!(
+            "{} WHERE p.user_id = ? AND l.invoice = ?",
+            self.sql(SELECT_PAYMENT_SQL)
+        );
         let row: Option<Row> = conn
             .exec_first(&query, (self.identity.clone(), invoice))
             .await
@@ -969,7 +1010,7 @@ impl Storage for MysqlStorage {
 
         let has_related: bool = conn
             .exec_first::<i64, _, _>(
-                "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE user_id = ? AND parent_payment_id IS NOT NULL LIMIT 1)",
+                self.sql("SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE user_id = ? AND parent_payment_id IS NOT NULL LIMIT 1)"),
                 (self.identity.clone(),),
             )
             .await
@@ -982,7 +1023,8 @@ impl Storage for MysqlStorage {
 
         let placeholders = build_placeholders(parent_payment_ids.len());
         let query = format!(
-            "{SELECT_PAYMENT_SQL} WHERE p.user_id = ? AND pm.parent_payment_id IN ({placeholders}) ORDER BY p.timestamp ASC"
+            "{} WHERE p.user_id = ? AND pm.parent_payment_id IN ({placeholders}) ORDER BY p.timestamp ASC",
+            self.sql(SELECT_PAYMENT_SQL)
         );
 
         let mut params: Vec<Value> = vec![Value::from(self.identity.clone())];
@@ -1014,9 +1056,11 @@ impl Storage for MysqlStorage {
     ) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         conn.exec_drop(
-            "INSERT INTO unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
+            self.sql(
+                "INSERT INTO unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
              VALUES (?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE is_mature = VALUES(is_mature), amount_sats = VALUES(amount_sats)",
+            ),
             (
                 self.identity.clone(),
                 txid,
@@ -1033,7 +1077,7 @@ impl Storage for MysqlStorage {
     async fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         conn.exec_drop(
-            "DELETE FROM unclaimed_deposits WHERE user_id = ? AND txid = ? AND vout = ?",
+            self.sql("DELETE FROM unclaimed_deposits WHERE user_id = ? AND txid = ? AND vout = ?"),
             (self.identity.clone(), txid, i32::try_from(vout)?),
         )
         .await
@@ -1045,7 +1089,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         let rows: Vec<Row> = conn
             .exec(
-                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits WHERE user_id = ?",
+                self.sql("SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits WHERE user_id = ?"),
                 (self.identity.clone(),),
             )
             .await
@@ -1089,7 +1133,7 @@ impl Storage for MysqlStorage {
                 let error_json = serde_json::to_string(&error)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 conn.exec_drop(
-                    "UPDATE unclaimed_deposits SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL WHERE user_id = ? AND txid = ? AND vout = ?",
+                    self.sql("UPDATE unclaimed_deposits SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL WHERE user_id = ? AND txid = ? AND vout = ?"),
                     (error_json, self.identity.clone(), txid, i32::try_from(vout)?),
                 )
                 .await
@@ -1100,7 +1144,7 @@ impl Storage for MysqlStorage {
                 refund_tx,
             } => {
                 conn.exec_drop(
-                    "UPDATE unclaimed_deposits SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL WHERE user_id = ? AND txid = ? AND vout = ?",
+                    self.sql("UPDATE unclaimed_deposits SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL WHERE user_id = ? AND txid = ? AND vout = ?"),
                     (refund_tx, refund_txid, self.identity.clone(), txid, i32::try_from(vout)?),
                 )
                 .await
@@ -1117,12 +1161,14 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         for m in metadata {
             conn.exec_drop(
-                "INSERT INTO lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+                self.sql(
+                    "INSERT INTO lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
                  VALUES (?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     nostr_zap_request = VALUES(nostr_zap_request),
                     nostr_zap_receipt = VALUES(nostr_zap_receipt),
                     sender_comment = VALUES(sender_comment)",
+                ),
                 (self.identity.clone(), m.payment_hash, m.nostr_zap_request, m.nostr_zap_receipt, m.sender_comment),
             )
             .await
@@ -1141,8 +1187,10 @@ impl Storage for MysqlStorage {
 
         let rows: Vec<(String, String, String, i64, i64)> = conn
             .exec(
-                "SELECT id, name, payment_identifier, created_at, updated_at
+                self.sql(
+                    "SELECT id, name, payment_identifier, created_at, updated_at
                  FROM contacts WHERE user_id = ? ORDER BY name ASC LIMIT ? OFFSET ?",
+                ),
                 (self.identity.clone(), limit, offset),
             )
             .await
@@ -1165,8 +1213,10 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         let row: Option<(String, String, String, i64, i64)> = conn
             .exec_first(
-                "SELECT id, name, payment_identifier, created_at, updated_at
+                self.sql(
+                    "SELECT id, name, payment_identifier, created_at, updated_at
                  FROM contacts WHERE user_id = ? AND id = ?",
+                ),
                 (self.identity.clone(), id),
             )
             .await
@@ -1185,12 +1235,14 @@ impl Storage for MysqlStorage {
     async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         conn.exec_drop(
-            "INSERT INTO contacts (user_id, id, name, payment_identifier, created_at, updated_at)
+            self.sql(
+                "INSERT INTO contacts (user_id, id, name, payment_identifier, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                name = VALUES(name),
                payment_identifier = VALUES(payment_identifier),
                updated_at = VALUES(updated_at)",
+            ),
             (
                 self.identity.clone(),
                 contact.id,
@@ -1208,7 +1260,7 @@ impl Storage for MysqlStorage {
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         conn.exec_drop(
-            "DELETE FROM contacts WHERE user_id = ? AND id = ?",
+            self.sql("DELETE FROM contacts WHERE user_id = ? AND id = ?"),
             (self.identity.clone(), id),
         )
         .await
@@ -1230,7 +1282,9 @@ impl Storage for MysqlStorage {
         // The local queue revision is per-tenant — two tenants don't share a queue.
         let local_revision: i64 = tx
             .exec_first(
-                "SELECT COALESCE(MAX(revision), 0) + 1 FROM sync_outgoing WHERE user_id = ?",
+                self.sql(
+                    "SELECT COALESCE(MAX(revision), 0) + 1 FROM sync_outgoing WHERE user_id = ?",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -1242,8 +1296,10 @@ impl Storage for MysqlStorage {
         let commit_time = chrono::Utc::now().timestamp();
 
         tx.exec_drop(
-            "INSERT INTO sync_outgoing (user_id, record_type, data_id, schema_version, commit_time, updated_fields_json, revision)
+            self.sql(
+                "INSERT INTO sync_outgoing (user_id, record_type, data_id, schema_version, commit_time, updated_fields_json, revision)
                  VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ),
             (
                 self.identity.clone(),
                 record.id.r#type,
@@ -1275,7 +1331,7 @@ impl Storage for MysqlStorage {
 
         let mut result = tx
             .exec_iter(
-                "DELETE FROM sync_outgoing WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?",
+                self.sql("DELETE FROM sync_outgoing WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?"),
                 (
                     self.identity.clone(),
                     record.id.r#type.clone(),
@@ -1301,13 +1357,15 @@ impl Storage for MysqlStorage {
         let commit_time = chrono::Utc::now().timestamp();
 
         tx.exec_drop(
-            "INSERT INTO sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
+            self.sql(
+                "INSERT INTO sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
                  VALUES (?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     schema_version = VALUES(schema_version),
                     commit_time = VALUES(commit_time),
                     data = VALUES(data),
                     revision = VALUES(revision)",
+            ),
             (
                 self.identity.clone(),
                 record.id.r#type,
@@ -1325,8 +1383,10 @@ impl Storage for MysqlStorage {
         // backfill, but a fresh tenant joining a shared DB after the migration
         // won't have one yet.
         tx.exec_drop(
-            "INSERT INTO sync_revision (user_id, revision) VALUES (?, ?)
+            self.sql(
+                "INSERT INTO sync_revision (user_id, revision) VALUES (?, ?)
              ON DUPLICATE KEY UPDATE revision = GREATEST(revision, VALUES(revision))",
+            ),
             (self.identity.clone(), i64::try_from(record.revision)?),
         )
         .await
@@ -1345,13 +1405,15 @@ impl Storage for MysqlStorage {
 
         let rows: Vec<Row> = conn
             .exec(
-                "SELECT o.record_type, o.data_id, o.schema_version, o.commit_time, o.updated_fields_json, o.revision,
+                self.sql(
+                    "SELECT o.record_type, o.data_id, o.schema_version, o.commit_time, o.updated_fields_json, o.revision,
                         e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
                  FROM sync_outgoing o
                  LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id AND o.user_id = e.user_id
                  WHERE o.user_id = ?
                  ORDER BY o.revision ASC
                  LIMIT ?",
+                ),
                 (self.identity.clone(), i64::from(limit)),
             )
             .await
@@ -1391,7 +1453,7 @@ impl Storage for MysqlStorage {
         // A tenant that hasn't synced anything yet may have no row; treat as 0.
         let revision: i64 = conn
             .exec_first(
-                "SELECT revision FROM sync_revision WHERE user_id = ?",
+                self.sql("SELECT revision FROM sync_revision WHERE user_id = ?"),
                 (self.identity.clone(),),
             )
             .await
@@ -1413,12 +1475,14 @@ impl Storage for MysqlStorage {
             let data_json = serde_json::to_string(&record.data)
                 .map_err(|e| StorageError::Serialization(e.to_string()))?;
             conn.exec_drop(
-                "INSERT INTO sync_incoming (user_id, record_type, data_id, schema_version, commit_time, data, revision)
+                self.sql(
+                    "INSERT INTO sync_incoming (user_id, record_type, data_id, schema_version, commit_time, data, revision)
                  VALUES (?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     schema_version = VALUES(schema_version),
                     commit_time = VALUES(commit_time),
                     data = VALUES(data)",
+                ),
                 (
                     self.identity.clone(),
                     record.id.r#type,
@@ -1440,7 +1504,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
 
         conn.exec_drop(
-            "DELETE FROM sync_incoming WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?",
+            self.sql("DELETE FROM sync_incoming WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?"),
             (
                 self.identity.clone(),
                 record.id.r#type,
@@ -1459,13 +1523,15 @@ impl Storage for MysqlStorage {
 
         let rows: Vec<Row> = conn
             .exec(
-                "SELECT i.record_type, i.data_id, i.schema_version, i.data, i.revision,
+                self.sql(
+                    "SELECT i.record_type, i.data_id, i.schema_version, i.data, i.revision,
                         e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
                  FROM sync_incoming i
                  LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
                  WHERE i.user_id = ?
                  ORDER BY i.revision ASC
                  LIMIT ?",
+                ),
                 (self.identity.clone(), i64::from(limit)),
             )
             .await
@@ -1507,13 +1573,15 @@ impl Storage for MysqlStorage {
 
         let row: Option<Row> = conn
             .exec_first(
-                "SELECT o.record_type, o.data_id, o.schema_version, o.commit_time, o.updated_fields_json, o.revision,
+                self.sql(
+                    "SELECT o.record_type, o.data_id, o.schema_version, o.commit_time, o.updated_fields_json, o.revision,
                         e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
                  FROM sync_outgoing o
                  LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id AND o.user_id = e.user_id
                  WHERE o.user_id = ?
                  ORDER BY o.revision DESC
                  LIMIT 1",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -1559,13 +1627,15 @@ impl Storage for MysqlStorage {
         let commit_time = chrono::Utc::now().timestamp();
 
         tx.exec_drop(
-            "INSERT INTO sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
+            self.sql(
+                "INSERT INTO sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
                  VALUES (?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     schema_version = VALUES(schema_version),
                     commit_time = VALUES(commit_time),
                     data = VALUES(data),
                     revision = VALUES(revision)",
+            ),
             (
                 self.identity.clone(),
                 record.id.r#type,
@@ -1580,8 +1650,10 @@ impl Storage for MysqlStorage {
         .map_err(map_db_error)?;
 
         tx.exec_drop(
-            "INSERT INTO sync_revision (user_id, revision) VALUES (?, ?)
+            self.sql(
+                "INSERT INTO sync_revision (user_id, revision) VALUES (?, ?)
              ON DUPLICATE KEY UPDATE revision = GREATEST(revision, VALUES(revision))",
+            ),
             (self.identity.clone(), i64::try_from(record.revision)?),
         )
         .await

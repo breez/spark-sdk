@@ -1,6 +1,7 @@
 //! Generic `PostgreSQL` migration runner with version tracking and concurrency control.
 
 use deadpool_postgres::Pool;
+use spark_storage::TableNameRewriter;
 
 use crate::error::PostgresError;
 use crate::pool::{map_db_error, map_pool_error};
@@ -25,7 +26,22 @@ pub async fn run_migrations(
     migrations_table: &str,
     migrations: &[Vec<String>],
 ) -> Result<(), PostgresError> {
+    run_migrations_with_table_prefix(pool, migrations_table, migrations, None).await
+}
+
+/// Runs database migrations with an optional table prefix applied to all
+/// SDK-owned table names.
+#[allow(clippy::arithmetic_side_effects)]
+pub async fn run_migrations_with_table_prefix(
+    pool: &Pool,
+    migrations_table: &str,
+    migrations: &[Vec<String>],
+    table_prefix: Option<&str>,
+) -> Result<(), PostgresError> {
+    let table_names = TableNameRewriter::new(table_prefix)
+        .map_err(|e| PostgresError::Initialization(e.to_string()))?;
     let mut client = pool.get().await.map_err(map_pool_error)?;
+    let migrations_table = table_names.identifier(migrations_table);
 
     // Generate a unique advisory lock ID from a descriptive lock name
     let lock_name = format!("migration_lock_{migrations_table}");
@@ -66,6 +82,7 @@ pub async fn run_migrations(
         let version = i32::try_from(i + 1).unwrap_or(i32::MAX);
         if version > current_version {
             for statement in migration {
+                let statement = table_names.sql(statement);
                 tx.execute(statement.as_str(), &[]).await.map_err(|e| {
                     PostgresError::Database(format!("Migration {version} failed: {e}"))
                 })?;

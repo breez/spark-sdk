@@ -1,0 +1,9 @@
+[package]
+name = "spark-storage"
+version.workspace = true
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]

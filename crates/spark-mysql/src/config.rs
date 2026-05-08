@@ -24,6 +24,12 @@ pub struct MysqlStorageConfig {
     /// Only used when the connection string requests TLS (`ssl-mode=verify_ca`,
     /// `ssl-mode=verify_identity`).
     pub root_ca_pem: Option<String>,
+
+    /// Optional prefix applied to all SDK-owned `MySQL` table names.
+    ///
+    /// This allows embedding the SDK tables in a shared application schema
+    /// without introducing generic table names such as `payments`.
+    pub table_prefix: Option<String>,
 }
 
 impl MysqlStorageConfig {
@@ -35,6 +41,7 @@ impl MysqlStorageConfig {
             max_pool_size: DEFAULT_MAX_POOL_SIZE,
             recycle_timeout_secs: None,
             root_ca_pem: None,
+            table_prefix: None,
         }
     }
 }

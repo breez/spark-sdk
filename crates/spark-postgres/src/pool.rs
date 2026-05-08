@@ -11,6 +11,7 @@ use rustls::server::ParsedCertificate;
 use rustls::{
     ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme,
 };
+use spark_storage::validate_table_prefix;
 use tokio_postgres::Config as PgConfig;
 use tokio_postgres_rustls::MakeRustlsConnect;
 use webpki_roots::TLS_SERVER_ROOTS;
@@ -278,6 +279,9 @@ fn apply_pool_config(config: &PostgresStorageConfig) -> deadpool_postgres::PoolC
 
 /// Creates a `PostgreSQL` connection pool from the given configuration.
 pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError> {
+    validate_table_prefix(config.table_prefix.as_deref().unwrap_or_default())
+        .map_err(|e| PostgresError::Initialization(e.to_string()))?;
+
     let pg_config: PgConfig = config
         .connection_string
         .parse()

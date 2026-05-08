@@ -23,8 +23,9 @@ use uuid::Uuid;
 use crate::advisory_lock::identity_lock_name;
 use crate::config::MysqlStorageConfig;
 use crate::error::MysqlError;
-use crate::migrations::{Migration, run_migrations};
+use crate::migrations::Migration;
 use crate::pool::create_pool;
+use spark_storage::TableNameRewriter;
 
 const TOKEN_MIGRATIONS_TABLE: &str = "token_schema_migrations";
 
@@ -43,6 +44,7 @@ const RESERVATION_TIMEOUT_SECS: i64 = 300;
 /// can share one `MySQL` database without cross-pollinating token state.
 pub struct MysqlTokenStore {
     pool: Pool,
+    table_names: TableNameRewriter,
     /// 33-byte secp256k1 compressed pubkey identifying this tenant. All reads
     /// and writes are filtered by `user_id = self.identity`.
     identity: Vec<u8>,
@@ -239,7 +241,8 @@ impl TokenOutputStore for MysqlTokenStore {
         // SUM works across full u128 range, then return as TEXT for parsing.
         let rows: Vec<Row> = conn
             .exec(
-                r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
+                self.sql(
+                    r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
                          m.max_supply, m.is_freezable, m.creation_entity_public_key,
                          CAST(COALESCE(SUM(
                             CASE
@@ -256,6 +259,7 @@ impl TokenOutputStore for MysqlTokenStore {
                   WHERE m.user_id = ?
                   GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
                            m.decimals, m.max_supply, m.is_freezable, m.creation_entity_public_key",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -277,7 +281,8 @@ impl TokenOutputStore for MysqlTokenStore {
 
         let rows: Vec<Row> = conn
             .exec(
-                r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
+                self.sql(
+                    r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
                          m.max_supply, m.is_freezable, m.creation_entity_public_key,
                          o.id AS output_id, o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
@@ -291,6 +296,7 @@ impl TokenOutputStore for MysqlTokenStore {
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
                   WHERE m.user_id = ?
                   ORDER BY m.identifier, CAST(o.token_amount AS DECIMAL(65,0)) ASC",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -366,6 +372,7 @@ impl TokenOutputStore for MysqlTokenStore {
               WHERE m.user_id = ? AND {where_clause}
               ORDER BY CAST(o.token_amount AS DECIMAL(65,0)) ASC"
         );
+        let query = self.sql(&query);
 
         let rows: Vec<Row> = conn
             .exec(&query, (self.identity.clone(), param))
@@ -430,6 +437,7 @@ impl TokenOutputStore for MysqlTokenStore {
             let sql = format!(
                 "DELETE FROM token_spent_outputs WHERE user_id = ? AND output_id IN ({placeholders})"
             );
+            let sql = self.sql(&sql);
             let mut params: Vec<Value> = Vec::with_capacity(output_ids.len().saturating_add(1));
             params.push(Value::from(self.identity.clone()));
             params.extend(output_ids.iter().cloned().map(Value::from));
@@ -538,18 +546,36 @@ impl MysqlTokenStore {
         config: MysqlStorageConfig,
         identity: &[u8],
     ) -> Result<Self, MysqlError> {
+        let table_names = TableNameRewriter::new(config.table_prefix.as_deref())
+            .map_err(|e| MysqlError::Initialization(e.to_string()))?;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::init(pool, identity, table_names).await
     }
 
     /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
     pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
-        Self::init(pool, identity).await
+        Self::from_pool_with_table_prefix(pool, identity, None).await
     }
 
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
+    /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
+    pub async fn from_pool_with_table_prefix(
+        pool: Pool,
+        identity: &[u8],
+        table_prefix: Option<&str>,
+    ) -> Result<Self, MysqlError> {
+        let table_names = TableNameRewriter::new(table_prefix)
+            .map_err(|e| MysqlError::Initialization(e.to_string()))?;
+        Self::init(pool, identity, table_names).await
+    }
+
+    async fn init(
+        pool: Pool,
+        identity: &[u8],
+        table_names: TableNameRewriter,
+    ) -> Result<Self, MysqlError> {
         let store = Self {
             pool,
+            table_names,
             identity: identity.to_vec(),
             lock_name: identity_lock_name(TOKEN_STORE_LOCK_PREFIX, identity),
         };
@@ -558,12 +584,17 @@ impl MysqlTokenStore {
     }
 
     async fn migrate(&self) -> Result<(), MysqlError> {
-        run_migrations(
+        crate::migrations::run_migrations_with_table_prefix(
             &self.pool,
             TOKEN_MIGRATIONS_TABLE,
             &Self::migrations(&self.identity),
+            self.table_names.prefix(),
         )
         .await
+    }
+
+    fn sql(&self, sql: &str) -> String {
+        self.table_names.sql(sql)
     }
 
     fn migrations(identity: &[u8]) -> Vec<Vec<Migration>> {
@@ -684,12 +715,14 @@ impl MysqlTokenStore {
 
         let row: Option<(i64, i64)> = tx
             .exec_first(
-                r"SELECT
+                self.sql(
+                    r"SELECT
                     (SELECT EXISTS(SELECT 1 FROM token_reservations WHERE user_id = ? AND purpose = 'Swap')) AS has_active_swap,
                     COALESCE(
                         (SELECT (last_completed_at >= ?) FROM token_swap_status WHERE user_id = ?),
                         0
                     ) AS swap_completed_during_refresh",
+                ),
                 (
                     self.identity.clone(),
                     refresh_timestamp.naive_utc(),
@@ -716,7 +749,9 @@ impl MysqlTokenStore {
 
         let spent_rows: Vec<String> = tx
             .exec(
-                "SELECT output_id FROM token_spent_outputs WHERE user_id = ? AND spent_at >= ?",
+                self.sql(
+                    "SELECT output_id FROM token_spent_outputs WHERE user_id = ? AND spent_at >= ?",
+                ),
                 (self.identity.clone(), refresh_timestamp.naive_utc()),
             )
             .await
@@ -724,7 +759,7 @@ impl MysqlTokenStore {
         let spent_ids: HashSet<String> = spent_rows.into_iter().collect();
 
         tx.exec_drop(
-            "DELETE FROM token_outputs WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
+            self.sql("DELETE FROM token_outputs WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?"),
             (self.identity.clone(), refresh_timestamp.naive_utc()),
         )
         .await
@@ -737,11 +772,13 @@ impl MysqlTokenStore {
 
         let reserved_pairs: Vec<(String, String)> = tx
             .exec(
-                r"SELECT r.id, o.id
+                self.sql(
+                    r"SELECT r.id, o.id
                   FROM token_reservations r
                   JOIN token_outputs o
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
                   WHERE r.user_id = ?",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -778,6 +815,7 @@ impl MysqlTokenStore {
             let outputs_sql = format!(
                 "DELETE FROM token_outputs WHERE user_id = ? AND reservation_id IN ({placeholders})"
             );
+            let outputs_sql = self.sql(&outputs_sql);
             let mut outputs_params: Vec<Value> =
                 Vec::with_capacity(reservations_to_delete.len().saturating_add(1));
             outputs_params.push(Value::from(self.identity.clone()));
@@ -789,6 +827,7 @@ impl MysqlTokenStore {
             let res_sql = format!(
                 "DELETE FROM token_reservations WHERE user_id = ? AND id IN ({placeholders})"
             );
+            let res_sql = self.sql(&res_sql);
             let mut res_params: Vec<Value> =
                 Vec::with_capacity(reservations_to_delete.len().saturating_add(1));
             res_params.push(Value::from(self.identity.clone()));
@@ -802,6 +841,7 @@ impl MysqlTokenStore {
             let placeholders = build_placeholders(outputs_to_remove_from_reservation.len());
             let sql =
                 format!("DELETE FROM token_outputs WHERE user_id = ? AND id IN ({placeholders})");
+            let sql = self.sql(&sql);
             let mut params: Vec<Value> =
                 Vec::with_capacity(outputs_to_remove_from_reservation.len().saturating_add(1));
             params.push(Value::from(self.identity.clone()));
@@ -817,10 +857,12 @@ impl MysqlTokenStore {
 
             let empty_ids: Vec<String> = tx
                 .exec(
-                    r"SELECT r.id FROM token_reservations r
+                    self.sql(
+                        r"SELECT r.id FROM token_reservations r
                       LEFT JOIN token_outputs o
                         ON o.reservation_id = r.id AND o.user_id = r.user_id
                       WHERE r.user_id = ? AND o.id IS NULL",
+                    ),
                     (self.identity.clone(),),
                 )
                 .await
@@ -830,6 +872,7 @@ impl MysqlTokenStore {
                 let sql = format!(
                     "DELETE FROM token_reservations WHERE user_id = ? AND id IN ({placeholders})"
                 );
+                let sql = self.sql(&sql);
                 let mut params: Vec<Value> = Vec::with_capacity(empty_ids.len().saturating_add(1));
                 params.push(Value::from(self.identity.clone()));
                 params.extend(empty_ids.iter().cloned().map(Value::from));
@@ -841,7 +884,9 @@ impl MysqlTokenStore {
 
         let reserved_output_ids: HashSet<String> = tx
             .exec::<String, _, _>(
-                "SELECT id FROM token_outputs WHERE user_id = ? AND reservation_id IS NOT NULL",
+                self.sql(
+                    "SELECT id FROM token_outputs WHERE user_id = ? AND reservation_id IS NOT NULL",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -851,11 +896,13 @@ impl MysqlTokenStore {
 
         // Drop tenant-scoped metadata rows that no longer have any outputs.
         tx.exec_drop(
-            r"DELETE FROM token_metadata
+            self.sql(
+                r"DELETE FROM token_metadata
               WHERE user_id = ?
                 AND identifier NOT IN (
                   SELECT DISTINCT token_identifier FROM token_outputs WHERE user_id = ?
               )",
+            ),
             (self.identity.clone(), self.identity.clone()),
         )
         .await
@@ -898,7 +945,7 @@ impl MysqlTokenStore {
 
         let metadata_row: Option<Row> = tx
             .exec_first(
-                "SELECT * FROM token_metadata WHERE user_id = ? AND identifier = ?",
+                self.sql("SELECT * FROM token_metadata WHERE user_id = ? AND identifier = ?"),
                 (self.identity.clone(), token_identifier),
             )
             .await
@@ -912,12 +959,14 @@ impl MysqlTokenStore {
 
         let rows: Vec<Row> = tx
             .exec(
-                r"SELECT o.id AS output_id, o.owner_public_key, o.revocation_commitment,
+                self.sql(
+                    r"SELECT o.id AS output_id, o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount, o.prev_tx_hash, o.prev_tx_vout,
                          o.token_identifier
                   FROM token_outputs o
                   WHERE o.user_id = ? AND o.token_identifier = ? AND o.reservation_id IS NULL",
+                ),
                 (self.identity.clone(), token_identifier),
             )
             .await
@@ -984,7 +1033,7 @@ impl MysqlTokenStore {
         };
 
         tx.exec_drop(
-            "INSERT INTO token_reservations (user_id, id, purpose) VALUES (?, ?, ?)",
+            self.sql("INSERT INTO token_reservations (user_id, id, purpose) VALUES (?, ?, ?)"),
             (self.identity.clone(), &reservation_id, purpose_str),
         )
         .await
@@ -999,6 +1048,7 @@ impl MysqlTokenStore {
             let sql = format!(
                 "UPDATE token_outputs SET reservation_id = ? WHERE user_id = ? AND id IN ({placeholders})"
             );
+            let sql = self.sql(&sql);
             let mut params: Vec<Value> = Vec::with_capacity(selected_ids.len() + 2);
             params.push(Value::from(reservation_id.clone()));
             params.push(Value::from(self.identity.clone()));
@@ -1032,14 +1082,14 @@ impl MysqlTokenStore {
             .map_err(map_err)?;
 
         tx.exec_drop(
-            "UPDATE token_outputs SET reservation_id = NULL WHERE user_id = ? AND reservation_id = ?",
+            self.sql("UPDATE token_outputs SET reservation_id = NULL WHERE user_id = ? AND reservation_id = ?"),
             (self.identity.clone(), id),
         )
         .await
         .map_err(map_err)?;
 
         tx.exec_drop(
-            "DELETE FROM token_reservations WHERE user_id = ? AND id = ?",
+            self.sql("DELETE FROM token_reservations WHERE user_id = ? AND id = ?"),
             (self.identity.clone(), id),
         )
         .await
@@ -1061,7 +1111,7 @@ impl MysqlTokenStore {
 
         let purpose: Option<String> = tx
             .exec_first(
-                "SELECT purpose FROM token_reservations WHERE user_id = ? AND id = ?",
+                self.sql("SELECT purpose FROM token_reservations WHERE user_id = ? AND id = ?"),
                 (self.identity.clone(), id),
             )
             .await
@@ -1077,7 +1127,7 @@ impl MysqlTokenStore {
 
         let reserved_output_ids: Vec<String> = tx
             .exec(
-                "SELECT id FROM token_outputs WHERE user_id = ? AND reservation_id = ?",
+                self.sql("SELECT id FROM token_outputs WHERE user_id = ? AND reservation_id = ?"),
                 (self.identity.clone(), id),
             )
             .await
@@ -1098,20 +1148,21 @@ impl MysqlTokenStore {
             }
             // Suppress duplicate-PK errors only.
             sql.push_str(" ON DUPLICATE KEY UPDATE output_id = output_id");
+            let sql = self.sql(&sql);
             tx.exec_drop(&sql, Params::Positional(params))
                 .await
                 .map_err(map_err)?;
         }
 
         tx.exec_drop(
-            "DELETE FROM token_outputs WHERE user_id = ? AND reservation_id = ?",
+            self.sql("DELETE FROM token_outputs WHERE user_id = ? AND reservation_id = ?"),
             (self.identity.clone(), id),
         )
         .await
         .map_err(map_err)?;
 
         tx.exec_drop(
-            "DELETE FROM token_reservations WHERE user_id = ? AND id = ?",
+            self.sql("DELETE FROM token_reservations WHERE user_id = ? AND id = ?"),
             (self.identity.clone(), id),
         )
         .await
@@ -1122,8 +1173,10 @@ impl MysqlTokenStore {
         // lazily.
         if is_swap {
             tx.exec_drop(
-                "INSERT INTO token_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
+                self.sql(
+                    "INSERT INTO token_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
                  ON DUPLICATE KEY UPDATE last_completed_at = VALUES(last_completed_at)",
+                ),
                 (self.identity.clone(),),
             )
             .await
@@ -1131,11 +1184,13 @@ impl MysqlTokenStore {
         }
 
         tx.exec_drop(
-            r"DELETE FROM token_metadata
+            self.sql(
+                r"DELETE FROM token_metadata
               WHERE user_id = ?
                 AND identifier NOT IN (
                   SELECT DISTINCT token_identifier FROM token_outputs WHERE user_id = ?
               )",
+            ),
             (self.identity.clone(), self.identity.clone()),
         )
         .await
@@ -1156,12 +1211,14 @@ impl MysqlTokenStore {
             // ON DUPLICATE KEY UPDATE id = id no-ops on the (user_id, id)
             // primary key conflict only — unlike INSERT IGNORE, FK / NOT NULL
             // / type errors still propagate.
-            r"INSERT INTO token_outputs
+            self.sql(
+                r"INSERT INTO token_outputs
                 (user_id, id, token_identifier, owner_public_key, revocation_commitment,
                  withdraw_bond_sats, withdraw_relative_block_locktime,
                  token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6))
               ON DUPLICATE KEY UPDATE id = id",
+            ),
             (
                 self.identity.clone(),
                 &output.output.id,
@@ -1188,7 +1245,8 @@ impl MysqlTokenStore {
         metadata: &TokenMetadata,
     ) -> Result<(), TokenOutputServiceError> {
         tx.exec_drop(
-            r"INSERT INTO token_metadata
+            self.sql(
+                r"INSERT INTO token_metadata
                 (user_id, identifier, issuer_public_key, name, ticker, decimals, max_supply,
                  is_freezable, creation_entity_public_key)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1200,6 +1258,7 @@ impl MysqlTokenStore {
                 max_supply = VALUES(max_supply),
                 is_freezable = VALUES(is_freezable),
                 creation_entity_public_key = VALUES(creation_entity_public_key)",
+            ),
             (
                 self.identity.clone(),
                 &metadata.identifier,
@@ -1225,7 +1284,8 @@ impl MysqlTokenStore {
         tx: &mut mysql_async::Transaction<'_>,
     ) -> Result<u64, TokenOutputServiceError> {
         tx.exec_drop(
-            r"UPDATE token_outputs SET reservation_id = NULL
+            self.sql(
+                r"UPDATE token_outputs SET reservation_id = NULL
               WHERE user_id = ?
                 AND reservation_id IN (
                     SELECT id FROM (
@@ -1234,6 +1294,7 @@ impl MysqlTokenStore {
                           AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)
                     ) AS stale
                 )",
+            ),
             (
                 self.identity.clone(),
                 self.identity.clone(),
@@ -1245,8 +1306,10 @@ impl MysqlTokenStore {
 
         let mut result = tx
             .exec_iter(
-                "DELETE FROM token_reservations
+                self.sql(
+                    "DELETE FROM token_reservations
                  WHERE user_id = ? AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)",
+                ),
                 (self.identity.clone(), RESERVATION_TIMEOUT_SECS),
             )
             .await
@@ -1271,7 +1334,7 @@ impl MysqlTokenStore {
             .unwrap_or(refresh_timestamp);
 
         tx.exec_drop(
-            "DELETE FROM token_spent_outputs WHERE user_id = ? AND spent_at < ?",
+            self.sql("DELETE FROM token_spent_outputs WHERE user_id = ? AND spent_at < ?"),
             (self.identity.clone(), cleanup_cutoff.naive_utc()),
         )
         .await
@@ -1432,6 +1495,20 @@ pub async fn create_mysql_token_store_from_pool(
     identity: &[u8],
 ) -> Result<Arc<dyn TokenOutputStore>, MysqlError> {
     Ok(Arc::new(MysqlTokenStore::from_pool(pool, identity).await?))
+}
+
+/// Creates a `MysqlTokenStore` instance from an existing connection pool with
+/// an optional table prefix.
+///
+/// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
+pub async fn create_mysql_token_store_from_pool_with_table_prefix(
+    pool: Pool,
+    identity: &[u8],
+    table_prefix: Option<&str>,
+) -> Result<Arc<dyn TokenOutputStore>, MysqlError> {
+    Ok(Arc::new(
+        MysqlTokenStore::from_pool_with_table_prefix(pool, identity, table_prefix).await?,
+    ))
 }
 
 #[cfg(test)]
