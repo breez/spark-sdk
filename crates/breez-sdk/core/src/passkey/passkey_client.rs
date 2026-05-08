@@ -214,10 +214,7 @@ impl PasskeyClient {
     /// best-effort: a transient failure leaves [`RestoreResponse::labels`]
     /// empty rather than aborting the flow, since the speculative
     /// wallet is still useful.
-    pub async fn restore(
-        &self,
-        request: RestoreRequest,
-    ) -> Result<RestoreResponse, PasskeyError> {
+    pub async fn restore(&self, request: RestoreRequest) -> Result<RestoreResponse, PasskeyError> {
         let candidate_label = request
             .candidate_label
             .clone()
