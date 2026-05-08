@@ -137,43 +137,63 @@ Built-in providers are not currently available for C#, Go, and Python.
 |--------|---------|-------------|
 | {{#name rp_id}} | `keys.breez.technology` | Relying Party ID. Changing this means existing passkeys produce a different seed; see [migration considerations](https://github.com/breez/passkey-login/blob/main/SDK%20implementation.md#passkey-migration-considerations). |
 | {{#name rp_name}} | `Breez SDK` | RP display name (registration only, does not affect existing credentials) |
-| {{#name user_name}} | {{#name rp_name}} | User name stored with the credential (registration only) |
-| {{#name user_display_name}} | {{#name user_name}} | Primary label shown in passkey picker (registration only) |
+| {{#name user_name}} | {{#name rp_name}} | User name stored with the credential (registration only). On iOS this is the only field surfaced in the iCloud Keychain / passkey picker — the platform's `ASAuthorizationPlatformPublicKeyCredentialProvider` API has no `displayName` slot. Pass the per-credential friendly label here if you want users to see it. |
+| {{#name user_display_name}} | {{#name user_name}} | Primary label shown in passkey picker on platforms that surface a separate display name (Android via WebAuthn JSON `user.displayName`, web via WebAuthn L3). iOS ignores. |
+| {{#name auto_register}} | `false` | When `true`, {{#name derive_seeds}} auto-creates a new passkey on `CredentialNotFound` and retries. When `false` (default), throws so the host can drive registration explicitly via {{#name create_passkey}}. |
+| {{#name allow_credential_ids}} | empty | Pin assertion to specific credential IDs. Empty = the platform picks any credential matching the RP. Set when binding sign-in to a specific cred (e.g. when multiple Glow passkeys exist for the same RP). |
 
-Apps that share an RP ID, whether the default `keys.breez.technology` or a custom domain, recognize the same user's passkey without per-app enrollment. Users don't need to manually enroll a passkey before using a built-in provider; it auto-registers a new credential on first use if one doesn't already exist for the RP ID.
+Apps that share an RP ID, whether the default `keys.breez.technology` or a custom domain, recognize the same user's passkey without per-app enrollment.
 
-Pass a `PasskeyProvider` instance to `Passkey` as shown in the [Connecting with a passkey](#connecting-with-passkey) snippets below. That is the recommended path for almost every app.
+Pass a `PasskeyProvider` instance to `PasskeyClient` as shown in the [Connecting with a passkey](#connecting-with-passkey) snippets below. That is the recommended path for almost every app.
+
+### Built-in behaviours
+
+The native built-in providers (iOS / Android / Flutter / RN) handle several platform quirks internally so consumers don't need workarounds:
+
+- **Bulk PRF (single OS prompt for N salts).** {{#name derive_seeds}} uses the WebAuthn dual-salt extension (`saltInput1` + `saltInput2` on iOS, `prfFirst` + `prfSecond` on Android) when the authenticator supports it, falling back to per-salt assertions otherwise. The SDK's {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} both go through this path so a master + label derivation costs **one** prompt where supported.
+- **Post-create grace (800ms).** After a successful {{#name create_passkey}}, the next derive call holds briefly so the OS finishes indexing the new credential before the immediate post-register assertion. Without this, on Apple Passwords the dual-salt assertion can drop `prf.second` and force a fallback prompt; on Google Password Manager the credential can be briefly invisible to the picker.
+- **Capture-on-sign-in.** Every successful assertion auto-adds the credential ID to the iCloud-Keychain-synced (iOS) or Block-Store-backed (Android) `KnownCredentialsStore`. This migrates pre-tracking credentials so subsequent registrations correctly hit the platform-level "already exists" guard via `excludeCredentialIds`.
+- **Fast-fail on no-credential.** Assertions set `preferImmediatelyAvailableCredentials` (iOS) / `preferImmediatelyAvailableCredentials=true` (Android) so a missing credential surfaces as `CredentialNotFound` immediately rather than the cross-device "use another device" hybrid sheet.
+- **`allowCredentialIds` auto-merge.** Assertions implicitly include the IDs in `KnownCredentialsStore` as the allow-list, so the OS auto-routes to the just-registered credential and skips the picker between create and the immediate post-create assert.
+
+These run by default. Hosts that need to override (e.g. for a custom credential-management UI) can pass an explicit `allowCredentialIds`.
+
+## Domain association diagnostic
+
+{{#name check_domain_association}} performs an Apple-app-site-association probe (iOS) or Digital Asset Links lookup (Android) against the configured RP and returns a typed {{#name DomainAssociation}} — `Associated`, `NotAssociated { source, reason }`, or `Skipped { reason }`. Use it to surface configuration mistakes (entitlement missing, AASA file not deployed) before a WebAuthn ceremony fails opaquely. The SDK never blocks on this check; treat `Skipped` as advisory.
 
 ## Checking passkey availability
 
-Use {{#name is_prf_available}} to gate passkey UI elements. This returns `false` on unsupported platforms (e.g., Android < 9, iOS < 18), allowing you to fall back to mnemonic-based onboarding gracefully:
+Use {{#name is_available}} to gate passkey UI elements. This returns `false` on unsupported platforms (e.g., Android < 9, iOS < 18), allowing you to fall back to mnemonic-based onboarding gracefully:
 
 {{#tabs passkey:check-availability}}
 
 <h2 id="connecting-with-passkey">
     <a class="header" href="#connecting-with-passkey">Connecting with a passkey</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.get_wallet">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.sign_in">API docs</a>
 </h2>
 
-To connect with a passkey, instantiate the built-in `PasskeyProvider`, pass it to `Passkey`, call {{#name Passkey.get_wallet}} to derive a wallet, then pass its seed to {{#name connect}}. The label defaults to `"Default"` when omitted.
+To connect with a passkey, instantiate the built-in `PasskeyProvider`, pass it to `PasskeyClient`, call {{#name PasskeyClient.sign_in}} to derive a wallet, then pass its seed to {{#name connect}}. The label defaults to discovery mode when omitted (the SDK lists existing labels via Nostr in the same ceremony).
 
 {{#tabs passkey:connect-with-passkey}}
 
+For a brand-new user with no existing passkey, call {{#name PasskeyClient.register}} instead — it creates the credential AND derives the wallet seed in one orchestrated call. Hosts that want a single-CTA onboarding can try `sign_in` first and fall through to `register` when the SDK returns {{#enum PrfProviderError::CredentialNotFound}}; on iOS+Android with `preferImmediatelyAvailableCredentials` this fast-fails (sub-300ms, no UI) when no credential exists, so the silent probe is cheap.
+
 <h2 id="listing-labels">
     <a class="header" href="#listing-labels">Listing labels</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.list_labels">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.list_labels">API docs</a>
 </h2>
 
-Discover labels associated to the passkey using Nostr.
+Discover labels associated to the passkey using Nostr. {{#name PasskeyClient.sign_in}} already lists labels in discovery mode (when no `label` is specified), so a separate `list_labels` call is only needed when re-fetching the label set after sign-in.
 
 {{#tabs passkey:list-labels}}
 
 <h2 id="storing-a-label">
     <a class="header" href="#storing-a-label">Storing a label</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.Passkey.html#method.store_label">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.store_label">API docs</a>
 </h2>
 
-Publish a label to Nostr so it can be discovered later.
+Publish a label to Nostr so it can be discovered later. {{#name PasskeyClient.register}} publishes the label automatically on registration; use {{#name PasskeyClient.store_label}} only when adding a new label to an existing identity (e.g. a "create a new wallet" path on a returning user).
 
 {{#tabs passkey:store-label}}
 
