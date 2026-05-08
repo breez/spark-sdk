@@ -5,8 +5,7 @@ use tokio::sync::Mutex;
 use crate::{
     BitcoinChainService, BreezSdk, Config, ConnectionManager, Credentials, FiatService,
     KeySetConfig, PaymentObserver, RestClient, SdkError, Seed, SessionManager,
-    SspConnectionManager, Storage,
-    chain::rest_client::ChainApiType,
+    SspConnectionManager, Storage, chain::rest_client::ChainApiType,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
