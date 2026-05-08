@@ -255,23 +255,14 @@ public class PasskeyProvider: PrfProvider {
         }
     }
 
-    /// Create a new passkey with PRF support.
-    ///
-    /// Only registers the credential, no seed derivation. Triggers exactly
-    /// 1 platform prompt. Use this to separate credential creation from
-    /// derivation in multi-step onboarding flows.
-    ///
-    /// - Parameters:
-    ///   - excludeCredentialIds: Optional list of credential IDs to exclude.
-    ///     Pass previously created credential IDs to prevent the authenticator
-    ///     from creating a duplicate on the same device.
-    /// - Returns: Credential ID plus AAGUID and backup-eligibility parsed
-    ///   from the attestation object. AAGUID and `backupEligible` are nil
-    ///   when the attestation can't be parsed.
-    /// - Throws: `PrfProviderError` if the user cancels or PRF is not supported by the authenticator.
+    /// Create a new passkey with PRF support. Single platform prompt;
+    /// separates credential creation from derivation in multi-step
+    /// onboarding flows. Per-call overrides on `request` (userId,
+    /// userName, userDisplayName) fall back to the constructor values
+    /// when omitted.
     @discardableResult
-    public func createPasskey(excludeCredentialIds: [Data] = []) async throws -> RegisteredCredential {
-        return try await registerCredential(excludeCredentialIds: excludeCredentialIds)
+    public func createPasskey(request: CreatePasskeyRequest) async throws -> RegisteredCredential {
+        return try await registerCredential(request: request)
     }
 
     /// Check if this device's OS version supports the passkey PRF extension.
@@ -611,18 +602,19 @@ public class PasskeyProvider: PrfProvider {
         }
     }
 
-    private func registerCredential(excludeCredentialIds: [Data] = []) async throws -> RegisteredCredential {
+    private func registerCredential(request: CreatePasskeyRequest = CreatePasskeyRequest()) async throws -> RegisteredCredential {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = randomBytes(count: 32)
-        let userId = randomBytes(count: 16)
+        let resolvedUserId = request.userId ?? randomBytes(count: 16)
+        let resolvedUserName = request.userName ?? userName
         let registrationRequest = provider.createCredentialRegistrationRequest(
             challenge: challenge,
-            name: userName,
-            userID: userId
+            name: resolvedUserName,
+            userID: resolvedUserId
         )
 
-        if !excludeCredentialIds.isEmpty {
-            registrationRequest.excludedCredentials = excludeCredentialIds.map {
+        if !request.excludeCredentialIds.isEmpty {
+            registrationRequest.excludedCredentials = request.excludeCredentialIds.map {
                 ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
             }
         }
@@ -651,23 +643,6 @@ public class PasskeyProvider: PrfProvider {
 }
 
 // MARK: - Registered credential metadata
-
-/// Authenticator data captured at registration. `aaguid` is the 16-byte
-/// Authenticator Attestation GUID (provider identifier); `backupEligible`
-/// is the BE flag indicating whether the credential can sync across
-/// devices. Both are nil when the attestation can't be parsed. AAGUID is
-/// unverified attestation — display hint only, never a trust decision.
-public struct RegisteredCredential {
-    public let credentialId: Data
-    public let aaguid: Data?
-    public let backupEligible: Bool?
-
-    public init(credentialId: Data, aaguid: Data?, backupEligible: Bool?) {
-        self.credentialId = credentialId
-        self.aaguid = aaguid
-        self.backupEligible = backupEligible
-    }
-}
 
 /// Extract AAGUID + BE flag from the attestation object's authenticator
 /// data via byte-pattern search for the "authData" CBOR key. Returns nil
