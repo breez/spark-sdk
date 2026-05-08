@@ -31,9 +31,9 @@ public class PasskeyProvider: PrfProvider {
     private let userDisplayName: String
     private let autoRegister: Bool
     private let allowCredentialIds: [Data]
-    private let anchor: PresentationAnchorProvider
     private let explicitTeamId: String?
     private let urlSession: URLSession
+    private let core: PasskeyAssertionCore
 
     /// Optional callback fired with the credential ID returned by every
     /// successful WebAuthn assertion (sign-in path). Hosts can set this
@@ -49,36 +49,12 @@ public class PasskeyProvider: PrfProvider {
     ///
     /// Must be set before calling `deriveSeed`. Not invoked on
     /// registration (see `createPasskey`'s return value for that).
-    public var onAssertionCredentialId: ((Data) -> Void)?
+    public var onAssertionCredentialId: ((Data) -> Void)? {
+        didSet { core.onAssertionCredentialId = onAssertionCredentialId }
+    }
 
     /// Protocol for providing a presentation anchor for the authorization controller.
-    public protocol PresentationAnchorProvider {
-        func presentationAnchor() -> ASPresentationAnchor
-    }
-
-    /// Default anchor provider that uses the key window from connected scenes.
-    private class DefaultAnchorProvider: PresentationAnchorProvider {
-        func presentationAnchor() -> ASPresentationAnchor {
-            #if os(iOS)
-            if let scene = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .first(where: { $0.activationState == .foregroundActive }),
-                let window = scene.windows.first(where: { $0.isKeyWindow }) {
-                return window
-            }
-            // Fallback: first available window
-            if let window = UIApplication.shared.connectedScenes
-                .compactMap({ $0 as? UIWindowScene })
-                .flatMap({ $0.windows })
-                .first {
-                return window
-            }
-            return ASPresentationAnchor()
-            #elseif os(macOS)
-            return NSApplication.shared.keyWindow ?? ASPresentationAnchor()
-            #endif
-        }
-    }
+    public typealias PresentationAnchorProvider = PasskeyPresentationAnchorProvider
 
     /// Create a new platform passkey PRF provider.
     ///
@@ -136,50 +112,13 @@ public class PasskeyProvider: PrfProvider {
         self.userDisplayName = userDisplayName ?? (userName ?? rpName)
         self.autoRegister = autoRegister
         self.allowCredentialIds = allowCredentialIds
-        self.anchor = anchorProvider ?? DefaultAnchorProvider()
         self.explicitTeamId = teamId
         self.urlSession = urlSession
-    }
-
-    /// Derive a 32-byte seed from passkey PRF with the given salt.
-    ///
-    /// Authenticates the user via a platform passkey and evaluates the PRF extension.
-    /// If `autoRegister` is `true` (the default) and no credential exists for this
-    /// RP ID, a new passkey is created automatically before retrying. If `autoRegister`
-    /// is `false`, throws `PrfProviderError.CredentialNotFound` instead.
-    ///
-    /// - Parameter salt: The salt string to use for PRF evaluation.
-    /// - Returns: The 32-byte PRF output.
-    /// - Throws: `PrfProviderError` if authentication fails, PRF is not supported, or the user cancels.
-    public func deriveSeed(salt: String) async throws -> Data {
-        guard let saltData = salt.data(using: .utf8) else {
-            throw PrfProviderError.Generic("Failed to encode salt as UTF-8")
-        }
-
-        // Try assertion first (existing credential)
-        do {
-            return try await performAssertionWithPrf(saltData: saltData)
-        } catch let error as PrfProviderError where error.isCredentialNotFound {
-            guard autoRegister else { throw error }
-
-            // No credential found, auto-register a new one and retry
-            do {
-                _ = try await registerCredential()
-            } catch let regError as PrfProviderError where regError.isCredentialNotFound {
-                // Registration also got notHandled: the entitlement or
-                // domain association is misconfigured, not a missing credential.
-                throw PrfProviderError.Configuration(
-                    "Associated Domains entitlement not configured. "
-                    + "Add 'webcredentials:\(rpId)' to your app's entitlements "
-                    + "and ensure a valid provisioning profile."
-                )
-            }
-            return try await performAssertionWithPrf(saltData: saltData)
-        }
+        self.core = PasskeyAssertionCore(anchorProvider: anchorProvider)
     }
 
     /// Derive multiple PRF outputs in as few authenticator ceremonies as
-    /// possible. Overrides the loop default with the iOS 18+
+    /// possible. Uses the iOS 18+
     /// `ASAuthorizationPublicKeyCredentialPRFAssertionInputValues`
     /// dual-salt path: 2 derivations in a single user prompt.
     ///
@@ -195,62 +134,22 @@ public class PasskeyProvider: PrfProvider {
     /// - Throws: `PrfProviderError` if any underlying ceremony fails. The
     ///   first failing ceremony aborts the rest.
     public func deriveSeeds(salts: [String]) async throws -> [Data] {
-        if salts.isEmpty {
-            return []
-        }
-        if salts.count == 1 {
-            return [try await deriveSeed(salt: salts[0])]
-        }
-
-        var out: [Data] = []
-        out.reserveCapacity(salts.count)
-        var idx = 0
-        while idx < salts.count {
-            if idx + 1 < salts.count {
-                let pair = try await performDualSaltAssertion(
-                    salt1: salts[idx],
-                    salt2: salts[idx + 1]
-                )
-                out.append(pair.0)
-                if let prfSecond = pair.1 {
-                    out.append(prfSecond)
-                } else {
-                    // Authenticator dropped saltInput2; recover via single-salt.
-                    out.append(try await deriveSeed(salt: salts[idx + 1]))
-                }
-                idx += 2
-            } else {
-                // Odd trailing salt — single-salt fallback.
-                out.append(try await deriveSeed(salt: salts[idx]))
-                idx += 1
-            }
-        }
-        return out
-    }
-
-    private func performDualSaltAssertion(salt1: String, salt2: String) async throws -> (Data, Data?) {
-        guard let salt1Data = salt1.data(using: .utf8),
-              let salt2Data = salt2.data(using: .utf8)
-        else {
+        let saltDatas: [Data] = salts.compactMap { $0.data(using: .utf8) }
+        guard saltDatas.count == salts.count else {
             throw PrfProviderError.Generic("Failed to encode salts as UTF-8")
         }
-
-        // Try assertion. Auto-register on missing-credential, mirroring
-        // `deriveSeed`.
         do {
-            return try await performDualSaltAssertionInner(salt1Data: salt1Data, salt2Data: salt2Data)
-        } catch let error as PrfProviderError where error.isCredentialNotFound {
-            guard autoRegister else { throw error }
-            do {
-                _ = try await registerCredential()
-            } catch let regError as PrfProviderError where regError.isCredentialNotFound {
-                throw PrfProviderError.Configuration(
-                    "Associated Domains entitlement not configured. "
-                    + "Add 'webcredentials:\(rpId)' to your app's entitlements "
-                    + "and ensure a valid provisioning profile."
-                )
-            }
-            return try await performDualSaltAssertionInner(salt1Data: salt1Data, salt2Data: salt2Data)
+            return try await core.performBulkDerivation(
+                salts: saltDatas,
+                rpId: rpId,
+                rpName: rpName,
+                userName: userName,
+                userDisplayName: userDisplayName,
+                autoRegister: autoRegister,
+                explicitAllowCredentialIds: allowCredentialIds
+            )
+        } catch let err as PasskeyAssertionError {
+            throw Self.toPrfProviderError(err)
         }
     }
 
@@ -266,21 +165,23 @@ public class PasskeyProvider: PrfProvider {
     /// credential ID after a successful create.
     @discardableResult
     public func createPasskey(request: CreatePasskeyRequest) async throws -> RegisteredCredential {
-        var merged = request
-        let known = KnownCredentialsStore.read(rpId: rpId).compactMap { Data(base64Encoded: $0) }
-        if !known.isEmpty {
-            var seen = Set(request.excludeCredentialIds)
-            for id in known where !seen.contains(id) {
-                merged.excludeCredentialIds.append(id)
-                seen.insert(id)
-            }
+        do {
+            let credential = try await core.createPasskey(
+                rpId: rpId,
+                rpName: rpName,
+                userName: request.userName ?? userName,
+                userDisplayName: request.userDisplayName ?? userDisplayName,
+                excludeCredentialIds: request.excludeCredentialIds,
+                userId: request.userId
+            )
+            return RegisteredCredential(
+                credentialId: credential.credentialId,
+                aaguid: credential.aaguid,
+                backupEligible: credential.backupEligible
+            )
+        } catch let err as PasskeyAssertionError {
+            throw Self.toPrfProviderError(err)
         }
-        let credential = try await registerCredential(request: merged)
-        KnownCredentialsStore.add(
-            credentialId: credential.credentialId.base64EncodedString(),
-            rpId: rpId,
-        )
-        return credential
     }
 
     /// Check if this device's OS version supports the passkey PRF extension.
@@ -319,8 +220,8 @@ public class PasskeyProvider: PrfProvider {
     /// or because your app update shipped before Apple's CDN picked up a
     /// newly-deployed AASA), subsequent `ASAuthorizationController`
     /// requests fail with `ASAuthorizationError.notHandled` or `.failed`
-    /// — errors that are **indistinguishable** from "no credential found"
-    /// or "user cancelled" at the error-code layer.
+    /// (errors that are **indistinguishable** from "no credential found"
+    /// or "user cancelled" at the error-code layer).
     ///
     /// By proactively hitting the same CDN iOS consults
     /// (`app-site-association.cdn-apple.com/a/v1/<rpId>`), callers can
@@ -330,11 +231,11 @@ public class PasskeyProvider: PrfProvider {
     ///
     /// # Detection asymmetry
     ///
-    /// - CDN lists this bundle → device will also list it (CDN is the
+    /// - CDN lists this bundle: device will also list it (CDN is the
     ///   upstream; propagation is monotonic). Return `.associated`.
-    /// - CDN does **not** list this bundle → device on this region almost
+    /// - CDN does **not** list this bundle: device on this region almost
     ///   certainly does not either. Return `.notAssociated`.
-    /// - CDN unreachable / timed out / returned invalid JSON → the check
+    /// - CDN unreachable / timed out / returned invalid JSON: the check
     ///   itself couldn't complete; return `.skipped` and let the caller
     ///   proceed with the WebAuthn ceremony normally.
     ///
@@ -350,541 +251,58 @@ public class PasskeyProvider: PrfProvider {
     ///    first dot.
     ///
     /// If both sources fail (no explicit team ID AND entitlement lookup
-    /// unavailable — e.g. unsigned test builds), returns `.skipped`.
+    /// unavailable, e.g. unsigned test builds), returns `.skipped`.
     ///
     /// - Returns: A [`DomainAssociation`] describing the verification
     ///   outcome. Never throws; uses `.skipped` for verification-level
     ///   failures so callers have a single surface to handle.
     public func checkDomainAssociation() async throws -> DomainAssociation {
-        let bundleId = Bundle.main.bundleIdentifier ?? ""
-        guard !bundleId.isEmpty else {
-            return .skipped(
-                reason: "Bundle.main.bundleIdentifier is empty (unsigned / test context?)"
-            )
-        }
-
-        guard let teamId = explicitTeamId ?? Self.detectTeamId() else {
-            return .skipped(
-                reason:
-                    "Could not resolve Apple Developer Team ID "
-                    + "(no explicit teamId and SecTaskCopyValueForEntitlement "
-                    + "lookup failed)"
-            )
-        }
-
-        let fullAppId = "\(teamId).\(bundleId)"
-        let cdnUrl = "https://app-site-association.cdn-apple.com/a/v1/\(rpId)"
-        guard let url = URL(string: cdnUrl) else {
-            return .skipped(reason: "Invalid AASA CDN URL: \(cdnUrl)")
-        }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 3.0
-        request.httpMethod = "GET"
-
-        do {
-            let (data, response) = try await urlSession.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                return .skipped(reason: "AASA CDN returned non-HTTP response")
-            }
-            guard httpResponse.statusCode == 200 else {
-                return .skipped(
-                    reason: "AASA CDN returned HTTP \(httpResponse.statusCode)"
-                )
-            }
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let webcredentials = json["webcredentials"] as? [String: Any],
-                  let apps = webcredentials["apps"] as? [String]
-            else {
-                return .skipped(
-                    reason:
-                        "AASA CDN returned unparseable JSON or missing "
-                        + "webcredentials.apps for \(rpId)"
-                )
-            }
-
-            if apps.contains(fullAppId) {
-                return .associated
-            } else {
-                return .notAssociated(
-                    source: "Apple app-site-association CDN",
-                    reason:
-                        "Bundle ID \(fullAppId) not in webcredentials.apps "
-                        + "for \(rpId). CDN listed: [\(apps.joined(separator: ", "))]"
-                )
-            }
-        } catch {
-            return .skipped(
-                reason: "AASA CDN fetch failed: \(error.localizedDescription)"
-            )
+        // Delegate to the canonical core. Translate from the layer-
+        // neutral `IosDomainAssociation` to UniFFI's `DomainAssociation`.
+        let result = await core.checkDomainAssociation(
+            rpId: rpId,
+            explicitTeamId: explicitTeamId,
+            urlSession: urlSession
+        )
+        switch result {
+        case .associated:
+            return .associated
+        case .notAssociated(let source, let reason):
+            return .notAssociated(source: source, reason: reason)
+        case .skipped(let reason):
+            return .skipped(reason: reason)
         }
     }
 
     /// Auto-detect the Apple Developer Team ID from the running app's
     /// signing information.
     ///
-    /// Two different mechanisms per platform, both yielding the same 10-char
-    /// team ID, because the iOS public SDK doesn't expose the SecTask
-    /// family:
-    ///
-    /// - **macOS**: read the `application-identifier` entitlement via
-    ///   `SecTaskCopyValueForEntitlement`. Entitlement format is
-    ///   `<TEAM_ID>.<BUNDLE_ID>`; split on the first dot.
-    ///
-    /// - **iOS**: parse `embedded.mobileprovision` from the app bundle.
-    ///   Provisioning profiles are PKCS#7-wrapped plists — the plist bytes
-    ///   are plain-text inside the CMS envelope, so we locate the
-    ///   `<?xml>…</plist>` span and deserialize. The profile declares
-    ///   `TeamIdentifier` (array of one entry, the team ID) and
-    ///   `ApplicationIdentifierPrefix` (same value) — we use the former.
-    ///
-    ///   Simulator and unsigned builds don't ship a provisioning profile,
-    ///   so this returns nil and `checkDomainAssociation` reports
-    ///   `.skipped`.
-    ///
-    /// Returns nil when auto-detection fails; the caller then falls back
-    /// to the `teamId` constructor argument, or reports `.skipped` if
-    /// neither source yields an ID.
-    /// Cached at first read. The team ID is stable for the lifetime
-    /// of the installed binary and detection is non-trivial
-    /// (provisioning-profile parse on iOS, entitlement copy on macOS).
-    private static let cachedTeamId: String? = {
-        #if os(macOS)
-        return detectTeamIdFromSecTask()
-        #elseif os(iOS)
-        return detectTeamIdFromProvisioningProfile()
-        #else
-        return nil
-        #endif
-    }()
+    // Team-ID detection lives in `PasskeyAssertionCore`'s
+    // `PasskeyTeamIdDetector` so Flutter / RN plugins can use the same
+    // logic. `checkDomainAssociation` above delegates to the core which
+    // calls into the detector when no explicit team ID is supplied.
 
-    private static func detectTeamId() -> String? {
-        return cachedTeamId
-    }
+    // MARK: - PasskeyAssertionError -> PrfProviderError mapping
 
-    #if os(macOS)
-    private static func detectTeamIdFromSecTask() -> String? {
-        guard let task = SecTaskCreateFromSelf(nil) else { return nil }
-        let key = "application-identifier" as CFString
-        var error: Unmanaged<CFError>?
-        guard let value = SecTaskCopyValueForEntitlement(task, key, &error)
-                as? String
-        else { return nil }
-        return parseTeamIdFromApplicationIdentifier(value)
-    }
-    #endif
-
-    #if os(iOS)
-    private static func detectTeamIdFromProvisioningProfile() -> String? {
-        // Release / ad-hoc / TestFlight / Enterprise builds all embed
-        // `embedded.mobileprovision` at the bundle root. App Store builds
-        // also ship it. Simulator + unsigned builds do not.
-        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
-              let data = try? Data(contentsOf: url)
-        else { return nil }
-        // The PKCS#7 CMS envelope around the signed plist contains binary
-        // DER bytes with values > 127. `.ascii` encoding rejects those and
-        // returns nil for the whole string. `.isoLatin1` maps every byte
-        // 0..255 to the corresponding Unicode code point 1:1 — it never
-        // fails, and our ASCII sentinels (`<?xml`, `</plist>`) still match
-        // identically because ASCII is a strict subset of Latin-1. We only
-        // use the string to LOCATE the plist span; actual plist parsing
-        // uses the raw Data slice (not the Latin-1 view) so non-ASCII
-        // byte corruption in other regions doesn't matter.
-        guard let raw = String(data: data, encoding: .isoLatin1),
-              let startRange = raw.range(of: "<?xml"),
-              let endRange = raw.range(of: "</plist>")
-        else { return nil }
-        // Convert character offsets back to byte offsets. Latin-1 is a 1:1
-        // byte-to-codepoint map so the distance in characters equals the
-        // distance in bytes, but Swift's String/Data bridging is safer
-        // when we compute via utf16 offsets (Latin-1 codepoints are all
-        // single-utf16-unit) and then read the corresponding Data slice.
-        let startByteOffset = raw.utf16.distance(
-            from: raw.utf16.startIndex,
-            to: startRange.lowerBound.samePosition(in: raw.utf16) ?? raw.utf16.startIndex
-        )
-        let endByteOffset = raw.utf16.distance(
-            from: raw.utf16.startIndex,
-            to: endRange.upperBound.samePosition(in: raw.utf16) ?? raw.utf16.endIndex
-        )
-        guard startByteOffset < endByteOffset,
-              endByteOffset <= data.count
-        else { return nil }
-        let plistData = data.subdata(in: startByteOffset..<endByteOffset)
-        guard let plist = try? PropertyListSerialization.propertyList(
-            from: plistData, format: nil
-        ) as? [String: Any]
-        else { return nil }
-        // `TeamIdentifier` is an array of 10-char team IDs; first entry
-        // is what we want. Defensive fallback to
-        // `ApplicationIdentifierPrefix` which holds the same value.
-        if let team = (plist["TeamIdentifier"] as? [String])?.first {
-            return validateTeamId(team)
-        }
-        if let prefix = (plist["ApplicationIdentifierPrefix"] as? [String])?.first {
-            return validateTeamId(prefix)
-        }
-        return nil
-    }
-    #endif
-
-    private static func parseTeamIdFromApplicationIdentifier(_ value: String) -> String? {
-        // `application-identifier` entitlement looks like
-        // "F7R2LZH3W5.technology.breez.glow" — split on the first "."
-        // to extract the team prefix.
-        guard let firstDot = value.firstIndex(of: ".") else { return nil }
-        return validateTeamId(String(value[..<firstDot]))
-    }
-
-    private static func validateTeamId(_ candidate: String) -> String? {
-        // Apple Team IDs are 10-character alphanumeric identifiers.
-        // Defensive guard against malformed entitlements / profiles.
-        guard candidate.count == 10,
-              candidate.allSatisfy({ $0.isLetter || $0.isNumber })
-        else { return nil }
-        return candidate
-    }
-
-    // MARK: - Private
-
-    /// Build an assertion request with rpId, challenge, allow-credentials,
-    /// and the caller-supplied PRF setup. Shared by single- and dual-salt.
-    private func makeAssertionRequest(
-        configurePrf: (ASAuthorizationPlatformPublicKeyCredentialAssertionRequest) -> Void
-    ) -> ASAuthorizationPlatformPublicKeyCredentialAssertionRequest {
-        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
-        let request = provider.createCredentialAssertionRequest(challenge: randomBytes(count: 32))
-        if !allowCredentialIds.isEmpty {
-            request.allowedCredentials = allowCredentialIds.map {
-                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
-            }
-        }
-        configurePrf(request)
-        return request
-    }
-
-    private func performAssertionWithPrf(saltData: Data) async throws -> Data {
-        // PRF types are NS_REFINED_FOR_SWIFT with no accessible Swift
-        // initializers; the ObjC helper sets them via runtime KVC.
-        let request = makeAssertionRequest { req in
-            PasskeyPRFHelper.setAssertionPRFOn(req, withSalt: saltData)
-        }
-
-        let delegate = AuthorizationDelegate()
-        let controller = ASAuthorizationController(authorizationRequests: [request])
-        controller.delegate = delegate
-        controller.presentationContextProvider = delegate
-        delegate.anchor = anchor.presentationAnchor()
-        delegate.onAssertionCredentialId = { [weak self] id in
-            self?.onAssertionCredentialId?(id)
-        }
-
-        return try await withCheckedThrowingContinuation { continuation in
-            delegate.continuation = continuation
-            delegate.extractPrf = true
-            performAssertionRequest(controller)
-        }
-    }
-
-    private func performDualSaltAssertionInner(salt1Data: Data, salt2Data: Data) async throws -> (Data, Data?) {
-        let request = makeAssertionRequest { req in
-            PasskeyPRFHelper.setAssertionPRFOn(req, withSalt1: salt1Data, salt2: salt2Data)
-        }
-
-        let delegate = DualSaltAuthorizationDelegate()
-        let controller = ASAuthorizationController(authorizationRequests: [request])
-        controller.delegate = delegate
-        controller.presentationContextProvider = delegate
-        delegate.anchor = anchor.presentationAnchor()
-        delegate.onAssertionCredentialId = { [weak self] id in
-            self?.onAssertionCredentialId?(id)
-        }
-
-        return try await withCheckedThrowingContinuation { continuation in
-            delegate.continuation = continuation
-            performAssertionRequest(controller)
-        }
-    }
-
-    /// Wraps `controller.performRequests` for assertion paths and
-    /// suppresses the OS's hybrid (cross-device QR) sign-in option.
-    /// Wallet-style integrators target only local credentials, so a
-    /// fast `.canceled` failure is preferable to a confusing QR sheet
-    /// when no passkey is on the device.
-    private func performAssertionRequest(_ controller: ASAuthorizationController) {
-        if #available(iOS 16.0, macOS 13.0, *) {
-            controller.performRequests(options: .preferImmediatelyAvailableCredentials)
-        } else {
-            controller.performRequests()
-        }
-    }
-
-    private func registerCredential(request: CreatePasskeyRequest = CreatePasskeyRequest()) async throws -> RegisteredCredential {
-        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
-        let challenge = randomBytes(count: 32)
-        let resolvedUserId = request.userId ?? randomBytes(count: 16)
-        let resolvedUserName = request.userName ?? userName
-        let registrationRequest = provider.createCredentialRegistrationRequest(
-            challenge: challenge,
-            name: resolvedUserName,
-            userID: resolvedUserId
-        )
-
-        if !request.excludeCredentialIds.isEmpty {
-            registrationRequest.excludedCredentials = request.excludeCredentialIds.map {
-                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
-            }
-        }
-
-        // Request PRF support during registration via ObjC helper
-        PasskeyPRFHelper.setRegistrationPRFOn(registrationRequest)
-
-        let delegate = AuthorizationDelegate()
-        let controller = ASAuthorizationController(authorizationRequests: [registrationRequest])
-        controller.delegate = delegate
-        controller.presentationContextProvider = delegate
-        delegate.anchor = anchor.presentationAnchor()
-
-        return try await withCheckedThrowingContinuation { continuation in
-            delegate.registrationContinuation = continuation
-            delegate.extractPrf = false
-            controller.performRequests()
-        }
-    }
-
-    private func randomBytes(count: Int) -> Data {
-        var bytes = [UInt8](repeating: 0, count: count)
-        _ = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
-        return Data(bytes)
-    }
-}
-
-// MARK: - Registered credential metadata
-
-/// Extract AAGUID + BE flag from the attestation object's authenticator
-/// data via byte-pattern search for the "authData" CBOR key. Returns nil
-/// when the pattern isn't found or the byte string is too short.
-///
-/// authData layout when AT flag is set (always on a successful create):
-///   [32]      flags (UP=0, UV=2, BE=3, BS=4, AT=6)
-///   [37..53)  AAGUID (16 bytes)
-@available(iOS 18.0, macOS 15.0, *)
-internal func extractRegistrationMetadata(from attestation: Data) -> (aaguid: Data, backupEligible: Bool)? {
-    let bytes = [UInt8](attestation)
-    // CBOR text key "authData": 0x68 = major type 3 (text) + length 8.
-    let key: [UInt8] = [0x68, 0x61, 0x75, 0x74, 0x68, 0x44, 0x61, 0x74, 0x61]
-    guard bytes.count >= key.count else { return nil }
-    var keyEnd = -1
-    for i in 0...(bytes.count - key.count) {
-        var match = true
-        for j in 0..<key.count where bytes[i + j] != key[j] {
-            match = false
-            break
-        }
-        if match { keyEnd = i + key.count; break }
-    }
-    guard keyEnd >= 0 && keyEnd < bytes.count else { return nil }
-
-    // Parse CBOR byte string (major type 2) at keyEnd.
-    let header = bytes[keyEnd]
-    guard header >> 5 == 2 else { return nil }
-    let minor = Int(header & 0x1f)
-    let length: Int
-    let dataStart: Int
-    switch minor {
-    case 0..<24:
-        length = minor
-        dataStart = keyEnd + 1
-    case 24:
-        guard keyEnd + 1 < bytes.count else { return nil }
-        length = Int(bytes[keyEnd + 1])
-        dataStart = keyEnd + 2
-    case 25:
-        guard keyEnd + 2 < bytes.count else { return nil }
-        length = (Int(bytes[keyEnd + 1]) << 8) | Int(bytes[keyEnd + 2])
-        dataStart = keyEnd + 3
-    case 26:
-        guard keyEnd + 4 < bytes.count else { return nil }
-        length = (Int(bytes[keyEnd + 1]) << 24) | (Int(bytes[keyEnd + 2]) << 16)
-            | (Int(bytes[keyEnd + 3]) << 8) | Int(bytes[keyEnd + 4])
-        dataStart = keyEnd + 5
-    default:
-        return nil
-    }
-    guard dataStart + length <= bytes.count, length >= 53 else { return nil }
-    let flags = bytes[dataStart + 32]
-    guard flags & 0x40 != 0 else { return nil }
-    let backupEligible = flags & 0x08 != 0
-    let aaguid = Data(bytes[(dataStart + 37)..<(dataStart + 53)])
-    return (aaguid: aaguid, backupEligible: backupEligible)
-}
-
-// MARK: - Authorization Delegate
-
-@available(iOS 18.0, macOS 15.0, *)
-private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate,
-    ASAuthorizationControllerPresentationContextProviding
-{
-    var continuation: CheckedContinuation<Data, Error>?
-    var registrationContinuation: CheckedContinuation<RegisteredCredential, Error>?
-    var anchor: ASPresentationAnchor = ASPresentationAnchor()
-    var extractPrf = true
-    /// Invoked with the credential ID from a successful assertion. Set
-    /// by PasskeyProvider so hosts can record which credential was used
-    /// on a sign-in. No-op on registration (the credential ID flows out
-    /// via the registrationContinuation).
-    var onAssertionCredentialId: ((Data) -> Void)?
-
-    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        return anchor
-    }
-
-    func authorizationController(
-        controller: ASAuthorizationController,
-        didCompleteWithAuthorization authorization: ASAuthorization
-    ) {
-        if extractPrf {
-            guard let credential = authorization.credential
-                as? ASAuthorizationPlatformPublicKeyCredentialAssertion
-            else {
-                continuation?.resume(
-                    throwing: PrfProviderError.AuthenticationFailed(
-                        "Unexpected credential type"))
-                return
-            }
-
-            guard let prfData = PasskeyPRFHelper.extractPRFOutput(from: credential) else {
-                continuation?.resume(throwing: PrfProviderError.PrfNotSupported)
-                return
-            }
-
-            // Surface the credential ID before resolving so hosts can
-            // record it. Failures here are best-effort and must not
-            // block the seed return.
-            onAssertionCredentialId?(credential.credentialID)
-
-            continuation?.resume(returning: prfData)
-        } else {
-            guard let credential = authorization.credential
-                as? ASAuthorizationPlatformPublicKeyCredentialRegistration
-            else {
-                registrationContinuation?.resume(
-                    throwing: PrfProviderError.AuthenticationFailed("Unexpected credential type"))
-                return
-            }
-            var aaguid: Data? = nil
-            var backupEligible: Bool? = nil
-            if let attestation = credential.rawAttestationObject,
-               let meta = extractRegistrationMetadata(from: attestation)
-            {
-                aaguid = meta.aaguid
-                backupEligible = meta.backupEligible
-            }
-            registrationContinuation?.resume(
-                returning: RegisteredCredential(
-                    credentialId: credential.credentialID,
-                    aaguid: aaguid,
-                    backupEligible: backupEligible
-                ))
-        }
-    }
-
-    func authorizationController(
-        controller: ASAuthorizationController, didCompleteWithError error: Error
-    ) {
-        let mapped = mapASAuthorizationError(error)
-        continuation?.resume(throwing: mapped)
-        registrationContinuation?.resume(throwing: mapped)
-    }
-}
-
-/// Map an `ASAuthorizationError` to our typed PRF error.
-///
-/// `.canceled` covers both user-dismissed and no-credential because
-/// `preferImmediatelyAvailableCredentials` collapses them and Apple
-/// exposes no in-process signal to disambiguate. Hosts that need the
-/// distinction can wall-clock the call: fast-fail < 200ms vs a
-/// dismissed sheet that takes seconds.
-@available(iOS 18.0, macOS 15.0, *)
-private func mapASAuthorizationError(_ error: Error) -> PrfProviderError {
-    let nsError = error as NSError
-    if nsError.domain == ASAuthorizationError.errorDomain {
-        switch ASAuthorizationError.Code(rawValue: nsError.code) {
-        case .canceled:
+    private static func toPrfProviderError(_ err: PasskeyAssertionError) -> PrfProviderError {
+        switch err {
+        case .userCancelled:
             return .UserCancelled
-        case .unknown:
-            if nsError.localizedDescription.contains("no credential")
-                || nsError.localizedDescription.contains("No credentials")
-            {
-                return .CredentialNotFound
-            }
-            return .AuthenticationFailed(nsError.localizedDescription)
-        case .invalidResponse:
-            return .PrfEvaluationFailed(nsError.localizedDescription)
-        case .notHandled:
+        case .credentialNotFound:
             return .CredentialNotFound
-        case .failed:
-            return .AuthenticationFailed(nsError.localizedDescription)
-        case .notInteractive:
-            return .AuthenticationFailed("User interaction required")
-        case .matchedExcludedCredential:
-            return .CredentialAlreadyExists("Credential already registered")
-        default:
-            return .Generic(nsError.localizedDescription)
+        case .credentialAlreadyExists(let msg):
+            return .CredentialAlreadyExists(msg)
+        case .prfNotSupported:
+            return .PrfNotSupported
+        case .prfEvaluationFailed(let msg):
+            return .PrfEvaluationFailed(msg)
+        case .configuration(let msg):
+            return .Configuration(msg)
+        case .authenticationFailed(let msg):
+            return .AuthenticationFailed(msg)
+        case .generic(let msg):
+            return .Generic(msg)
         }
-    }
-    return .Generic(error.localizedDescription)
-}
-
-// MARK: - Dual-Salt Authorization Delegate
-
-@available(iOS 18.0, macOS 15.0, *)
-private class DualSaltAuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate,
-    ASAuthorizationControllerPresentationContextProviding
-{
-    var continuation: CheckedContinuation<(Data, Data?), Error>?
-    var anchor: ASPresentationAnchor = ASPresentationAnchor()
-    /// Invoked with the credential ID extracted from a successful
-    /// dual-salt assertion before the continuation resolves. Same
-    /// semantics as the single-salt path.
-    var onAssertionCredentialId: ((Data) -> Void)?
-
-    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        return anchor
-    }
-
-    func authorizationController(
-        controller: ASAuthorizationController,
-        didCompleteWithAuthorization authorization: ASAuthorization
-    ) {
-        guard let credential = authorization.credential
-            as? ASAuthorizationPlatformPublicKeyCredentialAssertion
-        else {
-            continuation?.resume(
-                throwing: PrfProviderError.AuthenticationFailed(
-                    "Unexpected credential type"))
-            return
-        }
-
-        guard let prfFirst = PasskeyPRFHelper.extractPRFOutput(from: credential) else {
-            // Authenticator doesn't support the PRF extension at all.
-            continuation?.resume(throwing: PrfProviderError.PrfNotSupported)
-            return
-        }
-
-        onAssertionCredentialId?(credential.credentialID)
-
-        // `saltInput2` may be dropped by older iOS / third-party providers;
-        // caller falls back to single-salt for that one.
-        let prfSecond = PasskeyPRFHelper.extractSecondPRFOutput(from: credential)
-        continuation?.resume(returning: (prfFirst, prfSecond))
-    }
-
-    func authorizationController(
-        controller: ASAuthorizationController, didCompleteWithError error: Error
-    ) {
-        continuation?.resume(throwing: mapASAuthorizationError(error))
     }
 }
 

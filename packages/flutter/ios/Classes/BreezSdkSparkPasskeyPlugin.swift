@@ -4,10 +4,14 @@ import UIKit
 
 /// Flutter plugin for passkey PRF operations on iOS.
 ///
-/// Uses `ASAuthorizationPlatformPublicKeyCredentialProvider` with the PRF extension.
-/// Auto-registers a new credential on first use if none exists.
+/// Thin MethodChannel bridge over the shared `PasskeyAssertionCore`.
+/// Behavioral parity with the upstream Swift `PasskeyProvider` and the
+/// React Native module is enforced by routing all ASAuthorizationController
+/// orchestration through the same canonical core.
 @available(iOS 18.0, *)
 public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
+
+    private let core = PasskeyAssertionCore()
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(
@@ -20,352 +24,181 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
-        case "derivePrfSeed":
-            guard let args = call.arguments as? [String: Any],
-                  let salt = args["salt"] as? String,
-                  let rpId = args["rpId"] as? String,
-                  let rpName = args["rpName"] as? String,
-                  let userName = args["userName"] as? String,
-                  let userDisplayName = args["userDisplayName"] as? String
-            else {
-                result(FlutterError(code: "ERR_PASSKEY", message: "Invalid arguments", details: nil))
-                return
-            }
-
-            let autoRegister = (args["autoRegister"] as? Bool) ?? false
-
-            guard let saltData = salt.data(using: .utf8) else {
-                result(FlutterError(code: "ERR_PASSKEY", message: "Failed to encode salt as UTF-8", details: nil))
-                return
-            }
-
-            Task { @MainActor in
-                do {
-                    let prfOutput = try await performDerivation(
-                        saltData: saltData, rpId: rpId, rpName: rpName,
-                        userName: userName, userDisplayName: userDisplayName,
-                        autoRegister: autoRegister
-                    )
-                    result(prfOutput.base64EncodedString())
-                } catch PasskeyError.userCancelled {
-                    result(FlutterError(code: "ERR_USER_CANCELLED", message: "User cancelled authentication", details: nil))
-                } catch PasskeyError.prfNotSupported {
-                    result(FlutterError(code: "ERR_PRF_NOT_SUPPORTED", message: "PRF not supported by authenticator", details: nil))
-                } catch PasskeyError.configuration(let msg) {
-                    result(FlutterError(code: "ERR_CONFIGURATION", message: msg, details: nil))
-                } catch {
-                    result(FlutterError(code: "ERR_PASSKEY", message: error.localizedDescription, details: nil))
-                }
-            }
-
         case "createPasskey":
-            guard let args = call.arguments as? [String: Any],
-                  let rpId = args["rpId"] as? String,
-                  let rpName = args["rpName"] as? String,
-                  let userName = args["userName"] as? String,
-                  let userDisplayName = args["userDisplayName"] as? String
-            else {
-                result(FlutterError(code: "ERR_PASSKEY", message: "Invalid arguments", details: nil))
-                return
-            }
-
-            var excludeCredentialIds: [Data] = []
-            if let rawIds = args["excludeCredentialIds"] as? [FlutterStandardTypedData] {
-                excludeCredentialIds = rawIds.map { $0.data }
-            } else if let base64Ids = args["excludeCredentialIds"] as? [String] {
-                excludeCredentialIds = base64Ids.compactMap { Data(base64Encoded: $0) }
-            }
-
-            Task { @MainActor in
-                do {
-                    let registered = try await registerCredential(
-                        rpId: rpId, rpName: rpName,
-                        userName: userName, userDisplayName: userDisplayName,
-                        excludeCredentialIds: excludeCredentialIds
-                    )
-                    result([
-                        "credentialId": registered.credentialId.base64EncodedString(),
-                        "aaguid": registered.aaguid?.base64EncodedString() as Any?,
-                        "backupEligible": registered.backupEligible as Any?,
-                    ])
-                } catch PasskeyError.userCancelled {
-                    result(FlutterError(code: "ERR_USER_CANCELLED", message: "User cancelled registration", details: nil))
-                } catch PasskeyError.prfNotSupported {
-                    result(FlutterError(code: "ERR_PRF_NOT_SUPPORTED", message: "PRF not supported by authenticator", details: nil))
-                } catch PasskeyError.configuration(let msg) {
-                    result(FlutterError(code: "ERR_CONFIGURATION", message: msg, details: nil))
-                } catch {
-                    result(FlutterError(code: "ERR_PASSKEY", message: error.localizedDescription, details: nil))
-                }
-            }
-
-        case "isPrfAvailable":
+            handleCreatePasskey(call: call, result: result)
+        case "deriveSeeds":
+            handleDeriveSeeds(call: call, result: result)
+        case "isSupported":
             if #available(iOS 18.0, *) {
                 result(true)
             } else {
                 result(false)
             }
-
+        case "checkDomainAssociation":
+            handleCheckDomainAssociation(call: call, result: result)
         default:
             result(FlutterMethodNotImplemented)
         }
     }
 
-    // MARK: - Private
+    // MARK: - Method handlers
 
-    private func performDerivation(
-        saltData: Data, rpId: String, rpName: String,
-        userName: String, userDisplayName: String,
-        autoRegister: Bool
-    ) async throws -> Data {
-        do {
-            return try await assertionWithPrf(saltData: saltData, rpId: rpId)
-        } catch PasskeyError.credentialNotFound {
-            guard autoRegister else { throw PasskeyError.credentialNotFound }
+    private func handleCreatePasskey(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let rpId = args["rpId"] as? String,
+              let rpName = args["rpName"] as? String,
+              let userName = args["userName"] as? String,
+              let userDisplayName = args["userDisplayName"] as? String
+        else {
+            result(FlutterError(code: "ERR_PASSKEY", message: "Invalid arguments", details: nil))
+            return
+        }
 
+        var excludeCredentialIds: [Data] = []
+        if let rawIds = args["excludeCredentialIds"] as? [FlutterStandardTypedData] {
+            excludeCredentialIds = rawIds.map { $0.data }
+        } else if let base64Ids = args["excludeCredentialIds"] as? [String] {
+            excludeCredentialIds = base64Ids.compactMap { Data(base64Encoded: $0) }
+        }
+
+        var userIdOverride: Data? = nil
+        if let typed = args["userId"] as? FlutterStandardTypedData {
+            userIdOverride = typed.data
+        } else if let base64UserId = args["userId"] as? String,
+                  let decoded = Data(base64Encoded: base64UserId) {
+            userIdOverride = decoded
+        }
+
+        Task { @MainActor in
             do {
-                _ = try await registerCredential(
-                    rpId: rpId, rpName: rpName,
-                    userName: userName, userDisplayName: userDisplayName
+                let registered = try await core.createPasskey(
+                    rpId: rpId,
+                    rpName: rpName,
+                    userName: userName,
+                    userDisplayName: userDisplayName,
+                    excludeCredentialIds: excludeCredentialIds,
+                    userId: userIdOverride
                 )
-            } catch PasskeyError.credentialNotFound {
-                // Registration also got notHandled: the entitlement or
-                // domain association is misconfigured, not a missing credential.
-                throw PasskeyError.configuration(
-                    "Associated Domains entitlement not configured. "
-                    + "Add 'webcredentials:\(rpId)' to your app's entitlements "
-                    + "and ensure a valid provisioning profile."
+                result([
+                    "credentialId": registered.credentialId.base64EncodedString(),
+                    "aaguid": registered.aaguid?.base64EncodedString() as Any?,
+                    "backupEligible": registered.backupEligible as Any?,
+                ])
+            } catch let err as PasskeyAssertionError {
+                result(Self.flutterError(from: err))
+            } catch {
+                result(FlutterError(code: "ERR_PASSKEY", message: error.localizedDescription, details: nil))
+            }
+        }
+    }
+
+    private func handleDeriveSeeds(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let salts = args["salts"] as? [String],
+              let rpId = args["rpId"] as? String,
+              let rpName = args["rpName"] as? String,
+              let userName = args["userName"] as? String,
+              let userDisplayName = args["userDisplayName"] as? String
+        else {
+            result(FlutterError(code: "ERR_PASSKEY", message: "Invalid arguments", details: nil))
+            return
+        }
+
+        let autoRegister = (args["autoRegister"] as? Bool) ?? false
+
+        // Encode salts as UTF-8 bytes; the OS uses these directly as
+        // PRF eval inputs (saltInput1, saltInput2).
+        let saltDatas: [Data] = salts.compactMap { $0.data(using: .utf8) }
+        guard saltDatas.count == salts.count else {
+            result(FlutterError(code: "ERR_PASSKEY", message: "Failed to encode salts as UTF-8", details: nil))
+            return
+        }
+
+        var allowCredentialIds: [Data] = []
+        if let base64Ids = args["allowCredentialIds"] as? [String] {
+            allowCredentialIds = base64Ids.compactMap { Data(base64Encoded: $0) }
+        } else if let rawIds = args["allowCredentialIds"] as? [FlutterStandardTypedData] {
+            allowCredentialIds = rawIds.map { $0.data }
+        }
+
+        Task { @MainActor in
+            do {
+                let seeds = try await core.performBulkDerivation(
+                    salts: saltDatas,
+                    rpId: rpId,
+                    rpName: rpName,
+                    userName: userName,
+                    userDisplayName: userDisplayName,
+                    autoRegister: autoRegister,
+                    explicitAllowCredentialIds: allowCredentialIds
                 )
-            }
-            return try await assertionWithPrf(saltData: saltData, rpId: rpId)
-        }
-    }
-
-    private func assertionWithPrf(saltData: Data, rpId: String) async throws -> Data {
-        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
-        let challenge = randomBytes(count: 32)
-        let request = provider.createCredentialAssertionRequest(challenge: challenge)
-
-        PasskeyPRFHelper.setAssertionPRFOn(request, withSalt: saltData)
-
-        let delegate = PasskeyDelegate()
-        let controller = ASAuthorizationController(authorizationRequests: [request])
-        controller.delegate = delegate
-        controller.presentationContextProvider = delegate
-
-        return try await withCheckedThrowingContinuation { continuation in
-            delegate.continuation = continuation
-            delegate.extractPrf = true
-            DispatchQueue.main.async {
-                controller.performRequests()
+                result(seeds.map { $0.base64EncodedString() })
+            } catch let err as PasskeyAssertionError {
+                result(Self.flutterError(from: err))
+            } catch {
+                result(FlutterError(code: "ERR_PASSKEY", message: error.localizedDescription, details: nil))
             }
         }
     }
 
-    @discardableResult
-    private func registerCredential(
-        rpId: String, rpName: String,
-        userName: String, userDisplayName: String,
-        excludeCredentialIds: [Data] = []
-    ) async throws -> RegisteredCredential {
-        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
-        let challenge = randomBytes(count: 32)
-        let userId = randomBytes(count: 16)
-        let request = provider.createCredentialRegistrationRequest(
-            challenge: challenge,
-            name: userName,
-            userID: userId
-        )
-
-        // Auto-merge previously-registered credential IDs from the
-        // iCloud-synced KnownCredentialsStore so the platform refuses
-        // to create a duplicate even after a reinstall.
-        var allExclusions = excludeCredentialIds
-        var seen = Set(excludeCredentialIds)
-        for known in KnownCredentialsStore.read(rpId: rpId).compactMap({ Data(base64Encoded: $0) }) {
-            if seen.insert(known).inserted {
-                allExclusions.append(known)
-            }
+    private func handleCheckDomainAssociation(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let args = call.arguments as? [String: Any],
+              let rpId = args["rpId"] as? String
+        else {
+            result(FlutterError(code: "ERR_PASSKEY", message: "Invalid arguments", details: nil))
+            return
         }
-        if !allExclusions.isEmpty {
-            request.excludedCredentials = allExclusions.map {
-                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
-            }
-        }
+        // Optional explicit team ID — most callers leave it nil and let
+        // the canonical core auto-detect from the running app's
+        // signing info. Useful for unit tests / sandboxed contexts
+        // where SecTask / provisioning-profile lookup doesn't work.
+        let explicitTeamId = args["teamId"] as? String
 
-        PasskeyPRFHelper.setRegistrationPRFOn(request)
-
-        let delegate = PasskeyDelegate()
-        let controller = ASAuthorizationController(authorizationRequests: [request])
-        controller.delegate = delegate
-        controller.presentationContextProvider = delegate
-
-        let credential: RegisteredCredential = try await withCheckedThrowingContinuation { continuation in
-            delegate.registrationContinuation = continuation
-            delegate.extractPrf = false
-            DispatchQueue.main.async {
-                controller.performRequests()
-            }
-        }
-
-        // Record the new credential so subsequent registrations on
-        // this device (or a reinstall) auto-exclude it.
-        KnownCredentialsStore.add(
-            credentialId: credential.credentialId.base64EncodedString(),
-            rpId: rpId
-        )
-        return credential
-    }
-
-    private func randomBytes(count: Int) -> Data {
-        var bytes = [UInt8](repeating: 0, count: count)
-        _ = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
-        return Data(bytes)
-    }
-}
-
-// MARK: - Registered credential metadata
-
-fileprivate struct RegisteredCredential {
-    let credentialId: Data
-    let aaguid: Data?
-    let backupEligible: Bool?
-}
-
-/// Extract AAGUID + BE flag from the attestation object's authenticator
-/// data via byte-pattern search for the "authData" CBOR key.
-fileprivate func extractRegistrationMetadata(from attestation: Data) -> (aaguid: Data, backupEligible: Bool)? {
-    let bytes = [UInt8](attestation)
-    let key: [UInt8] = [0x68, 0x61, 0x75, 0x74, 0x68, 0x44, 0x61, 0x74, 0x61]
-    guard bytes.count >= key.count else { return nil }
-    var keyEnd = -1
-    for i in 0...(bytes.count - key.count) {
-        var match = true
-        for j in 0..<key.count where bytes[i + j] != key[j] {
-            match = false
-            break
-        }
-        if match { keyEnd = i + key.count; break }
-    }
-    guard keyEnd >= 0 && keyEnd < bytes.count else { return nil }
-    let header = bytes[keyEnd]
-    guard header >> 5 == 2 else { return nil }
-    let minor = Int(header & 0x1f)
-    let length: Int
-    let dataStart: Int
-    switch minor {
-    case 0..<24: length = minor; dataStart = keyEnd + 1
-    case 24:
-        guard keyEnd + 1 < bytes.count else { return nil }
-        length = Int(bytes[keyEnd + 1]); dataStart = keyEnd + 2
-    case 25:
-        guard keyEnd + 2 < bytes.count else { return nil }
-        length = (Int(bytes[keyEnd + 1]) << 8) | Int(bytes[keyEnd + 2])
-        dataStart = keyEnd + 3
-    case 26:
-        guard keyEnd + 4 < bytes.count else { return nil }
-        length = (Int(bytes[keyEnd + 1]) << 24) | (Int(bytes[keyEnd + 2]) << 16)
-            | (Int(bytes[keyEnd + 3]) << 8) | Int(bytes[keyEnd + 4])
-        dataStart = keyEnd + 5
-    default: return nil
-    }
-    guard dataStart + length <= bytes.count, length >= 53 else { return nil }
-    let flags = bytes[dataStart + 32]
-    guard flags & 0x40 != 0 else { return nil }
-    let backupEligible = flags & 0x08 != 0
-    let aaguid = Data(bytes[(dataStart + 37)..<(dataStart + 53)])
-    return (aaguid: aaguid, backupEligible: backupEligible)
-}
-
-// MARK: - Passkey Delegate
-
-@available(iOS 18.0, *)
-private class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate,
-    ASAuthorizationControllerPresentationContextProviding
-{
-    var continuation: CheckedContinuation<Data, Error>?
-    var registrationContinuation: CheckedContinuation<RegisteredCredential, Error>?
-    var extractPrf = true
-
-    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        if let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive }),
-            let window = scene.windows.first(where: { $0.isKeyWindow }) {
-            return window
-        }
-        return ASPresentationAnchor()
-    }
-
-    func authorizationController(
-        controller: ASAuthorizationController,
-        didCompleteWithAuthorization authorization: ASAuthorization
-    ) {
-        if extractPrf {
-            guard let credential = authorization.credential
-                as? ASAuthorizationPlatformPublicKeyCredentialAssertion
-            else {
-                continuation?.resume(throwing: PasskeyError.authenticationFailed("Unexpected credential type"))
-                return
-            }
-
-            guard let prfData = PasskeyPRFHelper.extractPRFOutput(from: credential) else {
-                continuation?.resume(throwing: PasskeyError.prfNotSupported)
-                return
-            }
-
-            continuation?.resume(returning: prfData)
-        } else {
-            guard let credential = authorization.credential
-                as? ASAuthorizationPlatformPublicKeyCredentialRegistration
-            else {
-                registrationContinuation?.resume(
-                    throwing: PasskeyError.authenticationFailed("Unexpected credential type"))
-                return
-            }
-            var aaguid: Data? = nil
-            var backupEligible: Bool? = nil
-            if let attestation = credential.rawAttestationObject,
-               let meta = extractRegistrationMetadata(from: attestation)
-            {
-                aaguid = meta.aaguid
-                backupEligible = meta.backupEligible
-            }
-            registrationContinuation?.resume(
-                returning: RegisteredCredential(
-                    credentialId: credential.credentialID,
-                    aaguid: aaguid,
-                    backupEligible: backupEligible
-                ))
+        Task { @MainActor in
+            let outcome = await core.checkDomainAssociation(
+                rpId: rpId,
+                explicitTeamId: explicitTeamId
+            )
+            result(Self.serializeDomainAssociation(outcome))
         }
     }
 
-    func authorizationController(
-        controller: ASAuthorizationController,
-        didCompleteWithError error: Error
-    ) {
-        let nsError = error as NSError
-        let mapped: PasskeyError
-        if nsError.domain == ASAuthorizationError.errorDomain {
-            switch ASAuthorizationError.Code(rawValue: nsError.code) {
-            case .canceled: mapped = .userCancelled
-            case .notHandled: mapped = .credentialNotFound
-            default: mapped = .authenticationFailed(nsError.localizedDescription)
-            }
-        } else {
-            mapped = .authenticationFailed(error.localizedDescription)
+    /// Serialize `IosDomainAssociation` into the JSON-shaped map the
+    /// Dart side expects. Mirrors the typed `DomainAssociation`
+    /// sealed class one-to-one.
+    private static func serializeDomainAssociation(
+        _ outcome: IosDomainAssociation
+    ) -> [String: Any] {
+        switch outcome {
+        case .associated:
+            return ["kind": "Associated"]
+        case .notAssociated(let source, let reason):
+            return ["kind": "NotAssociated", "source": source, "reason": reason]
+        case .skipped(let reason):
+            return ["kind": "Skipped", "reason": reason]
         }
-        continuation?.resume(throwing: mapped)
-        registrationContinuation?.resume(throwing: mapped)
     }
-}
 
-// MARK: - Error Types
+    // MARK: - Error mapping
 
-private enum PasskeyError: Error {
-    case userCancelled
-    case credentialNotFound
-    case prfNotSupported
-    case configuration(String)
-    case authenticationFailed(String)
+    private static func flutterError(from err: PasskeyAssertionError) -> FlutterError {
+        switch err {
+        case .userCancelled:
+            return FlutterError(code: "ERR_USER_CANCELLED", message: "User cancelled authentication", details: nil)
+        case .credentialNotFound:
+            return FlutterError(code: "ERR_NO_CREDENTIAL", message: "No matching passkey credential found", details: nil)
+        case .credentialAlreadyExists(let msg):
+            return FlutterError(code: "ERR_CREDENTIAL_ALREADY_EXISTS", message: msg, details: nil)
+        case .prfNotSupported:
+            return FlutterError(code: "ERR_PRF_NOT_SUPPORTED", message: "PRF not supported by authenticator", details: nil)
+        case .prfEvaluationFailed(let msg):
+            return FlutterError(code: "ERR_PRF_NOT_SUPPORTED", message: msg, details: nil)
+        case .configuration(let msg):
+            return FlutterError(code: "ERR_CONFIGURATION", message: msg, details: nil)
+        case .authenticationFailed(let msg):
+            return FlutterError(code: "ERR_PASSKEY", message: msg, details: nil)
+        case .generic(let msg):
+            return FlutterError(code: "ERR_PASSKEY", message: msg, details: nil)
+        }
+    }
 }
