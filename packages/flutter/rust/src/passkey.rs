@@ -2,8 +2,9 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    NostrRelayConfig, PasskeyError, PasskeyPrfError, PrfProvider, SetupWalletRequest, Wallet,
-    WalletSetup,
+    DeriveRequest, DeriveResponse, NostrRelayConfig, PasskeyError, PasskeyPrfError, PrfProvider,
+    RegisterRequest, RegisterResponse, RestoreRequest, RestoreResponse, SetupWalletRequest,
+    Wallet, WalletSetup,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -91,6 +92,76 @@ impl Passkey {
     }
 
     /// Publish a label to Nostr (idempotent). Requires 1 PRF call.
+    pub async fn store_label(&self, label: String) -> Result<(), PasskeyError> {
+        self.inner.store_label(label).await
+    }
+
+    /// True if the device supports passkey PRF.
+    pub async fn is_available(&self) -> Result<bool, PasskeyError> {
+        self.inner.is_available().await
+    }
+}
+
+/// High-level orchestrator. See the [`breez_sdk_spark::passkey::PasskeyClient`]
+/// docs for the register / restore / derive semantics.
+///
+/// Currently `register` will fail with
+/// [`PasskeyPrfError::PrfNotSupported`] on Flutter because the Dart-side
+/// `PrfProvider` callbacks don't yet expose `createPasskey` (blocked on
+/// flutter_rust_bridge supporting `Option<impl Fn(...) -> DartFnFuture<...>>`
+/// trait callbacks). `derive` and `restore` use only `derivePrfSeed` and
+/// work today.
+#[derive(Clone)]
+#[frb(opaque)]
+pub struct PasskeyClient {
+    pub(crate) inner: breez_sdk_spark::passkey::PasskeyClient,
+}
+
+impl PasskeyClient {
+    /// Construct using Dart callbacks for the underlying `PrfProvider`.
+    #[frb(sync)]
+    pub fn new(
+        derive_prf_seed: impl Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
+        is_prf_available: impl Fn() -> DartFnFuture<bool> + Send + Sync + 'static,
+        relay_config: Option<NostrRelayConfig>,
+    ) -> Self {
+        let provider = Arc::new(CallbackPrfProvider {
+            derive_prf_seed_fn: Arc::new(derive_prf_seed),
+            is_prf_available_fn: Arc::new(is_prf_available),
+        });
+        Self {
+            inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, relay_config),
+        }
+    }
+
+    /// First-time setup. Currently returns `PrfNotSupported` on Flutter.
+    pub async fn register(
+        &self,
+        request: RegisterRequest,
+    ) -> Result<RegisterResponse, PasskeyError> {
+        self.inner.register(request).await
+    }
+
+    /// Speculative cold-restore for returning users without local
+    /// state.
+    pub async fn restore(
+        &self,
+        request: RestoreRequest,
+    ) -> Result<RestoreResponse, PasskeyError> {
+        self.inner.restore(request).await
+    }
+
+    /// Returning user with the correct label cached locally.
+    pub async fn derive(&self, request: DeriveRequest) -> Result<DeriveResponse, PasskeyError> {
+        self.inner.derive(request).await
+    }
+
+    /// List labels published for this passkey's identity.
+    pub async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
+        self.inner.list_labels().await
+    }
+
+    /// Idempotently publish `label`.
     pub async fn store_label(&self, label: String) -> Result<(), PasskeyError> {
         self.inner.store_label(label).await
     }

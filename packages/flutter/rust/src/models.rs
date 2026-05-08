@@ -1314,3 +1314,53 @@ pub struct _WalletSetup {
     pub wallet: Wallet,
     pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
 }
+
+#[frb(mirror(RegisteredCredential))]
+pub struct _RegisteredCredential {
+    pub credential_id: Vec<u8>,
+    pub aaguid: Option<Vec<u8>>,
+    pub backup_eligible: Option<bool>,
+}
+
+#[frb(mirror(RegisterRequest))]
+pub struct _RegisterRequest {
+    pub label: Option<String>,
+    pub extra_salts: Vec<NamedSalt>,
+    pub exclude_credential_ids: Vec<Vec<u8>>,
+    pub user_id: Option<Vec<u8>>,
+    pub user_name: Option<String>,
+    pub user_display_name: Option<String>,
+}
+
+#[frb(mirror(RegisterResponse))]
+pub struct _RegisterResponse {
+    pub wallet: Wallet,
+    pub credential: RegisteredCredential,
+    pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
+}
+
+#[frb(mirror(RestoreRequest))]
+pub struct _RestoreRequest {
+    pub candidate_label: Option<String>,
+    pub extra_salts: Vec<NamedSalt>,
+}
+
+#[frb(mirror(RestoreResponse))]
+pub struct _RestoreResponse {
+    pub wallet: Wallet,
+    pub candidate_matched: bool,
+    pub labels: Vec<String>,
+    pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
+}
+
+#[frb(mirror(DeriveRequest))]
+pub struct _DeriveRequest {
+    pub label: Option<String>,
+    pub extra_salts: Vec<NamedSalt>,
+}
+
+#[frb(mirror(DeriveResponse))]
+pub struct _DeriveResponse {
+    pub wallet: Wallet,
+    pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
+}
