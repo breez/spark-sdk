@@ -1,16 +1,28 @@
 //! User-facing [`SessionManager`] surface for the Breez SDK.
 //!
-//! Integrators implement this trait — typically backed by a shared database —
-//! to let multiple SDK pods share authentication state and bootstrap quickly.
-//! Internally, a [`SessionManagerAdapter`] bridges to the identical-shape
-//! [`spark_wallet::SessionManager`] used by the SSP and SO auth providers.
+//! UniFFI-generated bindings can only export traits defined inside the crate
+//! they're generated from, so we re-declare the trait + supporting types here
+//! and bridge to [`spark_wallet`] via an internal adapter when the SDK is
+//! built. Integrators implement *this* trait — typically backed by a shared
+//! database — to let multiple SDK pods share authentication state.
 
 use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
 use thiserror::Error;
 
+#[cfg(feature = "uniffi")]
+uniffi::custom_type!(PublicKey, String, {
+    remote,
+    try_lift: |val| {
+        use std::str::FromStr;
+        PublicKey::from_str(&val).map_err(uniffi::deps::anyhow::Error::msg)
+    },
+    lower: |obj| obj.to_string(),
+});
+
 #[derive(Debug, Error, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum SessionManagerError {
     #[error("Session not found")]
     NotFound,
@@ -38,6 +50,7 @@ impl From<SessionManagerError> for spark_wallet::SessionManagerError {
 
 /// Cached authentication session for a single backend service identity.
 #[derive(Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Session {
     pub token: String,
     pub expiration: u64,
@@ -65,6 +78,7 @@ impl From<Session> for spark_wallet::Session {
 /// identity public key. Implementations should be thread-safe and may be
 /// backed by an in-memory map (default) or a shared database for cross-pod
 /// auth sharing.
+#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait SessionManager: Send + Sync {
     async fn get_session(
