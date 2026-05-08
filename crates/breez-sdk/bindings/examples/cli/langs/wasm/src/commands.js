@@ -6,6 +6,7 @@ const { printValue } = require('./serialization')
 const { registerIssuerCommands } = require('./issuer')
 const { registerContactsCommands } = require('./contacts')
 const { registerWebhooksCommands } = require('./webhooks')
+const { registerStableBalanceCommands } = require('./stable-balance')
 
 // ---------------------------------------------------------------------------
 // Command names for tab completion
@@ -55,7 +56,10 @@ const COMMAND_NAMES = [
   'contacts list',
   'webhooks register',
   'webhooks unregister',
-  'webhooks list'
+  'webhooks list',
+  'stable-balance get',
+  'stable-balance set',
+  'stable-balance unset'
 ]
 
 /**
@@ -326,9 +330,11 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       // Handle conversion estimate confirmation
       if (prepareResponse.conversionEstimate) {
         const estimate = prepareResponse.conversionEstimate
-        const units = estimate.options && estimate.options.conversionType &&
-          estimate.options.conversionType.type === 'fromBitcoin' ? 'sats' : 'token base units'
-        console.log(`Estimated conversion of ${estimate.amount} ${units} with a ${estimate.fee} ${units} fee`)
+        const [inUnits, outUnits] = estimate.options && estimate.options.conversionType &&
+          estimate.options.conversionType.type === 'fromBitcoin'
+          ? ['sats', 'token base units']
+          : ['token base units', 'sats']
+        console.log(`Estimated conversion from ${estimate.amountIn} ${inUnits} to ${estimate.amountOut} ${outUnits} with a ${estimate.fee} token base units fee`)
         const answer = await questionWithDefault(rl, 'Do you want to continue (y/n): ', 'y')
         if (answer.toLowerCase() !== 'y') {
           throw new Error('Payment cancelled')
@@ -355,6 +361,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .option('-c, --comment <text>', 'Optional comment for the invoice')
     .option('-v, --validate [value]', 'Validate the success action URL')
     .option('-i, --idempotency-key <key>', 'Optional idempotency key')
+    .option('-t, --token-identifier <id>', 'Optional token identifier (amount in token base units)')
     .option('--from-token <identifier>', 'Convert from the specified token to Bitcoin')
     .option('-s, --convert-max-slippage-bps <bps>', 'Max slippage in basis points for conversion', parseInt)
     .option('--fees-included', 'Deduct fees from the specified amount', false)
@@ -385,21 +392,22 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
 
       const minSendable = Math.ceil(payRequest.minSendable / 1000)
       const maxSendable = Math.floor(payRequest.maxSendable / 1000)
-      const amountStr = await question(rl, `Amount to pay (min ${minSendable} sat, max ${maxSendable} sat): `)
-      const amountSats = parseInt(amountStr, 10)
-      if (isNaN(amountSats)) {
-        throw new Error('Invalid amount provided')
-      }
+      const prompt = options.tokenIdentifier
+        ? `Amount to pay (min ${minSendable} sat, max ${maxSendable} sat) in token base units: `
+        : `Amount to pay (min ${minSendable} sat, max ${maxSendable} sat): `
+      const amountStr = await question(rl, prompt)
+      const amount = BigInt(amountStr)
 
       const validateSuccessActionUrl = options.validate != null
         ? options.validate === 'true' || options.validate === true
         : undefined
 
       const prepareResponse = await sdk.prepareLnurlPay({
-        amountSats,
+        amount,
         comment: options.comment,
         payRequest,
         validateSuccessActionUrl,
+        tokenIdentifier: options.tokenIdentifier,
         conversionOptions,
         feePolicy
       })
@@ -407,7 +415,11 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       // Handle conversion estimate confirmation
       if (prepareResponse.conversionEstimate) {
         const estimate = prepareResponse.conversionEstimate
-        console.log(`Estimated conversion of ${estimate.amount} token base units with a ${estimate.fee} token base units fee`)
+        const [inUnits, outUnits] = estimate.options && estimate.options.conversionType &&
+          estimate.options.conversionType.type === 'fromBitcoin'
+          ? ['sats', 'token base units']
+          : ['token base units', 'sats']
+        console.log(`Estimated conversion from ${estimate.amountIn} ${inUnits} to ${estimate.amountOut} ${outUnits} with a ${estimate.fee} token base units fee`)
         const answer = await questionWithDefault(rl, 'Do you want to continue (y/n): ', 'y')
         if (answer.toLowerCase() !== 'y') {
           throw new Error('Payment cancelled')
@@ -739,7 +751,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       if (options.private != null) {
         sparkPrivateModeEnabled = options.private === 'true' || options.private === true
       }
-      await sdk.updateUserSettings({ sparkPrivateModeEnabled })
+      await sdk.updateUserSettings({ sparkPrivateModeEnabled, stableBalanceActiveLabel: undefined })
       console.log('User settings updated')
     })
 
@@ -761,6 +773,9 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
 
   // --- webhooks subcommands ---
   registerWebhooksCommands(program, getSdk)
+
+  // --- stable-balance subcommands ---
+  registerStableBalanceCommands(program, getSdk)
 
   return program
 }
