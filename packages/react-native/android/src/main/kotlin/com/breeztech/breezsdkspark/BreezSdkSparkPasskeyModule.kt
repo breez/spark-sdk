@@ -1,5 +1,6 @@
 package com.breeztech.breezsdkspark
 
+import android.content.Context
 import android.util.Base64
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -11,9 +12,44 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import technology.breez.spark.passkey.KnownCredentialsStore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
+
+/**
+ * Holds the next derive call for up to [POST_CREATE_GRACE_TOTAL_MS]
+ * after a successful create so the OS finishes indexing the new
+ * credential before we hit the immediate post-register assertion.
+ * Mirrors the Capacitor / Flutter plugin's tracker.
+ */
+private class PostCreateGraceTracker {
+    private val mutex = Mutex()
+    @Volatile private var deadlineMs: Long = 0L
+
+    suspend fun arm(durationMs: Long) {
+        mutex.withLock {
+            deadlineMs = System.currentTimeMillis() + durationMs
+        }
+    }
+
+    suspend fun consume() {
+        val waitMs = mutex.withLock {
+            val now = System.currentTimeMillis()
+            val remaining = deadlineMs - now
+            deadlineMs = 0L
+            if (remaining > 0L) remaining else 0L
+        }
+        if (waitMs > 0L) {
+            delay(waitMs)
+        }
+    }
+}
+
+private const val POST_CREATE_GRACE_TOTAL_MS: Long = 800L
 
 /**
  * React Native native module for passkey PRF operations on Android.
@@ -42,6 +78,8 @@ class BreezSdkSparkPasskeyModule(
      */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    private val graceTracker = PostCreateGraceTracker()
+
     override fun getName(): String = NAME
 
     override fun onCatalystInstanceDestroy() {
@@ -50,18 +88,22 @@ class BreezSdkSparkPasskeyModule(
     }
 
     /**
-     * Derive a 32-byte PRF seed from a passkey assertion.
+     * Derive multiple 32-byte PRF seeds in a single ceremony when supported
+     * (dual-salt assertion). Falls back to per-salt single-salt assertion
+     * if the authenticator drops the second salt. The `salts.size == 1`
+     * case short-circuits to a single-salt assertion (one prompt).
      *
-     * @param promise Resolves with a base64-encoded 32-byte PRF output.
+     * @param promise Resolves with a list of base64-encoded 32-byte PRF outputs.
      */
     @ReactMethod
-    fun derivePrfSeed(
-        salt: String,
+    fun deriveSeeds(
+        saltsArg: com.facebook.react.bridge.ReadableArray,
         rpId: String,
         rpName: String,
         userName: String,
         userDisplayName: String,
         autoRegister: Boolean,
+        allowCredentialIdsArg: com.facebook.react.bridge.ReadableArray,
         promise: Promise,
     ) {
         val activity = currentActivity
@@ -70,18 +112,48 @@ class BreezSdkSparkPasskeyModule(
             return
         }
 
+        val salts = mutableListOf<String>()
+        for (i in 0 until saltsArg.size()) {
+            val s = saltsArg.getString(i)
+            if (s == null) {
+                promise.reject("ERR_PASSKEY", "Invalid salt at index $i")
+                return
+            }
+            salts.add(s)
+        }
+
+        val callerAllow = mutableListOf<ByteArray>()
+        for (i in 0 until allowCredentialIdsArg.size()) {
+            val b64 = allowCredentialIdsArg.getString(i) ?: continue
+            callerAllow.add(Base64.decode(b64, Base64.NO_WRAP))
+        }
+        val allowIds = if (callerAllow.isNotEmpty()) {
+            callerAllow
+        } else {
+            readKnownCredentialIds(activity.applicationContext, rpId)
+        }
+
         scope.launch {
             try {
-                val prfOutput = CredentialManagerPrfCore.deriveSeedOrRegister(
+                graceTracker.consume()
+                val seeds = CredentialManagerPrfCore.deriveSeedsOrRegister(
                     activity = activity,
-                    salt = salt,
+                    salts = salts,
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
                     autoRegister = autoRegister,
+                    allowCredentialIds = allowIds,
                 )
-                promise.resolve(Base64.encodeToString(prfOutput, Base64.NO_WRAP))
+                // Encode each seed as base64 so the React bridge can carry it
+                // as an array of strings. JS side base64-decodes back to
+                // Uint8Array.
+                val arr = Arguments.createArray()
+                for (seed in seeds) {
+                    arr.pushString(Base64.encodeToString(seed, Base64.NO_WRAP))
+                }
+                promise.resolve(arr)
             } catch (e: CredentialManagerPrfCoreException) {
                 promise.reject(e.errorCode, e.message ?: e.defaultMessage)
             } catch (e: Exception) {
@@ -91,9 +163,52 @@ class BreezSdkSparkPasskeyModule(
     }
 
     /**
+     * Domain association check. Mirrors Flutter Android: degrades
+     * `NotAssociated` results from the public Digital Asset Links API
+     * to `Skipped`, since CredentialManager runs its own check
+     * internally with a fresher GMS-cached statement set.
+     */
+    @ReactMethod
+    fun checkDomainAssociation(rpId: String, promise: Promise) {
+        val activity = currentActivity
+        if (activity == null) {
+            promise.reject("ERR_NO_ACTIVITY", "No current activity available")
+            return
+        }
+        scope.launch {
+            try {
+                val outcome = CredentialManagerPrfCore.checkDomainAssociation(
+                    context = activity.applicationContext,
+                    rpId = rpId,
+                )
+                val map = Arguments.createMap()
+                when (outcome) {
+                    is technology.breez.spark.passkey.core.DomainAssociationResult.Associated -> {
+                        map.putString("kind", "Associated")
+                    }
+                    is technology.breez.spark.passkey.core.DomainAssociationResult.NotAssociated -> {
+                        map.putString("kind", "Skipped")
+                        map.putString("reason", "[soft-fail on Android] ${outcome.reason}")
+                    }
+                    is technology.breez.spark.passkey.core.DomainAssociationResult.Skipped -> {
+                        map.putString("kind", "Skipped")
+                        map.putString("reason", outcome.reason)
+                    }
+                }
+                promise.resolve(map)
+            } catch (e: Exception) {
+                val map = Arguments.createMap()
+                map.putString("kind", "Skipped")
+                map.putString("reason", "Domain association probe failed: ${e.message ?: e.toString()}")
+                promise.resolve(map)
+            }
+        }
+    }
+
+    /**
      * Create a new passkey with PRF support.
      *
-     * Only registers the credential — no seed derivation. Triggers exactly
+     * Only registers the credential, no seed derivation. Triggers exactly
      * one platform prompt. Use for multi-step onboarding flows.
      */
     @ReactMethod
@@ -103,6 +218,7 @@ class BreezSdkSparkPasskeyModule(
         userName: String,
         userDisplayName: String,
         excludeCredentialIdsBase64: com.facebook.react.bridge.ReadableArray,
+        userIdBase64: String?,
         promise: Promise,
     ) {
         val activity = currentActivity
@@ -111,22 +227,41 @@ class BreezSdkSparkPasskeyModule(
             return
         }
 
-        val excludeCredentialIds = mutableListOf<ByteArray>()
+        val callerExcludes = mutableListOf<ByteArray>()
         for (i in 0 until excludeCredentialIdsBase64.size()) {
             val b64 = excludeCredentialIdsBase64.getString(i)
-            excludeCredentialIds.add(Base64.decode(b64, Base64.NO_WRAP))
+            callerExcludes.add(Base64.decode(b64, Base64.NO_WRAP))
         }
+        val context = activity.applicationContext
 
         scope.launch {
             try {
+                // Auto-merge previously-registered credential IDs from the
+                // KnownCredentialsStore so the platform refuses duplicates
+                // even after a reinstall.
+                val merged = mergeKnownCredentials(context, rpId, callerExcludes)
+                val userIdOverride = userIdBase64?.let { Base64.decode(it, Base64.NO_WRAP) }
                 val credential = CredentialManagerPrfCore.createCredential(
                     activity = activity,
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
-                    excludeCredentialIds = excludeCredentialIds,
+                    excludeCredentialIds = merged,
+                    userIdOverride = userIdOverride,
                 )
+                KnownCredentialsStore.add(
+                    context,
+                    Base64.encodeToString(
+                        credential.credentialId,
+                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                    ),
+                    rpId,
+                )
+                // Hold the next derive call for up to 800ms so the
+                // immediate post-register assertion doesn't race the
+                // credential's PRF-readiness window.
+                graceTracker.arm(POST_CREATE_GRACE_TOTAL_MS)
                 val map = Arguments.createMap()
                 map.putString("credentialId", Base64.encodeToString(credential.credentialId, Base64.NO_WRAP))
                 if (credential.aaguid != null) {
@@ -148,10 +283,43 @@ class BreezSdkSparkPasskeyModule(
         }
     }
 
+    private suspend fun mergeKnownCredentials(
+        context: Context,
+        rpId: String,
+        caller: List<ByteArray>,
+    ): List<ByteArray> {
+        val known = readKnownCredentialIds(context, rpId)
+        if (known.isEmpty()) return caller
+        val seen = caller.map { it.toList() }.toMutableSet()
+        val out = caller.toMutableList()
+        for (id in known) {
+            if (seen.add(id.toList())) {
+                out.add(id)
+            }
+        }
+        return out
+    }
+
+    /**
+     * Read all known credential IDs for [rpId]. The derive paths pass
+     * these to [CredentialManagerPrfCore.deriveSeed(s)OrRegister] as
+     * `allowCredentialIds` so the OS auto-routes to the just-registered
+     * credential — skipping the "select your passkey" picker between
+     * `createPasskey` and the post-register PRF assertion.
+     */
+    private suspend fun readKnownCredentialIds(
+        context: Context,
+        rpId: String,
+    ): List<ByteArray> {
+        return KnownCredentialsStore.read(context, rpId).map {
+            Base64.decode(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        }
+    }
+
     /** Check if PRF-capable passkeys are available on this device. */
     @ReactMethod
-    fun isPrfAvailable(promise: Promise) {
-        promise.resolve(CredentialManagerPrfCore.isPrfAvailable())
+    fun isSupported(promise: Promise) {
+        promise.resolve(CredentialManagerPrfCore.isSupported())
     }
 
     private val CredentialManagerPrfCoreException.errorCode: String

@@ -103,9 +103,9 @@ public object CredentialManagerPrfCore {
      * Services. The Jetpack Credential Manager library handles backward
      * compatibility automatically from there. This check does NOT verify
      * that a credential provider is actually installed or that biometrics
-     * are enrolled — only the platform version.
+     * are enrolled, only the platform version.
      */
-    public fun isPrfAvailable(): Boolean =
+    public fun isSupported(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
 
     /**
@@ -133,7 +133,7 @@ public object CredentialManagerPrfCore {
      * @throws CredentialManagerPrfCoreException for every handled error;
      *   wrappers should catch and remap by [CredentialManagerPrfCoreException.kind].
      */
-    public suspend fun deriveSeedOrRegister(
+    private suspend fun deriveSeedOrRegister(
         activity: Activity,
         salt: String,
         rpId: String,
@@ -656,12 +656,29 @@ public object CredentialManagerPrfCore {
         )
         val responseJson = JSONObject(authResponseJson)
 
-        // Surface the asserted credential ID before the PRF result.
-        // Best-effort: a malformed rawId or a throwing callback must
-        // not block the seed return.
-        if (onAssertionCredentialId != null) {
-            val rawIdEncoded = responseJson.optString("rawId", "")
-            if (rawIdEncoded.isNotEmpty()) {
+        // Capture the asserted credential ID for two purposes:
+        //
+        //   1. Auto-add to KnownCredentialsStore (always). Idempotent
+        //      add migrates users whose passkey predates our tracking:
+        //      first sign-in seeds the store, so the next createPasskey
+        //      correctly hits the platform-level "already exists" guard
+        //      via excludeCredentials. Without this, the store stays
+        //      empty until a fresh registration runs, and a returning
+        //      user with a pre-tracking credential could accidentally
+        //      register a duplicate.
+        //
+        //   2. Forward to the host's optional onAssertionCredentialId
+        //      callback for any host-side bookkeeping (per-cred
+        //      metadata, last-seen timestamps, etc.).
+        //
+        // Both are best-effort: a malformed rawId or a throwing callback
+        // must not block the seed return.
+        val rawIdEncoded = responseJson.optString("rawId", "")
+        if (rawIdEncoded.isNotEmpty()) {
+            try {
+                KnownCredentialsStore.add(activity.applicationContext, rawIdEncoded, rpId)
+            } catch (_: Exception) {}
+            if (onAssertionCredentialId != null) {
                 try {
                     onAssertionCredentialId(decodeBase64Url(rawIdEncoded))
                 } catch (_: Exception) {}

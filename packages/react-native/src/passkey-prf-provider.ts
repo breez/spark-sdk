@@ -41,9 +41,6 @@ function passkeyModuleUnavailableError(operation: string): Error {
 }
 
 /**
- * Options for constructing a PasskeyProvider.
- */
-/**
  * Authenticator data captured at registration. `aaguid` is the 16-byte
  * Authenticator Attestation GUID (provider identifier); `backupEligible`
  * is the BE flag indicating whether the credential can sync across
@@ -56,6 +53,51 @@ export interface RegisteredCredential {
   backupEligible: boolean | null;
 }
 
+/**
+ * Per-call overrides for `createPasskey`. All fields are optional;
+ * omitted fields fall back to the constructor values (random 16-byte
+ * `userId`, ctor `userName`, ctor `userDisplayName`).
+ */
+export interface CreatePasskeyRequest {
+  /**
+   * Credential IDs the authenticator must refuse to duplicate. When
+   * any entry matches a credential already on the device, the platform
+   * raises an "already exists" error which surfaces as a typed
+   * `PasskeyPrfException` with code `credentialAlreadyExists`. Defaults
+   * to none.
+   */
+  excludeCredentialIds?: Uint8Array[];
+
+  /**
+   * Override for the WebAuthn `user.id` field. Must be 1-64 bytes per
+   * WebAuthn spec. Defaults to a fresh random 16-byte value chosen by
+   * the native plugin per call. Always randomize per call: a hardcoded
+   * value across a fresh-install + create flow can silently destroy
+   * the user's prior credential and the data tied to it on consumer
+   * authenticators.
+   */
+  userId?: Uint8Array;
+
+  /** Override for the WebAuthn `user.name` field. */
+  userName?: string;
+
+  /** Override for the WebAuthn `user.displayName` field. */
+  userDisplayName?: string;
+}
+
+/**
+ * Result of {@link PasskeyProvider.checkDomainAssociation}. Mirrors the
+ * Rust `DomainAssociation` enum shape so cross-language callers can
+ * switch on `kind` regardless of which platform produced the result.
+ */
+export type DomainAssociation =
+  | { kind: 'Associated' }
+  | { kind: 'NotAssociated'; source: string; reason: string }
+  | { kind: 'Skipped'; reason: string };
+
+/**
+ * Options for constructing a PasskeyProvider.
+ */
 export interface PasskeyProviderOptions {
   /**
    * Relying Party ID. Must match the domain configured for cross-platform
@@ -89,13 +131,68 @@ export interface PasskeyProviderOptions {
   userDisplayName?: string;
 
   /**
-   * When true (default), `derivePrfSeed` automatically creates a new passkey
-   * if none exists for this RP ID, then retries the assertion. When false,
-   * throws an error instead, letting the caller control registration
-   * separately via `createPasskey()`.
-   * @default true
+   * When true, `deriveSeeds` automatically creates a new passkey if
+   * none exists for this RP ID, then retries the assertion. When false
+   * (default), throws an error instead, letting the caller control
+   * registration separately via `createPasskey()`.
+   * @default false
    */
   autoRegister?: boolean;
+
+  /**
+   * Restrict assertion (sign-in) to one of these credential IDs. The
+   * platform refuses any other credential for this RP. When null or
+   * empty, the platform picks any credential matching the RP. Critical
+   * for deterministic seed derivation when multiple credentials might
+   * exist for the same RP.
+   */
+  allowCredentialIds?: Uint8Array[];
+}
+
+/**
+ * Error thrown by [PasskeyProvider] when a passkey operation fails.
+ * Provides a structured `code` for programmatic handling.
+ *
+ * `code` values: `userCancelled`, `prfNotSupported`, `noCredential`,
+ * `configuration`, `credentialAlreadyExists`, `unknown`.
+ */
+export class PasskeyPrfException extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'PasskeyPrfException';
+    this.code = code;
+  }
+}
+
+/**
+ * Map a native bridge rejection (RN passes `{ code, message }` on the
+ * thrown error) into a typed [PasskeyPrfException].
+ */
+function mapNativeError(err: unknown): PasskeyPrfException {
+  // The RN bridge encodes the native error code as `err.code` (matching the
+  // first arg passed to `promise.reject(...)` on the native side).
+  const anyErr = err as { code?: string; message?: string };
+  const message = anyErr?.message ?? 'Unknown passkey error';
+  switch (anyErr?.code) {
+    case 'ERR_USER_CANCELLED':
+      return new PasskeyPrfException('userCancelled', message);
+    case 'ERR_PRF_NOT_SUPPORTED':
+      return new PasskeyPrfException('prfNotSupported', message);
+    case 'ERR_NO_CREDENTIAL':
+      return new PasskeyPrfException('noCredential', message);
+    case 'ERR_CONFIGURATION':
+      return new PasskeyPrfException('configuration', message);
+    case 'ERR_CREDENTIAL_ALREADY_EXISTS':
+      return new PasskeyPrfException('credentialAlreadyExists', message);
+    case 'ERR_AUTHENTICATION_FAILED':
+      return new PasskeyPrfException('authenticationFailed', message);
+    case 'ERR_PRF_EVALUATION_FAILED':
+      return new PasskeyPrfException('prfEvaluationFailed', message);
+    default:
+      return new PasskeyPrfException('unknown', message);
+  }
 }
 
 /**
@@ -128,40 +225,59 @@ export class PasskeyProvider {
   private userName: string;
   private userDisplayName: string;
   private autoRegister: boolean;
+  private allowCredentialIds: Uint8Array[];
 
   constructor(options?: PasskeyProviderOptions) {
     this.rpId = options?.rpId ?? 'keys.breez.technology';
     this.rpName = options?.rpName ?? 'Breez SDK';
     this.userName = options?.userName ?? this.rpName;
     this.userDisplayName = options?.userDisplayName ?? this.userName;
-    this.autoRegister = options?.autoRegister !== false;
+    // Default to false (matching every other binding's behaviour
+    // post-5f.1). When unset, deriveSeeds throws CredentialNotFound
+    // on missing creds; the host then drives registration explicitly
+    // via createPasskey.
+    this.autoRegister = options?.autoRegister ?? false;
+    this.allowCredentialIds = options?.allowCredentialIds ?? [];
   }
 
   /**
-   * Derive a 32-byte seed from passkey PRF with the given salt.
+   * Derive multiple 32-byte seeds from passkey PRF with the given salts in
+   * as few OS ceremonies as the platform supports (dual-salt assertion
+   * when available). The `salts.length === 1` case short-circuits to a
+   * single-salt assertion under the hood (one prompt). Used by the
+   * SDK's `setup_wallet` orchestration to collapse master + label
+   * derivation into one prompt.
    *
-   * Authenticates the user via a platform passkey and evaluates the PRF extension.
-   * If no credential exists for this RP ID, a new passkey is created automatically.
-   *
-   * @param salt - The salt string to use for PRF evaluation.
-   * @returns The 32-byte PRF output.
-   * @throws If authentication fails, PRF is not supported, or the user cancels.
+   * @param salts - Plain UTF-8 salt strings; the native side encodes each as
+   *   bytes for the PRF eval inputs.
    */
-  async derivePrfSeed(salt: string): Promise<Uint8Array> {
+  async deriveSeeds(salts: string[]): Promise<Uint8Array[]> {
     if (!BreezSdkSparkPasskey) {
-      throw passkeyModuleUnavailableError('derivePrfSeed');
+      throw passkeyModuleUnavailableError('deriveSeeds');
     }
 
-    const base64Result: string = await BreezSdkSparkPasskey.derivePrfSeed(
-      salt,
-      this.rpId,
-      this.rpName,
-      this.userName,
-      this.userDisplayName,
-      this.autoRegister
-    );
+    const allowBase64 = this.allowCredentialIds.map(id => uint8ArrayToBase64(id));
 
-    return base64ToUint8Array(base64Result);
+    try {
+      const base64Results: string[] = await BreezSdkSparkPasskey.deriveSeeds(
+        salts,
+        this.rpId,
+        this.rpName,
+        this.userName,
+        this.userDisplayName,
+        this.autoRegister,
+        allowBase64
+      );
+      if (!Array.isArray(base64Results)) {
+        throw new PasskeyPrfException('unknown', 'deriveSeeds returned a non-array');
+      }
+      return base64Results.map(b64 => base64ToUint8Array(b64));
+    } catch (err) {
+      if (err instanceof PasskeyPrfException) {
+        throw err;
+      }
+      throw mapNativeError(err);
+    }
   }
 
   /**
@@ -171,35 +287,46 @@ export class PasskeyProvider {
    * 1 platform prompt. Use this to separate credential creation from
    * derivation in multi-step onboarding flows.
    *
-   * @param excludeCredentialIds - Optional list of credential IDs to exclude.
-   *   Pass previously created credential IDs to prevent the authenticator
-   *   from creating a duplicate on the same device.
+   * Per-call overrides on `request` (excludeCredentialIds, userId,
+   * userName, userDisplayName) fall back to the constructor values when
+   * omitted.
+   *
    * @returns Credential ID plus AAGUID and backup-eligibility parsed from
    *   the attestation object. AAGUID and `backupEligible` are null when
    *   the attestation can't be parsed.
    * @throws If the user cancels or PRF is not supported by the authenticator.
    */
-  async createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<RegisteredCredential> {
+  async createPasskey(request?: CreatePasskeyRequest): Promise<RegisteredCredential> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('createPasskey');
     }
 
-    const excludeBase64 = (excludeCredentialIds ?? []).map(id => uint8ArrayToBase64(id));
+    const req = request ?? {};
+    const excludeBase64 = (req.excludeCredentialIds ?? []).map(id => uint8ArrayToBase64(id));
+    const userIdBase64 = req.userId ? uint8ArrayToBase64(req.userId) : null;
 
-    const result: { credentialId: string; aaguid: string | null; backupEligible: boolean | null } =
-      await BreezSdkSparkPasskey.createPasskey(
+    try {
+      const result: {
+        credentialId: string;
+        aaguid: string | null;
+        backupEligible: boolean | null;
+      } = await BreezSdkSparkPasskey.createPasskey(
         this.rpId,
         this.rpName,
-        this.userName,
-        this.userDisplayName,
-        excludeBase64
+        req.userName ?? this.userName,
+        req.userDisplayName ?? this.userDisplayName,
+        excludeBase64,
+        userIdBase64
       );
 
-    return {
-      credentialId: base64ToUint8Array(result.credentialId),
-      aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
-      backupEligible: result.backupEligible,
-    };
+      return {
+        credentialId: base64ToUint8Array(result.credentialId),
+        aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
+        backupEligible: result.backupEligible,
+      };
+    } catch (err) {
+      throw mapNativeError(err);
+    }
   }
 
   /**
@@ -207,12 +334,49 @@ export class PasskeyProvider {
    *
    * @returns true if the platform supports passkeys with PRF extension.
    */
-  async isPrfAvailable(): Promise<boolean> {
+  async isSupported(): Promise<boolean> {
     if (!BreezSdkSparkPasskey) {
       return false;
     }
 
-    return await BreezSdkSparkPasskey.isPrfAvailable();
+    return await BreezSdkSparkPasskey.isSupported();
+  }
+
+  /**
+   * Verify the configured `rpId` is a valid scope for WebAuthn from
+   * the running app's identity. Returns a typed {@link DomainAssociation}.
+   * On Android the native plugin degrades a `NotAssociated` result to
+   * `Skipped` because Credential Manager runs its own check internally
+   * with a fresher GMS-cached statement set.
+   */
+  async checkDomainAssociation(): Promise<DomainAssociation> {
+    if (!BreezSdkSparkPasskey) {
+      return {
+        kind: 'Skipped',
+        reason: 'Native passkey module unavailable on this platform',
+      };
+    }
+    try {
+      const result = await BreezSdkSparkPasskey.checkDomainAssociation(this.rpId);
+      const kind = result?.kind;
+      if (kind === 'Associated') {
+        return { kind: 'Associated' };
+      }
+      if (kind === 'NotAssociated') {
+        return {
+          kind: 'NotAssociated',
+          source: result?.source ?? 'unknown',
+          reason: result?.reason ?? '',
+        };
+      }
+      return { kind: 'Skipped', reason: result?.reason ?? '' };
+    } catch (err) {
+      const anyErr = err as { message?: string };
+      return {
+        kind: 'Skipped',
+        reason: anyErr?.message ?? 'Domain association probe failed',
+      };
+    }
   }
 }
 
@@ -239,12 +403,3 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/**
- * @deprecated Use PasskeyProviderOptions instead. This alias will be removed in a future release.
- */
-export type PasskeyPrfProviderOptions = PasskeyProviderOptions;
-
-/**
- * @deprecated Use PasskeyProvider instead. This alias will be removed in a future release.
- */
-export { PasskeyProvider as PasskeyPrfProvider };
