@@ -80,20 +80,10 @@ export class PasskeyAlreadyExistsError extends Error {
 }
 
 /**
- * Thrown when `createPasskey` resolves successfully at the platform
- * level but the host's `currentSignal` was aborted between the OS
- * prompt resolving and the JS continuation running. The credential
- * was already created on the device; the host's promise was about to
- * be rejected with `AbortError`, leaving an orphan that wouldn't be
- * passed to `excludeCredentialIds` on the next create call (and so
- * the next attempt would create a duplicate instead of throwing
- * `PasskeyAlreadyExistsError`).
- *
- * This error carries the orphan credential's metadata so the host
- * can record it and avoid the duplicate. Hosts that want to honor
- * the abort can simply rethrow; hosts that want to recover the
- * orphan record `error.credentialId` (and `aaguid` / `backupEligible`
- * if present) before deciding.
+ * Create succeeded on the device but the host's signal aborted before
+ * the JS promise resolved. Carries the orphan credential metadata so
+ * hosts can record it (avoiding a duplicate on the next attempt) and
+ * still honour the abort by rethrowing.
  */
 export class PasskeyCreateAbortedError extends Error {
     constructor(credentialId, aaguid, backupEligible) {
@@ -234,15 +224,7 @@ export class PasskeyProvider {
          */
         this._immediateGetSupported = undefined;
 
-        /**
-         * Single in-flight auto-register promise. Concurrent
-         * `derivePrfSeed` / `derivePrfSeeds` calls that both observe a
-         * missing-credential error share this Promise so we only ever
-         * fire one `navigator.credentials.create` ceremony per
-         * provider instance. Cleared after the registration settles.
-         * @type {Promise<{credentialId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null}> | null}
-         * @private
-         */
+        /** Shared Promise so concurrent auto-register paths fire one ceremony. @private */
         this._autoRegisterInFlight = null;
     }
 
@@ -313,10 +295,6 @@ export class PasskeyProvider {
         try {
             return await this._getAssertionWithPrf(saltBytes);
         } catch (error) {
-            // If no credential found and autoRegister is enabled,
-            // register a new one and retry. `_autoRegister` deduplicates
-            // concurrent callers so a fast double-derive can't trigger
-            // two registration prompts.
             if (this.autoRegister && this._isNoCredentialError(error)) {
                 await this._autoRegister();
                 return await this._getAssertionWithPrf(saltBytes);
@@ -777,13 +755,8 @@ export class PasskeyProvider {
     }
 
     /**
-     * Run `_registerCredential` with no arguments, deduplicating
-     * concurrent calls so the auto-register path can never fire two
-     * native ceremonies for one provider instance. The explicit
-     * `createPasskey()` entry point bypasses this and always issues
-     * its own ceremony, since callers there have asked for a new
-     * credential rather than reacting to a no-cred error.
-     * @returns {Promise<{ credentialId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
+     * Deduped auto-register. Public `createPasskey()` skips this and
+     * always issues a fresh ceremony.
      * @private
      */
     async _autoRegister() {
@@ -910,16 +883,10 @@ export class PasskeyProvider {
             throw new Error('Credential creation failed');
         }
 
-        // Race window: the OS prompt resolved successfully but the
-        // host's signal aborted between the platform return and this
-        // continuation running (e.g. a React component unmounted
-        // mid-create). The credential is already on the device; if
-        // we just throw AbortError, the caller never sees the new
-        // credentialId and a subsequent create will produce a
-        // duplicate instead of triggering excludeCredentialIds
-        // dedup. Surface the metadata via PasskeyCreateAbortedError
-        // so hosts can persist the orphan ID before honouring the
-        // abort.
+        // Late abort: the credential is already on the device. Throw
+        // a typed error carrying its metadata so the caller can record
+        // it before honouring the abort, otherwise the next create
+        // produces a duplicate.
         if (this.currentSignal && this.currentSignal.aborted) {
             const meta = extractRegistrationMetadata(credential);
             throw new PasskeyCreateAbortedError(
