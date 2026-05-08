@@ -1,5 +1,31 @@
 use thiserror::Error;
 
+/// Coarse classification of a passkey error: what the caller should
+/// do next. One value per distinct user/UX reaction. Map to your own
+/// presentation; the variant name carries the action, not the cause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ErrorKind {
+    /// The user dismissed the authenticator prompt. Do not auto-retry.
+    Cancel,
+    /// No matching credential on this device. Offer to register a new one.
+    NoCredential,
+    /// The authenticator does not implement the PRF extension. Fall back
+    /// to a non-passkey flow or guide the user to switch credential
+    /// providers (e.g. iCloud Keychain on iOS).
+    PrfUnsupported,
+    /// Platform / app configuration is wrong (entitlement, assetlinks,
+    /// rpId scope). Not retryable until the integrator fixes setup.
+    Configuration,
+    /// `excludeCredentialIds` matched an existing credential. Route the
+    /// user to the sign-in path.
+    AlreadyExists,
+    /// Platform or library failure the caller can't act on. Surface a
+    /// generic "try again" UI; diagnostic detail is in the variant
+    /// payload for logs.
+    Internal,
+}
+
 /// Error type for passkey PRF operations.
 /// Platforms implement `PrfProvider` and return this error type.
 #[derive(Debug, Error, Clone)]
@@ -44,6 +70,23 @@ pub enum PasskeyPrfError {
     Generic(String),
 }
 
+impl PasskeyPrfError {
+    /// Coarse classification for the caller. Lets hosts branch on a
+    /// small, actionable enum instead of pattern-matching every
+    /// variant.
+    #[must_use]
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::UserCancelled => ErrorKind::Cancel,
+            Self::CredentialNotFound => ErrorKind::NoCredential,
+            Self::PrfNotSupported | Self::PrfEvaluationFailed(_) => ErrorKind::PrfUnsupported,
+            Self::Configuration(_) => ErrorKind::Configuration,
+            Self::CredentialAlreadyExists(_) => ErrorKind::AlreadyExists,
+            Self::AuthenticationFailed(_) | Self::Generic(_) => ErrorKind::Internal,
+        }
+    }
+}
+
 /// Error type for passkey operations.
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
@@ -83,6 +126,21 @@ pub enum PasskeyError {
     /// Generic error
     #[error("Passkey error: {0}")]
     Generic(String),
+}
+
+impl PasskeyError {
+    /// Coarse classification of the underlying failure. Non-PRF
+    /// variants (Nostr, key derivation, mnemonic) all map to
+    /// `Internal` because they're caused by SDK / network state, not
+    /// authenticator state — the caller should surface a generic
+    /// retry / "try again later" UI.
+    #[must_use]
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::PrfError(inner) => inner.kind(),
+            _ => ErrorKind::Internal,
+        }
+    }
 }
 
 impl From<bip39::Error> for PasskeyError {

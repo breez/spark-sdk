@@ -54,7 +54,7 @@ mod passkey_prf_provider;
 
 pub use derivation::ACCOUNT_MASTER_SALT;
 use derivation::prf_to_mnemonic;
-pub use error::{PasskeyError, PasskeyPrfError};
+pub use error::{ErrorKind, PasskeyError, PasskeyPrfError};
 pub use models::{NamedSalt, NostrRelayConfig, SetupWalletRequest, Wallet, WalletSetup};
 pub use passkey_prf_provider::{DomainAssociation, PrfProvider};
 
