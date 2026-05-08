@@ -4,13 +4,15 @@ use bitcoin::secp256k1::PublicKey;
 use platform_utils::HttpClient;
 
 use crate::{
+    header_provider::{CombinedHeaderProvider, HeaderProvider},
     session_manager::SessionManager,
     signer::Signer,
     ssp::{
         BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
         CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput, RequestLightningReceiveInput,
         RequestLightningSendInput, RequestSwapInput, ServiceProviderConfig,
-        SparkWalletWebhookEventType, SspTransfer, StaticDepositQuote, WebhookEntry,
+        SparkWalletWebhookEventType, SspAuthHeaderProvider, SspTransfer, StaticDepositQuote,
+        WebhookEntry,
         error::ServiceProviderResult,
         graphql::{CoopExitRequest, GraphQLClient, LightningReceiveRequest, LightningSendRequest},
     },
@@ -22,15 +24,24 @@ pub struct ServiceProvider {
 }
 
 impl ServiceProvider {
-    /// Create a new GraphQLClient with the given configuration and signer.
+    /// Create a new SSP service provider.
+    ///
+    /// Internally builds a [`SspAuthHeaderProvider`] backed by the supplied
+    /// `signer` and `session_manager`. If `extra_header_provider` is set, the
+    /// auth provider's headers are combined with it on every request — used,
+    /// for example, to attach the Breez partner JWT alongside the SSP session
+    /// token.
     pub fn new(
         config: ServiceProviderConfig,
         signer: Arc<dyn Signer>,
         session_manager: Arc<dyn SessionManager>,
+        extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     ) -> Self {
+        let header_provider =
+            Self::build_header_provider(&config, signer, session_manager, extra_header_provider);
         Self {
             identity_public_key: config.identity_public_key,
-            gql_client: GraphQLClient::new(config.into(), signer, session_manager),
+            gql_client: GraphQLClient::new(config.into(), header_provider),
         }
     }
 
@@ -41,16 +52,34 @@ impl ServiceProvider {
         config: ServiceProviderConfig,
         signer: Arc<dyn Signer>,
         session_manager: Arc<dyn SessionManager>,
+        extra_header_provider: Option<Arc<dyn HeaderProvider>>,
         http_client: Arc<dyn HttpClient>,
     ) -> Self {
+        let header_provider =
+            Self::build_header_provider(&config, signer, session_manager, extra_header_provider);
         Self {
             identity_public_key: config.identity_public_key,
-            gql_client: GraphQLClient::new_with_client(
-                config.into(),
-                signer,
-                session_manager,
-                http_client,
-            ),
+            gql_client: GraphQLClient::new_with_client(config.into(), header_provider, http_client),
+        }
+    }
+
+    fn build_header_provider(
+        config: &ServiceProviderConfig,
+        signer: Arc<dyn Signer>,
+        session_manager: Arc<dyn SessionManager>,
+        extra_header_provider: Option<Arc<dyn HeaderProvider>>,
+    ) -> Arc<dyn HeaderProvider> {
+        let auth_provider: Arc<dyn HeaderProvider> = Arc::new(SspAuthHeaderProvider::new(
+            &config.base_url,
+            config.schema_endpoint.as_deref(),
+            config.user_agent.as_deref(),
+            signer,
+            session_manager,
+            config.identity_public_key,
+        ));
+        match extra_header_provider {
+            Some(extra) => Arc::new(CombinedHeaderProvider::new(vec![auth_provider, extra])),
+            None => auth_provider,
         }
     }
 

@@ -13,6 +13,7 @@ pub use spark::operator::{OperatorConfig, OperatorError, OperatorPoolConfig};
 pub use spark::{
     Identifier, Network,
     address::{SparkAddress, SparkAddressPaymentType},
+    header_provider::*,
     operator::rpc::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,

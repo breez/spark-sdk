@@ -2,6 +2,7 @@ pub mod address;
 pub mod bitcoin;
 pub mod core;
 pub mod events;
+pub mod header_provider;
 pub mod operator;
 pub mod services;
 pub mod session_manager;

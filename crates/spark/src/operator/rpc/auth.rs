@@ -1,38 +1,68 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use bitcoin::secp256k1::PublicKey;
+use prost::Message;
+use tonic::Request;
+use tracing::{debug, error};
+
 use super::OperatorRpcError;
 use super::error::Result;
 use super::spark_authn::{
     GetChallengeRequest, VerifyChallengeRequest,
     spark_authn_service_client::SparkAuthnServiceClient,
 };
+use crate::header_provider::{HeaderProvider, HeaderProviderError};
 use crate::operator::rpc::transport::grpc_client::Transport;
-use crate::session_manager::Session;
+use crate::session_manager::{Session, SessionManager, SessionManagerError};
 use crate::signer::Signer;
-use prost::Message;
-use tonic::Request;
 
 #[derive(Clone)]
-pub struct OperatorAuth {
+pub struct SoAuthHeaderProvider {
     transport: Transport,
     signer: Arc<dyn Signer>,
+    session_manager: Arc<dyn SessionManager>,
+    identity_public_key: PublicKey,
 }
 
-impl OperatorAuth {
-    pub fn new(transport: Transport, signer: Arc<dyn Signer>) -> Self {
-        Self { transport, signer }
+impl SoAuthHeaderProvider {
+    pub fn new(
+        transport: Transport,
+        signer: Arc<dyn Signer>,
+        session_manager: Arc<dyn SessionManager>,
+        identity_public_key: PublicKey,
+    ) -> Self {
+        Self {
+            transport,
+            signer,
+            session_manager,
+            identity_public_key,
+        }
     }
 
-    pub async fn get_authenticated_session(&self, session: Option<Session>) -> Result<Session> {
-        // Check if the session is still valid
-        if let Some(session) = session
-            && session.is_valid()
-        {
-            return Ok(session);
-        }
-
-        let session = self.authenticate().await?;
+    async fn get_or_authenticate(&self) -> Result<Session> {
+        let cached = self
+            .session_manager
+            .get_session(&self.identity_public_key)
+            .await;
+        let candidate = match cached {
+            Ok(session) => Some(session),
+            Err(SessionManagerError::NotFound) => {
+                debug!("Operator session not found, authenticating");
+                None
+            }
+            Err(SessionManagerError::Generic(e)) => {
+                error!("Failed to get operator session from session manager: {}", e);
+                None
+            }
+        };
+        let session = match candidate {
+            Some(s) if s.is_valid() => s,
+            _ => self.authenticate().await?,
+        };
+        self.session_manager
+            .set_session(&self.identity_public_key, session.clone())
+            .await?;
         Ok(session)
     }
 
@@ -44,7 +74,6 @@ impl OperatorAuth {
 
         let mut auth_client = SparkAuthnServiceClient::new(self.transport.clone());
 
-        // get the challenge from Spark Authn Service
         let spark_authn_response = auth_client
             .get_challenge(Request::new(challenge_req))
             .await?
@@ -57,7 +86,6 @@ impl OperatorAuth {
                     "Missing challenge".to_string(),
                 ))?;
 
-        // sign the challenge
         let challenge =
             protected_challenge
                 .challenge
@@ -66,8 +94,7 @@ impl OperatorAuth {
                     "Invalid challenge".to_string(),
                 ))?;
 
-        // Serialize the challenge to match what the server uses
-        let challenge_bytes = challenge.encode_to_vec(); // This is the same as proto.Marshal in Go.
+        let challenge_bytes = challenge.encode_to_vec();
 
         let signature = self
             .signer
@@ -85,15 +112,27 @@ impl OperatorAuth {
             .await?
             .into_inner();
 
-        let session = Session {
+        Ok(Session {
             token: verify_resp.session_token.parse().map_err(|_| {
                 OperatorRpcError::Authentication("Invalid session token".to_string())
             })?,
             expiration: verify_resp.expiration_timestamp.try_into().map_err(|_| {
                 OperatorRpcError::Authentication("Invalid expiration timestamp".to_string())
             })?,
-            headers: HashMap::new(),
-        };
-        Ok(session)
+        })
+    }
+}
+
+#[macros::async_trait]
+impl HeaderProvider for SoAuthHeaderProvider {
+    async fn headers(&self) -> std::result::Result<HashMap<String, String>, HeaderProviderError> {
+        let session = self
+            .get_or_authenticate()
+            .await
+            .map_err(|e| HeaderProviderError::Generic(e.to_string()))?;
+        Ok(HashMap::from([(
+            "authorization".to_string(),
+            session.token,
+        )]))
     }
 }

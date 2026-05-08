@@ -19,7 +19,7 @@ use spark_wallet::SparkWallet;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell, oneshot, watch};
 
-use crate::session_manager::BreezSessionManager;
+use crate::partner_header_provider::BreezPartnerHeaderProvider;
 use crate::{
     BitcoinChainService, ExternalInputParser, InputType, Logger, Network, OptimizationConfig,
     error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
@@ -94,7 +94,7 @@ pub struct BreezSdk {
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
-    pub(crate) session_manager: Arc<BreezSessionManager>,
+    pub(crate) partner_headers: Arc<BreezPartnerHeaderProvider>,
 }
 
 pub(crate) struct BreezSdkParams {
@@ -112,7 +112,7 @@ pub(crate) struct BreezSdkParams {
     pub token_converter: Arc<dyn TokenConverter>,
     pub stable_balance: Option<Arc<StableBalance>>,
     pub sync_coordinator: SyncCoordinator,
-    pub session_manager: Arc<BreezSessionManager>,
+    pub partner_headers: Arc<BreezPartnerHeaderProvider>,
 }
 
 pub async fn parse_input(

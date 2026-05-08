@@ -1,9 +1,11 @@
 use crate::ssp::graphql::GraphQLClientConfig;
 
+mod auth;
 mod error;
 mod graphql;
 mod service_provider;
 
+pub use auth::SspAuthHeaderProvider;
 use bitcoin::secp256k1::PublicKey;
 pub use error::ServiceProviderError;
 pub use graphql::models::*;
@@ -57,7 +59,6 @@ impl From<ServiceProviderConfig> for GraphQLClientConfig {
         Self {
             base_url: opts.base_url,
             schema_endpoint: opts.schema_endpoint,
-            ssp_identity_public_key: opts.identity_public_key,
             user_agent: opts.user_agent,
             retry_config: opts.retry_config,
         }
