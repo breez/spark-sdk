@@ -109,7 +109,7 @@ public class PasskeyProvider: PrfProvider {
     ///   - autoRegister: When `true` (default), `deriveSeed` automatically
     ///     creates a new passkey if none exists for this RP ID, then retries
     ///     the assertion. When `false`, `deriveSeed` throws
-    ///     `PasskeyPrfError.CredentialNotFound` instead, letting the caller
+    ///     `PrfProviderError.CredentialNotFound` instead, letting the caller
     ///     control registration separately via `createPasskey()`.
     ///   - allowCredentialIds: When non-empty, restricts assertion (sign-in)
     ///     to one of the listed credential IDs. iOS will refuse any other
@@ -147,29 +147,29 @@ public class PasskeyProvider: PrfProvider {
     /// Authenticates the user via a platform passkey and evaluates the PRF extension.
     /// If `autoRegister` is `true` (the default) and no credential exists for this
     /// RP ID, a new passkey is created automatically before retrying. If `autoRegister`
-    /// is `false`, throws `PasskeyPrfError.CredentialNotFound` instead.
+    /// is `false`, throws `PrfProviderError.CredentialNotFound` instead.
     ///
     /// - Parameter salt: The salt string to use for PRF evaluation.
     /// - Returns: The 32-byte PRF output.
-    /// - Throws: `PasskeyPrfError` if authentication fails, PRF is not supported, or the user cancels.
+    /// - Throws: `PrfProviderError` if authentication fails, PRF is not supported, or the user cancels.
     public func deriveSeed(salt: String) async throws -> Data {
         guard let saltData = salt.data(using: .utf8) else {
-            throw PasskeyPrfError.Generic("Failed to encode salt as UTF-8")
+            throw PrfProviderError.Generic("Failed to encode salt as UTF-8")
         }
 
         // Try assertion first (existing credential)
         do {
             return try await performAssertionWithPrf(saltData: saltData)
-        } catch let error as PasskeyPrfError where error.isCredentialNotFound {
+        } catch let error as PrfProviderError where error.isCredentialNotFound {
             guard autoRegister else { throw error }
 
             // No credential found, auto-register a new one and retry
             do {
                 _ = try await registerCredential()
-            } catch let regError as PasskeyPrfError where regError.isCredentialNotFound {
+            } catch let regError as PrfProviderError where regError.isCredentialNotFound {
                 // Registration also got notHandled: the entitlement or
                 // domain association is misconfigured, not a missing credential.
-                throw PasskeyPrfError.Configuration(
+                throw PrfProviderError.Configuration(
                     "Associated Domains entitlement not configured. "
                     + "Add 'webcredentials:\(rpId)' to your app's entitlements "
                     + "and ensure a valid provisioning profile."
@@ -193,7 +193,7 @@ public class PasskeyProvider: PrfProvider {
     ///
     /// - Parameter salts: Salt strings in order.
     /// - Returns: One 32-byte output per salt, in input order.
-    /// - Throws: `PasskeyPrfError` if any underlying ceremony fails. The
+    /// - Throws: `PrfProviderError` if any underlying ceremony fails. The
     ///   first failing ceremony aborts the rest.
     public func deriveSeeds(salts: [String]) async throws -> [Data] {
         if salts.isEmpty {
@@ -233,19 +233,19 @@ public class PasskeyProvider: PrfProvider {
         guard let salt1Data = salt1.data(using: .utf8),
               let salt2Data = salt2.data(using: .utf8)
         else {
-            throw PasskeyPrfError.Generic("Failed to encode salts as UTF-8")
+            throw PrfProviderError.Generic("Failed to encode salts as UTF-8")
         }
 
         // Try assertion. Auto-register on missing-credential, mirroring
         // `deriveSeed`.
         do {
             return try await performDualSaltAssertionInner(salt1Data: salt1Data, salt2Data: salt2Data)
-        } catch let error as PasskeyPrfError where error.isCredentialNotFound {
+        } catch let error as PrfProviderError where error.isCredentialNotFound {
             guard autoRegister else { throw error }
             do {
                 _ = try await registerCredential()
-            } catch let regError as PasskeyPrfError where regError.isCredentialNotFound {
-                throw PasskeyPrfError.Configuration(
+            } catch let regError as PrfProviderError where regError.isCredentialNotFound {
+                throw PrfProviderError.Configuration(
                     "Associated Domains entitlement not configured. "
                     + "Add 'webcredentials:\(rpId)' to your app's entitlements "
                     + "and ensure a valid provisioning profile."
@@ -268,7 +268,7 @@ public class PasskeyProvider: PrfProvider {
     /// - Returns: Credential ID plus AAGUID and backup-eligibility parsed
     ///   from the attestation object. AAGUID and `backupEligible` are nil
     ///   when the attestation can't be parsed.
-    /// - Throws: `PasskeyPrfError` if the user cancels or PRF is not supported by the authenticator.
+    /// - Throws: `PrfProviderError` if the user cancels or PRF is not supported by the authenticator.
     @discardableResult
     public func createPasskey(excludeCredentialIds: [Data] = []) async throws -> RegisteredCredential {
         return try await registerCredential(excludeCredentialIds: excludeCredentialIds)
@@ -287,7 +287,7 @@ public class PasskeyProvider: PrfProvider {
     ///   credential provider is configured. Those states are handled by the
     ///   system at call time: when `deriveSeed` runs, the OS surfaces
     ///   its own "set up biometrics / pick a credential provider" prompts
-    ///   and the call either succeeds or fails with a `PasskeyPrfError`
+    ///   and the call either succeeds or fails with a `PrfProviderError`
     ///   (e.g. `.userCancelled`, `.authenticationFailed`).
     ///
     /// Callers that need a stronger "ready to derive" signal should try a
@@ -756,13 +756,13 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
                 as? ASAuthorizationPlatformPublicKeyCredentialAssertion
             else {
                 continuation?.resume(
-                    throwing: PasskeyPrfError.AuthenticationFailed(
+                    throwing: PrfProviderError.AuthenticationFailed(
                         "Unexpected credential type"))
                 return
             }
 
             guard let prfData = PasskeyPRFHelper.extractPRFOutput(from: credential) else {
-                continuation?.resume(throwing: PasskeyPrfError.PrfNotSupported)
+                continuation?.resume(throwing: PrfProviderError.PrfNotSupported)
                 return
             }
 
@@ -777,7 +777,7 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
                 as? ASAuthorizationPlatformPublicKeyCredentialRegistration
             else {
                 registrationContinuation?.resume(
-                    throwing: PasskeyPrfError.AuthenticationFailed("Unexpected credential type"))
+                    throwing: PrfProviderError.AuthenticationFailed("Unexpected credential type"))
                 return
             }
             var aaguid: Data? = nil
@@ -814,7 +814,7 @@ private class AuthorizationDelegate: NSObject, ASAuthorizationControllerDelegate
 /// distinction can wall-clock the call: fast-fail < 200ms vs a
 /// dismissed sheet that takes seconds.
 @available(iOS 18.0, macOS 15.0, *)
-private func mapASAuthorizationError(_ error: Error) -> PasskeyPrfError {
+private func mapASAuthorizationError(_ error: Error) -> PrfProviderError {
     let nsError = error as NSError
     if nsError.domain == ASAuthorizationError.errorDomain {
         switch ASAuthorizationError.Code(rawValue: nsError.code) {
@@ -869,14 +869,14 @@ private class DualSaltAuthorizationDelegate: NSObject, ASAuthorizationController
             as? ASAuthorizationPlatformPublicKeyCredentialAssertion
         else {
             continuation?.resume(
-                throwing: PasskeyPrfError.AuthenticationFailed(
+                throwing: PrfProviderError.AuthenticationFailed(
                     "Unexpected credential type"))
             return
         }
 
         guard let prfFirst = PasskeyPRFHelper.extractPRFOutput(from: credential) else {
             // Authenticator doesn't support the PRF extension at all.
-            continuation?.resume(throwing: PasskeyPrfError.PrfNotSupported)
+            continuation?.resume(throwing: PrfProviderError.PrfNotSupported)
             return
         }
 
@@ -898,7 +898,7 @@ private class DualSaltAuthorizationDelegate: NSObject, ASAuthorizationController
 // MARK: - Error Extension
 
 @available(iOS 18.0, macOS 15.0, *)
-extension PasskeyPrfError {
+extension PrfProviderError {
     /// Whether this error indicates no credential was found (recoverable by registration).
     var isCredentialNotFound: Bool {
         switch self {

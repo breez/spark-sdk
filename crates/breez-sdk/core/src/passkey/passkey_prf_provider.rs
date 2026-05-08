@@ -1,4 +1,4 @@
-use super::error::PasskeyPrfError;
+use super::error::PrfProviderError;
 use super::models::{CreatePasskeyRequest, RegisteredCredential};
 
 /// Result of a domain-association verification check against the platform's
@@ -86,8 +86,8 @@ pub trait PrfProvider: Send + Sync {
     ///
     /// # Returns
     /// * `Ok(Vec<u8>)` - The 32-byte PRF output
-    /// * `Err(PasskeyPrfError)` - If authentication fails or PRF is not supported
-    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError>;
+    /// * `Err(PrfProviderError)` - If authentication fails or PRF is not supported
+    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError>;
 
     /// Derive multiple 32-byte PRF outputs in as few authenticator
     /// ceremonies as the platform supports.
@@ -116,10 +116,10 @@ pub trait PrfProvider: Send + Sync {
     ///
     /// # Returns
     /// * `Ok(Vec<Vec<u8>>)` - One 32-byte output per salt, in input order.
-    /// * `Err(PasskeyPrfError)` - If authentication fails, PRF is not
+    /// * `Err(PrfProviderError)` - If authentication fails, PRF is not
     ///   supported, or fewer outputs than salts are returned by the
     ///   platform.
-    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
+    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
         let mut out = Vec::with_capacity(salts.len());
         for salt in salts {
             out.push(self.derive_seed(salt).await?);
@@ -134,8 +134,8 @@ pub trait PrfProvider: Send + Sync {
     /// # Returns
     /// * `Ok(true)` - PRF-capable passkey is available
     /// * `Ok(false)` - No PRF-capable passkey available
-    /// * `Err(PasskeyPrfError)` - If the check fails
-    async fn is_supported(&self) -> Result<bool, PasskeyPrfError>;
+    /// * `Err(PrfProviderError)` - If the check fails
+    async fn is_supported(&self) -> Result<bool, PrfProviderError>;
 
     /// Register a new passkey on the authenticator and return its
     /// metadata.
@@ -154,24 +154,24 @@ pub trait PrfProvider: Send + Sync {
     /// - **CLI / hardware providers** (FIDO2 hmac-secret, `YubiKey`, file-backed):
     ///   these implementations register lazily inside [`Self::derive_seed`]
     ///   when no credential exists, and do not expose explicit creation. The
-    ///   default impl returns [`PasskeyPrfError::PrfNotSupported`] to signal
+    ///   default impl returns [`PrfProviderError::PrfNotSupported`] to signal
     ///   that callers should rely on the implicit registration path.
     ///
     /// # Returns
     /// * `Ok(RegisteredCredential)` with the new credential's identifier
     ///   and any platform-supplied metadata (AAGUID, BE flag).
-    /// * `Err(PasskeyPrfError::CredentialAlreadyExists)` when the
+    /// * `Err(PrfProviderError::CredentialAlreadyExists)` when the
     ///   authenticator refused registration because an entry in
     ///   `request.exclude_credential_ids` matched a credential already
     ///   on the device.
-    /// * `Err(PasskeyPrfError::PrfNotSupported)` from the default impl
+    /// * `Err(PrfProviderError::PrfNotSupported)` from the default impl
     ///   when the provider does not implement explicit registration.
     async fn create_passkey(
         &self,
         request: CreatePasskeyRequest,
-    ) -> Result<RegisteredCredential, PasskeyPrfError> {
+    ) -> Result<RegisteredCredential, PrfProviderError> {
         let _ = request;
-        Err(PasskeyPrfError::PrfNotSupported)
+        Err(PrfProviderError::PrfNotSupported)
     }
 
     /// Diagnostic check: verify the app's identity against the platform's
@@ -219,8 +219,8 @@ pub trait PrfProvider: Send + Sync {
     ///   the provider degrades this to `Skipped` (see above).
     /// * `Ok(DomainAssociation::Skipped { .. })`: check was not performed or
     ///   could not complete. Proceed normally.
-    /// * `Err(PasskeyPrfError)`: the check mechanism itself failed.
-    async fn check_domain_association(&self) -> Result<DomainAssociation, PasskeyPrfError> {
+    /// * `Err(PrfProviderError)`: the check mechanism itself failed.
+    async fn check_domain_association(&self) -> Result<DomainAssociation, PrfProviderError> {
         Ok(DomainAssociation::Skipped {
             reason: "Provider does not verify domain association".to_string(),
         })

@@ -58,7 +58,7 @@ mod passkey_prf_provider;
 
 pub use derivation::ACCOUNT_MASTER_SALT;
 use derivation::prf_to_mnemonic;
-pub use error::{ErrorKind, PasskeyError, PasskeyPrfError};
+pub use error::{ErrorKind, PasskeyError, PrfProviderError};
 pub use label_store::{Identity, LabelStore};
 pub use models::{
     CreatePasskeyRequest, NamedSalt, NostrRelayConfig, RegisteredCredential, SetupWalletRequest,
@@ -201,7 +201,7 @@ impl Passkey {
 
         let seeds = self.prf_provider.derive_seeds(salts).await?;
         if seeds.len() != expected {
-            return Err(PasskeyError::PrfError(PasskeyPrfError::Generic(format!(
+            return Err(PasskeyError::Prf(PrfProviderError::Generic(format!(
                 "derive_seeds returned {} outputs, expected {expected}",
                 seeds.len()
             ))));
@@ -331,11 +331,11 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for MockPrfProvider {
-        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PrfProviderError> {
             Ok(self.seed.to_vec())
         }
 
-        async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
+        async fn is_supported(&self) -> Result<bool, PrfProviderError> {
             Ok(true)
         }
     }
@@ -357,7 +357,7 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for SaltAwareMockProvider {
-        async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
             let mut outputs = self.salt_outputs.lock().unwrap();
             if let Some(output) = outputs.get(&salt) {
                 return Ok(output.clone());
@@ -379,29 +379,29 @@ mod tests {
             Ok(output.to_vec())
         }
 
-        async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
+        async fn is_supported(&self) -> Result<bool, PrfProviderError> {
             Ok(true)
         }
     }
 
     // Mock that always fails - for testing error propagation
     struct FailingPrfProvider {
-        error: PasskeyPrfError,
+        error: PrfProviderError,
     }
 
     impl FailingPrfProvider {
-        fn new(error: PasskeyPrfError) -> Self {
+        fn new(error: PrfProviderError) -> Self {
             Self { error }
         }
     }
 
     #[macros::async_trait]
     impl PrfProvider for FailingPrfProvider {
-        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PrfProviderError> {
             Err(self.error.clone())
         }
 
-        async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
+        async fn is_supported(&self) -> Result<bool, PrfProviderError> {
             Err(self.error.clone())
         }
     }
@@ -411,11 +411,11 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for UnavailablePrfProvider {
-        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
-            Err(PasskeyPrfError::PrfNotSupported)
+        async fn derive_seed(&self, _salt: String) -> Result<Vec<u8>, PrfProviderError> {
+            Err(PrfProviderError::PrfNotSupported)
         }
 
-        async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
+        async fn is_supported(&self) -> Result<bool, PrfProviderError> {
             Ok(false)
         }
     }
@@ -449,7 +449,7 @@ mod tests {
     #[macros::async_test_all]
     async fn test_is_available_error() {
         let prf_provider = Arc::new(FailingPrfProvider::new(
-            PasskeyPrfError::AuthenticationFailed("Test error".to_string()),
+            PrfProviderError::AuthenticationFailed("Test error".to_string()),
         ));
         let passkey = Passkey::new(prf_provider, None);
 
@@ -457,7 +457,7 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            PasskeyError::PrfError(PasskeyPrfError::AuthenticationFailed(_))
+            PasskeyError::Prf(PrfProviderError::AuthenticationFailed(_))
         ));
     }
 

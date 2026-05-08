@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
-use breez_sdk_spark::passkey::{PasskeyPrfError, PrfProvider};
+use breez_sdk_spark::passkey::{PrfProviderError, PrfProvider};
 use rand::{RngCore, thread_rng};
 
 /// File name for the seed restore secret.
@@ -31,18 +31,18 @@ impl FilePrfProvider {
     /// * `data_dir` - The data directory where the secret file is stored
     ///
     /// # Errors
-    /// Returns `PasskeyPrfError::Generic` if file operations fail.
-    pub fn new(data_dir: &PathBuf) -> Result<Self, PasskeyPrfError> {
+    /// Returns `PrfProviderError::Generic` if file operations fail.
+    pub fn new(data_dir: &PathBuf) -> Result<Self, PrfProviderError> {
         let secret_path = data_dir.join(SECRET_FILE_NAME);
 
         let secret = if secret_path.exists() {
             // Read existing secret
             let bytes = fs::read(&secret_path).map_err(|e| {
-                PasskeyPrfError::Generic(format!("Failed to read secret file: {e}"))
+                PrfProviderError::Generic(format!("Failed to read secret file: {e}"))
             })?;
 
             if bytes.len() != 32 {
-                return Err(PasskeyPrfError::Generic(format!(
+                return Err(PrfProviderError::Generic(format!(
                     "Invalid secret file: expected 32 bytes, got {}",
                     bytes.len()
                 )));
@@ -58,12 +58,12 @@ impl FilePrfProvider {
 
             // Ensure data directory exists
             fs::create_dir_all(data_dir).map_err(|e| {
-                PasskeyPrfError::Generic(format!("Failed to create data directory: {e}"))
+                PrfProviderError::Generic(format!("Failed to create data directory: {e}"))
             })?;
 
             // Save secret to file
             fs::write(&secret_path, secret).map_err(|e| {
-                PasskeyPrfError::Generic(format!("Failed to write secret file: {e}"))
+                PrfProviderError::Generic(format!("Failed to write secret file: {e}"))
             })?;
 
             secret
@@ -75,7 +75,7 @@ impl FilePrfProvider {
 
 #[async_trait::async_trait]
 impl PrfProvider for FilePrfProvider {
-    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+    async fn derive_seed(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
         // Use HMAC-SHA256(secret, salt) as the PRF output
         let mut engine = HmacEngine::<sha256::Hash>::new(&self.secret);
         engine.input(salt.as_bytes());
@@ -84,7 +84,7 @@ impl PrfProvider for FilePrfProvider {
         Ok(hmac.to_byte_array().to_vec())
     }
 
-    async fn is_supported(&self) -> Result<bool, PasskeyPrfError> {
+    async fn is_supported(&self) -> Result<bool, PrfProviderError> {
         // File-based PRF is always available once initialized
         Ok(true)
     }

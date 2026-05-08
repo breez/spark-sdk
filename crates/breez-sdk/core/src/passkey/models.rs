@@ -61,7 +61,7 @@ pub struct WalletSetup {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct CreatePasskeyRequest {
     /// Credential IDs the authenticator must refuse to duplicate.
-    /// Surfaces as `PasskeyPrfError::CredentialAlreadyExists` when
+    /// Surfaces as `PrfProviderError::CredentialAlreadyExists` when
     /// any entry matches a credential already on the device.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub exclude_credential_ids: Vec<Vec<u8>>,

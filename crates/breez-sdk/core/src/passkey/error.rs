@@ -30,7 +30,7 @@ pub enum ErrorKind {
 /// Platforms implement `PrfProvider` and return this error type.
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
-pub enum PasskeyPrfError {
+pub enum PrfProviderError {
     /// PRF extension is not supported by the authenticator
     #[error("PRF not supported by authenticator")]
     PrfNotSupported,
@@ -70,7 +70,7 @@ pub enum PasskeyPrfError {
     Generic(String),
 }
 
-impl PasskeyPrfError {
+impl PrfProviderError {
     /// Coarse classification for the caller. Lets hosts branch on a
     /// small, actionable enum instead of pattern-matching every
     /// variant.
@@ -91,9 +91,9 @@ impl PasskeyPrfError {
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum PasskeyError {
-    /// Passkey PRF provider error
+    /// Error raised by the underlying [`crate::passkey::PrfProvider`].
     #[error("PRF error: {0}")]
-    PrfError(#[from] PasskeyPrfError),
+    Prf(#[from] PrfProviderError),
 
     /// Nostr relay connection failed
     #[error("Nostr relay connection failed: {0}")]
@@ -137,7 +137,7 @@ impl PasskeyError {
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::PrfError(inner) => inner.kind(),
+            Self::Prf(inner) => inner.kind(),
             _ => ErrorKind::Internal,
         }
     }

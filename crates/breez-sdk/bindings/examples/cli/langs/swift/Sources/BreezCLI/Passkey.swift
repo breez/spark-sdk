@@ -39,7 +39,7 @@ class FilePrfProvider: PrfProvider {
         if fm.fileExists(atPath: secretPath) {
             let bytes = try Data(contentsOf: URL(fileURLWithPath: secretPath))
             guard bytes.count == 32 else {
-                throw PasskeyPrfError.Generic( "Invalid secret file: expected 32 bytes, got \(bytes.count)")
+                throw PrfProviderError.Generic( "Invalid secret file: expected 32 bytes, got \(bytes.count)")
             }
             self.secret = bytes
         } else {
@@ -47,7 +47,7 @@ class FilePrfProvider: PrfProvider {
             var randomBytes = [UInt8](repeating: 0, count: 32)
             let status = SecRandomCopyBytes(kSecRandomDefault, 32, &randomBytes)
             guard status == errSecSuccess else {
-                throw PasskeyPrfError.Generic( "Failed to generate random secret")
+                throw PrfProviderError.Generic( "Failed to generate random secret")
             }
 
             // Ensure data directory exists
@@ -94,7 +94,7 @@ class FilePrfProvider: PrfProvider {
 /// a Swift YubiKey library (e.g., YubiKit from Yubico).
 class YubiKeyPrfProvider: PrfProvider {
     func derivePrfSeed(salt: String) async throws -> Data {
-        throw PasskeyPrfError.Generic(
+        throw PrfProviderError.Generic(
             "YubiKey PRF provider is not yet supported in the Swift CLI. " +
                 "See the Rust CLI for a reference implementation using yubico-manager."
         )
@@ -117,7 +117,7 @@ class YubiKeyPrfProvider: PrfProvider {
 /// a Swift FIDO2/CTAP2 library with HID transport support.
 class Fido2PrfProvider: PrfProvider {
     func derivePrfSeed(salt: String) async throws -> Data {
-        throw PasskeyPrfError.Generic(
+        throw PrfProviderError.Generic(
             "FIDO2 PRF provider is not yet supported in the Swift CLI. " +
                 "See the Rust CLI for a reference implementation using ctap-hid-fido2."
         )
@@ -143,7 +143,7 @@ func createPrfProvider(type: PasskeyProviderType, dataDir: String, rpId: String?
                 rpName: "Breez SDK"
             )
         } else {
-            throw PasskeyPrfError.Generic(
+            throw PrfProviderError.Generic(
                 "Platform passkey PRF requires iOS 18.0+ or macOS 15.0+"
             )
         }
@@ -182,7 +182,7 @@ func resolvePasskeySeed(
         let labels = try await passkey.listLabels()
 
         if labels.isEmpty {
-            throw PasskeyPrfError.Generic(
+            throw PrfProviderError.Generic(
                 "No labels found on Nostr for this identity"
             )
         }
@@ -196,7 +196,7 @@ func resolvePasskeySeed(
               let idx = Int(line.trimmingCharacters(in: .whitespaces)),
               idx >= 1, idx <= labels.count
         else {
-            throw PasskeyPrfError.Generic( "Invalid selection")
+            throw PrfProviderError.Generic( "Invalid selection")
         }
 
         resolvedName = labels[idx - 1]

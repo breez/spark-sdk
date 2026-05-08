@@ -1,4 +1,4 @@
-pub use breez_sdk_spark::passkey::{PasskeyPrfError, PasskeyError};
+pub use breez_sdk_spark::passkey::{PasskeyError, PrfProviderError};
 pub use breez_sdk_spark::{DepositClaimError, Fee, SdkError, StorageError};
 use flutter_rust_bridge::frb;
 
@@ -53,8 +53,8 @@ pub enum _StorageError {
     Serialization(String),
 }
 
-#[frb(mirror(PasskeyPrfError))]
-pub enum _PasskeyPrfError {
+#[frb(mirror(PrfProviderError))]
+pub enum _PrfProviderError {
     PrfNotSupported,
     UserCancelled,
     CredentialNotFound,
@@ -67,7 +67,7 @@ pub enum _PasskeyPrfError {
 
 #[frb(mirror(PasskeyError))]
 pub enum _PasskeyError {
-    PrfError(PasskeyPrfError),
+    Prf(PrfProviderError),
     RelayConnectionFailed(String),
     NostrWriteFailed(String),
     NostrReadFailed(String),

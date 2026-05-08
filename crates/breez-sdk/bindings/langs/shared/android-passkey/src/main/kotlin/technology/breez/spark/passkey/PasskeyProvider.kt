@@ -2,7 +2,7 @@ package technology.breez.spark.passkey
 
 import android.app.Activity
 import breez_sdk_spark.DomainAssociation
-import breez_sdk_spark.PasskeyPrfException
+import breez_sdk_spark.PrfProviderException
 import breez_sdk_spark.PrfProvider
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
@@ -13,7 +13,7 @@ import technology.breez.spark.passkey.core.RegisteredCredential
  * Built-in [PrfProvider] that uses the AndroidX Credential Manager +
  * WebAuthn PRF extension to derive deterministic 32-byte seeds from platform
  * passkeys. A thin wrapper around [CredentialManagerPrfCore] that adapts the
- * core's exceptions into the UniFFI-generated [PasskeyPrfException] variants.
+ * core's exceptions into the UniFFI-generated [PrfProviderException] variants.
  *
  * On first use, if no credential exists for the Relying Party, a new passkey
  * is automatically created (registered), then the assertion is retried.
@@ -53,7 +53,7 @@ import technology.breez.spark.passkey.core.RegisteredCredential
  * @param autoRegister When `true` (default), [deriveSeed] automatically
  *   creates a new passkey if none exists for this RP ID, then retries the
  *   assertion. When `false`, [deriveSeed] throws
- *   [PasskeyPrfException.CredentialNotFound] instead, letting the caller
+ *   [PrfProviderException.CredentialNotFound] instead, letting the caller
  *   control registration separately via [createPasskey].
  * @param allowCredentialIds When non-empty, restricts assertion (sign-in)
  *   to one of the listed credential IDs. The platform refuses any other
@@ -109,7 +109,7 @@ public class PasskeyProvider(
                 onAssertionCredentialId = onAssertionCredentialId,
             )
         } catch (e: CredentialManagerPrfCoreException) {
-            throw e.toPasskeyPrfException()
+            throw e.toPrfProviderException()
         }
     }
 
@@ -139,7 +139,7 @@ public class PasskeyProvider(
                 onAssertionCredentialId = onAssertionCredentialId,
             )
         } catch (e: CredentialManagerPrfCoreException) {
-            throw e.toPasskeyPrfException()
+            throw e.toPrfProviderException()
         }
     }
 
@@ -219,27 +219,27 @@ public class PasskeyProvider(
                 excludeCredentialIds = excludeCredentialIds,
             )
         } catch (e: CredentialManagerPrfCoreException) {
-            throw e.toPasskeyPrfException()
+            throw e.toPrfProviderException()
         }
     }
 
-    private fun CredentialManagerPrfCoreException.toPasskeyPrfException(): PasskeyPrfException =
+    private fun CredentialManagerPrfCoreException.toPrfProviderException(): PrfProviderException =
         when (kind) {
             CredentialManagerPrfCore.Kind.PrfNotSupported ->
-                PasskeyPrfException.PrfNotSupported()
+                PrfProviderException.PrfNotSupported()
             CredentialManagerPrfCore.Kind.UserCancelled ->
-                PasskeyPrfException.UserCancelled()
+                PrfProviderException.UserCancelled()
             CredentialManagerPrfCore.Kind.CredentialNotFound ->
-                PasskeyPrfException.CredentialNotFound()
+                PrfProviderException.CredentialNotFound()
             CredentialManagerPrfCore.Kind.AuthenticationFailed ->
-                PasskeyPrfException.AuthenticationFailed(message ?: "")
+                PrfProviderException.AuthenticationFailed(message ?: "")
             CredentialManagerPrfCore.Kind.PrfEvaluationFailed ->
-                PasskeyPrfException.PrfEvaluationFailed(message ?: "")
+                PrfProviderException.PrfEvaluationFailed(message ?: "")
             CredentialManagerPrfCore.Kind.Configuration ->
-                PasskeyPrfException.Configuration(message ?: "")
+                PrfProviderException.Configuration(message ?: "")
             CredentialManagerPrfCore.Kind.CredentialAlreadyExists ->
-                PasskeyPrfException.CredentialAlreadyExists(message ?: "")
+                PrfProviderException.CredentialAlreadyExists(message ?: "")
             CredentialManagerPrfCore.Kind.Generic ->
-                PasskeyPrfException.Generic(message ?: "")
+                PrfProviderException.Generic(message ?: "")
         }
 }
