@@ -953,8 +953,3 @@ export class PasskeyProvider {
         }
     }
 }
-
-/**
- * @deprecated Use PasskeyProvider instead. This alias will be removed in a future release.
- */
-export { PasskeyProvider as PasskeyPrfProvider };
