@@ -79,36 +79,6 @@ public object CredentialManagerPrfCore {
     public const val DEFAULT_RP_NAME: String = "Breez SDK"
 
     /**
-     * Cached verdict for dual-salt PRF support, used as an optimization
-     * hint to skip the dual-salt probe once we've seen a successful
-     * pair. Two states only:
-     *   - `null` (unknown / not yet observed): attempt dual-salt; on
-     *     missing `results.second`, fall back to a single-salt assertion
-     *     for the dropped salt. Same prompt count as if we knew up front
-     *     that the authenticator drops `second`, so there is no value
-     *     in caching that negative outcome.
-     *   - `true` (confirmed): keep using the dual-salt fast path.
-     *
-     * We deliberately don't cache a `false` verdict. The previous design
-     * did, which permanently disabled dual-salt for the rest of the
-     * process if the user briefly authenticated with a credential
-     * provider that drops `saltInput2` (a hardware key over NFC, an
-     * older third-party password manager). Switching back to a
-     * dual-salt-capable provider afterwards left dual-salt disabled
-     * until app restart.
-     */
-    @Volatile
-    private var dualSaltSupportVerdict: Boolean? = null
-
-    /**
-     * Reset the cached dual-salt-support verdict. Useful in tests and
-     * for hosts that want to re-probe before a sensitive flow.
-     */
-    public fun resetDualSaltVerdict() {
-        dualSaltSupportVerdict = null
-    }
-
-    /**
      * Returns `true` if this device's OS version could support passkey PRF.
      *
      * PRF extension support requires API 28+ (Android 9+) via Google Play
@@ -239,11 +209,9 @@ public object CredentialManagerPrfCore {
         var idx = 0
         while (idx < salts.size) {
             if (idx + 1 < salts.size) {
-                // Always attempt dual-salt: a missing `results.second`
-                // is recovered via single-salt fallback below at zero
-                // additional prompt cost compared to single-salting both
-                // up front. See `dualSaltSupportVerdict` doc for why we
-                // don't cache a negative outcome.
+                // Always attempt dual-salt; if the authenticator drops
+                // `results.second` we recover via single-salt below at
+                // zero extra prompt cost.
                 try {
                     val pair = getDualSaltAssertionWithPrfOrRegister(
                         activity = activity,
@@ -631,14 +599,9 @@ public object CredentialManagerPrfCore {
     }
 
     /**
-     * Run a dual-salt PRF assertion, with auto-registration on missing
-     * credential when [autoRegister] is true. Returns
-     * `(first, second?)` where `second` is null if the authenticator
-     * silently dropped the second salt (caller falls back to a single
-     * assertion for that salt).
-     *
-     * The cached [dualSaltSupportVerdict] is updated to `true` when
-     * both salts come back successfully.
+     * Dual-salt assertion with auto-register on missing credential.
+     * Returns `(first, second?)`; `second` is null when the
+     * authenticator dropped `saltInput2`.
      */
     private suspend fun getDualSaltAssertionWithPrfOrRegister(
         activity: Activity,
@@ -781,9 +744,6 @@ public object CredentialManagerPrfCore {
         } catch (_: Exception) {
             return Pair(firstBytes, null)
         }
-        // Mark dual-salt as supported on this authenticator: subsequent
-        // calls skip the probe and use the fast path directly.
-        dualSaltSupportVerdict = true
         return Pair(firstBytes, secondBytes)
     }
 

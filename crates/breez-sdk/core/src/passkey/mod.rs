@@ -241,19 +241,14 @@ impl Passkey {
         let account_master = &seeds[0];
         let root_key = &seeds[1];
 
-        // Prime the Nostr identity cache. `set` returns Err if the cell
-        // was already populated by a prior call, which is acceptable:
-        // the existing keys are deterministic from the same passkey, so
-        // overwriting would be a no-op anyway. We ignore that error.
+        // Prime the Nostr identity cache (idempotent; deterministic keys).
         let nostr_keys = derive_nostr_keypair(account_master)?;
         let _ = self.nostr_keys.set(nostr_keys.clone());
 
-        // Derive the mnemonic before reaching out to Nostr. The PRF
-        // ceremony already cost the user a biometric prompt; a
-        // transient relay outage on the publish leg shouldn't burn
-        // that. Phase 2's `WalletSetup { wallet, sync_error }` shape
-        // will surface the failure to the caller as a structured
-        // warning; for now we log the error and proceed.
+        // Build the wallet first so a transient relay failure on the
+        // publish leg below doesn't burn the PRF ceremony. Phase 2's
+        // WalletSetup { wallet, sync_error } will surface that failure
+        // structurally instead of just logging.
         let mnemonic = prf_to_mnemonic(root_key)?;
         let wallet = Wallet {
             seed: Seed::Mnemonic {
@@ -263,9 +258,6 @@ impl Passkey {
             label: label.clone(),
         };
 
-        // Publish the label to Nostr (idempotent: skip if it already
-        // exists for this identity). Skipped entirely when the caller
-        // is performing a speculative derivation.
         if publish_label {
             match self.nostr_client.label_exists(&nostr_keys, &label).await {
                 Ok(true) => { /* already published; no-op */ }

@@ -216,10 +216,7 @@ public class PasskeyProvider: PrfProvider {
                 if let prfSecond = pair.1 {
                     out.append(prfSecond)
                 } else {
-                    // Authenticator dropped saltInput2; fall back to a
-                    // separate single-salt assertion for the second
-                    // salt. Mirrors the Android `dualSaltSupportVerdict`
-                    // recovery path.
+                    // Authenticator dropped saltInput2; recover via single-salt.
                     out.append(try await derivePrfSeed(salt: salts[idx + 1]))
                 }
                 idx += 2
@@ -890,20 +887,15 @@ private class DualSaltAuthorizationDelegate: NSObject, ASAuthorizationController
         }
 
         guard let prfFirst = PasskeyPRFHelper.extractPRFOutput(from: credential) else {
-            // No PRF output at all — the authenticator doesn't support
-            // the extension. Hard error.
+            // Authenticator doesn't support the PRF extension at all.
             continuation?.resume(throwing: PasskeyPrfError.PrfNotSupported)
             return
         }
 
-        // Surface the credential ID before resolving so hosts can record
-        // it (synced keychain, server-side allowlist, etc.).
         onAssertionCredentialId?(credential.credentialID)
 
-        // Second PRF output may be missing on older iOS versions or
-        // third-party credential providers that drop `saltInput2`. The
-        // caller falls back to a single-salt assertion for the dropped
-        // salt, mirroring the Android `dualSaltSupportVerdict` path.
+        // `saltInput2` may be dropped by older iOS / third-party providers;
+        // caller falls back to single-salt for that one.
         let prfSecond = PasskeyPRFHelper.extractSecondPRFOutput(from: credential)
         continuation?.resume(returning: (prfFirst, prfSecond))
     }
