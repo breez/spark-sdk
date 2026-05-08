@@ -51,6 +51,7 @@ mod error;
 mod label_store;
 mod models;
 mod nostr_client;
+mod passkey_client;
 mod passkey_prf_provider;
 
 pub use derivation::ACCOUNT_MASTER_SALT;
@@ -60,6 +61,10 @@ pub use label_store::{Identity, LabelStore};
 pub use models::{
     CreatePasskeyRequest, NamedSalt, NostrRelayConfig, RegisteredCredential, SetupWalletRequest,
     Wallet, WalletSetup,
+};
+pub use passkey_client::{
+    DeriveRequest, DeriveResponse, PasskeyClient, RegisterRequest, RegisterResponse,
+    RestoreRequest, RestoreResponse,
 };
 pub use passkey_prf_provider::{DomainAssociation, PrfProvider};
 
@@ -75,7 +80,7 @@ use derivation::derive_nostr_keypair;
 use nostr_client::NostrSaltClient;
 
 /// The default label used when none is provided to [`Passkey::get_wallet`].
-const DEFAULT_LABEL: &str = "Default";
+pub(super) const DEFAULT_LABEL: &str = "Default";
 
 /// Maximum allowed label length in bytes.
 const MAX_LABEL_LENGTH: usize = 1024;
