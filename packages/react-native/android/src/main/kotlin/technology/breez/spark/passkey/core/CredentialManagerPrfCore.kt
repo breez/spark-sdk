@@ -79,24 +79,30 @@ public object CredentialManagerPrfCore {
     public const val DEFAULT_RP_NAME: String = "Breez SDK"
 
     /**
-     * Cached verdict for dual-salt PRF support, keyed off the
-     * authenticator's behavior on first attempt. Initially `null`
-     * (unknown); set to `true` after a successful dual-salt assertion
-     * returns both `results.first` and `results.second`, or `false` if
-     * the second salt was silently dropped.
+     * Cached verdict for dual-salt PRF support, used as an optimization
+     * hint to skip the dual-salt probe once we've seen a successful
+     * pair. Two states only:
+     *   - `null` (unknown / not yet observed): attempt dual-salt; on
+     *     missing `results.second`, fall back to a single-salt assertion
+     *     for the dropped salt. Same prompt count as if we knew up front
+     *     that the authenticator drops `second`, so there is no value
+     *     in caching that negative outcome.
+     *   - `true` (confirmed): keep using the dual-salt fast path.
      *
-     * The verdict is per process: app restart re-probes. Different
-     * authenticators (Google Password Manager, Samsung Pass, third-party)
-     * may have different verdicts; the cache is conservative (assumes
-     * the worst once observed).
+     * We deliberately don't cache a `false` verdict. The previous design
+     * did, which permanently disabled dual-salt for the rest of the
+     * process if the user briefly authenticated with a credential
+     * provider that drops `saltInput2` (a hardware key over NFC, an
+     * older third-party password manager). Switching back to a
+     * dual-salt-capable provider afterwards left dual-salt disabled
+     * until app restart.
      */
     @Volatile
     private var dualSaltSupportVerdict: Boolean? = null
 
     /**
      * Reset the cached dual-salt-support verdict. Useful in tests and
-     * for hosts that want to re-probe after a credential-provider
-     * change (e.g., user switched default authenticator in Settings).
+     * for hosts that want to re-probe before a sensitive flow.
      */
     public fun resetDualSaltVerdict() {
         dualSaltSupportVerdict = null
@@ -232,12 +238,12 @@ public object CredentialManagerPrfCore {
         val output = ArrayList<ByteArray>(salts.size)
         var idx = 0
         while (idx < salts.size) {
-            if (idx + 1 < salts.size && dualSaltSupportVerdict != false) {
-                // Attempt dual-salt for this pair. The cached verdict
-                // is `null` (unknown) on first try and `true` after a
-                // successful pair. Either way we attempt; a missing
-                // results.second flips the verdict to false and triggers
-                // a single-salt fallback for the second salt only.
+            if (idx + 1 < salts.size) {
+                // Always attempt dual-salt: a missing `results.second`
+                // is recovered via single-salt fallback below at zero
+                // additional prompt cost compared to single-salting both
+                // up front. See `dualSaltSupportVerdict` doc for why we
+                // don't cache a negative outcome.
                 try {
                     val pair = getDualSaltAssertionWithPrfOrRegister(
                         activity = activity,
@@ -257,11 +263,11 @@ public object CredentialManagerPrfCore {
                         idx += 2
                         continue
                     }
-                    // Dual-salt unsupported: we got results.first but not
-                    // results.second. Flip the verdict so subsequent
-                    // calls don't waste a probe attempt, and fall through
-                    // to a single-salt for salts[idx + 1].
-                    dualSaltSupportVerdict = false
+                    // Got `results.first` but not `results.second`.
+                    // Fall through to a single-salt assertion for
+                    // salts[idx + 1]. The verdict stays `null` so the
+                    // next pair re-probes (cheap; same prompt count
+                    // either way).
                     output.add(
                         deriveSeedOrRegister(
                             activity = activity,
@@ -567,7 +573,14 @@ public object CredentialManagerPrfCore {
         }.toString()
 
         val option = GetPublicKeyCredentialOption(requestJson)
-        val request = GetCredentialRequest(listOf(option))
+        // Suppress the cross-device QR sheet so a missing local
+        // credential surfaces immediately as NoCredentialException
+        // instead of routing the user into a hybrid flow they'll
+        // never use for a wallet passkey.
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(option)
+            .setPreferImmediatelyAvailableCredentials(true)
+            .build()
         val response = credentialManager.getCredential(activity, request)
 
         val authResponseJson = response.credential.data.getString(
@@ -703,7 +716,11 @@ public object CredentialManagerPrfCore {
         }.toString()
 
         val option = GetPublicKeyCredentialOption(requestJson)
-        val request = GetCredentialRequest(listOf(option))
+        // See single-salt path for rationale.
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(option)
+            .setPreferImmediatelyAvailableCredentials(true)
+            .build()
         val response = credentialManager.getCredential(activity, request)
 
         val authResponseJson = response.credential.data.getString(
