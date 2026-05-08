@@ -44,11 +44,7 @@ private class UniformSampler(private val n: Int) : UserSampler {
     override fun sample(rng: Random): Int = rng.nextInt(n)
 }
 
-/**
- * Zipf sampler over [0, n). Precomputes cumulative weights at construction
- * (8N bytes) and binary-searches per sample. For N ≤ 10^6 this is ≤ 8 MB
- * of memory; partner workloads at this scale don't need denser sampling.
- */
+/** Zipf sampler over [0, n). Precomputed cumulative weights, binary search per sample. */
 private class ZipfSampler(private val n: Int, skew: Double) : UserSampler {
     private val cum: DoubleArray
     private val total: Double
@@ -239,8 +235,7 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
     var senderCursor = 0
 
     coroutineScope {
-        // Periodic progress logger — prints every 5s while dispatching, then a
-        // shorter interval during drain so the user sees in-flight tail off.
+        // 5s progress tick.
         val progressJob = launch {
             var lastDispatched = 0L
             var lastCompleted = 0L

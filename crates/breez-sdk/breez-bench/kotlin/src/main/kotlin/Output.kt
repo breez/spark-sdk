@@ -18,21 +18,8 @@ fun defaultRunId(): String =
 // --- JSONL writer ---------------------------------------------------------
 
 /**
- * Append-only JSONL writer with a dedicated daemon writer thread.
- *
- * Producers call [submit] from any thread; entries are queued onto an
- * unbounded [LinkedBlockingQueue] and drained onto disk by the writer
- * thread. Per-write flush keeps the file readable by another process
- * while the run is in flight.
- *
- * Unbounded queue: producers never block. At our throughput targets
- * (≤ a few thousand entries/sec, small entries) memory pressure is
- * negligible. If a future phase pushes that, swap in a bounded queue
- * with a back-pressure policy.
- *
- * The thread shape (vs. the earlier coroutine + Channel design) lets
- * the server use this from a non-coroutine context (Ktor's start hook)
- * without forcing the whole server into a single coroutine scope.
+ * Append-only JSONL writer; daemon thread drains an unbounded queue.
+ * Per-write flush so the file is readable mid-run.
  */
 class JsonlWriter<T : Any>(
     path: Path,

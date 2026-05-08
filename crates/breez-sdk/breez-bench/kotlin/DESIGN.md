@@ -81,11 +81,9 @@ parallel throughput.
 | `POST /users/{userId}/send` | `prepareSendPayment` + `sendPayment` | Reported as a single number. |
 | `POST /users/{userId}/receive` | `receivePayment(SparkAddress)` | **Address generation only.** |
 
-- `/info` always uses `ensureSynced=true`. Without it, a fresh per-
-  request SDK returns a meaningless balance. `ensureSynced=true`
-  forces a sync only on the *first* call after SDK init — but in the
-  no-pool baseline every request *is* a first call, so every `/info`
-  pays the full sync cost.
+- `/info` always uses `ensureSynced=true`. A fresh per-request SDK
+  has no cached state; without forcing a sync, the returned balance
+  would be meaningless.
 - `/send` latency includes both `prepareSendPayment` and
   `sendPayment`. Single number matches what a real handler does.
 - `/receive` is **address generation only** — `receivePayment` returns
@@ -118,20 +116,6 @@ Sampling:
   reserved sender wallets (keeps closed-loop funding balanced).
   Destination is always the treasurer's Spark address, fetched once
   at startup and cached.
-
-## Why no warmup window
-
-Per-request lifecycle is cold-start by design — each request builds a
-fresh SDK and reconnects to operators — so JIT-amortizable Java code
-is a small fraction of overall request cost. Empirically the first
-~5s of an rps-10 step shows ≤8% bias on `info` p50 vs steady state
-(below run-to-run variance), and at higher RPS the first window is
-the *cleanest* data, not the slowest. We report the full window.
-
-**Low-RPS exclusion still applies.** The HotSpot JIT optimizes hot
-paths only after roughly 10k invocations. At 1 RPS × 60s = 60
-invocations, p99 reflects warmup, not steady-state. The default sweep
-starts at 50 RPS for that reason.
 
 ## Closed-loop funding
 

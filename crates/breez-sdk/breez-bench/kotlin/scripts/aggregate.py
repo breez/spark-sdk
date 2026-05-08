@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""Aggregate a Phase 6 RPS sweep into the headline 3 numbers.
+"""Aggregate an RPS sweep into summary.json + RESULTS.md.
 
 Walks `out/<sweep-id>/rps-<N>/` directories, reads `latency.jsonl`
 (client-side observed timings), `requests.jsonl` (server-side handler
-timings), and `metrics.jsonl` (1Hz process samples). Writes
-`summary.json` and `RESULTS.md` to the sweep dir.
-
-Stdlib only — no numpy / pandas / matplotlib. Phase 9 will add
-matplotlib for charts.
+timings), and `metrics.jsonl` (1Hz process samples). Stdlib only.
 """
 
 import argparse
@@ -436,7 +432,7 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
 # --- main ---------------------------------------------------------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Aggregate a Phase 6 RPS sweep")
+    ap = argparse.ArgumentParser(description="Aggregate an RPS sweep")
     ap.add_argument("--sweep-dir", required=True, help="Path to out/<sweep-id>/")
     args = ap.parse_args()
 

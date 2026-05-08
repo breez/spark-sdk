@@ -65,16 +65,7 @@ fun parseArgs(args: Array<String>): Map<String, String> {
 private fun maskPassword(url: String): String =
     url.replace(Regex("://([^:]*):[^@/]*@"), "://$1:***@")
 
-/**
- * Deterministic seed derivation: HMAC-SHA512(masterSecret, userId) → 64 bytes.
- *
- * The bench uses raw entropy via [Seed.Entropy] rather than a BIP39 mnemonic;
- * the SDK accepts both, and entropy avoids carrying around the wordlist.
- *
- * In a real deployment, the partner replaces this with their own secrets
- * store lookup (user id → seed bytes). The shape of "stable per-user bytes"
- * is what matters — the SDK derives the wallet from there.
- */
+/** HMAC-SHA512(masterSecret, userId) → 64-byte entropy seed. */
 fun deriveSeedBytes(masterSecret: String, userId: String): ByteArray {
     val mac = Mac.getInstance("HmacSHA512")
     mac.init(SecretKeySpec(masterSecret.toByteArray(Charsets.UTF_8), "HmacSHA512"))
@@ -84,13 +75,12 @@ fun deriveSeedBytes(masterSecret: String, userId: String): ByteArray {
 // --- per-request SDK lifecycle --------------------------------------------
 
 /**
- * Spins up a fresh SDK instance per call and tears it down after `op`. Same-
- * `userId` calls serialize through a per-userId mutex so concurrent requests
- * never race two SDK instances against the same MySQL identity rows.
+ * Builds a fresh SDK per call and tears it down after `op`. Same-`userId`
+ * calls serialize through a per-userId mutex so concurrent requests never
+ * race two SDK instances against the same MySQL identity rows.
  *
- * The mutex map grows unboundedly with distinct user-ids. For v1 (bench
- * lifetime is bounded) that's acceptable. Phase 7 (LRU SDK pool) revisits
- * this together with instance reuse.
+ * The mutex map grows unboundedly with distinct user-ids — fine for the
+ * bounded bench lifetime.
  */
 class BenchSdkProvider(
     private val masterSecret: String,
@@ -137,14 +127,7 @@ data class ReceiveResult(val paymentRequest: String, val feeSats: String)
 @Serializable
 data class ErrorBody(val error: String)
 
-/**
- * Per-request server-side timing record written to `requests.jsonl`.
- *
- * Captures handler duration only — no network round-trip — so this is
- * the SDK + MySQL + operator cost that a partner integrator would pay
- * for the same call. The loadgen's `latency.jsonl` adds the network
- * leg on top; comparing the two surfaces network overhead.
- */
+/** Server-side handler timing for `requests.jsonl`. */
 @Serializable
 data class ServerRequestLogEntry(
     val ts: Long,
@@ -271,8 +254,6 @@ fun fundTreasurer(opts: Map<String, String>) = runBlocking {
         ?: error("--master-secret=<hex-or-string> or MASTER_SECRET env var is required")
     val targetSats = opts["target-sats"]?.toLongOrNull() ?: 5_000_000L
 
-    // Fail fast if creds are missing — otherwise we'd build the SDK,
-    // request a deposit address, and only then discover we can't fund.
     System.getenv("FAUCET_USERNAME") ?: error("FAUCET_USERNAME env var is required")
     System.getenv("FAUCET_PASSWORD") ?: error("FAUCET_PASSWORD env var is required")
 
@@ -371,22 +352,9 @@ private suspend fun waitForBalanceIncrease(
 // --- seed-senders mode (top up sender pool from treasurer) ----------------
 
 /**
- * One-shot seeding pass for the K reserved sender wallets
- * (`__sender_0__` … `__sender_{K-1}__`). For each sender, if its
- * balance is below `perSenderSats`, the treasurer Spark-transfers
- * enough to bring it up to that amount.
- *
- * Sized per planned workload — the bench's sweep driver computes
- * `perSenderSats` from the sweep config (RPS list × duration × send
- * mix / K × payment_sats × safety factor) and passes it through. For
- * standalone runs (debugging, ad-hoc), 5000 is a sensible default.
- *
- * Closed-loop design: every `/send` during the bench targets the
- * treasurer, so leftover sender balances roll forward to the next
- * run; re-running this is idempotent (skip-if-balance-already-above).
- *
- * Senders are processed in parallel with bounded concurrency so the
- * treasurer SDK isn't hit by K simultaneous sendPayment calls.
+ * Top each of K sender wallets up to `perSenderSats` from the
+ * treasurer. Idempotent (skip-if-balance-already-above). Bounded
+ * concurrency so the treasurer SDK isn't hit by K simultaneous sends.
  */
 fun seedSenders(opts: Map<String, String>) = runBlocking {
     val mysqlUrl = opts["mysql-url"]
@@ -422,8 +390,6 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
         val treasurerInfo = treasurer.getInfo(GetInfoRequest(ensureSynced = false))
         val treasurerBalance = treasurerInfo.balanceSats.toLong()
         println("[seed] treasurer balance (cached): $treasurerBalance sats")
-        // Worst case: every sender is at zero. Just a warning — partial
-        // seeding is still useful for diagnostics.
         val maxSpend = senderCount.toLong() * perSenderSats
         if (treasurerBalance < maxSpend) {
             System.err.println(
@@ -502,9 +468,6 @@ private suspend fun seedOneSender(
         )
         treasurer.sendPayment(SendPaymentRequest(prepareResponse = prepared))
 
-        // Verify the receiver sees the transfer. Spark transfers are
-        // typically sub-second, but the receiver's SDK still has to
-        // sync to surface the new balance.
         waitForBalanceIncrease(
             sender,
             balance.toULong(),
@@ -546,8 +509,7 @@ fun runServer(opts: Map<String, String>) {
     )
     sampler.start()
 
-    // Best-effort cleanup so a Ctrl-C still flushes the JSONL writers.
-    // Idempotent: each component's close is itself a no-op after the first call.
+    // Flush JSONL writers on Ctrl-C.
     Runtime.getRuntime().addShutdownHook(Thread {
         sampler.stop()
         try { mysqlPoller.close() } catch (_: Exception) {}
@@ -561,12 +523,6 @@ fun runServer(opts: Map<String, String>) {
     embeddedServer(Netty, port = port) {
         install(ContentNegotiation) { json() }
         routing {
-            // GET /users/{userId}/info → InfoResponse
-            //
-            // ensureSynced=true: balance against fresh per-request SDK state
-            // is meaningless without forcing a sync. v1 (per-request lifecycle)
-            // pays the full sync cost on every call; Phase 7 (pooled SDK) will
-            // amortize it to once-per-pool-admission.
             get("/users/{userId}/info") {
                 val userId = call.parameters["userId"]!!
                 handleAndLog(call, "info", userId, requestsWriter) {
@@ -577,11 +533,6 @@ fun runServer(opts: Map<String, String>) {
                 }
             }
 
-            // POST /users/{userId}/send  body=SendBody → SendResult
-            //
-            // Spans both prepareSendPayment + sendPayment. The plan reports
-            // /send latency as a single number; /send-by-stage breakdown can
-            // be added later if a partner wants it.
             post("/users/{userId}/send") {
                 val userId = call.parameters["userId"]!!
                 val body = call.receive<SendBody>()
@@ -602,13 +553,6 @@ fun runServer(opts: Map<String, String>) {
                 }
             }
 
-            // POST /users/{userId}/receive → ReceiveResult
-            //
-            // Address generation only — no funds are landing during the
-            // measurement window. This number is the cost of producing a
-            // deposit destination, not the end-to-end cost of a payment
-            // arriving. Worth flagging in RESULTS.md so partners don't
-            // misread the number.
             post("/users/{userId}/receive") {
                 val userId = call.parameters["userId"]!!
                 handleAndLog(call, "receive", userId, requestsWriter) {
@@ -701,9 +645,8 @@ fun main(args: Array<String>) {
                   smoke         Single-request flow check: derive seed for one user-id,
                                 connect, getInfo, disconnect.
                   server        HTTP server with /users/{userId}/{info,send,receive}
-                                endpoints. Each request spins up a fresh SDK instance
-                                (per-request lifecycle, v1 baseline). Emits per-request
-                                requests.jsonl + 1Hz metrics.jsonl to out/<run-id>/.
+                                endpoints. Fresh SDK per request. Emits requests.jsonl
+                                + 1Hz metrics.jsonl to out/<run-id>/.
                   fund          Top up the reserved treasurer wallet via the Lightspark
                                 regtest faucet. Idempotent. Requires FAUCET_USERNAME +
                                 FAUCET_PASSWORD env vars (FAUCET_URL is optional).

@@ -4,9 +4,11 @@
 # gets its own out/<sweep-id>/rps-<N>/ directory so the aggregator
 # can read them as a set.
 #
-# Per-step server restart matters: cold-start latency is part of the
-# v1 baseline. Reusing a single server across steps would amortise
-# that and overstate v1 capacity.
+# Per-step server restart isolates each RPS step from the previous
+# one's resource state — TIME_WAIT sockets, leaked FDs, JVM heap drift
+# all reset. Without it, a degraded step N would distort step N+1 and
+# we'd misread carryover as RPS-driven cliff. Costs ~25s of JVM
+# startup per step but keeps each step independently interpretable.
 #
 # Required env: MYSQL_URL, MASTER_SECRET.
 # Optional env: SWEEP_RPS (default "50,100,250,500,1000"), DURATION
@@ -191,19 +193,19 @@ ensure_treasurer_addr() {
         return 0
     fi
     echo "[sweep] no cached treasurer addr — fetching once (this can take several minutes the first time per master secret)"
-    local warmup_log="$SWEEP_DIR/treasurer-warmup.log"
+    local bootstrap_log="$SWEEP_DIR/treasurer-bootstrap.log"
     ./gradlew run --console=plain --args="\
         --mode=server \
         --mysql-url=$MYSQL_URL \
         --master-secret=$MASTER_SECRET \
         --port=$PORT \
-        --out-dir=$SWEEP_DIR/.warmup" \
-        > "$warmup_log" 2>&1 &
-    local warmup_pid=$!
-    trap 'echo "[sweep] interrupted during treasurer warmup"; stop_server "$warmup_pid"; exit 130' INT TERM
+        --out-dir=$SWEEP_DIR/.bootstrap" \
+        > "$bootstrap_log" 2>&1 &
+    local bootstrap_pid=$!
+    trap 'echo "[sweep] interrupted during treasurer bootstrap"; stop_server "$bootstrap_pid"; exit 130' INT TERM
     if ! wait_for_server 120; then
-        echo "[sweep] treasurer-warmup server did not become ready (see $warmup_log)"
-        stop_server "$warmup_pid"
+        echo "[sweep] treasurer-bootstrap server did not become ready (see $bootstrap_log)"
+        stop_server "$bootstrap_pid"
         trap - INT TERM
         return 1
     fi
@@ -212,10 +214,10 @@ ensure_treasurer_addr() {
     addr=$(curl -sS --max-time 0 -X POST -H 'content-type: application/json' \
         -d '{}' "http://localhost:$PORT/users/__treasurer__/receive" \
         | python3 -c 'import json,sys; print(json.load(sys.stdin)["paymentRequest"])')
-    stop_server "$warmup_pid"
+    stop_server "$bootstrap_pid"
     trap - INT TERM
     if [ -z "$addr" ]; then
-        echo "[sweep] failed to fetch treasurer Spark addr (see $warmup_log)"
+        echo "[sweep] failed to fetch treasurer Spark addr (see $bootstrap_log)"
         return 1
     fi
     printf '%s\n' "$addr" > "$TREASURER_ADDR_CACHE"

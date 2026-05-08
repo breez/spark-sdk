@@ -12,24 +12,7 @@ import kotlinx.serialization.Serializable
 
 // --- record shape ---------------------------------------------------------
 
-/**
- * A single 1-Hz metrics tick written to `metrics.jsonl`.
- *
- * `-1` for a numeric field means "unavailable on this platform / this
- * tick" rather than zero. Keeping it numeric (vs. a JSON null) keeps
- * downstream aggregators trivial.
- *
- * `mysql_conns` counts rows in `INFORMATION_SCHEMA.PROCESSLIST` whose
- * `DB` matches the bench database name — server-authoritative count of
- * connections open against that DB. Coarse: if multiple bench
- * processes share the DB this over-counts; fine for the v1 single-
- * process bench.
- *
- * `remote_tcp_sockets` is all non-loopback TCP sockets in any state
- * held by this process. Includes ephemeral TIME_WAIT — those still
- * consume local ports, which is the failure mode we care about (port
- * exhaustion at high RPS during cold-start churn).
- */
+/** 1Hz process-metrics tick. Numeric `-1` means "unavailable". */
 @Serializable
 data class MetricSample(
     val ts: Long,
@@ -344,9 +327,6 @@ class MetricsSampler(
 
     private fun sampleNow(): MetricSample {
         val rt = Runtime.getRuntime()
-        // CPU load returns -1.0 if not yet sampled (typical for the
-        // first second after JVM start) — pass that through unchanged
-        // since it shares the same "unavailable" semantics as the rest.
         val procCpu = osMx?.processCpuLoad ?: -1.0
         val hostCpu = osMx?.cpuLoad ?: -1.0
         return MetricSample(
