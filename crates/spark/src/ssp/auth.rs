@@ -52,21 +52,17 @@ impl SspAuthHeaderProvider {
             .session_manager
             .get_session(&self.ssp_identity_public_key)
             .await;
-        let candidate = match cached {
-            Ok(session) => Some(session),
+        match cached {
+            Ok(session) if session.is_valid() => return Ok(session),
+            Ok(_) => debug!("SSP session expired, authenticating"),
             Err(SessionManagerError::NotFound) => {
-                debug!("SSP session not found, authenticating");
-                None
+                debug!("SSP session not found, authenticating")
             }
             Err(SessionManagerError::Generic(e)) => {
-                error!("Failed to get SSP session from session manager: {}", e);
-                None
+                error!("Failed to get SSP session from session manager: {}", e)
             }
-        };
-        let session = match candidate {
-            Some(s) if s.is_valid() => s,
-            _ => self.authenticate().await?,
-        };
+        }
+        let session = self.authenticate().await?;
         self.session_manager
             .set_session(&self.ssp_identity_public_key, session.clone())
             .await?;
