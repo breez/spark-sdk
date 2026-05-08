@@ -257,11 +257,30 @@ public class PasskeyProvider: PrfProvider {
     /// Create a new passkey with PRF support. Single platform prompt;
     /// separates credential creation from derivation in multi-step
     /// onboarding flows. Per-call overrides on `request` (userId,
-    /// userName, userDisplayName) fall back to the constructor values
-    /// when omitted.
+    /// userName, userDisplayName) fall back to the constructor values.
+    ///
+    /// Auto-merges previously-registered credential IDs from
+    /// [`KnownCredentialsStore`] into `request.excludeCredentialIds`
+    /// so the platform refuses to create a duplicate even after a
+    /// reinstall (the store is iCloud-synced). Records the new
+    /// credential ID after a successful create.
     @discardableResult
     public func createPasskey(request: CreatePasskeyRequest) async throws -> RegisteredCredential {
-        return try await registerCredential(request: request)
+        var merged = request
+        let known = KnownCredentialsStore.read(rpId: rpId).compactMap { Data(base64Encoded: $0) }
+        if !known.isEmpty {
+            var seen = Set(request.excludeCredentialIds)
+            for id in known where !seen.contains(id) {
+                merged.excludeCredentialIds.append(id)
+                seen.insert(id)
+            }
+        }
+        let credential = try await registerCredential(request: merged)
+        KnownCredentialsStore.add(
+            credentialId: credential.credentialId.base64EncodedString(),
+            rpId: rpId,
+        )
+        return credential
     }
 
     /// Check if this device's OS version supports the passkey PRF extension.
