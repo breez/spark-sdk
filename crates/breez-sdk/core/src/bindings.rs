@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
-    RestClient, SdkError, Seed, Storage, chain::rest_client::ChainApiType,
+    RestClient, SdkError, Seed, SspConnectionManager, Storage, chain::rest_client::ChainApiType,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -98,6 +98,14 @@ impl SdkBuilder {
     pub async fn with_payment_observer(&self, payment_observer: Arc<dyn PaymentObserver>) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_payment_observer(payment_observer);
+    }
+
+    /// Sets a shared SSP connection manager to be reused across SDK instances.
+    /// Arguments:
+    /// - `manager`: The shared SSP connection manager.
+    pub async fn with_ssp_connection_manager(&self, manager: Arc<SspConnectionManager>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_ssp_connection_manager(manager);
     }
 
     /// Builds the `BreezSdk` instance with the configured components.
