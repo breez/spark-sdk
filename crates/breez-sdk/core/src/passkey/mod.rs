@@ -244,18 +244,13 @@ impl Passkey {
             .map(|(salt, seed)| (salt.name.clone(), seed))
             .collect();
 
-        if request.publish_label {
-            match self.nostr_client.label_exists(&nostr_keys, &label).await {
-                Ok(true) => {}
-                Ok(false) => {
-                    if let Err(e) = self.nostr_client.publish_label(&nostr_keys, &label).await {
-                        warn!("setup_wallet: label publish failed, returning wallet anyway: {e}");
-                    }
-                }
-                Err(e) => {
-                    warn!("setup_wallet: label_exists check failed, skipping publish: {e}");
-                }
-            }
+        if request.publish_label
+            && let Err(e) = self
+                .nostr_client
+                .ensure_label_published(&nostr_keys, &label)
+                .await
+        {
+            warn!("setup_wallet: ensure_label_published failed, returning wallet anyway: {e}");
         }
 
         Ok(WalletSetup {

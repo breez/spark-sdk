@@ -126,6 +126,79 @@ impl NostrSaltClient {
         Ok(labels.iter().any(|l| l == label))
     }
 
+    /// Idempotently ensure `label` is published for `keys`. Opens a
+    /// single client connection, queries existing events on a relay
+    /// batch, and writes the new event to the same connection if the
+    /// label is missing. Halves the round-trip count compared to
+    /// `label_exists` + `publish_label`, and avoids the cold NIP-65
+    /// fetch that `create_write_client` would otherwise trigger.
+    ///
+    /// Triggers the one-time background NIP-65 relay sync (same as
+    /// `query_labels`), keyed off the events fetched here.
+    pub async fn ensure_label_published(
+        &self,
+        keys: &nostr::Keys,
+        label: &str,
+    ) -> Result<(), PasskeyError> {
+        let relays = self.read_relay_candidates();
+        let timeout = Duration::from_secs(u64::from(self.config.timeout_secs()));
+        let filter = Filter::new()
+            .author(keys.public_key())
+            .kind(nostr::Kind::TextNote);
+
+        let mut last_err: Option<String> = None;
+
+        for chunk in relays.chunks(2) {
+            let client = self.new_client(keys)?;
+            let mut added = 0usize;
+            for relay_url in chunk {
+                match client.add_relay(relay_url.as_str()).await {
+                    #[allow(clippy::arithmetic_side_effects)]
+                    Ok(_) => added += 1,
+                    Err(e) => {
+                        warn!("Failed to add relay {relay_url}: {e}");
+                        last_err = Some(e.to_string());
+                    }
+                }
+            }
+            if added == 0 {
+                continue;
+            }
+            client.connect().await;
+
+            let events = match client.fetch_events(filter.clone(), timeout).await {
+                Ok(events) => events,
+                Err(e) => {
+                    client.disconnect().await;
+                    warn!("Failed to fetch events from relay batch: {e}");
+                    last_err = Some(e.to_string());
+                    continue;
+                }
+            };
+            let events_vec: Vec<Event> = events.into_iter().collect();
+
+            let exists = events_vec.iter().any(|e| e.content == label);
+            if !exists {
+                let builder = nostr::EventBuilder::text_note(label);
+                let event = builder.sign_with_keys(keys).map_err(|e| {
+                    PasskeyError::NostrWriteFailed(format!("Failed to sign event: {e}"))
+                })?;
+                if let Err(e) = client.send_event(&event).await {
+                    client.disconnect().await;
+                    return Err(PasskeyError::NostrWriteFailed(e.to_string()));
+                }
+            }
+
+            self.spawn_relay_sync(keys, events_vec);
+            client.disconnect().await;
+            return Ok(());
+        }
+
+        Err(PasskeyError::NostrReadFailed(
+            last_err.unwrap_or_else(|| "no relays available".to_string()),
+        ))
+    }
+
     /// Spawn the NIP-65 relay sync task if it hasn't been triggered yet.
     fn spawn_relay_sync(&self, keys: &nostr::Keys, events: Vec<Event>) {
         if self
