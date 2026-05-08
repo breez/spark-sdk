@@ -94,6 +94,44 @@ export interface CreatePasskeyRequest {
      * Useful for per-wallet discriminators.
      */
     userDisplayName?: string;
+
+    /**
+     * AbortSignal threaded into `navigator.credentials.create`. The
+     * spec-defined late-abort race (signal aborts after the OS prompt
+     * resolves) raises {@link PasskeyCreateAbortedError} carrying the
+     * orphan credential's metadata so hosts can still record it.
+     */
+    signal?: AbortSignal;
+}
+
+/**
+ * Per-call options for {@link PasskeyProvider.derivePrfSeed} and
+ * {@link PasskeyProvider.derivePrfSeeds}. All fields optional.
+ */
+export interface DerivePrfSeedOptions {
+    /**
+     * Restrict assertion to one of these credential IDs. The browser
+     * refuses any other credential for this RP. Use to pin sign-in to
+     * a specific passkey when multiple credentials exist for the RP.
+     * Empty / omitted lets the browser pick any matching credential.
+     */
+    allowCredentialIds?: Uint8Array[];
+
+    /**
+     * AbortSignal threaded into `navigator.credentials.get`. Aborting
+     * rejects the promise with `AbortError`. iOS Safari quirk: the
+     * promise rejects but the OS modal does NOT visually close.
+     */
+    signal?: AbortSignal;
+
+    /**
+     * Fired with the asserted credential's ID and user handle after a
+     * successful ceremony. Useful for migrating credential-ID
+     * tracking, or for `PublicKeyCredential.signalCurrentUserDetails`
+     * follow-ups. Errors thrown inside are swallowed; the seed return
+     * is never blocked.
+     */
+    onCredentialId?: (credentialId: Uint8Array, userHandle: Uint8Array | null) => void;
 }
 
 /**
@@ -141,19 +179,6 @@ export interface PasskeyProviderOptions {
      * @default true
      */
     autoRegister?: boolean;
-
-    /**
-     * When non-empty, restricts assertion (sign-in) to one of the listed
-     * credential IDs. The browser refuses any other credential for this
-     * RP, even if it matches the RP. Use this to bind sign-in to a
-     * specific passkey the caller has registered, instead of letting
-     * the browser pick any sibling credential that happens to share the
-     * RP. Critical for deterministic seed derivation when multiple
-     * credentials might exist for the same RP. When empty (default),
-     * the browser picks any credential matching the RP.
-     * @default []
-     */
-    allowCredentialIds?: Uint8Array[];
 
     /**
      * When set, narrows the create-time UI to the chosen authenticator
@@ -218,117 +243,36 @@ export declare class PasskeyProvider {
     constructor(options?: PasskeyProviderOptions);
 
     /**
-     * List of base64 credential IDs to constrain assertion to. Mirrors
-     * the `allowCredentialIds` constructor option but is also settable
-     * at runtime so callers can re-target sign-in to a refreshed list
-     * (e.g. after a synced-storage hydrate) without reconstructing the
-     * provider. Empty list (default) lets the platform pick any
-     * credential matching the RP.
-     */
-    allowCredentialIds: Uint8Array[];
-
-    /**
-     * Settable `AbortSignal`. When set before a derivePrfSeed /
-     * derivePrfSeeds / createPasskey invocation, threaded into the
-     * underlying `navigator.credentials.{get,create}` call so the
-     * caller can abort an in-flight ceremony.
+     * Derive a 32-byte seed from passkey PRF.
      *
-     * Mirror of the `allowCredentialIds` / `onAssertionCredentialId`
-     * mutate-the-singleton pattern: per-call value, set before the
-     * call, optionally cleared after. Necessary because the SDK's
-     * Rust-side Passkey methods (setupWallet / getWallet) drive the
-     * provider via UniFFI without a generic signal-passing slot, so
-     * the host has no other place to attach the signal.
+     * If no credential exists and `autoRegister` is true (default), a
+     * new passkey is created and the assertion is retried.
      *
-     * Aborting unsettles the WebAuthn promise per spec; on iOS Safari
-     * the OS modal does NOT visually close in current versions, but
-     * the JS promise rejects with `AbortError` so the host can free
-     * its own state machine.
-     */
-    currentSignal?: AbortSignal;
-
-    /**
-     * Optional callback fired with the credential ID and user handle
-     * returned by every successful WebAuthn assertion (sign-in path).
-     * Hosts can set this to record which credential was just used so
-     * they can populate `excludeCredentialIds` and `allowCredentialIds`
-     * on subsequent requests.
-     *
-     * Useful for:
-     * - Migrating users whose passkey predates the host's own
-     *   credential-ID tracking: the first successful sign-in surfaces
-     *   the credential ID, after which the host's records are correct
-     *   and the platform-level "already exists" check can fire on
-     *   future create attempts.
-     * - Retroactive rename of a credential's `user.name` /
-     *   `user.displayName` via `PublicKeyCredential.signalCurrentUserDetails`,
-     *   which requires the credential's `user.id` (the `userHandle`).
-     *
-     * The second argument may be `null` on browsers that don't return
-     * `userHandle` in the assertion response (rare — most authenticators
-     * include it for discoverable credentials).
-     *
-     * Set before calling `derivePrfSeed`. Not invoked on registration
-     * (see `createPasskey`'s return value for that).
-     */
-    onAssertionCredentialId?: (credentialId: Uint8Array, userHandle: Uint8Array | null) => void;
-
-    /**
-     * Derive a 32-byte seed from passkey PRF with the given salt.
-     *
-     * Authenticates the user via a platform passkey and evaluates the PRF extension.
-     * If no credential exists for this RP ID, a new passkey is created automatically.
-     *
-     * @param salt - The salt string to use for PRF evaluation.
-     * @returns The 32-byte PRF output.
      * @throws If authentication fails, PRF is not supported, or the user cancels.
      */
-    derivePrfSeed(salt: string): Promise<Uint8Array>;
+    derivePrfSeed(salt: string, options?: DerivePrfSeedOptions): Promise<Uint8Array>;
 
     /**
      * Derive multiple 32-byte PRF outputs in as few user prompts as the
-     * authenticator supports. The WebAuthn PRF extension allows two
-     * salts per assertion (`prf.eval.first` + `prf.eval.second`),
-     * collapsing two derivations into a single ceremony on browsers
-     * that honor the spec.
-     *
-     * Salt count semantics:
-     * - 0 salts: returns empty without prompting.
-     * - 1 salt: equivalent to `derivePrfSeed`.
-     * - 2 salts: 1 ceremony where supported, 2 otherwise.
-     * - 3+ salts: pairs are batched. Trailing odd salt uses single-salt.
-     *
-     * Authenticators that silently drop the second salt fall back to a
-     * sequential single-salt assertion for the affected salt(s); worst
-     * case prompt count matches looping `derivePrfSeed`.
-     *
-     * Output ordering matches input ordering.
-     *
-     * @param salts - Salt strings in caller order.
-     * @returns One 32-byte output per salt, in input order.
+     * authenticator supports. Pairs salts into `prf.eval.first` +
+     * `prf.eval.second` per ceremony where the platform honors it.
+     * Authenticators that drop `second` fall back to single-salt for
+     * the affected salt; worst case prompt count matches looping
+     * `derivePrfSeed`. Output order matches input order.
      */
-    derivePrfSeeds(salts: string[]): Promise<Uint8Array[]>;
+    derivePrfSeeds(salts: string[], options?: DerivePrfSeedOptions): Promise<Uint8Array[]>;
 
     /**
      * Create a new passkey with PRF support.
      *
-     * Only registers the credential, no seed derivation. Triggers exactly
-     * 1 WebAuthn prompt. Use this to separate credential creation from
-     * derivation in multi-step onboarding flows.
-     *
-     * @param request - Per-call overrides. Passing a plain `Uint8Array[]`
-     *   is accepted as a backward-compat shim for
-     *   `{ excludeCredentialIds: array }` and is equivalent to the
-     *   pre-`CreatePasskeyRequest` signature.
-     * @returns The credential ID plus AAGUID and backup-eligibility flag
-     *   parsed from the authenticator data. AAGUID and `backupEligible`
-     *   are `null` on browsers that don't expose `getAuthenticatorData()`.
      * @throws {PasskeyAlreadyExistsError} If an entry in `excludeCredentialIds`
      *   matches a credential already on the device.
+     * @throws {PasskeyCreateAbortedError} If `request.signal` aborts after
+     *   the OS has already created the credential.
      * @throws If the user cancels, `userId` fails the WebAuthn 1-64 byte
      *   length validation, or PRF is not supported by the authenticator.
      */
-    createPasskey(request?: CreatePasskeyRequest | Uint8Array[]): Promise<RegisteredCredential>;
+    createPasskey(request?: CreatePasskeyRequest): Promise<RegisteredCredential>;
 
     /**
      * Check if a PRF-capable passkey is available on this device.

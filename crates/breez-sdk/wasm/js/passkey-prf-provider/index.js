@@ -120,15 +120,6 @@ export class PasskeyProvider {
      *   this RP ID, then retries the assertion. When false, throws an error
      *   instead, letting the caller control registration separately via
      *   `createPasskey()`.
-     * @param {Uint8Array[]} [options.allowCredentialIds=[]] - When non-empty,
-     *   restricts assertion (sign-in) to one of the listed credential IDs.
-     *   The browser refuses any other credential for this RP, even if it
-     *   matches the RP. Use this to bind sign-in to a specific passkey the
-     *   caller has registered, instead of letting the browser pick any
-     *   sibling credential that happens to share the RP. Critical for
-     *   deterministic seed derivation when multiple credentials might
-     *   exist for the same RP. When empty (default), the browser picks
-     *   any credential matching the RP.
      * @param {'platform'|'cross-platform'} [options.authenticatorAttachment]
      *   When set, narrows the create-time UI to the chosen authenticator
      *   class. `'platform'` scopes registration to the local platform
@@ -155,76 +146,21 @@ export class PasskeyProvider {
         this.userName = options.userName || this.rpName;
         this.userDisplayName = options.userDisplayName || this.userName;
         this.autoRegister = options.autoRegister !== false;
-        this.allowCredentialIds = options.allowCredentialIds || [];
         this.authenticatorAttachment = options.authenticatorAttachment;
         this.hints = options.hints;
         /**
          * Default WebAuthn `timeout` (milliseconds) for both create()
-         * and get() ceremonies. Surfaced as a hint to the user agent;
-         * platforms still apply their own internal cap (60s on iOS,
-         * similar on Android Credential Manager). Pass a value 5 to 10s
-         * under the platform cap so a host-side "looks like a timeout"
-         * heuristic can fire before the OS tears the prompt down. When
-         * undefined (default), the platform default applies.
+         * and get() ceremonies. Hint only; platforms cap at ~60s.
+         * Pass 5 to 10s under that cap to let a host-side "looks like
+         * a timeout" heuristic fire before the OS tears the prompt
+         * down.
          * @type {number | undefined}
          */
         this.defaultTimeoutMs = options.defaultTimeoutMs;
-        /**
-         * Optional callback fired with the credential ID returned by
-         * every successful WebAuthn assertion. Hosts can set this to
-         * record which credential was just used so they can populate
-         * `excludeCredentialIds` and `allowCredentialIds` on subsequent
-         * requests.
-         *
-         * Useful for migrating users whose passkey predates the host's
-         * own credential-ID tracking: the first successful sign-in
-         * surfaces the credential ID, after which the host's records
-         * are correct and the platform-level "already exists" check
-         * can fire on future create attempts.
-         *
-         * Set before calling `derivePrfSeed`. Not invoked on
-         * registration (see `createPasskey`'s return value for that).
-         *
-         * @type {((credentialId: Uint8Array) => void) | undefined}
-         */
-        this.onAssertionCredentialId = undefined;
 
-        /**
-         * Settable `AbortSignal`. When set before a derivePrfSeed /
-         * derivePrfSeeds / createPasskey invocation, threaded into the
-         * underlying `navigator.credentials.{get,create}` call so the
-         * caller can abort an in-flight ceremony.
-         *
-         * Mirror of the `allowCredentialIds` / `onAssertionCredentialId`
-         * mutate-the-singleton pattern: per-call value, set before the
-         * call, optionally cleared after. Necessary because the SDK's
-         * Rust-side Passkey methods (setupWallet / getWallet) drive the
-         * provider via UniFFI without a generic signal-passing slot,
-         * so the host has no other place to attach the signal.
-         *
-         * Aborting unsettles the WebAuthn promise per spec; on iOS
-         * Safari the OS modal does NOT visually close, but the JS
-         * promise rejects with `AbortError` so the host can free its
-         * own state machine.
-         *
-         * @type {AbortSignal | undefined}
-         */
-        this.currentSignal = undefined;
-
-        /**
-         * Cached result of `PublicKeyCredential.getClientCapabilities()`
-         * for the `immediateGet` capability. Lazily populated on the
-         * first assertion; reused for subsequent calls so we only pay
-         * the capability lookup once. Possible values:
-         *   - `undefined`: not yet checked
-         *   - `null`: capability lookup unsupported / failed
-         *   - `true` / `false`: browser explicitly advertised support
-         * @type {boolean | null | undefined}
-         * @private
-         */
+        /** @private cached getClientCapabilities('immediateGet') result */
         this._immediateGetSupported = undefined;
-
-        /** Shared Promise so concurrent auto-register paths fire one ceremony. @private */
+        /** @private shared Promise so concurrent auto-register paths fire one ceremony */
         this._autoRegisterInFlight = null;
     }
 
@@ -279,25 +215,20 @@ export class PasskeyProvider {
     }
 
     /**
-     * Derive a 32-byte seed from passkey PRF with the given salt.
+     * Derive a 32-byte seed from passkey PRF.
      *
-     * Authenticates the user via a platform passkey and evaluates the PRF extension.
-     * If no credential exists for this RP ID, a new passkey is created automatically.
-     *
-     * @param {string} salt - The salt string to use for PRF evaluation.
-     * @returns {Promise<Uint8Array>} The 32-byte PRF output.
-     * @throws {Error} If authentication fails, PRF is not supported, or the user cancels.
+     * @param {string} salt
+     * @param {DerivePrfSeedOptions} [options]
+     * @returns {Promise<Uint8Array>}
      */
-    async derivePrfSeed(salt) {
+    async derivePrfSeed(salt, options = {}) {
         const saltBytes = new TextEncoder().encode(salt);
-
-        // Try assertion first (existing credential)
         try {
-            return await this._getAssertionWithPrf(saltBytes);
+            return await this._getAssertionWithPrf(saltBytes, options);
         } catch (error) {
             if (this.autoRegister && this._isNoCredentialError(error)) {
                 await this._autoRegister();
-                return await this._getAssertionWithPrf(saltBytes);
+                return await this._getAssertionWithPrf(saltBytes, options);
             }
             throw error;
         }
@@ -305,56 +236,39 @@ export class PasskeyProvider {
 
     /**
      * Derive multiple 32-byte PRF outputs in as few user prompts as the
-     * authenticator supports. The WebAuthn PRF extension allows two
-     * salts per assertion (`prf.eval.first` + `prf.eval.second`),
-     * collapsing two derivations into a single ceremony on browsers
-     * that honor the spec.
+     * authenticator supports. Pairs salts into `prf.eval.first` +
+     * `prf.eval.second` per ceremony where the platform honors it;
+     * authenticators that silently drop `second` trigger a single-salt
+     * fallback for the affected salt. Worst case is the same prompt
+     * count as looping `derivePrfSeed`.
      *
-     * Salt count semantics:
-     * - 0 salts: returns empty without prompting.
-     * - 1 salt: equivalent to `derivePrfSeed`.
-     * - 2 salts: 1 ceremony where supported, 2 otherwise.
-     * - 3+ salts: pairs are batched. Trailing odd salt uses single-salt.
-     *
-     * Output ordering matches input ordering.
-     *
-     * Authenticators that silently drop the second salt (some
-     * third-party password managers) are detected by the missing
-     * `results.second` field; the call falls back to a sequential
-     * single-salt assertion for the affected salt(s). Worst case is
-     * the same prompt count as looping `derivePrfSeed`.
-     *
-     * @param {string[]} salts - Salt strings in caller order.
-     * @returns {Promise<Uint8Array[]>} One 32-byte output per salt, in
-     *   input order.
-     * @throws {Error} If authentication fails, PRF is not supported, or
-     *   the user cancels.
+     * @param {string[]} salts - Caller-ordered.
+     * @param {DerivePrfSeedOptions} [options]
+     * @returns {Promise<Uint8Array[]>} One 32-byte output per salt, in input order.
      */
-    async derivePrfSeeds(salts) {
+    async derivePrfSeeds(salts, options = {}) {
         if (!Array.isArray(salts) || salts.length === 0) {
             return [];
         }
         if (salts.length === 1) {
-            return [await this.derivePrfSeed(salts[0])];
+            return [await this.derivePrfSeed(salts[0], options)];
         }
 
         const out = [];
         let idx = 0;
         while (idx < salts.length) {
             if (idx + 1 < salts.length) {
-                const pair = await this._tryDualSaltAssertion(salts[idx], salts[idx + 1]);
+                const pair = await this._tryDualSaltAssertion(salts[idx], salts[idx + 1], options);
                 out.push(pair[0]);
                 if (pair[1] != null) {
                     out.push(pair[1]);
                     idx += 2;
                     continue;
                 }
-                // Authenticator dropped the second salt. Single-salt
-                // fallback for the missing one.
-                out.push(await this.derivePrfSeed(salts[idx + 1]));
+                out.push(await this.derivePrfSeed(salts[idx + 1], options));
                 idx += 2;
             } else {
-                out.push(await this.derivePrfSeed(salts[idx]));
+                out.push(await this.derivePrfSeed(salts[idx], options));
                 idx += 1;
             }
         }
@@ -412,32 +326,17 @@ export class PasskeyProvider {
      */
 
     /**
-     * Create a new passkey with PRF support.
+     * Register a new passkey with PRF support. One ceremony, no seed
+     * derivation. Browsers allow multiple credentials per RP, so this
+     * may add a sibling credential — pass `excludeCredentialIds` to
+     * surface that case as `PasskeyAlreadyExistsError`.
      *
-     * Only registers the credential, no seed derivation. Triggers exactly
-     * 1 WebAuthn prompt. Use this to separate credential creation from
-     * derivation in multi-step onboarding flows.
-     *
-     * If a passkey already exists for this RP ID, this will create an
-     * additional credential (browsers allow multiple per RP).
-     *
-     * @param {CreatePasskeyRequest|Uint8Array[]} [request] - Per-call
-     *   overrides. Passing a plain array is accepted as a backward-compat
-     *   shim for `{ excludeCredentialIds: array }` and is equivalent to
-     *   the pre-`CreatePasskeyRequest` signature.
-     * @returns {Promise<{ credentialId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
-     *   `credentialId` is always populated. `aaguid` and `backupEligible`
-     *   are null when the browser does not expose `getAuthenticatorData()`
-     *   on the create response (pre-Level-2 implementations).
-     * @throws {Error} If the user cancels or PRF is not supported by the authenticator.
+     * @param {CreatePasskeyRequest} [request]
+     * @returns {Promise<RegisteredCredential>} `aaguid`/`backupEligible`
+     *   are null on browsers without `getAuthenticatorData()`.
      */
-    async createPasskey(request) {
-        // Backward compat: array arg from the pre-CreatePasskeyRequest
-        // signature is rewrapped as `{ excludeCredentialIds }`.
-        if (Array.isArray(request)) {
-            request = { excludeCredentialIds: request };
-        }
-        return await this._registerCredential(request || {});
+    async createPasskey(request = {}) {
+        return await this._registerCredential(request);
     }
 
     /**
@@ -535,223 +434,132 @@ export class PasskeyProvider {
     }
 
     /**
-     * Perform a WebAuthn assertion with PRF extension.
      * @param {Uint8Array} saltBytes
+     * @param {DerivePrfSeedOptions} options
      * @returns {Promise<Uint8Array>}
      * @private
      */
-    async _getAssertionWithPrf(saltBytes) {
-        // When non-empty, the browser refuses any credential not in the
-        // list. Without this, the browser picks any credential for the
-        // RP, which produces non-deterministic seeds when multiple
-        // credentials exist for the same RP.
-        const allowCredentials = (this.allowCredentialIds || []).map((id) => ({
-            type: 'public-key',
-            id,
-        }));
-
-        const options = {
-            publicKey: {
-                challenge: randomBytes(32),
-                rpId: this.rpId,
-                allowCredentials,
-                userVerification: 'required',
-                extensions: {
-                    prf: {
-                        eval: {
-                            first: saltBytes,
-                        },
-                    },
-                },
-            },
-        };
-        // WebAuthn L3 hints apply to both create() and get() options.
-        // On the assertion path this is a soft signal that nudges the
-        // browser's get() picker toward the listed authenticator
-        // classes — passing `['client-device']` deprioritizes the
-        // cross-device QR / hybrid sheet on browsers that honor it
-        // (recent Chrome). Mobile pickers in particular default to
-        // surfacing QR options for new users; this is the only
-        // standards-track lever we have on get() since
-        // `authenticatorAttachment` is create-only per spec.
-        if (Array.isArray(this.hints) && this.hints.length > 0) {
-            options.publicKey.hints = [...this.hints];
-        }
-        // Privacy-gated to empty allowCredentials. Only enable
-        // immediate mediation when the browser explicitly advertises
-        // `immediateGet` via `getClientCapabilities()` — otherwise
-        // we'd trip the legacy `mediation` enum check (TypeError) or
-        // silently degrade.
-        if (allowCredentials.length === 0 && await this._supportsImmediateGet()) {
-            this._applyImmediateOption(options);
-        }
-        if (typeof this.defaultTimeoutMs === 'number' && this.defaultTimeoutMs > 0) {
-            options.publicKey.timeout = this.defaultTimeoutMs;
-        }
-        if (this.currentSignal instanceof AbortSignal) {
-            options.signal = this.currentSignal;
-        }
-
-        let credential;
-        try {
-            credential = await navigator.credentials.get(options);
-        } catch (error) {
-            throw this._mapError(error);
-        }
-
-        if (!credential) {
-            throw new Error('Credential not found');
-        }
-
-        // Surface the asserted credential ID before resolving the PRF
-        // result so hosts can record it (synced storage, server-side
-        // allowlist). Failures inside the callback are swallowed: the
-        // assertion already succeeded and the seed return must not be
-        // blocked by host-side bookkeeping.
-        if (typeof this.onAssertionCredentialId === 'function') {
-            try {
-                // userHandle is the WebAuthn `user.id` value the RP set
-                // at create time, returned in the assertion response.
-                // Hosts can pass it to `PublicKeyCredential.signalCurrentUserDetails`
-                // to retroactively rename a credential's `user.name` /
-                // `user.displayName` after sign-in (useful for migrating
-                // legacy creds created with a generic `user.name` that
-                // password managers collapse in their picker).
-                const userHandleBuf = credential.response && credential.response.userHandle;
-                const userHandle = userHandleBuf ? new Uint8Array(userHandleBuf) : null;
-                this.onAssertionCredentialId(new Uint8Array(credential.rawId), userHandle);
-            } catch {
-                // best-effort
-            }
-        }
-
-        const extensionResults = credential.getClientExtensionResults();
-
-        if (!extensionResults.prf || !extensionResults.prf.results || !extensionResults.prf.results.first) {
+    async _getAssertionWithPrf(saltBytes, options) {
+        const credential = await this._performAssertion(
+            { first: saltBytes },
+            options,
+        );
+        const ext = credential.getClientExtensionResults();
+        if (!ext.prf || !ext.prf.results || !ext.prf.results.first) {
             throw new Error('PRF not supported by authenticator');
         }
-
-        return new Uint8Array(extensionResults.prf.results.first);
+        return new Uint8Array(ext.prf.results.first);
     }
 
     /**
-     * Run a dual-salt PRF assertion. Returns a tuple
-     * `[firstResult, secondResult|null]`. `secondResult` is null when
-     * the authenticator silently drops `prf.eval.second` (the caller
-     * is expected to fall back to a single-salt assertion in that
-     * case).
-     *
-     * Mirrors the structure of `_getAssertionWithPrf` but with two
-     * eval inputs and two outputs. Auto-register on missing-credential
-     * is preserved, identical to the single-salt path.
+     * Dual-salt assertion. Returns `[first, second|null]`; `second` is
+     * null when the authenticator drops `prf.eval.second` (caller
+     * single-salts the dropped one).
      *
      * @param {string} salt1
      * @param {string} salt2
+     * @param {DerivePrfSeedOptions} options
      * @returns {Promise<[Uint8Array, Uint8Array|null]>}
      * @private
      */
-    async _tryDualSaltAssertion(salt1, salt2) {
-        const salt1Bytes = new TextEncoder().encode(salt1);
-        const salt2Bytes = new TextEncoder().encode(salt2);
-
+    async _tryDualSaltAssertion(salt1, salt2, options) {
+        const enc = new TextEncoder();
+        const salt1Bytes = enc.encode(salt1);
+        const salt2Bytes = enc.encode(salt2);
         try {
-            return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes);
+            return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes, options);
         } catch (error) {
             if (this.autoRegister && this._isNoCredentialError(error)) {
                 await this._autoRegister();
-                return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes);
+                return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes, options);
             }
             throw error;
         }
     }
 
     /**
-     * Inner dual-salt assertion (no auto-register). Reads both
-     * `results.first` and `results.second` from the PRF extension
-     * output.
-     *
      * @param {Uint8Array} salt1Bytes
      * @param {Uint8Array} salt2Bytes
+     * @param {DerivePrfSeedOptions} options
      * @returns {Promise<[Uint8Array, Uint8Array|null]>}
      * @private
      */
-    async _getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes) {
-        const allowCredentials = (this.allowCredentialIds || []).map((id) => ({
+    async _getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes, options) {
+        const credential = await this._performAssertion(
+            { first: salt1Bytes, second: salt2Bytes },
+            options,
+        );
+        const ext = credential.getClientExtensionResults();
+        if (!ext.prf || !ext.prf.results || !ext.prf.results.first) {
+            throw new Error('PRF not supported by authenticator');
+        }
+        const first = new Uint8Array(ext.prf.results.first);
+        const second = ext.prf.results.second
+            ? new Uint8Array(ext.prf.results.second)
+            : null;
+        return [first, second];
+    }
+
+    /**
+     * Build assertion options, run the ceremony, and fire the
+     * onCredentialId callback. Shared by single- and dual-salt paths.
+     *
+     * @param {{ first: Uint8Array, second?: Uint8Array }} prfEval
+     * @param {DerivePrfSeedOptions} options
+     * @returns {Promise<PublicKeyCredential>}
+     * @private
+     */
+    async _performAssertion(prfEval, options) {
+        const allowList = options.allowCredentialIds || [];
+        const allowCredentials = allowList.map((id) => ({
             type: 'public-key',
             id,
         }));
 
-        const options = {
-            publicKey: {
-                challenge: randomBytes(32),
-                rpId: this.rpId,
-                allowCredentials,
-                userVerification: 'required',
-                extensions: {
-                    prf: {
-                        eval: {
-                            first: salt1Bytes,
-                            second: salt2Bytes,
-                        },
-                    },
-                },
-            },
+        const publicKey = {
+            challenge: randomBytes(32),
+            rpId: this.rpId,
+            allowCredentials,
+            userVerification: 'required',
+            extensions: { prf: { eval: prfEval } },
         };
-        // Mirror the hints + immediate-mediation logic from
-        // `_getAssertionWithPrf`. Hints deprioritize the cross-device
-        // sheet on supporting browsers; immediate mediation suppresses
-        // the picker entirely when no creds exist on browsers that
-        // implement it.
         if (Array.isArray(this.hints) && this.hints.length > 0) {
-            options.publicKey.hints = [...this.hints];
+            publicKey.hints = [...this.hints];
         }
+        // Immediate mediation is privacy-gated to empty allowCredentials
+        // and only enabled when getClientCapabilities() advertises it.
         if (allowCredentials.length === 0 && await this._supportsImmediateGet()) {
-            this._applyImmediateOption(options);
+            this._applyImmediateOption({ publicKey });
         }
         if (typeof this.defaultTimeoutMs === 'number' && this.defaultTimeoutMs > 0) {
-            options.publicKey.timeout = this.defaultTimeoutMs;
+            publicKey.timeout = this.defaultTimeoutMs;
         }
-        if (this.currentSignal instanceof AbortSignal) {
-            options.signal = this.currentSignal;
+
+        const requestOptions = { publicKey };
+        if (options.signal instanceof AbortSignal) {
+            requestOptions.signal = options.signal;
         }
 
         let credential;
         try {
-            credential = await navigator.credentials.get(options);
+            credential = await navigator.credentials.get(requestOptions);
         } catch (error) {
             throw this._mapError(error);
         }
-
         if (!credential) {
             throw new Error('Credential not found');
         }
 
-        if (typeof this.onAssertionCredentialId === 'function') {
+        if (typeof options.onCredentialId === 'function') {
             try {
-                // userHandle is the WebAuthn `user.id` value the RP set
-                // at create time, returned in the assertion response.
-                // Hosts can pass it to `PublicKeyCredential.signalCurrentUserDetails`
-                // to retroactively rename a credential's `user.name` /
-                // `user.displayName` after sign-in (useful for migrating
-                // legacy creds created with a generic `user.name` that
-                // password managers collapse in their picker).
                 const userHandleBuf = credential.response && credential.response.userHandle;
                 const userHandle = userHandleBuf ? new Uint8Array(userHandleBuf) : null;
-                this.onAssertionCredentialId(new Uint8Array(credential.rawId), userHandle);
+                options.onCredentialId(new Uint8Array(credential.rawId), userHandle);
             } catch {
-                // best-effort
+                // best-effort: bookkeeping must not block seed return
             }
         }
-
-        const extensionResults = credential.getClientExtensionResults();
-        if (!extensionResults.prf || !extensionResults.prf.results || !extensionResults.prf.results.first) {
-            throw new Error('PRF not supported by authenticator');
-        }
-
-        const first = new Uint8Array(extensionResults.prf.results.first);
-        const secondBuf = extensionResults.prf.results.second;
-        const second = secondBuf ? new Uint8Array(secondBuf) : null;
-        return [first, second];
+        return credential;
     }
 
     /**
@@ -785,12 +593,10 @@ export class PasskeyProvider {
             userId,
             userName,
             userDisplayName,
+            signal,
         } = request;
 
-        // Validate per-call userId. WebAuthn spec requires user.id to be
-        // 1-64 bytes (BufferSource). Reject upfront so a malformed value
-        // surfaces as a clear API error instead of an opaque
-        // TypeError from the platform.
+        // WebAuthn spec: user.id must be 1-64 bytes.
         let resolvedUserId;
         if (userId !== undefined) {
             if (!(userId instanceof Uint8Array) || userId.length < 1 || userId.length > 64) {
@@ -828,22 +634,13 @@ export class PasskeyProvider {
                 { type: 'public-key', alg: -257 },  // RS256
             ],
             authenticatorSelection,
-            // Explicit; matches spec default. Stated to make the
-            // intent unmistakable on a future security review: passkeys
-            // are bootstrapped without server-side attestation
-            // verification, so anything other than 'none' would be a
-            // protocol mismatch (and would also surface a different
-            // user-facing prompt on some platforms).
+            // Explicit so future security review can't read it as ambient.
             attestation: 'none',
-            extensions: {
-                prf: {},
-            },
+            extensions: { prf: {} },
         };
 
         if (Array.isArray(this.hints) && this.hints.length > 0) {
-            // Defensive copy: spec accepts a sequence so we shouldn't
-            // hand the platform a reference the host can mutate
-            // mid-ceremony.
+            // Defensive copy; the host could otherwise mutate mid-ceremony.
             publicKeyOptions.hints = [...this.hints];
         }
 
@@ -859,8 +656,8 @@ export class PasskeyProvider {
         }
 
         const createOptions = { publicKey: publicKeyOptions };
-        if (this.currentSignal instanceof AbortSignal) {
-            createOptions.signal = this.currentSignal;
+        if (signal instanceof AbortSignal) {
+            createOptions.signal = signal;
         }
 
         let credential;
@@ -887,7 +684,7 @@ export class PasskeyProvider {
         // a typed error carrying its metadata so the caller can record
         // it before honouring the abort, otherwise the next create
         // produces a duplicate.
-        if (this.currentSignal && this.currentSignal.aborted) {
+        if (signal && signal.aborted) {
             const meta = extractRegistrationMetadata(credential);
             throw new PasskeyCreateAbortedError(
                 new Uint8Array(credential.rawId),
