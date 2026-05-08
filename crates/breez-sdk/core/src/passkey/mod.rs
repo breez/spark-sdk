@@ -153,31 +153,12 @@ impl Passkey {
         Self::with_label_store(prf_provider, Arc::new(nostr))
     }
 
-    /// Single-prompt setup: derive the Nostr identity, the wallet seed
-    /// for `request.label`, and any caller-supplied [`NamedSalt`]s, all
-    /// in one PRF ceremony where the platform supports it. Primes the
-    /// Nostr identity cache; conditionally publishes the label.
-    ///
-    /// On platforms whose [`PrfProvider`] implements the dual-salt fast
-    /// path, N inputs cost ⌈N / 2⌉ user prompts. The default trait
-    /// impl loops, so on platforms without that override the prompt
-    /// count equals N. Built-in `PasskeyProvider`s override.
-    ///
-    /// The Nostr identity is cached after this call; subsequent
-    /// [`Self::list_labels`] / [`Self::store_label`] calls on the same
-    /// `Passkey` instance need no additional PRF interactions.
-    ///
-    /// `publish_label = false` enables **speculative cold-restore**:
-    /// derive a candidate wallet for a guessed label without polluting
-    /// the user's Nostr label set if the guess is wrong. After this
-    /// call, the caller runs [`Self::list_labels`] (free, cached) and
-    /// either keeps the candidate wallet on a match or re-derives
-    /// [`Self::setup_wallet`] for the right label.
-    ///
-    /// `extra_salts` accepts caller-supplied salts (e.g. a local-DB
-    /// encryption key, a server-auth token) that ride the same
-    /// ceremony as the wallet seed. Outputs are returned keyed by name
-    /// in [`WalletSetup::extra_seeds`].
+    /// Derive the Nostr identity, the wallet seed for `request.label`,
+    /// and any [`NamedSalt`]s in one PRF ceremony where the platform
+    /// supports it. Primes the identity cache so subsequent
+    /// [`Self::list_labels`] / [`Self::store_label`] need no extra
+    /// PRF prompts. `publish_label = false` skips the Nostr write —
+    /// used by speculative cold-restore.
     pub async fn setup_wallet(
         &self,
         request: SetupWalletRequest,

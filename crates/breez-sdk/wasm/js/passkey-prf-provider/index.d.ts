@@ -258,12 +258,12 @@ export interface PasskeyProviderOptions {
  *
  * @example
  * ```typescript
- * import { Passkey } from '@breeztech/breez-sdk-spark'
+ * import { PasskeyClient } from '@breeztech/breez-sdk-spark'
  * import { PasskeyProvider } from '@breeztech/breez-sdk-spark/passkey-prf-provider'
  *
- * const prfProvider = new PasskeyProvider()
- * const passkey = new Passkey(prfProvider, undefined)
- * const wallet = await passkey.getWallet('personal')
+ * const provider = new PasskeyProvider()
+ * const client = new PasskeyClient(provider)
+ * const { wallet } = await client.signIn({ label: 'personal' })
  * ```
  */
 export declare class PasskeyProvider {

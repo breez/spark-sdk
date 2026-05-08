@@ -30,9 +30,9 @@ pub struct Wallet {
     pub label: String,
 }
 
-/// Caller-supplied salt for `extraSalts` on `PasskeyClient.register`,
-/// `restore`, and `derive`. Yields a 32-byte output keyed by `name` in
-/// the response's `extraSeeds` map.
+/// Caller-supplied salt for `extraSalts` on `PasskeyClient.register`
+/// and `signIn`. Yields a 32-byte output keyed by `name` in the
+/// response's `extraSeeds` map.
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::NamedSalt)]
 pub struct NamedSalt {
     pub name: String,

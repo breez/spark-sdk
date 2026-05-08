@@ -56,12 +56,8 @@ pub enum PrfProviderError {
     #[error("Configuration error: {0}")]
     Configuration(String),
 
-    /// Credential registration was refused because a credential already
-    /// exists on the authenticator that matches one of the IDs the
-    /// caller passed in `excludeCredentialIds`. Surfaces the platform's
-    /// duplicate-prevention check as a typed error so callers can
-    /// route the user to the sign-in path instead of treating it as
-    /// a generic authentication failure.
+    /// An entry in `excludeCredentialIds` matched a credential
+    /// already on the device. Route the user to sign-in.
     #[error("Credential already exists: {0}")]
     CredentialAlreadyExists(String),
 

@@ -74,18 +74,10 @@ pub struct RegisterResponse {
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SignInRequest {
-    /// If provided, derive directly for this label and skip the
-    /// label-store query (fast path; one ceremony, no Nostr round-trip).
-    /// Use when the host has the user's label cached locally from a
-    /// previous session.
-    ///
-    /// If `None`, the SDK derives a wallet for [`DEFAULT_LABEL`] **and**
-    /// queries the label store for the user's full label set in the
-    /// same ceremony. Use when the host has no local state — typically
-    /// a fresh install / new device. The host then checks
-    /// [`SignInResponse::labels`]: if it contains [`DEFAULT_LABEL`] the
-    /// returned wallet is final; otherwise show a picker and call
-    /// `sign_in` again with the chosen label.
+    /// `Some(label)` is the fast path: one ceremony, no label-store
+    /// query. `None` triggers discovery: derives `DEFAULT_LABEL` and
+    /// also returns the user's full label set in
+    /// [`SignInResponse::labels`].
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
@@ -98,17 +90,10 @@ pub struct SignInRequest {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SignInResponse {
-    /// The derived wallet for the resolved label
-    /// ([`SignInRequest::label`] or [`DEFAULT_LABEL`]).
     pub wallet: Wallet,
-    /// All labels the user has published. **Empty** when
-    /// [`SignInRequest::label`] was provided (fast path; the SDK skips
-    /// the label-store query). **Populated** when `label` was `None`,
-    /// so the host can show a picker if the default-derived wallet
-    /// isn't the one the user wanted. Also empty if the label store
-    /// is unreachable on the discovery path.
+    /// Empty on the fast path. Populated on discovery (or empty if
+    /// the label store was unreachable).
     pub labels: Vec<String>,
-    /// Same as [`RegisterResponse::extra_seeds`].
     pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
@@ -177,25 +162,13 @@ impl PasskeyClient {
         })
     }
 
-    /// Returning-user sign-in. Two modes based on whether the host
-    /// has the label cached locally:
-    ///
-    /// - **Fast path** ([`SignInRequest::label`] = `Some(...)`): one
-    ///   ceremony, no Nostr round-trip. [`SignInResponse::labels`] is
-    ///   empty.
-    /// - **Discovery path** ([`SignInRequest::label`] = `None`): one
-    ///   ceremony derives a wallet for [`DEFAULT_LABEL`] and the SDK
-    ///   queries the label store off the cached identity (no extra
-    ///   prompt). [`SignInResponse::labels`] carries the full set; the
-    ///   host shows a picker if [`DEFAULT_LABEL`] isn't in it and calls
-    ///   `sign_in` again with the chosen label.
-    ///
-    /// In both modes the label is **not** re-published. Call
-    /// [`Self::store_label`] separately if needed.
-    ///
-    /// The label-store query on the discovery path is best-effort: a
-    /// transient failure leaves `labels` empty rather than aborting,
-    /// since the speculative wallet is still useful.
+    /// Returning-user sign-in. Fast path (`label` set) skips the
+    /// label-store query; discovery path (`label = None`) derives
+    /// `DEFAULT_LABEL` and lists the user's labels in the same
+    /// ceremony. Never re-publishes the label — call
+    /// [`Self::store_label`] separately if needed. The discovery
+    /// label-store query is best-effort; transient failures leave
+    /// `labels` empty.
     pub async fn sign_in(
         &self,
         request: SignInRequest,
