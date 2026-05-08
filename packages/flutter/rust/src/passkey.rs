@@ -4,7 +4,7 @@ use std::sync::Arc;
 use breez_sdk_spark::passkey::{
     DeriveRequest, DeriveResponse, NostrRelayConfig, PasskeyError, PasskeyPrfError, PrfProvider,
     RegisterRequest, RegisterResponse, RestoreRequest, RestoreResponse, SetupWalletRequest,
-    Wallet, WalletSetup,
+    WalletSetup,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -66,11 +66,6 @@ impl Passkey {
         Self {
             inner: breez_sdk_spark::passkey::Passkey::new(provider, relay_config),
         }
-    }
-
-    /// Derive a wallet for `label` (defaults to `"Default"` when `None`).
-    pub async fn get_wallet(&self, label: Option<String>) -> Result<Wallet, PasskeyError> {
-        self.inner.get_wallet(label).await
     }
 
     /// Single-prompt setup: derive the wallet seed plus any

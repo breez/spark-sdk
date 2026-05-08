@@ -139,16 +139,6 @@ impl Passkey {
         }
     }
 
-    /// Derive a wallet for a given label.
-    ///
-    /// Uses the passkey PRF to derive a `Wallet` containing the seed and resolved label.
-    ///
-    /// @param label - Optional label string (defaults to "Default")
-    #[wasm_bindgen(js_name = "getWallet")]
-    pub async fn get_wallet(&self, label: Option<String>) -> WasmResult<Wallet> {
-        Ok(self.inner.get_wallet(label).await?.into())
-    }
-
     /// Single-prompt setup. See the `SetupWalletRequest` /
     /// `WalletSetup` shape for full semantics. ⌈N / 2⌉ prompts where
     /// the authenticator supports `prf.eval.first` + `.second`, N

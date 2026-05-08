@@ -29,21 +29,23 @@
 //! # Example
 //!
 //! ```ignore
-//! use breez_sdk_spark::passkey::{Passkey, NostrRelayConfig};
+//! use breez_sdk_spark::passkey::{DeriveRequest, NostrRelayConfig, PasskeyClient};
 //!
 //! // Platform provides a PrfProvider implementation
 //! let prf_provider = Arc::new(MyPrfProvider::new());
 //!
-//! let passkey = Passkey::new(prf_provider, None);
+//! let client = PasskeyClient::new(prf_provider, None);
 //!
-//! // Get a wallet (creates or restores)
-//! let wallet = passkey.get_wallet(Some("my-wallet".to_string())).await?;
+//! // Derive a wallet for a known label
+//! let response = client
+//!     .derive(DeriveRequest {
+//!         label: Some("my-wallet".to_string()),
+//!         extra_salts: vec![],
+//!     })
+//!     .await?;
 //!
-//! // List available labels for restore
-//! let labels = passkey.list_labels().await?;
-//!
-//! // Store a label to Nostr
-//! passkey.store_label("my-wallet".to_string()).await?;
+//! // List available labels for restore (off the cached identity, no extra prompt)
+//! let labels = client.list_labels().await?;
 //! ```
 
 mod derivation;
@@ -79,7 +81,7 @@ use crate::Seed;
 use derivation::derive_nostr_keypair;
 use nostr_client::NostrSaltClient;
 
-/// The default label used when none is provided to [`Passkey::get_wallet`].
+/// The default label used when none is provided.
 pub(super) const DEFAULT_LABEL: &str = "Default";
 
 /// Maximum allowed label length in bytes.
@@ -152,29 +154,6 @@ impl Passkey {
         Self::with_label_store(prf_provider, Arc::new(nostr))
     }
 
-    /// Derive a wallet for a given label.
-    ///
-    /// Uses the passkey PRF to derive a 12-word BIP39 mnemonic from the label
-    /// and returns it as a [`Wallet`] containing the seed and resolved label.
-    /// This works for both creating a new wallet and restoring an existing one.
-    ///
-    /// # Arguments
-    /// * `label` - A user-chosen label (e.g., "personal", "business").
-    ///   If `None`, defaults to [`DEFAULT_LABEL`].
-    pub async fn get_wallet(&self, label: Option<String>) -> Result<Wallet, PasskeyError> {
-        let label = label.unwrap_or_else(|| DEFAULT_LABEL.to_string());
-        validate_label(&label)?;
-        let root_key = self.prf_provider.derive_prf_seed(label.clone()).await?;
-        let mnemonic = prf_to_mnemonic(&root_key)?;
-        Ok(Wallet {
-            seed: Seed::Mnemonic {
-                mnemonic,
-                passphrase: None,
-            },
-            label,
-        })
-    }
-
     /// Single-prompt setup: derive the Nostr identity, the wallet seed
     /// for `request.label`, and any caller-supplied [`NamedSalt`]s, all
     /// in one PRF ceremony where the platform supports it. Primes the
@@ -193,8 +172,8 @@ impl Passkey {
     /// derive a candidate wallet for a guessed label without polluting
     /// the user's Nostr label set if the guess is wrong. After this
     /// call, the caller runs [`Self::list_labels`] (free, cached) and
-    /// either keeps the candidate wallet on a match or re-derives via
-    /// [`Self::get_wallet`] for the right label.
+    /// either keeps the candidate wallet on a match or re-derives
+    /// [`Self::setup_wallet`] for the right label.
     ///
     /// `extra_salts` accepts caller-supplied salts (e.g. a local-DB
     /// encryption key, a server-auth token) that ride the same
@@ -480,132 +459,6 @@ mod tests {
             result.unwrap_err(),
             PasskeyError::PrfError(PasskeyPrfError::AuthenticationFailed(_))
         ));
-    }
-
-    /// Extract the mnemonic string from a `Wallet`.
-    fn unwrap_mnemonic(wallet: Wallet) -> String {
-        match wallet.seed {
-            Seed::Mnemonic { mnemonic, .. } => mnemonic,
-            Seed::Entropy(_) => panic!("Expected Seed::Mnemonic"),
-        }
-    }
-
-    #[macros::async_test_all]
-    async fn test_get_wallet_deterministic() {
-        let prf_provider1 = Arc::new(MockPrfProvider::new([42u8; 32]));
-        let prf_provider2 = Arc::new(MockPrfProvider::new([42u8; 32]));
-
-        let passkey1 = Passkey::new(prf_provider1, None);
-        let passkey2 = Passkey::new(prf_provider2, None);
-
-        let mnemonic1 =
-            unwrap_mnemonic(passkey1.get_wallet(Some("test".to_string())).await.unwrap());
-        let mnemonic2 =
-            unwrap_mnemonic(passkey2.get_wallet(Some("test".to_string())).await.unwrap());
-
-        assert_eq!(mnemonic1, mnemonic2);
-    }
-
-    #[macros::async_test_all]
-    async fn test_get_wallet_different_providers() {
-        let prf_provider1 = Arc::new(MockPrfProvider::new([1u8; 32]));
-        let prf_provider2 = Arc::new(MockPrfProvider::new([2u8; 32]));
-
-        let passkey1 = Passkey::new(prf_provider1, None);
-        let passkey2 = Passkey::new(prf_provider2, None);
-
-        let mnemonic1 =
-            unwrap_mnemonic(passkey1.get_wallet(Some("test".to_string())).await.unwrap());
-        let mnemonic2 =
-            unwrap_mnemonic(passkey2.get_wallet(Some("test".to_string())).await.unwrap());
-
-        assert_ne!(mnemonic1, mnemonic2);
-    }
-
-    #[macros::async_test_all]
-    async fn test_get_wallet_produces_12_words() {
-        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
-        let passkey = Passkey::new(prf_provider, None);
-
-        let mnemonic = unwrap_mnemonic(passkey.get_wallet(Some("test".to_string())).await.unwrap());
-
-        let word_count = mnemonic.split_whitespace().count();
-        assert_eq!(word_count, 12, "Mnemonic should be 12 words");
-    }
-
-    #[macros::async_test_all]
-    async fn test_get_wallet_default_label() {
-        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
-        let passkey = Passkey::new(prf_provider, None);
-
-        // None label should default to "Default" and not error
-        let wallet = passkey.get_wallet(None).await.unwrap();
-        assert_eq!(wallet.label, "Default");
-    }
-
-    #[macros::async_test_all]
-    async fn test_get_wallet_custom_label() {
-        let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
-        let passkey = Passkey::new(prf_provider, None);
-
-        let wallet = passkey
-            .get_wallet(Some("personal".to_string()))
-            .await
-            .unwrap();
-        assert_eq!(wallet.label, "personal");
-    }
-
-    #[macros::async_test_all]
-    async fn test_get_wallet_error_propagation() {
-        let prf_provider = Arc::new(FailingPrfProvider::new(PasskeyPrfError::UserCancelled));
-        let passkey = Passkey::new(prf_provider, None);
-
-        let result = passkey.get_wallet(Some("test".to_string())).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            PasskeyError::PrfError(PasskeyPrfError::UserCancelled)
-        ));
-    }
-
-    #[macros::async_test_all]
-    async fn test_different_labels_produce_different_mnemonics() {
-        let prf_provider = Arc::new(SaltAwareMockProvider::new([0u8; 32]));
-        let passkey = Passkey::new(prf_provider, None);
-
-        let mnemonic1 = unwrap_mnemonic(
-            passkey
-                .get_wallet(Some("personal".to_string()))
-                .await
-                .unwrap(),
-        );
-        let mnemonic2 = unwrap_mnemonic(
-            passkey
-                .get_wallet(Some("business".to_string()))
-                .await
-                .unwrap(),
-        );
-
-        assert_ne!(
-            mnemonic1, mnemonic2,
-            "Different labels should produce different mnemonics"
-        );
-    }
-
-    #[macros::async_test_all]
-    async fn test_same_label_deterministic() {
-        let prf_provider = Arc::new(SaltAwareMockProvider::new([0u8; 32]));
-        let passkey = Passkey::new(prf_provider, None);
-
-        let mnemonic1 =
-            unwrap_mnemonic(passkey.get_wallet(Some("test".to_string())).await.unwrap());
-        let mnemonic2 =
-            unwrap_mnemonic(passkey.get_wallet(Some("test".to_string())).await.unwrap());
-
-        assert_eq!(
-            mnemonic1, mnemonic2,
-            "Same label should produce same mnemonic"
-        );
     }
 
     #[macros::test_all]
