@@ -53,7 +53,6 @@ All knobs are env vars. Defaults give the fast pass.
 |---|---|---|
 | `SWEEP_RPS` | `50,100,250` | Comma-separated RPS list |
 | `DURATION` | `2m` | Per-step duration (`Xs` / `Xm` / `Xh`) |
-| `WARMUP_SECS` | `60` | First N seconds of each step excluded from stats |
 | `MIX` | `info=40,receive=30,send=30` | Op weights (any positive numbers) |
 | `USERS` | `10000` | Workload pool size for `/info` + `/receive` |
 | `SENDERS` | `50` | Sender wallet pool for `/send` |

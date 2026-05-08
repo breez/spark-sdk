@@ -28,7 +28,6 @@ data class LogEntry(
     val ts: Long,                 // unix millis
     val op: String,               // "info" | "send" | "receive"
     @SerialName("user_id") val userId: String,
-    val warmup: Boolean,
     @SerialName("status_code") val statusCode: Int? = null,
     @SerialName("duration_ms") val durationMs: Long? = null,
     val error: String? = null,
@@ -199,7 +198,6 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
     val zipfSkew = opts["zipf-skew"]?.toDoubleOrNull() ?: 1.0
     val userSampler = makeUserSampler(distribution, users, zipfSkew)
     val duration = parseDuration(opts["duration"] ?: error("--duration=<10m|60s|1h> is required"))
-    val warmupSecs = opts["warmup-secs"]?.toIntOrNull() ?: 60
     val senderCount = opts["senders"]?.toIntOrNull() ?: 50
     require(senderCount > 0) { "--senders must be > 0" }
     val maxInFlight = opts["max-in-flight"]?.toIntOrNull() ?: 5_000
@@ -208,7 +206,7 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
     val outDir = Path.of(opts["out-dir"] ?: "out/$runId").also { Files.createDirectories(it) }
 
     println("[loadgen] base=$baseUrl  rps=$targetRps  users=$users  mix=$mixSpec  " +
-        "dist=$distribution  duration=$duration  warmup=${warmupSecs}s  senders=$senderCount  " +
+        "dist=$distribution  duration=$duration  senders=$senderCount  " +
         "payment=${paymentSats}sat  max_in_flight=$maxInFlight  out=$outDir")
 
     val httpClient: HttpClient = HttpClient.newBuilder()
@@ -232,7 +230,6 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
 
     val intervalNs = (1_000_000_000.0 / targetRps).toLong()
     val startNs = System.nanoTime()
-    val warmupEndNs = startNs + warmupSecs * 1_000_000_000L
     val endNs = startNs + duration.toNanos()
     val inFlight = AtomicInteger(0)
     val completedCount = AtomicLong(0)
@@ -275,7 +272,6 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
                 continue
             }
             val op = opSampler.sample(rng)
-            val warmup = now < warmupEndNs
             val userId: String
             val request: HttpRequest
             when (op) {
@@ -300,7 +296,6 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
                     ts = System.currentTimeMillis(),
                     op = op,
                     userId = userId,
-                    warmup = warmup,
                     dropped = true,
                 ))
                 dropped++
@@ -319,7 +314,6 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
                             ts = System.currentTimeMillis(),
                             op = op,
                             userId = userId,
-                            warmup = warmup,
                             statusCode = resp.statusCode(),
                             durationMs = durMs,
                             error = if (ok) null else "http_${resp.statusCode()}",
@@ -331,7 +325,6 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
                             ts = System.currentTimeMillis(),
                             op = op,
                             userId = userId,
-                            warmup = warmup,
                             durationMs = durMs,
                             error = "${e::class.simpleName}: ${e.message}",
                         ))

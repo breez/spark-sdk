@@ -43,7 +43,7 @@ seed-senders: build ## Top each of K sender wallets up to PER_SENDER_SATS from t
 	$(GRADLE) run --console=plain --args="--mode=seed-senders --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --senders=$${SENDERS:-50} --per-sender-sats=$${PER_SENDER_SATS:-5000}"
 
 loadgen: build ## Run the load generator against an already-running server (TARGET_RPS + DURATION required)
-	$(GRADLE) run --console=plain --args="--mode=loadgen --base-url=$${BASE_URL:-http://localhost:8080} --target-rps=$$TARGET_RPS --duration=$$DURATION --users=$${USERS:-10000} --mix=$${MIX:-info=40,receive=30,send=30} --user-distribution=$${DIST:-uniform} --warmup-secs=$${WARMUP_SECS:-60} --senders=$${SENDERS:-50} --payment-sats=$${PAYMENT_SATS:-1}$${RUN_ID:+ --run-id=$$RUN_ID}"
+	$(GRADLE) run --console=plain --args="--mode=loadgen --base-url=$${BASE_URL:-http://localhost:8080} --target-rps=$$TARGET_RPS --duration=$$DURATION --users=$${USERS:-10000} --mix=$${MIX:-info=40,receive=30,send=30} --user-distribution=$${DIST:-uniform} --senders=$${SENDERS:-50} --payment-sats=$${PAYMENT_SATS:-1}$${RUN_ID:+ --run-id=$$RUN_ID}"
 
 sweep: build ## RPS sweep only (no aggregation). See scripts/sweep.sh for env knobs.
 	./scripts/sweep.sh

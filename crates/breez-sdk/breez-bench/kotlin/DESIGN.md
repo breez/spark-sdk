@@ -119,17 +119,19 @@ Sampling:
   Destination is always the treasurer's Spark address, fetched once
   at startup and cached.
 
-## Warmup + low-RPS exclusion
+## Why no warmup window
 
-JVM-specific gotchas the loadgen handles:
+Per-request lifecycle is cold-start by design — each request builds a
+fresh SDK and reconnects to operators — so JIT-amortizable Java code
+is a small fraction of overall request cost. Empirically the first
+~5s of an rps-10 step shows ≤8% bias on `info` p50 vs steady state
+(below run-to-run variance), and at higher RPS the first window is
+the *cleanest* data, not the slowest. We report the full window.
 
-- **Warmup.** Default `--warmup-secs=60`. Samples in that window are
-  recorded with `warmup=true` in `latency.jsonl` but excluded from
-  headline percentiles.
-- **Low-RPS exclusion.** The HotSpot JIT optimizes hot paths only
-  after roughly 10k invocations. At 1 RPS × 60s = 60 invocations,
-  p99 reflects warmup, not steady-state. The default sweep starts at
-  50 RPS for that reason.
+**Low-RPS exclusion still applies.** The HotSpot JIT optimizes hot
+paths only after roughly 10k invocations. At 1 RPS × 60s = 60
+invocations, p99 reflects warmup, not steady-state. The default sweep
+starts at 50 RPS for that reason.
 
 ## Closed-loop funding
 
@@ -185,7 +187,7 @@ out/<sweep-id>/
     loadgen.log            loadgen stdout/stderr
     requests.jsonl         server-side per-request timings (op, durMs, error)
     metrics.jsonl          1Hz process samples
-    latency.jsonl          client-side per-request timings + warmup + dropped flags
+    latency.jsonl          client-side per-request timings + dropped flag
   rps-100/  ...
 ```
 
@@ -235,13 +237,11 @@ harness development.
 
 ## Aggregator
 
-`scripts/aggregate.py` walks `out/<sweep-id>/rps-N/`, drops warmup
-samples (using the loadgen's `warmup` flag as ground truth), and
-computes:
+`scripts/aggregate.py` walks `out/<sweep-id>/rps-N/` and computes:
 
 - Per-op p50/p95/p99 (linear-interpolated), client and server views,
   successful requests only.
-- Process metrics summary stats over the post-warmup window.
+- Process metrics summary stats over the full step window.
 - **Headline `max_safe_rps`** = highest swept RPS where client-side
   p99(send) is < 2× the lowest stable p99(send). "Stable" requires
   ≥30 samples. Threshold-doubling, not an absolute SLA, so the bench

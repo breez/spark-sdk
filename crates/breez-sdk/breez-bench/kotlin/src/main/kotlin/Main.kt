@@ -738,7 +738,6 @@ fun main(args: Array<String>) {
                   --user-distribution=uniform|zipf             Workload pool sampling (default: uniform)
                   --zipf-skew=<s>                              Zipf exponent (default: 1.0)
                   --duration=<10m|60s|1h|...>                  Required. Total run duration.
-                  --warmup-secs=<N>                            Mark first N seconds of samples as warmup (default: 60)
                   --payment-sats=<N>                           Sats per /send (default: 1)
                   --max-in-flight=<N>                          Hard cap; dispatch records 'dropped' if exceeded (default: 5000)
                   --treasurer-spark-addr=<addr>                Skip the bootstrap /receive call and use this address

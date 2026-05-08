@@ -10,7 +10,7 @@
 #
 # Required env: MYSQL_URL, MASTER_SECRET.
 # Optional env: SWEEP_RPS (default "50,100,250,500,1000"), DURATION
-# (default 5m), WARMUP_SECS (60), MIX (info=40,receive=30,send=30),
+# (default 5m), MIX (info=40,receive=30,send=30),
 # USERS (10000), SENDERS (50), DIST (uniform), PAYMENT_SATS (1),
 # PORT (8080), SWEEP_ID (fresh timestamp).
 
@@ -27,7 +27,6 @@ MASTER_SECRET="${MASTER_SECRET:-breez-bench}"
 
 SWEEP_RPS="${SWEEP_RPS:-50,100,250,500,1000}"
 DURATION="${DURATION:-5m}"
-WARMUP_SECS="${WARMUP_SECS:-60}"
 MIX="${MIX:-info=40,receive=30,send=30}"
 USERS="${USERS:-10000}"
 SENDERS="${SENDERS:-50}"
@@ -115,7 +114,6 @@ cat > "$SWEEP_DIR/manifest.json" <<EOF
   "sweep_id": "$SWEEP_ID",
   "rps_steps": [$(echo "$SWEEP_RPS" | sed 's/,/, /g')],
   "duration_per_step": "$DURATION",
-  "warmup_secs": $WARMUP_SECS,
   "mix": "$MIX",
   "users": $USERS,
   "senders": $SENDERS,
@@ -345,7 +343,6 @@ for raw_rps in "${RPS_LIST[@]}"; do
         --users=$USERS \
         --mix=$MIX \
         --user-distribution=$DIST \
-        --warmup-secs=$WARMUP_SECS \
         --senders=$SENDERS \
         --payment-sats=$PAYMENT_SATS \
         --run-id=$SWEEP_ID/rps-$rps \

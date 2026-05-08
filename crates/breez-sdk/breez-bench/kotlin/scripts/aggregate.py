@@ -2,10 +2,9 @@
 """Aggregate a Phase 6 RPS sweep into the headline 3 numbers.
 
 Walks `out/<sweep-id>/rps-<N>/` directories, reads `latency.jsonl`
-(client-side observed timings + warmup flag), `requests.jsonl`
-(server-side handler timings, no warmup flag — derived), and
-`metrics.jsonl` (1Hz process samples). Writes `summary.json` and
-`RESULTS.md` to the sweep dir.
+(client-side observed timings), `requests.jsonl` (server-side handler
+timings), and `metrics.jsonl` (1Hz process samples). Writes
+`summary.json` and `RESULTS.md` to the sweep dir.
 
 Stdlib only — no numpy / pandas / matplotlib. Phase 9 will add
 matplotlib for charts.
@@ -117,12 +116,10 @@ def summary_stats(values):
 
 # --- per-step aggregation ------------------------------------------------
 
-def per_op_latency(rows, duration_field, op_field, *, post_warmup_only=False, warmup_cutoff_ts=None):
+def per_op_latency(rows, duration_field, op_field):
     """Group durations by op, return summary stats per op."""
     by_op = {}
     for r in rows:
-        if post_warmup_only and warmup_cutoff_ts is not None and r.get("ts", 0) < warmup_cutoff_ts:
-            continue
         if r.get("error") is not None:
             continue
         if r.get("dropped"):
@@ -135,15 +132,6 @@ def per_op_latency(rows, duration_field, op_field, *, post_warmup_only=False, wa
             continue
         by_op.setdefault(op, []).append(d)
     return {op: summary_stats(v) for op, v in by_op.items()}
-
-
-def warmup_cutoff(latency_rows):
-    """Return the smallest ts where warmup=false (i.e., post-warmup window
-    start). If no such row exists, return +inf so everything is filtered out."""
-    cutoffs = [r["ts"] for r in latency_rows if r.get("warmup") is False and "ts" in r]
-    if not cutoffs:
-        return float("inf")
-    return min(cutoffs)
 
 
 def metrics_window(metrics_rows, ts_lo, ts_hi):
@@ -195,20 +183,14 @@ def aggregate_step(step_dir):
     if not latency_rows and not requests_rows:
         return None
 
-    warm_ts = warmup_cutoff(latency_rows)
-
-    # Step time bounds: from earliest non-warmup latency row to last entry seen.
-    if warm_ts == float("inf"):
-        ts_lo = min((r["ts"] for r in latency_rows if "ts" in r), default=0)
-    else:
-        ts_lo = int(warm_ts)
+    # Step time bounds: full window from first observation to last.
     all_ts = (
         [r["ts"] for r in latency_rows if "ts" in r]
         + [r["ts"] for r in requests_rows if "ts" in r]
     )
+    ts_lo = min(all_ts) if all_ts else 0
     ts_hi = max(all_ts) if all_ts else ts_lo
 
-    # --- counts (whole step, not just post-warmup) for visibility -------
     total_dispatched = sum(1 for r in latency_rows)
     total_dropped = sum(1 for r in latency_rows if r.get("dropped"))
     total_errors = sum(
@@ -220,23 +202,9 @@ def aggregate_step(step_dir):
     client_errors_by_category = bucket_errors(latency_rows)
     server_errors_by_category = bucket_errors(requests_rows)
 
-    # --- post-warmup latency per op (client + server view) --------------
-    client_lat = per_op_latency(
-        latency_rows,
-        duration_field="duration_ms",
-        op_field="op",
-        post_warmup_only=True,
-        warmup_cutoff_ts=warm_ts if warm_ts != float("inf") else None,
-    )
-    server_lat = per_op_latency(
-        requests_rows,
-        duration_field="duration_ms",
-        op_field="op",
-        post_warmup_only=True,
-        warmup_cutoff_ts=warm_ts if warm_ts != float("inf") else None,
-    )
+    client_lat = per_op_latency(latency_rows, duration_field="duration_ms", op_field="op")
+    server_lat = per_op_latency(requests_rows, duration_field="duration_ms", op_field="op")
 
-    # --- post-warmup metrics window -------------------------------------
     metrics = metrics_window(metrics_rows, ts_lo, ts_hi) if metrics_rows else {}
 
     return {
@@ -340,7 +308,6 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
     lines.append("")
     lines.append(f"- host: `{manifest.get('host', '?')}`")
     lines.append(f"- duration per step: `{manifest.get('duration_per_step', '?')}`")
-    lines.append(f"- warmup: `{manifest.get('warmup_secs', '?')}s`")
     lines.append(f"- mix: `{manifest.get('mix', '?')}`")
     lines.append(f"- users: `{manifest.get('users', '?')}`  senders: `{manifest.get('senders', '?')}`")
     lines.append(f"- distribution: `{manifest.get('distribution', '?')}`")
@@ -386,15 +353,15 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
         lines.append("")
 
     render_lat_table(
-        "## Client-side latency (ms; post-warmup; successful requests only)",
+        "## Client-side latency (ms; successful requests only)",
         "client_latency_ms",
     )
     render_lat_table(
-        "## Server-side latency (ms; handler-only; post-warmup)",
+        "## Server-side latency (ms; handler-only)",
         "server_latency_ms",
     )
 
-    lines.append("## Process metrics (post-warmup window)")
+    lines.append("## Process metrics")
     lines.append("")
     cpu_cores = next(
         (s["metrics"]["available_processors"] for _, s in steps_summary
