@@ -80,6 +80,32 @@ export class PasskeyAlreadyExistsError extends Error {
 }
 
 /**
+ * Thrown when `createPasskey` resolves successfully at the platform
+ * level but the host's `currentSignal` was aborted between the OS
+ * prompt resolving and the JS continuation running. The credential
+ * was already created on the device; the host's promise was about to
+ * be rejected with `AbortError`, leaving an orphan that wouldn't be
+ * passed to `excludeCredentialIds` on the next create call (and so
+ * the next attempt would create a duplicate instead of throwing
+ * `PasskeyAlreadyExistsError`).
+ *
+ * This error carries the orphan credential's metadata so the host
+ * can record it and avoid the duplicate. Hosts that want to honor
+ * the abort can simply rethrow; hosts that want to recover the
+ * orphan record `error.credentialId` (and `aaguid` / `backupEligible`
+ * if present) before deciding.
+ */
+export class PasskeyCreateAbortedError extends Error {
+    constructor(credentialId, aaguid, backupEligible) {
+        super('Passkey create was aborted after the credential was registered on the device');
+        this.name = 'PasskeyCreateAbortedError';
+        this.credentialId = credentialId;
+        this.aaguid = aaguid;
+        this.backupEligible = backupEligible;
+    }
+}
+
+/**
  * Built-in passkey-based PRF provider for browser environments.
  */
 export class PasskeyProvider {
@@ -882,6 +908,25 @@ export class PasskeyProvider {
 
         if (!credential) {
             throw new Error('Credential creation failed');
+        }
+
+        // Race window: the OS prompt resolved successfully but the
+        // host's signal aborted between the platform return and this
+        // continuation running (e.g. a React component unmounted
+        // mid-create). The credential is already on the device; if
+        // we just throw AbortError, the caller never sees the new
+        // credentialId and a subsequent create will produce a
+        // duplicate instead of triggering excludeCredentialIds
+        // dedup. Surface the metadata via PasskeyCreateAbortedError
+        // so hosts can persist the orphan ID before honouring the
+        // abort.
+        if (this.currentSignal && this.currentSignal.aborted) {
+            const meta = extractRegistrationMetadata(credential);
+            throw new PasskeyCreateAbortedError(
+                new Uint8Array(credential.rawId),
+                meta ? meta.aaguid : null,
+                meta ? meta.backupEligible : null,
+            );
         }
 
         // Verify PRF extension was acknowledged. The credential is now
