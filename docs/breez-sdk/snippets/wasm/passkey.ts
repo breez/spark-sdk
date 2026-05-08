@@ -1,6 +1,10 @@
 import type { NostrRelayConfig, RegisteredCredential } from '@breeztech/breez-sdk-spark'
 import { PasskeyClient, connect, defaultConfig } from '@breeztech/breez-sdk-spark'
-import { PasskeyProvider } from '@breeztech/breez-sdk-spark/passkey-prf-provider'
+import {
+  PasskeyAlreadyExistsError,
+  PasskeyProvider,
+  PasskeyTimedOutError
+} from '@breeztech/breez-sdk-spark/passkey-prf-provider'
 
 // ANCHOR: implement-prf-provider
 // Implement the PrfProvider interface for custom logic if the built-in
@@ -114,4 +118,127 @@ const storeLabel = async () => {
   // storeLabel uses the cached identity for free (1 OS prompt total).
   await passkey.storeLabel('personal')
   // ANCHOR_END: store-label
+}
+
+const singleCtaOnboarding = async () => {
+  // ANCHOR: signin-fallback-register
+  // Single-CTA onboarding: try silent signIn first, fall through to
+  // register on CredentialNotFound. The OS shows ONE prompt for a
+  // returning user (silent assertion succeeds), TWO for a new user
+  // (silent assertion fast-fails, then create + dual-salt assert).
+  const prfProvider = new PasskeyProvider()
+  const passkey = new PasskeyClient(prfProvider as any, undefined)
+
+  try {
+    // Discovery mode (label undefined): derives master + DEFAULT label
+    // in a single ceremony. preferImmediatelyAvailableCredentials
+    // means a fresh-device user fast-fails in <300ms with no UI shown.
+    const response = await passkey.signIn({ label: undefined, extraSalts: [] })
+    return response.wallet
+  } catch (error) {
+    // CredentialNotFound is the SDK's classification for "no matching
+    // credential on this device" — including iOS's <300ms fast-fail
+    // case where the platform conflates no-cred with user-cancel.
+    if (!isCredentialNotFound(error)) throw error
+
+    // No credential. Onboard a new user.
+    const response = await passkey.register({
+      label: 'personal',
+      extraSalts: [],
+      excludeCredentialIds: [],
+    })
+    return response.wallet
+  }
+  // ANCHOR_END: signin-fallback-register
+}
+
+const isCredentialNotFound = (error: unknown): boolean => {
+  // Hosts can branch on the SDK's typed error name. The Web JS layer
+  // emits 'CredentialNotFound' both for genuine no-cred cases and for
+  // the iOS <300ms fast-fail UserCancelled case (which is no-cred in
+  // disguise). See uxguide_passkey.md for the full mapping table.
+  return (error as { name?: string })?.name === 'CredentialNotFound'
+}
+
+const checkDomain = async () => {
+  // ANCHOR: domain-association
+  // Verify Apple AASA / Android Asset Links / Web Related Origins
+  // before the first WebAuthn ceremony. Diagnostic only: never blocks.
+  const prfProvider = new PasskeyProvider()
+  const result = await prfProvider.checkDomainAssociation()
+
+  switch (result.kind) {
+    case 'Associated':
+      // Safe to proceed.
+      break
+    case 'NotAssociated':
+      // Configuration is wrong (entitlement missing, AASA stale,
+      // assetlinks malformed). Surface a developer-facing error.
+      console.error(
+        `Domain association failed (source=${result.source}): ${result.reason}`
+      )
+      return
+    case 'Skipped':
+      // Verification could not be performed (offline, endpoint
+      // timeout, no public-suffix match). Proceed normally — this
+      // is NOT a negative signal.
+      break
+  }
+  // ANCHOR_END: domain-association
+}
+
+const recoverFromAlreadyExists = async () => {
+  // ANCHOR: recover-already-exists
+  // The OS rejected register because the user's password manager
+  // already holds a credential matching `excludeCredentialIds`.
+  // Route the user to the sign-in path: the OS picker will surface
+  // the existing credential and the SDK's identity cache will warm
+  // up on the assertion.
+  const prfProvider = new PasskeyProvider()
+  const passkey = new PasskeyClient(prfProvider as any, undefined)
+
+  try {
+    await passkey.register({
+      label: 'personal',
+      extraSalts: [],
+      excludeCredentialIds: [
+        // app-persisted credential IDs from prior registrations
+      ],
+    })
+  } catch (error) {
+    if (error instanceof PasskeyAlreadyExistsError) {
+      // Flip to sign-in. The existing credential's PRF output is
+      // the same wallet seed the host would have minted on register.
+      const response = await passkey.signIn({
+        label: 'personal',
+        extraSalts: [],
+      })
+      return response.wallet
+    }
+    throw error
+  }
+  // ANCHOR_END: recover-already-exists
+}
+
+const handleTimeout = async () => {
+  // ANCHOR: handle-timeout
+  // The OS biometric inactivity timeout (~55s+) tore down the prompt
+  // without user intent. Distinct from a real cancel: hosts may
+  // surface a re-prompt UI without treating it as the user opting
+  // out. The SDK fires PasskeyTimedOutError when assertion or
+  // register elapsed time crosses 55_000ms.
+  const prfProvider = new PasskeyProvider()
+  const passkey = new PasskeyClient(prfProvider as any, undefined)
+
+  try {
+    return await passkey.signIn({ label: 'personal', extraSalts: [] })
+  } catch (error) {
+    if (error instanceof PasskeyTimedOutError) {
+      // Show a sticky retry screen with timeout-specific copy.
+      // Do NOT auto-retry without user input.
+      console.log('Sign-in timed out — show "Try Again" UI.')
+    }
+    throw error
+  }
+  // ANCHOR_END: handle-timeout
 }
