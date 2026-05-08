@@ -1288,7 +1288,6 @@ pub struct _UnregisterWebhookRequest {
 #[frb(mirror(NostrRelayConfig))]
 pub struct _NostrRelayConfig {
     pub breez_api_key: Option<String>,
-    pub timeout_secs: Option<u32>,
 }
 
 #[frb(mirror(Wallet))]

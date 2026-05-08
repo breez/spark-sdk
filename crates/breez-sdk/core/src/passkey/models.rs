@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::Seed;
 
-const DEFAULT_TIMEOUT_SECS: u32 = 30;
-
 /// A wallet derived from a passkey.
 ///
 /// Contains the derived seed and the label used during derivation.
@@ -111,13 +109,4 @@ pub struct NostrRelayConfig {
     /// When provided, the Breez relay is added and NIP-42 authentication is enabled.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub breez_api_key: Option<String>,
-    /// Connection timeout in seconds. Defaults to 30 when `None`.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub timeout_secs: Option<u32>,
-}
-
-impl NostrRelayConfig {
-    pub(crate) fn timeout_secs(&self) -> u32 {
-        self.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS)
-    }
 }

@@ -309,7 +309,6 @@ impl Passkey {
             prf_provider,
             Some(NostrRelayConfig {
                 breez_api_key: config.api_key.clone(),
-                timeout_secs: None,
             }),
         )
     }
@@ -607,16 +606,6 @@ mod tests {
             mnemonic1, mnemonic2,
             "Same label should produce same mnemonic"
         );
-    }
-
-    #[macros::test_all]
-    fn test_nostr_relay_config_default() {
-        let config = NostrRelayConfig::default();
-        assert!(
-            config.breez_api_key.is_none(),
-            "Default should have no API key"
-        );
-        assert_eq!(config.timeout_secs(), 30, "Should have 30 sec timeout");
     }
 
     #[macros::test_all]

@@ -24,6 +24,11 @@ const STATIC_RELAYS: &[&str] = &[
     "wss://monitorlizard.nostr1.com",
 ];
 
+/// Per-relay-batch read/write timeout. Picked to outlast a slow public
+/// relay's TLS handshake without keeping a stalled batch alive long
+/// enough to block the surrounding flow.
+const RELAY_TIMEOUT_SECS: u64 = 30;
+
 /// Breez-operated relay URL (requires NIP-42 authentication).
 const BREEZ_RELAY: &str = "wss://nr1.breez.technology";
 
@@ -105,7 +110,7 @@ impl NostrSaltClient {
         label: &str,
     ) -> Result<(), PasskeyError> {
         let relays = self.read_relay_candidates();
-        let timeout = Duration::from_secs(u64::from(self.config.timeout_secs()));
+        let timeout = Duration::from_secs(RELAY_TIMEOUT_SECS);
         let filter = Filter::new()
             .author(keys.public_key())
             .kind(nostr::Kind::TextNote);
@@ -438,7 +443,7 @@ impl NostrSaltClient {
         relays: &[String],
         filter: Filter,
     ) -> Result<Vec<Event>, PasskeyError> {
-        let timeout = Duration::from_secs(u64::from(self.config.timeout_secs()));
+        let timeout = Duration::from_secs(RELAY_TIMEOUT_SECS);
         let mut last_err = None;
 
         for chunk in relays.chunks(2) {
@@ -565,19 +570,16 @@ mod tests {
         let client = NostrSaltClient::new(config);
 
         assert!(client.config.breez_api_key.is_none());
-        assert_eq!(client.config.timeout_secs(), 30);
     }
 
     #[macros::test_all]
     fn test_nostr_salt_client_with_api_key() {
         let config = NostrRelayConfig {
             breez_api_key: Some("dGVzdC1hcGkta2V5".to_string()),
-            ..Default::default()
         };
         let client = NostrSaltClient::new(config);
 
         assert!(client.config.breez_api_key.is_some());
-        assert_eq!(client.config.timeout_secs(), 30);
     }
 
     #[macros::test_all]

@@ -19,8 +19,6 @@ pub struct NostrRelayConfig {
     /// Optional Breez API key for authenticated access to the Breez relay.
     /// When provided, the Breez relay is added and NIP-42 authentication is enabled.
     pub breez_api_key: Option<String>,
-    /// Connection timeout in seconds. Defaults to 30 when `None`.
-    pub timeout_secs: Option<u32>,
 }
 
 /// A wallet derived from a passkey.
