@@ -86,8 +86,6 @@ pub(crate) struct GraphQLClientConfig {
     pub base_url: String,
     /// Schema endpoint path (defaults to "graphql/spark/2025-03-19")
     pub schema_endpoint: Option<String>,
-
-    pub user_agent: Option<String>,
     pub retry_config: crate::ssp::RetryConfig,
 }
 

@@ -3,10 +3,9 @@ use std::sync::Arc;
 
 use base64::Engine;
 use bitcoin::secp256k1::PublicKey;
-use platform_utils::{HttpClient, create_http_client};
+use platform_utils::HttpClient;
 use tracing::{debug, error};
 
-use crate::default_user_agent;
 use crate::header_provider::{HeaderProvider, HeaderProviderError};
 use crate::session_manager::{Session, SessionManager, SessionManagerError};
 use crate::signer::Signer;
@@ -31,15 +30,14 @@ impl SspAuthHeaderProvider {
     pub fn new(
         base_url: &str,
         schema_endpoint: Option<&str>,
-        user_agent: Option<&str>,
+        client: Arc<dyn HttpClient>,
         signer: Arc<dyn Signer>,
         session_manager: Arc<dyn SessionManager>,
         ssp_identity_public_key: PublicKey,
     ) -> Self {
         let schema_endpoint = schema_endpoint.unwrap_or("graphql/spark/2025-03-19");
-        let user_agent_owned = user_agent.map_or_else(default_user_agent, ToString::to_string);
         Self {
-            client: create_http_client(Some(&user_agent_owned)),
+            client,
             full_url: format!("{base_url}/{schema_endpoint}"),
             signer,
             session_manager,

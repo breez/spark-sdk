@@ -7,10 +7,9 @@ use std::time::Duration;
 use tracing::warn;
 
 use platform_utils::tokio;
-use platform_utils::{ContentType, HttpClient, add_content_type_header, create_http_client};
+use platform_utils::{ContentType, HttpClient, add_content_type_header};
 use tokio::time::sleep;
 
-use crate::default_user_agent;
 use crate::header_provider::HeaderProvider;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{
@@ -83,21 +82,10 @@ pub struct GraphQLClient {
 }
 
 impl GraphQLClient {
-    /// Create a new GraphQLClient with the given configuration and header provider.
-    ///
-    /// Builds an internal HTTP client. Use [`GraphQLClient::new_with_client`] to
-    /// share a pooled HTTP client across SDK instances.
-    pub fn new(config: GraphQLClientConfig, header_provider: Arc<dyn HeaderProvider>) -> Self {
-        let user_agent = config.user_agent.clone().unwrap_or_else(default_user_agent);
-        let client = create_http_client(Some(&user_agent));
-        Self::new_with_client(config, header_provider, client)
-    }
-
-    /// Create a new GraphQLClient using a shared HTTP client.
+    /// Create a new GraphQLClient using the supplied HTTP client.
     ///
     /// All SDK instances built with the same `client` share its underlying
-    /// pooled `reqwest::Client`. The `user_agent` field on `config` is ignored
-    /// — the user-agent is whatever the shared client was constructed with.
+    /// pooled `reqwest::Client` and its baked-in user-agent.
     pub fn new_with_client(
         config: GraphQLClientConfig,
         header_provider: Arc<dyn HeaderProvider>,

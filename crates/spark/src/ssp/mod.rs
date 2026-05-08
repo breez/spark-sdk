@@ -59,7 +59,6 @@ impl From<ServiceProviderConfig> for GraphQLClientConfig {
         Self {
             base_url: opts.base_url,
             schema_endpoint: opts.schema_endpoint,
-            user_agent: opts.user_agent,
             retry_config: opts.retry_config,
         }
     }
