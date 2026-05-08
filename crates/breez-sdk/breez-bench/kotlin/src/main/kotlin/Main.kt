@@ -280,13 +280,17 @@ private suspend fun waitForBalanceIncrease(sdk: BreezSdk, currentBalance: ULong,
 /**
  * One-shot seeding pass for the K reserved sender wallets
  * (`__sender_0__` … `__sender_{K-1}__`). For each sender, if its
- * balance is below `minSats`, the treasurer Spark-transfers enough to
- * bring it up to `targetSats`.
+ * balance is below `perSenderSats`, the treasurer Spark-transfers
+ * enough to bring it up to that amount.
  *
- * In the closed-loop bench design (load generator's `/send` always
- * targets the treasurer), senders barely drain — only by per-transfer
- * fees. So a single seeding pass before a long run is enough; no
- * background replenisher is needed. Re-running this is idempotent.
+ * Sized per planned workload — the bench's sweep driver computes
+ * `perSenderSats` from the sweep config (RPS list × duration × send
+ * mix / K × payment_sats × safety factor) and passes it through. For
+ * standalone runs (debugging, ad-hoc), 5000 is a sensible default.
+ *
+ * Closed-loop design: every `/send` during the bench targets the
+ * treasurer, so leftover sender balances roll forward to the next
+ * run; re-running this is idempotent (skip-if-balance-already-above).
  *
  * Senders are processed in parallel with bounded concurrency so the
  * treasurer SDK isn't hit by K simultaneous sendPayment calls.
@@ -298,16 +302,15 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
         ?: System.getenv("MASTER_SECRET")
         ?: error("--master-secret=<hex-or-string> or MASTER_SECRET env var is required")
     val senderCount = opts["senders"]?.toIntOrNull() ?: 50
-    val minSats = opts["min-sats"]?.toLongOrNull() ?: 10_000L
-    val targetSats = opts["target-sats"]?.toLongOrNull() ?: 50_000L
+    val perSenderSats = opts["per-sender-sats"]?.toLongOrNull() ?: 5_000L
     val parallelism = opts["parallelism"]?.toIntOrNull() ?: 5
 
     require(senderCount > 0) { "--senders must be > 0" }
-    require(minSats in 1..targetSats) { "--min-sats must be in [1, --target-sats]" }
+    require(perSenderSats > 0) { "--per-sender-sats must be > 0" }
     require(parallelism > 0) { "--parallelism must be > 0" }
 
     println(
-        "[seed] senders=$senderCount  min=$minSats  target=$targetSats  parallel=$parallelism  " +
+        "[seed] senders=$senderCount  per-sender=$perSenderSats  parallel=$parallelism  " +
             "mysql=${maskPassword(mysqlUrl)}"
     )
 
@@ -323,9 +326,9 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
         val treasurerInfo = treasurer.getInfo(GetInfoRequest(ensureSynced = true))
         val treasurerBalance = treasurerInfo.balanceSats.toLong()
         println("[seed] treasurer balance: $treasurerBalance sats")
-        // Worst-case spend if every sender is at zero. We only warn —
-        // partial seeding is still useful for diagnostics.
-        val maxSpend = senderCount.toLong() * targetSats
+        // Worst case: every sender is at zero. Just a warning — partial
+        // seeding is still useful for diagnostics.
+        val maxSpend = senderCount.toLong() * perSenderSats
         if (treasurerBalance < maxSpend) {
             System.err.println(
                 "[seed] warning: treasurer has $treasurerBalance sats; up to $maxSpend may be needed " +
@@ -346,8 +349,7 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
                             masterSecret = masterSecret,
                             config = config,
                             storageCfg = storageCfg,
-                            minSats = minSats,
-                            targetSats = targetSats,
+                            perSenderSats = perSenderSats,
                         )
                         synchronized(this@runBlocking) {
                             when (outcome) {
@@ -377,8 +379,7 @@ private suspend fun seedOneSender(
     masterSecret: String,
     config: breez_sdk_spark.Config,
     storageCfg: breez_sdk_spark.MysqlStorageConfig,
-    minSats: Long,
-    targetSats: Long,
+    perSenderSats: Long,
 ): SeedOutcome {
     val userId = senderUserId(senderIdx)
     val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
@@ -387,15 +388,15 @@ private suspend fun seedOneSender(
     return try {
         val info = sender.getInfo(GetInfoRequest(ensureSynced = true))
         val balance = info.balanceSats.toLong()
-        if (balance >= minSats) {
-            println("[seed] sender $senderIdx: $balance sats (≥ $minSats, skip)")
+        if (balance >= perSenderSats) {
+            println("[seed] sender $senderIdx: $balance sats (≥ $perSenderSats, skip)")
             return SeedOutcome.SKIPPED
         }
         val sparkAddr = sender.receivePayment(
             ReceivePaymentRequest(paymentMethod = ReceivePaymentMethod.SparkAddress)
         ).paymentRequest
-        val toSend = targetSats - balance
-        println("[seed] sender $senderIdx: $balance sats → topping up by $toSend to $targetSats")
+        val toSend = perSenderSats - balance
+        println("[seed] sender $senderIdx: $balance sats → topping up by $toSend to $perSenderSats")
 
         val prepared = treasurer.prepareSendPayment(
             PrepareSendPaymentRequest(
@@ -605,8 +606,8 @@ fun main(args: Array<String>) {
                                 regtest faucet. Idempotent. Requires FAUCET_USERNAME +
                                 FAUCET_PASSWORD env vars (FAUCET_URL is optional).
                   seed-senders  One-shot top-up of the K reserved sender wallets from
-                                the treasurer (Spark transfers). Idempotent — only
-                                refills senders whose balance is below --min-sats.
+                                the treasurer (Spark transfers). Idempotent — skips
+                                senders already at or above --per-sender-sats.
                   loadgen       Open-loop HTTP load generator against the bench server.
                                 Dispatches at --target-rps regardless of completion;
                                 surfaces server backpressure as in-flight queue growth.
@@ -619,10 +620,12 @@ fun main(args: Array<String>) {
                   --port=<port>                                (server) HTTP listen port (default: 8080)
                   --run-id=<id>                                (server, loadgen) Defaults to filesystem-safe ISO-8601 timestamp
                   --out-dir=<path>                             (server, loadgen) Defaults to out/<run-id>/
-                  --target-sats=<N>                            (fund) Treasurer balance target (default: 5_000_000)
-                                                               (seed-senders) Per-sender top-up target (default: 50_000)
+                  --target-sats=<N>                            (fund) Treasurer balance target (default: 5_000_000;
+                                                               sweep driver computes a workload-sized value)
                   --senders=<K>                                (seed-senders, loadgen) Number of sender wallets (default: 50)
-                  --min-sats=<N>                               (seed-senders) Refill threshold per sender (default: 10_000)
+                  --per-sender-sats=<N>                        (seed-senders) Top each sender up to N sats. Skips
+                                                               senders already at or above N. Default: 5000;
+                                                               sweep driver computes a workload-sized value
                   --parallelism=<N>                            (seed-senders) Concurrent top-ups (default: 5)
 
                 Options (loadgen mode):

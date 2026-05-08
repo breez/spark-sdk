@@ -22,7 +22,13 @@ Sibling of `../js/concurrent_perf.js` (the WASM/Node version).
   sampler emitting `metrics.jsonl` (RSS, JVM heap, threads, FDs,
   MySQL connection count, remote TCP socket count). Linux + macOS
   first-class via a platform shim.
-- Phases 6–9: pending.
+- **Phase 6 (RPS sweep + aggregator)**: implemented — bash sweep
+  driver (`scripts/sweep.sh`) with per-step server restart, Python
+  aggregator (`scripts/aggregate.py`) that produces `summary.json`
+  and `RESULTS.md` from a sweep dir. The aggregator computes the
+  headline 3 numbers including `max_safe_rps` (highest RPS where
+  client-side p99(send) is still < 2× the lowest stable p99).
+- Phases 7–9: pending.
 
 ## Funding flow
 
@@ -40,25 +46,14 @@ faucet  ───────►  treasurer  ◄─── (load gen `/send` dest
               senders pool (K wallets)  ───── (load gen `/send` source)
 ```
 
-**Sender pool runway** (how long a single seeding pass lasts before
-senders are empty):
-
-```
-runway_seconds = (K × TARGET_SATS) / (RPS × payment_sats)
-```
-
-With defaults K=50, TARGET=50_000, payment=1 sat:
-
-| RPS  | runway   |
-|------|----------|
-| 100  | ~7 hours |
-| 500  | ~1.4 h   |
-| 1000 | ~42 min  |
-
-This is enough for the Phase 6 RPS sweep (~5 min per step). For
-Phase 8 (24h leak run at sustained RPS), the prefund model isn't
-enough — a continuous replenisher (treasurer→senders at the drain
-rate) is needed and will be added before that phase.
+**Workload-sized funding.** The sweep driver
+(`scripts/sweep.sh`) computes the per-sender top-up amount from the
+planned sweep config (sum of `rps × duration × send_mix / K × payment_sats`,
+with a 2× safety factor) and the treasurer target from `K × per-sender × 1.5`.
+For typical sweeps the faucet fund is tiny (≤10 chunks, a few minutes
+of wait); for the 24h leak run (Phase 8) we'll need Phase 3c's
+continuous replenisher instead — the prefund model isn't enough at
+sustained-RPS hour-long horizons.
 
 Run outputs (per-request JSONL, metrics samples, summaries, and the
 human-readable `RESULTS.md` digest) are written to `out/<run-id>/` and
@@ -84,6 +79,17 @@ this README; anyone who wants numbers re-runs the bench.
    make setup
    ```
    (Wait for `Local bindings published to mavenLocal`.)
+3. **Standard `MASTER_SECRET` for bench runs**: use `breez-bench` (see
+   plan). Keeping the secret stable across sessions means the
+   treasurer and sender wallets stay funded between runs, so the
+   faucet step only kicks in after long idle periods.
+
+   ```bash
+   export MASTER_SECRET=breez-bench
+   ```
+
+   Use a different secret only when intentionally starting from a
+   clean wallet set.
 
 ## Smoke (Phase 1)
 
@@ -186,6 +192,11 @@ Field notes:
   including TIME_WAIT) held by the server process. Surfaces ephemeral
   port exhaustion under cold-start churn — what we expect to bottleneck
   at high RPS in v1 before the SDK-level shared-pool optimizations land.
+  **Linux only** (parses `/proc/self/net/tcp{,6}`). On macOS the field
+  is `-1` because there's no JVM API for it and `lsof -p PID` slows to
+  multi-second-per-call at scale — same reason FDs use the MXBean.
+  `fd_count` is a close proxy on macOS (misses only TIME_WAIT, which
+  has no FD).
 - `fd_count` is from `UnixOperatingSystemMXBean.getOpenFileDescriptorCount()`
   — works on both Linux and macOS, no subprocess.
 - `-1` in any numeric field means "couldn't sample this tick" (transient
@@ -215,15 +226,19 @@ wallets above their minimum threshold.
 ## Sender pool top-up (Phase 3b)
 
 One-shot top-up: for each of K sender wallets (`__sender_0__` …
-`__sender_{K-1}__`), if the wallet's balance is below `MIN_SATS`, the
-treasurer Spark-transfers enough to bring it to `TARGET_SATS`. Run
-once before a long bench run. Idempotent — re-running skips already-
-funded senders. Bounded concurrency (default 5) so the treasurer SDK
-isn't hammered with K simultaneous sendPayment calls.
+`__sender_{K-1}__`), tops the wallet up to `PER_SENDER_SATS` from the
+treasurer (no-op if it already has enough). Run once before a long
+bench run; idempotent — re-running skips senders already at-or-above
+target. Bounded concurrency (default 5) so the treasurer SDK isn't
+hammered with K simultaneous sendPayment calls.
+
+The sweep driver (`scripts/sweep.sh`) computes a workload-sized
+`PER_SENDER_SATS` from the planned RPS list × duration × send mix and
+runs `seed-senders` automatically; you only need this command for ad-
+hoc testing or when the auto-fund flow needs an explicit override.
 
 ```bash
-SENDERS=50 MIN_SATS=10000 TARGET_SATS=50000 \
-  MASTER_SECRET=any-string \
+SENDERS=50 PER_SENDER_SATS=5000 \
   MYSQL_URL='mysql://root:password@127.0.0.1:3306/breez_bench' \
   make seed-senders
 ```
@@ -262,6 +277,77 @@ TARGET_RPS=100 DURATION=2m \
 ```
 
 End-of-run summary: `[loadgen] dispatched=N  dropped=M  actual_rps=R`.
+
+## RPS sweep (Phase 6)
+
+Drives the full headline measurement. For each target RPS, spins up a
+fresh server, runs the loadgen against it for `DURATION`, then tears
+the server down. Per-step server restart preserves the v1 cold-start
+characteristic (Phase 7's pool reuses across steps).
+
+```bash
+# Treasurer + senders must already be funded (see Phase 3 sections above).
+SWEEP_RPS=50,100,250,500,1000 \
+  DURATION=5m \
+  MASTER_SECRET=any-string \
+  MYSQL_URL='mysql://root:password@127.0.0.1:3306/breez_bench' \
+  make sweep
+```
+
+Output structure:
+
+```
+out/<sweep-id>/
+  manifest.json                # sweep config + host info
+  rps-50/
+    server.log                 # server stdout/stderr
+    loadgen.log                # loadgen stdout/stderr
+    requests.jsonl             # server-side per-request timings
+    metrics.jsonl              # 1Hz process metrics
+    latency.jsonl              # client-side per-request timings
+  rps-100/  ...
+  rps-250/  ...
+  ...
+```
+
+Per-step duration default is 5 min. The full sweep at default RPS list
+is ~30 min wall time + ~5s drain between steps (TIME_WAIT cleanup).
+
+### Aggregating
+
+```bash
+make aggregate SWEEP_ID=<sweep-id>
+```
+
+Reads each `rps-N/` step dir, filters out warmup samples, and writes:
+
+- `out/<sweep-id>/summary.json` — full structured per-step breakdown
+- `out/<sweep-id>/RESULTS.md` — human-readable digest with the headline 3
+
+The aggregator is stdlib-only Python 3 — no external deps. Phase 9
+will add matplotlib for charts.
+
+### Headline derivation
+
+- **Max RPS before p99(send) doubles** — baseline p99(send) is the
+  smallest p99 across the swept steps where send had ≥30 samples.
+  `max_safe_rps` is the highest swept RPS still below 2× baseline.
+- **Per-op p50/p95/p99** — computed from `latency.jsonl` (client-side)
+  and `requests.jsonl` (server-side) excluding warmup, dropped, and
+  failed requests.
+- **Memory at sustained RPS** — RSS / heap mean+max from the post-warmup
+  metrics window per step.
+
+### Framing the headline (SDK- vs regtest-bounded)
+
+The bench uses the public Lightspark regtest operators, which may
+throttle. We don't pre-probe — the sweep itself is the experiment.
+At reporting time, `RESULTS.md` cross-checks: if the latency cliff
+coincides with local resource saturation (RSS climbing, FDs near
+limit, MySQL pool saturated, CPU pegged) the headline is
+**SDK-bounded**. If local resources stay idle through the cliff,
+it's **regtest-bounded** and a partner's prod deployment should
+expect higher ceilings.
 
 ## Notes
 

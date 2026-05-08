@@ -236,58 +236,37 @@ private class LinuxProcessMetricsCollector : ProcessMetricsCollector {
     }
 }
 
+/**
+ * macOS collector. RSS is cheap (`ps -o rss=`). Socket count is not
+ * sampled here: there is no JVM API that returns this process's TCP
+ * socket count (only FDs, via [UnixOperatingSystemMXBean]), and the
+ * only PID-filtered tool on macOS is `lsof`, which slows to multi-
+ * second-per-call once the process accumulates a few hundred FDs.
+ * Same reason we don't use `lsof` for FDs on macOS in the first place.
+ *
+ * So [remoteTcpSocketCount] returns -1 on macOS. `fd_count` is a
+ * reasonable proxy for outbound-connection saturation under load (it
+ * misses only TIME_WAIT, which has no FD). Partner-facing measurements
+ * should be taken on Linux, where `/proc/self/net/tcp{,6}` gives the
+ * full picture sub-ms per sample.
+ */
 private class MacosProcessMetricsCollector(private val pid: Long) : ProcessMetricsCollector {
     override fun rssKb(): Long {
-        // `ps -o rss=` prints just the RSS in KB, no header.
-        val output = runCommand(listOf("ps", "-o", "rss=", "-p", pid.toString()))
+        val output = runCommand(listOf("ps", "-o", "rss=", "-p", pid.toString()), timeoutSecs = 5)
             ?: return -1
         return output.trim().toLongOrNull() ?: -1
     }
 
-    override fun remoteTcpSocketCount(): Int {
-        // `lsof -nP -iTCP -p PID` lists every TCP socket the process holds.
-        // The NAME column has shape "LOCAL:PORT->REMOTE:PORT (STATE)" for
-        // connected sockets and "*:PORT (LISTEN)" for listeners. We count
-        // connected, non-loopback entries.
-        val output = runCommand(listOf("lsof", "-nP", "-iTCP", "-p", pid.toString()))
-            ?: return -1
-        var count = 0
-        output.lineSequence().drop(1).forEach { line ->
-            if (line.isBlank()) return@forEach
-            val tcpAt = line.indexOf(" TCP ")
-            if (tcpAt < 0) return@forEach
-            val nameField = line.substring(tcpAt + " TCP ".length)
-            val arrow = nameField.indexOf("->")
-            if (arrow < 0) return@forEach  // not a connected socket
-            val remoteAndAfter = nameField.substring(arrow + 2)
-            val remote = remoteAndAfter.substringBefore(' ')
-            val remoteHost = remote.substringBeforeLast(':')
-                .removePrefix("[").removeSuffix("]")
-            if (isLoopbackHost(remoteHost)) return@forEach
-            count++
-        }
-        return count
-    }
-
-    private fun isLoopbackHost(host: String): Boolean {
-        // Avoid hitting DNS — only treat numeric IPv4/IPv6 forms as loopback.
-        return try {
-            // lsof -n prints numeric addresses, so InetAddress.getByName here
-            // won't perform DNS lookups in practice.
-            InetAddress.getByName(host).isLoopbackAddress
-        } catch (_: Exception) {
-            false
-        }
-    }
+    override fun remoteTcpSocketCount(): Int = -1
 }
 
-private fun runCommand(cmd: List<String>): String? {
+private fun runCommand(cmd: List<String>, timeoutSecs: Long = 5): String? {
     return try {
         val proc = ProcessBuilder(cmd)
             .redirectErrorStream(false)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
-        val finished = proc.waitFor(5, TimeUnit.SECONDS)
+        val finished = proc.waitFor(timeoutSecs, TimeUnit.SECONDS)
         if (!finished) {
             proc.destroyForcibly()
             return null
@@ -303,8 +282,8 @@ private fun runCommand(cmd: List<String>): String? {
 
 /**
  * Daemon thread that emits one [MetricSample] per [intervalMs] to a
- * [JsonlWriter]. Cheap on Linux (file reads + a JDBC query); on macOS,
- * `lsof` adds tens of milliseconds per tick which is fine at 1 Hz.
+ * [JsonlWriter]. Cheap on Linux (file reads + a JDBC query); on macOS
+ * sockets are unavailable (see [MacosProcessMetricsCollector]).
  *
  * Errors inside a single tick are swallowed (a stderr line + best-effort
  * fields) so the sampler outlives transient hiccups (MySQL flap, /proc
