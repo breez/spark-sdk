@@ -1,6 +1,7 @@
 package technology.breez.spark.passkey
 
 import android.app.Activity
+import android.util.Base64
 import breez_sdk_spark.CreatePasskeyRequest
 import breez_sdk_spark.DomainAssociation
 import breez_sdk_spark.PrfProvider
@@ -202,17 +203,47 @@ public class PasskeyProvider(
      * Register a new passkey with PRF support. One ceremony, no seed
      * derivation. Per-call overrides on `request` (userId, userName,
      * userDisplayName) fall back to constructor values when omitted.
+     *
+     * Auto-merges previously-registered credential IDs from
+     * [KnownCredentialsStore] into `request.excludeCredentialIds` so
+     * the platform refuses to create a duplicate even after a reinstall
+     * (the store is Block Store + Google-account synced). Records the
+     * new credential ID after a successful create.
      */
     override suspend fun createPasskey(request: CreatePasskeyRequest): RegisteredCredential {
         try {
+            val activity = activityProvider()
+            val context = activity.applicationContext
+            val known = KnownCredentialsStore.read(context, rpId)
+                .map { Base64.decode(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) }
+            val merged = if (known.isEmpty()) {
+                request.excludeCredentialIds
+            } else {
+                val seen = request.excludeCredentialIds.toMutableList()
+                val seenSet = seen.map { it.toList() }.toMutableSet()
+                for (id in known) {
+                    if (seenSet.add(id.toList())) {
+                        seen.add(id)
+                    }
+                }
+                seen
+            }
             val core = CredentialManagerPrfCore.createCredential(
-                activity = activityProvider(),
+                activity = activity,
                 rpId = rpId,
                 rpName = rpName,
                 userName = request.userName ?: userName,
                 userDisplayName = request.userDisplayName ?: userDisplayName,
-                excludeCredentialIds = request.excludeCredentialIds,
+                excludeCredentialIds = merged,
                 userIdOverride = request.userId,
+            )
+            KnownCredentialsStore.add(
+                context = context,
+                credentialIdBase64 = Base64.encodeToString(
+                    core.credentialId,
+                    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                ),
+                rpId = rpId,
             )
             return RegisteredCredential(core.credentialId, core.aaguid, core.backupEligible)
         } catch (e: CredentialManagerPrfCoreException) {
