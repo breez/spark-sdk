@@ -5,30 +5,20 @@ import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
-import java.time.Instant
-import java.time.LocalDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 import kotlin.random.Random
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 // --- record shape ---------------------------------------------------------
@@ -44,55 +34,6 @@ data class LogEntry(
     val error: String? = null,
     val dropped: Boolean = false,  // true if dispatch was skipped due to in-flight cap
 )
-
-// --- JSONL writer (single dedicated coroutine, unbounded channel) ---------
-
-/**
- * Async append-only JSONL writer. Producers send LogEntry into a channel;
- * a dedicated coroutine drains it onto disk. Unbounded channel so request
- * handlers never block — at the cost of memory growth if disk falls
- * behind. For our throughput targets (≤1000 RPS, small entries) this is
- * a non-issue.
- */
-private class JsonlWriter(path: Path) : AutoCloseable {
-    private val codec = Json { encodeDefaults = true }
-    private val channel = Channel<LogEntry>(Channel.UNLIMITED)
-    private val writer = Files.newBufferedWriter(path)
-
-    /**
-     * Launches the writer coroutine as a child of [scope]. Callers must
-     * call [closeChannel] before [scope]'s block ends — otherwise the
-     * coroutineScope will block forever waiting for the writer (which
-     * itself is blocked waiting for more entries). [close] is then
-     * called after the scope ends to release the file handle.
-     */
-    fun start(scope: kotlinx.coroutines.CoroutineScope) {
-        scope.launch(Dispatchers.IO) {
-            // Per-write flush keeps the file readable from another process
-            // while the run is in flight (cheap at our throughput, < 1k lines/s).
-            for (entry in channel) {
-                writer.write(codec.encodeToString(entry))
-                writer.newLine()
-                writer.flush()
-            }
-        }
-    }
-
-    /** Non-blocking submit. Should never fail since the channel is unbounded. */
-    fun submit(entry: LogEntry) {
-        check(channel.trySend(entry).isSuccess) { "JSONL channel send failed unexpectedly" }
-    }
-
-    /** Signals end-of-input to the writer coroutine. Call inside the scope used by [start]. */
-    fun closeChannel() {
-        channel.close()
-    }
-
-    /** Releases the underlying file handle. Call after the writer coroutine has completed. */
-    override fun close() {
-        writer.close()
-    }
-}
 
 // --- samplers -------------------------------------------------------------
 
@@ -200,12 +141,6 @@ private fun parseDuration(spec: String): Duration {
     }
 }
 
-private val RUN_ID_FORMAT: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH-mm-ss")
-
-private fun defaultRunId(): String =
-    LocalDateTime.now(ZoneId.systemDefault()).format(RUN_ID_FORMAT)
-
 // --- HTTP request shapes (must match the server's wire types) -------------
 
 private val jsonOut = Json { encodeDefaults = false }
@@ -284,7 +219,7 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
     val treasurerAddr = fetchTreasurerSparkAddress(httpClient, baseUrl)
     println("[loadgen] treasurer destination: $treasurerAddr")
 
-    val writer = JsonlWriter(outDir.resolve("latency.jsonl"))
+    val writer = JsonlWriter(outDir.resolve("latency.jsonl"), LogEntry.serializer())
     val rng = Random.Default
 
     val intervalNs = (1_000_000_000.0 / targetRps).toLong()
@@ -299,8 +234,6 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
     var senderCursor = 0
 
     coroutineScope {
-        writer.start(this)
-
         // Periodic progress logger — prints every 5s while dispatching, then a
         // shorter interval during drain so the user sees in-flight tail off.
         val progressJob = launch {
@@ -414,10 +347,9 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
             System.err.println("[loadgen] drain warning: ${inFlight.get()} requests still in flight after 60s")
         }
         progressJob.cancel()
-        writer.closeChannel()  // let the writer coroutine drain and exit so the scope can return
     }
 
-    writer.close()
+    writer.close()  // drains the queue + closes the file (blocks up to 10s)
     println("[loadgen] dispatched=$dispatched  dropped=$dropped  " +
         "actual_rps=${"%.2f".format(dispatched.toDouble() * 1e9 / (System.nanoTime() - startNs))}")
     println("[loadgen] OK  out=$outDir")

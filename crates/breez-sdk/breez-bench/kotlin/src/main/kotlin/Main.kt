@@ -32,6 +32,8 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 
 import javax.crypto.Mac
@@ -40,6 +42,7 @@ import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 // --- arg parsing -----------------------------------------------------------
@@ -132,6 +135,23 @@ data class ReceiveResult(val paymentRequest: String, val feeSats: String)
 
 @Serializable
 data class ErrorBody(val error: String)
+
+/**
+ * Per-request server-side timing record written to `requests.jsonl`.
+ *
+ * Captures handler duration only — no network round-trip — so this is
+ * the SDK + MySQL + operator cost that a partner integrator would pay
+ * for the same call. The loadgen's `latency.jsonl` adds the network
+ * leg on top; comparing the two surfaces network overhead.
+ */
+@Serializable
+data class ServerRequestLogEntry(
+    val ts: Long,
+    val op: String,
+    @SerialName("user_id") val userId: String,
+    @SerialName("duration_ms") val durationMs: Long,
+    val error: String? = null,
+)
 
 // --- reserved user-ids (funding pipeline) ---------------------------------
 
@@ -404,13 +424,36 @@ private suspend fun seedOneSender(
 fun runServer(opts: Map<String, String>) {
     val mysqlUrl = opts["mysql-url"]
         ?: error("--mysql-url=mysql://user:pass@host:port/dbname is required")
+    val mysqlParts = parseMysqlUrl(mysqlUrl)
     val masterSecret = opts["master-secret"]
         ?: System.getenv("MASTER_SECRET")
         ?: error("--master-secret=<hex-or-string> or MASTER_SECRET env var is required")
     val port = opts["port"]?.toIntOrNull() ?: 8080
+    val runId = opts["run-id"] ?: defaultRunId()
+    val outDir = Path.of(opts["out-dir"] ?: "out/$runId").also { Files.createDirectories(it) }
 
     val provider = BenchSdkProvider(masterSecret, mysqlUrl)
 
+    val requestsWriter = JsonlWriter(outDir.resolve("requests.jsonl"), ServerRequestLogEntry.serializer())
+    val metricsWriter = JsonlWriter(outDir.resolve("metrics.jsonl"), MetricSample.serializer())
+    val mysqlPoller = MysqlConnPoller(mysqlParts)
+    val sampler = MetricsSampler(
+        collector = ProcessMetricsCollector.create(),
+        mysqlPoller = mysqlPoller,
+        writer = metricsWriter,
+    )
+    sampler.start()
+
+    // Best-effort cleanup so a Ctrl-C still flushes the JSONL writers.
+    // Idempotent: each component's close is itself a no-op after the first call.
+    Runtime.getRuntime().addShutdownHook(Thread {
+        sampler.stop()
+        try { mysqlPoller.close() } catch (_: Exception) {}
+        try { requestsWriter.close() } catch (_: Exception) {}
+        try { metricsWriter.close() } catch (_: Exception) {}
+    })
+
+    println("[server] run-id=$runId  out=$outDir")
     println("[server] listening on :$port  mysql=${maskPassword(mysqlUrl)}")
 
     embeddedServer(Netty, port = port) {
@@ -424,7 +467,7 @@ fun runServer(opts: Map<String, String>) {
             // amortize it to once-per-pool-admission.
             get("/users/{userId}/info") {
                 val userId = call.parameters["userId"]!!
-                handle(call) {
+                handleAndLog(call, "info", userId, requestsWriter) {
                     provider.withUser(userId) { sdk ->
                         val info = sdk.getInfo(GetInfoRequest(ensureSynced = true))
                         InfoResponse(balanceSats = info.balanceSats.toLong())
@@ -440,7 +483,7 @@ fun runServer(opts: Map<String, String>) {
             post("/users/{userId}/send") {
                 val userId = call.parameters["userId"]!!
                 val body = call.receive<SendBody>()
-                handle(call) {
+                handleAndLog(call, "send", userId, requestsWriter) {
                     provider.withUser(userId) { sdk ->
                         val prepared = sdk.prepareSendPayment(
                             PrepareSendPaymentRequest(
@@ -466,7 +509,7 @@ fun runServer(opts: Map<String, String>) {
             // misread the number.
             post("/users/{userId}/receive") {
                 val userId = call.parameters["userId"]!!
-                handle(call) {
+                handleAndLog(call, "receive", userId, requestsWriter) {
                     provider.withUser(userId) { sdk ->
                         val resp = sdk.receivePayment(
                             ReceivePaymentRequest(paymentMethod = ReceivePaymentMethod.SparkAddress)
@@ -492,15 +535,45 @@ private fun feeOf(pm: SendPaymentMethod): String = when (pm) {
     }
 }
 
-private suspend inline fun <reified T : Any> handle(
+/**
+ * Executes [block], times it, responds (with JSON on success or
+ * 500 + ErrorBody on failure), and emits a [ServerRequestLogEntry] to
+ * [requestsWriter] in the `finally` arm so failures land in
+ * `requests.jsonl` too.
+ *
+ * `op` is the route op label ("info" / "send" / "receive"). The handler
+ * never rethrows — Ktor logs handler exceptions on its own; we don't
+ * need to bubble them up.
+ */
+private suspend inline fun <reified T : Any> handleAndLog(
     call: io.ktor.server.application.ApplicationCall,
-    crossinline op: suspend () -> T,
+    op: String,
+    userId: String,
+    requestsWriter: JsonlWriter<ServerRequestLogEntry>,
+    crossinline block: suspend () -> T,
 ) {
+    val tsMs = System.currentTimeMillis()
+    val tStartNs = System.nanoTime()
+    var errStr: String? = null
     try {
-        call.respond(op())
+        call.respond(block())
     } catch (e: Throwable) {
-        System.err.println("[server] handler error: ${e.message}")
-        call.respond(HttpStatusCode.InternalServerError, ErrorBody(error = e.message ?: e::class.qualifiedName ?: "error"))
+        errStr = "${e::class.simpleName}: ${e.message ?: ""}"
+        System.err.println("[server] handler error (op=$op user=$userId): ${e.message}")
+        call.respond(
+            HttpStatusCode.InternalServerError,
+            ErrorBody(error = e.message ?: e::class.qualifiedName ?: "error"),
+        )
+    } finally {
+        requestsWriter.submit(
+            ServerRequestLogEntry(
+                ts = tsMs,
+                op = op,
+                userId = userId,
+                durationMs = (System.nanoTime() - tStartNs) / 1_000_000,
+                error = errStr,
+            )
+        )
     }
 }
 
@@ -526,7 +599,8 @@ fun main(args: Array<String>) {
                                 connect, getInfo, disconnect.
                   server        HTTP server with /users/{userId}/{info,send,receive}
                                 endpoints. Each request spins up a fresh SDK instance
-                                (per-request lifecycle, v1 baseline).
+                                (per-request lifecycle, v1 baseline). Emits per-request
+                                requests.jsonl + 1Hz metrics.jsonl to out/<run-id>/.
                   fund          Top up the reserved treasurer wallet via the Lightspark
                                 regtest faucet. Idempotent. Requires FAUCET_USERNAME +
                                 FAUCET_PASSWORD env vars (FAUCET_URL is optional).
@@ -543,6 +617,8 @@ fun main(args: Array<String>) {
                                                                (or set MASTER_SECRET env var)
                   --user-id=<id>                               (smoke) User id to derive seed for (default: smoke-default)
                   --port=<port>                                (server) HTTP listen port (default: 8080)
+                  --run-id=<id>                                (server, loadgen) Defaults to filesystem-safe ISO-8601 timestamp
+                  --out-dir=<path>                             (server, loadgen) Defaults to out/<run-id>/
                   --target-sats=<N>                            (fund) Treasurer balance target (default: 5_000_000)
                                                                (seed-senders) Per-sender top-up target (default: 50_000)
                   --senders=<K>                                (seed-senders, loadgen) Number of sender wallets (default: 50)
@@ -560,8 +636,6 @@ fun main(args: Array<String>) {
                   --warmup-secs=<N>                            Mark first N seconds of samples as warmup (default: 60)
                   --payment-sats=<N>                           Sats per /send (default: 1)
                   --max-in-flight=<N>                          Hard cap; dispatch records 'dropped' if exceeded (default: 5000)
-                  --run-id=<id>                                Defaults to filesystem-safe ISO-8601 timestamp
-                  --out-dir=<path>                             Defaults to out/<run-id>/
                 """.trimIndent()
             )
         }

@@ -30,8 +30,12 @@ dependencies {
     implementation("io.ktor:ktor-serialization-kotlinx-json-jvm:2.3.13")
     implementation("ch.qos.logback:logback-classic:1.5.6")
 
-    // Phase 5+ will add MySQL JDBC (INFORMATION_SCHEMA sampling) and
-    // HdrHistogram (latency aggregation) when those phases land.
+    // Phase 5: MySQL JDBC for sampling INFORMATION_SCHEMA.PROCESSLIST.
+    // Used only by the metrics sampler — the SDK has its own MySQL path.
+    implementation("com.mysql:mysql-connector-j:9.1.0")
+
+    // HdrHistogram (latency aggregation) will be added with the Phase 6/9
+    // aggregator script when those phases land.
 }
 
 application {

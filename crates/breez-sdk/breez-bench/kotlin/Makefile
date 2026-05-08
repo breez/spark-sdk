@@ -15,8 +15,8 @@ build: ## Compile the benchmark harness
 smoke-test: build ## Run per-request smoke (requires MYSQL_URL + MASTER_SECRET env vars)
 	$(GRADLE) run --console=plain --args="--mode=smoke --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET"
 
-run-server: build ## Start the HTTP server (PORT defaults to 8080; needs MYSQL_URL + MASTER_SECRET)
-	$(GRADLE) run --console=plain --args="--mode=server --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --port=$${PORT:-8080}"
+run-server: build ## Start the HTTP server (PORT defaults to 8080; RUN_ID optional; needs MYSQL_URL + MASTER_SECRET)
+	$(GRADLE) run --console=plain --args="--mode=server --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --port=$${PORT:-8080}$${RUN_ID:+ --run-id=$$RUN_ID}"
 
 fund: build ## Top up the treasurer (TARGET_SATS defaults to 5000000; needs MYSQL_URL + MASTER_SECRET + FAUCET_USERNAME + FAUCET_PASSWORD)
 	$(GRADLE) run --console=plain --args="--mode=fund --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --target-sats=$${TARGET_SATS:-5000000}"

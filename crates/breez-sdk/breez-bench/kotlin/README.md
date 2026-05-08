@@ -17,7 +17,12 @@ Sibling of `../js/concurrent_perf.js` (the WASM/Node version).
 - **Phase 4 (load generator)**: implemented — open-loop HTTP load
   generator that dispatches at a target RPS regardless of completion,
   emits per-request JSONL, prints periodic progress.
-- Phases 5–9: pending.
+- **Phase 5 (server-side metrics)**: implemented — per-request
+  `requests.jsonl` (op, user, duration, error) plus a 1Hz background
+  sampler emitting `metrics.jsonl` (RSS, JVM heap, threads, FDs,
+  MySQL connection count, remote TCP socket count). Linux + macOS
+  first-class via a platform shim.
+- Phases 6–9: pending.
 
 ## Funding flow
 
@@ -147,6 +152,44 @@ The server runs on regtest by default (Network.REGTEST). The `/info` and
 `/receive` endpoints work without funding; `/send` will fail until the user
 has been funded — Phase 3 adds the funding tooling (treasurer + sender pool
 + replenisher).
+
+### Server-side metrics (Phase 5)
+
+Every server run writes two JSONL streams to `out/<run-id>/`:
+
+| File | Cadence | Fields |
+|---|---|---|
+| `requests.jsonl` | per-request | `ts`, `op`, `user_id`, `duration_ms`, `error` |
+| `metrics.jsonl` | 1 Hz | `ts`, `rss_kb`, `heap_used_bytes`, `heap_total_bytes`, `thread_count`, `fd_count`, `mysql_conns`, `remote_tcp_sockets` |
+
+`run-id` defaults to a fresh ISO-8601 timestamp; pass `RUN_ID=…` to
+share a directory across server + loadgen for the same run.
+
+```bash
+# Server + loadgen sharing one run-id (out files end up in out/2026-05-08T15-00-00/):
+RUN_ID=2026-05-08T15-00-00 \
+  MYSQL_URL='mysql://root:password@127.0.0.1:3306/breez_bench' \
+  MASTER_SECRET=any-string \
+  make run-server &
+
+RUN_ID=2026-05-08T15-00-00 TARGET_RPS=100 DURATION=2m \
+  MYSQL_URL='mysql://root:password@127.0.0.1:3306/breez_bench' \
+  MASTER_SECRET=any-string \
+  make loadgen
+```
+
+Field notes:
+- `mysql_conns` is `SELECT COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE DB = <bench-db>`
+  — server-authoritative count of connections open against the
+  bench database. Coarse if multiple bench processes share a DB.
+- `remote_tcp_sockets` counts non-loopback TCP sockets (any state,
+  including TIME_WAIT) held by the server process. Surfaces ephemeral
+  port exhaustion under cold-start churn — what we expect to bottleneck
+  at high RPS in v1 before the SDK-level shared-pool optimizations land.
+- `fd_count` is from `UnixOperatingSystemMXBean.getOpenFileDescriptorCount()`
+  — works on both Linux and macOS, no subprocess.
+- `-1` in any numeric field means "couldn't sample this tick" (transient
+  failure, OS path missing); the sampler keeps running.
 
 ## Treasurer top-up (Phase 3a)
 
