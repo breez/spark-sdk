@@ -64,6 +64,12 @@ dependencies {
     implementation "androidx.credentials:credentials:1.3.0"
     implementation "androidx.credentials:credentials-play-services-auth:1.3.0"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0"
+    // KnownCredentialsStore: Block Store (Google-account synced) +
+    // EncryptedSharedPreferences (local fallback). tasks.await()
+    // bridges Play Services Tasks to coroutines.
+    implementation "androidx.security:security-crypto:1.1.0-alpha06"
+    implementation "com.google.android.gms:play-services-auth-blockstore:16.4.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.0"
 }
 
 apply from: "../cargokit/gradle/plugin.gradle"

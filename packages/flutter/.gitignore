@@ -33,3 +33,5 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 build/
 **/Classes/*.h
+# Hand-written ObjC headers we DO want tracked (companion to .m files):
+!**/Classes/PasskeyPRFHelper.h

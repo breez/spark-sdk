@@ -32,7 +32,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                 return
             }
 
-            let autoRegister = (args["autoRegister"] as? Bool) ?? true
+            let autoRegister = (args["autoRegister"] as? Bool) ?? false
 
             guard let saltData = salt.data(using: .utf8) else {
                 result(FlutterError(code: "ERR_PASSKEY", message: "Failed to encode salt as UTF-8", details: nil))
@@ -177,8 +177,18 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
             userID: userId
         )
 
-        if !excludeCredentialIds.isEmpty {
-            request.excludedCredentials = excludeCredentialIds.map {
+        // Auto-merge previously-registered credential IDs from the
+        // iCloud-synced KnownCredentialsStore so the platform refuses
+        // to create a duplicate even after a reinstall.
+        var allExclusions = excludeCredentialIds
+        var seen = Set(excludeCredentialIds)
+        for known in KnownCredentialsStore.read(rpId: rpId).compactMap({ Data(base64Encoded: $0) }) {
+            if seen.insert(known).inserted {
+                allExclusions.append(known)
+            }
+        }
+        if !allExclusions.isEmpty {
+            request.excludedCredentials = allExclusions.map {
                 ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
             }
         }
@@ -190,13 +200,21 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
 
-        return try await withCheckedThrowingContinuation { continuation in
+        let credential: RegisteredCredential = try await withCheckedThrowingContinuation { continuation in
             delegate.registrationContinuation = continuation
             delegate.extractPrf = false
             DispatchQueue.main.async {
                 controller.performRequests()
             }
         }
+
+        // Record the new credential so subsequent registrations on
+        // this device (or a reinstall) auto-exclude it.
+        KnownCredentialsStore.add(
+            credentialId: credential.credentialId.base64EncodedString(),
+            rpId: rpId
+        )
+        return credential
     }
 
     private func randomBytes(count: Int) -> Data {

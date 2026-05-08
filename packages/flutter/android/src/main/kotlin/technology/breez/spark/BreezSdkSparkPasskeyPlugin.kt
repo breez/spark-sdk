@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import technology.breez.spark.passkey.KnownCredentialsStore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
 
@@ -85,7 +86,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
         val rpName = call.argument<String>("rpName")
         val userName = call.argument<String>("userName")
         val userDisplayName = call.argument<String>("userDisplayName")
-        val autoRegister = call.argument<Boolean>("autoRegister") ?: true
+        val autoRegister = call.argument<Boolean>("autoRegister") ?: false
 
         if (salt == null || rpId == null || rpName == null || userName == null || userDisplayName == null) {
             result.error("ERR_PASSKEY", "Invalid arguments", null)
@@ -131,20 +132,32 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             return
         }
 
-        val excludeCredentialIds: List<ByteArray> =
+        val callerExcludes: List<ByteArray> =
             (call.argument<List<String>>("excludeCredentialIds") ?: emptyList()).map {
                 Base64.decode(it, Base64.NO_WRAP)
             }
+        val context = currentActivity.applicationContext
 
         scope.launch {
             try {
+                // Auto-merge previously-registered credential IDs so the
+                // platform refuses duplicates even after a reinstall.
+                val merged = mergeKnownCredentials(context, rpId, callerExcludes)
                 val credential = CredentialManagerPrfCore.createCredential(
                     activity = currentActivity,
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
-                    excludeCredentialIds = excludeCredentialIds,
+                    excludeCredentialIds = merged,
+                )
+                KnownCredentialsStore.add(
+                    context,
+                    Base64.encodeToString(
+                        credential.credentialId,
+                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                    ),
+                    rpId,
                 )
                 result.success(mapOf(
                     "credentialId" to Base64.encodeToString(credential.credentialId, Base64.NO_WRAP),
@@ -157,6 +170,25 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                 result.error("ERR_PASSKEY", e.message ?: e.toString(), null)
             }
         }
+    }
+
+    private suspend fun mergeKnownCredentials(
+        context: android.content.Context,
+        rpId: String,
+        caller: List<ByteArray>,
+    ): List<ByteArray> {
+        val known = KnownCredentialsStore.read(context, rpId).map {
+            Base64.decode(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        }
+        if (known.isEmpty()) return caller
+        val seen = caller.map { it.toList() }.toMutableSet()
+        val out = caller.toMutableList()
+        for (id in known) {
+            if (seen.add(id.toList())) {
+                out.add(id)
+            }
+        }
+        return out
     }
 
     private val CredentialManagerPrfCoreException.errorCode: String
