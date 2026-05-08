@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::Seed;
@@ -14,6 +16,44 @@ pub struct Wallet {
     pub seed: Seed,
     /// The label used for derivation (either user-provided or the default).
     pub label: String,
+}
+
+/// A caller-supplied salt to derive an extra 32-byte seed in the same
+/// PRF ceremony as the wallet seed. Output keyed by `name` in
+/// [`WalletSetup::extra_seeds`].
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct NamedSalt {
+    /// Caller-chosen name; appears as the lookup key on the result.
+    pub name: String,
+}
+
+/// Request for [`crate::passkey::Passkey::setup_wallet`].
+#[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SetupWalletRequest {
+    /// User-chosen label. Defaults to `"Default"` when `None`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub label: Option<String>,
+    /// Whether to publish `label` to Nostr after deriving. Pass `false`
+    /// for speculative derivations (cold restore).
+    #[cfg_attr(feature = "uniffi", uniffi(default = false))]
+    pub publish_label: bool,
+    /// Extra salts to derive in the same ceremony. Each yields a
+    /// 32-byte output keyed by name in [`WalletSetup::extra_seeds`].
+    /// On platforms that pair `prf.eval.first` + `prf.eval.second` per
+    /// ceremony, N extra salts cost ⌈(2 + N) / 2⌉ user prompts.
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub extra_salts: Vec<NamedSalt>,
+}
+
+/// Response from [`crate::passkey::Passkey::setup_wallet`].
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WalletSetup {
+    pub wallet: Wallet,
+    /// 32 bytes per [`NamedSalt`] in the request, keyed by name.
+    pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
 /// Configuration for Nostr relay connections used in `Passkey`.
