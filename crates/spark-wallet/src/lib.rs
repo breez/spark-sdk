@@ -54,6 +54,8 @@ pub use wallet::SparkWallet;
 pub use wallet_builder::WalletBuilder;
 
 #[cfg(feature = "test-utils")]
+pub use spark::session_manager::tests as session_manager_tests;
+#[cfg(feature = "test-utils")]
 pub use spark::tree::tests as tree_store_tests;
 
 #[cfg(feature = "test-utils")]
