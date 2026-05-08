@@ -25,6 +25,18 @@ const DEFAULT_RP_ID = 'keys.breez.technology';
 const DEFAULT_RP_NAME = 'Breez SDK';
 
 /**
+ * Wall-clock threshold (ms) used to discriminate a NotAllowedError
+ * raised by `navigator.credentials.get`. WebAuthn deliberately
+ * collapses "no matching credential" and "user dismissed" into the
+ * same error for privacy reasons, but a no-credential fast-fail
+ * resolves before any UI is shown (typically 50-150ms), while
+ * dismissing a visible prompt takes seconds. Anything below this
+ * threshold is classified as no-credential; anything at or above
+ * is classified as user-cancel.
+ */
+const NO_CRED_FAST_FAIL_MS = 250;
+
+/**
  * Module-level caches. Survive `PasskeyProvider` reconstruction
  * (e.g. host signs out and signs back in within the same tab), so
  * the capability probes only run once per page load.
@@ -547,10 +559,16 @@ export class PasskeyProvider {
         }
 
         let credential;
+        const startedAt = (typeof performance !== 'undefined' && performance.now)
+            ? performance.now()
+            : Date.now();
         try {
             credential = await navigator.credentials.get(requestOptions);
         } catch (error) {
-            throw this._mapError(error);
+            const elapsed = ((typeof performance !== 'undefined' && performance.now)
+                ? performance.now()
+                : Date.now()) - startedAt;
+            throw this._mapAssertionError(error, elapsed);
         }
         if (!credential) {
             throw new Error('Credential not found');
@@ -750,19 +768,39 @@ export class PasskeyProvider {
     }
 
     /**
-     * Map WebAuthn errors to descriptive error messages.
+     * Map a `navigator.credentials.get` failure into a typed message.
+     * `elapsedMs` lets us discriminate the WebAuthn `NotAllowedError`
+     * ambiguity: cancel vs no-credential collapse to the same error
+     * by spec, but only the cancel path shows UI to dismiss, so the
+     * call's wall-clock time tells them apart.
+     * @param {Error} error
+     * @param {number} elapsedMs
+     * @returns {Error}
+     * @private
+     */
+    _mapAssertionError(error, elapsedMs) {
+        if (!error) return new Error('Unknown WebAuthn error');
+        if (error.name === 'NotAllowedError') {
+            return elapsedMs < NO_CRED_FAST_FAIL_MS
+                ? new Error('Credential not found')
+                : new Error('User cancelled authentication');
+        }
+        return this._mapError(error);
+    }
+
+    /**
+     * Map non-assertion WebAuthn errors (registration path).
      * @param {Error} error
      * @returns {Error}
      * @private
      */
     _mapError(error) {
-        if (!error) {
-            return new Error('Unknown WebAuthn error');
-        }
-
+        if (!error) return new Error('Unknown WebAuthn error');
         switch (error.name) {
             case 'NotAllowedError':
-                // Could be user cancellation or no credentials
+                // Registration NotAllowedError isn't usefully timed
+                // (no fast-fail equivalent), so keep the substring
+                // heuristic and fall back to the raw error.
                 if (error.message && (
                     error.message.includes('cancelled') ||
                     error.message.includes('canceled') ||
@@ -772,16 +810,11 @@ export class PasskeyProvider {
                     return new Error('User cancelled authentication');
                 }
                 return error;
-
             case 'SecurityError':
-                return new Error(`Authentication failed: ${error.message}`);
-
             case 'InvalidStateError':
                 return new Error(`Authentication failed: ${error.message}`);
-
             case 'AbortError':
                 return new Error('User cancelled authentication');
-
             default:
                 return error;
         }
