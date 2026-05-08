@@ -56,6 +56,49 @@ pub struct WalletSetup {
     pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
+/// Per-call overrides for [`crate::passkey::PrfProvider::create_passkey`].
+/// All fields optional; missing values fall back to the provider's
+/// configured defaults.
+#[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CreatePasskeyRequest {
+    /// Credential IDs the authenticator must refuse to duplicate.
+    /// Surfaces as `PasskeyPrfError::CredentialAlreadyExists` when
+    /// any entry matches a credential already on the device.
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub exclude_credential_ids: Vec<Vec<u8>>,
+
+    /// Override for the `WebAuthn` `user.id` field. Must be 1-64 bytes
+    /// per spec; rejected otherwise. Always randomize per call:
+    /// reusing a `user_id` across creates on the same `rp_id` causes
+    /// some authenticators (Apple Passwords) to silently destroy the
+    /// existing credential. Default is a fresh 16 random bytes.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub user_id: Option<Vec<u8>>,
+
+    /// Override for `user.name`. Defaults to the provider's `user_name`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub user_name: Option<String>,
+
+    /// Override for `user.displayName`. Defaults to the provider's `user_display_name`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub user_display_name: Option<String>,
+}
+
+/// Result of a successful [`crate::passkey::PrfProvider::create_passkey`].
+/// `aaguid` (16-byte authenticator identifier) and `backup_eligible`
+/// (BE flag) are parsed from authenticator data when available; they
+/// are `None` on platforms that don't expose attestation data (e.g.
+/// Safari without `getAuthenticatorData()`). Use only as display
+/// hints, never for trust decisions: AAGUID is unverified attestation.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RegisteredCredential {
+    pub credential_id: Vec<u8>,
+    pub aaguid: Option<Vec<u8>>,
+    pub backup_eligible: Option<bool>,
+}
+
 /// Configuration for Nostr relay connections used in `Passkey`.
 ///
 /// Relay URLs are managed internally by the client:

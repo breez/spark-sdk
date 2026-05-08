@@ -4,9 +4,25 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
-use breez_sdk_spark::passkey::PasskeyPrfError;
+use breez_sdk_spark::passkey::{CreatePasskeyRequest, PasskeyPrfError, RegisteredCredential};
 
 pub(crate) fn js_error_to_passkey_prf_error(js_error: JsValue) -> PasskeyPrfError {
+    // Map the typed `PasskeyAlreadyExistsError` thrown by the bundled
+    // JS provider back to the typed Rust variant so callers don't have
+    // to substring-match `error.message`. Other errors fall through to
+    // `Generic`.
+    if let Some(name) = js_sys::Reflect::get(&js_error, &JsValue::from_str("name"))
+        .ok()
+        .and_then(|v| v.as_string())
+        && name == "PasskeyAlreadyExistsError"
+    {
+        let message = js_sys::Reflect::get(&js_error, &JsValue::from_str("message"))
+            .ok()
+            .and_then(|v| v.as_string())
+            .unwrap_or_else(|| "credential already exists".to_string());
+        return PasskeyPrfError::CredentialAlreadyExists(message);
+    }
+
     let error_message = js_error
         .as_string()
         .unwrap_or_else(|| "Passkey PRF error occurred".to_string());
@@ -18,6 +34,8 @@ pub struct WasmPrfProvider {
     /// Cached `derivePrfSeeds` presence probe; the JS provider's
     /// method set doesn't change between calls.
     supports_bulk: OnceLock<bool>,
+    /// Cached `createPasskey` presence probe.
+    supports_create: OnceLock<bool>,
 }
 
 impl WasmPrfProvider {
@@ -25,7 +43,22 @@ impl WasmPrfProvider {
         Self {
             inner,
             supports_bulk: OnceLock::new(),
+            supports_create: OnceLock::new(),
         }
+    }
+
+    /// Probe whether the JS provider exposes a method named `name`.
+    /// One reflective lookup; the result is cached in `cell` so
+    /// subsequent calls are free.
+    fn js_has_method(&self, name: &str, cell: &OnceLock<bool>) -> bool {
+        let target: &JsValue = self.inner.as_ref();
+        let key = JsValue::from_str(name);
+        *cell.get_or_init(|| {
+            js_sys::Reflect::has(target, &key).unwrap_or(false)
+                && js_sys::Reflect::get(target, &key)
+                    .map(|v| v.is_function())
+                    .unwrap_or(false)
+        })
     }
 }
 
@@ -49,19 +82,9 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
     }
 
     async fn derive_prf_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PasskeyPrfError> {
-        // Probe once for `derivePrfSeeds`; custom providers that only
-        // implement legacy `derivePrfSeed` fall back to the trait's
-        // default loop (N prompts for N salts).
-        let target: &wasm_bindgen::JsValue = self.inner.as_ref();
-        let key = wasm_bindgen::JsValue::from_str("derivePrfSeeds");
-        let supports_bulk = *self.supports_bulk.get_or_init(|| {
-            js_sys::Reflect::has(target, &key).unwrap_or(false)
-                && js_sys::Reflect::get(target, &key)
-                    .map(|v| v.is_function())
-                    .unwrap_or(false)
-        });
-
-        if !supports_bulk {
+        // Custom providers that only implement legacy `derivePrfSeed`
+        // fall back to the trait's default loop (N prompts for N salts).
+        if !self.js_has_method("derivePrfSeeds", &self.supports_bulk) {
             let mut out = Vec::with_capacity(salts.len());
             for salt in salts {
                 out.push(self.derive_prf_seed(salt).await?);
@@ -72,10 +95,11 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         // Build a JS array of strings to pass to derivePrfSeeds.
         let salts_array = js_sys::Array::new();
         for salt in &salts {
-            salts_array.push(&wasm_bindgen::JsValue::from_str(salt));
+            salts_array.push(&JsValue::from_str(salt));
         }
 
-        let func = js_sys::Reflect::get(target, &key)
+        let target: &JsValue = self.inner.as_ref();
+        let func = js_sys::Reflect::get(target, &JsValue::from_str("derivePrfSeeds"))
             .map_err(js_error_to_passkey_prf_error)?
             .dyn_into::<js_sys::Function>()
             .map_err(|_| {
@@ -123,6 +147,110 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
             .as_bool()
             .ok_or_else(|| PasskeyPrfError::Generic("Expected boolean result".to_string()))
     }
+
+    async fn create_passkey(
+        &self,
+        request: CreatePasskeyRequest,
+    ) -> Result<RegisteredCredential, PasskeyPrfError> {
+        // Custom providers may not implement explicit creation; fall
+        // back to the trait default (`PrfNotSupported`).
+        if !self.js_has_method("createPasskey", &self.supports_create) {
+            return Err(PasskeyPrfError::PrfNotSupported);
+        }
+
+        let target: &JsValue = self.inner.as_ref();
+        let func = js_sys::Reflect::get(target, &JsValue::from_str("createPasskey"))
+            .map_err(js_error_to_passkey_prf_error)?
+            .dyn_into::<js_sys::Function>()
+            .map_err(|_| PasskeyPrfError::Generic("createPasskey is not a function".to_string()))?;
+
+        let js_request = build_create_passkey_request(&request)?;
+        let result_promise = func
+            .call1(target, &js_request)
+            .map_err(js_error_to_passkey_prf_error)?
+            .dyn_into::<Promise>()
+            .map_err(|_| {
+                PasskeyPrfError::Generic("createPasskey did not return a Promise".to_string())
+            })?;
+        let result = JsFuture::from(result_promise)
+            .await
+            .map_err(js_error_to_passkey_prf_error)?;
+
+        parse_registered_credential(&result)
+    }
+}
+
+/// Marshal a [`CreatePasskeyRequest`] into a JS object literal shaped
+/// per `index.d.ts#CreatePasskeyRequest`. `Vec<u8>` payloads cross as
+/// `Uint8Array` (not plain arrays) to match what the JS provider's
+/// `navigator.credentials.create` call expects.
+fn build_create_passkey_request(request: &CreatePasskeyRequest) -> Result<JsValue, PasskeyPrfError> {
+    let obj = js_sys::Object::new();
+
+    if !request.exclude_credential_ids.is_empty() {
+        let arr = js_sys::Array::new();
+        for id in &request.exclude_credential_ids {
+            arr.push(&js_sys::Uint8Array::from(id.as_slice()));
+        }
+        js_sys::Reflect::set(&obj, &JsValue::from_str("excludeCredentialIds"), &arr)
+            .map_err(js_error_to_passkey_prf_error)?;
+    }
+    if let Some(user_id) = &request.user_id {
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("userId"),
+            &js_sys::Uint8Array::from(user_id.as_slice()),
+        )
+        .map_err(js_error_to_passkey_prf_error)?;
+    }
+    if let Some(user_name) = &request.user_name {
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("userName"),
+            &JsValue::from_str(user_name),
+        )
+        .map_err(js_error_to_passkey_prf_error)?;
+    }
+    if let Some(user_display_name) = &request.user_display_name {
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("userDisplayName"),
+            &JsValue::from_str(user_display_name),
+        )
+        .map_err(js_error_to_passkey_prf_error)?;
+    }
+
+    Ok(obj.into())
+}
+
+/// Parse the JS `RegisteredCredential` returned by the provider's
+/// `createPasskey` into the Rust core type. Tolerates `aaguid` /
+/// `backupEligible` being missing or null since some platforms can't
+/// surface them (Safari without `getAuthenticatorData()`).
+fn parse_registered_credential(value: &JsValue) -> Result<RegisteredCredential, PasskeyPrfError> {
+    let credential_id_raw = js_sys::Reflect::get(value, &JsValue::from_str("credentialId"))
+        .map_err(js_error_to_passkey_prf_error)?;
+    if credential_id_raw.is_undefined() || credential_id_raw.is_null() {
+        return Err(PasskeyPrfError::Generic(
+            "createPasskey result missing credentialId".to_string(),
+        ));
+    }
+    let credential_id = js_sys::Uint8Array::new(&credential_id_raw).to_vec();
+
+    let aaguid = js_sys::Reflect::get(value, &JsValue::from_str("aaguid"))
+        .ok()
+        .and_then(|v| (!v.is_null() && !v.is_undefined()).then_some(v))
+        .map(|v| js_sys::Uint8Array::new(&v).to_vec());
+
+    let backup_eligible = js_sys::Reflect::get(value, &JsValue::from_str("backupEligible"))
+        .ok()
+        .and_then(|v| v.as_bool());
+
+    Ok(RegisteredCredential {
+        credential_id,
+        aaguid,
+        backup_eligible,
+    })
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -188,6 +316,21 @@ export interface PrfProvider {
     derivePrfSeeds?(salts: string[]): Promise<Uint8Array[]>;
 
     /**
+     * Optional explicit registration. Platform passkey providers (browser
+     * WebAuthn, iOS / Android) implement this to drive the OS create
+     * ceremony and return credential metadata (`credentialId`, optional
+     * `aaguid`, optional `backupEligible`) that callers need for
+     * `excludeCredentialIds` bookkeeping. Custom providers without an
+     * explicit creation step (CLI / hardware backends that auto-register
+     * inside `derivePrfSeed`) can omit this method.
+     *
+     * @throws `PasskeyAlreadyExistsError` when an entry in
+     *   `excludeCredentialIds` matches a credential already on the
+     *   device.
+     */
+    createPasskey?(request: CreatePasskeyRequestJSON): Promise<RegisteredCredentialJSON>;
+
+    /**
      * Check if a PRF-capable source is available on this device.
      *
      * This allows applications to gracefully degrade if passkey PRF is not supported.
@@ -195,6 +338,30 @@ export interface PrfProvider {
      * @returns A Promise resolving to true if a PRF-capable source is available
      */
     isPrfAvailable(): Promise<boolean>;
+}
+
+/**
+ * Plain-object shape passed to {@link PrfProvider.createPasskey}. The
+ * bundled `PasskeyProvider` exposes a richer
+ * `CreatePasskeyRequest` with extra fields (`signal`, etc.); the bridge
+ * marshals only the fields the Rust core understands.
+ */
+export interface CreatePasskeyRequestJSON {
+    excludeCredentialIds?: Uint8Array[];
+    userId?: Uint8Array;
+    userName?: string;
+    userDisplayName?: string;
+}
+
+/**
+ * Plain-object shape returned by {@link PrfProvider.createPasskey}. The
+ * bundled `PasskeyProvider` returns a `RegisteredCredential` with the
+ * same shape; this name is reserved for the Rust-bridge boundary.
+ */
+export interface RegisteredCredentialJSON {
+    credentialId: Uint8Array;
+    aaguid?: Uint8Array | null;
+    backupEligible?: boolean | null;
 }"#;
 
 #[wasm_bindgen]
