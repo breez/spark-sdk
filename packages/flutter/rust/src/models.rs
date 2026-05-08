@@ -1311,18 +1311,6 @@ pub struct _NamedSalt {
     pub name: String,
 }
 
-#[frb(mirror(SetupWalletRequest))]
-pub struct _SetupWalletRequest {
-    pub label: Option<String>,
-    pub publish_label: bool,
-    pub extra_salts: Vec<NamedSalt>,
-}
-
-#[frb(mirror(WalletSetup))]
-pub struct _WalletSetup {
-    pub wallet: Wallet,
-    pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
-}
 
 #[frb(mirror(RegisteredCredential))]
 pub struct _RegisteredCredential {

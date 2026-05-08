@@ -10,5 +10,5 @@ pub mod sdk;
 pub mod sdk_builder;
 pub mod sdk_context;
 
-pub use passkey::Passkey;
+pub use passkey::PasskeyClient;
 pub use sdk::BreezSdk;
