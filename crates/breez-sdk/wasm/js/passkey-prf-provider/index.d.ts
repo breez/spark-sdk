@@ -186,11 +186,11 @@ export interface PasskeyProviderOptions {
     userDisplayName?: string;
 
     /**
-     * When true (default), `deriveSeed` automatically creates a new passkey
-     * if none exists for this RP ID, then retries the assertion. When false,
-     * throws an error instead, letting the caller control registration
-     * separately via `createPasskey()`.
-     * @default true
+     * When `true`, `deriveSeed` automatically creates a new passkey if
+     * none exists, then retries the assertion. When `false` (default),
+     * throws on missing credential — hosts drive registration via
+     * `PasskeyClient.register` / `createPasskey()`.
+     * @default false
      */
     autoRegister?: boolean;
 
@@ -272,8 +272,9 @@ export declare class PasskeyProvider {
     /**
      * Derive a 32-byte seed from passkey PRF.
      *
-     * If no credential exists and `autoRegister` is true (default), a
-     * new passkey is created and the assertion is retried.
+     * If no credential exists and `autoRegister` is true, a new
+     * passkey is created and the assertion is retried (default
+     * `false`: hosts drive registration explicitly).
      *
      * @throws If authentication fails, PRF is not supported, or the user cancels.
      */
