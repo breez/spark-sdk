@@ -2,8 +2,8 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    NostrRelayConfig, PasskeyError, PrfProvider, PrfProviderError, RegisterRequest,
-    RegisterResponse, SignInRequest, SignInResponse,
+    CreatePasskeyRequest, NostrRelayConfig, PasskeyError, PrfProvider, PrfProviderError,
+    RegisterRequest, RegisterResponse, RegisteredCredential, SignInRequest, SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -17,12 +17,14 @@ fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
 }
 
 /// Wraps Dart callbacks as a [`PrfProvider`] implementation. The Dart
-/// callback handles a single salt; this loops it for the bulk-PRF
-/// trait surface. A native dual-salt fast path is blocked on
-/// flutter_rust_bridge supporting `Option<impl Fn(...) -> DartFnFuture<...>>`.
+/// `derive_seed` callback handles a single salt; this loops it for the
+/// bulk-PRF trait surface. Hosts that don't drive registration can
+/// have `create_passkey` throw on the Dart side.
 struct CallbackPrfProvider {
     derive_seed_fn: Arc<dyn Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync>,
     is_supported_fn: Arc<dyn Fn() -> DartFnFuture<bool> + Send + Sync>,
+    create_passkey_fn:
+        Arc<dyn Fn(CreatePasskeyRequest) -> DartFnFuture<RegisteredCredential> + Send + Sync>,
 }
 
 #[async_trait::async_trait]
@@ -45,16 +47,20 @@ impl PrfProvider for CallbackPrfProvider {
             .await
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))
     }
+
+    async fn create_passkey(
+        &self,
+        request: CreatePasskeyRequest,
+    ) -> Result<RegisteredCredential, PrfProviderError> {
+        AssertUnwindSafe((self.create_passkey_fn)(request))
+            .catch_unwind()
+            .await
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))
+    }
 }
 
 /// High-level orchestrator. See the [`breez_sdk_spark::passkey::PasskeyClient`]
 /// docs for the register / sign_in semantics.
-///
-/// Currently `register` will fail with
-/// [`PrfProviderError::PrfNotSupported`] on Flutter because the Dart-side
-/// `PrfProvider` callbacks don't yet expose `createPasskey` (blocked on
-/// flutter_rust_bridge supporting `Option<impl Fn(...) -> DartFnFuture<...>>`
-/// trait callbacks). `sign_in` uses only `derive_seed` and works today.
 #[derive(Clone)]
 #[frb(opaque)]
 pub struct PasskeyClient {
@@ -63,22 +69,30 @@ pub struct PasskeyClient {
 
 impl PasskeyClient {
     /// Construct using Dart callbacks for the underlying `PrfProvider`.
+    /// Hosts that don't drive registration can have `create_passkey`
+    /// throw `PrfProviderError.PrfNotSupported` on the Dart side.
     #[frb(sync)]
     pub fn new(
         derive_seed: impl Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
         is_supported: impl Fn() -> DartFnFuture<bool> + Send + Sync + 'static,
+        create_passkey: impl Fn(CreatePasskeyRequest) -> DartFnFuture<RegisteredCredential>
+            + Send
+            + Sync
+            + 'static,
         relay_config: Option<NostrRelayConfig>,
     ) -> Self {
         let provider = Arc::new(CallbackPrfProvider {
             derive_seed_fn: Arc::new(derive_seed),
             is_supported_fn: Arc::new(is_supported),
+            create_passkey_fn: Arc::new(create_passkey),
         });
         Self {
             inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, relay_config),
         }
     }
 
-    /// First-time setup. Currently returns `PrfNotSupported` on Flutter.
+    /// First-time setup: drives the Dart-side `create_passkey` callback
+    /// then derives the wallet seed.
     pub async fn register(
         &self,
         request: RegisterRequest,
@@ -130,6 +144,7 @@ mod tests {
         CallbackPrfProvider {
             derive_seed_fn: Arc::new(derive),
             is_supported_fn: Arc::new(is_available),
+            create_passkey_fn: Arc::new(|_req| panicking::<RegisteredCredential>("create_passkey not used")),
         }
     }
 

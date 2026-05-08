@@ -1319,6 +1319,14 @@ pub struct _RegisteredCredential {
     pub backup_eligible: Option<bool>,
 }
 
+#[frb(mirror(CreatePasskeyRequest))]
+pub struct _CreatePasskeyRequest {
+    pub exclude_credential_ids: Vec<Vec<u8>>,
+    pub user_id: Option<Vec<u8>>,
+    pub user_name: Option<String>,
+    pub user_display_name: Option<String>,
+}
+
 #[frb(mirror(RegisterRequest))]
 pub struct _RegisterRequest {
     pub label: Option<String>,
