@@ -25,6 +25,16 @@ const DEFAULT_RP_ID = 'keys.breez.technology';
 const DEFAULT_RP_NAME = 'Breez SDK';
 
 /**
+ * Module-level caches. Survive `PasskeyProvider` reconstruction
+ * (e.g. host signs out and signs back in within the same tab), so
+ * the capability probes only run once per page load.
+ *   _immediateGetCache: undefined = not probed, null = unsupported, true/false = result
+ *   _chromeMajorCache:  undefined = not parsed, NaN = non-Chrome, number = major
+ */
+let _immediateGetCache;
+let _chromeMajorCache;
+
+/**
  * Generate cryptographically random bytes.
  * @param {number} length
  * @returns {Uint8Array}
@@ -158,37 +168,31 @@ export class PasskeyProvider {
          */
         this.defaultTimeoutMs = options.defaultTimeoutMs;
 
-        /** @private cached getClientCapabilities('immediateGet') result */
-        this._immediateGetSupported = undefined;
         /** @private shared Promise so concurrent auto-register paths fire one ceremony */
         this._autoRegisterInFlight = null;
     }
 
     /**
-     * Resolve whether the current browser supports
-     * `mediation`/`uiMode: 'immediate'`. Uses
-     * `PublicKeyCredential.getClientCapabilities()` (returns the
-     * `immediateGet` flag); cached after the first call.
-     *
+     * Whether `mediation`/`uiMode: 'immediate'` is supported in this
+     * tab. Result cached at module scope (see top of file) so
+     * `PasskeyProvider` reconstruction doesn't re-probe.
      * @returns {Promise<boolean>}
      * @private
      */
     async _supportsImmediateGet() {
-        if (this._immediateGetSupported === true) return true;
-        if (this._immediateGetSupported === false) return false;
-        if (this._immediateGetSupported === null) return false;
+        if (_immediateGetCache !== undefined) return _immediateGetCache === true;
         try {
             if (typeof PublicKeyCredential === 'undefined'
                 || typeof PublicKeyCredential.getClientCapabilities !== 'function') {
-                this._immediateGetSupported = null;
+                _immediateGetCache = null;
                 return false;
             }
             const caps = await PublicKeyCredential.getClientCapabilities('public-key');
-            this._immediateGetSupported = caps?.immediateGet === true;
+            _immediateGetCache = caps?.immediateGet === true;
         } catch {
-            this._immediateGetSupported = null;
+            _immediateGetCache = null;
         }
-        return this._immediateGetSupported === true;
+        return _immediateGetCache === true;
     }
 
     /**
@@ -205,9 +209,11 @@ export class PasskeyProvider {
      * @private
      */
     _applyImmediateOption(options) {
-        const m = (typeof navigator !== 'undefined' && /Chrome\/(\d+)/.exec(navigator.userAgent || ''));
-        const chromeMajor = m ? parseInt(m[1], 10) : NaN;
-        if (Number.isFinite(chromeMajor) && chromeMajor <= 144) {
+        if (_chromeMajorCache === undefined) {
+            const m = (typeof navigator !== 'undefined' && /Chrome\/(\d+)/.exec(navigator.userAgent || ''));
+            _chromeMajorCache = m ? parseInt(m[1], 10) : NaN;
+        }
+        if (Number.isFinite(_chromeMajorCache) && _chromeMajorCache <= 144) {
             options.mediation = 'immediate';
         } else {
             options.uiMode = 'immediate';
