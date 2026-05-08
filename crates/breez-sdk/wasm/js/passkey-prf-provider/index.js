@@ -207,6 +207,17 @@ export class PasskeyProvider {
          * @private
          */
         this._immediateGetSupported = undefined;
+
+        /**
+         * Single in-flight auto-register promise. Concurrent
+         * `derivePrfSeed` / `derivePrfSeeds` calls that both observe a
+         * missing-credential error share this Promise so we only ever
+         * fire one `navigator.credentials.create` ceremony per
+         * provider instance. Cleared after the registration settles.
+         * @type {Promise<{credentialId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null}> | null}
+         * @private
+         */
+        this._autoRegisterInFlight = null;
     }
 
     /**
@@ -277,9 +288,11 @@ export class PasskeyProvider {
             return await this._getAssertionWithPrf(saltBytes);
         } catch (error) {
             // If no credential found and autoRegister is enabled,
-            // register a new one and retry
+            // register a new one and retry. `_autoRegister` deduplicates
+            // concurrent callers so a fast double-derive can't trigger
+            // two registration prompts.
             if (this.autoRegister && this._isNoCredentialError(error)) {
-                await this._registerCredential();
+                await this._autoRegister();
                 return await this._getAssertionWithPrf(saltBytes);
             }
             throw error;
@@ -641,7 +654,7 @@ export class PasskeyProvider {
             return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes);
         } catch (error) {
             if (this.autoRegister && this._isNoCredentialError(error)) {
-                await this._registerCredential();
+                await this._autoRegister();
                 return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes);
             }
             throw error;
@@ -735,6 +748,30 @@ export class PasskeyProvider {
         const secondBuf = extensionResults.prf.results.second;
         const second = secondBuf ? new Uint8Array(secondBuf) : null;
         return [first, second];
+    }
+
+    /**
+     * Run `_registerCredential` with no arguments, deduplicating
+     * concurrent calls so the auto-register path can never fire two
+     * native ceremonies for one provider instance. The explicit
+     * `createPasskey()` entry point bypasses this and always issues
+     * its own ceremony, since callers there have asked for a new
+     * credential rather than reacting to a no-cred error.
+     * @returns {Promise<{ credentialId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
+     * @private
+     */
+    async _autoRegister() {
+        if (this._autoRegisterInFlight) {
+            return this._autoRegisterInFlight;
+        }
+        this._autoRegisterInFlight = (async () => {
+            try {
+                return await this._registerCredential();
+            } finally {
+                this._autoRegisterInFlight = null;
+            }
+        })();
+        return this._autoRegisterInFlight;
     }
 
     /**
