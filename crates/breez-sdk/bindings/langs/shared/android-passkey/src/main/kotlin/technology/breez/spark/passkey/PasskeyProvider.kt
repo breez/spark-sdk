@@ -95,7 +95,7 @@ public class PasskeyProvider(
      *  recent assertion, clearing the slot. Returns `null` if no
      *  assertion has completed since the last call.
      */
-    public fun takeLastObservedCredentialId(): ByteArray? {
+    override suspend fun takeLastObservedCredentialId(): ByteArray? {
         val v = lastObservedCredentialId
         lastObservedCredentialId = null
         return v
