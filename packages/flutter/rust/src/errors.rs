@@ -58,7 +58,7 @@ pub enum _PrfProviderError {
     PrfNotSupported,
     UserCancelled,
     UserTimedOut,
-    CredentialNotFound,
+    CredentialNotFound(String),
     AuthenticationFailed(String),
     PrfEvaluationFailed(String),
     Configuration(String),

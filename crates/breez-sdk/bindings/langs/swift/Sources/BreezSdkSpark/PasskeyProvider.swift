@@ -159,13 +159,7 @@ public class PasskeyProvider: PrfProvider {
                 options: options
             )
         } catch let err as PasskeyAssertionError {
-            throw Self.toPrfProviderError(
-                err,
-                augment: PasskeyAssertionCore.shouldAugmentCredentialNotFound(
-                    explicitAllowCredentialIds: effectiveAllow,
-                    credentialRegistry: credentialRegistry
-                )
-            )
+            throw Self.toPrfProviderError(err)
         }
     }
 
@@ -200,7 +194,7 @@ public class PasskeyProvider: PrfProvider {
                 backupEligible: credential.backupEligible
             )
         } catch let err as PasskeyAssertionError {
-            throw Self.toPrfProviderError(err, augment: false)
+            throw Self.toPrfProviderError(err)
         }
     }
 
@@ -305,27 +299,18 @@ public class PasskeyProvider: PrfProvider {
     // MARK: - PasskeyAssertionError -> PrfProviderError mapping
 
     private static func toPrfProviderError(
-        _ err: PasskeyAssertionError,
-        augment: Bool
+        _ err: PasskeyAssertionError
     ) -> PrfProviderError {
         switch err {
         case .userCancelled:
             return .UserCancelled
         case .userTimedOut:
             return .UserTimedOut
-        case .credentialNotFound:
-            // The core throws the bare variant; the binding layer adds
-            // the registry help suffix when relevant. Since UniFFI's
-            // `CredentialNotFound` carries no associated message, we
-            // surface the help text via the `Generic` variant only when
-            // augmenting; otherwise propagate as-is.
-            if augment {
-                return .Generic(
-                    "No credential found for this RP."
-                    + credentialRegistryHelpSuffix
-                )
-            }
-            return .CredentialNotFound
+        case .credentialNotFound(let msg):
+            // The core embeds any registry help suffix into the message
+            // when relevant. Pass through unchanged so every host
+            // surface (UniFFI, Flutter, RN) sees the same diagnostic.
+            return .CredentialNotFound(msg)
         case .credentialAlreadyExists(let msg):
             return .CredentialAlreadyExists(msg)
         case .prfNotSupported:

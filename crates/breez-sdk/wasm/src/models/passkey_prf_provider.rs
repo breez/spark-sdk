@@ -28,6 +28,13 @@ pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderEr
             "PasskeyTimedOutError" => {
                 return PrfProviderError::UserTimedOut;
             }
+            "PasskeyCredentialNotFoundError" => {
+                let message = js_sys::Reflect::get(&js_error, &JsValue::from_str("message"))
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or_else(|| "Credential not found".to_string());
+                return PrfProviderError::CredentialNotFound(message);
+            }
             _ => {}
         }
     }

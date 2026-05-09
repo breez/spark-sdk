@@ -47,6 +47,18 @@ export declare class PasskeyTimedOutError extends Error {
 }
 
 /**
+ * Thrown when `deriveSeeds` cannot match a credential on this device.
+ * Surfaces both the WebAuthn fast-fail `NotAllowedError` (no credential
+ * for this RP) and the bare "no credential available" path. The
+ * `message` carries diagnostic detail and may include the
+ * `CredentialRegistry` help suffix when the host had no allow-list and
+ * no registry configured.
+ */
+export declare class PasskeyCredentialNotFoundError extends Error {
+    constructor(message?: string);
+}
+
+/**
  * Per-call overrides for `createPasskey`. All fields are optional;
  * omitted fields fall back to the corresponding constructor option,
  * then to the spec default (random 16-byte `userId`, ctor `userName`,

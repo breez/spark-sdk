@@ -166,7 +166,7 @@ public enum PasskeyAssertionError: Error {
     /// (~55s+ inactivity on iOS). Distinct from `userCancelled`, which
     /// means the user actively dismissed the prompt.
     case userTimedOut
-    case credentialNotFound
+    case credentialNotFound(String)
     case credentialAlreadyExists(String)
     case prfNotSupported
     case prfEvaluationFailed(String)
@@ -491,7 +491,7 @@ public final class PasskeyAssertionCore {
                 credentialRegistry: credentialRegistry,
                 onRegistryError: onRegistryError
             )
-        } catch PasskeyAssertionError.credentialNotFound {
+        } catch PasskeyAssertionError.credentialNotFound(_) {
             guard autoRegister else {
                 throw augmentCredentialNotFound(
                     explicitAllowCredentialIds: explicitAllowCredentialIds,
@@ -507,7 +507,7 @@ public final class PasskeyAssertionCore {
                     credentialRegistry: credentialRegistry,
                     onRegistryError: onRegistryError
                 )
-            } catch PasskeyAssertionError.credentialNotFound {
+            } catch PasskeyAssertionError.credentialNotFound(_) {
                 throw PasskeyAssertionError.configuration(
                     "Associated Domains entitlement not configured. "
                     + "Add 'webcredentials:\(rpId)' to your app's entitlements "
@@ -622,7 +622,7 @@ public final class PasskeyAssertionCore {
                 } else {
                     i += 1
                 }
-            } catch PasskeyAssertionError.credentialNotFound {
+            } catch PasskeyAssertionError.credentialNotFound(_) {
                 // No credential on the device. Single-salt path can fall
                 // back to register; the bulk path defers to single-salt.
                 guard autoRegister else {
@@ -1030,14 +1030,24 @@ public final class PasskeyAssertionCore {
     }
 }
 
-/// Module-level wrapper used inside the core; defers to the type
-/// method so the call sites stay short.
+/// Module-level wrapper used inside the core. Returns
+/// `.credentialNotFound(message)` with an augmented help suffix when
+/// the host had no allow-list and no registry, plain message
+/// otherwise. The String payload travels untouched through the
+/// binding-layer mappers so every host surface (UniFFI Swift,
+/// React Native, Flutter) shows the same diagnostic without
+/// per-binding string manipulation.
 @available(iOS 18.0, macOS 15.0, *)
 fileprivate func augmentCredentialNotFound(
     explicitAllowCredentialIds: [Data],
     credentialRegistry: CredentialRegistry?
 ) -> PasskeyAssertionError {
-    return .credentialNotFound
+    let base = "No matching credential on this device"
+    let augment = PasskeyAssertionCore.shouldAugmentCredentialNotFound(
+        explicitAllowCredentialIds: explicitAllowCredentialIds,
+        credentialRegistry: credentialRegistry
+    )
+    return .credentialNotFound(augment ? base + credentialRegistryHelpSuffix : base)
 }
 
 /// Suffix appended to `CredentialNotFound` errors when the host had no
@@ -1251,13 +1261,13 @@ public func mapPasskeyError(
             if nsError.localizedDescription.contains("no credential")
                 || nsError.localizedDescription.contains("No credentials")
             {
-                return .credentialNotFound
+                return .credentialNotFound(nsError.localizedDescription)
             }
             return .authenticationFailed(nsError.localizedDescription)
         case .invalidResponse:
             return .prfEvaluationFailed(nsError.localizedDescription)
         case .notHandled:
-            return .credentialNotFound
+            return .credentialNotFound(nsError.localizedDescription)
         case .failed:
             return .authenticationFailed(nsError.localizedDescription)
         case .notInteractive:
@@ -1281,7 +1291,7 @@ private func classifyCanceled(elapsedMs: Double?) -> PasskeyAssertionError {
         return .userCancelled
     }
     if elapsed < 300 {
-        return .credentialNotFound
+        return .credentialNotFound("Credential not found")
     }
     if elapsed >= 55_000 {
         return .userTimedOut

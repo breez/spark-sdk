@@ -234,7 +234,7 @@ public class PasskeyProvider(
             CredentialManagerPrfCore.Kind.UserTimedOut ->
                 PrfProviderException.UserTimedOut()
             CredentialManagerPrfCore.Kind.CredentialNotFound ->
-                PrfProviderException.CredentialNotFound()
+                PrfProviderException.CredentialNotFound(message ?: "Credential not found")
             CredentialManagerPrfCore.Kind.AuthenticationFailed ->
                 PrfProviderException.AuthenticationFailed(message ?: "")
             CredentialManagerPrfCore.Kind.PrfEvaluationFailed ->
