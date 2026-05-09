@@ -117,6 +117,13 @@ pub struct SignInResponse {
     /// the label store was unreachable).
     pub labels: Vec<String>,
     pub extra_seeds: HashMap<String, Vec<u8>>,
+    /// The credential ID of the credential the user used for this
+    /// sign-in, when surfaced by the underlying [`PrfProvider`].
+    /// Hosts can pass this to a `CredentialRegistry::add(...)` to
+    /// remember the credential, or to populate `allowCredentialIds`
+    /// on subsequent calls. `None` for providers that don't surface
+    /// this signal (CLI / file-backed / hardware providers).
+    pub credential_id: Option<Vec<u8>>,
 }
 
 /// High-level orchestration over a [`PrfProvider`] and a
@@ -210,6 +217,10 @@ impl PasskeyClient {
             })
             .await?;
 
+        // Capture the credential ID from the just-completed assertion
+        // before any subsequent PRF call (list_labels) overwrites it.
+        let credential_id = self.prf_provider.take_last_observed_credential_id().await;
+
         let labels = if discovery {
             self.passkey.list_labels().await.unwrap_or_default()
         } else {
@@ -220,6 +231,7 @@ impl PasskeyClient {
             wallet: setup.wallet,
             labels,
             extra_seeds: setup.extra_seeds,
+            credential_id,
         })
     }
 

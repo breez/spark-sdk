@@ -250,3 +250,40 @@ const handleTimeout = async () => {
   }
   // ANCHOR_END: handle-timeout
 }
+
+const withCredentialRegistry = async () => {
+  // ANCHOR: with-credential-registry
+  // Opt-in CredentialRegistry. The Dart/JS-side wrapper merges
+  // stored IDs into allowCredentials on assertion and
+  // excludeCredentials on registration, then auto-adds new
+  // credential IDs after success. The native plugin never sees the
+  // registry: all bookkeeping is done in JS.
+  //
+  // The SDK doesn't ship a default impl: copy the iOS Keychain or
+  // Android Block Store reference impl from the passkey guide and
+  // wire it up here. (Stubbed below so the snippet compiles.)
+  const registry: import('@breeztech/breez-sdk-spark-react-native').CredentialRegistry =
+    {
+      async read(_rpId) { return [] },
+      async add(_rpId, _credentialId) {},
+      async remove(_rpId, _credentialId) {},
+      async clear(_rpId) {},
+    }
+
+  const prfProvider = new PasskeyProvider({
+    credentialRegistry: registry,
+    onRegistryError: (op, err) => console.warn('registry', op, err),
+  })
+  const passkey = new PasskeyClient(prfProvider as any, undefined)
+
+  // signIn: registry IDs are auto-merged into allowCredentials.
+  await passkey.signIn({ label: 'personal', extraSalts: [] })
+
+  // register: registry IDs are auto-merged into excludeCredentials.
+  await passkey.register({ label: 'personal', extraSalts: [] })
+
+  // On logout, clear the registry so a fresh device-pairing
+  // wouldn't pin to the old credential.
+  await registry.clear('keys.breez.technology')
+  // ANCHOR_END: with-credential-registry
+}

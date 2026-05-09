@@ -83,6 +83,7 @@ pub struct SignInResponse {
     pub wallet: Wallet,
     pub labels: Vec<String>,
     pub extra_seeds: HashMap<String, Vec<u8>>,
+    pub credential_id: Option<Vec<u8>>,
 }
 
 /// High-level orchestrator that collapses register / sign-in flows

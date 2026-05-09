@@ -186,14 +186,6 @@ const PASSKEY_SYNC_FILES: &[(&str, &[&str])] = &[
         ],
     ),
     (
-        // KnownCredentialsStore: Block Store + EncryptedSharedPreferences.
-        "crates/breez-sdk/bindings/langs/shared/android-passkey/src/main/kotlin/technology/breez/spark/passkey/KnownCredentialsStore.kt",
-        &[
-            "packages/flutter/android/src/main/kotlin/technology/breez/spark/passkey/KnownCredentialsStore.kt",
-            "packages/react-native/android/src/main/kotlin/technology/breez/spark/passkey/KnownCredentialsStore.kt",
-        ],
-    ),
-    (
         // PasskeyAssertionCore: WebAuthn / PRF / dual-salt logic on iOS+macOS.
         // The upstream Swift target ships the same file in its own Sources
         // tree so SPM can compile PasskeyProvider.swift against it without
@@ -203,15 +195,6 @@ const PASSKEY_SYNC_FILES: &[(&str, &[&str])] = &[
             "crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/PasskeyAssertionCore.swift",
             "packages/flutter/ios/Classes/PasskeyAssertionCore.swift",
             "packages/react-native/ios/PasskeyAssertionCore.swift",
-        ],
-    ),
-    (
-        // KnownCredentialsStore (iOS): iCloud-keychain credential ID store.
-        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/KnownCredentialsStore.swift",
-        &[
-            "crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/KnownCredentialsStore.swift",
-            "packages/flutter/ios/Classes/KnownCredentialsStore.swift",
-            "packages/react-native/ios/KnownCredentialsStore.swift",
         ],
     ),
     (

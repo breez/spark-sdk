@@ -1,6 +1,5 @@
 package com.breeztech.breezsdkspark
 
-import android.content.Context
 import android.util.Base64
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -16,7 +15,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import technology.breez.spark.passkey.KnownCredentialsStore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
 import technology.breez.spark.passkey.core.DeriveSeedsOptions
@@ -124,15 +122,10 @@ class BreezSdkSparkPasskeyModule(
             salts.add(s)
         }
 
-        val callerAllow = mutableListOf<ByteArray>()
+        val allowIds = mutableListOf<ByteArray>()
         for (i in 0 until allowCredentialIdsArg.size()) {
             val b64 = allowCredentialIdsArg.getString(i) ?: continue
-            callerAllow.add(Base64.decode(b64, Base64.NO_WRAP))
-        }
-        val allowIds = if (callerAllow.isNotEmpty()) {
-            callerAllow
-        } else {
-            readKnownCredentialIds(activity.applicationContext, rpId)
+            allowIds.add(Base64.decode(b64, Base64.NO_WRAP))
         }
 
         scope.launch {
@@ -232,19 +225,14 @@ class BreezSdkSparkPasskeyModule(
             return
         }
 
-        val callerExcludes = mutableListOf<ByteArray>()
+        val excludeIds = mutableListOf<ByteArray>()
         for (i in 0 until excludeCredentialIdsBase64.size()) {
             val b64 = excludeCredentialIdsBase64.getString(i)
-            callerExcludes.add(Base64.decode(b64, Base64.NO_WRAP))
+            excludeIds.add(Base64.decode(b64, Base64.NO_WRAP))
         }
-        val context = activity.applicationContext
 
         scope.launch {
             try {
-                // Auto-merge previously-registered credential IDs from the
-                // KnownCredentialsStore so the platform refuses duplicates
-                // even after a reinstall.
-                val merged = mergeKnownCredentials(context, rpId, callerExcludes)
                 val userIdOverride = userIdBase64?.let { Base64.decode(it, Base64.NO_WRAP) }
                 val credential = CredentialManagerPrfCore.createCredential(
                     activity = activity,
@@ -252,16 +240,8 @@ class BreezSdkSparkPasskeyModule(
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
-                    excludeCredentialIds = merged,
+                    excludeCredentialIds = excludeIds,
                     userIdOverride = userIdOverride,
-                )
-                KnownCredentialsStore.add(
-                    context,
-                    Base64.encodeToString(
-                        credential.credentialId,
-                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                    ),
-                    rpId,
                 )
                 // Hold the next derive call for up to 800ms so the
                 // immediate post-register assertion doesn't race the
@@ -285,39 +265,6 @@ class BreezSdkSparkPasskeyModule(
             } catch (e: Exception) {
                 promise.reject("ERR_PASSKEY", e.message ?: e.toString())
             }
-        }
-    }
-
-    private suspend fun mergeKnownCredentials(
-        context: Context,
-        rpId: String,
-        caller: List<ByteArray>,
-    ): List<ByteArray> {
-        val known = readKnownCredentialIds(context, rpId)
-        if (known.isEmpty()) return caller
-        val seen = caller.map { it.toList() }.toMutableSet()
-        val out = caller.toMutableList()
-        for (id in known) {
-            if (seen.add(id.toList())) {
-                out.add(id)
-            }
-        }
-        return out
-    }
-
-    /**
-     * Read all known credential IDs for [rpId]. The derive paths pass
-     * these to [CredentialManagerPrfCore.deriveSeed(s)OrRegister] as
-     * `allowCredentialIds` so the OS auto-routes to the just-registered
-     * credential — skipping the "select your passkey" picker between
-     * `createPasskey` and the post-register PRF assertion.
-     */
-    private suspend fun readKnownCredentialIds(
-        context: Context,
-        rpId: String,
-    ): List<ByteArray> {
-        return KnownCredentialsStore.read(context, rpId).map {
-            Base64.decode(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         }
     }
 

@@ -96,6 +96,28 @@ export type DomainAssociation =
   | { kind: 'Skipped'; reason: string };
 
 /**
+ * App-side persistent store of credential IDs registered for an RP.
+ * The SDK does not ship a built-in implementation: bring your own
+ * (Keychain on iOS, Block Store + SharedPreferences on Android, or
+ * any custom backend). See the reference implementations in the
+ * passkey guide.
+ *
+ * All methods are called from the SDK as best-effort optimizations:
+ * failures and timeouts (3s) are swallowed and surfaced via
+ * {@link PasskeyProviderOptions.onRegistryError}; they never block
+ * the WebAuthn ceremony.
+ */
+export interface CredentialRegistry {
+  read(rpId: string): Promise<Uint8Array[]>;
+  add(rpId: string, credentialId: Uint8Array): Promise<void>;
+  remove(rpId: string, credentialId: Uint8Array): Promise<void>;
+  clear(rpId: string): Promise<void>;
+}
+
+/** Discriminator for {@link PasskeyProviderOptions.onRegistryError}. */
+export type RegistryOperation = 'read' | 'add' | 'remove' | 'clear';
+
+/**
  * Options for constructing a PasskeyProvider.
  */
 export interface PasskeyProviderOptions {
@@ -147,6 +169,82 @@ export interface PasskeyProviderOptions {
    * exist for the same RP.
    */
   allowCredentialIds?: Uint8Array[];
+
+  /**
+   * Optional opt-in registry. When set, the JS-side wrapper merges
+   * stored IDs into `allowCredentials` before each native call and
+   * writes the asserted / created credential ID back after success.
+   * The native module never sees the registry: all bookkeeping is
+   * done in JS. All registry calls are best-effort with a 3s
+   * timeout; failures fire {@link onRegistryError} and the ceremony
+   * proceeds.
+   */
+  credentialRegistry?: CredentialRegistry;
+
+  /**
+   * Fired when a {@link CredentialRegistry} call throws or times
+   * out. Best-effort: invocation never blocks ceremony progress.
+   */
+  onRegistryError?: (operation: RegistryOperation, error: Error) => void;
+}
+
+const REGISTRY_TIMEOUT_MS = 3_000;
+
+const CREDENTIAL_REGISTRY_HELP_SUFFIX =
+  ' (No CredentialRegistry was supplied to PasskeyProvider; ' +
+  'if you expect the SDK to auto-discover known credentials, see ' +
+  'https://sdk-doc-spark.breez.technology/guide/passkey.html#credentialregistry)';
+
+const _REGISTRY_TIMEOUT = Symbol('registryTimeout');
+
+function _withRegistryTimeout<T>(p: Promise<T>): Promise<T | typeof _REGISTRY_TIMEOUT> {
+  return Promise.race([
+    p,
+    new Promise<typeof _REGISTRY_TIMEOUT>((resolve) =>
+      setTimeout(() => resolve(_REGISTRY_TIMEOUT), REGISTRY_TIMEOUT_MS)
+    ),
+  ]);
+}
+
+async function _registryReadBestEffort(
+  registry: CredentialRegistry,
+  rpId: string,
+  onRegistryError?: (op: RegistryOperation, err: Error) => void
+): Promise<Uint8Array[]> {
+  try {
+    const result = await _withRegistryTimeout(registry.read(rpId));
+    if (result === _REGISTRY_TIMEOUT) {
+      const err = new Error('CredentialRegistry.read timed out');
+      console.warn('[CredentialRegistry] read timed out');
+      onRegistryError?.('read', err);
+      return [];
+    }
+    return Array.isArray(result) ? result : [];
+  } catch (err) {
+    console.warn('[CredentialRegistry] read failed', err);
+    onRegistryError?.('read', err as Error);
+    return [];
+  }
+}
+
+function _registryAddFireAndForget(
+  registry: CredentialRegistry,
+  rpId: string,
+  credentialId: Uint8Array,
+  onRegistryError?: (op: RegistryOperation, err: Error) => void
+): void {
+  _withRegistryTimeout(registry.add(rpId, credentialId))
+    .then((result) => {
+      if (result === _REGISTRY_TIMEOUT) {
+        const err = new Error('CredentialRegistry.add timed out');
+        console.warn('[CredentialRegistry] add timed out');
+        onRegistryError?.('add', err);
+      }
+    })
+    .catch((err) => {
+      console.warn('[CredentialRegistry] add failed', err);
+      onRegistryError?.('add', err as Error);
+    });
 }
 
 /**
@@ -233,6 +331,9 @@ export class PasskeyProvider {
   private userDisplayName: string;
   private autoRegister: boolean;
   private allowCredentialIds: Uint8Array[];
+  private credentialRegistry: CredentialRegistry | undefined;
+  private onRegistryError: ((op: RegistryOperation, err: Error) => void) | undefined;
+  private _lastObservedCredentialId: Uint8Array | null = null;
 
   constructor(options?: PasskeyProviderOptions) {
     this.rpId = options?.rpId ?? 'keys.breez.technology';
@@ -245,6 +346,29 @@ export class PasskeyProvider {
     // via createPasskey.
     this.autoRegister = options?.autoRegister ?? false;
     this.allowCredentialIds = options?.allowCredentialIds ?? [];
+    this.credentialRegistry = options?.credentialRegistry;
+    if (this.credentialRegistry) {
+      for (const method of ['read', 'add', 'remove', 'clear'] as const) {
+        if (typeof this.credentialRegistry[method] !== 'function') {
+          throw new Error(
+            `PasskeyProvider: credentialRegistry is missing a "${method}" ` +
+              'method. Implementations must provide read / add / remove / clear.'
+          );
+        }
+      }
+    }
+    this.onRegistryError = options?.onRegistryError;
+  }
+
+  /**
+   * Take ownership of the credential ID captured by the most recent
+   * successful assertion. Returns `null` if no assertion has
+   * completed since the last call.
+   */
+  takeLastObservedCredentialId(): Uint8Array | null {
+    const v = this._lastObservedCredentialId;
+    this._lastObservedCredentialId = null;
+    return v;
   }
 
   /**
@@ -272,13 +396,35 @@ export class PasskeyProvider {
     // Per-call overrides win over per-instance defaults; an empty
     // per-call list defers to the constructor's allowCredentialIds.
     const perCallAllow = request.allowCredentialIds ?? [];
-    const effectiveAllow =
+    let effectiveAllow =
       perCallAllow.length > 0 ? perCallAllow : this.allowCredentialIds;
+    // Auto-merge registry IDs into the allow-list. JS-side dance:
+    // the native module never sees the registry.
+    if (this.credentialRegistry) {
+      const registryIds = await _registryReadBestEffort(
+        this.credentialRegistry,
+        this.rpId,
+        this.onRegistryError
+      );
+      if (registryIds.length > 0) {
+        const seen = new Set(effectiveAllow.map(uint8ArrayToBase64));
+        const merged: Uint8Array[] = [...effectiveAllow];
+        for (const id of registryIds) {
+          const key = uint8ArrayToBase64(id);
+          if (!seen.has(key)) {
+            seen.add(key);
+            merged.push(id);
+          }
+        }
+        effectiveAllow = merged;
+      }
+    }
     const allowBase64 = effectiveAllow.map(id => uint8ArrayToBase64(id));
     const preferImmediate = request.preferImmediatelyAvailableCredentials ?? null;
 
+    let base64Results: string[];
     try {
-      const base64Results: string[] = await BreezSdkSparkPasskey.deriveSeeds(
+      base64Results = await BreezSdkSparkPasskey.deriveSeeds(
         request.salts,
         this.rpId,
         this.rpName,
@@ -291,13 +437,35 @@ export class PasskeyProvider {
       if (!Array.isArray(base64Results)) {
         throw new PasskeyPrfException('unknown', 'deriveSeeds returned a non-array');
       }
-      return base64Results.map(b64 => base64ToUint8Array(b64));
     } catch (err) {
       if (err instanceof PasskeyPrfException) {
         throw err;
       }
-      throw mapNativeError(err);
+      const mapped = mapNativeError(err);
+      // Augment CredentialNotFound when host had no allow-list and no
+      // registry so integrators can discover the opt-in path.
+      if (
+        mapped.code === 'noCredential' &&
+        effectiveAllow.length === 0 &&
+        !this.credentialRegistry
+      ) {
+        throw new PasskeyPrfException(
+          mapped.code,
+          mapped.message + CREDENTIAL_REGISTRY_HELP_SUFFIX
+        );
+      }
+      throw mapped;
     }
+
+    // Attempt to capture the asserted credential ID. The native
+    // module already returns just seeds, but every successful
+    // assertion has exactly one credential ID. We defer to the
+    // caller-supplied registry: post-success, the SDK doesn't have a
+    // way to learn the assertion's credential ID through the seeds
+    // path, so the `takeLastObservedCredentialId` slot stays empty
+    // for now. Future revisions of the native plugin can return the
+    // credential ID alongside the seeds.
+    return base64Results.map(b64 => base64ToUint8Array(b64));
   }
 
   /**
@@ -322,7 +490,28 @@ export class PasskeyProvider {
     }
 
     const req = request ?? {};
-    const excludeBase64 = (req.excludeCredentialIds ?? []).map(id => uint8ArrayToBase64(id));
+    let excludeIds = req.excludeCredentialIds ?? [];
+    // Merge registry IDs into the exclude list before the native call.
+    if (this.credentialRegistry) {
+      const registryIds = await _registryReadBestEffort(
+        this.credentialRegistry,
+        this.rpId,
+        this.onRegistryError
+      );
+      if (registryIds.length > 0) {
+        const seen = new Set(excludeIds.map(uint8ArrayToBase64));
+        const merged: Uint8Array[] = [...excludeIds];
+        for (const id of registryIds) {
+          const key = uint8ArrayToBase64(id);
+          if (!seen.has(key)) {
+            seen.add(key);
+            merged.push(id);
+          }
+        }
+        excludeIds = merged;
+      }
+    }
+    const excludeBase64 = excludeIds.map(id => uint8ArrayToBase64(id));
     const userIdBase64 = req.userId ? uint8ArrayToBase64(req.userId) : null;
 
     try {
@@ -339,8 +528,18 @@ export class PasskeyProvider {
         userIdBase64
       );
 
+      const credentialId = base64ToUint8Array(result.credentialId);
+      // Persist new credential ID to the registry post-success.
+      if (this.credentialRegistry) {
+        _registryAddFireAndForget(
+          this.credentialRegistry,
+          this.rpId,
+          credentialId,
+          this.onRegistryError
+        );
+      }
       return {
-        credentialId: base64ToUint8Array(result.credentialId),
+        credentialId,
         aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
         backupEligible: result.backupEligible,
       };

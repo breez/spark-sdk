@@ -123,4 +123,17 @@ pub trait PrfProvider: Send + Sync {
             reason: "Provider does not verify domain association".to_string(),
         })
     }
+
+    /// Take ownership of the credential ID observed during the most
+    /// recent assertion ceremony, clearing the slot. Returns `None` if
+    /// no assertion has completed since the last call OR if the
+    /// provider does not surface this signal (the trait default).
+    ///
+    /// Built-in platform passkey providers (iOS, Android, Web JS)
+    /// override this so [`PasskeyClient::sign_in`] can populate
+    /// [`SignInResponse::credential_id`]. CLI / hardware providers
+    /// (file-backed, FIDO2, YubiKey) inherit the `None` default.
+    async fn take_last_observed_credential_id(&self) -> Option<Vec<u8>> {
+        None
+    }
 }

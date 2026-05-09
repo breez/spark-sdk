@@ -1,18 +1,19 @@
 package technology.breez.spark.passkey
 
 import android.app.Activity
-import android.util.Base64
 import breez_sdk_spark.CreatePasskeyRequest
 import breez_sdk_spark.DeriveSeedsRequest
 import breez_sdk_spark.DomainAssociation
 import breez_sdk_spark.PrfProvider
 import breez_sdk_spark.PrfProviderException
 import breez_sdk_spark.RegisteredCredential
+import technology.breez.spark.passkey.core.CreatePasskeyOptions
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
+import technology.breez.spark.passkey.core.CredentialRegistry
 import technology.breez.spark.passkey.core.DeriveSeedsOptions
 import technology.breez.spark.passkey.core.DomainAssociationResult
-import technology.breez.spark.passkey.core.RegisteredCredential as CoreRegisteredCredential
+import technology.breez.spark.passkey.core.RegistryOperation
 
 /**
  * Built-in [PrfProvider] that uses the AndroidX Credential Manager +
@@ -76,28 +77,29 @@ public class PasskeyProvider(
     userDisplayName: String? = null,
     private val autoRegister: Boolean = false,
     private val allowCredentialIds: List<ByteArray> = emptyList(),
+    private val credentialRegistry: CredentialRegistry? = null,
+    private val onRegistryError: ((RegistryOperation, Throwable) -> Unit)? = null,
 ) : PrfProvider {
 
     private val userName: String = userName ?: rpName
     private val userDisplayName: String = userDisplayName ?: (userName ?: rpName)
 
-    /**
-     * Optional callback fired with the credential ID returned by every
-     * successful WebAuthn assertion (sign-in path). Hosts can set this
-     * to record which credential was just used so they can populate
-     * `excludeCredentialIds` and [allowCredentialIds] on subsequent
-     * requests.
-     *
-     * Useful for migrating users whose passkey predates the host's own
-     * credential-ID tracking: the first successful sign-in surfaces the
-     * credential ID, after which the host's records are correct and the
-     * platform-level "already exists" check can fire on future create
-     * attempts.
-     *
-     * Set before calling [deriveSeed]. Not invoked on registration
-     * (see [createPasskey]'s return value for that).
+    /** Slot used to surface the credential ID asserted in the most
+     *  recent ceremony. Read once, cleared on read. Used by the
+     *  binding-layer `SignInResponse.credential_id` plumbing.
      */
-    public var onAssertionCredentialId: ((ByteArray) -> Unit)? = null
+    @Volatile
+    private var lastObservedCredentialId: ByteArray? = null
+
+    /** Take ownership of the credential ID captured by the most
+     *  recent assertion, clearing the slot. Returns `null` if no
+     *  assertion has completed since the last call.
+     */
+    public fun takeLastObservedCredentialId(): ByteArray? {
+        val v = lastObservedCredentialId
+        lastObservedCredentialId = null
+        return v
+    }
 
     /**
      * Bulk PRF derivation backed by [CredentialManagerPrfCore.deriveSeedsOrRegister].
@@ -121,6 +123,8 @@ public class PasskeyProvider(
             val options = DeriveSeedsOptions(
                 allowCredentialIds = effectiveAllow,
                 preferImmediatelyAvailableCredentials = request.preferImmediatelyAvailableCredentials,
+                credentialRegistry = credentialRegistry,
+                onRegistryError = onRegistryError,
             )
             return CredentialManagerPrfCore.deriveSeedsOrRegister(
                 activity = activityProvider(),
@@ -130,7 +134,7 @@ public class PasskeyProvider(
                 userName = userName,
                 userDisplayName = userDisplayName,
                 autoRegister = autoRegister,
-                onAssertionCredentialId = onAssertionCredentialId,
+                captureCredentialId = { id -> lastObservedCredentialId = id },
                 options = options,
             )
         } catch (e: CredentialManagerPrfCoreException) {
@@ -195,46 +199,25 @@ public class PasskeyProvider(
      * derivation. Per-call overrides on `request` (userId, userName,
      * userDisplayName) fall back to constructor values when omitted.
      *
-     * Auto-merges previously-registered credential IDs from
-     * [KnownCredentialsStore] into `request.excludeCredentialIds` so
-     * the platform refuses to create a duplicate even after a reinstall
-     * (the store is Block Store + Google-account synced). Records the
-     * new credential ID after a successful create.
+     * When the provider was constructed with a `credentialRegistry`,
+     * the registry's stored IDs are auto-merged into
+     * `request.excludeCredentialIds` and the new credential ID is
+     * auto-added on success.
      */
     override suspend fun createPasskey(request: CreatePasskeyRequest): RegisteredCredential {
         try {
-            val activity = activityProvider()
-            val context = activity.applicationContext
-            val known = KnownCredentialsStore.read(context, rpId)
-                .map { Base64.decode(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) }
-            val merged = if (known.isEmpty()) {
-                request.excludeCredentialIds
-            } else {
-                val seen = request.excludeCredentialIds.toMutableList()
-                val seenSet = seen.map { it.toList() }.toMutableSet()
-                for (id in known) {
-                    if (seenSet.add(id.toList())) {
-                        seen.add(id)
-                    }
-                }
-                seen
-            }
             val core = CredentialManagerPrfCore.createCredential(
-                activity = activity,
+                activity = activityProvider(),
                 rpId = rpId,
                 rpName = rpName,
                 userName = request.userName ?: userName,
                 userDisplayName = request.userDisplayName ?: userDisplayName,
-                excludeCredentialIds = merged,
+                excludeCredentialIds = request.excludeCredentialIds,
                 userIdOverride = request.userId,
-            )
-            KnownCredentialsStore.add(
-                context = context,
-                credentialIdBase64 = Base64.encodeToString(
-                    core.credentialId,
-                    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                options = CreatePasskeyOptions(
+                    credentialRegistry = credentialRegistry,
+                    onRegistryError = onRegistryError,
                 ),
-                rpId = rpId,
             )
             return RegisteredCredential(core.credentialId, core.aaguid, core.backupEligible)
         } catch (e: CredentialManagerPrfCoreException) {

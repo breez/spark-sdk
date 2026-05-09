@@ -145,39 +145,28 @@ export interface DeriveSeedOptions {
 }
 
 /**
- * Persisted set of credential IDs the host has registered against
- * each RP. The SDK reads it before `createPasskey` to populate
- * `excludeCredentials` (so the platform refuses to create a duplicate
- * even after a localStorage wipe / app reinstall) and writes new IDs
- * to it when assertions or registrations succeed.
+ * App-side persistent store of credential IDs registered for an RP.
+ * The SDK does not ship a built-in implementation: bring your own
+ * via localStorage, IndexedDB, or any custom backend. See the
+ * reference implementation in the passkey guide.
  *
- * The default backend in the SDK is {@link LocalStorageCredentialRegistry}.
- * Hosts that want cross-device or server-mirrored persistence should
- * implement this interface against their backend.
+ * All methods are called from the SDK as best-effort optimizations:
+ * failures and timeouts (3s) are swallowed and surfaced via
+ * {@link PasskeyProviderOptions.onRegistryError}; they never block
+ * the WebAuthn ceremony.
  *
- * IDs are stored as raw `Uint8Array`s; encoding to wire format is the
- * implementation's responsibility.
+ * IDs are exchanged as raw `Uint8Array`s; encoding to wire format
+ * is the implementation's responsibility.
  */
 export interface CredentialRegistry {
-    list(rpId: string): Promise<Uint8Array[]>;
+    read(rpId: string): Promise<Uint8Array[]>;
     add(rpId: string, credentialId: Uint8Array): Promise<void>;
     remove(rpId: string, credentialId: Uint8Array): Promise<void>;
     clear(rpId: string): Promise<void>;
 }
 
-/**
- * Default {@link CredentialRegistry} backed by `window.localStorage`.
- * One JSON-encoded array of base64url credential IDs per RP. Cleared
- * by the browser when the user clears site data; not synced across
- * devices.
- */
-export declare class LocalStorageCredentialRegistry implements CredentialRegistry {
-    constructor(keyPrefix?: string);
-    list(rpId: string): Promise<Uint8Array[]>;
-    add(rpId: string, credentialId: Uint8Array): Promise<void>;
-    remove(rpId: string, credentialId: Uint8Array): Promise<void>;
-    clear(rpId: string): Promise<void>;
-}
+/** Discriminator for {@link PasskeyProviderOptions.onRegistryError}. */
+export type RegistryOperation = 'read' | 'add' | 'remove' | 'clear';
 
 /**
  * Options for constructing a PasskeyProvider.
@@ -264,17 +253,28 @@ export interface PasskeyProviderOptions {
     defaultTimeoutMs?: number;
 
     /**
-     * When set, the provider auto-populates `excludeCredentials` on
-     * `createPasskey` from this store and writes successful create /
-     * assertion credential IDs back into it. Lets the platform
-     * refuse to create duplicates after a localStorage wipe / app
-     * reinstall — provided the registry survives. Default backend
-     * is {@link LocalStorageCredentialRegistry}; pass a custom one
-     * for cross-device / server-mirrored persistence. Omit to
-     * disable auto-population (the host manages excludeCredentialIds
-     * manually).
+     * Optional opt-in registry. When set, the provider auto-merges
+     * stored IDs into `excludeCredentials` on `createPasskey` and
+     * into `allowCredentials` on assertion, then auto-adds new
+     * credential IDs after success. Omit to disable auto-population
+     * (the host manages `excludeCredentialIds` / `allowCredentialIds`
+     * manually). All registry calls are best-effort with a 3s
+     * timeout; failures fire {@link onRegistryError} and the
+     * ceremony proceeds.
+     *
+     * The constructor performs a conformance check: the supplied
+     * object must expose `read`, `add`, `remove`, `clear` as
+     * functions. Missing methods cause an immediate throw so
+     * misconfiguration surfaces at startup rather than at first
+     * sign-in.
      */
     credentialRegistry?: CredentialRegistry;
+
+    /**
+     * Fired when a {@link CredentialRegistry} call throws or times
+     * out. Best-effort: invocation never blocks ceremony progress.
+     */
+    onRegistryError?: (operation: RegistryOperation, error: Error) => void;
 }
 
 /**

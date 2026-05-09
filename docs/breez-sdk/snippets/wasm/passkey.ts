@@ -257,3 +257,39 @@ const handleTimeout = async () => {
   }
   // ANCHOR_END: handle-timeout
 }
+
+
+const withCredentialRegistry = async () => {
+  // ANCHOR: with-credential-registry
+  // Opt-in CredentialRegistry. The SDK auto-merges stored IDs into
+  // allowCredentials on assertion and excludeCredentials on
+  // registration, then auto-adds new credential IDs after success.
+  // Reference impl (LocalStorageCredentialRegistry) is in the
+  // passkey guide; copy-paste into your app code.
+  const registry = new LocalStorageCredentialRegistry()
+  const prfProvider = new PasskeyProvider({
+    credentialRegistry: registry,
+    onRegistryError: (op, err) => console.warn('registry', op, err),
+  })
+  const passkey = new PasskeyClient(prfProvider as any, undefined)
+
+  // signIn: registry IDs are auto-merged into allowCredentials.
+  await passkey.signIn({ label: 'personal', extraSalts: [] })
+
+  // register: registry IDs are auto-merged into excludeCredentials.
+  await passkey.register({ label: 'personal', extraSalts: [] })
+
+  // On logout, clear the registry so a fresh device-pairing
+  // wouldn't pin to the old credential.
+  await registry.clear('keys.breez.technology')
+  // ANCHOR_END: with-credential-registry
+}
+
+// LocalStorageCredentialRegistry is a copy-paste reference impl;
+// see the passkey guide. Defined here for the snippet to compile.
+declare class LocalStorageCredentialRegistry {
+  read(rpId: string): Promise<Uint8Array[]>
+  add(rpId: string, credentialId: Uint8Array): Promise<void>
+  remove(rpId: string, credentialId: Uint8Array): Promise<void>
+  clear(rpId: string): Promise<void>
+}
