@@ -80,9 +80,9 @@ pub struct RecommendedFees {
 ///
 /// For one-off, non-shared use, prefer
 /// [`SdkBuilder::with_rest_chain_service`](crate::SdkBuilder::with_rest_chain_service).
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[must_use]
-pub fn new_rest_chain_service(
+pub async fn new_rest_chain_service(
     url: String,
     network: Network,
     api_type: ChainApiType,

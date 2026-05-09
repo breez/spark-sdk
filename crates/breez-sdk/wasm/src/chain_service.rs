@@ -84,7 +84,7 @@ impl BitcoinChainServiceHandle {
     unchecked_return_type = "BitcoinChainService"
 )]
 #[must_use]
-pub fn new_rest_chain_service(
+pub async fn new_rest_chain_service(
     url: String,
     network: Network,
     api_type: ChainApiType,
@@ -96,6 +96,7 @@ pub fn new_rest_chain_service(
             network.into(),
             api_type.into(),
             credentials.map(Into::into),
-        ),
+        )
+        .await,
     }
 }
