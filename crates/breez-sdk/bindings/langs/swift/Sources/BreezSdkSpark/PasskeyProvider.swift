@@ -36,23 +36,15 @@ public class PasskeyProvider: PrfProvider {
     private let explicitTeamId: String?
     private let urlSession: URLSession
     private let core: PasskeyAssertionCore
+    private let credentialRegistry: CredentialRegistry?
+    private let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
 
-    /// Optional callback fired with the credential ID returned by every
-    /// successful WebAuthn assertion (sign-in path). Hosts can set this
-    /// to record which credential was just used so they can populate
-    /// `excludeCredentialIds` and `allowCredentialIds` on subsequent
-    /// requests.
-    ///
-    /// Useful for migrating users whose passkey predates the host's
-    /// own credential-ID tracking: the first successful sign-in surfaces
-    /// the credential ID, after which the host's records are correct
-    /// and the platform-level "already exists" check can fire on
-    /// future create attempts.
-    ///
-    /// Must be set before calling `deriveSeed`. Not invoked on
-    /// registration (see `createPasskey`'s return value for that).
-    public var onAssertionCredentialId: ((Data) -> Void)? {
-        didSet { core.onAssertionCredentialId = onAssertionCredentialId }
+    /// Take ownership of the credential ID captured by the most recent
+    /// successful assertion. Returns nil if no assertion has completed
+    /// since the last call. Used by binding-layer code that wants to
+    /// surface the credential ID to a higher-level response type.
+    public func takeLastObservedCredentialId() -> Data? {
+        core.takeLastObservedCredentialId()
     }
 
     /// Protocol for providing a presentation anchor for the authorization controller.
@@ -106,7 +98,9 @@ public class PasskeyProvider: PrfProvider {
         teamId: String? = nil,
         urlSession: URLSession = .shared,
         autoRegister: Bool = false,
-        allowCredentialIds: [Data] = []
+        allowCredentialIds: [Data] = [],
+        credentialRegistry: CredentialRegistry? = nil,
+        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) {
         self.rpId = rpId
         self.rpName = rpName
@@ -117,6 +111,8 @@ public class PasskeyProvider: PrfProvider {
         self.explicitTeamId = teamId
         self.urlSession = urlSession
         self.core = PasskeyAssertionCore(anchorProvider: anchorProvider)
+        self.credentialRegistry = credentialRegistry
+        self.onRegistryError = onRegistryError
     }
 
     /// Derive multiple PRF outputs in as few authenticator ceremonies as
@@ -145,9 +141,12 @@ public class PasskeyProvider: PrfProvider {
         // `allowCredentialIds`. `nil` defers to the platform default
         // (immediate mediation on).
         let perCallAllow = request.allowCredentialIds.map { Data($0) }
+        let effectiveAllow = perCallAllow.isEmpty ? allowCredentialIds : perCallAllow
         let options = DeriveSeedsOptions(
-            allowCredentialIds: perCallAllow.isEmpty ? allowCredentialIds : perCallAllow,
-            preferImmediatelyAvailableCredentials: request.preferImmediatelyAvailableCredentials
+            allowCredentialIds: effectiveAllow,
+            preferImmediatelyAvailableCredentials: request.preferImmediatelyAvailableCredentials,
+            credentialRegistry: credentialRegistry,
+            onRegistryError: onRegistryError
         )
         do {
             return try await core.performBulkDerivation(
@@ -160,7 +159,13 @@ public class PasskeyProvider: PrfProvider {
                 options: options
             )
         } catch let err as PasskeyAssertionError {
-            throw Self.toPrfProviderError(err)
+            throw Self.toPrfProviderError(
+                err,
+                augment: PasskeyAssertionCore.shouldAugmentCredentialNotFound(
+                    explicitAllowCredentialIds: effectiveAllow,
+                    credentialRegistry: credentialRegistry
+                )
+            )
         }
     }
 
@@ -183,7 +188,11 @@ public class PasskeyProvider: PrfProvider {
                 userName: request.userName ?? userName,
                 userDisplayName: request.userDisplayName ?? userDisplayName,
                 excludeCredentialIds: request.excludeCredentialIds,
-                userId: request.userId
+                userId: request.userId,
+                options: CreatePasskeyOptions(
+                    credentialRegistry: credentialRegistry,
+                    onRegistryError: onRegistryError
+                )
             )
             return RegisteredCredential(
                 credentialId: credential.credentialId,
@@ -191,7 +200,7 @@ public class PasskeyProvider: PrfProvider {
                 backupEligible: credential.backupEligible
             )
         } catch let err as PasskeyAssertionError {
-            throw Self.toPrfProviderError(err)
+            throw Self.toPrfProviderError(err, augment: false)
         }
     }
 
@@ -295,13 +304,27 @@ public class PasskeyProvider: PrfProvider {
 
     // MARK: - PasskeyAssertionError -> PrfProviderError mapping
 
-    private static func toPrfProviderError(_ err: PasskeyAssertionError) -> PrfProviderError {
+    private static func toPrfProviderError(
+        _ err: PasskeyAssertionError,
+        augment: Bool
+    ) -> PrfProviderError {
         switch err {
         case .userCancelled:
             return .UserCancelled
         case .userTimedOut:
             return .UserTimedOut
         case .credentialNotFound:
+            // The core throws the bare variant; the binding layer adds
+            // the registry help suffix when relevant. Since UniFFI's
+            // `CredentialNotFound` carries no associated message, we
+            // surface the help text via the `Generic` variant only when
+            // augmenting; otherwise propagate as-is.
+            if augment {
+                return .Generic(
+                    "No credential found for this RP."
+                    + credentialRegistryHelpSuffix
+                )
+            }
             return .CredentialNotFound
         case .credentialAlreadyExists(let msg):
             return .CredentialAlreadyExists(msg)

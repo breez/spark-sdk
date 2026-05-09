@@ -1354,4 +1354,5 @@ pub struct _SignInResponse {
     pub wallet: Wallet,
     pub labels: Vec<String>,
     pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
+    pub credential_id: Option<Vec<u8>>,
 }

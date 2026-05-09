@@ -38,6 +38,56 @@ class DomainAssociationSkipped extends DomainAssociation {
   const DomainAssociationSkipped({required this.reason});
 }
 
+/// App-side persistent store of credential IDs registered for an RP.
+/// The SDK does not ship a built-in implementation: bring your own
+/// (Keychain on iOS, Block Store + SharedPreferences on Android, or
+/// any custom backend). See the reference implementations in the
+/// passkey guide.
+///
+/// All methods are called from the SDK as best-effort optimizations:
+/// failures and timeouts (3s) are swallowed and surfaced via the
+/// caller's `onRegistryError`; they never block the WebAuthn ceremony.
+abstract class CredentialRegistry {
+  Future<List<Uint8List>> read(String rpId);
+  Future<void> add(String rpId, Uint8List credentialId);
+  Future<void> remove(String rpId, Uint8List credentialId);
+  Future<void> clear(String rpId);
+}
+
+/// Discriminator for the `onRegistryError` callback.
+enum RegistryOperation { read, add, remove, clear }
+
+const Duration _registryTimeout = Duration(seconds: 3);
+
+const String _credentialRegistryHelpSuffix =
+    ' (No CredentialRegistry was supplied to PasskeyProvider; '
+    'if you expect the SDK to auto-discover known credentials, see '
+    'https://sdk-doc-spark.breez.technology/guide/passkey.html#credentialregistry)';
+
+Future<List<Uint8List>> _registryReadBestEffort(
+  CredentialRegistry registry,
+  String rpId,
+  void Function(RegistryOperation, Object)? onRegistryError,
+) async {
+  try {
+    return await registry.read(rpId).timeout(_registryTimeout);
+  } catch (e) {
+    onRegistryError?.call(RegistryOperation.read, e);
+    return const [];
+  }
+}
+
+void _registryAddFireAndForget(
+  CredentialRegistry registry,
+  String rpId,
+  Uint8List credentialId,
+  void Function(RegistryOperation, Object)? onRegistryError,
+) {
+  registry.add(rpId, credentialId).timeout(_registryTimeout).catchError((Object e) {
+    onRegistryError?.call(RegistryOperation.add, e);
+  });
+}
+
 /// Options for constructing a [PasskeyProvider].
 class PasskeyProviderOptions {
   /// Relying Party ID. Must match the domain configured for cross-platform
@@ -77,6 +127,19 @@ class PasskeyProviderOptions {
   /// derivation when multiple credentials might exist for the same RP.
   final List<Uint8List>? allowCredentialIds;
 
+  /// Optional opt-in registry. When set, the Dart-side wrapper
+  /// merges stored IDs into `allowCredentialIds` / `excludeCredentialIds`
+  /// before the MethodChannel call and writes the asserted /
+  /// created credential ID back after success. The native plugin
+  /// never sees the registry. Calls are best-effort with a 3s
+  /// timeout; failures fire [onRegistryError] and the ceremony
+  /// proceeds.
+  final CredentialRegistry? credentialRegistry;
+
+  /// Fired when a [CredentialRegistry] call throws or times out.
+  /// Best-effort: invocation never blocks ceremony progress.
+  final void Function(RegistryOperation, Object)? onRegistryError;
+
   const PasskeyProviderOptions({
     this.rpId = 'keys.breez.technology',
     this.rpName = 'Breez SDK',
@@ -84,6 +147,8 @@ class PasskeyProviderOptions {
     this.userDisplayName,
     this.autoRegister = false,
     this.allowCredentialIds,
+    this.credentialRegistry,
+    this.onRegistryError,
   });
 }
 
@@ -128,6 +193,9 @@ class PasskeyProvider {
   final String _userDisplayName;
   final bool _autoRegister;
   final List<Uint8List>? _allowCredentialIds;
+  final CredentialRegistry? _credentialRegistry;
+  final void Function(RegistryOperation, Object)? _onRegistryError;
+  Uint8List? _lastObservedCredentialId;
 
   PasskeyProvider([PasskeyProviderOptions? options])
     : _rpId = options?.rpId ?? 'keys.breez.technology',
@@ -136,7 +204,18 @@ class PasskeyProvider {
       _userDisplayName =
           options?.userDisplayName ?? (options?.userName ?? (options?.rpName ?? 'Breez SDK')),
       _autoRegister = options?.autoRegister ?? false,
-      _allowCredentialIds = options?.allowCredentialIds;
+      _allowCredentialIds = options?.allowCredentialIds,
+      _credentialRegistry = options?.credentialRegistry,
+      _onRegistryError = options?.onRegistryError;
+
+  /// Take ownership of the credential ID captured by the most recent
+  /// successful assertion. Returns `null` if no assertion has
+  /// completed since the last call.
+  Uint8List? takeLastObservedCredentialId() {
+    final v = _lastObservedCredentialId;
+    _lastObservedCredentialId = null;
+    return v;
+  }
 
   /// Derive multiple 32-byte seeds from passkey PRF with the given salts
   /// in as few OS ceremonies as the platform supports (dual-salt
@@ -145,28 +224,45 @@ class PasskeyProvider {
   /// prompt). Used by the SDK's `setup_wallet` orchestration to collapse
   /// master + label derivation into one prompt.
   Future<List<Uint8List>> deriveSeeds(DeriveSeedsRequest request) async {
+    final args = <String, Object?>{
+      'salts': request.salts,
+      'rpId': _rpId,
+      'rpName': _rpName,
+      'userName': _userName,
+      'userDisplayName': _userDisplayName,
+      'autoRegister': _autoRegister,
+    };
+    // Per-call overrides win over per-instance defaults; an empty
+    // per-call list defers to the constructor's allowCredentialIds.
+    final perCallAllow = request.allowCredentialIds;
+    List<Uint8List> effectiveAllow = perCallAllow.isNotEmpty
+        ? perCallAllow.map(Uint8List.fromList).toList()
+        : (_allowCredentialIds ?? const []);
+    // Auto-merge registry IDs into the allow-list. Dart-side dance:
+    // the native plugin never sees the registry.
+    final registry = _credentialRegistry;
+    if (registry != null) {
+      final registryIds = await _registryReadBestEffort(registry, _rpId, _onRegistryError);
+      if (registryIds.isNotEmpty) {
+        final seen = effectiveAllow.map(base64Encode).toSet();
+        final merged = <Uint8List>[...effectiveAllow];
+        for (final id in registryIds) {
+          final key = base64Encode(id);
+          if (seen.add(key)) {
+            merged.add(id);
+          }
+        }
+        effectiveAllow = merged;
+      }
+    }
+    if (effectiveAllow.isNotEmpty) {
+      args['allowCredentialIds'] = effectiveAllow.map(base64Encode).toList();
+    }
+    final preferImmediate = request.preferImmediatelyAvailableCredentials;
+    if (preferImmediate != null) {
+      args['preferImmediatelyAvailableCredentials'] = preferImmediate;
+    }
     try {
-      final args = <String, Object?>{
-        'salts': request.salts,
-        'rpId': _rpId,
-        'rpName': _rpName,
-        'userName': _userName,
-        'userDisplayName': _userDisplayName,
-        'autoRegister': _autoRegister,
-      };
-      // Per-call overrides win over per-instance defaults; an empty
-      // per-call list defers to the constructor's allowCredentialIds.
-      final perCallAllow = request.allowCredentialIds;
-      final List<Uint8List>? effectiveAllow = perCallAllow.isNotEmpty
-          ? perCallAllow.map(Uint8List.fromList).toList()
-          : _allowCredentialIds;
-      if (effectiveAllow != null && effectiveAllow.isNotEmpty) {
-        args['allowCredentialIds'] = effectiveAllow.map(base64Encode).toList();
-      }
-      final preferImmediate = request.preferImmediatelyAvailableCredentials;
-      if (preferImmediate != null) {
-        args['preferImmediatelyAvailableCredentials'] = preferImmediate;
-      }
       final result = await _channel.invokeMethod<List<Object?>>('deriveSeeds', args);
       if (result == null) {
         throw const PasskeyPrfException(
@@ -176,7 +272,16 @@ class PasskeyProvider {
       }
       return result.cast<String>().map((b64) => base64Decode(b64)).toList();
     } on PlatformException catch (e) {
-      throw _mapPlatformException(e);
+      var mapped = _mapPlatformException(e);
+      // Augment CredentialNotFound when host had no allow-list and no
+      // registry so integrators can discover the opt-in path.
+      if (mapped.code == 'noCredential' && effectiveAllow.isEmpty && registry == null) {
+        mapped = PasskeyPrfException(
+          code: mapped.code,
+          message: mapped.message + _credentialRegistryHelpSuffix,
+        );
+      }
+      throw mapped;
     }
   }
 
@@ -185,26 +290,43 @@ class PasskeyProvider {
   /// fall back to the constructor values when omitted. Throws
   /// [PasskeyPrfException] on failure.
   Future<RegisteredCredential> createPasskey(CreatePasskeyRequest request) async {
+    final args = <String, Object?>{
+      'rpId': _rpId,
+      'rpName': _rpName,
+      'userName': request.userName ?? _userName,
+      'userDisplayName': request.userDisplayName ?? _userDisplayName,
+    };
+    var excludeIds = List<Uint8List>.from(request.excludeCredentialIds);
+    final registry = _credentialRegistry;
+    if (registry != null) {
+      final registryIds = await _registryReadBestEffort(registry, _rpId, _onRegistryError);
+      if (registryIds.isNotEmpty) {
+        final seen = excludeIds.map(base64Encode).toSet();
+        for (final id in registryIds) {
+          final key = base64Encode(id);
+          if (seen.add(key)) {
+            excludeIds.add(id);
+          }
+        }
+      }
+    }
+    if (excludeIds.isNotEmpty) {
+      args['excludeCredentialIds'] = excludeIds.map(base64Encode).toList();
+    }
+    if (request.userId != null) {
+      args['userId'] = base64Encode(request.userId!);
+    }
     try {
-      final args = <String, Object?>{
-        'rpId': _rpId,
-        'rpName': _rpName,
-        'userName': request.userName ?? _userName,
-        'userDisplayName': request.userDisplayName ?? _userDisplayName,
-      };
-      if (request.excludeCredentialIds.isNotEmpty) {
-        args['excludeCredentialIds'] =
-            request.excludeCredentialIds.map((id) => base64Encode(id)).toList();
-      }
-      if (request.userId != null) {
-        args['userId'] = base64Encode(request.userId!);
-      }
       final result = await _channel.invokeMethod<Map<Object?, Object?>>('createPasskey', args);
       final map = result!;
       final credentialId = base64Decode(map['credentialId'] as String);
       final aaguidB64 = map['aaguid'] as String?;
       final aaguid = aaguidB64 == null ? null : base64Decode(aaguidB64);
       final backupEligible = map['backupEligible'] as bool?;
+      // Persist new credential ID to the registry post-success.
+      if (registry != null) {
+        _registryAddFireAndForget(registry, _rpId, credentialId, _onRegistryError);
+      }
       return RegisteredCredential(
         credentialId: credentialId,
         aaguid: aaguid,

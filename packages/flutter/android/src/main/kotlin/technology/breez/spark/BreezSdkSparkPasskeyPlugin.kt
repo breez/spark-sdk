@@ -17,7 +17,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import technology.breez.spark.passkey.KnownCredentialsStore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
 import technology.breez.spark.passkey.core.DeriveSeedsOptions
@@ -138,18 +137,14 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             return
         }
 
-        // Caller-supplied allow-list (e.g. host-tracked credential IDs)
-        // takes precedence over the implicit KnownCredentialsStore set
-        // when present.
-        val callerAllow: List<ByteArray> =
+        // Caller-supplied allow-list. When the host has a Dart-side
+        // `CredentialRegistry`, registry IDs are merged in on the
+        // Dart side before the MethodChannel call. The native plugin
+        // never reads or writes credential IDs itself.
+        val allowIds: List<ByteArray> =
             (call.argument<List<String>>("allowCredentialIds") ?: emptyList()).map {
                 Base64.decode(it, Base64.NO_WRAP)
             }
-        val allowIds = if (callerAllow.isNotEmpty()) {
-            callerAllow
-        } else {
-            readKnownCredentialIds(currentActivity.applicationContext, rpId)
-        }
         val preferImmediate = call.argument<Boolean>("preferImmediatelyAvailableCredentials")
 
         scope.launch {
@@ -235,35 +230,23 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             return
         }
 
-        val callerExcludes: List<ByteArray> =
+        val excludeIds: List<ByteArray> =
             (call.argument<List<String>>("excludeCredentialIds") ?: emptyList()).map {
                 Base64.decode(it, Base64.NO_WRAP)
             }
         val userIdOverride: ByteArray? =
             call.argument<String>("userId")?.let { Base64.decode(it, Base64.NO_WRAP) }
-        val context = currentActivity.applicationContext
 
         scope.launch {
             try {
-                // Auto-merge previously-registered credential IDs so the
-                // platform refuses duplicates even after a reinstall.
-                val merged = mergeKnownCredentials(context, rpId, callerExcludes)
                 val credential = CredentialManagerPrfCore.createCredential(
                     activity = currentActivity,
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
-                    excludeCredentialIds = merged,
+                    excludeCredentialIds = excludeIds,
                     userIdOverride = userIdOverride,
-                )
-                KnownCredentialsStore.add(
-                    context,
-                    Base64.encodeToString(
-                        credential.credentialId,
-                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                    ),
-                    rpId,
                 )
                 // Hold the next derive call for up to 800ms so the
                 // immediate post-register assertion doesn't race the
@@ -279,39 +262,6 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             } catch (e: Exception) {
                 result.error("ERR_PASSKEY", e.message ?: e.toString(), null)
             }
-        }
-    }
-
-    private suspend fun mergeKnownCredentials(
-        context: android.content.Context,
-        rpId: String,
-        caller: List<ByteArray>,
-    ): List<ByteArray> {
-        val known = readKnownCredentialIds(context, rpId)
-        if (known.isEmpty()) return caller
-        val seen = caller.map { it.toList() }.toMutableSet()
-        val out = caller.toMutableList()
-        for (id in known) {
-            if (seen.add(id.toList())) {
-                out.add(id)
-            }
-        }
-        return out
-    }
-
-    /// Read all known credential IDs for [rpId] from the iCloud-Keychain
-    /// equivalent (encrypted SharedPreferences + Block Store). Used by
-    /// the derive paths to populate `allowCredentials` so the OS auto-
-    /// routes to the registering provider after a fresh `createPasskey`,
-    /// skipping the "select your passkey" picker. Without this the user
-    /// sees an extra prompt between create and the post-register PRF
-    /// assertion. Mirrors the Capacitor plugin's allowCredentialIds path.
-    private suspend fun readKnownCredentialIds(
-        context: android.content.Context,
-        rpId: String,
-    ): List<ByteArray> {
-        return KnownCredentialsStore.read(context, rpId).map {
-            Base64.decode(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         }
     }
 

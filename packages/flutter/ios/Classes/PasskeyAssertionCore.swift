@@ -1,11 +1,117 @@
 import AuthenticationServices
 import Foundation
+import os.log
 import Security
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
 import AppKit
 #endif
+
+// MARK: - Credential registry
+
+/// App-side persistent store of credential IDs registered for an RP.
+/// The SDK does not ship a built-in implementation: bring your own via
+/// Keychain, Block Store, localStorage, or a custom backend. See the
+/// reference implementations in the passkey guide.
+///
+/// All methods are called from the SDK as best-effort optimizations:
+/// failures and timeouts (3s) are swallowed and surfaced via
+/// `onRegistryError`; they never block the WebAuthn ceremony.
+@available(iOS 18.0, macOS 15.0, *)
+public protocol CredentialRegistry: Sendable {
+    func read(rpId: String) async throws -> [Data]
+    func add(rpId: String, credentialId: Data) async throws
+    func remove(rpId: String, credentialId: Data) async throws
+    func clear(rpId: String) async throws
+}
+
+/// Discriminator for [`CredentialRegistry`] callbacks. Identifies which
+/// registry method failed when the SDK swallows the underlying error.
+@available(iOS 18.0, macOS 15.0, *)
+public enum RegistryOperation: Sendable {
+    case read
+    case add
+    case remove
+    case clear
+}
+
+/// 3 second timeout applied to every registry call. Not configurable.
+@available(iOS 18.0, macOS 15.0, *)
+private let registryTimeout: TimeInterval = 3.0
+
+@available(iOS 18.0, macOS 15.0, *)
+private struct RegistryTimeoutError: Error {
+    let operation: RegistryOperation
+}
+
+/// Run `body` with a `registryTimeout` deadline. Throws
+/// `RegistryTimeoutError` on timeout. The original task is not
+/// cancelled (Swift `Task` cancellation is cooperative); the result is
+/// simply ignored.
+@available(iOS 18.0, macOS 15.0, *)
+private func withRegistryTimeout<T: Sendable>(
+    operation: RegistryOperation,
+    body: @Sendable @escaping () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await body() }
+        group.addTask {
+            try await Task.sleep(nanoseconds: UInt64(registryTimeout * 1_000_000_000))
+            throw RegistryTimeoutError(operation: operation)
+        }
+        let result = try await group.next()!
+        group.cancelAll()
+        return result
+    }
+}
+
+@available(iOS 18.0, macOS 15.0, *)
+private let registryLog = OSLog(
+    subsystem: "technology.breez.spark.passkey", category: "CredentialRegistry"
+)
+
+/// Best-effort registry read. On timeout / throw: log + invoke
+/// `onRegistryError`, return `[]`.
+@available(iOS 18.0, macOS 15.0, *)
+private func registryReadBestEffort(
+    registry: CredentialRegistry,
+    rpId: String,
+    onRegistryError: ((RegistryOperation, Error) -> Void)?
+) async -> [Data] {
+    do {
+        return try await withRegistryTimeout(operation: .read) {
+            try await registry.read(rpId: rpId)
+        }
+    } catch {
+        os_log("CredentialRegistry.read failed: %{public}@",
+               log: registryLog, type: .info,
+               String(describing: error))
+        onRegistryError?(.read, error)
+        return []
+    }
+}
+
+/// Best-effort registry write. On timeout / throw: log + invoke
+/// `onRegistryError`, swallow.
+@available(iOS 18.0, macOS 15.0, *)
+private func registryAddBestEffort(
+    registry: CredentialRegistry,
+    rpId: String,
+    credentialId: Data,
+    onRegistryError: ((RegistryOperation, Error) -> Void)?
+) async {
+    do {
+        try await withRegistryTimeout(operation: .add) {
+            try await registry.add(rpId: rpId, credentialId: credentialId)
+        }
+    } catch {
+        os_log("CredentialRegistry.add failed: %{public}@",
+               log: registryLog, type: .info,
+               String(describing: error))
+        onRegistryError?(.add, error)
+    }
+}
 
 /// Canonical iOS/macOS passkey PRF logic shared between the upstream
 /// Swift `PrfProvider`, the Flutter MethodChannel plugin, and the
@@ -81,22 +187,52 @@ public struct DeriveSeedsOptions {
     /// Per-call assertion allow-list. When non-empty, this list
     /// overrides any caller-supplied default for the duration of the
     /// ceremony. Empty defers to the legacy positional
-    /// `explicitAllowCredentialIds` parameter (for back-compat) and
-    /// then to the `KnownCredentialsStore` fallback inside
-    /// `applyAllowedCredentials`.
+    /// `explicitAllowCredentialIds` parameter (for back-compat).
     public let allowCredentialIds: [Data]
     /// Per-call control over the OS picker. `nil` keeps the historical
     /// default (`.preferImmediatelyAvailableCredentials` on iOS 16+).
     /// `true` is identical to `nil`; `false` opts back into the
     /// cross-device picker (QR sign-in / hybrid transports).
     public let preferImmediatelyAvailableCredentials: Bool?
+    /// Optional opt-in registry. When non-nil, the core auto-merges
+    /// stored IDs into the assertion allow-list before the ceremony
+    /// and auto-adds the asserted credential ID after success. All
+    /// registry calls are best-effort with a 3 second timeout.
+    public let credentialRegistry: CredentialRegistry?
+    /// Fired when a `CredentialRegistry` call throws or times out.
+    /// Best-effort: invocation never blocks ceremony progress.
+    public let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
 
     public init(
         allowCredentialIds: [Data] = [],
-        preferImmediatelyAvailableCredentials: Bool? = nil
+        preferImmediatelyAvailableCredentials: Bool? = nil,
+        credentialRegistry: CredentialRegistry? = nil,
+        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) {
         self.allowCredentialIds = allowCredentialIds
         self.preferImmediatelyAvailableCredentials = preferImmediatelyAvailableCredentials
+        self.credentialRegistry = credentialRegistry
+        self.onRegistryError = onRegistryError
+    }
+}
+
+// MARK: - Create options
+
+/// Per-call shaping options for `createPasskey`. Exposes the same
+/// optional registry plumbing as `DeriveSeedsOptions` so registration
+/// can auto-merge stored IDs into `excludeCredentialIds` and capture
+/// the new credential ID afterwards.
+@available(iOS 18.0, macOS 15.0, *)
+public struct CreatePasskeyOptions {
+    public let credentialRegistry: CredentialRegistry?
+    public let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
+
+    public init(
+        credentialRegistry: CredentialRegistry? = nil,
+        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
+    ) {
+        self.credentialRegistry = credentialRegistry
+        self.onRegistryError = onRegistryError
     }
 }
 
@@ -282,8 +418,7 @@ public final class DefaultPasskeyPresentationAnchorProvider: PasskeyPresentation
 /// - dual-salt assertion (`dualSaltAssertion`)
 /// - bulk derivation walking salts in pairs (`performBulkDerivation`)
 /// - registration with iOS 17.4+ displayName overload (`registerCredential`)
-/// - KnownCredentialsStore auto-merge for `excludeCredentialIds` and
-///   `allowedCredentials`
+/// - opt-in `CredentialRegistry` auto-merge / auto-capture
 /// - `preferImmediatelyAvailableCredentials` for fast-fail on no-cred
 /// - `matchedExcludedCredential` -> `credentialAlreadyExists`
 /// - AAGUID + BE flag extraction from attestation CBOR
@@ -294,12 +429,11 @@ public final class PasskeyAssertionCore {
     private let graceTracker: PostCreateGraceTracker
     private let postCreateGraceTotal: TimeInterval
 
-    /// Optional callback fired with the credential ID returned by every
-    /// successful WebAuthn assertion (sign-in path). Hosts can set this
-    /// to record which credential was just used so they can populate
-    /// `excludeCredentialIds` and `allowedCredentialIds` on subsequent
-    /// requests.
-    public var onAssertionCredentialId: ((Data) -> Void)?
+    /// Most recent credential ID observed during assertion. Captured for
+    /// the binding-layer `SignInResponse.credential_id` field. Cleared
+    /// before every ceremony.
+    private var lastObservedCredentialId: Data?
+    private let lastObservedLock = NSLock()
 
     public init(
         anchorProvider: PasskeyPresentationAnchorProvider? = nil,
@@ -309,6 +443,23 @@ public final class PasskeyAssertionCore {
         self.anchor = anchorProvider ?? DefaultPasskeyPresentationAnchorProvider()
         self.graceTracker = graceTracker
         self.postCreateGraceTotal = postCreateGraceTotal
+    }
+
+    /// Take ownership of the credential ID captured by the most recent
+    /// assertion, clearing the slot. Returns `nil` if no assertion has
+    /// completed since the last call.
+    public func takeLastObservedCredentialId() -> Data? {
+        lastObservedLock.lock()
+        defer { lastObservedLock.unlock() }
+        let value = lastObservedCredentialId
+        lastObservedCredentialId = nil
+        return value
+    }
+
+    private func recordObservedCredentialId(_ id: Data) {
+        lastObservedLock.lock()
+        defer { lastObservedLock.unlock() }
+        lastObservedCredentialId = id
     }
 
     // MARK: Public entry points
@@ -326,7 +477,9 @@ public final class PasskeyAssertionCore {
         userDisplayName: String,
         autoRegister: Bool,
         explicitAllowCredentialIds: [Data] = [],
-        preferImmediatelyAvailableCredentials: Bool? = nil
+        preferImmediatelyAvailableCredentials: Bool? = nil,
+        credentialRegistry: CredentialRegistry? = nil,
+        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) async throws -> Data {
         await graceTracker.consume()
         do {
@@ -334,16 +487,25 @@ public final class PasskeyAssertionCore {
                 saltData: saltData,
                 rpId: rpId,
                 explicitAllowCredentialIds: explicitAllowCredentialIds,
-                preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials
+                preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials,
+                credentialRegistry: credentialRegistry,
+                onRegistryError: onRegistryError
             )
         } catch PasskeyAssertionError.credentialNotFound {
-            guard autoRegister else { throw PasskeyAssertionError.credentialNotFound }
+            guard autoRegister else {
+                throw augmentCredentialNotFound(
+                    explicitAllowCredentialIds: explicitAllowCredentialIds,
+                    credentialRegistry: credentialRegistry
+                )
+            }
             do {
                 _ = try await registerCredential(
                     rpId: rpId,
                     rpName: rpName,
                     userName: userName,
-                    userDisplayName: userDisplayName
+                    userDisplayName: userDisplayName,
+                    credentialRegistry: credentialRegistry,
+                    onRegistryError: onRegistryError
                 )
             } catch PasskeyAssertionError.credentialNotFound {
                 throw PasskeyAssertionError.configuration(
@@ -356,7 +518,9 @@ public final class PasskeyAssertionCore {
                 saltData: saltData,
                 rpId: rpId,
                 explicitAllowCredentialIds: explicitAllowCredentialIds,
-                preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials
+                preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials,
+                credentialRegistry: credentialRegistry,
+                onRegistryError: onRegistryError
             )
         }
     }
@@ -381,10 +545,25 @@ public final class PasskeyAssertionCore {
         // parameter remains for back-compat with older call sites
         // (Swift PasskeyProvider's per-instance `allowCredentialIds`,
         // FFI bridges that haven't been ported yet).
-        let allowIds = options.allowCredentialIds.isEmpty
+        var allowIds = options.allowCredentialIds.isEmpty
             ? explicitAllowCredentialIds
             : options.allowCredentialIds
         let preferImmediate = options.preferImmediatelyAvailableCredentials
+        let registry = options.credentialRegistry
+        let onRegistryError = options.onRegistryError
+        // Auto-merge: read registry IDs and union them into the allow
+        // list before the OS call.
+        if let reg = registry {
+            let registryIds = await registryReadBestEffort(
+                registry: reg, rpId: rpId, onRegistryError: onRegistryError
+            )
+            if !registryIds.isEmpty {
+                var seen = Set(allowIds)
+                for id in registryIds where seen.insert(id).inserted {
+                    allowIds.append(id)
+                }
+            }
+        }
         // Wait out post-create grace before any assertion in the batch.
         // Without this, the immediate setup_wallet derive after register
         // races the credential's PRF-readiness window: dual-salt comes
@@ -403,7 +582,9 @@ public final class PasskeyAssertionCore {
                 userDisplayName: userDisplayName,
                 autoRegister: autoRegister,
                 explicitAllowCredentialIds: allowIds,
-                preferImmediatelyAvailableCredentials: preferImmediate
+                preferImmediatelyAvailableCredentials: preferImmediate,
+                credentialRegistry: registry,
+                onRegistryError: onRegistryError
             )]
         }
         var out: [Data] = []
@@ -417,7 +598,9 @@ public final class PasskeyAssertionCore {
                     salt2: salt2,
                     rpId: rpId,
                     explicitAllowCredentialIds: allowIds,
-                    preferImmediatelyAvailableCredentials: preferImmediate
+                    preferImmediatelyAvailableCredentials: preferImmediate,
+                    credentialRegistry: registry,
+                    onRegistryError: onRegistryError
                 )
                 out.append(pair.0)
                 if let second = pair.1 {
@@ -430,7 +613,9 @@ public final class PasskeyAssertionCore {
                         saltData: salt2,
                         rpId: rpId,
                         explicitAllowCredentialIds: allowIds,
-                        preferImmediatelyAvailableCredentials: preferImmediate
+                        preferImmediatelyAvailableCredentials: preferImmediate,
+                        credentialRegistry: registry,
+                        onRegistryError: onRegistryError
                     )
                     out.append(recovered)
                     i += 2
@@ -440,12 +625,19 @@ public final class PasskeyAssertionCore {
             } catch PasskeyAssertionError.credentialNotFound {
                 // No credential on the device. Single-salt path can fall
                 // back to register; the bulk path defers to single-salt.
-                guard autoRegister else { throw PasskeyAssertionError.credentialNotFound }
+                guard autoRegister else {
+                    throw augmentCredentialNotFound(
+                        explicitAllowCredentialIds: allowIds,
+                        credentialRegistry: registry
+                    )
+                }
                 _ = try await registerCredential(
                     rpId: rpId,
                     rpName: rpName,
                     userName: userName,
-                    userDisplayName: userDisplayName
+                    userDisplayName: userDisplayName,
+                    credentialRegistry: registry,
+                    onRegistryError: onRegistryError
                 )
                 // Retry the same pair after registration.
                 continue
@@ -454,12 +646,12 @@ public final class PasskeyAssertionCore {
         return out
     }
 
-    /// Create a new passkey with PRF support. Auto-merges previously-
-    /// registered credential IDs from `KnownCredentialsStore` into the
-    /// final exclude list so the platform refuses to create a duplicate
-    /// even after a reinstall (the store is iCloud-synced). Records the
-    /// new credential ID after a successful create and arms the
-    /// post-create grace tracker.
+    /// Create a new passkey with PRF support. When the caller supplies
+    /// a `CredentialRegistry`, registered IDs are auto-merged into the
+    /// `excludeCredentialIds` (so the platform refuses to create a
+    /// duplicate even after a reinstall) and the new credential ID is
+    /// auto-added to the registry on success. Arms the post-create
+    /// grace tracker either way.
     @discardableResult
     public func createPasskey(
         rpId: String,
@@ -467,7 +659,8 @@ public final class PasskeyAssertionCore {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: [Data] = [],
-        userId: Data? = nil
+        userId: Data? = nil,
+        options: CreatePasskeyOptions = CreatePasskeyOptions()
     ) async throws -> IosRegisteredCredential {
         let credential = try await registerCredential(
             rpId: rpId,
@@ -475,7 +668,9 @@ public final class PasskeyAssertionCore {
             userName: userName,
             userDisplayName: userDisplayName,
             excludeCredentialIds: excludeCredentialIds,
-            userId: userId
+            userId: userId,
+            credentialRegistry: options.credentialRegistry,
+            onRegistryError: options.onRegistryError
         )
         return credential
     }
@@ -581,38 +776,21 @@ public final class PasskeyAssertionCore {
         let request = provider.createCredentialAssertionRequest(challenge: Self.randomBytes(count: 32))
         applyAllowedCredentials(
             to: request,
-            rpId: rpId,
             explicitAllowCredentialIds: explicitAllowCredentialIds
         )
         configurePrf(request)
         return request
     }
 
-    /// Pin the assertion to credentials we've registered for this rpId
-    /// (read from the iCloud-synced KnownCredentialsStore). With this
+    /// Pin the assertion to caller-supplied credential IDs. With this
     /// set + `preferImmediatelyAvailableCredentials`, iOS auto-routes
-    /// to a single matching credential. No "select your passkey"
-    /// picker between register and the post-register PRF assertion.
-    /// Empty / no known creds means fully discoverable (initial sign-in
-    /// before the user has registered anything on this device).
+    /// to a single matching credential. Empty means fully discoverable.
     private func applyAllowedCredentials(
         to request: ASAuthorizationPlatformPublicKeyCredentialAssertionRequest,
-        rpId: String,
         explicitAllowCredentialIds: [Data]
     ) {
-        // Caller-supplied IDs win when present (upstream PrfProvider
-        // exposes this via constructor for tests / explicit pinning).
         if !explicitAllowCredentialIds.isEmpty {
             request.allowedCredentials = explicitAllowCredentialIds.map {
-                ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
-            }
-            return
-        }
-        let known: [Data] = KnownCredentialsStore.read(rpId: rpId).compactMap {
-            Data(base64Encoded: $0)
-        }
-        if !known.isEmpty {
-            request.allowedCredentials = known.map {
                 ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
             }
         }
@@ -622,7 +800,9 @@ public final class PasskeyAssertionCore {
         saltData: Data,
         rpId: String,
         explicitAllowCredentialIds: [Data],
-        preferImmediatelyAvailableCredentials: Bool? = nil
+        preferImmediatelyAvailableCredentials: Bool? = nil,
+        credentialRegistry: CredentialRegistry? = nil,
+        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) async throws -> Data {
         let request = makeAssertionRequest(
             rpId: rpId,
@@ -638,7 +818,11 @@ public final class PasskeyAssertionCore {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
-        delegate.onAssertionCredentialId = makeCaptureCallback(rpId: rpId)
+        delegate.onAssertionCredentialId = makeCaptureCallback(
+            rpId: rpId,
+            credentialRegistry: credentialRegistry,
+            onRegistryError: onRegistryError
+        )
 
         let preferImmediate = preferImmediatelyAvailableCredentials ?? true
         return try await withCheckedThrowingContinuation { continuation in
@@ -659,7 +843,9 @@ public final class PasskeyAssertionCore {
         salt2: Data?,
         rpId: String,
         explicitAllowCredentialIds: [Data],
-        preferImmediatelyAvailableCredentials: Bool? = nil
+        preferImmediatelyAvailableCredentials: Bool? = nil,
+        credentialRegistry: CredentialRegistry? = nil,
+        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) async throws -> (Data, Data?) {
         let request = makeAssertionRequest(
             rpId: rpId,
@@ -673,7 +859,11 @@ public final class PasskeyAssertionCore {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
-        delegate.onAssertionCredentialId = makeCaptureCallback(rpId: rpId)
+        delegate.onAssertionCredentialId = makeCaptureCallback(
+            rpId: rpId,
+            credentialRegistry: credentialRegistry,
+            onRegistryError: onRegistryError
+        )
 
         let preferImmediate = preferImmediatelyAvailableCredentials ?? true
         return try await withCheckedThrowingContinuation { continuation in
@@ -690,33 +880,32 @@ public final class PasskeyAssertionCore {
         }
     }
 
-    /// Build the per-assertion credential-ID callback. Wraps two
-    /// concerns into one closure passed to the delegate:
+    /// Build the per-assertion credential-ID callback. Two concerns:
     ///
-    /// 1. Capture-on-sign-in: every successful assertion auto-adds the
-    ///    credential ID to the iCloud-synced `KnownCredentialsStore`.
-    ///    `add` is idempotent. This migrates users whose passkey
-    ///    predates our tracking — first assertion seeds the store, so
-    ///    subsequent registration attempts correctly hit the
+    /// 1. Record the credential ID under the core's
+    ///    `lastObservedCredentialId` slot so the binding layer can
+    ///    surface it on `SignInResponse.credential_id`.
+    /// 2. Best-effort `registry.add(...)` when a registry is supplied,
+    ///    so a returning user's pre-tracking credential gets seeded
+    ///    on first assertion and subsequent registrations hit the
     ///    platform-level "already exists" guard via `excludedCredentials`.
-    ///    Without this, the store stays empty until a fresh `createPasskey`
-    ///    runs, and a returning user with a pre-tracking credential
-    ///    can accidentally register a duplicate.
-    /// 2. Host opt-in: forwards to the public `onAssertionCredentialId`
-    ///    callback for any host-side bookkeeping (per-cred metadata,
-    ///    last-seen timestamps, etc.). Always invoked, regardless of
-    ///    whether the cred was already in the store.
-    ///
-    /// Capture happens BEFORE the host callback fires so a host that
-    /// reads the store inside its callback observes the just-seen cred.
-    private func makeCaptureCallback(rpId: String) -> (Data) -> Void {
-        let captured = onAssertionCredentialId
-        return { credentialId in
-            KnownCredentialsStore.add(
-                credentialId: credentialId.base64EncodedString(),
-                rpId: rpId
-            )
-            captured?(credentialId)
+    private func makeCaptureCallback(
+        rpId: String,
+        credentialRegistry: CredentialRegistry?,
+        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
+    ) -> (Data) -> Void {
+        return { [weak self] credentialId in
+            self?.recordObservedCredentialId(credentialId)
+            if let reg = credentialRegistry {
+                Task.detached {
+                    await registryAddBestEffort(
+                        registry: reg,
+                        rpId: rpId,
+                        credentialId: credentialId,
+                        onRegistryError: onRegistryError
+                    )
+                }
+            }
         }
     }
 
@@ -743,7 +932,9 @@ public final class PasskeyAssertionCore {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: [Data] = [],
-        userId: Data? = nil
+        userId: Data? = nil,
+        credentialRegistry: CredentialRegistry? = nil,
+        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) async throws -> IosRegisteredCredential {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = Self.randomBytes(count: 32)
@@ -763,13 +954,16 @@ public final class PasskeyAssertionCore {
         )
 
         // Auto-merge previously-registered credential IDs from the
-        // iCloud-synced KnownCredentialsStore so the platform refuses
-        // to create a duplicate even after a reinstall.
+        // opt-in registry so the platform refuses to create a duplicate
+        // even after a reinstall (when the registry survives).
         var allExclusions = excludeCredentialIds
         var seen = Set(excludeCredentialIds)
-        for known in KnownCredentialsStore.read(rpId: rpId).compactMap({ Data(base64Encoded: $0) }) {
-            if seen.insert(known).inserted {
-                allExclusions.append(known)
+        if let reg = credentialRegistry {
+            let known = await registryReadBestEffort(
+                registry: reg, rpId: rpId, onRegistryError: onRegistryError
+            )
+            for id in known where seen.insert(id).inserted {
+                allExclusions.append(id)
             }
         }
         if !allExclusions.isEmpty {
@@ -797,11 +991,18 @@ public final class PasskeyAssertionCore {
         }
 
         // Record the new credential so subsequent registrations on
-        // this device (or a reinstall) auto-exclude it.
-        KnownCredentialsStore.add(
-            credentialId: credential.credentialId.base64EncodedString(),
-            rpId: rpId
-        )
+        // this device auto-exclude it. Best-effort, fire-and-forget.
+        if let reg = credentialRegistry {
+            let credentialId = credential.credentialId
+            Task.detached {
+                await registryAddBestEffort(
+                    registry: reg,
+                    rpId: rpId,
+                    credentialId: credentialId,
+                    onRegistryError: onRegistryError
+                )
+            }
+        }
         // Arm the post-create grace so the SDK's immediate
         // setup_wallet derive doesn't race the credential's
         // PRF-readiness window. Without this, on Apple Passwords
@@ -816,7 +1017,37 @@ public final class PasskeyAssertionCore {
         _ = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
         return Data(bytes)
     }
+
+    /// Whether a `.credentialNotFound` should carry the registry help
+    /// suffix when the binding layer maps it to its own error type:
+    /// the host had no allow-list and no registry, so the SDK had no
+    /// way to populate `allowCredentials` itself.
+    public static func shouldAugmentCredentialNotFound(
+        explicitAllowCredentialIds: [Data],
+        credentialRegistry: CredentialRegistry?
+    ) -> Bool {
+        explicitAllowCredentialIds.isEmpty && credentialRegistry == nil
+    }
 }
+
+/// Module-level wrapper used inside the core; defers to the type
+/// method so the call sites stay short.
+@available(iOS 18.0, macOS 15.0, *)
+fileprivate func augmentCredentialNotFound(
+    explicitAllowCredentialIds: [Data],
+    credentialRegistry: CredentialRegistry?
+) -> PasskeyAssertionError {
+    return .credentialNotFound
+}
+
+/// Suffix appended to `CredentialNotFound` errors when the host had no
+/// `allowCredentialIds` and no `CredentialRegistry`, pointing at the
+/// docs section that explains the opt-in auto-discovery path.
+@available(iOS 18.0, macOS 15.0, *)
+public let credentialRegistryHelpSuffix: String =
+    " (No CredentialRegistry was supplied to PasskeyProvider; "
+    + "if you expect the SDK to auto-discover known credentials, see "
+    + "https://sdk-doc-spark.breez.technology/guide/passkey.html#credentialregistry)"
 
 // MARK: - Registered credential metadata
 

@@ -43,6 +43,10 @@ pub struct WasmPrfProvider {
     /// Cached `createPasskey` presence probe — JS providers may omit
     /// it (only platform passkey backends implement registration).
     supports_create: OnceLock<bool>,
+    /// Cached `takeLastObservedCredentialId` presence probe — JS
+    /// providers may omit it (only the bundled platform-passkey
+    /// provider currently implements the read-and-clear slot).
+    supports_take_last_observed: OnceLock<bool>,
 }
 
 impl WasmPrfProvider {
@@ -50,6 +54,7 @@ impl WasmPrfProvider {
         Self {
             inner,
             supports_create: OnceLock::new(),
+            supports_take_last_observed: OnceLock::new(),
         }
     }
 
@@ -131,6 +136,25 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         result
             .as_bool()
             .ok_or_else(|| PrfProviderError::Generic("Expected boolean result".to_string()))
+    }
+
+    async fn take_last_observed_credential_id(&self) -> Option<Vec<u8>> {
+        if !self.js_has_method(
+            "takeLastObservedCredentialId",
+            &self.supports_take_last_observed,
+        ) {
+            return None;
+        }
+        let target: &JsValue = self.inner.as_ref();
+        let func = js_sys::Reflect::get(target, &JsValue::from_str("takeLastObservedCredentialId"))
+            .ok()?
+            .dyn_into::<js_sys::Function>()
+            .ok()?;
+        let raw = func.call0(target).ok()?;
+        if raw.is_undefined() || raw.is_null() {
+            return None;
+        }
+        Some(js_sys::Uint8Array::new(&raw).to_vec())
     }
 
     async fn create_passkey(

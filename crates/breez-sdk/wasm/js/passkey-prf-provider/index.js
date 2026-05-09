@@ -142,65 +142,60 @@ function _base64UrlToBytes(s) {
     return out;
 }
 
-/**
- * Default `CredentialRegistry` backed by `window.localStorage`. One
- * JSON-encoded array of base64url credential IDs per RP, keyed
- * `<keyPrefix><rpId>`. Cleared by the browser on site-data clear;
- * not synced across devices.
+/** Hard cap on registry calls. Failures are logged and reported via
+ *  `onRegistryError`; the ceremony proceeds either way.
  */
-export class LocalStorageCredentialRegistry {
-    constructor(keyPrefix = 'breez.spark.passkey.knownCredentials.') {
-        this._prefix = keyPrefix;
-    }
+const REGISTRY_TIMEOUT_MS = 3_000;
 
-    _key(rpId) {
-        return this._prefix + rpId;
-    }
+/** Suffix appended to a `Credential not found` error when the host
+ *  had no `allowCredentialIds` and no `CredentialRegistry`. Lets
+ *  integrators discover the opt-in auto-discovery path from the error.
+ */
+const CREDENTIAL_REGISTRY_HELP_SUFFIX =
+    ' (No CredentialRegistry was supplied to PasskeyProvider; '
+    + 'if you expect the SDK to auto-discover known credentials, see '
+    + 'https://sdk-doc-spark.breez.technology/guide/passkey.html#credentialregistry)';
 
-    _read(rpId) {
-        try {
-            const raw = globalThis.localStorage?.getItem(this._key(rpId));
-            if (!raw) return [];
-            const parsed = JSON.parse(raw);
-            return Array.isArray(parsed) ? parsed.filter((s) => typeof s === 'string') : [];
-        } catch {
+/** Sentinel used to distinguish a timeout from a thrown error. */
+const _REGISTRY_TIMEOUT = Symbol('registryTimeout');
+
+function _withRegistryTimeout(promise) {
+    return Promise.race([
+        promise,
+        new Promise((resolve) => setTimeout(() => resolve(_REGISTRY_TIMEOUT), REGISTRY_TIMEOUT_MS)),
+    ]);
+}
+
+async function _registryReadBestEffort(registry, rpId, onRegistryError) {
+    try {
+        const result = await _withRegistryTimeout(registry.read(rpId));
+        if (result === _REGISTRY_TIMEOUT) {
+            const err = new Error('CredentialRegistry.read timed out');
+            console.warn('[CredentialRegistry] read timed out');
+            onRegistryError?.('read', err);
             return [];
         }
+        return Array.isArray(result) ? result : [];
+    } catch (err) {
+        console.warn('[CredentialRegistry] read failed', err);
+        onRegistryError?.('read', err);
+        return [];
     }
+}
 
-    _write(rpId, ids) {
-        try {
-            if (ids.length === 0) {
-                globalThis.localStorage?.removeItem(this._key(rpId));
-            } else {
-                globalThis.localStorage?.setItem(this._key(rpId), JSON.stringify(ids));
+function _registryAddFireAndForget(registry, rpId, credentialId, onRegistryError) {
+    _withRegistryTimeout(registry.add(rpId, credentialId))
+        .then((result) => {
+            if (result === _REGISTRY_TIMEOUT) {
+                const err = new Error('CredentialRegistry.add timed out');
+                console.warn('[CredentialRegistry] add timed out');
+                onRegistryError?.('add', err);
             }
-        } catch {
-            // best-effort: localStorage quota / disabled
-        }
-    }
-
-    async list(rpId) {
-        return this._read(rpId).map(_base64UrlToBytes);
-    }
-
-    async add(rpId, credentialId) {
-        const encoded = _bytesToBase64Url(credentialId);
-        const ids = this._read(rpId);
-        if (ids.includes(encoded)) return;
-        ids.push(encoded);
-        this._write(rpId, ids);
-    }
-
-    async remove(rpId, credentialId) {
-        const encoded = _bytesToBase64Url(credentialId);
-        const ids = this._read(rpId).filter((s) => s !== encoded);
-        this._write(rpId, ids);
-    }
-
-    async clear(rpId) {
-        this._write(rpId, []);
-    }
+        })
+        .catch((err) => {
+            console.warn('[CredentialRegistry] add failed', err);
+            onRegistryError?.('add', err);
+        });
 }
 
 /**
@@ -270,15 +265,51 @@ export class PasskeyProvider {
         /**
          * Optional persistence for known credential IDs. When set,
          * the provider auto-merges its contents into
-         * `excludeCredentials` on create and writes successful
-         * create / assert IDs back. Omit to disable
-         * auto-population entirely.
+         * `excludeCredentials` on create and `allowCredentials` on
+         * assert, and writes successful create / assert IDs back.
+         * Omit to disable auto-population entirely.
          * @type {CredentialRegistry | undefined}
          */
         this.credentialRegistry = options.credentialRegistry;
+        if (this.credentialRegistry) {
+            for (const method of ['read', 'add', 'remove', 'clear']) {
+                if (typeof this.credentialRegistry[method] !== 'function') {
+                    throw new Error(
+                        `PasskeyProvider: credentialRegistry is missing a "${method}" `
+                        + 'method. Implementations must provide read / add / remove / clear.'
+                    );
+                }
+            }
+        }
+        /**
+         * Optional callback for `CredentialRegistry` failures. Best-
+         * effort: invocation never blocks ceremony progress.
+         * @type {((operation: string, error: Error) => void) | undefined}
+         */
+        this.onRegistryError = options.onRegistryError;
+
+        /**
+         * Slot used to surface the credential ID asserted in the most
+         * recent ceremony to higher-level callers. Read-and-clear via
+         * `takeLastObservedCredentialId()`.
+         * @private
+         */
+        this._lastObservedCredentialId = null;
 
         /** @private shared Promise so concurrent auto-register paths fire one ceremony */
         this._autoRegisterInFlight = null;
+    }
+
+    /**
+     * Take ownership of the credential ID captured by the most recent
+     * successful assertion. Returns `null` if no assertion has
+     * completed since the last call.
+     * @returns {Uint8Array | null}
+     */
+    takeLastObservedCredentialId() {
+        const v = this._lastObservedCredentialId;
+        this._lastObservedCredentialId = null;
+        return v;
     }
 
     /**
@@ -577,7 +608,25 @@ export class PasskeyProvider {
      * @private
      */
     async _performAssertion(prfEval, options) {
-        const allowList = options.allowCredentialIds || [];
+        let allowList = options.allowCredentialIds || [];
+        // Auto-merge registry IDs into the allow-list.
+        if (this.credentialRegistry) {
+            const registryIds = await _registryReadBestEffort(
+                this.credentialRegistry, this.rpId, this.onRegistryError,
+            );
+            if (registryIds.length > 0) {
+                const seen = new Set(allowList.map((id) => _bytesToBase64Url(id)));
+                const merged = [...allowList];
+                for (const id of registryIds) {
+                    const key = _bytesToBase64Url(id);
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        merged.push(id);
+                    }
+                }
+                allowList = merged;
+            }
+        }
         const allowCredentials = allowList.map((id) => ({
             type: 'public-key',
             id,
@@ -623,13 +672,19 @@ export class PasskeyProvider {
             const elapsed = ((typeof performance !== 'undefined' && performance.now)
                 ? performance.now()
                 : Date.now()) - startedAt;
-            throw this._mapAssertionError(error, elapsed);
+            // Append registry help suffix when host had nothing for us
+            // to populate the allow-list with: no per-call IDs, no
+            // registry. Tells integrators about the opt-in path.
+            const augmentNoCredHelp =
+                allowCredentials.length === 0 && !this.credentialRegistry;
+            throw this._mapAssertionError(error, elapsed, augmentNoCredHelp);
         }
         if (!credential) {
             throw new Error('Credential not found');
         }
 
         const credentialIdBytes = new Uint8Array(credential.rawId);
+        this._lastObservedCredentialId = credentialIdBytes;
         if (typeof options.onCredentialId === 'function') {
             try {
                 options.onCredentialId(credentialIdBytes);
@@ -638,11 +693,9 @@ export class PasskeyProvider {
             }
         }
         if (this.credentialRegistry) {
-            try {
-                await this.credentialRegistry.add(this.rpId, credentialIdBytes);
-            } catch {
-                // best-effort: registry write must not block seed return
-            }
+            _registryAddFireAndForget(
+                this.credentialRegistry, this.rpId, credentialIdBytes, this.onRegistryError,
+            );
         }
         return credential;
     }
@@ -792,11 +845,9 @@ export class PasskeyProvider {
         const meta = extractRegistrationMetadata(credential);
         const credentialIdBytes = new Uint8Array(credential.rawId);
         if (this.credentialRegistry) {
-            try {
-                await this.credentialRegistry.add(this.rpId, credentialIdBytes);
-            } catch {
-                // best-effort; registry write must not block return
-            }
+            _registryAddFireAndForget(
+                this.credentialRegistry, this.rpId, credentialIdBytes, this.onRegistryError,
+            );
         }
         return {
             credentialId: credentialIdBytes,
@@ -815,12 +866,9 @@ export class PasskeyProvider {
         if (!this.credentialRegistry) {
             return Array.isArray(callerIds) ? [...callerIds] : [];
         }
-        let stored;
-        try {
-            stored = await this.credentialRegistry.list(this.rpId);
-        } catch {
-            stored = [];
-        }
+        const stored = await _registryReadBestEffort(
+            this.credentialRegistry, this.rpId, this.onRegistryError,
+        );
         const seen = new Set();
         const out = [];
         const push = (id) => {
@@ -867,11 +915,13 @@ export class PasskeyProvider {
      * @returns {Error}
      * @private
      */
-    _mapAssertionError(error, elapsedMs) {
+    _mapAssertionError(error, elapsedMs, augmentNoCredHelp = false) {
         if (!error) return new Error('Unknown WebAuthn error');
         if (error.name === 'NotAllowedError') {
             if (elapsedMs < NO_CRED_FAST_FAIL_MS) {
-                return new Error('Credential not found');
+                const msg = 'Credential not found'
+                    + (augmentNoCredHelp ? CREDENTIAL_REGISTRY_HELP_SUFFIX : '');
+                return new Error(msg);
             }
             if (elapsedMs >= BIOMETRIC_TIMEOUT_MS) {
                 return new PasskeyTimedOutError();
