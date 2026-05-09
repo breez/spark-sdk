@@ -154,5 +154,138 @@ namespace BreezSdkSnippets
             await passkey.StoreLabel(label: "personal");
             // ANCHOR_END: store-label
         }
+
+        async Task<Wallet> SingleCtaOnboarding()
+        {
+            // ANCHOR: signin-fallback-register
+            // Single-CTA onboarding: try silent SignIn first, fall through
+            // to Register on CredentialNotFound. The OS shows ONE prompt
+            // for a returning user (silent assertion succeeds), TWO for a
+            // new user (silent assertion fast-fails, then create + dual-salt
+            // assert).
+            var prfProvider = new CustomPrfProvider();
+            var passkey = new PasskeyClient(prfProvider, null);
+
+            try
+            {
+                // Discovery mode (label=null): derives master + DEFAULT
+                // label in a single ceremony. The fresh-device user
+                // fast-fails in <300ms with no UI shown.
+                var response = await passkey.SignIn(new SignInRequest(
+                    label: null,
+                    extraSalts: new List<NamedSalt>()
+                ));
+                return response.wallet;
+            }
+            catch (PrfProviderException.CredentialNotFound)
+            {
+                // CredentialNotFound is the SDK's classification for "no
+                // matching credential on this device", including iOS's
+                // <300ms fast-fail case where the platform conflates
+                // no-cred with user-cancel.
+                var response = await passkey.Register(new RegisterRequest(
+                    label: "personal",
+                    extraSalts: new List<NamedSalt>(),
+                    excludeCredentialIds: new List<byte[]>()
+                ));
+                return response.wallet;
+            }
+            // ANCHOR_END: signin-fallback-register
+        }
+
+        async Task CheckDomain()
+        {
+            // ANCHOR: domain-association
+            // Verify Apple AASA / Android Asset Links / Web Related Origins
+            // before the first WebAuthn ceremony. Diagnostic only: never
+            // blocks.
+            var prfProvider = new CustomPrfProvider();
+            var result = await prfProvider.CheckDomainAssociation();
+
+            switch (result)
+            {
+                case DomainAssociation.Associated:
+                    // Safe to proceed.
+                    break;
+                case DomainAssociation.NotAssociated notAssociated:
+                    // Configuration is wrong (entitlement missing, AASA
+                    // stale, assetlinks malformed). Surface a
+                    // developer-facing error.
+                    Console.WriteLine($"Domain association failed (source={notAssociated.source}): {notAssociated.reason}");
+                    return;
+                case DomainAssociation.Skipped:
+                    // Verification could not be performed (offline,
+                    // endpoint timeout, no public-suffix match). Proceed
+                    // normally: this is NOT a negative signal.
+                    break;
+            }
+            // ANCHOR_END: domain-association
+        }
+
+        async Task<Wallet> RecoverFromAlreadyExists()
+        {
+            // ANCHOR: recover-already-exists
+            // The OS rejected Register because the user's password
+            // manager already holds a credential matching
+            // `excludeCredentialIds`. Route the user to the sign-in path:
+            // the OS picker will surface the existing credential and the
+            // SDK's identity cache will warm up on the assertion.
+            var prfProvider = new CustomPrfProvider();
+            var passkey = new PasskeyClient(prfProvider, null);
+
+            try
+            {
+                var response = await passkey.Register(new RegisterRequest(
+                    label: "personal",
+                    extraSalts: new List<NamedSalt>(),
+                    excludeCredentialIds: new List<byte[]>
+                    {
+                        // app-persisted credential IDs from prior registrations
+                    }
+                ));
+                return response.wallet;
+            }
+            catch (PrfProviderException.CredentialAlreadyExists)
+            {
+                // Flip to sign-in. The existing credential's PRF output
+                // is the same wallet seed the host would have minted on
+                // register.
+                var response = await passkey.SignIn(new SignInRequest(
+                    label: "personal",
+                    extraSalts: new List<NamedSalt>()
+                ));
+                return response.wallet;
+            }
+            // ANCHOR_END: recover-already-exists
+        }
+
+        async Task<SignInResponse> HandleTimeout()
+        {
+            // ANCHOR: handle-timeout
+            // The OS biometric inactivity timeout (~55s+) tore down the
+            // prompt without user intent. Distinct from a real cancel:
+            // hosts may surface a re-prompt UI without treating it as the
+            // user opting out. The SDK fires
+            // PrfProviderException.UserTimedOut when assertion or register
+            // elapsed time crosses 55_000 ms.
+            var prfProvider = new CustomPrfProvider();
+            var passkey = new PasskeyClient(prfProvider, null);
+
+            try
+            {
+                return await passkey.SignIn(new SignInRequest(
+                    label: "personal",
+                    extraSalts: new List<NamedSalt>()
+                ));
+            }
+            catch (PrfProviderException.UserTimedOut)
+            {
+                // Show a sticky retry screen with timeout-specific copy.
+                // Do NOT auto-retry without user input.
+                Console.WriteLine("Sign-in timed out: show \"Try Again\" UI.");
+                throw;
+            }
+            // ANCHOR_END: handle-timeout
+        }
     }
 }

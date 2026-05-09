@@ -7,6 +7,7 @@ from breez_sdk_spark import (
     NostrRelayConfig,
     PasskeyClient,
     PrfProvider,
+    PrfProviderError,
     RegisterRequest,
     RegisteredCredential,
     SignInRequest,
@@ -131,3 +132,106 @@ async def store_label():
     # store_label uses the cached identity for free (1 OS prompt total).
     await passkey.store_label(label="personal")
     # ANCHOR_END: store-label
+
+
+async def single_cta_onboarding():
+    # ANCHOR: signin-fallback-register
+    # Single-CTA onboarding: try silent sign_in first, fall through to
+    # register on CredentialNotFound. The OS shows ONE prompt for a
+    # returning user (silent assertion succeeds), TWO for a new user
+    # (silent assertion fast-fails, then create + dual-salt assert).
+    prf_provider = CustomPrfProvider()
+    passkey = PasskeyClient(prf_provider, None)
+
+    try:
+        # Discovery mode (label=None): derives master + DEFAULT label
+        # in a single ceremony. The fresh-device user fast-fails in
+        # <300ms with no UI shown.
+        response = await passkey.sign_in(SignInRequest(label=None, extra_salts=[]))
+        return response.wallet
+    except PrfProviderError.CredentialNotFound:
+        # CredentialNotFound is the SDK's classification for "no matching
+        # credential on this device", including iOS's <300ms fast-fail
+        # case where the platform conflates no-cred with user-cancel.
+        response = await passkey.register(
+            RegisterRequest(
+                label="personal",
+                extra_salts=[],
+                exclude_credential_ids=[],
+            )
+        )
+        return response.wallet
+    # ANCHOR_END: signin-fallback-register
+
+
+async def check_domain():
+    # ANCHOR: domain-association
+    # Verify Apple AASA / Android Asset Links / Web Related Origins
+    # before the first WebAuthn ceremony. Diagnostic only: never blocks.
+    prf_provider = CustomPrfProvider()
+    result = await prf_provider.check_domain_association()
+
+    if isinstance(result, DomainAssociation.ASSOCIATED):
+        # Safe to proceed.
+        pass
+    elif isinstance(result, DomainAssociation.NOT_ASSOCIATED):
+        # Configuration is wrong (entitlement missing, AASA stale,
+        # assetlinks malformed). Surface a developer-facing error.
+        print(f"Domain association failed (source={result.source}): {result.reason}")
+        return
+    elif isinstance(result, DomainAssociation.SKIPPED):
+        # Verification could not be performed (offline, endpoint
+        # timeout, no public-suffix match). Proceed normally: this
+        # is NOT a negative signal.
+        pass
+    # ANCHOR_END: domain-association
+
+
+async def recover_from_already_exists():
+    # ANCHOR: recover-already-exists
+    # The OS rejected register because the user's password manager
+    # already holds a credential matching `exclude_credential_ids`.
+    # Route the user to the sign-in path: the OS picker will surface
+    # the existing credential and the SDK's identity cache will warm
+    # up on the assertion.
+    prf_provider = CustomPrfProvider()
+    passkey = PasskeyClient(prf_provider, None)
+
+    try:
+        await passkey.register(
+            RegisterRequest(
+                label="personal",
+                extra_salts=[],
+                exclude_credential_ids=[
+                    # app-persisted credential IDs from prior registrations
+                ],
+            )
+        )
+    except PrfProviderError.CredentialAlreadyExists:
+        # Flip to sign-in. The existing credential's PRF output is
+        # the same wallet seed the host would have minted on register.
+        response = await passkey.sign_in(
+            SignInRequest(label="personal", extra_salts=[])
+        )
+        return response.wallet
+    # ANCHOR_END: recover-already-exists
+
+
+async def handle_timeout():
+    # ANCHOR: handle-timeout
+    # The OS biometric inactivity timeout (~55s+) tore down the prompt
+    # without user intent. Distinct from a real cancel: hosts may
+    # surface a re-prompt UI without treating it as the user opting
+    # out. The SDK fires PrfProviderError.UserTimedOut when assertion
+    # or register elapsed time crosses 55_000 ms.
+    prf_provider = CustomPrfProvider()
+    passkey = PasskeyClient(prf_provider, None)
+
+    try:
+        return await passkey.sign_in(SignInRequest(label="personal", extra_salts=[]))
+    except PrfProviderError.UserTimedOut:
+        # Show a sticky retry screen with timeout-specific copy.
+        # Do NOT auto-retry without user input.
+        print("Sign-in timed out: show \"Try Again\" UI.")
+        raise
+    # ANCHOR_END: handle-timeout

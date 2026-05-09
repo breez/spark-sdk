@@ -135,3 +135,129 @@ Future<void> storeLabel() async {
   await passkey.storeLabel(label: "personal");
   // ANCHOR_END: store-label
 }
+
+Future<Wallet> singleCtaOnboarding() async {
+  // ANCHOR: signin-fallback-register
+  // Single-CTA onboarding: try silent signIn first, fall through to
+  // register on noCredential. The OS shows ONE prompt for a returning
+  // user (silent assertion succeeds), TWO for a new user (silent
+  // assertion fast-fails, then create + dual-salt assert).
+  final prfProvider = PasskeyProvider();
+  final passkey = PasskeyClient(
+    deriveSeeds: prfProvider.deriveSeeds,
+    isSupported: prfProvider.isSupported,
+    createPasskey: prfProvider.createPasskey,
+  );
+
+  try {
+    // Discovery mode (label=null): derives master + DEFAULT label in
+    // a single ceremony. The fresh-device user fast-fails in <300ms
+    // with no UI shown.
+    final response = await passkey.signIn(
+      request: SignInRequest(label: null, extraSalts: []),
+    );
+    return response.wallet;
+  } on PasskeyPrfException catch (e) {
+    if (e.code != 'noCredential') rethrow;
+    // The 'noCredential' code surfaces "no matching credential on this
+    // device", including iOS's <300ms fast-fail case where the
+    // platform conflates no-cred with user-cancel.
+    final response = await passkey.register(
+      request: RegisterRequest(
+        label: 'personal',
+        extraSalts: [],
+        excludeCredentialIds: [],
+      ),
+    );
+    return response.wallet;
+  }
+  // ANCHOR_END: signin-fallback-register
+}
+
+Future<void> checkDomain() async {
+  // ANCHOR: domain-association
+  // Verify Apple AASA / Android Asset Links before the first WebAuthn
+  // ceremony. Diagnostic only: never blocks.
+  final prfProvider = PasskeyProvider();
+  final result = await prfProvider.checkDomainAssociation();
+
+  if (result is DomainAssociationAssociated) {
+    // Safe to proceed.
+  } else if (result is DomainAssociationNotAssociated) {
+    // Configuration is wrong (entitlement missing, AASA stale,
+    // assetlinks malformed). Surface a developer-facing error.
+    print(
+        "Domain association failed (source=${result.source}): ${result.reason}");
+    return;
+  } else if (result is DomainAssociationSkipped) {
+    // Verification could not be performed (offline, endpoint timeout).
+    // Proceed normally: this is NOT a negative signal.
+  }
+  // ANCHOR_END: domain-association
+}
+
+Future<Wallet?> recoverFromAlreadyExists() async {
+  // ANCHOR: recover-already-exists
+  // The OS rejected register because the user's password manager
+  // already holds a credential matching `excludeCredentialIds`.
+  // Route the user to the sign-in path: the OS picker will surface
+  // the existing credential and the SDK's identity cache will warm
+  // up on the assertion.
+  final prfProvider = PasskeyProvider();
+  final passkey = PasskeyClient(
+    deriveSeeds: prfProvider.deriveSeeds,
+    isSupported: prfProvider.isSupported,
+    createPasskey: prfProvider.createPasskey,
+  );
+
+  try {
+    final response = await passkey.register(
+      request: RegisterRequest(
+        label: 'personal',
+        extraSalts: [],
+        excludeCredentialIds: [
+          // app-persisted credential IDs from prior registrations
+        ],
+      ),
+    );
+    return response.wallet;
+  } on PasskeyPrfException catch (e) {
+    if (e.code != 'credentialAlreadyExists') rethrow;
+    // Flip to sign-in. The existing credential's PRF output is the
+    // same wallet seed the host would have minted on register.
+    final response = await passkey.signIn(
+      request: SignInRequest(label: 'personal', extraSalts: []),
+    );
+    return response.wallet;
+  }
+  // ANCHOR_END: recover-already-exists
+}
+
+Future<SignInResponse> handleTimeout() async {
+  // ANCHOR: handle-timeout
+  // The OS biometric inactivity timeout (~55s+) tore down the prompt
+  // without user intent. Distinct from a real cancel: hosts may
+  // surface a re-prompt UI without treating it as the user opting
+  // out. The SDK fires PasskeyPrfException with code 'userTimedOut'
+  // when assertion or register elapsed time crosses 55_000 ms.
+  final prfProvider = PasskeyProvider();
+  final passkey = PasskeyClient(
+    deriveSeeds: prfProvider.deriveSeeds,
+    isSupported: prfProvider.isSupported,
+    createPasskey: prfProvider.createPasskey,
+  );
+
+  try {
+    return await passkey.signIn(
+      request: SignInRequest(label: 'personal', extraSalts: []),
+    );
+  } on PasskeyPrfException catch (e) {
+    if (e.code == 'userTimedOut') {
+      // Show a sticky retry screen with timeout-specific copy.
+      // Do NOT auto-retry without user input.
+      print("Sign-in timed out: show \"Try Again\" UI.");
+    }
+    rethrow;
+  }
+  // ANCHOR_END: handle-timeout
+}
