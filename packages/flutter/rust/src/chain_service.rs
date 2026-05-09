@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use breez_sdk_spark::{ChainApiType, Credentials, Network};
-use flutter_rust_bridge::frb;
 
 /// Rust-built handle to a [`breez_sdk_spark::BitcoinChainService`].
 ///
@@ -19,15 +18,14 @@ pub struct BitcoinChainServiceHandle {
 /// must use the same `network`.
 ///
 /// For one-off, non-shared use, prefer `with_rest_chain_service`.
-#[frb(sync)]
 #[must_use]
-pub fn new_rest_chain_service(
+pub async fn new_rest_chain_service(
     url: String,
     network: Network,
     api_type: ChainApiType,
     credentials: Option<Credentials>,
 ) -> BitcoinChainServiceHandle {
     BitcoinChainServiceHandle {
-        inner: breez_sdk_spark::new_rest_chain_service(url, network, api_type, credentials),
+        inner: breez_sdk_spark::new_rest_chain_service(url, network, api_type, credentials).await,
     }
 }
