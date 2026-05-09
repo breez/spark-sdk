@@ -4,6 +4,7 @@ Using the SDK Builder gives you more control over the initialization and modular
 
 - [Storage](#with-storage) to manage stored data
 - [PostgreSQL Connection Pool](#with-postgres-connection-pool) as an alternative storage backend
+- [MySQL Connection Pool](#with-mysql-connection-pool) as an alternative storage backend
 - [Bitcoin Chain Service](#with-chain-service) to provide network data
 - [Shared REST Chain Service](#with-shared-rest-chain-service) to share the chain service HTTP client across SDK instances
 - [LNURL Client](#with-lnurl-client) to make REST requests
@@ -41,6 +42,28 @@ The SDK includes a PostgreSQL backend as an alternative to file-based storage. C
 Sharing the same PostgreSQL database with multiple SDK instances is incompatible with real-time sync. See [Real-time sync server URL](./config.md#real-time-sync-server-url) for how to disable it.
 
 The PostgreSQL tree store can use the same or a separate PostgreSQL database as the PostgreSQL storage. The tree store uses its own set of tables prefixed with `tree_`.
+
+</div>
+
+<h2 id="with-mysql-connection-pool">
+    <a class="header" href="#with-mysql-connection-pool">With MySQL Connection Pool</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_mysql_connection_pool">API docs</a>
+</h2>
+
+The SDK includes a MySQL backend (MySQL 8.0+) as an alternative to file-based storage. Construct a connection pool once with {{#name create_mysql_connection_pool}} and pass it to the builder via {{#name with_mysql_connection_pool}} — this configures MySQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. The same pool can be shared across multiple `SdkBuilder` instances; per-tenant scoping (rows isolated by seed identity) is preserved.
+
+**Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
+
+{{#tabs sdk_building:init-sdk-mysql}}
+
+<div class="warning">
+<h4>Developer note</h4>
+
+MySQL only accepts URL-form connection strings (`mysql://user:password@host:3306/dbname`); the key=value form supported by PostgreSQL is not available. TLS is enabled by appending `?ssl-mode=required` (or `verify_ca` / `verify_identity`); when using `verify_ca` or `verify_identity` you can supply a custom `root_ca_pem`.
+
+Sharing the same MySQL database with multiple SDK instances is incompatible with real-time sync. See [Real-time sync server URL](./config.md#real-time-sync-server-url) for how to disable it.
+
+The MySQL tree store can use the same or a separate MySQL database as the MySQL storage. The tree store uses its own set of tables prefixed with `tree_`.
 
 </div>
 

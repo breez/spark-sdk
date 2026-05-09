@@ -105,3 +105,39 @@ func initSdkPostgres() async throws -> BreezSdk {
 
     return sdk
 }
+
+func initSdkMysql() async throws -> BreezSdk {
+    // ANCHOR: init-sdk-mysql
+    // Construct the seed using a mnemonic, entropy or passkey
+    let mnemonic = "<mnemonic words>"
+    let seed = Seed.mnemonic(mnemonic: mnemonic, passphrase: nil)
+
+    // Create the default config
+    var config = defaultConfig(network: Network.mainnet)
+    config.apiKey = "<breez api key>"
+
+    // Configure MySQL backend (MySQL 8.0+).
+    // Connection string format (URL only):
+    //   "mysql://user:password@host:3306/dbname?ssl-mode=required"
+    var mysqlConfig = defaultMysqlStorageConfig(
+        connectionString: "mysql://user:password@localhost:3306/spark"
+    )
+    // Optionally pool settings can be adjusted. Some examples:
+    mysqlConfig.maxPoolSize = UInt32(8) // Max connections in pool
+    mysqlConfig.recycleTimeoutSecs = UInt64(60) // Recycle idle connections after this many seconds
+    // Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
+    // mysqlConfig.rootCaPem = "-----BEGIN CERTIFICATE-----\n..."
+
+    // Construct the connection pool. The same pool can be passed to
+    // multiple SdkBuilders to share connections across SDKs; per-tenant
+    // scoping (rows isolated by seed identity) is preserved.
+    let pool = try createMysqlConnectionPool(config: mysqlConfig)
+
+    // Build the SDK with MySQL backend (storage, tree store, and token store)
+    let builder = SdkBuilder(config: config, seed: seed)
+    await builder.withMysqlConnectionPool(pool: pool)
+    let sdk = try await builder.build()
+    // ANCHOR_END: init-sdk-mysql
+
+    return sdk
+}

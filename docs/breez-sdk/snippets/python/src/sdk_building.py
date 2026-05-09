@@ -4,6 +4,8 @@ from breez_sdk_spark import (
     default_config,
     default_postgres_storage_config,
     create_postgres_connection_pool,
+    default_mysql_storage_config,
+    create_mysql_connection_pool,
     Network,
     ProvisionalPayment,
     SdkBuilder,
@@ -122,3 +124,42 @@ async def init_sdk_postgres():
         logging.error(error)
         raise
 # ANCHOR_END: init-sdk-postgres
+
+
+# ANCHOR: init-sdk-mysql
+async def init_sdk_mysql():
+    # Construct the seed using a mnemonic, entropy or passkey
+    mnemonic = "<mnemonic words>"
+    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+
+    # Create the default config
+    config = default_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    # Configure MySQL backend (MySQL 8.0+).
+    # Connection string format (URL only):
+    #   "mysql://user:password@host:3306/dbname?ssl-mode=required"
+    mysql_config = default_mysql_storage_config(
+        connection_string="mysql://user:password@localhost:3306/spark"
+    )
+    # Optionally pool settings can be adjusted. Some examples:
+    mysql_config.max_pool_size = 8  # Max connections in pool
+    mysql_config.recycle_timeout_secs = 60  # Recycle idle connections after this many seconds
+    # Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
+    # mysql_config.root_ca_pem = "-----BEGIN CERTIFICATE-----\n..."
+
+    # Construct the connection pool. The same pool can be passed to multiple
+    # SdkBuilders to share connections across SDKs; per-tenant scoping (rows
+    # isolated by seed identity) is preserved.
+    pool = create_mysql_connection_pool(config=mysql_config)
+
+    try:
+        # Build the SDK with MySQL backend (storage, tree store, and token store)
+        builder = SdkBuilder(config=config, seed=seed)
+        await builder.with_mysql_connection_pool(pool=pool)
+        sdk = await builder.build()
+        return sdk
+    except Exception as error:
+        logging.error(error)
+        raise
+# ANCHOR_END: init-sdk-mysql

@@ -10,6 +10,7 @@ anyhow = "1"
 async-trait = "0.1.89"
 breez-sdk-spark = { path = "../../../../crates/breez-sdk/core", features = [
     "postgres",
+    "mysql",
     "passkey",
 ] }
 log = "0.4"
