@@ -51,7 +51,7 @@ fn dart_error_to_prf(err: anyhow::Error) -> PrfProviderError {
     if lower.contains("usercancelled") {
         PrfProviderError::UserCancelled
     } else if lower.contains("nocredential") {
-        PrfProviderError::CredentialNotFound
+        PrfProviderError::CredentialNotFound(msg)
     } else if lower.contains("prfnotsupported") {
         PrfProviderError::PrfNotSupported
     } else if lower.contains("credentialalreadyexists") {
@@ -235,7 +235,7 @@ mod tests {
         );
         let err = provider.derive_seeds(req(&["test"])).await.unwrap_err();
         assert!(
-            matches!(err, PrfProviderError::CredentialNotFound),
+            matches!(err, PrfProviderError::CredentialNotFound(_)),
             "Expected CredentialNotFound, got: {err:?}"
         );
     }

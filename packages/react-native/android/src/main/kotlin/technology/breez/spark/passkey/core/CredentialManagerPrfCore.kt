@@ -1155,7 +1155,10 @@ public object CredentialManagerPrfCore {
             CredentialManagerPrfCoreException(classifyCancellation(elapsedMs))
 
         is NoCredentialException ->
-            CredentialManagerPrfCoreException(Kind.CredentialNotFound)
+            CredentialManagerPrfCoreException(
+                Kind.CredentialNotFound,
+                message ?: "No matching credential on this device",
+            )
 
         // Surface the platform's duplicate-prevention check as a typed
         // kind so callers can route the user to the sign-in path instead

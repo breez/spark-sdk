@@ -127,6 +127,21 @@ export class PasskeyTimedOutError extends Error {
     }
 }
 
+/**
+ * Thrown when `deriveSeeds` cannot match a credential. Surfaces both
+ * the WebAuthn fast-fail `NotAllowedError` (no credential on this
+ * device for the RP) and the bare "no credential available" path.
+ * `error.message` carries diagnostic detail and may include the
+ * `CredentialRegistry` help suffix when the host had no allow-list
+ * and no registry configured.
+ */
+export class PasskeyCredentialNotFoundError extends Error {
+    constructor(message = 'Credential not found') {
+        super(message);
+        this.name = 'PasskeyCredentialNotFoundError';
+    }
+}
+
 function _bytesToBase64Url(bytes) {
     let s = '';
     for (const b of bytes) s += String.fromCharCode(b);
@@ -680,7 +695,7 @@ export class PasskeyProvider {
             throw this._mapAssertionError(error, elapsed, augmentNoCredHelp);
         }
         if (!credential) {
-            throw new Error('Credential not found');
+            throw new PasskeyCredentialNotFoundError();
         }
 
         const credentialIdBytes = new Uint8Array(credential.rawId);
@@ -921,7 +936,7 @@ export class PasskeyProvider {
             if (elapsedMs < NO_CRED_FAST_FAIL_MS) {
                 const msg = 'Credential not found'
                     + (augmentNoCredHelp ? CREDENTIAL_REGISTRY_HELP_SUFFIX : '');
-                return new Error(msg);
+                return new PasskeyCredentialNotFoundError(msg);
             }
             if (elapsedMs >= BIOMETRIC_TIMEOUT_MS) {
                 return new PasskeyTimedOutError();

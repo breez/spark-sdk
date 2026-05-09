@@ -26,8 +26,9 @@ impl YubiKeyPrfProvider {
     pub fn new() -> Result<Self, PrfProviderError> {
         let mut cr = ChallengeResponse::new()
             .map_err(|e| PrfProviderError::Generic(format!("Failed to init YubiKey: {e}")))?;
-        cr.find_device()
-            .map_err(|_| PrfProviderError::CredentialNotFound)?;
+        cr.find_device().map_err(|_| {
+            PrfProviderError::CredentialNotFound("No YubiKey connected".to_string())
+        })?;
         Ok(Self)
     }
 }
@@ -36,9 +37,9 @@ impl YubiKeyPrfProvider {
     fn derive_one_blocking(salt: &str) -> Result<Vec<u8>, PrfProviderError> {
         let mut cr = ChallengeResponse::new()
             .map_err(|e| PrfProviderError::Generic(format!("YubiKey init failed: {e}")))?;
-        let device = cr
-            .find_device()
-            .map_err(|_| PrfProviderError::CredentialNotFound)?;
+        let device = cr.find_device().map_err(|_| {
+            PrfProviderError::CredentialNotFound("No YubiKey connected".to_string())
+        })?;
 
         let config = Config::new_from(device)
             .set_mode(Mode::Sha1)

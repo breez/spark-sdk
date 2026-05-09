@@ -56,8 +56,8 @@ pub enum PrfProviderError {
     UserTimedOut,
 
     /// No credential found
-    #[error("Credential not found")]
-    CredentialNotFound,
+    #[error("Credential not found: {0}")]
+    CredentialNotFound(String),
 
     /// Authentication failed
     #[error("Authentication failed: {0}")]
@@ -91,7 +91,7 @@ impl PrfProviderError {
         match self {
             Self::UserCancelled => ErrorKind::Cancel,
             Self::UserTimedOut => ErrorKind::Timeout,
-            Self::CredentialNotFound => ErrorKind::NoCredential,
+            Self::CredentialNotFound(_) => ErrorKind::NoCredential,
             Self::PrfNotSupported | Self::PrfEvaluationFailed(_) => ErrorKind::PrfUnsupported,
             Self::Configuration(_) => ErrorKind::Configuration,
             Self::CredentialAlreadyExists(_) => ErrorKind::AlreadyExists,

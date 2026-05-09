@@ -149,6 +149,9 @@ const singleCtaOnboarding = async () => {
     const response = await passkey.signIn({ label: undefined, extraSalts: [] })
     return response.wallet
   } catch (error) {
+    // CredentialNotFound now carries a diagnostic message (including
+    // the `CredentialRegistry` help suffix when applicable); branching
+    // on the typed name still works regardless of payload.
     if (!isCredentialNotFound(error)) throw error
 
     // No credential. Onboard a new user.

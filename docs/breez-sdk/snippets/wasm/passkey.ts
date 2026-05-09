@@ -152,8 +152,10 @@ const singleCtaOnboarding = async () => {
     return response.wallet
   } catch (error) {
     // CredentialNotFound is the SDK's classification for "no matching
-    // credential on this device" — including iOS's <300ms fast-fail
+    // credential on this device", including iOS's <300ms fast-fail
     // case where the platform conflates no-cred with user-cancel.
+    // The error now carries a String payload with diagnostic detail
+    // (e.g. the `CredentialRegistry` help suffix when applicable).
     if (!isCredentialNotFound(error)) throw error
 
     // No credential. Onboard a new user.

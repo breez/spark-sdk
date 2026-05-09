@@ -168,9 +168,11 @@ impl Fido2PrfProvider {
             .get_assertion_with_args(&args)
             .map_err(|e| map_fido2_error(e, "PRF assertion failed"))?;
 
-        let assertion = assertions
-            .first()
-            .ok_or(PrfProviderError::CredentialNotFound)?;
+        let assertion = assertions.first().ok_or_else(|| {
+            PrfProviderError::CredentialNotFound(
+                "FIDO2 device returned no assertion".to_string(),
+            )
+        })?;
 
         // Extract hmac-secret output from extensions
         for ext in &assertion.extensions {
@@ -194,7 +196,7 @@ impl Fido2PrfProvider {
             let pin = Self::get_pin(&cache)?;
             match Self::get_assertion_with_prf(&rp_id, transformed_salt, &pin) {
                 Ok(output) => Ok(output),
-                Err(PrfProviderError::CredentialNotFound) => {
+                Err(PrfProviderError::CredentialNotFound(_)) => {
                     eprintln!("No passkey found for {rp_id}.");
                     Self::register_discoverable_credential(&rp_id, &rp_name, &pin)?;
                     Self::get_assertion_with_prf(&rp_id, transformed_salt, &pin)
@@ -242,7 +244,7 @@ fn map_fido2_error(e: impl std::fmt::Display, context: &str) -> PrfProviderError
     let msg = format!("{e}");
 
     if msg.contains("NO_CREDENTIALS") || msg.contains("no credential") {
-        PrfProviderError::CredentialNotFound
+        PrfProviderError::CredentialNotFound(format!("{context}: {e}"))
     } else if msg.contains("PIN") && (msg.contains("invalid") || msg.contains("Invalid")) {
         PrfProviderError::AuthenticationFailed("Invalid PIN".into())
     } else if msg.contains("PIN") && msg.contains("blocked") {

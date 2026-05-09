@@ -191,8 +191,8 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
             return FlutterError(code: "ERR_USER_CANCELLED", message: "User cancelled authentication", details: nil)
         case .userTimedOut:
             return FlutterError(code: "ERR_USER_TIMED_OUT", message: "Authenticator timed out", details: nil)
-        case .credentialNotFound:
-            return FlutterError(code: "ERR_NO_CREDENTIAL", message: "No matching passkey credential found", details: nil)
+        case .credentialNotFound(let msg):
+            return FlutterError(code: "ERR_NO_CREDENTIAL", message: msg, details: nil)
         case .credentialAlreadyExists(let msg):
             return FlutterError(code: "ERR_CREDENTIAL_ALREADY_EXISTS", message: msg, details: nil)
         case .prfNotSupported:
