@@ -9,6 +9,7 @@ RCT_EXTERN_METHOD(deriveSeeds:(NSArray *)salts
                   userDisplayName:(NSString *)userDisplayName
                   autoRegister:(BOOL)autoRegister
                   allowCredentialIds:(NSArray *)allowCredentialIds
+                  preferImmediatelyAvailableCredentials:(nullable NSNumber *)preferImmediatelyAvailableCredentials
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 

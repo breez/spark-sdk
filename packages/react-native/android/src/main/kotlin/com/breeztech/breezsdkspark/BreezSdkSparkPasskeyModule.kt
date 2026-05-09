@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import technology.breez.spark.passkey.KnownCredentialsStore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
+import technology.breez.spark.passkey.core.DeriveSeedsOptions
 
 /**
  * Holds the next derive call for up to [POST_CREATE_GRACE_TOTAL_MS]
@@ -104,6 +105,7 @@ class BreezSdkSparkPasskeyModule(
         userDisplayName: String,
         autoRegister: Boolean,
         allowCredentialIdsArg: com.facebook.react.bridge.ReadableArray,
+        preferImmediatelyAvailableCredentials: Boolean?,
         promise: Promise,
     ) {
         val activity = currentActivity
@@ -144,7 +146,10 @@ class BreezSdkSparkPasskeyModule(
                     userName = userName,
                     userDisplayName = userDisplayName,
                     autoRegister = autoRegister,
-                    allowCredentialIds = allowIds,
+                    options = DeriveSeedsOptions(
+                        allowCredentialIds = allowIds,
+                        preferImmediatelyAvailableCredentials = preferImmediatelyAvailableCredentials,
+                    ),
                 )
                 // Encode each seed as base64 so the React bridge can carry it
                 // as an array of strings. JS side base64-decodes back to

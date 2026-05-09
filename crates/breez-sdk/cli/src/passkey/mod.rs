@@ -101,6 +101,7 @@ pub async fn resolve_passkey_seed(
             .sign_in(SignInRequest {
                 label: None,
                 extra_salts: vec![],
+                ..Default::default()
             })
             .await
             .map_err(|e| anyhow!("Failed to discover labels: {e}"))?;
@@ -147,6 +148,7 @@ pub async fn resolve_passkey_seed(
         .sign_in(SignInRequest {
             label,
             extra_salts: vec![],
+            ..Default::default()
         })
         .await
         .map_err(|e| anyhow!("Failed to derive wallet: {e}"))?;

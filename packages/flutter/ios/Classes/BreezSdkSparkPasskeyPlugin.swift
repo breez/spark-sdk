@@ -120,6 +120,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         } else if let rawIds = args["allowCredentialIds"] as? [FlutterStandardTypedData] {
             allowCredentialIds = rawIds.map { $0.data }
         }
+        let preferImmediate = args["preferImmediatelyAvailableCredentials"] as? Bool
 
         Task { @MainActor in
             do {
@@ -130,7 +131,10 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                     userName: userName,
                     userDisplayName: userDisplayName,
                     autoRegister: autoRegister,
-                    explicitAllowCredentialIds: allowCredentialIds
+                    options: DeriveSeedsOptions(
+                        allowCredentialIds: allowCredentialIds,
+                        preferImmediatelyAvailableCredentials: preferImmediate
+                    )
                 )
                 result(seeds.map { $0.base64EncodedString() })
             } catch let err as PasskeyAssertionError {

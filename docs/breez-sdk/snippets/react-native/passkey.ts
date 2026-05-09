@@ -54,7 +54,22 @@ const connectWithPasskey = async () => {
 
   // signIn derives the wallet seed for an existing credential. With
   // bulk PRF on iOS+Android this is one OS prompt for master + label.
-  const response = await passkey.signIn({ label: 'personal', extraSalts: [] })
+  //
+  // Per-call shaping:
+  // - allowCredentialIds: server-driven sign-in passes the user's known
+  //   credential IDs from /passkey/options here so the assertion is
+  //   pinned to credentials the server has on record. Empty (default)
+  //   lets the platform pick any matching credential.
+  // - preferImmediatelyAvailableCredentials: true (default) suppresses
+  //   the cross-device QR / hybrid picker so a missing local credential
+  //   surfaces as CredentialNotFound; pass false to allow cross-device
+  //   sign-in.
+  const response = await passkey.signIn({
+    label: 'personal',
+    extraSalts: [],
+    allowCredentialIds: [],
+    preferImmediatelyAvailableCredentials: true,
+  })
 
   const config = defaultConfig(Network.Mainnet)
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })

@@ -306,13 +306,13 @@ export class PasskeyProvider {
 
     /**
      * Set the immediate-mediation option on the get() request, picking
-     * the right field name across the spec transition. Chrome ≤ 144
+     * the right field name across the spec transition. Chrome <= 144
      * implements the original `mediation: 'immediate'`; Chrome 145+
      * renamed it to `uiMode: 'immediate'`. Both names are set when
      * the field-rename milestone is unknown so older Chromes ignore
      * `uiMode` (unknown property) and newer Chromes ignore the
-     * `mediation` value because the enum no longer accepts it — but
-     * since both throw TypeError if a known property gets an unknown
+     * `mediation` value because the enum no longer accepts it. Since
+     * both throw TypeError if a known property gets an unknown
      * value, we pick by Chrome major when detectable and fall back
      * to `uiMode` for non-Chrome / unknown UA.
      * @private
@@ -333,7 +333,9 @@ export class PasskeyProvider {
      * Derive a 32-byte seed from passkey PRF.
      *
      * @param {string} salt
-     * @param {DeriveSeedOptions} [options]
+     * @param {DeriveSeedOptions} [options] - Per-call overrides:
+     *   `allowCredentialIds`, `preferImmediatelyAvailableCredentials`,
+     *   `onCredentialId`. See `index.d.ts` for full semantics.
      * @returns {Promise<Uint8Array>}
      */
     async deriveSeed(salt, options = {}) {
@@ -591,9 +593,18 @@ export class PasskeyProvider {
         if (Array.isArray(this.hints) && this.hints.length > 0) {
             publicKey.hints = [...this.hints];
         }
+        // `preferImmediatelyAvailableCredentials` is the cross-platform
+        // name; on the web the closest analogue is the WebAuthn L3
+        // immediate-mediation flag. Default (undefined / true) keeps
+        // the historical behavior; explicit `false` opts out so the
+        // browser falls through to its standard picker (cross-device
+        // QR sign-in, hybrid transports, etc.).
+        const preferImmediate = options.preferImmediatelyAvailableCredentials !== false;
         // Immediate mediation is privacy-gated to empty allowCredentials
         // and only enabled when getClientCapabilities() advertises it.
-        if (allowCredentials.length === 0 && await this._supportsImmediateGet()) {
+        if (preferImmediate
+            && allowCredentials.length === 0
+            && await this._supportsImmediateGet()) {
             this._applyImmediateOption({ publicKey });
         }
         if (typeof this.defaultTimeoutMs === 'number' && this.defaultTimeoutMs > 0) {

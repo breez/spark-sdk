@@ -125,6 +125,13 @@ export interface PasskeyPrfPlugin {
         salt: string;
         autoRegister?: boolean;
         allowCredentialIds?: string[];
+        /**
+         * Per-call override for the platform's "fast-fail when no
+         * local credential is available" behavior. `true` (default)
+         * suppresses the cross-device picker on iOS / hybrid sheet on
+         * Android; `false` re-enables it.
+         */
+        preferImmediatelyAvailableCredentials?: boolean;
     }): Promise<{ seed: string; credentialId: string | null }>;
 
     /**
@@ -142,6 +149,13 @@ export interface PasskeyPrfPlugin {
         salts: string[];
         autoRegister?: boolean;
         allowCredentialIds?: string[];
+        /**
+         * Per-call override for the platform's "fast-fail when no
+         * local credential is available" behavior. `true` (default)
+         * suppresses the cross-device picker on iOS / hybrid sheet on
+         * Android; `false` re-enables it.
+         */
+        preferImmediatelyAvailableCredentials?: boolean;
     }): Promise<{ seeds: string[]; credentialId: string | null }>;
 
     /**

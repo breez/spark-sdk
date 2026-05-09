@@ -1,6 +1,41 @@
 use super::error::PrfProviderError;
 use super::models::{CreatePasskeyRequest, RegisteredCredential};
 
+/// Per-call inputs for [`PrfProvider::derive_seeds`]. Bundles the salt
+/// list with optional ceremony-shaping fields so providers can apply
+/// them per call without forcing every host to reconstruct the
+/// provider for each ceremony. Hosts that don't care fall back to
+/// [`Default`] (= `salts` only, all overrides empty / `None`).
+#[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct DeriveSeedsRequest {
+    /// Salt strings in caller order. One 32-byte PRF output is
+    /// returned per salt, in the same order.
+    pub salts: Vec<String>,
+
+    /// Per-call assertion allow-list. When non-empty, the platform is
+    /// asked to refuse any credential whose ID is not in this list.
+    /// Server-driven authentication (`/passkey/options` returning the
+    /// user's known credentials) is the canonical use case. Empty
+    /// (default) lets the provider's configured default apply (built-in
+    /// providers fall through to their per-instance `allow_credential_ids`
+    /// or to "any matching credential" when that is also empty).
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub allow_credential_ids: Vec<Vec<u8>>,
+
+    /// Per-call control over the platform's "fast-fail when no local
+    /// credential is available" behavior. `Some(true)` (the historical
+    /// default) suppresses the cross-device picker and lets a missing
+    /// credential surface as `CredentialNotFound` immediately.
+    /// `Some(false)` opts back into the OS picker (e.g. cross-device
+    /// QR sign-in on iOS, hybrid transports on Android, browser
+    /// `mediation: undefined` on web). `None` means "use the
+    /// provider's default" (same as `Some(true)` for built-in
+    /// providers).
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub prefer_immediately_available_credentials: Option<bool>,
+}
+
 /// Result of [`PrfProvider::check_domain_association`]. The platform's
 /// out-of-band verification (AASA / assetlinks) gates passkey
 /// ceremonies but its failures collapse into opaque platform errors;
@@ -36,13 +71,23 @@ pub enum DomainAssociation {
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait PrfProvider: Send + Sync {
-    /// Derive 32-byte PRF outputs for `salts` in as few authenticator
-    /// ceremonies as the platform supports. Output ordering matches
-    /// input ordering. Empty `salts` returns an empty vec without
-    /// prompting. Built-in providers chunk pairs via `WebAuthn`'s
-    /// `prf.eval.first` + `.second` (halving prompt count); custom
-    /// providers without bulk capability should loop internally.
-    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError>;
+    /// Derive 32-byte PRF outputs for `request.salts` in as few
+    /// authenticator ceremonies as the platform supports. Output
+    /// ordering matches input ordering. Empty `salts` returns an
+    /// empty vec without prompting. Built-in providers chunk pairs
+    /// via `WebAuthn`'s `prf.eval.first` + `.second` (halving prompt
+    /// count); custom providers without bulk capability should loop
+    /// internally.
+    ///
+    /// `request.allow_credential_ids` and
+    /// `request.prefer_immediately_available_credentials` shape the
+    /// platform ceremony for this single call. Custom providers that
+    /// don't model those concepts (file-backed, YubiKey HMAC, etc.)
+    /// can ignore them.
+    async fn derive_seeds(
+        &self,
+        request: DeriveSeedsRequest,
+    ) -> Result<Vec<Vec<u8>>, PrfProviderError>;
 
     /// Whether this provider can produce PRF outputs on the current
     /// device. Hosts gate UX on the result.
