@@ -1,6 +1,7 @@
 package example
 
 import (
+	"errors"
 	"log"
 
 	"github.com/breez/breez-sdk-spark-go/breez_sdk_spark"
@@ -162,4 +163,139 @@ func StoreLabel() error {
 	}
 	// ANCHOR_END: store-label
 	return nil
+}
+
+func SingleCtaOnboarding() (*breez_sdk_spark.Wallet, error) {
+	// ANCHOR: signin-fallback-register
+	// Single-CTA onboarding: try silent SignIn first, fall through to
+	// Register on CredentialNotFound. The OS shows ONE prompt for a
+	// returning user (silent assertion succeeds), TWO for a new user
+	// (silent assertion fast-fails, then create + dual-salt assert).
+	prfProvider := &CustomPrfProvider{}
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil)
+
+	// Discovery mode (Label=nil): derives master + DEFAULT label in a
+	// single ceremony. The fresh-device user fast-fails in <300ms with
+	// no UI shown.
+	response, err := passkey.SignIn(breez_sdk_spark.SignInRequest{
+		Label:      nil,
+		ExtraSalts: []breez_sdk_spark.NamedSalt{},
+	})
+	if err == nil {
+		return &response.Wallet, nil
+	}
+
+	// CredentialNotFound is the SDK's classification for "no matching
+	// credential on this device", including iOS's <300ms fast-fail case
+	// where the platform conflates no-cred with user-cancel.
+	if !errors.Is(err, breez_sdk_spark.ErrPrfProviderErrorCredentialNotFound) {
+		return nil, err
+	}
+
+	label := "personal"
+	registerResponse, err := passkey.Register(breez_sdk_spark.RegisterRequest{
+		Label:                &label,
+		ExtraSalts:           []breez_sdk_spark.NamedSalt{},
+		ExcludeCredentialIds: [][]byte{},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &registerResponse.Wallet, nil
+	// ANCHOR_END: signin-fallback-register
+}
+
+func CheckDomain() error {
+	// ANCHOR: domain-association
+	// Verify Apple AASA / Android Asset Links / Web Related Origins
+	// before the first WebAuthn ceremony. Diagnostic only: never blocks.
+	prfProvider := &CustomPrfProvider{}
+	result, err := prfProvider.CheckDomainAssociation()
+	if err != nil {
+		return err
+	}
+
+	switch r := result.(type) {
+	case breez_sdk_spark.DomainAssociationAssociated:
+		// Safe to proceed.
+		_ = r
+	case breez_sdk_spark.DomainAssociationNotAssociated:
+		// Configuration is wrong (entitlement missing, AASA stale,
+		// assetlinks malformed). Surface a developer-facing error.
+		log.Printf("Domain association failed (source=%s): %s", r.Source, r.Reason)
+		return nil
+	case breez_sdk_spark.DomainAssociationSkipped:
+		// Verification could not be performed (offline, endpoint
+		// timeout, no public-suffix match). Proceed normally: this is
+		// NOT a negative signal.
+		_ = r
+	}
+	// ANCHOR_END: domain-association
+	return nil
+}
+
+func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
+	// ANCHOR: recover-already-exists
+	// The OS rejected Register because the user's password manager
+	// already holds a credential matching `ExcludeCredentialIds`.
+	// Route the user to the sign-in path: the OS picker will surface
+	// the existing credential and the SDK's identity cache will warm
+	// up on the assertion.
+	prfProvider := &CustomPrfProvider{}
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil)
+
+	label := "personal"
+	registerResponse, err := passkey.Register(breez_sdk_spark.RegisterRequest{
+		Label:      &label,
+		ExtraSalts: []breez_sdk_spark.NamedSalt{},
+		ExcludeCredentialIds: [][]byte{
+			// app-persisted credential IDs from prior registrations
+		},
+	})
+	if err == nil {
+		return &registerResponse.Wallet, nil
+	}
+
+	if !errors.Is(err, breez_sdk_spark.ErrPrfProviderErrorCredentialAlreadyExists) {
+		return nil, err
+	}
+
+	// Flip to sign-in. The existing credential's PRF output is the
+	// same wallet seed the host would have minted on register.
+	signInResponse, err := passkey.SignIn(breez_sdk_spark.SignInRequest{
+		Label:      &label,
+		ExtraSalts: []breez_sdk_spark.NamedSalt{},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &signInResponse.Wallet, nil
+	// ANCHOR_END: recover-already-exists
+}
+
+func HandleTimeout() (*breez_sdk_spark.SignInResponse, error) {
+	// ANCHOR: handle-timeout
+	// The OS biometric inactivity timeout (~55s+) tore down the prompt
+	// without user intent. Distinct from a real cancel: hosts may
+	// surface a re-prompt UI without treating it as the user opting
+	// out. The SDK fires PrfProviderErrorUserTimedOut when assertion or
+	// register elapsed time crosses 55_000 ms.
+	prfProvider := &CustomPrfProvider{}
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil)
+
+	label := "personal"
+	response, err := passkey.SignIn(breez_sdk_spark.SignInRequest{
+		Label:      &label,
+		ExtraSalts: []breez_sdk_spark.NamedSalt{},
+	})
+	if err != nil {
+		if errors.Is(err, breez_sdk_spark.ErrPrfProviderErrorUserTimedOut) {
+			// Show a sticky retry screen with timeout-specific copy.
+			// Do NOT auto-retry without user input.
+			log.Print("Sign-in timed out: show \"Try Again\" UI.")
+		}
+		return nil, err
+	}
+	return &response, nil
+	// ANCHOR_END: handle-timeout
 }

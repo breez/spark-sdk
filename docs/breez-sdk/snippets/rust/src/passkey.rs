@@ -1,7 +1,8 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
-    CreatePasskeyRequest, DomainAssociation, NostrRelayConfig, PasskeyClient, PrfProvider,
-    PrfProviderError, RegisterRequest, RegisteredCredential, SignInRequest,
+    CreatePasskeyRequest, DomainAssociation, NostrRelayConfig, PasskeyClient, PasskeyError,
+    PrfProvider, PrfProviderError, RegisterRequest, RegisteredCredential, SignInRequest,
+    SignInResponse, Wallet,
 };
 use breez_sdk_spark::{ConnectRequest, Network, connect, default_config};
 use std::sync::Arc;
@@ -158,4 +159,138 @@ async fn store_label() -> Result<()> {
     passkey.store_label("personal".to_string()).await?;
     // ANCHOR_END: store-label
     Ok(())
+}
+
+async fn single_cta_onboarding() -> Result<Wallet> {
+    // ANCHOR: signin-fallback-register
+    // Single-CTA onboarding: try silent sign_in first, fall through to
+    // register on CredentialNotFound. The OS shows ONE prompt for a
+    // returning user (silent assertion succeeds), TWO for a new user
+    // (silent assertion fast-fails, then create + dual-salt assert).
+    let prf_provider = Arc::new(CustomPrfProvider);
+    let passkey = PasskeyClient::new(prf_provider, None);
+
+    // Discovery mode (label = None): derives master + DEFAULT label
+    // in a single ceremony. The fresh-device user fast-fails in <300ms
+    // with no UI shown.
+    match passkey
+        .sign_in(SignInRequest {
+            label: None,
+            extra_salts: vec![],
+        })
+        .await
+    {
+        Ok(response) => Ok(response.wallet),
+        // CredentialNotFound is the SDK's classification for "no matching
+        // credential on this device", including iOS's <300ms fast-fail
+        // case where the platform conflates no-cred with user-cancel.
+        Err(PasskeyError::Prf(PrfProviderError::CredentialNotFound)) => {
+            // No credential. Onboard a new user.
+            let response = passkey
+                .register(RegisterRequest {
+                    label: Some("personal".to_string()),
+                    extra_salts: vec![],
+                    exclude_credential_ids: vec![],
+                    ..Default::default()
+                })
+                .await?;
+            Ok(response.wallet)
+        }
+        Err(e) => Err(e.into()),
+    }
+    // ANCHOR_END: signin-fallback-register
+}
+
+async fn check_domain() -> Result<()> {
+    // ANCHOR: domain-association
+    // Verify Apple AASA / Android Asset Links / Web Related Origins
+    // before the first WebAuthn ceremony. Diagnostic only: never blocks.
+    let prf_provider = Arc::new(CustomPrfProvider);
+    let result = prf_provider.check_domain_association().await?;
+
+    match result {
+        DomainAssociation::Associated => {
+            // Safe to proceed.
+        }
+        DomainAssociation::NotAssociated { source, reason } => {
+            // Configuration is wrong (entitlement missing, AASA stale,
+            // assetlinks malformed). Surface a developer-facing error.
+            eprintln!("Domain association failed (source={source}): {reason}");
+            return Ok(());
+        }
+        DomainAssociation::Skipped { reason: _ } => {
+            // Verification could not be performed (offline, endpoint
+            // timeout, no public-suffix match). Proceed normally: this
+            // is NOT a negative signal.
+        }
+    }
+    // ANCHOR_END: domain-association
+    Ok(())
+}
+
+async fn recover_from_already_exists() -> Result<Wallet> {
+    // ANCHOR: recover-already-exists
+    // The OS rejected register because the user's password manager
+    // already holds a credential matching `exclude_credential_ids`.
+    // Route the user to the sign-in path: the OS picker will surface
+    // the existing credential and the SDK's identity cache will warm
+    // up on the assertion.
+    let prf_provider = Arc::new(CustomPrfProvider);
+    let passkey = PasskeyClient::new(prf_provider, None);
+
+    match passkey
+        .register(RegisterRequest {
+            label: Some("personal".to_string()),
+            extra_salts: vec![],
+            exclude_credential_ids: vec![
+                // app-persisted credential IDs from prior registrations
+            ],
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(response) => Ok(response.wallet),
+        Err(PasskeyError::Prf(PrfProviderError::CredentialAlreadyExists(_))) => {
+            // Flip to sign-in. The existing credential's PRF output is
+            // the same wallet seed the host would have minted on register.
+            let response = passkey
+                .sign_in(SignInRequest {
+                    label: Some("personal".to_string()),
+                    extra_salts: vec![],
+                })
+                .await?;
+            Ok(response.wallet)
+        }
+        Err(e) => Err(e.into()),
+    }
+    // ANCHOR_END: recover-already-exists
+}
+
+async fn handle_timeout() -> Result<SignInResponse> {
+    // ANCHOR: handle-timeout
+    // The OS biometric inactivity timeout (~55s+) tore down the prompt
+    // without user intent. Distinct from a real cancel: hosts may
+    // surface a re-prompt UI without treating it as the user opting
+    // out. The SDK fires PrfProviderError::UserTimedOut when assertion
+    // or register elapsed time crosses 55_000 ms.
+    let prf_provider = Arc::new(CustomPrfProvider);
+    let passkey = PasskeyClient::new(prf_provider, None);
+
+    match passkey
+        .sign_in(SignInRequest {
+            label: Some("personal".to_string()),
+            extra_salts: vec![],
+        })
+        .await
+    {
+        Ok(response) => Ok(response),
+        Err(PasskeyError::Prf(PrfProviderError::UserTimedOut)) => {
+            // Show a sticky retry screen with timeout-specific copy.
+            // Do NOT auto-retry without user input.
+            println!("Sign-in timed out: show \"Try Again\" UI.");
+            Err(PasskeyError::Prf(PrfProviderError::UserTimedOut).into())
+        }
+        Err(e) => Err(e.into()),
+    }
+    // ANCHOR_END: handle-timeout
 }
