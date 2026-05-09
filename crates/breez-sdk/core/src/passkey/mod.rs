@@ -64,7 +64,7 @@ pub use models::{
 pub use passkey_client::{
     PasskeyClient, RegisterRequest, RegisterResponse, SignInRequest, SignInResponse,
 };
-pub use passkey_prf_provider::{DomainAssociation, PrfProvider};
+pub use passkey_prf_provider::{DeriveSeedsRequest, DomainAssociation, PrfProvider};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -129,7 +129,10 @@ impl Passkey {
             .get_or_try_init(|| async {
                 let mut seeds = self
                     .prf_provider
-                    .derive_seeds(vec![ACCOUNT_MASTER_SALT.to_string()])
+                    .derive_seeds(DeriveSeedsRequest {
+                        salts: vec![ACCOUNT_MASTER_SALT.to_string()],
+                        ..Default::default()
+                    })
                     .await?;
                 let account_master = seeds.pop().ok_or_else(|| {
                     PrfProviderError::Generic("derive_seeds returned no output".to_string())
@@ -179,7 +182,15 @@ impl Passkey {
             salts.push(format!("{APP_SALT_PREFIX}{}", s.name));
         }
 
-        let seeds = self.prf_provider.derive_seeds(salts).await?;
+        let seeds = self
+            .prf_provider
+            .derive_seeds(DeriveSeedsRequest {
+                salts,
+                allow_credential_ids: request.allow_credential_ids,
+                prefer_immediately_available_credentials: request
+                    .prefer_immediately_available_credentials,
+            })
+            .await?;
         if seeds.len() != expected {
             return Err(PasskeyError::Prf(PrfProviderError::Generic(format!(
                 "derive_seeds returned {} outputs, expected {expected}",
@@ -309,8 +320,15 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for MockPrfProvider {
-        async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-            Ok(salts.into_iter().map(|_| self.seed.to_vec()).collect())
+        async fn derive_seeds(
+            &self,
+            request: DeriveSeedsRequest,
+        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+            Ok(request
+                .salts
+                .into_iter()
+                .map(|_| self.seed.to_vec())
+                .collect())
         }
 
         async fn is_supported(&self) -> Result<bool, PrfProviderError> {
@@ -333,7 +351,7 @@ mod tests {
     impl PrfProvider for FailingPrfProvider {
         async fn derive_seeds(
             &self,
-            _salts: Vec<String>,
+            _request: DeriveSeedsRequest,
         ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
             Err(self.error.clone())
         }
@@ -349,7 +367,7 @@ mod tests {
     impl PrfProvider for UnavailablePrfProvider {
         async fn derive_seeds(
             &self,
-            _salts: Vec<String>,
+            _request: DeriveSeedsRequest,
         ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
             Err(PrfProviderError::PrfNotSupported)
         }

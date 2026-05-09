@@ -3,12 +3,14 @@ package technology.breez.spark.passkey
 import android.app.Activity
 import android.util.Base64
 import breez_sdk_spark.CreatePasskeyRequest
+import breez_sdk_spark.DeriveSeedsRequest
 import breez_sdk_spark.DomainAssociation
 import breez_sdk_spark.PrfProvider
 import breez_sdk_spark.PrfProviderException
 import breez_sdk_spark.RegisteredCredential
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
+import technology.breez.spark.passkey.core.DeriveSeedsOptions
 import technology.breez.spark.passkey.core.DomainAssociationResult
 import technology.breez.spark.passkey.core.RegisteredCredential as CoreRegisteredCredential
 
@@ -35,8 +37,8 @@ import technology.breez.spark.passkey.core.RegisteredCredential as CoreRegistere
  * val prfProvider = PasskeyProvider(
  *     activityProvider = { MainActivity.currentInstance!! },
  * )
- * val passkey = Passkey(prfProvider, relayConfig = null)
- * val wallet = passkey.getWallet("personal")
+ * val passkey = PasskeyClient(prfProvider, relayConfig = null)
+ * val response = passkey.signIn(SignInRequest(label = "personal"))
  * ```
  *
  * @param activityProvider Called lazily on every PRF / registration request
@@ -109,18 +111,27 @@ public class PasskeyProvider(
      *
      * Output ordering matches input ordering.
      */
-    override suspend fun deriveSeeds(salts: List<String>): List<ByteArray> {
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): List<ByteArray> {
         try {
+            // Per-call overrides win over per-instance defaults; an
+            // empty per-call list defers to the constructor's
+            // `allowCredentialIds`.
+            val perCallAllow = request.allowCredentialIds
+            val effectiveAllow = if (perCallAllow.isEmpty()) allowCredentialIds else perCallAllow
+            val options = DeriveSeedsOptions(
+                allowCredentialIds = effectiveAllow,
+                preferImmediatelyAvailableCredentials = request.preferImmediatelyAvailableCredentials,
+            )
             return CredentialManagerPrfCore.deriveSeedsOrRegister(
                 activity = activityProvider(),
-                salts = salts,
+                salts = request.salts,
                 rpId = rpId,
                 rpName = rpName,
                 userName = userName,
                 userDisplayName = userDisplayName,
                 autoRegister = autoRegister,
-                allowCredentialIds = allowCredentialIds,
                 onAssertionCredentialId = onAssertionCredentialId,
+                options = options,
             )
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()

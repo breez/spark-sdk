@@ -2,8 +2,9 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    CreatePasskeyRequest, NostrRelayConfig, PasskeyError, PrfProvider, PrfProviderError,
-    RegisterRequest, RegisterResponse, RegisteredCredential, SignInRequest, SignInResponse,
+    CreatePasskeyRequest, DeriveSeedsRequest, NostrRelayConfig, PasskeyError, PrfProvider,
+    PrfProviderError, RegisterRequest, RegisterResponse, RegisteredCredential, SignInRequest,
+    SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -31,7 +32,7 @@ struct CallbackPrfProvider {
     /// matches the trait contract: callers pass salts, the provider
     /// returns one seed per salt in input order.
     derive_seeds_fn:
-        Arc<dyn Fn(Vec<String>) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>> + Send + Sync>,
+        Arc<dyn Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>> + Send + Sync>,
     is_supported_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync>,
     create_passkey_fn: Arc<
         dyn Fn(CreatePasskeyRequest) -> DartFnFuture<anyhow::Result<RegisteredCredential>>
@@ -64,12 +65,15 @@ fn dart_error_to_prf(err: anyhow::Error) -> PrfProviderError {
 
 #[async_trait::async_trait]
 impl PrfProvider for CallbackPrfProvider {
-    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+    async fn derive_seeds(
+        &self,
+        request: DeriveSeedsRequest,
+    ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
         // The Dart-side `deriveSeeds` callback is the single PRF entry
         // point. It internally handles dual-salt-capable platforms (one
         // OS ceremony for N salts) and falls back to looping per-salt
         // where the platform can't pack two salts per assertion.
-        let bulk = AssertUnwindSafe((self.derive_seeds_fn)(salts))
+        let bulk = AssertUnwindSafe((self.derive_seeds_fn)(request))
             .catch_unwind()
             .await
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
@@ -110,7 +114,7 @@ impl PasskeyClient {
     /// throw `PrfProviderError.PrfNotSupported` on the Dart side.
     #[frb(sync)]
     pub fn new(
-        derive_seeds: impl Fn(Vec<String>) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
+        derive_seeds: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
             + Send
             + Sync
             + 'static,
@@ -178,7 +182,7 @@ mod tests {
     }
 
     fn make_provider(
-        derive_bulk: impl Fn(Vec<String>) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
+        derive_bulk: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
             + Send
             + Sync
             + 'static,
@@ -191,25 +195,32 @@ mod tests {
         }
     }
 
+    fn req(salts: &[&str]) -> DeriveSeedsRequest {
+        DeriveSeedsRequest {
+            salts: salts.iter().map(|s| (*s).to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_derive_seeds_success() {
         let expected = vec![42u8; 32];
         let expected_clone = expected.clone();
         let provider = make_provider(
-            move |_salts| ready(Ok(vec![expected_clone.clone()])),
+            move |_request| ready(Ok(vec![expected_clone.clone()])),
             || ready(Ok(true)),
         );
-        let seeds = provider.derive_seeds(vec!["test".into()]).await.unwrap();
+        let seeds = provider.derive_seeds(req(&["test"])).await.unwrap();
         assert_eq!(seeds, vec![expected]);
     }
 
     #[tokio::test]
     async fn test_derive_seeds_panic_caught() {
         let provider = make_provider(
-            |_salts| panicking("Dart threw an exception"),
+            |_request| panicking("Dart threw an exception"),
             || ready(Ok(true)),
         );
-        let err = provider.derive_seeds(vec!["test".into()]).await.unwrap_err();
+        let err = provider.derive_seeds(req(&["test"])).await.unwrap_err();
         assert!(
             matches!(err, PrfProviderError::Generic(ref msg) if msg.contains("Dart threw an exception")),
             "Expected Generic error with panic message, got: {err:?}"
@@ -219,10 +230,10 @@ mod tests {
     #[tokio::test]
     async fn test_derive_seeds_dart_error_mapped() {
         let provider = make_provider(
-            |_salts| ready(Err(anyhow::anyhow!("PasskeyPrfException(noCredential): not found"))),
+            |_request| ready(Err(anyhow::anyhow!("PasskeyPrfException(noCredential): not found"))),
             || ready(Ok(true)),
         );
-        let err = provider.derive_seeds(vec!["test".into()]).await.unwrap_err();
+        let err = provider.derive_seeds(req(&["test"])).await.unwrap_err();
         assert!(
             matches!(err, PrfProviderError::CredentialNotFound),
             "Expected CredentialNotFound, got: {err:?}"
@@ -231,14 +242,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_supported_success() {
-        let provider = make_provider(|_salts| ready(Ok(vec![])), || ready(Ok(false)));
+        let provider = make_provider(|_request| ready(Ok(vec![])), || ready(Ok(false)));
         assert!(!provider.is_supported().await.unwrap());
     }
 
     #[tokio::test]
     async fn test_is_supported_panic_caught() {
         let provider = make_provider(
-            |_salts| ready(Ok(vec![])),
+            |_request| ready(Ok(vec![])),
             || panicking("device check failed"),
         );
         let err = provider.is_supported().await.unwrap_err();
@@ -251,7 +262,7 @@ mod tests {
     #[tokio::test]
     async fn test_derive_seeds_propagates_non_prf_errors() {
         let provider = make_provider(
-            move |_salts| {
+            move |_request| {
                 ready(Err(anyhow::anyhow!(
                     "PasskeyPrfException(userCancelled): user dismissed"
                 )))
@@ -259,7 +270,7 @@ mod tests {
             || ready(Ok(true)),
         );
         let err = provider
-            .derive_seeds(vec!["a".into(), "b".into()])
+            .derive_seeds(req(&["a", "b"]))
             .await
             .unwrap_err();
         assert!(

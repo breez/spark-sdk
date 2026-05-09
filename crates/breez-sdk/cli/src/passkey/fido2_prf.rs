@@ -1,5 +1,5 @@
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_spark::passkey::{PrfProvider, PrfProviderError};
+use breez_sdk_spark::passkey::{DeriveSeedsRequest, PrfProvider, PrfProviderError};
 use ctap_hid_fido2::fidokey::get_assertion::get_assertion_params::{
     Extension as GetExtension, GetAssertionArgsBuilder,
 };
@@ -209,9 +209,14 @@ impl Fido2PrfProvider {
 
 #[async_trait::async_trait]
 impl PrfProvider for Fido2PrfProvider {
-    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-        let mut out = Vec::with_capacity(salts.len());
-        for salt in salts {
+    async fn derive_seeds(
+        &self,
+        request: DeriveSeedsRequest,
+    ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        // FIDO2 hmac-secret has no platform picker; the per-call
+        // allow-list and immediate-mediation hint are no-ops here.
+        let mut out = Vec::with_capacity(request.salts.len());
+        for salt in request.salts {
             out.push(self.derive_one(salt).await?);
         }
         Ok(out)

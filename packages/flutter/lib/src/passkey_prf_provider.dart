@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
-import 'rust/models.dart' show CreatePasskeyRequest, RegisteredCredential;
+import 'rust/models.dart' show CreatePasskeyRequest, DeriveSeedsRequest, RegisteredCredential;
 
 /// Result of a domain-association verification check against the
 /// platform's well-known configuration source. Mirrors the Rust
@@ -144,19 +144,28 @@ class PasskeyProvider {
   /// native plugin short-circuits to a single-salt assertion (one
   /// prompt). Used by the SDK's `setup_wallet` orchestration to collapse
   /// master + label derivation into one prompt.
-  Future<List<Uint8List>> deriveSeeds(List<String> salts) async {
+  Future<List<Uint8List>> deriveSeeds(DeriveSeedsRequest request) async {
     try {
       final args = <String, Object?>{
-        'salts': salts,
+        'salts': request.salts,
         'rpId': _rpId,
         'rpName': _rpName,
         'userName': _userName,
         'userDisplayName': _userDisplayName,
         'autoRegister': _autoRegister,
       };
-      final allow = _allowCredentialIds;
-      if (allow != null && allow.isNotEmpty) {
-        args['allowCredentialIds'] = allow.map(base64Encode).toList();
+      // Per-call overrides win over per-instance defaults; an empty
+      // per-call list defers to the constructor's allowCredentialIds.
+      final perCallAllow = request.allowCredentialIds;
+      final List<Uint8List>? effectiveAllow = perCallAllow.isNotEmpty
+          ? perCallAllow.map(Uint8List.fromList).toList()
+          : _allowCredentialIds;
+      if (effectiveAllow != null && effectiveAllow.isNotEmpty) {
+        args['allowCredentialIds'] = effectiveAllow.map(base64Encode).toList();
+      }
+      final preferImmediate = request.preferImmediatelyAvailableCredentials;
+      if (preferImmediate != null) {
+        args['preferImmediatelyAvailableCredentials'] = preferImmediate;
       }
       final result = await _channel.invokeMethod<List<Object?>>('deriveSeeds', args);
       if (result == null) {

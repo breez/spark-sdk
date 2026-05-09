@@ -73,6 +73,8 @@ pub struct RegisterResponse {
 pub struct SignInRequest {
     pub label: Option<String>,
     pub extra_salts: Vec<NamedSalt>,
+    pub allow_credential_ids: Vec<Vec<u8>>,
+    pub prefer_immediately_available_credentials: Option<bool>,
 }
 
 /// Response shape for `PasskeyClient.signIn`.

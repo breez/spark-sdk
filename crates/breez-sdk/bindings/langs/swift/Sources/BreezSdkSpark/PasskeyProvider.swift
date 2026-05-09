@@ -20,8 +20,10 @@ import Security
 /// Example:
 /// ```swift
 /// let prfProvider = PasskeyProvider()
-/// let passkey = Passkey(prfProvider: prfProvider, relayConfig: nil)
-/// let wallet = try await passkey.getWallet(walletName: "personal")
+/// let passkey = PasskeyClient(prfProvider: prfProvider, relayConfig: nil)
+/// let response = try await passkey.signIn(
+///     request: SignInRequest(label: "personal")
+/// )
 /// ```
 @available(iOS 18.0, macOS 15.0, *)
 public class PasskeyProvider: PrfProvider {
@@ -133,11 +135,20 @@ public class PasskeyProvider: PrfProvider {
     /// - Returns: One 32-byte output per salt, in input order.
     /// - Throws: `PrfProviderError` if any underlying ceremony fails. The
     ///   first failing ceremony aborts the rest.
-    public func deriveSeeds(salts: [String]) async throws -> [Data] {
-        let saltDatas: [Data] = salts.compactMap { $0.data(using: .utf8) }
-        guard saltDatas.count == salts.count else {
+    public func deriveSeeds(request: DeriveSeedsRequest) async throws -> [Data] {
+        let saltDatas: [Data] = request.salts.compactMap { $0.data(using: .utf8) }
+        guard saltDatas.count == request.salts.count else {
             throw PrfProviderError.Generic("Failed to encode salts as UTF-8")
         }
+        // Per-call overrides win over the per-instance defaults: an
+        // empty per-call list defers to the constructor's
+        // `allowCredentialIds`. `nil` defers to the platform default
+        // (immediate mediation on).
+        let perCallAllow = request.allowCredentialIds.map { Data($0) }
+        let options = DeriveSeedsOptions(
+            allowCredentialIds: perCallAllow.isEmpty ? allowCredentialIds : perCallAllow,
+            preferImmediatelyAvailableCredentials: request.preferImmediatelyAvailableCredentials
+        )
         do {
             return try await core.performBulkDerivation(
                 salts: saltDatas,
@@ -146,7 +157,7 @@ public class PasskeyProvider: PrfProvider {
                 userName: userName,
                 userDisplayName: userDisplayName,
                 autoRegister: autoRegister,
-                explicitAllowCredentialIds: allowCredentialIds
+                options: options
             )
         } catch let err as PasskeyAssertionError {
             throw Self.toPrfProviderError(err)

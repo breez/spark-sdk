@@ -71,6 +71,28 @@ public data class RegisteredCredential(
     public val backupEligible: Boolean?,
 )
 
+/**
+ * Per-call shaping options for [CredentialManagerPrfCore.deriveSeedsOrRegister].
+ * Lets the upstream callers (UniFFI Kotlin `PasskeyProvider`, Flutter
+ * plugin, React Native module) override the per-instance defaults on a
+ * per-ceremony basis without reconstructing the core.
+ */
+public data class DeriveSeedsOptions(
+    /**
+     * Per-call assertion allow-list. When non-empty, this list overrides
+     * any caller-supplied default for the duration of the ceremony.
+     * Empty defers to the legacy positional `allowCredentialIds`
+     * parameter (for back-compat).
+     */
+    public val allowCredentialIds: List<ByteArray> = emptyList(),
+    /**
+     * Per-call control over [GetCredentialRequest.Builder.setPreferImmediatelyAvailableCredentials].
+     * `null` keeps the historical default (`true`); `false` opts back
+     * into the cross-device hybrid sheet.
+     */
+    public val preferImmediatelyAvailableCredentials: Boolean? = null,
+)
+
 public object CredentialManagerPrfCore {
 
     /** Default Relying Party ID for cross-platform credential sharing. */
@@ -143,12 +165,16 @@ public object CredentialManagerPrfCore {
         userDisplayName: String,
         autoRegister: Boolean = true,
         allowCredentialIds: List<ByteArray> = emptyList(),
+        preferImmediatelyAvailableCredentials: Boolean = true,
         onAssertionCredentialId: ((ByteArray) -> Unit)? = null,
     ): ByteArray = withContext(Dispatchers.Main) {
         val startedAtMs = System.currentTimeMillis()
         try {
             try {
-                getAssertionWithPrf(activity, salt, rpId, allowCredentialIds, onAssertionCredentialId)
+                getAssertionWithPrf(
+                    activity, salt, rpId, allowCredentialIds,
+                    preferImmediatelyAvailableCredentials, onAssertionCredentialId,
+                )
             } catch (e: NoCredentialException) {
                 if (!autoRegister) {
                     throw CredentialManagerPrfCoreException(Kind.CredentialNotFound, e.message)
@@ -162,7 +188,10 @@ public object CredentialManagerPrfCore {
                 // retry will fail with CredentialNotFound. Hosts handle
                 // that as a deletion-recovery signal: clear the registry
                 // and route to onboarding. Mirrors iOS behavior.
-                getAssertionWithPrf(activity, salt, rpId, allowCredentialIds, onAssertionCredentialId)
+                getAssertionWithPrf(
+                    activity, salt, rpId, allowCredentialIds,
+                    preferImmediatelyAvailableCredentials, onAssertionCredentialId,
+                )
             }
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
@@ -205,7 +234,17 @@ public object CredentialManagerPrfCore {
         autoRegister: Boolean = true,
         allowCredentialIds: List<ByteArray> = emptyList(),
         onAssertionCredentialId: ((ByteArray) -> Unit)? = null,
+        options: DeriveSeedsOptions = DeriveSeedsOptions(),
     ): List<ByteArray> = withContext(Dispatchers.Main) {
+        // Per-call options win over the legacy positional
+        // `allowCredentialIds` when non-empty. The positional parameter
+        // remains for back-compat with older call sites.
+        val effectiveAllow = if (options.allowCredentialIds.isNotEmpty()) {
+            options.allowCredentialIds
+        } else {
+            allowCredentialIds
+        }
+        val preferImmediate = options.preferImmediatelyAvailableCredentials ?: true
         if (salts.isEmpty()) {
             return@withContext emptyList()
         }
@@ -219,7 +258,8 @@ public object CredentialManagerPrfCore {
                     userName = userName,
                     userDisplayName = userDisplayName,
                     autoRegister = autoRegister,
-                    allowCredentialIds = allowCredentialIds,
+                    allowCredentialIds = effectiveAllow,
+                    preferImmediatelyAvailableCredentials = preferImmediate,
                     onAssertionCredentialId = onAssertionCredentialId,
                 )
             )
@@ -242,7 +282,8 @@ public object CredentialManagerPrfCore {
                         userName = userName,
                         userDisplayName = userDisplayName,
                         autoRegister = autoRegister,
-                        allowCredentialIds = allowCredentialIds,
+                        allowCredentialIds = effectiveAllow,
+                        preferImmediatelyAvailableCredentials = preferImmediate,
                         onAssertionCredentialId = onAssertionCredentialId,
                     )
                     output.add(pair.first)
@@ -265,7 +306,8 @@ public object CredentialManagerPrfCore {
                             userName = userName,
                             userDisplayName = userDisplayName,
                             autoRegister = autoRegister,
-                            allowCredentialIds = allowCredentialIds,
+                            allowCredentialIds = effectiveAllow,
+                            preferImmediatelyAvailableCredentials = preferImmediate,
                             onAssertionCredentialId = onAssertionCredentialId,
                         )
                     )
@@ -289,7 +331,8 @@ public object CredentialManagerPrfCore {
                     userName = userName,
                     userDisplayName = userDisplayName,
                     autoRegister = autoRegister,
-                    allowCredentialIds = allowCredentialIds,
+                    allowCredentialIds = effectiveAllow,
+                    preferImmediatelyAvailableCredentials = preferImmediate,
                     onAssertionCredentialId = onAssertionCredentialId,
                 )
             )
@@ -523,13 +566,15 @@ public object CredentialManagerPrfCore {
         salt: String,
         rpId: String,
         allowCredentialIds: List<ByteArray> = emptyList(),
+        preferImmediatelyAvailableCredentials: Boolean = true,
         onAssertionCredentialId: ((ByteArray) -> Unit)? = null,
     ): ByteArray {
         val prfEval = JSONObject().apply {
             put("first", encodeBase64Url(salt.toByteArray(Charsets.UTF_8)))
         }
         val results = runAssertion(
-            activity, rpId, allowCredentialIds, prfEval, onAssertionCredentialId,
+            activity, rpId, allowCredentialIds,
+            preferImmediatelyAvailableCredentials, prfEval, onAssertionCredentialId,
         )
         val first = results.optString("first")
         if (first.isNullOrEmpty()) {
@@ -553,12 +598,14 @@ public object CredentialManagerPrfCore {
         userDisplayName: String,
         autoRegister: Boolean,
         allowCredentialIds: List<ByteArray>,
+        preferImmediatelyAvailableCredentials: Boolean = true,
         onAssertionCredentialId: ((ByteArray) -> Unit)?,
     ): Pair<ByteArray, ByteArray?> {
         val startedAtMs = System.currentTimeMillis()
         return try {
             getDualSaltAssertionWithPrf(
-                activity, salt1, salt2, rpId, allowCredentialIds, onAssertionCredentialId,
+                activity, salt1, salt2, rpId, allowCredentialIds,
+                preferImmediatelyAvailableCredentials, onAssertionCredentialId,
             )
         } catch (e: NoCredentialException) {
             if (!autoRegister) {
@@ -569,7 +616,8 @@ public object CredentialManagerPrfCore {
                 activity, rpId, rpName, userName, userDisplayName,
             )
             getDualSaltAssertionWithPrf(
-                activity, salt1, salt2, rpId, allowCredentialIds, onAssertionCredentialId,
+                activity, salt1, salt2, rpId, allowCredentialIds,
+                preferImmediatelyAvailableCredentials, onAssertionCredentialId,
             )
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
@@ -584,6 +632,7 @@ public object CredentialManagerPrfCore {
         salt2: String,
         rpId: String,
         allowCredentialIds: List<ByteArray>,
+        preferImmediatelyAvailableCredentials: Boolean = true,
         onAssertionCredentialId: ((ByteArray) -> Unit)?,
     ): Pair<ByteArray, ByteArray?> {
         val prfEval = JSONObject().apply {
@@ -591,7 +640,8 @@ public object CredentialManagerPrfCore {
             put("second", encodeBase64Url(salt2.toByteArray(Charsets.UTF_8)))
         }
         val results = runAssertion(
-            activity, rpId, allowCredentialIds, prfEval, onAssertionCredentialId,
+            activity, rpId, allowCredentialIds,
+            preferImmediatelyAvailableCredentials, prfEval, onAssertionCredentialId,
         )
         val first = results.optString("first")
         if (first.isNullOrEmpty()) {
@@ -622,6 +672,7 @@ public object CredentialManagerPrfCore {
         activity: Activity,
         rpId: String,
         allowCredentialIds: List<ByteArray>,
+        preferImmediatelyAvailableCredentials: Boolean,
         prfEval: JSONObject,
         onAssertionCredentialId: ((ByteArray) -> Unit)?,
     ): JSONObject {
@@ -648,12 +699,14 @@ public object CredentialManagerPrfCore {
         }.toString()
 
         val option = GetPublicKeyCredentialOption(requestJson)
-        // Suppress the cross-device QR sheet so a missing local
-        // credential surfaces as NoCredentialException, not a hybrid
-        // flow the wallet user will never use.
+        // Default `true` suppresses the cross-device QR sheet so a
+        // missing local credential surfaces as NoCredentialException
+        // instead of a hybrid flow the wallet user will never use.
+        // Per-call `false` opts back into the picker for hosts that
+        // want to support cross-device sign-in.
         val request = GetCredentialRequest.Builder()
             .addCredentialOption(option)
-            .setPreferImmediatelyAvailableCredentials(true)
+            .setPreferImmediatelyAvailableCredentials(preferImmediatelyAvailableCredentials)
             .build()
         val response = credentialManager(activity).getCredential(activity, request)
 

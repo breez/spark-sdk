@@ -117,6 +117,26 @@ export interface DeriveSeedOptions {
     allowCredentialIds?: Uint8Array[];
 
     /**
+     * Per-call control over the platform's "fast-fail when no local
+     * credential is available" behavior. On the web the closest
+     * analogue is the WebAuthn L3 immediate-mediation flag.
+     *
+     * `true` (the historical default) opts into immediate mediation
+     * when the browser advertises the capability via
+     * `PublicKeyCredential.getClientCapabilities('public-key')`. The
+     * browser then fast-fails a no-credential ceremony instead of
+     * showing the cross-device QR sheet.
+     *
+     * `false` falls back to the browser's standard picker (cross-
+     * device QR sign-in, hybrid transports). Useful for hosts that
+     * want users to be able to sign in from a passkey on a paired
+     * device.
+     *
+     * Omitted (the default) preserves the historical behavior.
+     */
+    preferImmediatelyAvailableCredentials?: boolean;
+
+    /**
      * Fired with the asserted credential's ID after a successful
      * ceremony. Useful for migrating credential-ID tracking. Errors
      * thrown inside are swallowed; the seed return is never blocked.

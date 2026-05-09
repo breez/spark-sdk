@@ -218,12 +218,12 @@ function mapNativeError(err: unknown): PasskeyPrfException {
  *
  * @example
  * ```typescript
- * import { Passkey } from '@breeztech/breez-sdk-spark-react-native'
+ * import { PasskeyClient } from '@breeztech/breez-sdk-spark-react-native'
  * import { PasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
  *
  * const prfProvider = new PasskeyProvider()
- * const passkey = new Passkey(prfProvider, undefined)
- * const wallet = await passkey.getWallet('personal')
+ * const passkey = new PasskeyClient(prfProvider as any, undefined)
+ * const response = await passkey.signIn({ label: 'personal', extraSalts: [] })
  * ```
  */
 export class PasskeyProvider {
@@ -255,25 +255,38 @@ export class PasskeyProvider {
    * SDK's `setup_wallet` orchestration to collapse master + label
    * derivation into one prompt.
    *
-   * @param salts - Plain UTF-8 salt strings; the native side encodes each as
-   *   bytes for the PRF eval inputs.
+   * Accepts the SDK's `DeriveSeedsRequest` shape. Per-call
+   * `allowCredentialIds` overrides the constructor default when
+   * non-empty; `preferImmediatelyAvailableCredentials` overrides the
+   * platform default when non-null.
    */
-  async deriveSeeds(salts: string[]): Promise<Uint8Array[]> {
+  async deriveSeeds(request: {
+    salts: string[];
+    allowCredentialIds?: Uint8Array[];
+    preferImmediatelyAvailableCredentials?: boolean | null;
+  }): Promise<Uint8Array[]> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('deriveSeeds');
     }
 
-    const allowBase64 = this.allowCredentialIds.map(id => uint8ArrayToBase64(id));
+    // Per-call overrides win over per-instance defaults; an empty
+    // per-call list defers to the constructor's allowCredentialIds.
+    const perCallAllow = request.allowCredentialIds ?? [];
+    const effectiveAllow =
+      perCallAllow.length > 0 ? perCallAllow : this.allowCredentialIds;
+    const allowBase64 = effectiveAllow.map(id => uint8ArrayToBase64(id));
+    const preferImmediate = request.preferImmediatelyAvailableCredentials ?? null;
 
     try {
       const base64Results: string[] = await BreezSdkSparkPasskey.deriveSeeds(
-        salts,
+        request.salts,
         this.rpId,
         this.rpName,
         this.userName,
         this.userDisplayName,
         this.autoRegister,
-        allowBase64
+        allowBase64,
+        preferImmediate
       );
       if (!Array.isArray(base64Results)) {
         throw new PasskeyPrfException('unknown', 'deriveSeeds returned a non-array');

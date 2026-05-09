@@ -34,6 +34,7 @@ class BreezSdkSparkPasskey: NSObject {
         userDisplayName: String,
         autoRegister: Bool,
         allowCredentialIds: [String],
+        preferImmediatelyAvailableCredentials: NSNumber?,
         resolve: @escaping RCTPromiseResolveBlock,
         reject: @escaping RCTPromiseRejectBlock
     ) {
@@ -46,6 +47,7 @@ class BreezSdkSparkPasskey: NSObject {
         }
 
         let allowIds: [Data] = allowCredentialIds.compactMap { Data(base64Encoded: $0) }
+        let preferImmediate = preferImmediatelyAvailableCredentials?.boolValue
 
         Task { @MainActor in
             do {
@@ -56,7 +58,10 @@ class BreezSdkSparkPasskey: NSObject {
                     userName: userName,
                     userDisplayName: userDisplayName,
                     autoRegister: autoRegister,
-                    explicitAllowCredentialIds: allowIds
+                    options: DeriveSeedsOptions(
+                        allowCredentialIds: allowIds,
+                        preferImmediatelyAvailableCredentials: preferImmediate
+                    )
                 )
                 resolve(seeds.map { $0.base64EncodedString() })
             } catch let err as PasskeyAssertionError {

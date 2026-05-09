@@ -20,6 +20,7 @@ import kotlinx.coroutines.sync.withLock
 import technology.breez.spark.passkey.KnownCredentialsStore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
+import technology.breez.spark.passkey.core.DeriveSeedsOptions
 
 /**
  * After a successful `createPasskey` the platform takes a moment to
@@ -149,6 +150,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
         } else {
             readKnownCredentialIds(currentActivity.applicationContext, rpId)
         }
+        val preferImmediate = call.argument<Boolean>("preferImmediatelyAvailableCredentials")
 
         scope.launch {
             try {
@@ -161,7 +163,10 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                     userName = userName,
                     userDisplayName = userDisplayName,
                     autoRegister = autoRegister,
-                    allowCredentialIds = allowIds,
+                    options = DeriveSeedsOptions(
+                        allowCredentialIds = allowIds,
+                        preferImmediatelyAvailableCredentials = preferImmediate,
+                    ),
                 )
                 // Encode each seed as base64 so MethodChannel can carry
                 // it as a List<String>. Dart side base64-decodes back

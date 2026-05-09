@@ -84,6 +84,28 @@ pub struct SignInRequest {
     /// Same as [`RegisterRequest::extra_salts`].
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub extra_salts: Vec<NamedSalt>,
+
+    /// Per-call assertion allow-list forwarded to
+    /// [`crate::passkey::DeriveSeedsRequest::allow_credential_ids`].
+    /// Hosts driving server-mediated authentication pass the list
+    /// returned from `/passkey/options` here so the assertion is
+    /// pinned to credentials known to the server. Empty (default)
+    /// preserves the historical behavior (the provider's per-instance
+    /// `allow_credential_ids`, if any, applies; otherwise the OS
+    /// picker chooses).
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub allow_credential_ids: Vec<Vec<u8>>,
+
+    /// Per-call control over the platform's "fast-fail when no local
+    /// credential is available" behavior, forwarded to
+    /// [`crate::passkey::DeriveSeedsRequest::prefer_immediately_available_credentials`].
+    /// `Some(true)` (the historical default for built-in providers)
+    /// suppresses the cross-device picker. `Some(false)` re-enables
+    /// it (cross-device QR sign-in on iOS / hybrid transports on
+    /// Android / `mediation: undefined` on web). `None` (default)
+    /// defers to the provider's default.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub prefer_immediately_available_credentials: Option<bool>,
 }
 
 /// Response from [`PasskeyClient::sign_in`].
@@ -152,6 +174,10 @@ impl PasskeyClient {
                 label: request.label,
                 publish_label: true,
                 extra_salts: request.extra_salts,
+                // Registration always derives via the just-created
+                // credential; callers don't drive sign-in pinning here.
+                allow_credential_ids: Vec::new(),
+                prefer_immediately_available_credentials: None,
             })
             .await?;
 
@@ -178,6 +204,9 @@ impl PasskeyClient {
                 label: request.label,
                 publish_label: false,
                 extra_salts: request.extra_salts,
+                allow_credential_ids: request.allow_credential_ids,
+                prefer_immediately_available_credentials: request
+                    .prefer_immediately_available_credentials,
             })
             .await?;
 
@@ -254,6 +283,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
+    use super::super::DeriveSeedsRequest;
     use super::super::error::PrfProviderError;
 
     /// Salt-aware mock that produces deterministic per-salt PRF
@@ -304,8 +334,15 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for MockProvider {
-        async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-            Ok(salts.into_iter().map(|s| self.output_for(&s)).collect())
+        async fn derive_seeds(
+            &self,
+            request: DeriveSeedsRequest,
+        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+            Ok(request
+                .salts
+                .into_iter()
+                .map(|s| self.output_for(&s))
+                .collect())
         }
 
         async fn is_supported(&self) -> Result<bool, PrfProviderError> {
@@ -385,6 +422,7 @@ mod tests {
                 extra_salts: vec![NamedSalt {
                     name: "db_key".to_string(),
                 }],
+                ..Default::default()
             })
             .await
             .unwrap();

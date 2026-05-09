@@ -69,6 +69,37 @@ public enum PasskeyAssertionError: Error {
     case generic(String)
 }
 
+// MARK: - Derive options
+
+/// Per-call shaping options for `performBulkDerivation`. Lets the
+/// upstream callers (UniFFI Swift `PasskeyProvider`, Flutter plugin,
+/// React Native module) override the `allowCredentialIds` and the
+/// `preferImmediatelyAvailableCredentials` behavior on a per-ceremony
+/// basis without reconstructing the core.
+@available(iOS 18.0, macOS 15.0, *)
+public struct DeriveSeedsOptions {
+    /// Per-call assertion allow-list. When non-empty, this list
+    /// overrides any caller-supplied default for the duration of the
+    /// ceremony. Empty defers to the legacy positional
+    /// `explicitAllowCredentialIds` parameter (for back-compat) and
+    /// then to the `KnownCredentialsStore` fallback inside
+    /// `applyAllowedCredentials`.
+    public let allowCredentialIds: [Data]
+    /// Per-call control over the OS picker. `nil` keeps the historical
+    /// default (`.preferImmediatelyAvailableCredentials` on iOS 16+).
+    /// `true` is identical to `nil`; `false` opts back into the
+    /// cross-device picker (QR sign-in / hybrid transports).
+    public let preferImmediatelyAvailableCredentials: Bool?
+
+    public init(
+        allowCredentialIds: [Data] = [],
+        preferImmediatelyAvailableCredentials: Bool? = nil
+    ) {
+        self.allowCredentialIds = allowCredentialIds
+        self.preferImmediatelyAvailableCredentials = preferImmediatelyAvailableCredentials
+    }
+}
+
 // MARK: - Registered credential
 
 /// Result of a successful registration. Named `Ios*` so it does not
@@ -294,14 +325,16 @@ public final class PasskeyAssertionCore {
         userName: String,
         userDisplayName: String,
         autoRegister: Bool,
-        explicitAllowCredentialIds: [Data] = []
+        explicitAllowCredentialIds: [Data] = [],
+        preferImmediatelyAvailableCredentials: Bool? = nil
     ) async throws -> Data {
         await graceTracker.consume()
         do {
             return try await assertionWithPrf(
                 saltData: saltData,
                 rpId: rpId,
-                explicitAllowCredentialIds: explicitAllowCredentialIds
+                explicitAllowCredentialIds: explicitAllowCredentialIds,
+                preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials
             )
         } catch PasskeyAssertionError.credentialNotFound {
             guard autoRegister else { throw PasskeyAssertionError.credentialNotFound }
@@ -322,7 +355,8 @@ public final class PasskeyAssertionCore {
             return try await assertionWithPrf(
                 saltData: saltData,
                 rpId: rpId,
-                explicitAllowCredentialIds: explicitAllowCredentialIds
+                explicitAllowCredentialIds: explicitAllowCredentialIds,
+                preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials
             )
         }
     }
@@ -339,8 +373,18 @@ public final class PasskeyAssertionCore {
         userName: String,
         userDisplayName: String,
         autoRegister: Bool,
-        explicitAllowCredentialIds: [Data] = []
+        explicitAllowCredentialIds: [Data] = [],
+        options: DeriveSeedsOptions = DeriveSeedsOptions()
     ) async throws -> [Data] {
+        // Per-call options win over the legacy positional
+        // `explicitAllowCredentialIds` when non-empty. The positional
+        // parameter remains for back-compat with older call sites
+        // (Swift PasskeyProvider's per-instance `allowCredentialIds`,
+        // FFI bridges that haven't been ported yet).
+        let allowIds = options.allowCredentialIds.isEmpty
+            ? explicitAllowCredentialIds
+            : options.allowCredentialIds
+        let preferImmediate = options.preferImmediatelyAvailableCredentials
         // Wait out post-create grace before any assertion in the batch.
         // Without this, the immediate setup_wallet derive after register
         // races the credential's PRF-readiness window: dual-salt comes
@@ -358,7 +402,8 @@ public final class PasskeyAssertionCore {
                 userName: userName,
                 userDisplayName: userDisplayName,
                 autoRegister: autoRegister,
-                explicitAllowCredentialIds: explicitAllowCredentialIds
+                explicitAllowCredentialIds: allowIds,
+                preferImmediatelyAvailableCredentials: preferImmediate
             )]
         }
         var out: [Data] = []
@@ -371,7 +416,8 @@ public final class PasskeyAssertionCore {
                     salt1: salt1,
                     salt2: salt2,
                     rpId: rpId,
-                    explicitAllowCredentialIds: explicitAllowCredentialIds
+                    explicitAllowCredentialIds: allowIds,
+                    preferImmediatelyAvailableCredentials: preferImmediate
                 )
                 out.append(pair.0)
                 if let second = pair.1 {
@@ -383,7 +429,8 @@ public final class PasskeyAssertionCore {
                     let recovered = try await assertionWithPrf(
                         saltData: salt2,
                         rpId: rpId,
-                        explicitAllowCredentialIds: explicitAllowCredentialIds
+                        explicitAllowCredentialIds: allowIds,
+                        preferImmediatelyAvailableCredentials: preferImmediate
                     )
                     out.append(recovered)
                     i += 2
@@ -574,7 +621,8 @@ public final class PasskeyAssertionCore {
     private func assertionWithPrf(
         saltData: Data,
         rpId: String,
-        explicitAllowCredentialIds: [Data]
+        explicitAllowCredentialIds: [Data],
+        preferImmediatelyAvailableCredentials: Bool? = nil
     ) async throws -> Data {
         let request = makeAssertionRequest(
             rpId: rpId,
@@ -592,12 +640,16 @@ public final class PasskeyAssertionCore {
         delegate.anchor = anchor.presentationAnchor()
         delegate.onAssertionCredentialId = makeCaptureCallback(rpId: rpId)
 
+        let preferImmediate = preferImmediatelyAvailableCredentials ?? true
         return try await withCheckedThrowingContinuation { continuation in
             delegate.continuation = continuation
             delegate.extractPrf = true
             delegate.ceremonyStartedAt = Date()
             DispatchQueue.main.async {
-                Self.performAssertionRequest(controller)
+                Self.performAssertionRequest(
+                    controller,
+                    preferImmediatelyAvailableCredentials: preferImmediate
+                )
             }
         }
     }
@@ -606,7 +658,8 @@ public final class PasskeyAssertionCore {
         salt1: Data,
         salt2: Data?,
         rpId: String,
-        explicitAllowCredentialIds: [Data]
+        explicitAllowCredentialIds: [Data],
+        preferImmediatelyAvailableCredentials: Bool? = nil
     ) async throws -> (Data, Data?) {
         let request = makeAssertionRequest(
             rpId: rpId,
@@ -622,13 +675,17 @@ public final class PasskeyAssertionCore {
         delegate.anchor = anchor.presentationAnchor()
         delegate.onAssertionCredentialId = makeCaptureCallback(rpId: rpId)
 
+        let preferImmediate = preferImmediatelyAvailableCredentials ?? true
         return try await withCheckedThrowingContinuation { continuation in
             delegate.dualSaltContinuation = continuation
             delegate.extractPrf = true
             delegate.extractSecondPrf = true
             delegate.ceremonyStartedAt = Date()
             DispatchQueue.main.async {
-                Self.performAssertionRequest(controller)
+                Self.performAssertionRequest(
+                    controller,
+                    preferImmediatelyAvailableCredentials: preferImmediate
+                )
             }
         }
     }
@@ -668,8 +725,11 @@ public final class PasskeyAssertionCore {
     /// Wallet-style integrators target only local credentials, so a
     /// fast `.canceled` failure is preferable to a confusing QR sheet
     /// when no passkey is on the device.
-    private static func performAssertionRequest(_ controller: ASAuthorizationController) {
-        if #available(iOS 16.0, macOS 13.0, *) {
+    private static func performAssertionRequest(
+        _ controller: ASAuthorizationController,
+        preferImmediatelyAvailableCredentials: Bool = true
+    ) {
+        if #available(iOS 16.0, macOS 13.0, *), preferImmediatelyAvailableCredentials {
             controller.performRequests(options: .preferImmediatelyAvailableCredentials)
         } else {
             controller.performRequests()

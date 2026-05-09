@@ -109,12 +109,12 @@ If you're using Expo, the Breez SDK plugin can configure this automatically. See
 
 <div class="warning">
 <h4>Associated Domains entitlement must be enabled</h4>
-Without the Associated Domains entitlement, passkey operations will fail with a configuration error even though {{#name is_prf_available}} returns `true` (the OS-level check can't verify entitlements at runtime).
+Without the Associated Domains entitlement, passkey operations will fail with a configuration error even though {{#name is_available}} returns `true` (the OS-level check can't verify entitlements at runtime).
 </div>
 
 ### Nostr relay configuration
 
-The SDK uses Nostr relays to store and discover labels. Configure relay access by passing a {{#name NostrRelayConfig}} when constructing the {{#name Passkey}} instance:
+The SDK uses Nostr relays to store and discover labels. Configure relay access by passing a {{#name NostrRelayConfig}} when constructing the {{#name PasskeyClient}} instance:
 
 - {{#name breez_api_key}} - Your Breez API key. When provided, the SDK connects to the Breez-managed relay with <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a> authentication.
 - {{#name timeout_secs}} - Connection timeout in seconds (defaults to 30).

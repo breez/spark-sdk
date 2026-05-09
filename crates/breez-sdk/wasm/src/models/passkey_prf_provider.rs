@@ -4,7 +4,9 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
-use breez_sdk_spark::passkey::{CreatePasskeyRequest, PrfProviderError, RegisteredCredential};
+use breez_sdk_spark::passkey::{
+    CreatePasskeyRequest, DeriveSeedsRequest, PrfProviderError, RegisteredCredential,
+};
 
 pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderError {
     // Map typed JS error classes thrown by the bundled JS provider
@@ -71,11 +73,19 @@ unsafe impl Sync for WasmPrfProvider {}
 
 #[macros::async_trait]
 impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
-    async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+    async fn derive_seeds(
+        &self,
+        request: DeriveSeedsRequest,
+    ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
         let salts_array = js_sys::Array::new();
-        for salt in &salts {
+        for salt in &request.salts {
             salts_array.push(&JsValue::from_str(salt));
         }
+
+        // Build the per-call options object so JS providers can apply
+        // allow-list and immediate-mediation overrides without
+        // reconstructing themselves.
+        let options = build_derive_seeds_options(&request)?;
 
         let target: &JsValue = self.inner.as_ref();
         let func = js_sys::Reflect::get(target, &JsValue::from_str("deriveSeeds"))
@@ -83,7 +93,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
             .dyn_into::<js_sys::Function>()
             .map_err(|_| PrfProviderError::Generic("deriveSeeds is not a function".to_string()))?;
         let result_promise = func
-            .call1(target, &salts_array)
+            .call2(target, &salts_array, &options)
             .map_err(js_error_to_prf_provider_error)?
             .dyn_into::<Promise>()
             .map_err(|_| {
@@ -95,11 +105,11 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
 
         let array = js_sys::Array::from(&result);
         let len = array.length() as usize;
-        if len != salts.len() {
+        if len != request.salts.len() {
             return Err(PrfProviderError::Generic(format!(
                 "deriveSeeds returned {} outputs, expected {}",
                 len,
-                salts.len()
+                request.salts.len()
             )));
         }
         let mut out = Vec::with_capacity(len);
@@ -155,6 +165,34 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
 
         parse_registered_credential(&result)
     }
+}
+
+/// Marshal a [`DeriveSeedsRequest`]'s per-call overrides into a JS
+/// options object shaped per `index.d.ts#DeriveSeedOptions`. The
+/// `salts` field is passed positionally; this object only carries
+/// the optional shaping fields. Returned even when empty so the JS
+/// provider always receives a well-formed second argument.
+fn build_derive_seeds_options(request: &DeriveSeedsRequest) -> Result<JsValue, PrfProviderError> {
+    let obj = js_sys::Object::new();
+
+    if !request.allow_credential_ids.is_empty() {
+        let arr = js_sys::Array::new();
+        for id in &request.allow_credential_ids {
+            arr.push(&js_sys::Uint8Array::from(id.as_slice()));
+        }
+        js_sys::Reflect::set(&obj, &JsValue::from_str("allowCredentialIds"), &arr)
+            .map_err(js_error_to_prf_provider_error)?;
+    }
+    if let Some(prefer) = request.prefer_immediately_available_credentials {
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("preferImmediatelyAvailableCredentials"),
+            &JsValue::from_bool(prefer),
+        )
+        .map_err(js_error_to_prf_provider_error)?;
+    }
+
+    Ok(obj.into())
 }
 
 /// Marshal a [`CreatePasskeyRequest`] into a JS object literal shaped
@@ -278,10 +316,16 @@ export interface PrfProvider {
      * ceremony where supported; otherwise loop the single-salt path
      * internally. Output ordering matches input ordering.
      *
+     * The optional `options` object carries per-call ceremony shapers
+     * (allow-list, immediate-mediation toggle). Built-in providers
+     * forward them to the underlying WebAuthn / Credential Manager
+     * call; custom providers without an OS picker can ignore them.
+     *
      * @param salts - Salt strings in caller order
+     * @param options - Optional per-call overrides
      * @returns A Promise resolving to one 32-byte output per salt
      */
-    deriveSeeds(salts: string[]): Promise<Uint8Array[]>;
+    deriveSeeds(salts: string[], options?: DeriveSeedsOptionsJSON): Promise<Uint8Array[]>;
 
     /**
      * Optional explicit registration. Platform passkey providers
@@ -302,6 +346,27 @@ export interface PrfProvider {
      * device. Hosts gate UX on the result.
      */
     isSupported(): Promise<boolean>;
+}
+
+/**
+ * Plain-object shape passed as the second argument of
+ * {@link PrfProvider.deriveSeeds}. Mirrors the bundled
+ * `PasskeyProvider`'s `DeriveSeedOptions` so JS providers can apply
+ * the same shaping fields the Rust-side `DeriveSeedsRequest` carries.
+ */
+export interface DeriveSeedsOptionsJSON {
+    /** Per-call allow-list; empty / omitted lets the provider default apply. */
+    allowCredentialIds?: Uint8Array[];
+    /**
+     * Per-call control over the platform's "fast-fail when no local
+     * credential is available" behavior. On the web this maps to the
+     * WebAuthn `mediation: 'immediate'` / `uiMode: 'immediate'` flag:
+     * `true` (the historical default) opts into immediate mediation
+     * when the browser advertises the capability; `false` falls back
+     * to the standard picker (cross-device QR, hybrid transports).
+     * Omitted lets the provider's default apply.
+     */
+    preferImmediatelyAvailableCredentials?: boolean;
 }
 
 /**
