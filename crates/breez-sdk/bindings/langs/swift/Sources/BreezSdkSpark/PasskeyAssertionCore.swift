@@ -1,6 +1,7 @@
 import AuthenticationServices
 import Foundation
 import os.log
+import PasskeyPRFHelperObjC
 import Security
 #if canImport(UIKit)
 import UIKit

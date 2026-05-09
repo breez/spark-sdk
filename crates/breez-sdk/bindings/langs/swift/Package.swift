@@ -10,7 +10,7 @@ let package = Package(
         .iOS(.v13),
     ],
     products: [
-        .library(name: "BreezSdkSpark", targets: ["breez_sdk_sparkFFI", "BreezSdkSpark"])
+        .library(name: "BreezSdkSpark", targets: ["breez_sdk_sparkFFI", "BreezSdkSpark", "PasskeyPRFHelperObjC"])
     ],
     dependencies: [
         .package(url: "https://github.com/mkrd/Swift-BigInt.git", from: "2.0.0")
