@@ -169,10 +169,7 @@ impl PasskeyClient {
     /// [`Self::store_label`] separately if needed. The discovery
     /// label-store query is best-effort; transient failures leave
     /// `labels` empty.
-    pub async fn sign_in(
-        &self,
-        request: SignInRequest,
-    ) -> Result<SignInResponse, PasskeyError> {
+    pub async fn sign_in(&self, request: SignInRequest) -> Result<SignInResponse, PasskeyError> {
         let discovery = request.label.is_none();
 
         let setup = self
@@ -307,10 +304,7 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for MockProvider {
-        async fn derive_seeds(
-            &self,
-            salts: Vec<String>,
-        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
             Ok(salts.into_iter().map(|s| self.output_for(&s)).collect())
         }
 

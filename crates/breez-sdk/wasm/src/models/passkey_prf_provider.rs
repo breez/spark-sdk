@@ -74,9 +74,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         let func = js_sys::Reflect::get(target, &JsValue::from_str("deriveSeeds"))
             .map_err(js_error_to_prf_provider_error)?
             .dyn_into::<js_sys::Function>()
-            .map_err(|_| {
-                PrfProviderError::Generic("deriveSeeds is not a function".to_string())
-            })?;
+            .map_err(|_| PrfProviderError::Generic("deriveSeeds is not a function".to_string()))?;
         let result_promise = func
             .call1(target, &salts_array)
             .map_err(js_error_to_prf_provider_error)?
@@ -132,7 +130,9 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         let func = js_sys::Reflect::get(target, &JsValue::from_str("createPasskey"))
             .map_err(js_error_to_prf_provider_error)?
             .dyn_into::<js_sys::Function>()
-            .map_err(|_| PrfProviderError::Generic("createPasskey is not a function".to_string()))?;
+            .map_err(|_| {
+                PrfProviderError::Generic("createPasskey is not a function".to_string())
+            })?;
 
         let js_request = build_create_passkey_request(&request)?;
         let result_promise = func
