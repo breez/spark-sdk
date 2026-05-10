@@ -169,9 +169,7 @@ impl Fido2PrfProvider {
             .map_err(|e| map_fido2_error(e, "PRF assertion failed"))?;
 
         let assertion = assertions.first().ok_or_else(|| {
-            PrfProviderError::CredentialNotFound(
-                "FIDO2 device returned no assertion".to_string(),
-            )
+            PrfProviderError::CredentialNotFound("FIDO2 device returned no assertion".to_string())
         })?;
 
         // Extract hmac-secret output from extensions
