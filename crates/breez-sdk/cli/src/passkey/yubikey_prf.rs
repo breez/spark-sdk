@@ -1,5 +1,5 @@
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_spark::passkey::{PrfProviderError, PrfProvider};
+use breez_sdk_spark::passkey::{PrfProvider, PrfProviderError};
 use challenge_response::ChallengeResponse;
 use challenge_response::config::{Config, Mode, Slot};
 
@@ -44,18 +44,20 @@ impl YubiKeyPrfProvider {
             .set_mode(Mode::Sha1)
             .set_slot(Slot::Slot2);
 
-        let hmac_result = cr.challenge_response_hmac(salt.as_bytes(), config).map_err(|e| {
-            let msg = format!("{e}");
-            if msg.contains("Wrong CRC") {
-                PrfProviderError::PrfEvaluationFailed(
-                    "YubiKey Slot 2 is not configured for HMAC challenge-response. \
+        let hmac_result = cr
+            .challenge_response_hmac(salt.as_bytes(), config)
+            .map_err(|e| {
+                let msg = format!("{e}");
+                if msg.contains("Wrong CRC") {
+                    PrfProviderError::PrfEvaluationFailed(
+                        "YubiKey Slot 2 is not configured for HMAC challenge-response. \
                          Program it with: ykman otp chalresp -g 2"
-                        .to_string(),
-                )
-            } else {
-                PrfProviderError::PrfEvaluationFailed(format!("HMAC failed: {e}"))
-            }
-        })?;
+                            .to_string(),
+                    )
+                } else {
+                    PrfProviderError::PrfEvaluationFailed(format!("HMAC failed: {e}"))
+                }
+            })?;
 
         // Expand 20-byte HMAC-SHA1 output to 32 bytes via SHA256
         Ok(sha256::Hash::hash(&hmac_result).to_byte_array().to_vec())

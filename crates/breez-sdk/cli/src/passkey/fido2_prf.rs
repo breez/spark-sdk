@@ -1,5 +1,5 @@
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_spark::passkey::{PrfProviderError, PrfProvider};
+use breez_sdk_spark::passkey::{PrfProvider, PrfProviderError};
 use ctap_hid_fido2::fidokey::get_assertion::get_assertion_params::{
     Extension as GetExtension, GetAssertionArgsBuilder,
 };

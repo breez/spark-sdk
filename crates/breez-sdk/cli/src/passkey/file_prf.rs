@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
-use breez_sdk_spark::passkey::{PrfProviderError, PrfProvider};
+use breez_sdk_spark::passkey::{PrfProvider, PrfProviderError};
 use rand::{RngCore, thread_rng};
 
 /// File name for the seed restore secret.

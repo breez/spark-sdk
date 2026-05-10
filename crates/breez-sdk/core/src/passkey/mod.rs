@@ -311,10 +311,7 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for MockPrfProvider {
-        async fn derive_seeds(
-            &self,
-            salts: Vec<String>,
-        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
             Ok(salts.into_iter().map(|_| self.seed.to_vec()).collect())
         }
 
@@ -364,10 +361,7 @@ mod tests {
 
     #[macros::async_trait]
     impl PrfProvider for SaltAwareMockProvider {
-        async fn derive_seeds(
-            &self,
-            salts: Vec<String>,
-        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
             Ok(salts.into_iter().map(|s| self.derive_one(s)).collect())
         }
 
