@@ -319,7 +319,8 @@ mod tests {
             if self.fail_create {
                 return Err(PrfProviderError::PrfNotSupported);
             }
-            *self.create_calls.lock().unwrap() += 1;
+            let mut count = self.create_calls.lock().unwrap();
+            *count = count.checked_add(1).expect("create_calls overflow");
             Ok(RegisteredCredential {
                 credential_id: vec![0xab, 0xcd, 0xef],
                 aaguid: Some(vec![0; 16]),

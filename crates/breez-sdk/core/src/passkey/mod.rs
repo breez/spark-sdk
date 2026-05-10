@@ -292,8 +292,6 @@ impl Passkey {
 #[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -313,56 +311,6 @@ mod tests {
     impl PrfProvider for MockPrfProvider {
         async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
             Ok(salts.into_iter().map(|_| self.seed.to_vec()).collect())
-        }
-
-        async fn is_supported(&self) -> Result<bool, PrfProviderError> {
-            Ok(true)
-        }
-    }
-
-    // Enhanced mock that returns salt-specific outputs (simulates real PRF behavior)
-    struct SaltAwareMockProvider {
-        base_seed: [u8; 32],
-        salt_outputs: Mutex<HashMap<String, Vec<u8>>>,
-    }
-
-    impl SaltAwareMockProvider {
-        fn new(base_seed: [u8; 32]) -> Self {
-            Self {
-                base_seed,
-                salt_outputs: Mutex::new(HashMap::new()),
-            }
-        }
-    }
-
-    impl SaltAwareMockProvider {
-        fn derive_one(&self, salt: String) -> Vec<u8> {
-            let mut outputs = self.salt_outputs.lock().unwrap();
-            if let Some(output) = outputs.get(&salt) {
-                return output.clone();
-            }
-
-            let salt_bytes = salt.as_bytes();
-            let mut salt_hash = [0u8; 32];
-            for (i, &byte) in salt_bytes.iter().enumerate() {
-                salt_hash[i % 32] ^= byte;
-                salt_hash[(i + 1) % 32] = salt_hash[(i + 1) % 32].wrapping_add(byte);
-            }
-
-            let mut output = [0u8; 32];
-            for i in 0..32 {
-                output[i] = self.base_seed[i] ^ salt_hash[i];
-            }
-
-            outputs.insert(salt, output.to_vec());
-            output.to_vec()
-        }
-    }
-
-    #[macros::async_trait]
-    impl PrfProvider for SaltAwareMockProvider {
-        async fn derive_seeds(&self, salts: Vec<String>) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-            Ok(salts.into_iter().map(|s| self.derive_one(s)).collect())
         }
 
         async fn is_supported(&self) -> Result<bool, PrfProviderError> {

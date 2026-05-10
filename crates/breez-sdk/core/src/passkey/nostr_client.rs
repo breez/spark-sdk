@@ -624,7 +624,6 @@ mod tests {
     fn test_read_relay_candidates_with_api_key() {
         let config = NostrRelayConfig {
             breez_api_key: Some("dGVzdC1hcGkta2V5".to_string()),
-            ..Default::default()
         };
         let client = NostrSaltClient::new(config);
         let candidates = client.read_relay_candidates();
