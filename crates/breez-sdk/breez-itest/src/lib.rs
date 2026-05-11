@@ -21,7 +21,7 @@ use anyhow::Result;
 use breez_sdk_spark::{BreezSdk, Config, SdkEvent};
 use rand::RngCore;
 use tempfile::TempDir;
-use tokio::sync::mpsc;
+use tokio::sync::{OnceCell, mpsc};
 
 /// Container for SDK instance, event channel, and storage directory
 /// The TempDir is kept alive to prevent premature deletion
@@ -44,6 +44,10 @@ pub struct ReinitializableSdkInstance {
     pub storage_path: String,
     pub config: Config,
     _temp_dir: TempDir, // Keep TempDir alive to prevent directory deletion
+    // Pinned on first `build_sdk()` so subsequent rebuilds reuse the same DB.
+    // Without this, `USE_POSTGRES_TREE_STORE` / `USE_MYSQL_TREE_STORE` runs
+    // would allocate a fresh `ts_N` database on every build and lose state.
+    backend: OnceCell<BackendChoice>,
 }
 
 impl ReinitializableSdkInstance {
@@ -59,17 +63,24 @@ impl ReinitializableSdkInstance {
             storage_path,
             config,
             _temp_dir: temp_dir,
+            backend: OnceCell::new(),
         })
     }
 
     /// Build the SDK instance (can be called multiple times with the same config)
     pub async fn build_sdk(&self) -> Result<SdkInstance> {
-        build_sdk_with_custom_config(
+        let backend = self
+            .backend
+            .get_or_try_init(resolve_backend_choice)
+            .await?
+            .clone();
+        build_sdk_with_custom_config_and_backend(
             self.storage_path.clone(),
             self.seed,
             self.config.clone(),
             None,
             true,
+            Some(backend),
         )
         .await
     }
