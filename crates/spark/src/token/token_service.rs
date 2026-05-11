@@ -1732,15 +1732,21 @@ mod tests {
     use macros::test_all;
     use prost_types::Timestamp;
 
+    use bitcoin::secp256k1::PublicKey;
+
     use crate::{
         Network,
+        address::SparkAddress,
         operator::rpc::{
             self,
             spark_token::{
                 TokenOutput, TokenOutputToSpend, TokenTransferInput, token_transaction::TokenInputs,
             },
         },
-        token::{HashableTokenTransaction, token_service::validate_create_token_params},
+        token::{
+            HashableTokenTransaction,
+            token_service::{build_consolidation_outputs, validate_create_token_params},
+        },
     };
 
     #[cfg(feature = "browser-tests")]
@@ -2023,6 +2029,100 @@ mod tests {
             hex::encode(&decoded),
             "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca"
         );
+    }
+
+    fn test_receiver_address() -> SparkAddress {
+        const TEST_PUBKEY_BYTES: [u8; 33] = [
+            3, 141, 37, 201, 160, 148, 226, 93, 184, 201, 131, 47, 222, 91, 55, 171, 38, 95, 13,
+            248, 175, 190, 44, 132, 189, 75, 131, 204, 215, 82, 93, 167, 177,
+        ];
+        SparkAddress {
+            identity_public_key: PublicKey::from_slice(&TEST_PUBKEY_BYTES).unwrap(),
+            network: Network::Mainnet,
+            spark_invoice_fields: None,
+        }
+    }
+
+    const TEST_TOKEN_ID: &str = "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87";
+
+    #[test_all]
+    fn test_build_consolidation_outputs_target_zero_returns_single_output() {
+        let receiver = test_receiver_address();
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 100, 0, &receiver);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].amount, 100);
+        assert_eq!(outputs[0].token_id, TEST_TOKEN_ID);
+        assert_eq!(outputs[0].receiver_address, receiver);
+        assert!(outputs[0].spark_invoice.is_none());
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_target_one_returns_single_output() {
+        let receiver = test_receiver_address();
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 100, 1, &receiver);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].amount, 100);
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_amount_less_than_target_falls_back() {
+        let receiver = test_receiver_address();
+        // amount=3, target=5: cannot split into 5 non-zero outputs, fall back to one.
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 3, 5, &receiver);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].amount, 3);
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_amount_equal_to_target_splits_into_ones() {
+        let receiver = test_receiver_address();
+        // amount=5, target=5: per_output=1, emit 4 outputs of 1; change of 1 is
+        // added by the transfer builder, yielding 5 outputs total.
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 5, 5, &receiver);
+        assert_eq!(outputs.len(), 4);
+        for out in &outputs {
+            assert_eq!(out.amount, 1);
+        }
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_even_split() {
+        let receiver = test_receiver_address();
+        // amount=1000, target=4: per_output=250, emit 3 explicit outputs of 250;
+        // change of 250 lands as the 4th output.
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 1000, 4, &receiver);
+        assert_eq!(outputs.len(), 3);
+        for out in &outputs {
+            assert_eq!(out.amount, 250);
+            assert_eq!(out.token_id, TEST_TOKEN_ID);
+            assert_eq!(out.receiver_address, receiver);
+        }
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_uneven_split_remainder_goes_to_change() {
+        let receiver = test_receiver_address();
+        // amount=1003, target=4: per_output=250, emit 3 explicit outputs of 250.
+        // Change = 1003 - 750 = 253 will be added by the transfer builder.
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 1003, 4, &receiver);
+        assert_eq!(outputs.len(), 3);
+        let explicit_total: u128 = outputs.iter().map(|o| o.amount).sum();
+        assert_eq!(explicit_total, 750);
+        for out in &outputs {
+            assert_eq!(out.amount, 250);
+        }
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_large_u128_amount() {
+        let receiver = test_receiver_address();
+        // Sanity-check that the math does not overflow at the u128 ceiling.
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, u128::MAX, 10, &receiver);
+        assert_eq!(outputs.len(), 9);
+        let per_output = u128::MAX / 10;
+        for out in &outputs {
+            assert_eq!(out.amount, per_output);
+        }
     }
 
     #[test_all]
