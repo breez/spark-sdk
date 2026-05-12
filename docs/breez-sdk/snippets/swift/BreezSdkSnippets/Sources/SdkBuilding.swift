@@ -92,7 +92,7 @@ func initSdkPostgres() async throws -> BreezSdk {
     postgresConfig.maxPoolSize = UInt32(8) // Max connections in pool
     postgresConfig.waitTimeoutSecs = UInt64(30) // Timeout waiting for connection
     // If your service owns SDK-compatible schema migrations:
-    postgresConfig.schemaManagedExternally = true
+    postgresConfig.runMigration = false
 
     // Construct the connection pool. The same pool can be passed to
     // multiple SdkBuilders to share connections across SDKs; per-tenant

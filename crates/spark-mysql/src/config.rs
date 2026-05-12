@@ -25,10 +25,13 @@ pub struct MysqlStorageConfig {
     /// `ssl-mode=verify_identity`).
     pub root_ca_pem: Option<String>,
 
-    /// If true, the SDK trusts that the database schema is managed by the
-    /// embedding service and skips all migrations, including writes to the
-    /// schema migrations tables.
-    pub schema_managed_externally: bool,
+    /// Whether the SDK should run schema migrations on startup.
+    ///
+    /// Set to `false` when the database schema is owned and migrated by the
+    /// embedding service; the SDK will trust the existing schema and skip all
+    /// migrations, including writes to the schema migrations tables. Defaults
+    /// to `true`.
+    pub run_migration: bool,
 }
 
 impl MysqlStorageConfig {
@@ -40,7 +43,7 @@ impl MysqlStorageConfig {
             max_pool_size: DEFAULT_MAX_POOL_SIZE,
             recycle_timeout_secs: None,
             root_ca_pem: None,
-            schema_managed_externally: false,
+            run_migration: true,
         }
     }
 }

@@ -48,31 +48,26 @@ pub(crate) struct MysqlStorage {
 impl MysqlStorage {
     #[cfg(test)]
     pub async fn new(config: MysqlStorageConfig, identity: &[u8]) -> Result<Self, StorageError> {
-        let schema_managed_externally = config.schema_managed_externally;
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::new_with_pool_and_schema_management(pool, identity, schema_managed_externally).await
-    }
-
-    /// Creates a new `MysqlStorage` using an existing connection pool. Each
-    /// `MysqlStorage` is scoped to a single tenant `identity`.
-    pub async fn new_with_pool(pool: Pool, identity: &[u8]) -> Result<Self, StorageError> {
-        Self::new_with_pool_and_schema_management(pool, identity, false).await
+        Self::new_with_pool(pool, identity, run_migration).await
     }
 
     /// Creates a new `MysqlStorage` using an existing connection pool.
     ///
-    /// When `schema_managed_externally` is true, initialization trusts the
-    /// existing schema and skips SDK storage migrations entirely.
-    pub async fn new_with_pool_and_schema_management(
+    /// Each `MysqlStorage` is scoped to a single tenant `identity`. When
+    /// `run_migration` is `false`, initialization trusts the existing schema
+    /// and skips SDK storage migrations entirely.
+    pub async fn new_with_pool(
         pool: Pool,
         identity: &[u8],
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<Self, StorageError> {
         let storage = Self {
             pool,
             identity: identity.to_vec(),
         };
-        if !schema_managed_externally {
+        if run_migration {
             storage.migrate().await?;
         }
         Ok(storage)

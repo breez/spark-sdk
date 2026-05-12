@@ -62,7 +62,7 @@ class PostgresTreeStore {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null, schemaManagedExternally = false) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity || identity.length !== 33) {
       throw new TreeStoreError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -72,7 +72,7 @@ class PostgresTreeStore {
     this.identity = Buffer.from(identity);
     this.lockKey = _identityLockKey(TREE_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
-    this.schemaManagedExternally = schemaManagedExternally;
+    this.runMigration = runMigration;
   }
 
   /**
@@ -80,7 +80,7 @@ class PostgresTreeStore {
    */
   async initialize() {
     try {
-      if (!this.schemaManagedExternally) {
+      if (this.runMigration) {
         const migrationManager = new TreeStoreMigrationManager(this.logger);
         await migrationManager.migrate(this.pool, this.identity);
       }
@@ -1012,7 +1012,7 @@ async function createPostgresTreeStore(config, identity, logger = null) {
     pool,
     identity,
     logger,
-    config.schemaManagedExternally === true
+    config.runMigration !== false
   );
 }
 
@@ -1028,13 +1028,13 @@ async function createPostgresTreeStoreWithPool(
   pool,
   identity,
   logger = null,
-  schemaManagedExternally = false
+  runMigration = true
 ) {
   const store = new PostgresTreeStore(
     pool,
     identity,
     logger,
-    schemaManagedExternally
+    runMigration
   );
   await store.initialize();
   return store;

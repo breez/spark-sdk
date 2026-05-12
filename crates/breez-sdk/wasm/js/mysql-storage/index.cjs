@@ -107,20 +107,20 @@ class MysqlStorage {
    *   so that multiple instances with distinct identities can share one DB.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null, schemaManagedExternally = false) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity) {
       throw new StorageError("MysqlStorage requires a tenant identity");
     }
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.logger = logger;
-    this.schemaManagedExternally = schemaManagedExternally;
+    this.runMigration = runMigration;
   }
 
   /** Initialize the database (run migrations). */
   async initialize() {
     try {
-      if (!this.schemaManagedExternally) {
+      if (this.runMigration) {
         const migrationManager = new MysqlMigrationManager(this.logger);
         await migrationManager.migrate(this.pool, this.identity);
       }
@@ -1317,7 +1317,7 @@ function defaultMysqlStorageConfig(connectionString) {
     maxPoolSize: 10,
     createTimeoutSecs: 0,
     recycleTimeoutSecs: 10,
-    schemaManagedExternally: false,
+    runMigration: true,
   };
 }
 
@@ -1346,13 +1346,13 @@ async function createMysqlStorageWithPool(
   pool,
   identity,
   logger = null,
-  schemaManagedExternally = false
+  runMigration = true
 ) {
   const storage = new MysqlStorage(
     pool,
     identity,
     logger,
-    schemaManagedExternally
+    runMigration
   );
   await storage.initialize();
   return storage;
@@ -1372,7 +1372,7 @@ async function createMysqlStorage(config, identity, logger = null) {
     pool,
     identity,
     logger,
-    config.schemaManagedExternally === true
+    config.runMigration !== false
   );
 }
 

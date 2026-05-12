@@ -64,7 +64,7 @@ class PostgresTokenStore {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null, schemaManagedExternally = false) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity || identity.length !== 33) {
       throw new TokenStoreError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -74,7 +74,7 @@ class PostgresTokenStore {
     this.identity = Buffer.from(identity);
     this.lockKey = _identityLockKey(TOKEN_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
-    this.schemaManagedExternally = schemaManagedExternally;
+    this.runMigration = runMigration;
   }
 
   /**
@@ -82,7 +82,7 @@ class PostgresTokenStore {
    */
   async initialize() {
     try {
-      if (!this.schemaManagedExternally) {
+      if (this.runMigration) {
         const migrationManager = new TokenStoreMigrationManager(this.logger);
         await migrationManager.migrate(this.pool, this.identity);
       }
@@ -1022,7 +1022,7 @@ async function createPostgresTokenStore(config, identity, logger = null) {
     pool,
     identity,
     logger,
-    config.schemaManagedExternally === true
+    config.runMigration !== false
   );
 }
 
@@ -1038,13 +1038,13 @@ async function createPostgresTokenStoreWithPool(
   pool,
   identity,
   logger = null,
-  schemaManagedExternally = false
+  runMigration = true
 ) {
   const store = new PostgresTokenStore(
     pool,
     identity,
     logger,
-    schemaManagedExternally
+    runMigration
   );
   await store.initialize();
   return store;
