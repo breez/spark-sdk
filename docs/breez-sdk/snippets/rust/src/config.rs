@@ -43,6 +43,7 @@ pub(crate) fn configure_optimization_configuration() -> Result<()> {
     config.optimization_config = OptimizationConfig {
         auto_enabled: true,
         multiplicity: 1,
+        token_target_output_count: 5,
     };
     // ANCHOR_END: optimization-configuration
     info!("Config: {:?}", config);

@@ -197,6 +197,7 @@ pub fn default_config(network: Network) -> Config {
         optimization_config: OptimizationConfig {
             auto_enabled: true,
             multiplicity: 1,
+            token_target_output_count: 5,
         },
         stable_balance_config: None,
         max_concurrent_claims: 4,

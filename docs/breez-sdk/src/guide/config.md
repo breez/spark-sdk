@@ -69,6 +69,7 @@ This configuration controls optimization through the following options:
 
 - **Automatic optimization enabled**: whether optimization runs automatically when a payment is sent or received. Enabled by default.
 - **Multiplicity**: the desired multiplicity for the leaf set. Default value is 1. Setting it to 0 fully optimizes for unilateral exit efficiency. Setting it to a value greater than 0 also optimizes for payment speed, with higher values prioritizing payment speed more aggressively at the cost of higher unilateral exit fees. Values above 5 are intended for high-throughput server environments that require maximum TPS and are not recommended for end-user wallets.
+- **Token target output count**: the number of token outputs to produce when token-output auto-consolidation fires. Auto-consolidation triggers per-token once the wallet exceeds its available-outputs threshold for that token; instead of collapsing them into a single output (which would serialize subsequent sends), the SDK splits the consolidated balance across this many outputs of roughly equal value. Higher values preserve concurrency for parallel sends at the cost of a slightly larger output set. Must be at least 1 and strictly less than the underlying outputs threshold. Default value is 5.
 
 See [Custom leaf optimization](./optimize.md) for more information and recommendations on how to configure optimization.
 

@@ -673,6 +673,7 @@ pub struct SparkSspConfig {
 pub struct OptimizationConfig {
     pub auto_enabled: bool,
     pub multiplicity: u8,
+    pub token_target_output_count: u32,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceToken)]

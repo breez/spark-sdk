@@ -687,6 +687,9 @@ impl SdkBuilder {
             self.config.optimization_config.auto_enabled;
         spark_wallet_config.leaf_optimization_options.multiplicity =
             self.config.optimization_config.multiplicity;
+        spark_wallet_config
+            .token_outputs_optimization_options
+            .target_output_count = self.config.optimization_config.token_target_output_count;
         spark_wallet_config.max_concurrent_claims = self.config.max_concurrent_claims;
 
         let shutdown_sender = watch::channel::<()>(()).0;

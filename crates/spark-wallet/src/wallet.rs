@@ -1655,6 +1655,9 @@ impl SparkWallet {
                 self.config
                     .token_outputs_optimization_options
                     .min_outputs_threshold,
+                self.config
+                    .token_outputs_optimization_options
+                    .target_output_count,
             )
             .await?;
         Ok(())
@@ -2324,6 +2327,7 @@ impl BackgroundProcessor {
                     None,
                     self.token_outputs_optimization_options
                         .min_outputs_threshold,
+                    self.token_outputs_optimization_options.target_output_count,
                 )
                 .await
             {

@@ -50,6 +50,52 @@ fn is_transaction_preempted_error(error: &OperatorRpcError) -> bool {
     matches!(error, OperatorRpcError::Connection(status) if status.code() == tonic::Code::Aborted)
 }
 
+/// Build the list of `TransferTokenOutput` entries that consolidation should send
+/// to the wallet's own spark address.
+///
+/// The summed input `amount` is split into `target_output_count` outputs of
+/// `amount / target_output_count`. The transfer builder auto-adds any remainder
+/// as a change output to the same address, so the resulting on-chain output
+/// count is exactly `target_output_count`. If the per-output amount would round
+/// down to zero (i.e., `amount < target_output_count`), we fall back to a
+/// single output of `amount` to avoid creating zero-value outputs.
+fn build_consolidation_outputs(
+    token_id: &str,
+    amount: u128,
+    target_output_count: u32,
+    receiver_address: &SparkAddress,
+) -> Vec<TransferTokenOutput> {
+    let n = u128::from(target_output_count);
+    if n <= 1 || amount < n {
+        if amount < n {
+            warn!(
+                "Consolidation amount {} smaller than target_output_count {}; falling back to a single output",
+                amount, target_output_count
+            );
+        }
+        return vec![TransferTokenOutput {
+            token_id: token_id.to_string(),
+            amount,
+            receiver_address: receiver_address.clone(),
+            spark_invoice: None,
+        }];
+    }
+
+    let per_output = amount / n;
+    // Emit (n - 1) explicit outputs of `per_output`. The remainder
+    // (amount - (n - 1) * per_output) becomes the change output added by
+    // build_transfer_token_transaction, also routed back to receiver_address,
+    // landing us at exactly `target_output_count` outputs.
+    (0..(target_output_count - 1))
+        .map(|_| TransferTokenOutput {
+            token_id: token_id.to_string(),
+            amount: per_output,
+            receiver_address: receiver_address.clone(),
+            spark_invoice: None,
+        })
+        .collect()
+}
+
 const HRP_STR_MAINNET: &str = "btkn";
 const HRP_STR_TESTNET: &str = "btknt";
 const HRP_STR_REGTEST: &str = "btknrt";
@@ -501,7 +547,10 @@ impl TokenService {
                 Err(ServiceError::NeededTooManyOutputs)
                     if attempt < MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS - 1 =>
                 {
-                    self.optimize_token_outputs(Some(&token_id), 2).await?;
+                    // Emergency consolidation during a transfer retry: collapse to a
+                    // single output regardless of the wallet's configured target so the
+                    // next retry has the simplest possible input set to work with.
+                    self.optimize_token_outputs(Some(&token_id), 2, 1).await?;
                     attempt += 1;
                     continue;
                 }
@@ -590,14 +639,32 @@ impl TokenService {
     /// Optimizes token outputs by consolidating them when there are more than the configured threshold.
     /// Processes one token at a time. Token identifier can be provided, otherwise one is automatically selected.
     /// Only optimizes if the number of outputs is greater than the provided `min_outputs_threshold` (min 2).
+    ///
+    /// `target_output_count` controls how many outputs the consolidation transfer produces.
+    /// The summed input amount is split into roughly-equal outputs to the wallet's own
+    /// spark address; any integer-division remainder becomes the change output (also
+    /// self-addressed), so the resulting output count is exactly `target_output_count`.
+    /// If the per-output amount would round down to zero, the consolidation falls back
+    /// to a single output to avoid creating zero-value outputs.
     pub async fn optimize_token_outputs(
         &self,
         token_identifier: Option<&str>,
         min_outputs_threshold: u32,
+        target_output_count: u32,
     ) -> Result<(), ServiceError> {
         if min_outputs_threshold <= 1 {
             return Err(ServiceError::ValidationError(
                 "min_outputs_threshold must be greater than 1".to_string(),
+            ));
+        }
+        if target_output_count < 1 {
+            return Err(ServiceError::ValidationError(
+                "target_output_count must be at least 1".to_string(),
+            ));
+        }
+        if target_output_count >= min_outputs_threshold {
+            return Err(ServiceError::ValidationError(
+                "target_output_count must be strictly less than min_outputs_threshold".to_string(),
             ));
         }
 
@@ -645,21 +712,24 @@ impl TokenService {
                 .map(|o| o.output.token_amount)
                 .sum::<u128>();
 
+            let receiver_address = SparkAddress::new(
+                self.signer.get_identity_public_key().await?,
+                self.network,
+                None,
+            );
+            let receiver_outputs = build_consolidation_outputs(
+                &output.metadata.identifier,
+                amount,
+                target_output_count,
+                &receiver_address,
+            );
+
             let token_transaction = with_reserved_token_outputs(
                 self.token_output_service.as_ref(),
                 self.transfer_tokens_inner(
                     &output.metadata.identifier,
                     reservation.token_outputs.outputs.clone(),
-                    vec![TransferTokenOutput {
-                        token_id: output.metadata.identifier.clone(),
-                        amount,
-                        receiver_address: SparkAddress::new(
-                            self.signer.get_identity_public_key().await?,
-                            self.network,
-                            None,
-                        ),
-                        spark_invoice: None,
-                    }],
+                    receiver_outputs,
                 ),
                 &reservation,
             )
@@ -1662,15 +1732,21 @@ mod tests {
     use macros::test_all;
     use prost_types::Timestamp;
 
+    use bitcoin::secp256k1::PublicKey;
+
     use crate::{
         Network,
+        address::SparkAddress,
         operator::rpc::{
             self,
             spark_token::{
                 TokenOutput, TokenOutputToSpend, TokenTransferInput, token_transaction::TokenInputs,
             },
         },
-        token::{HashableTokenTransaction, token_service::validate_create_token_params},
+        token::{
+            HashableTokenTransaction,
+            token_service::{build_consolidation_outputs, validate_create_token_params},
+        },
     };
 
     #[cfg(feature = "browser-tests")]
@@ -1953,6 +2029,100 @@ mod tests {
             hex::encode(&decoded),
             "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca"
         );
+    }
+
+    fn test_receiver_address() -> SparkAddress {
+        const TEST_PUBKEY_BYTES: [u8; 33] = [
+            3, 141, 37, 201, 160, 148, 226, 93, 184, 201, 131, 47, 222, 91, 55, 171, 38, 95, 13,
+            248, 175, 190, 44, 132, 189, 75, 131, 204, 215, 82, 93, 167, 177,
+        ];
+        SparkAddress {
+            identity_public_key: PublicKey::from_slice(&TEST_PUBKEY_BYTES).unwrap(),
+            network: Network::Mainnet,
+            spark_invoice_fields: None,
+        }
+    }
+
+    const TEST_TOKEN_ID: &str = "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87";
+
+    #[test_all]
+    fn test_build_consolidation_outputs_target_zero_returns_single_output() {
+        let receiver = test_receiver_address();
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 100, 0, &receiver);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].amount, 100);
+        assert_eq!(outputs[0].token_id, TEST_TOKEN_ID);
+        assert_eq!(outputs[0].receiver_address, receiver);
+        assert!(outputs[0].spark_invoice.is_none());
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_target_one_returns_single_output() {
+        let receiver = test_receiver_address();
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 100, 1, &receiver);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].amount, 100);
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_amount_less_than_target_falls_back() {
+        let receiver = test_receiver_address();
+        // amount=3, target=5: cannot split into 5 non-zero outputs, fall back to one.
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 3, 5, &receiver);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].amount, 3);
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_amount_equal_to_target_splits_into_ones() {
+        let receiver = test_receiver_address();
+        // amount=5, target=5: per_output=1, emit 4 outputs of 1; change of 1 is
+        // added by the transfer builder, yielding 5 outputs total.
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 5, 5, &receiver);
+        assert_eq!(outputs.len(), 4);
+        for out in &outputs {
+            assert_eq!(out.amount, 1);
+        }
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_even_split() {
+        let receiver = test_receiver_address();
+        // amount=1000, target=4: per_output=250, emit 3 explicit outputs of 250;
+        // change of 250 lands as the 4th output.
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 1000, 4, &receiver);
+        assert_eq!(outputs.len(), 3);
+        for out in &outputs {
+            assert_eq!(out.amount, 250);
+            assert_eq!(out.token_id, TEST_TOKEN_ID);
+            assert_eq!(out.receiver_address, receiver);
+        }
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_uneven_split_remainder_goes_to_change() {
+        let receiver = test_receiver_address();
+        // amount=1003, target=4: per_output=250, emit 3 explicit outputs of 250.
+        // Change = 1003 - 750 = 253 will be added by the transfer builder.
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, 1003, 4, &receiver);
+        assert_eq!(outputs.len(), 3);
+        let explicit_total: u128 = outputs.iter().map(|o| o.amount).sum();
+        assert_eq!(explicit_total, 750);
+        for out in &outputs {
+            assert_eq!(out.amount, 250);
+        }
+    }
+
+    #[test_all]
+    fn test_build_consolidation_outputs_large_u128_amount() {
+        let receiver = test_receiver_address();
+        // Sanity-check that the math does not overflow at the u128 ceiling.
+        let outputs = build_consolidation_outputs(TEST_TOKEN_ID, u128::MAX, 10, &receiver);
+        assert_eq!(outputs.len(), 9);
+        let per_output = u128::MAX / 10;
+        for out in &outputs {
+            assert_eq!(out.amount, per_output);
+        }
     }
 
     #[test_all]

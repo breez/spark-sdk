@@ -40,7 +40,7 @@ Future<void> configureOptimizationConfiguration() async {
   // ANCHOR: optimization-configuration
   var config = defaultConfig(network: Network.mainnet).copyWith(
       optimizationConfig:
-          OptimizationConfig(autoEnabled: true, multiplicity: 1));
+          OptimizationConfig(autoEnabled: true, multiplicity: 1, tokenTargetOutputCount: 5));
   // ANCHOR_END: optimization-configuration
   print(config);
 }
