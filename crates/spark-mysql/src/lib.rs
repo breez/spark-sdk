@@ -28,9 +28,7 @@ pub use session_manager::{
 pub use token_store::{
     MysqlTokenStore, create_mysql_token_store, create_mysql_token_store_from_pool,
 };
-pub use tree_store::{
-    MysqlTreeStore, create_mysql_tree_store, create_mysql_tree_store_from_pool,
-};
+pub use tree_store::{MysqlTreeStore, create_mysql_tree_store, create_mysql_tree_store_from_pool};
 
 pub use migrations::{Migration, run_migrations};
 pub use pool::{create_pool, map_db_error, tx_opts};
