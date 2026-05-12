@@ -34,7 +34,7 @@ use crate::{
     signer::Signer,
     token::{
         GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
-        TokenMetadata, TokenOutput, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
+        TokenMetadata, TokenOutput, TokenOutputService, TokenOutputWithPrevOut,
         with_reserved_token_outputs,
     },
     utils::{
@@ -449,153 +449,11 @@ impl TokenService {
             .try_into()
     }
 
-    pub async fn transfer_tokens(
-        &self,
-        receiver_outputs: Vec<TransferTokenOutput>,
-        preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
-        selection_strategy: Option<SelectionStrategy>,
-    ) -> Result<TokenTransaction, ServiceError> {
-        // Validate parameters
-        if receiver_outputs.is_empty() {
-            return Err(ServiceError::Generic(
-                "No receiver outputs provided".to_string(),
-            ));
-        }
-        let token_id = receiver_outputs[0].token_id.clone();
-        if receiver_outputs.iter().any(|o| o.token_id != token_id) {
-            return Err(ServiceError::Generic(
-                "All receiver outputs must have the same token id".to_string(),
-            ));
-        }
-
-        let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
-
-        let mut attempt = 0;
-        let mut preempted_attempt = 0;
-        let (token_transaction, reservation) = loop {
-            if attempt >= MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS {
-                return Err(ServiceError::NeededTooManyOutputs);
-            }
-
-            let reservation = self
-                .token_output_service
-                .reserve_token_outputs(
-                    &token_id,
-                    ReservationTarget::MinTotalValue(total_amount),
-                    ReservationPurpose::Payment,
-                    preferred_outputs.clone(),
-                    selection_strategy,
-                )
-                .await?;
-
-            let result = with_reserved_token_outputs(
-                self.token_output_service.as_ref(),
-                self.transfer_tokens_inner(
-                    &token_id,
-                    reservation.token_outputs.outputs.clone(),
-                    receiver_outputs.clone(),
-                ),
-                &reservation,
-            )
-            .await;
-
-            match result {
-                Ok(token_transaction) => break (token_transaction, reservation),
-                Err(ServiceError::NeededTooManyOutputs)
-                    if attempt < MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS - 1 =>
-                {
-                    self.optimize_token_outputs(Some(&token_id), 2).await?;
-                    attempt += 1;
-                    continue;
-                }
-                Err(ServiceError::ServiceConnectionError(ref e))
-                    if is_transaction_preempted_error(e)
-                        && preempted_attempt < MAX_TOKEN_PREEMPTED_RETRY_ATTEMPTS - 1 =>
-                {
-                    preempted_attempt += 1;
-                    warn!(
-                        "Token transfer preempted (attempt {preempted_attempt}/{}), refreshing token outputs and retrying",
-                        MAX_TOKEN_PREEMPTED_RETRY_ATTEMPTS
-                    );
-                    self.refresh_tokens_outputs().await?;
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        };
-
-        let identity_public_key = self.signer.get_identity_public_key().await?;
-        let outputs = token_transaction
-            .outputs
-            .iter()
-            .enumerate()
-            .filter(|(_, output)| output.owner_public_key == identity_public_key)
-            .map(|(vout, output)| TokenOutputWithPrevOut {
-                output: output.clone(),
-                prev_tx_hash: token_transaction.hash.clone(),
-                prev_tx_vout: vout as u32,
-            })
-            .collect::<Vec<_>>();
-        self.token_output_service
-            .insert_token_outputs(&TokenOutputs {
-                metadata: reservation.token_outputs.metadata,
-                outputs,
-            })
-            .await?;
-
-        Ok(token_transaction)
-    }
-
-    async fn transfer_tokens_inner(
-        &self,
-        token_id: &str,
-        inputs: Vec<TokenOutputWithPrevOut>,
-        receiver_outputs: Vec<TransferTokenOutput>,
-    ) -> Result<TokenTransaction, ServiceError> {
-        if inputs.len() > MAX_TOKEN_TX_INPUTS {
-            return Err(ServiceError::NeededTooManyOutputs);
-        }
-
-        let partial_tx = self
-            .build_transfer_token_transaction(inputs.clone(), receiver_outputs.clone())
-            .await?;
-        let final_tx = self.start_transaction(partial_tx).await?;
-        let txid = hex::encode(final_tx.compute_hash(false)?);
-
-        if let Some(observer) = &self.transfer_observer {
-            observer
-                .before_send_token(
-                    &txid,
-                    token_id,
-                    receiver_outputs
-                        .into_iter()
-                        .map(|o| {
-                            Ok(ReceiverTokenOutput {
-                                pay_request: o
-                                    .spark_invoice
-                                    .or(o.receiver_address.to_address_string().ok())
-                                    .ok_or(ServiceError::Generic(
-                                        "No pay request available".to_string(),
-                                    ))?,
-                                amount: o.amount,
-                            })
-                        })
-                        .collect::<Result<Vec<ReceiverTokenOutput>, ServiceError>>()?,
-                )
-                .await?;
-        }
-
-        self.commit_transaction(final_tx.clone()).await?;
-
-        (final_tx, self.network).try_into()
-    }
-
-    /// Transfers tokens using the v3 single-phase broadcast flow.
+    /// Transfers tokens using the single-phase broadcast flow.
     ///
     /// Uses `spark_token_primitives` to construct and hash the partial transaction, then
-    /// calls `broadcast_transaction` in a single RPC instead of the two-phase
-    /// `start_transaction` + `commit_transaction` flow.
-    pub async fn transfer_tokens_v3(
+    /// calls `broadcast_transaction` in a single RPC.
+    pub async fn transfer_tokens(
         &self,
         receiver_outputs: Vec<TransferTokenOutput>,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
@@ -636,7 +494,7 @@ impl TokenService {
 
             let result = with_reserved_token_outputs(
                 self.token_output_service.as_ref(),
-                self.transfer_tokens_v3_inner(
+                self.transfer_tokens_inner(
                     &token_id,
                     reservation.token_outputs.outputs.clone(),
                     receiver_outputs.clone(),
@@ -660,7 +518,7 @@ impl TokenService {
                 {
                     preempted_attempt += 1;
                     warn!(
-                        "Token transfer v3 preempted (attempt {preempted_attempt}/{}), refreshing token outputs and retrying",
+                        "Token transfer preempted (attempt {preempted_attempt}/{}), refreshing token outputs and retrying",
                         MAX_TOKEN_PREEMPTED_RETRY_ATTEMPTS
                     );
                     self.refresh_tokens_outputs().await?;
@@ -678,7 +536,7 @@ impl TokenService {
         Ok(token_transaction)
     }
 
-    async fn transfer_tokens_v3_inner(
+    async fn transfer_tokens_inner(
         &self,
         token_id: &str,
         inputs: Vec<TokenOutputWithPrevOut>,
@@ -972,7 +830,7 @@ impl TokenService {
                 .map(|o| o.output.token_amount)
                 .sum::<u128>();
 
-            let token_transaction = with_reserved_token_outputs(
+            with_reserved_token_outputs(
                 self.token_output_service.as_ref(),
                 self.transfer_tokens_inner(
                     &output.metadata.identifier,
@@ -992,22 +850,7 @@ impl TokenService {
             )
             .await?;
 
-            let outputs = token_transaction
-                .outputs
-                .iter()
-                .enumerate()
-                .map(|(vout, output)| TokenOutputWithPrevOut {
-                    output: output.clone(),
-                    prev_tx_hash: token_transaction.hash.clone(),
-                    prev_tx_vout: vout as u32,
-                })
-                .collect::<Vec<_>>();
-            self.token_output_service
-                .insert_token_outputs(&TokenOutputs {
-                    metadata: reservation.token_outputs.metadata,
-                    outputs,
-                })
-                .await?;
+            self.refresh_tokens_outputs().await?;
         }
 
         if !did_optimize {
@@ -1073,76 +916,6 @@ impl TokenService {
         }];
 
         self.build_token_transaction(token_inputs, token_outputs, vec![])
-    }
-
-    async fn build_transfer_token_transaction(
-        &self,
-        mut inputs: Vec<TokenOutputWithPrevOut>,
-        mut receiver_outputs: Vec<TransferTokenOutput>,
-    ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
-        // Ensure inputs are ordered by vout ascending so that the input indices
-        // used for owner signatures match the order expected by the SO, which sorts
-        // inputs by "prevTokenTransactionVout" before validating signatures.
-        inputs.sort_by_key(|o| o.prev_tx_vout);
-
-        // If the inputs amount is greater than the outputs amount, we add a change output
-        let inputs_amount = inputs.iter().map(|o| o.output.token_amount).sum::<u128>();
-        let outputs_amount = receiver_outputs.iter().map(|o| o.amount).sum::<u128>();
-        if inputs_amount > outputs_amount {
-            receiver_outputs.push(TransferTokenOutput {
-                token_id: receiver_outputs[0].token_id.clone(),
-                amount: inputs_amount - outputs_amount,
-                receiver_address: SparkAddress::new(
-                    self.signer.get_identity_public_key().await?,
-                    self.network,
-                    None,
-                ),
-                spark_invoice: None,
-            });
-        }
-
-        // Prepare inputs
-        let outputs_to_spend = inputs
-            .iter()
-            .map(|o| {
-                Ok(rpc::spark_token::TokenOutputToSpend {
-                    prev_token_transaction_hash: hex::decode(&o.prev_tx_hash)
-                        .map_err(|_| ServiceError::Generic("Invalid prev tx hash".to_string()))?,
-                    prev_token_transaction_vout: o.prev_tx_vout,
-                })
-            })
-            .collect::<Result<Vec<_>, ServiceError>>()?;
-        let inputs = rpc::spark_token::token_transaction::TokenInputs::TransferInput(
-            rpc::spark_token::TokenTransferInput { outputs_to_spend },
-        );
-
-        // Prepare outputs
-        let token_outputs = receiver_outputs
-            .iter()
-            .map(|o| {
-                Ok(rpc::spark_token::TokenOutput {
-                    owner_public_key: o.receiver_address.identity_public_key.serialize().to_vec(),
-                    token_identifier: Some(
-                        bech32m_decode_token_id(&o.token_id, Some(self.network))
-                            .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))?,
-                    ),
-                    token_amount: o.amount.to_be_bytes().to_vec(),
-                    ..Default::default()
-                })
-            })
-            .collect::<Result<Vec<_>, ServiceError>>()?;
-
-        // Spark invoices this tx fulfills
-        let invoice_attachments = receiver_outputs
-            .into_iter()
-            .filter_map(|o| {
-                o.spark_invoice
-                    .map(|i| rpc::spark_token::InvoiceAttachment { spark_invoice: i })
-            })
-            .collect::<Vec<_>>();
-
-        // Build transaction
-        self.build_token_transaction(inputs, token_outputs, invoice_attachments)
     }
 
     fn build_token_transaction(
