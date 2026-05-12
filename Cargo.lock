@@ -790,6 +790,7 @@ dependencies = [
  "rcgen",
  "rusqlite",
  "rusqlite_migration",
+ "rustls",
  "serde",
  "serde_json",
  "spark-mysql",
