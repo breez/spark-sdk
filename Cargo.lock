@@ -714,6 +714,7 @@ dependencies = [
  "rand 0.8.6",
  "regex-lite",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "spark",

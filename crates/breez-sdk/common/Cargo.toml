@@ -44,6 +44,7 @@ url.workspace = true
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 dnssec-prover = { workspace = true, features = ["std", "tokio", "validation"] }
 prost.workspace = true
+rustls.workspace = true
 tonic = { workspace = true, features = [
     "channel",
     "codegen",
