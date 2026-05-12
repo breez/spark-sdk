@@ -1521,10 +1521,6 @@ mod tests {
 
     impl MysqlTreeStoreTestFixture {
         async fn new() -> Self {
-            // testcontainers' bollard Docker client builds its own rustls
-            // ClientConfig before any pool is created, so install the provider
-            // here too (the call is idempotent via Once).
-            crate::pool::install_rustls_crypto_provider();
             let container = Mysql::default()
                 .start()
                 .await
@@ -2437,7 +2433,6 @@ mod tests {
 
     impl TwoTenantTreeFixture {
         async fn new() -> Self {
-            crate::pool::install_rustls_crypto_provider();
             let container = Mysql::default()
                 .start()
                 .await

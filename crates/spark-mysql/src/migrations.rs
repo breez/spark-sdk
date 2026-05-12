@@ -422,7 +422,6 @@ mod tests {
     /// detect the existing state and no-op rather than abort.
     #[tokio::test]
     async fn test_partial_migration_replay_is_idempotent() {
-        crate::pool::install_rustls_crypto_provider();
         // Container must outlive the test — drop binds the lifetime to the
         // function scope while clippy is happy with a non-underscore name.
         let container: ContainerAsync<Mysql> = Mysql::default()
