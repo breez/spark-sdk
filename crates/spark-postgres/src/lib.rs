@@ -23,15 +23,12 @@ pub use error::PostgresError;
 pub use session_manager::{
     PostgresSessionManager, create_postgres_session_manager,
     create_postgres_session_manager_from_pool,
-    create_postgres_session_manager_from_pool_with_schema_management,
 };
 pub use token_store::{
     PostgresTokenStore, create_postgres_token_store, create_postgres_token_store_from_pool,
-    create_postgres_token_store_from_pool_with_schema_management,
 };
 pub use tree_store::{
     PostgresTreeStore, create_postgres_tree_store, create_postgres_tree_store_from_pool,
-    create_postgres_tree_store_from_pool_with_schema_management,
 };
 
 // Re-export pool infrastructure for downstream crates

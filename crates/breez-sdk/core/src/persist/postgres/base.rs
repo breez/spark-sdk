@@ -88,10 +88,13 @@ pub struct PostgresStorageConfig {
     /// Only used with `sslmode=verify-ca` or `sslmode=verify-full`.
     pub root_ca_pem: Option<String>,
 
-    /// If true, the SDK trusts that the database schema is managed by the
-    /// embedding service and skips all migrations, including writes to the
-    /// schema migrations tables.
-    pub schema_managed_externally: bool,
+    /// Whether the SDK should run schema migrations on startup.
+    ///
+    /// Set to `false` when the database schema is owned and migrated by the
+    /// embedding service; the SDK will trust the existing schema and skip all
+    /// migrations, including writes to the schema migrations tables. Defaults
+    /// to `true`.
+    pub run_migration: bool,
 }
 
 impl From<PostgresStorageConfig> for spark_postgres::PostgresStorageConfig {
@@ -104,7 +107,7 @@ impl From<PostgresStorageConfig> for spark_postgres::PostgresStorageConfig {
             recycle_timeout_secs: config.recycle_timeout_secs,
             queue_mode: config.queue_mode.into(),
             root_ca_pem: config.root_ca_pem,
-            schema_managed_externally: config.schema_managed_externally,
+            run_migration: config.run_migration,
         }
     }
 }
@@ -119,7 +122,7 @@ impl From<spark_postgres::PostgresStorageConfig> for PostgresStorageConfig {
             recycle_timeout_secs: config.recycle_timeout_secs,
             queue_mode: config.queue_mode.into(),
             root_ca_pem: config.root_ca_pem,
-            schema_managed_externally: config.schema_managed_externally,
+            run_migration: config.run_migration,
         }
     }
 }
@@ -201,43 +204,31 @@ pub(super) async fn run_migrations(
 pub(crate) async fn create_postgres_tree_store(
     pool: deadpool_postgres::Pool,
     identity: &[u8],
-    schema_managed_externally: bool,
+    run_migration: bool,
 ) -> Result<Arc<dyn TreeStore>, StorageError> {
-    spark_postgres::create_postgres_tree_store_from_pool_with_schema_management(
-        pool,
-        identity,
-        schema_managed_externally,
-    )
-    .await
-    .map_err(StorageError::from)
+    spark_postgres::create_postgres_tree_store_from_pool(pool, identity, run_migration)
+        .await
+        .map_err(StorageError::from)
 }
 
 /// Creates a `PostgresTokenStore` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_postgres_token_store(
     pool: deadpool_postgres::Pool,
     identity: &[u8],
-    schema_managed_externally: bool,
+    run_migration: bool,
 ) -> Result<Arc<dyn TokenOutputStore>, StorageError> {
-    spark_postgres::create_postgres_token_store_from_pool_with_schema_management(
-        pool,
-        identity,
-        schema_managed_externally,
-    )
-    .await
-    .map_err(StorageError::from)
+    spark_postgres::create_postgres_token_store_from_pool(pool, identity, run_migration)
+        .await
+        .map_err(StorageError::from)
 }
 
 /// Creates a `PostgresSessionManager` instance for use with the SDK, using an existing pool.
 pub(crate) async fn create_postgres_session_manager(
     pool: deadpool_postgres::Pool,
     identity: &[u8],
-    schema_managed_externally: bool,
+    run_migration: bool,
 ) -> Result<Arc<dyn SessionManager>, StorageError> {
-    spark_postgres::create_postgres_session_manager_from_pool_with_schema_management(
-        pool,
-        identity,
-        schema_managed_externally,
-    )
-    .await
-    .map_err(StorageError::from)
+    spark_postgres::create_postgres_session_manager_from_pool(pool, identity, run_migration)
+        .await
+        .map_err(StorageError::from)
 }

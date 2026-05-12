@@ -85,40 +85,26 @@ impl PostgresSessionManager {
         config: PostgresStorageConfig,
         identity: &[u8],
     ) -> Result<Self, PostgresError> {
-        let schema_managed_externally = config.schema_managed_externally;
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity, schema_managed_externally).await
+        Self::from_pool(pool, identity, run_migration).await
     }
 
     /// Creates a new `PostgresSessionManager` from an existing connection pool.
     ///
     /// Useful when sharing a pool with other components (e.g., `PostgresStorage`).
-    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
-        Self::init(pool, identity, false).await
-    }
-
-    /// Creates a new `PostgresSessionManager` from an existing connection pool.
-    ///
-    /// When `schema_managed_externally` is true, initialization trusts the
-    /// existing schema and skips session manager migrations entirely.
-    pub async fn from_pool_with_schema_management(
+    /// When `run_migration` is `false`, initialization trusts the existing
+    /// schema and skips session manager migrations entirely.
+    pub async fn from_pool(
         pool: Pool,
         identity: &[u8],
-        schema_managed_externally: bool,
-    ) -> Result<Self, PostgresError> {
-        Self::init(pool, identity, schema_managed_externally).await
-    }
-
-    async fn init(
-        pool: Pool,
-        identity: &[u8],
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<Self, PostgresError> {
         let store = Self {
             pool,
             identity: identity.to_vec(),
         };
-        if !schema_managed_externally {
+        if run_migration {
             store.migrate().await?;
         }
         Ok(store)
@@ -161,31 +147,15 @@ pub async fn create_postgres_session_manager(
 /// Creates a `PostgresSessionManager` from an existing connection pool.
 ///
 /// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
+/// When `run_migration` is `false`, skips SDK-managed schema migrations and
+/// trusts that the `sessions` table already exists.
 pub async fn create_postgres_session_manager_from_pool(
     pool: Pool,
     identity: &[u8],
+    run_migration: bool,
 ) -> Result<Arc<dyn SessionManager>, PostgresError> {
     Ok(Arc::new(
-        PostgresSessionManager::from_pool(pool, identity).await?,
-    ))
-}
-
-/// Creates a `PostgresSessionManager` from an existing connection pool.
-///
-/// If `schema_managed_externally` is true, skips SDK-managed schema
-/// migrations and trusts that the `sessions` table already exists.
-pub async fn create_postgres_session_manager_from_pool_with_schema_management(
-    pool: Pool,
-    identity: &[u8],
-    schema_managed_externally: bool,
-) -> Result<Arc<dyn SessionManager>, PostgresError> {
-    Ok(Arc::new(
-        PostgresSessionManager::from_pool_with_schema_management(
-            pool,
-            identity,
-            schema_managed_externally,
-        )
-        .await?,
+        PostgresSessionManager::from_pool(pool, identity, run_migration).await?,
     ))
 }
 

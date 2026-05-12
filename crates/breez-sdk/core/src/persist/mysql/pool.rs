@@ -18,7 +18,7 @@ use super::{MysqlStorageConfig, base::create_pool};
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct MysqlConnectionPool {
     pub(crate) inner: mysql_async::Pool,
-    pub(crate) schema_managed_externally: bool,
+    pub(crate) run_migration: bool,
 }
 
 /// Creates a shareable `MySQL` connection pool from the given configuration.
@@ -33,7 +33,7 @@ pub fn create_mysql_connection_pool(
     let inner = create_pool(config).map_err(SdkError::from)?;
     Ok(Arc::new(MysqlConnectionPool {
         inner,
-        schema_managed_externally: config.schema_managed_externally,
+        run_migration: config.run_migration,
     }))
 }
 

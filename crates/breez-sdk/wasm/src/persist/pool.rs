@@ -23,7 +23,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<crate::persist::Storage, JsValue>;
 
     #[wasm_bindgen(js_name = "createPostgresTreeStoreWithPool", catch)]
@@ -31,7 +31,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<TreeStoreJs, JsValue>;
 
     #[wasm_bindgen(js_name = "createPostgresTokenStoreWithPool", catch)]
@@ -39,7 +39,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<TokenStoreJs, JsValue>;
 
     #[wasm_bindgen(js_name = "createPostgresSessionManagerWithPool", catch)]
@@ -47,7 +47,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<SessionManager, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlPool", catch)]
@@ -58,7 +58,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<crate::persist::Storage, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlTreeStoreWithPool", catch)]
@@ -66,7 +66,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<TreeStoreJs, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlTokenStoreWithPool", catch)]
@@ -74,7 +74,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<TokenStoreJs, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlSessionManagerWithPool", catch)]
@@ -82,6 +82,6 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<SessionManager, JsValue>;
 }

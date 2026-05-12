@@ -39,7 +39,7 @@ class PostgresSessionManager {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null, schemaManagedExternally = false) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity || identity.length !== 33) {
       throw new SessionManagerError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -48,12 +48,12 @@ class PostgresSessionManager {
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.logger = logger;
-    this.schemaManagedExternally = schemaManagedExternally;
+    this.runMigration = runMigration;
   }
 
   async initialize() {
     try {
-      if (!this.schemaManagedExternally) {
+      if (this.runMigration) {
         const migrationManager = new SessionManagerMigrationManager(this.logger);
         await migrationManager.migrate(this.pool);
       }
@@ -149,7 +149,7 @@ async function createPostgresSessionManager(poolConfig, identity, logger = null)
     pool,
     identity,
     logger,
-    poolConfig.schemaManagedExternally === true
+    poolConfig.runMigration !== false
   );
   await manager.initialize();
   return manager;
@@ -163,13 +163,13 @@ async function createPostgresSessionManagerWithPool(
   pool,
   identity,
   logger = null,
-  schemaManagedExternally = false
+  runMigration = true
 ) {
   const manager = new PostgresSessionManager(
     pool,
     identity,
     logger,
-    schemaManagedExternally
+    runMigration
   );
   await manager.initialize();
   return manager;

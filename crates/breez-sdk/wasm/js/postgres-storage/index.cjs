@@ -77,14 +77,14 @@ class PostgresStorage {
    *   so that multiple instances with distinct identities can share one DB.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null, schemaManagedExternally = false) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity) {
       throw new StorageError("PostgresStorage requires a tenant identity");
     }
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.logger = logger;
-    this.schemaManagedExternally = schemaManagedExternally;
+    this.runMigration = runMigration;
   }
 
   /**
@@ -92,7 +92,7 @@ class PostgresStorage {
    */
   async initialize() {
     try {
-      if (!this.schemaManagedExternally) {
+      if (this.runMigration) {
         const migrationManager = new PostgresMigrationManager(this.logger);
         await migrationManager.migrate(this.pool, this.identity);
       }
@@ -1393,7 +1393,7 @@ function defaultPostgresStorageConfig(connectionString) {
     maxPoolSize: 10,
     createTimeoutSecs: 0,
     recycleTimeoutSecs: 10,
-    schemaManagedExternally: false,
+    runMigration: true,
   };
 }
 
@@ -1417,7 +1417,7 @@ async function createPostgresStorage(config, identity, logger = null) {
     pool,
     identity,
     logger,
-    config.schemaManagedExternally === true
+    config.runMigration !== false
   );
 }
 
@@ -1449,13 +1449,13 @@ async function createPostgresStorageWithPool(
   pool,
   identity,
   logger = null,
-  schemaManagedExternally = false
+  runMigration = true
 ) {
   const storage = new PostgresStorage(
     pool,
     identity,
     logger,
-    schemaManagedExternally
+    runMigration
   );
   await storage.initialize();
   return storage;

@@ -805,36 +805,20 @@ impl PostgresTreeStore {
         config: PostgresStorageConfig,
         identity: &[u8],
     ) -> Result<Self, PostgresError> {
-        let schema_managed_externally = config.schema_managed_externally;
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity, schema_managed_externally).await
+        Self::from_pool(pool, identity, run_migration).await
     }
 
     /// Creates a new `PostgresTreeStore` from an existing connection pool.
     ///
-    /// This reuses the provided pool and runs tree store migrations.
     /// Useful when sharing a pool with other components (e.g., `PostgresStorage`).
-    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
-        Self::init(pool, identity, false).await
-    }
-
-    /// Creates a new `PostgresTreeStore` from an existing connection pool.
-    ///
-    /// When `schema_managed_externally` is true, initialization trusts the
-    /// existing schema and skips tree store migrations entirely.
-    pub async fn from_pool_with_schema_management(
+    /// When `run_migration` is `false`, initialization trusts the existing
+    /// schema and skips tree store migrations entirely.
+    pub async fn from_pool(
         pool: Pool,
         identity: &[u8],
-        schema_managed_externally: bool,
-    ) -> Result<Self, PostgresError> {
-        Self::init(pool, identity, schema_managed_externally).await
-    }
-
-    /// Shared initialization logic for both constructors.
-    async fn init(
-        pool: Pool,
-        identity: &[u8],
-        schema_managed_externally: bool,
+        run_migration: bool,
     ) -> Result<Self, PostgresError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
@@ -846,7 +830,7 @@ impl PostgresTreeStore {
             balance_changed_rx,
         };
 
-        if !schema_managed_externally {
+        if run_migration {
             store.migrate().await?;
         }
         store.notify_balance_change();
@@ -1310,31 +1294,15 @@ pub async fn create_postgres_tree_store(
 ///
 /// * `pool` - An existing deadpool-postgres connection pool
 /// * `identity` - 33-byte secp256k1 pubkey scoping all reads and writes
+/// * `run_migration` - Whether to run tree store migrations. Set to `false`
+///   when the embedding service owns the schema.
 pub async fn create_postgres_tree_store_from_pool(
     pool: Pool,
     identity: &[u8],
+    run_migration: bool,
 ) -> Result<Arc<dyn TreeStore>, PostgresError> {
     Ok(Arc::new(
-        PostgresTreeStore::from_pool(pool, identity).await?,
-    ))
-}
-
-/// Creates a `PostgresTreeStore` instance from an existing connection pool.
-///
-/// If `schema_managed_externally` is true, skips SDK-managed schema
-/// migrations and trusts that all required tables, columns, and indexes exist.
-pub async fn create_postgres_tree_store_from_pool_with_schema_management(
-    pool: Pool,
-    identity: &[u8],
-    schema_managed_externally: bool,
-) -> Result<Arc<dyn TreeStore>, PostgresError> {
-    Ok(Arc::new(
-        PostgresTreeStore::from_pool_with_schema_management(
-            pool,
-            identity,
-            schema_managed_externally,
-        )
-        .await?,
+        PostgresTreeStore::from_pool(pool, identity, run_migration).await?,
     ))
 }
 
@@ -2320,10 +2288,10 @@ mod tests {
             let config = PostgresStorageConfig::with_defaults(connection_string);
             let pool = create_pool(&config).expect("Failed to create pool");
 
-            let a = PostgresTreeStore::from_pool(pool.clone(), &TEST_IDENTITY)
+            let a = PostgresTreeStore::from_pool(pool.clone(), &TEST_IDENTITY, true)
                 .await
                 .expect("Failed to create tenant A");
-            let b = PostgresTreeStore::from_pool(pool, &TEST_IDENTITY_B)
+            let b = PostgresTreeStore::from_pool(pool, &TEST_IDENTITY_B, true)
                 .await
                 .expect("Failed to create tenant B");
 

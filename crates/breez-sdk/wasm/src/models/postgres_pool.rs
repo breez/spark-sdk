@@ -19,7 +19,7 @@ use crate::sdk_builder::PostgresStorageConfig;
 #[wasm_bindgen]
 pub struct PostgresConnectionPool {
     pub(crate) inner: Rc<JsPool>,
-    pub(crate) schema_managed_externally: bool,
+    pub(crate) run_migration: bool,
 }
 
 impl PostgresConnectionPool {
@@ -27,8 +27,8 @@ impl PostgresConnectionPool {
         Rc::clone(&self.inner)
     }
 
-    pub(crate) fn schema_managed_externally(&self) -> bool {
-        self.schema_managed_externally
+    pub(crate) fn run_migration(&self) -> bool {
+        self.run_migration
     }
 }
 
@@ -37,9 +37,9 @@ impl PostgresConnectionPool {
 pub fn create_postgres_connection_pool(
     config: PostgresStorageConfig,
 ) -> WasmResult<PostgresConnectionPool> {
-    let schema_managed_externally = config.schema_managed_externally;
+    let run_migration = config.run_migration;
     Ok(PostgresConnectionPool {
         inner: Rc::new(create_postgres_pool(config)?),
-        schema_managed_externally,
+        run_migration,
     })
 }
