@@ -215,14 +215,16 @@ pub fn make_tls_config_verifying(
 /// This is appropriate for `sslmode=require` which ensures encrypted connections
 /// but does not verify the server's identity.
 fn make_tls_config() -> Result<ClientConfig, PostgresError> {
-    Ok(ClientConfig::builder_with_provider(Arc::new(default_provider()))
-        .with_safe_default_protocol_versions()
-        .map_err(|e| {
-            PostgresError::Initialization(format!("Failed to configure rustls protocols: {e}"))
-        })?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(NoVerifier))
-        .with_no_client_auth())
+    Ok(
+        ClientConfig::builder_with_provider(Arc::new(default_provider()))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| {
+                PostgresError::Initialization(format!("Failed to configure rustls protocols: {e}"))
+            })?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerifier))
+            .with_no_client_auth(),
+    )
 }
 
 /// Internal representation of SSL modes, including verify-ca and verify-full
