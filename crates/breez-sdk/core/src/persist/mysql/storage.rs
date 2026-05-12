@@ -2040,10 +2040,10 @@ mod tests {
             let config = MysqlStorageConfig::with_defaults(connection_string);
             let pool = create_pool(&config).expect("Failed to create pool");
 
-            let a = MysqlStorage::new_with_pool(pool.clone(), &TEST_IDENTITY_A)
+            let a = MysqlStorage::new_with_pool(pool.clone(), &TEST_IDENTITY_A, true)
                 .await
                 .expect("Failed to create tenant A");
-            let b = MysqlStorage::new_with_pool(pool, &TEST_IDENTITY_B)
+            let b = MysqlStorage::new_with_pool(pool, &TEST_IDENTITY_B, true)
                 .await
                 .expect("Failed to create tenant B");
 
