@@ -4,6 +4,7 @@
 //! min/max constraints and idle TTL. We translate `MysqlStorageConfig` knobs
 //! onto the closest `mysql_async` equivalents.
 
+use std::sync::Once;
 use std::time::Duration;
 
 use mysql_async::{
@@ -61,13 +62,26 @@ pub fn create_pool(config: &MysqlStorageConfig) -> Result<Pool, MysqlError> {
     Ok(Pool::new(builder))
 }
 
-fn install_rustls_crypto_provider() {
-    if rustls::crypto::ring::default_provider()
-        .install_default()
-        .is_err()
-    {
-        tracing::debug!("Failed to install rustls crypto provider, ignoring error");
-    }
+/// Installs the rustls Ring crypto provider as the process-level default.
+///
+/// `mysql_async` constructs its own `rustls::ClientConfig` internally and relies on
+/// `CryptoProvider::get_default()`. With both `ring` and `aws_lc_rs` enabled in the
+/// unified workspace build, that auto-detect panics unless a default has already been
+/// installed. We install Ring once per process, here and from each test fixture that
+/// spins up `testcontainers` (whose `bollard` Docker client builds its own
+/// `ClientConfig` before `create_pool` runs).
+pub(crate) fn install_rustls_crypto_provider() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        if rustls::crypto::ring::default_provider()
+            .install_default()
+            .is_err()
+        {
+            tracing::debug!(
+                "rustls crypto provider was already installed by another caller; leaving it in place"
+            );
+        }
+    });
 }
 
 /// Parses an `ssl-mode` value from a `MySQL` URL connection string and constructs
