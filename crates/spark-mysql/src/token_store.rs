@@ -1442,6 +1442,7 @@ mod tests {
 
     impl MysqlTokenStoreTestFixture {
         async fn new() -> Self {
+            crate::pool::install_rustls_crypto_provider();
             let container = Mysql::default()
                 .start()
                 .await
@@ -1881,6 +1882,7 @@ mod tests {
 
     impl TwoTenantTokenFixture {
         async fn new() -> Self {
+            crate::pool::install_rustls_crypto_provider();
             let container = Mysql::default()
                 .start()
                 .await

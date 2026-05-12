@@ -4,6 +4,7 @@
 //! min/max constraints and idle TTL. We translate `MysqlStorageConfig` knobs
 //! onto the closest `mysql_async` equivalents.
 
+use std::sync::Once;
 use std::time::Duration;
 
 use mysql_async::{
@@ -35,14 +36,15 @@ pub fn tx_opts() -> TxOpts {
 /// - `verify_ca` / `verify_identity` — TLS with the CA from `root_ca_pem`
 ///   (or system roots if not provided)
 pub fn create_pool(config: &MysqlStorageConfig) -> Result<Pool, MysqlError> {
-    let opts: Opts = Opts::from_url(&config.connection_string)
+    install_rustls_crypto_provider();
+
+    let (connection_string, ssl_mode) = connection_string_and_ssl_mode(&config.connection_string);
+    let opts: Opts = Opts::from_url(&connection_string)
         .map_err(|e| MysqlError::Initialization(format!("Invalid connection string: {e}")))?;
 
     let mut builder = OptsBuilder::from_opts(opts);
 
-    if let Some(ssl_opts) =
-        build_ssl_opts(&config.connection_string, config.root_ca_pem.as_deref())?
-    {
+    if let Some(ssl_opts) = build_ssl_opts(ssl_mode, config.root_ca_pem.as_deref()) {
         builder = builder.ssl_opts(ssl_opts);
     }
 
@@ -60,35 +62,50 @@ pub fn create_pool(config: &MysqlStorageConfig) -> Result<Pool, MysqlError> {
     Ok(Pool::new(builder))
 }
 
+/// Installs the rustls Ring crypto provider as the process-level default.
+///
+/// `mysql_async` constructs its own `rustls::ClientConfig` internally and relies on
+/// `CryptoProvider::get_default()`. With both `ring` and `aws_lc_rs` enabled in the
+/// unified workspace build, that auto-detect panics unless a default has already been
+/// installed. We install Ring once per process, here and from each test fixture that
+/// spins up `testcontainers` (whose `bollard` Docker client builds its own
+/// `ClientConfig` before `create_pool` runs).
+pub(crate) fn install_rustls_crypto_provider() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        if rustls::crypto::ring::default_provider()
+            .install_default()
+            .is_err()
+        {
+            tracing::debug!(
+                "rustls crypto provider was already installed by another caller; leaving it in place"
+            );
+        }
+    });
+}
+
 /// Parses an `ssl-mode` value from a `MySQL` URL connection string and constructs
 /// matching `SslOpts`.
-#[allow(clippy::unnecessary_wraps)] // future-proofs for cert parsing errors
-fn build_ssl_opts(
-    conn_str: &str,
-    root_ca_pem: Option<&str>,
-) -> Result<Option<SslOpts>, MysqlError> {
-    let ssl_mode = parse_ssl_mode_from_url(conn_str);
+fn build_ssl_opts(ssl_mode: SslModeExt, root_ca_pem: Option<&str>) -> Option<SslOpts> {
     match ssl_mode {
-        SslModeExt::Disabled => Ok(None),
+        SslModeExt::Disabled => None,
         SslModeExt::Preferred | SslModeExt::Required => {
             // Encryption without identity verification.
-            Ok(Some(
-                SslOpts::default().with_danger_accept_invalid_certs(true),
-            ))
+            Some(SslOpts::default().with_danger_accept_invalid_certs(true))
         }
         SslModeExt::VerifyCa => {
             let mut opts = SslOpts::default().with_danger_skip_domain_validation(true);
             if let Some(pem) = root_ca_pem {
                 opts = opts.with_root_certs(vec![pem.as_bytes().to_vec().into()]);
             }
-            Ok(Some(opts))
+            Some(opts)
         }
         SslModeExt::VerifyIdentity => {
             let mut opts = SslOpts::default();
             if let Some(pem) = root_ca_pem {
                 opts = opts.with_root_certs(vec![pem.as_bytes().to_vec().into()]);
             }
-            Ok(Some(opts))
+            Some(opts)
         }
     }
 }
@@ -102,23 +119,35 @@ enum SslModeExt {
     VerifyIdentity,
 }
 
-fn parse_ssl_mode_from_url(conn_str: &str) -> SslModeExt {
-    let Some(query) = conn_str.split_once('?').map(|(_, q)| q) else {
+fn connection_string_and_ssl_mode(conn_str: &str) -> (String, SslModeExt) {
+    let Some((base, query)) = conn_str.split_once('?') else {
         // Default for MySQL clients is preferred when supported, but the safe
         // default for an unspecified backend is no TLS to avoid surprising
         // failures on local docker setups.
-        return SslModeExt::Disabled;
+        return (conn_str.to_string(), SslModeExt::Disabled);
     };
+
+    let mut ssl_mode = SslModeExt::Disabled;
+    let mut retained_params = Vec::new();
 
     for param in query.split('&') {
         if let Some((key, value)) = param.split_once('=') {
             let key_lc = key.to_ascii_lowercase();
             if key_lc == "ssl-mode" || key_lc == "ssl_mode" || key_lc == "sslmode" {
-                return parse_ssl_mode_value(value);
+                ssl_mode = parse_ssl_mode_value(value);
+                continue;
             }
         }
+        retained_params.push(param);
     }
-    SslModeExt::Disabled
+
+    let connection_string = if retained_params.is_empty() {
+        base.to_string()
+    } else {
+        format!("{}?{}", base, retained_params.join("&"))
+    };
+
+    (connection_string, ssl_mode)
 }
 
 #[allow(clippy::match_same_arms)] // explicit "disabled" arm + unknown-fallback arm both default to Disabled
@@ -168,5 +197,34 @@ pub fn map_db_error(e: mysql_async::Error) -> MysqlError {
 impl From<mysql_async::Error> for MysqlError {
     fn from(value: mysql_async::Error) -> Self {
         map_db_error(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_ssl_mode_before_mysql_async_url_parsing() {
+        assert_eq!(
+            connection_string_and_ssl_mode("mysql://u:p@host:3306/db?ssl-mode=required"),
+            ("mysql://u:p@host:3306/db".to_string(), SslModeExt::Required)
+        );
+        assert_eq!(
+            connection_string_and_ssl_mode(
+                "mysql://u:p@host:3306/db?stmt_cache_size=100&ssl_mode=verify_ca&pool_max=4"
+            ),
+            (
+                "mysql://u:p@host:3306/db?stmt_cache_size=100&pool_max=4".to_string(),
+                SslModeExt::VerifyCa,
+            )
+        );
+        assert_eq!(
+            connection_string_and_ssl_mode("mysql://u:p@host:3306/db?sslmode=disabled&pool_min=1"),
+            (
+                "mysql://u:p@host:3306/db?pool_min=1".to_string(),
+                SslModeExt::Disabled,
+            )
+        );
     }
 }
