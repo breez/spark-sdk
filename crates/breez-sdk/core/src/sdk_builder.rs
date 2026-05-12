@@ -470,6 +470,16 @@ impl SdkBuilder {
     /// Builds the `BreezSdk` instance with the configured components.
     #[allow(clippy::too_many_lines)]
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
+        // The mysql backend's `rustls-tls` feature pulls rustls with both `ring`
+        // and `aws_lc_rs` provider features enabled. With both on, rustls refuses
+        // to auto-pick a process-level CryptoProvider and panics the first time
+        // anything (here, `DefaultHttpClient`) builds a `ClientConfig`. Install
+        // ring up front so reqwest / tonic / bollard all see a default.
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+
         // Validate configuration
         self.config.validate()?;
 
