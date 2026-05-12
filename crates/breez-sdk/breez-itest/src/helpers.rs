@@ -92,29 +92,69 @@ async fn get_mysql_tree_store_base_url() -> Option<&'static str> {
     Some(&shared.base_url)
 }
 
-/// If USE_POSTGRES_TREE_STORE or USE_MYSQL_TREE_STORE is set, creates a unique
-/// database and attaches the corresponding backend to the builder. Otherwise
-/// sets default storage with the given directory. Exactly one storage
-/// configuration is applied; if both env vars are set, postgres wins.
-async fn apply_storage(builder: SdkBuilder, storage_dir: String) -> Result<SdkBuilder> {
+/// A resolved storage backend. Captures the choice (and connection string for
+/// PG/MySQL) so the same database can be reused across multiple SDK builds —
+/// e.g. for `ReinitializableSdkInstance`, which expects storage to persist
+/// across SDK reinitializations.
+#[derive(Clone, Debug)]
+pub enum BackendChoice {
+    Sqlite,
+    Postgres(String),
+    Mysql(String),
+}
+
+/// Resolves which backend to use based on env vars. For PG/MySQL, allocates a
+/// fresh database by incrementing the appropriate counter and ensuring the DB
+/// exists; for SQLite returns [`BackendChoice::Sqlite`]. Call once per logical
+/// storage scope and reuse the result across SDK builds that share that scope.
+///
+/// If both `USE_POSTGRES_TREE_STORE` and `USE_MYSQL_TREE_STORE` are set,
+/// postgres wins (matches prior `apply_storage` behavior).
+pub async fn resolve_backend_choice() -> Result<BackendChoice> {
     if let Some(base_url) = get_postgres_tree_store_base_url().await {
         let counter = TREE_STORE_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let conn_str = format!("{base_url} dbname=ts_{counter}");
         ensure_postgres_database_exists(&conn_str).await?;
-        let pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
-        let pool = breez_sdk_spark::create_postgres_connection_pool(&pg_config)?;
-        return Ok(builder.with_postgres_connection_pool(pool));
+        return Ok(BackendChoice::Postgres(conn_str));
     }
     if let Some(base_url) = get_mysql_tree_store_base_url().await {
         let counter = MYSQL_TREE_STORE_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let db_name = format!("ts_{counter}");
         let conn_str = format!("{base_url}/{db_name}");
         ensure_mysql_database_exists(base_url, &db_name).await?;
-        let my_config = breez_sdk_spark::default_mysql_storage_config(conn_str);
-        let pool = breez_sdk_spark::create_mysql_connection_pool(&my_config)?;
-        return Ok(builder.with_mysql_connection_pool(pool));
+        return Ok(BackendChoice::Mysql(conn_str));
     }
-    Ok(builder.with_default_storage(storage_dir))
+    Ok(BackendChoice::Sqlite)
+}
+
+/// Attaches a previously-resolved [`BackendChoice`] to the builder.
+fn apply_backend_choice(
+    builder: SdkBuilder,
+    storage_dir: String,
+    choice: &BackendChoice,
+) -> Result<SdkBuilder> {
+    match choice {
+        BackendChoice::Sqlite => Ok(builder.with_default_storage(storage_dir)),
+        BackendChoice::Postgres(conn_str) => {
+            let pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str.clone());
+            let pool = breez_sdk_spark::create_postgres_connection_pool(&pg_config)?;
+            Ok(builder.with_postgres_connection_pool(pool))
+        }
+        BackendChoice::Mysql(conn_str) => {
+            let my_config = breez_sdk_spark::default_mysql_storage_config(conn_str.clone());
+            let pool = breez_sdk_spark::create_mysql_connection_pool(&my_config)?;
+            Ok(builder.with_mysql_connection_pool(pool))
+        }
+    }
+}
+
+/// If USE_POSTGRES_TREE_STORE or USE_MYSQL_TREE_STORE is set, creates a unique
+/// database and attaches the corresponding backend to the builder. Otherwise
+/// sets default storage with the given directory. Exactly one storage
+/// configuration is applied; if both env vars are set, postgres wins.
+async fn apply_storage(builder: SdkBuilder, storage_dir: String) -> Result<SdkBuilder> {
+    let choice = resolve_backend_choice().await?;
+    apply_backend_choice(builder, storage_dir, &choice)
 }
 
 /// Event listener that forwards events to a channel
@@ -276,9 +316,34 @@ pub async fn build_sdk_with_shared_connection_manager(
 pub async fn build_sdk_with_custom_config(
     storage_dir: String,
     seed_bytes: [u8; 32],
+    config: Config,
+    temp_dir: Option<tempfile::TempDir>,
+    apply_sensible_test_defaults: bool,
+) -> Result<SdkInstance> {
+    build_sdk_with_custom_config_and_backend(
+        storage_dir,
+        seed_bytes,
+        config,
+        temp_dir,
+        apply_sensible_test_defaults,
+        None,
+    )
+    .await
+}
+
+/// Like [`build_sdk_with_custom_config`], but accepts an optional pre-resolved
+/// [`BackendChoice`] that pins which database the SDK opens. When `None`, the
+/// backend is selected fresh (via the usual `USE_*_TREE_STORE` env-var logic),
+/// which allocates a new PG/MySQL database. Passing `Some(_)` lets callers
+/// reuse the same database across multiple builds — required for tests that
+/// reinit an SDK and expect persisted state to survive.
+pub async fn build_sdk_with_custom_config_and_backend(
+    storage_dir: String,
+    seed_bytes: [u8; 32],
     mut config: Config,
     temp_dir: Option<tempfile::TempDir>,
     apply_sensible_test_defaults: bool,
+    backend: Option<BackendChoice>,
 ) -> Result<SdkInstance> {
     // Apply sensible test defaults if not already configured
     if config.api_key.is_some() && matches!(config.network, Network::Regtest) {
@@ -296,7 +361,10 @@ pub async fn build_sdk_with_custom_config(
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
     let builder = SdkBuilder::new(config, seed);
-    let builder = apply_storage(builder, storage_dir).await?;
+    let builder = match backend {
+        Some(choice) => apply_backend_choice(builder, storage_dir, &choice)?,
+        None => apply_storage(builder, storage_dir).await?,
+    };
     let sdk = builder.build().await?;
 
     // Set up event listener
