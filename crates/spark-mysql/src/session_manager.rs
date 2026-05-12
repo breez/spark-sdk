@@ -177,7 +177,6 @@ mod tests {
 
     impl MysqlSessionManagerTestFixture {
         async fn new() -> Self {
-            crate::pool::install_rustls_crypto_provider();
             let container = Mysql::default()
                 .start()
                 .await

@@ -41,7 +41,6 @@ unicode-normalization = "0.1.25"
 
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
-rustls.workspace = true
 tonic = { workspace = true, features = [
     "channel",
     "codegen",

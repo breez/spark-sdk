@@ -3535,7 +3535,6 @@ dependencies = [
  "prost",
  "prost-types",
  "rand 0.8.5",
- "rustls",
  "serde",
  "serde_json",
  "serde_with",
