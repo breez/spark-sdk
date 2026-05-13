@@ -595,7 +595,12 @@ impl SdkBuilder {
                 .await
                 .map_err(|e| SdkError::Generic(e.to_string()))?
                 .serialize();
-            Some((pool.inner.clone(), identity, pool.run_migration))
+            Some((
+                pool.inner.clone(),
+                identity,
+                pool.run_migration,
+                pool.foreign_key_mode,
+            ))
         } else {
             None
         };
@@ -646,7 +651,7 @@ impl SdkBuilder {
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
             if s.is_none()
-                && let Some((ref pool, ref identity, run_migration)) = mysql_backend
+                && let Some((ref pool, ref identity, run_migration, _)) = mysql_backend
             {
                 s = Some(Arc::new(
                     crate::persist::mysql::MysqlStorage::new_with_pool(
@@ -719,13 +724,14 @@ impl SdkBuilder {
 
         #[cfg(feature = "mysql")]
         if tree_store.is_none()
-            && let Some((ref pool, ref identity, run_migration)) = mysql_backend
+            && let Some((ref pool, ref identity, run_migration, foreign_key_mode)) = mysql_backend
         {
             tree_store = Some(
                 crate::persist::mysql::create_mysql_tree_store(
                     pool.clone(),
                     identity,
                     run_migration,
+                    foreign_key_mode,
                 )
                 .await?,
             );
@@ -751,13 +757,14 @@ impl SdkBuilder {
 
         #[cfg(feature = "mysql")]
         if token_output_store.is_none()
-            && let Some((ref pool, ref identity, run_migration)) = mysql_backend
+            && let Some((ref pool, ref identity, run_migration, foreign_key_mode)) = mysql_backend
         {
             token_output_store = Some(
                 crate::persist::mysql::create_mysql_token_store(
                     pool.clone(),
                     identity,
                     run_migration,
+                    foreign_key_mode,
                 )
                 .await?,
             );
@@ -784,7 +791,7 @@ impl SdkBuilder {
 
         #[cfg(feature = "mysql")]
         if inner_session_manager.is_none()
-            && let Some((ref pool, ref identity, run_migration)) = mysql_backend
+            && let Some((ref pool, ref identity, run_migration, _)) = mysql_backend
         {
             inner_session_manager = Some(
                 crate::persist::mysql::create_mysql_session_manager(

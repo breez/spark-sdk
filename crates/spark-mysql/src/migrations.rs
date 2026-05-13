@@ -29,6 +29,8 @@
 //! Migration::CreateIndex { name: "idx_tree_leaves_slim", table: "tree_leaves",
 //!     columns: "(status, is_missing_from_operators, reservation_id, value)" }
 //! Migration::DropColumn { table: "lnurl_receive_metadata", column: "preimage" }
+//! Migration::AddForeignKey { name: "fk_tree_leaves_reservation", table: "tree_leaves",
+//!     definition: "FOREIGN KEY (reservation_id) REFERENCES tree_reservations(id) ON DELETE SET NULL" }
 //! ```
 //!
 //! The runner emits guarded SQL for each variant: a pre-flight check against
@@ -105,6 +107,18 @@ pub enum Migration {
     DropIndex {
         name: &'static str,
         table: &'static str,
+    },
+
+    /// Adds a foreign-key constraint on `table` named `name`, guarded by an
+    /// `information_schema.table_constraints` lookup so re-running an already
+    /// applied migration is a no-op. `MySQL` doesn't support
+    /// `ADD CONSTRAINT … IF NOT EXISTS`, so this variant emulates it.
+    AddForeignKey {
+        name: &'static str,
+        table: &'static str,
+        /// Body after `ADD CONSTRAINT <name>`, e.g.
+        /// `"FOREIGN KEY (col) REFERENCES other(col) ON DELETE SET NULL"`.
+        definition: &'static str,
     },
 
     /// Drops a foreign-key constraint on `table` named `name`, guarded by an
@@ -302,6 +316,22 @@ async fn run_step(
             conn.query_drop(&sql).await.map_err(|e| {
                 MysqlError::Database(format!(
                     "Migration {version} DROP INDEX {name} on {table} failed: {e}"
+                ))
+            })
+        }
+
+        Migration::AddForeignKey {
+            name,
+            table,
+            definition,
+        } => {
+            if foreign_key_exists(conn, table, name).await? {
+                return Ok(());
+            }
+            let sql = format!("ALTER TABLE `{table}` ADD CONSTRAINT `{name}` {definition}");
+            conn.query_drop(&sql).await.map_err(|e| {
+                MysqlError::Database(format!(
+                    "Migration {version} ADD CONSTRAINT {name} on {table} failed: {e}"
                 ))
             })
         }
