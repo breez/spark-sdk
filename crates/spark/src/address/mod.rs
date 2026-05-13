@@ -401,19 +401,14 @@ impl SparkAddress {
             ));
         }
 
-        let payment_type = invoice_fields
-            .payment_type
-            .as_ref()
-            .ok_or_else(|| AddressError::Other("No payment type".to_string()))?;
-
-        if let SparkAddressPaymentType::TokensPayment(payment) = payment_type {
-            return Ok(self
-                .prepare_token_invoice_via_primitives(payment)?
-                .spark_invoice_hash);
-        }
-
-        let SparkAddressPaymentType::SatsPayment(payment) = payment_type else {
-            unreachable!("token payment handled above");
+        let payment = match invoice_fields.payment_type.as_ref() {
+            Some(SparkAddressPaymentType::TokensPayment(payment)) => {
+                return Ok(self
+                    .prepare_token_invoice_via_primitives(payment)?
+                    .spark_invoice_hash);
+            }
+            Some(SparkAddressPaymentType::SatsPayment(payment)) => payment,
+            None => return Err(AddressError::Other("No payment type".to_string())),
         };
 
         let mut all_hashes = vec![
