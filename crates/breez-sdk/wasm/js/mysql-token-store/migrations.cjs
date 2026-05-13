@@ -52,6 +52,22 @@ async function runMigrationStep(conn, step) {
     }
     return;
   }
+  if (step.op === "addForeignKey") {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS c FROM information_schema.table_constraints
+       WHERE table_schema = DATABASE()
+         AND table_name = ?
+         AND constraint_type = 'FOREIGN KEY'
+         AND constraint_name = ?`,
+      [step.table, step.name]
+    );
+    if (rows[0].c === 0) {
+      await conn.query(
+        `ALTER TABLE \`${step.table}\` ADD CONSTRAINT \`${step.name}\` ${step.definition}`
+      );
+    }
+    return;
+  }
   throw new Error(`Unknown migration step op: ${JSON.stringify(step)}`);
 }
 
@@ -147,44 +163,7 @@ class MysqlTokenStoreMigrationManager {
     const idLit = `UNHEX('${idHex}')`;
     const foreignKeyModeEnforced = this.foreignKeyMode === "Enforced";
 
-    const tokenOutputsCreate = foreignKeyModeEnforced
-      ? `CREATE TABLE IF NOT EXISTS token_outputs (
-            id VARCHAR(255) NOT NULL PRIMARY KEY,
-            token_identifier VARCHAR(255) NOT NULL,
-            owner_public_key VARCHAR(255) NOT NULL,
-            revocation_commitment VARCHAR(255) NOT NULL,
-            withdraw_bond_sats BIGINT NOT NULL,
-            withdraw_relative_block_locktime BIGINT NOT NULL,
-            token_public_key VARCHAR(255) NULL,
-            token_amount VARCHAR(128) NOT NULL,
-            prev_tx_hash VARCHAR(255) NOT NULL,
-            prev_tx_vout INT NOT NULL,
-            reservation_id VARCHAR(255) NULL,
-            added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            CONSTRAINT fk_token_outputs_metadata FOREIGN KEY (token_identifier)
-                REFERENCES token_metadata(identifier),
-            CONSTRAINT fk_token_outputs_reservation FOREIGN KEY (reservation_id)
-                REFERENCES token_reservations(id) ON DELETE SET NULL
-          )`
-      : `CREATE TABLE IF NOT EXISTS token_outputs (
-            id VARCHAR(255) NOT NULL PRIMARY KEY,
-            token_identifier VARCHAR(255) NOT NULL,
-            owner_public_key VARCHAR(255) NOT NULL,
-            revocation_commitment VARCHAR(255) NOT NULL,
-            withdraw_bond_sats BIGINT NOT NULL,
-            withdraw_relative_block_locktime BIGINT NOT NULL,
-            token_public_key VARCHAR(255) NULL,
-            token_amount VARCHAR(128) NOT NULL,
-            prev_tx_hash VARCHAR(255) NOT NULL,
-            prev_tx_vout INT NOT NULL,
-            reservation_id VARCHAR(255) NULL,
-            added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-          )`;
-
-    return [
-      {
-        name: "Create token store tables",
-        sql: [
+    const initialSql = [
           `CREATE TABLE IF NOT EXISTS token_metadata (
             identifier VARCHAR(255) NOT NULL PRIMARY KEY,
             issuer_public_key VARCHAR(255) NOT NULL,
@@ -202,7 +181,20 @@ class MysqlTokenStoreMigrationManager {
             purpose VARCHAR(64) NOT NULL,
             created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
           )`,
-          tokenOutputsCreate,
+          `CREATE TABLE IF NOT EXISTS token_outputs (
+            id VARCHAR(255) NOT NULL PRIMARY KEY,
+            token_identifier VARCHAR(255) NOT NULL,
+            owner_public_key VARCHAR(255) NOT NULL,
+            revocation_commitment VARCHAR(255) NOT NULL,
+            withdraw_bond_sats BIGINT NOT NULL,
+            withdraw_relative_block_locktime BIGINT NOT NULL,
+            token_public_key VARCHAR(255) NULL,
+            token_amount VARCHAR(128) NOT NULL,
+            prev_tx_hash VARCHAR(255) NOT NULL,
+            prev_tx_vout INT NOT NULL,
+            reservation_id VARCHAR(255) NULL,
+            added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+          )`,
           `CREATE INDEX idx_token_outputs_identifier
             ON token_outputs (token_identifier)`,
           `CREATE INDEX idx_token_outputs_reservation
@@ -216,6 +208,29 @@ class MysqlTokenStoreMigrationManager {
             last_completed_at DATETIME(6) NULL,
             CHECK (id = 1)
           )`,
+    ];
+    if (foreignKeyModeEnforced) {
+      initialSql.push(
+        {
+          op: "addForeignKey",
+          table: "token_outputs",
+          name: "fk_token_outputs_metadata",
+          definition: `FOREIGN KEY (token_identifier) REFERENCES token_metadata(identifier)`,
+        },
+        {
+          op: "addForeignKey",
+          table: "token_outputs",
+          name: "fk_token_outputs_reservation",
+          definition: `FOREIGN KEY (reservation_id) REFERENCES token_reservations(id) ON DELETE SET NULL`,
+        }
+      );
+    }
+
+    return [
+      {
+        name: "Create token store tables",
+        sql: [
+          ...initialSql,
           `INSERT INTO token_swap_status (id) VALUES (1)
             ON DUPLICATE KEY UPDATE id = id`,
         ],
@@ -267,14 +282,18 @@ class MysqlTokenStoreMigrationManager {
           `ALTER TABLE token_outputs DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
           ...(foreignKeyModeEnforced
             ? [
-                `ALTER TABLE token_outputs
-                   ADD CONSTRAINT fk_token_outputs_metadata_user
-                   FOREIGN KEY (user_id, token_identifier)
-                   REFERENCES token_metadata(user_id, identifier)`,
-                `ALTER TABLE token_outputs
-                   ADD CONSTRAINT fk_token_outputs_reservation_user
-                   FOREIGN KEY (user_id, reservation_id)
-                   REFERENCES token_reservations(user_id, id)`,
+                {
+                  op: "addForeignKey",
+                  table: "token_outputs",
+                  name: "fk_token_outputs_metadata_user",
+                  definition: `FOREIGN KEY (user_id, token_identifier) REFERENCES token_metadata(user_id, identifier)`,
+                },
+                {
+                  op: "addForeignKey",
+                  table: "token_outputs",
+                  name: "fk_token_outputs_reservation_user",
+                  definition: `FOREIGN KEY (user_id, reservation_id) REFERENCES token_reservations(user_id, id)`,
+                },
               ]
             : []),
           `DROP INDEX idx_token_outputs_identifier ON token_outputs`,

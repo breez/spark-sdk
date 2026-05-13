@@ -52,6 +52,22 @@ async function runMigrationStep(conn, step) {
     }
     return;
   }
+  if (step.op === "addForeignKey") {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS c FROM information_schema.table_constraints
+       WHERE table_schema = DATABASE()
+         AND table_name = ?
+         AND constraint_type = 'FOREIGN KEY'
+         AND constraint_name = ?`,
+      [step.table, step.name]
+    );
+    if (rows[0].c === 0) {
+      await conn.query(
+        `ALTER TABLE \`${step.table}\` ADD CONSTRAINT \`${step.name}\` ${step.definition}`
+      );
+    }
+    return;
+  }
   throw new Error(`Unknown migration step op: ${JSON.stringify(step)}`);
 }
 
@@ -130,19 +146,14 @@ class MysqlTreeStoreMigrationManager {
     const idLit = `UNHEX('${idHex}')`;
     const foreignKeyModeEnforced = this.foreignKeyMode === "Enforced";
 
-    const treeLeavesCreate = foreignKeyModeEnforced
-      ? `CREATE TABLE IF NOT EXISTS tree_leaves (
+    const initialSql = [
+          `CREATE TABLE IF NOT EXISTS tree_reservations (
             id VARCHAR(255) NOT NULL PRIMARY KEY,
-            status VARCHAR(64) NOT NULL,
-            is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
-            reservation_id VARCHAR(255) NULL,
-            data JSON NOT NULL,
-            created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            CONSTRAINT fk_tree_leaves_reservation FOREIGN KEY (reservation_id)
-                REFERENCES tree_reservations(id) ON DELETE SET NULL
-          )`
-      : `CREATE TABLE IF NOT EXISTS tree_leaves (
+            purpose VARCHAR(64) NOT NULL,
+            pending_change_amount BIGINT NOT NULL DEFAULT 0,
+            created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+          )`,
+          `CREATE TABLE IF NOT EXISTS tree_leaves (
             id VARCHAR(255) NOT NULL PRIMARY KEY,
             status VARCHAR(64) NOT NULL,
             is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
@@ -150,19 +161,7 @@ class MysqlTreeStoreMigrationManager {
             data JSON NOT NULL,
             created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
             added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-          )`;
-
-    return [
-      {
-        name: "Create tree store tables",
-        sql: [
-          `CREATE TABLE IF NOT EXISTS tree_reservations (
-            id VARCHAR(255) NOT NULL PRIMARY KEY,
-            purpose VARCHAR(64) NOT NULL,
-            pending_change_amount BIGINT NOT NULL DEFAULT 0,
-            created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
           )`,
-          treeLeavesCreate,
           `CREATE TABLE IF NOT EXISTS tree_spent_leaves (
             leaf_id VARCHAR(255) NOT NULL PRIMARY KEY,
             spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
@@ -171,7 +170,20 @@ class MysqlTreeStoreMigrationManager {
             ON tree_leaves(status, is_missing_from_operators)`,
           `CREATE INDEX idx_tree_leaves_reservation ON tree_leaves(reservation_id)`,
           `CREATE INDEX idx_tree_leaves_added_at ON tree_leaves(added_at)`,
-        ],
+    ];
+    if (foreignKeyModeEnforced) {
+      initialSql.push({
+        op: "addForeignKey",
+        table: "tree_leaves",
+        name: "fk_tree_leaves_reservation",
+        definition: `FOREIGN KEY (reservation_id) REFERENCES tree_reservations(id) ON DELETE SET NULL`,
+      });
+    }
+
+    return [
+      {
+        name: "Create tree store tables",
+        sql: initialSql,
       },
       {
         name: "Add swap status tracking",
@@ -222,10 +234,12 @@ class MysqlTreeStoreMigrationManager {
           `ALTER TABLE tree_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
           ...(foreignKeyModeEnforced
             ? [
-                `ALTER TABLE tree_leaves
-                   ADD CONSTRAINT fk_tree_leaves_reservation_user
-                   FOREIGN KEY (user_id, reservation_id)
-                   REFERENCES tree_reservations(user_id, id)`,
+                {
+                  op: "addForeignKey",
+                  table: "tree_leaves",
+                  name: "fk_tree_leaves_reservation_user",
+                  definition: `FOREIGN KEY (user_id, reservation_id) REFERENCES tree_reservations(user_id, id)`,
+                },
               ]
             : []),
           `DROP INDEX idx_tree_leaves_available ON tree_leaves`,

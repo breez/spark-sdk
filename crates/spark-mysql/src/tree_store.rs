@@ -164,12 +164,12 @@ fn tree_store_multi_tenant_migration(
         "ALTER TABLE tree_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)",
     ));
     if foreign_key_mode.creates_constraints() {
-        stmts.push(Migration::sql(
-            "ALTER TABLE tree_leaves \
-             ADD CONSTRAINT fk_tree_leaves_reservation_user \
-             FOREIGN KEY (user_id, reservation_id) \
-             REFERENCES tree_reservations(user_id, id)",
-        ));
+        stmts.push(Migration::AddForeignKey {
+            name: "fk_tree_leaves_reservation_user",
+            table: "tree_leaves",
+            definition: "FOREIGN KEY (user_id, reservation_id) \
+                         REFERENCES tree_reservations(user_id, id)",
+        });
     }
     stmts.push(Migration::DropIndex {
         name: "idx_tree_leaves_available",
@@ -530,44 +530,64 @@ impl MysqlTreeStore {
     }
 
     fn migrations(identity: &[u8], foreign_key_mode: MysqlForeignKeyMode) -> Vec<Vec<Migration>> {
+        // Migration 1: Initial tree tables.
+        //
+        // Reservations are referenced via FK so that ON DELETE SET NULL
+        // releases the leaves automatically when a reservation is dropped.
+        // This FK is omitted when foreign keys are disabled.
+        let mut initial = vec![
+            Migration::sql(
+                "CREATE TABLE IF NOT EXISTS tree_reservations (
+                    id VARCHAR(255) NOT NULL PRIMARY KEY,
+                    purpose VARCHAR(64) NOT NULL,
+                    pending_change_amount BIGINT NOT NULL DEFAULT 0,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                )",
+            ),
+            Migration::sql(
+                "CREATE TABLE IF NOT EXISTS tree_leaves (
+                    id VARCHAR(255) NOT NULL PRIMARY KEY,
+                    status VARCHAR(64) NOT NULL,
+                    is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
+                    reservation_id VARCHAR(255) NULL,
+                    data JSON NOT NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                )",
+            ),
+            Migration::sql(
+                "CREATE TABLE IF NOT EXISTS tree_spent_leaves (
+                    leaf_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                    spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                )",
+            ),
+            Migration::CreateIndex {
+                name: "idx_tree_leaves_available",
+                table: "tree_leaves",
+                columns: "(status, is_missing_from_operators)",
+            },
+            Migration::CreateIndex {
+                name: "idx_tree_leaves_reservation",
+                table: "tree_leaves",
+                columns: "(reservation_id)",
+            },
+            Migration::CreateIndex {
+                name: "idx_tree_leaves_added_at",
+                table: "tree_leaves",
+                columns: "(added_at)",
+            },
+        ];
+        if foreign_key_mode.creates_constraints() {
+            initial.push(Migration::AddForeignKey {
+                name: "fk_tree_leaves_reservation",
+                table: "tree_leaves",
+                definition: "FOREIGN KEY (reservation_id) \
+                             REFERENCES tree_reservations(id) ON DELETE SET NULL",
+            });
+        }
+
         vec![
-            // Migration 1: Initial tree tables.
-            //
-            // Reservations are referenced via FK so that ON DELETE SET NULL
-            // releases the leaves automatically when a reservation is dropped.
-            // This FK is omitted when foreign keys are disabled.
-            vec![
-                Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS tree_reservations (
-                        id VARCHAR(255) NOT NULL PRIMARY KEY,
-                        purpose VARCHAR(64) NOT NULL,
-                        pending_change_amount BIGINT NOT NULL DEFAULT 0,
-                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                    )",
-                ),
-                Migration::sql(tree_leaves_create_table_sql(foreign_key_mode)),
-                Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS tree_spent_leaves (
-                        leaf_id VARCHAR(255) NOT NULL PRIMARY KEY,
-                        spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                    )",
-                ),
-                Migration::CreateIndex {
-                    name: "idx_tree_leaves_available",
-                    table: "tree_leaves",
-                    columns: "(status, is_missing_from_operators)",
-                },
-                Migration::CreateIndex {
-                    name: "idx_tree_leaves_reservation",
-                    table: "tree_leaves",
-                    columns: "(reservation_id)",
-                },
-                Migration::CreateIndex {
-                    name: "idx_tree_leaves_added_at",
-                    table: "tree_leaves",
-                    columns: "(added_at)",
-                },
-            ],
+            initial,
             // Migration 2: Swap status tracking.
             vec![
                 Migration::sql(
@@ -1475,35 +1495,6 @@ fn build_placeholders(n: usize) -> String {
     s
 }
 
-fn tree_leaves_create_table_sql(foreign_key_mode: MysqlForeignKeyMode) -> &'static str {
-    match foreign_key_mode {
-        MysqlForeignKeyMode::Enforced => {
-            "CREATE TABLE IF NOT EXISTS tree_leaves (
-                        id VARCHAR(255) NOT NULL PRIMARY KEY,
-                        status VARCHAR(64) NOT NULL,
-                        is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
-                        reservation_id VARCHAR(255) NULL,
-                        data JSON NOT NULL,
-                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                        added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                        CONSTRAINT fk_tree_leaves_reservation FOREIGN KEY (reservation_id)
-                            REFERENCES tree_reservations(id) ON DELETE SET NULL
-                    )"
-        }
-        MysqlForeignKeyMode::Disabled => {
-            "CREATE TABLE IF NOT EXISTS tree_leaves (
-                        id VARCHAR(255) NOT NULL PRIMARY KEY,
-                        status VARCHAR(64) NOT NULL,
-                        is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
-                        reservation_id VARCHAR(255) NULL,
-                        data JSON NOT NULL,
-                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                        added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                    )"
-        }
-    }
-}
-
 fn map_err<E: std::fmt::Display>(e: E) -> TreeServiceError {
     TreeServiceError::Generic(e.to_string())
 }
@@ -1552,22 +1543,28 @@ mod tests {
         0x1e, 0x1f, 0x20,
     ];
 
-    fn migration_sql_contains(migrations: &[Vec<Migration>], needle: &str) -> bool {
+    fn has_add_foreign_key(migrations: &[Vec<Migration>], needle_name: &str) -> bool {
+        migrations.iter().flatten().any(|migration| {
+            matches!(migration, Migration::AddForeignKey { name, .. } if *name == needle_name)
+        })
+    }
+
+    fn has_any_add_foreign_key(migrations: &[Vec<Migration>]) -> bool {
         migrations
             .iter()
             .flatten()
-            .any(|migration| matches!(migration, Migration::Sql(sql) if sql.contains(needle)))
+            .any(|migration| matches!(migration, Migration::AddForeignKey { .. }))
     }
 
     #[test]
     fn enforced_foreign_key_mode_includes_tree_constraints() {
         let migrations = MysqlTreeStore::migrations(&TEST_IDENTITY, MysqlForeignKeyMode::Enforced);
 
-        assert!(migration_sql_contains(
+        assert!(has_add_foreign_key(
             &migrations,
-            "fk_tree_leaves_reservation FOREIGN KEY"
+            "fk_tree_leaves_reservation"
         ));
-        assert!(migration_sql_contains(
+        assert!(has_add_foreign_key(
             &migrations,
             "fk_tree_leaves_reservation_user"
         ));
@@ -1577,7 +1574,7 @@ mod tests {
     fn disabled_foreign_key_mode_omits_tree_constraints() {
         let migrations = MysqlTreeStore::migrations(&TEST_IDENTITY, MysqlForeignKeyMode::Disabled);
 
-        assert!(!migration_sql_contains(&migrations, "FOREIGN KEY"));
+        assert!(!has_any_add_foreign_key(&migrations));
         assert!(migrations.iter().flatten().any(|migration| matches!(
             migration,
             Migration::DropForeignKey {
@@ -1652,7 +1649,23 @@ mod tests {
             MysqlTreeStoreTestFixture::new_with_foreign_key_mode(MysqlForeignKeyMode::Disabled)
                 .await;
         shared_tests::test_new(&fixture.store).await;
+        assert_eq!(count_tree_store_foreign_keys(&fixture).await, 0);
+    }
 
+    /// `Enforced` mode runs the initial FK add (`fk_tree_leaves_reservation`)
+    /// and the multi-tenant rewrite: the original is dropped in migration 4
+    /// and replaced by the composite `fk_tree_leaves_reservation_user`, so
+    /// final FK count is 1.
+    #[tokio::test]
+    async fn test_new_with_enforced_foreign_key_mode() {
+        let fixture =
+            MysqlTreeStoreTestFixture::new_with_foreign_key_mode(MysqlForeignKeyMode::Enforced)
+                .await;
+        shared_tests::test_new(&fixture.store).await;
+        assert_eq!(count_tree_store_foreign_keys(&fixture).await, 1);
+    }
+
+    async fn count_tree_store_foreign_keys(fixture: &MysqlTreeStoreTestFixture) -> u64 {
         let mut conn = fixture
             .store
             .pool
@@ -1674,8 +1687,7 @@ mod tests {
             )
             .await
             .expect("Failed to count tree store foreign keys");
-
-        assert_eq!(count, Some(0));
+        count.expect("count_tree_store_foreign_keys returned NULL")
     }
 
     #[tokio::test]

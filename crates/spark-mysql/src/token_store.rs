@@ -141,18 +141,18 @@ fn token_store_multi_tenant_migration(
     // NO ACTION (the default) instead of the previous `ON DELETE SET NULL`:
     // a whole-row SET NULL would null `user_id` (NOT NULL).
     if foreign_key_mode.creates_constraints() {
-        stmts.push(Migration::sql(
-            "ALTER TABLE token_outputs \
-             ADD CONSTRAINT fk_token_outputs_metadata_user \
-             FOREIGN KEY (user_id, token_identifier) \
-             REFERENCES token_metadata(user_id, identifier)",
-        ));
-        stmts.push(Migration::sql(
-            "ALTER TABLE token_outputs \
-             ADD CONSTRAINT fk_token_outputs_reservation_user \
-             FOREIGN KEY (user_id, reservation_id) \
-             REFERENCES token_reservations(user_id, id)",
-        ));
+        stmts.push(Migration::AddForeignKey {
+            name: "fk_token_outputs_metadata_user",
+            table: "token_outputs",
+            definition: "FOREIGN KEY (user_id, token_identifier) \
+                         REFERENCES token_metadata(user_id, identifier)",
+        });
+        stmts.push(Migration::AddForeignKey {
+            name: "fk_token_outputs_reservation_user",
+            table: "token_outputs",
+            definition: "FOREIGN KEY (user_id, reservation_id) \
+                         REFERENCES token_reservations(user_id, id)",
+        });
     }
     stmts.push(Migration::DropIndex {
         name: "idx_token_outputs_identifier",
@@ -581,61 +581,91 @@ impl MysqlTokenStore {
     }
 
     fn migrations(identity: &[u8], foreign_key_mode: MysqlForeignKeyMode) -> Vec<Vec<Migration>> {
+        let mut initial = vec![
+            Migration::sql(
+                "CREATE TABLE IF NOT EXISTS token_metadata (
+                    identifier VARCHAR(255) NOT NULL PRIMARY KEY,
+                    issuer_public_key VARCHAR(255) NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    ticker VARCHAR(64) NOT NULL,
+                    decimals INT NOT NULL,
+                    max_supply VARCHAR(128) NOT NULL,
+                    is_freezable TINYINT(1) NOT NULL,
+                    creation_entity_public_key VARCHAR(255) NULL
+                )",
+            ),
+            Migration::CreateIndex {
+                name: "idx_token_metadata_issuer_pk",
+                table: "token_metadata",
+                columns: "(issuer_public_key)",
+            },
+            Migration::sql(
+                "CREATE TABLE IF NOT EXISTS token_reservations (
+                    id VARCHAR(255) NOT NULL PRIMARY KEY,
+                    purpose VARCHAR(64) NOT NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                )",
+            ),
+            Migration::sql(
+                "CREATE TABLE IF NOT EXISTS token_outputs (
+                    id VARCHAR(255) NOT NULL PRIMARY KEY,
+                    token_identifier VARCHAR(255) NOT NULL,
+                    owner_public_key VARCHAR(255) NOT NULL,
+                    revocation_commitment VARCHAR(255) NOT NULL,
+                    withdraw_bond_sats BIGINT NOT NULL,
+                    withdraw_relative_block_locktime BIGINT NOT NULL,
+                    token_public_key VARCHAR(255) NULL,
+                    token_amount VARCHAR(128) NOT NULL,
+                    prev_tx_hash VARCHAR(255) NOT NULL,
+                    prev_tx_vout INT NOT NULL,
+                    reservation_id VARCHAR(255) NULL,
+                    added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                )",
+            ),
+            Migration::CreateIndex {
+                name: "idx_token_outputs_identifier",
+                table: "token_outputs",
+                columns: "(token_identifier)",
+            },
+            Migration::CreateIndex {
+                name: "idx_token_outputs_reservation",
+                table: "token_outputs",
+                columns: "(reservation_id)",
+            },
+            Migration::sql(
+                "CREATE TABLE IF NOT EXISTS token_spent_outputs (
+                    output_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                    spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                )",
+            ),
+            Migration::sql(
+                "CREATE TABLE IF NOT EXISTS token_swap_status (
+                    id INT NOT NULL PRIMARY KEY DEFAULT 1,
+                    last_completed_at DATETIME(6) NULL,
+                    CHECK (id = 1)
+                )",
+            ),
+            Migration::sql(
+                "INSERT INTO token_swap_status (id) VALUES (1)
+                 ON DUPLICATE KEY UPDATE id = id",
+            ),
+        ];
+        if foreign_key_mode.creates_constraints() {
+            initial.push(Migration::AddForeignKey {
+                name: "fk_token_outputs_metadata",
+                table: "token_outputs",
+                definition: "FOREIGN KEY (token_identifier) \
+                             REFERENCES token_metadata(identifier)",
+            });
+            initial.push(Migration::AddForeignKey {
+                name: "fk_token_outputs_reservation",
+                table: "token_outputs",
+                definition: "FOREIGN KEY (reservation_id) \
+                             REFERENCES token_reservations(id) ON DELETE SET NULL",
+            });
+        }
         vec![
-            vec![
-                Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS token_metadata (
-                        identifier VARCHAR(255) NOT NULL PRIMARY KEY,
-                        issuer_public_key VARCHAR(255) NOT NULL,
-                        name VARCHAR(255) NOT NULL,
-                        ticker VARCHAR(64) NOT NULL,
-                        decimals INT NOT NULL,
-                        max_supply VARCHAR(128) NOT NULL,
-                        is_freezable TINYINT(1) NOT NULL,
-                        creation_entity_public_key VARCHAR(255) NULL
-                    )",
-                ),
-                Migration::CreateIndex {
-                    name: "idx_token_metadata_issuer_pk",
-                    table: "token_metadata",
-                    columns: "(issuer_public_key)",
-                },
-                Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS token_reservations (
-                        id VARCHAR(255) NOT NULL PRIMARY KEY,
-                        purpose VARCHAR(64) NOT NULL,
-                        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                    )",
-                ),
-                Migration::sql(token_outputs_create_table_sql(foreign_key_mode)),
-                Migration::CreateIndex {
-                    name: "idx_token_outputs_identifier",
-                    table: "token_outputs",
-                    columns: "(token_identifier)",
-                },
-                Migration::CreateIndex {
-                    name: "idx_token_outputs_reservation",
-                    table: "token_outputs",
-                    columns: "(reservation_id)",
-                },
-                Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS token_spent_outputs (
-                        output_id VARCHAR(255) NOT NULL PRIMARY KEY,
-                        spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                    )",
-                ),
-                Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS token_swap_status (
-                        id INT NOT NULL PRIMARY KEY DEFAULT 1,
-                        last_completed_at DATETIME(6) NULL,
-                        CHECK (id = 1)
-                    )",
-                ),
-                Migration::sql(
-                    "INSERT INTO token_swap_status (id) VALUES (1)
-                     ON DUPLICATE KEY UPDATE id = id",
-                ),
-            ],
+            initial,
             // Migration 2: Multi-tenant scoping.
             token_store_multi_tenant_migration(identity, foreign_key_mode),
         ]
@@ -1374,47 +1404,6 @@ fn build_placeholders(n: usize) -> String {
     s
 }
 
-fn token_outputs_create_table_sql(foreign_key_mode: MysqlForeignKeyMode) -> &'static str {
-    match foreign_key_mode {
-        MysqlForeignKeyMode::Enforced => {
-            "CREATE TABLE IF NOT EXISTS token_outputs (
-                        id VARCHAR(255) NOT NULL PRIMARY KEY,
-                        token_identifier VARCHAR(255) NOT NULL,
-                        owner_public_key VARCHAR(255) NOT NULL,
-                        revocation_commitment VARCHAR(255) NOT NULL,
-                        withdraw_bond_sats BIGINT NOT NULL,
-                        withdraw_relative_block_locktime BIGINT NOT NULL,
-                        token_public_key VARCHAR(255) NULL,
-                        token_amount VARCHAR(128) NOT NULL,
-                        prev_tx_hash VARCHAR(255) NOT NULL,
-                        prev_tx_vout INT NOT NULL,
-                        reservation_id VARCHAR(255) NULL,
-                        added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                        CONSTRAINT fk_token_outputs_metadata FOREIGN KEY (token_identifier)
-                            REFERENCES token_metadata(identifier),
-                        CONSTRAINT fk_token_outputs_reservation FOREIGN KEY (reservation_id)
-                            REFERENCES token_reservations(id) ON DELETE SET NULL
-                    )"
-        }
-        MysqlForeignKeyMode::Disabled => {
-            "CREATE TABLE IF NOT EXISTS token_outputs (
-                        id VARCHAR(255) NOT NULL PRIMARY KEY,
-                        token_identifier VARCHAR(255) NOT NULL,
-                        owner_public_key VARCHAR(255) NOT NULL,
-                        revocation_commitment VARCHAR(255) NOT NULL,
-                        withdraw_bond_sats BIGINT NOT NULL,
-                        withdraw_relative_block_locktime BIGINT NOT NULL,
-                        token_public_key VARCHAR(255) NULL,
-                        token_amount VARCHAR(128) NOT NULL,
-                        prev_tx_hash VARCHAR(255) NOT NULL,
-                        prev_tx_vout INT NOT NULL,
-                        reservation_id VARCHAR(255) NULL,
-                        added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                    )"
-        }
-    }
-}
-
 /// Reads a column that the schema declares NOT NULL as an `Option<String>`
 /// first to avoid `mysql_async`'s panic-on-NULL behavior in `FromValue` for
 /// non-`Option` types, then surfaces both "column missing" and "column NULL"
@@ -1479,30 +1468,36 @@ mod tests {
         0x1e, 0x1f, 0x20,
     ];
 
-    fn migration_sql_contains(migrations: &[Vec<Migration>], needle: &str) -> bool {
+    fn has_add_foreign_key(migrations: &[Vec<Migration>], needle_name: &str) -> bool {
+        migrations.iter().flatten().any(|migration| {
+            matches!(migration, Migration::AddForeignKey { name, .. } if *name == needle_name)
+        })
+    }
+
+    fn has_any_add_foreign_key(migrations: &[Vec<Migration>]) -> bool {
         migrations
             .iter()
             .flatten()
-            .any(|migration| matches!(migration, Migration::Sql(sql) if sql.contains(needle)))
+            .any(|migration| matches!(migration, Migration::AddForeignKey { .. }))
     }
 
     #[test]
     fn enforced_foreign_key_mode_includes_token_constraints() {
         let migrations = MysqlTokenStore::migrations(&TEST_IDENTITY, MysqlForeignKeyMode::Enforced);
 
-        assert!(migration_sql_contains(
+        assert!(has_add_foreign_key(
             &migrations,
-            "fk_token_outputs_metadata FOREIGN KEY"
+            "fk_token_outputs_metadata"
         ));
-        assert!(migration_sql_contains(
+        assert!(has_add_foreign_key(
             &migrations,
-            "fk_token_outputs_reservation FOREIGN KEY"
+            "fk_token_outputs_reservation"
         ));
-        assert!(migration_sql_contains(
+        assert!(has_add_foreign_key(
             &migrations,
             "fk_token_outputs_metadata_user"
         ));
-        assert!(migration_sql_contains(
+        assert!(has_add_foreign_key(
             &migrations,
             "fk_token_outputs_reservation_user"
         ));
@@ -1512,7 +1507,7 @@ mod tests {
     fn disabled_foreign_key_mode_omits_token_constraints() {
         let migrations = MysqlTokenStore::migrations(&TEST_IDENTITY, MysqlForeignKeyMode::Disabled);
 
-        assert!(!migration_sql_contains(&migrations, "FOREIGN KEY"));
+        assert!(!has_any_add_foreign_key(&migrations));
         assert!(migrations.iter().flatten().any(|migration| matches!(
             migration,
             Migration::DropForeignKey {
@@ -1574,7 +1569,22 @@ mod tests {
         let fixture =
             MysqlTokenStoreTestFixture::new_with_foreign_key_mode(MysqlForeignKeyMode::Disabled)
                 .await;
+        assert_eq!(count_token_store_foreign_keys(&fixture).await, 0);
+    }
 
+    /// `Enforced` mode runs both initial-FK adds and the multi-tenant
+    /// rewrites: the originals (`fk_token_outputs_metadata`,
+    /// `fk_token_outputs_reservation`) are dropped in migration 2 and
+    /// replaced by the composite `*_user` variants, so final FK count is 2.
+    #[tokio::test]
+    async fn test_new_with_enforced_foreign_key_mode() {
+        let fixture =
+            MysqlTokenStoreTestFixture::new_with_foreign_key_mode(MysqlForeignKeyMode::Enforced)
+                .await;
+        assert_eq!(count_token_store_foreign_keys(&fixture).await, 2);
+    }
+
+    async fn count_token_store_foreign_keys(fixture: &MysqlTokenStoreTestFixture) -> u64 {
         let mut conn = fixture
             .store
             .pool
@@ -1597,8 +1607,7 @@ mod tests {
             )
             .await
             .expect("Failed to count token store foreign keys");
-
-        assert_eq!(count, Some(0));
+        count.expect("count_token_store_foreign_keys returned NULL")
     }
 
     #[tokio::test]

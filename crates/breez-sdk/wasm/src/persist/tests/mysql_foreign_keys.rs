@@ -1,7 +1,8 @@
 //! Verifies that the JS-side MySQL tree-store and token-store migrations
-//! honor `MysqlForeignKeyMode::Disabled` by not leaving any FK constraints
-//! behind. Mirrors the native `test_new_with_disabled_foreign_key_mode`
-//! tests in [`spark-mysql`](../../../../../../spark-mysql/src/tree_store.rs).
+//! honor `MysqlForeignKeyMode` in both directions: `Disabled` leaves no FK
+//! constraints behind, `Enforced` creates the composite multi-tenant FKs.
+//! Mirrors the native `test_new_with_*_foreign_key_mode` tests in
+//! [`spark-mysql`](../../../../../../spark-mysql/src/tree_store.rs).
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
@@ -114,4 +115,50 @@ async fn test_token_store_disabled_foreign_key_mode() {
     )
     .await;
     assert_eq!(count, 0, "token store left foreign keys behind");
+}
+
+/// `Enforced` mode runs both initial-FK adds and the multi-tenant rewrites:
+/// the originals are dropped in migration 2 and replaced by the composite
+/// `*_user` variants — final FK count is 1 on tree_leaves, 2 on token_outputs.
+#[wasm_bindgen_test]
+async fn test_tree_store_enforced_foreign_key_mode() {
+    let conn_string = fresh_test_db("my_tree_fk_enforced").await;
+    let config = config_with_mode(&conn_string, MysqlForeignKeyMode::Enforced);
+    let _tree_store = create_mysql_tree_store(config, &TEST_IDENTITY, None)
+        .await
+        .expect("Failed to create mysql tree store");
+
+    let count = count_fks(
+        &conn_string,
+        &[
+            "tree_leaves",
+            "tree_reservations",
+            "tree_spent_leaves",
+            "tree_swap_status",
+        ],
+    )
+    .await;
+    assert_eq!(count, 1, "tree store did not create expected foreign key");
+}
+
+#[wasm_bindgen_test]
+async fn test_token_store_enforced_foreign_key_mode() {
+    let conn_string = fresh_test_db("my_token_fk_enforced").await;
+    let config = config_with_mode(&conn_string, MysqlForeignKeyMode::Enforced);
+    let _token_store = create_mysql_token_store(config, &TEST_IDENTITY, None)
+        .await
+        .expect("Failed to create mysql token store");
+
+    let count = count_fks(
+        &conn_string,
+        &[
+            "token_metadata",
+            "token_outputs",
+            "token_reservations",
+            "token_spent_outputs",
+            "token_swap_status",
+        ],
+    )
+    .await;
+    assert_eq!(count, 2, "token store did not create expected foreign keys");
 }
