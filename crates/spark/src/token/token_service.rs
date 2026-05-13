@@ -529,8 +529,8 @@ impl TokenService {
         };
 
         // Refresh outputs from the operator instead of extracting them from the
-        // response, since FinalTokenOutput lacks the id/revocation fields needed
-        // to construct local TokenOutput entries directly.
+        // response, since FinalTokenOutput lacks the SO-local `id` needed to
+        // construct local TokenOutput entries directly.
         self.refresh_tokens_outputs().await?;
 
         Ok(token_transaction)

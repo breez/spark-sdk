@@ -175,7 +175,6 @@ platform-utils = { path = "crates/platform-utils" }
 utils = { path = "crates/utils" }
 proc-macro2 = "1.0.97"
 prost = "0.13.4"
-prost-build = "0.13.3"
 prost-types = "0.13.4"
 quote = "1.0.40"
 rand = "0.8"
