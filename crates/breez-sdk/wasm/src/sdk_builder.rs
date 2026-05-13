@@ -44,6 +44,15 @@ pub struct PostgresStorageConfig {
     pub create_timeout_secs: u32,
     /// Timeout in seconds before recycling an idle connection.
     pub recycle_timeout_secs: u32,
+    /// Whether the SDK should run schema migrations on startup. Set to
+    /// `false` when the embedding service owns and migrates the database
+    /// schema. Defaults to `true`.
+    #[serde(default = "default_run_migration")]
+    pub run_migration: bool,
+}
+
+fn default_run_migration() -> bool {
+    true
 }
 
 /// Creates a default PostgreSQL storage configuration with sensible defaults.
@@ -59,6 +68,7 @@ pub fn default_postgres_storage_config(connection_string: &str) -> PostgresStora
         max_pool_size: 10,
         create_timeout_secs: 0,
         recycle_timeout_secs: 10,
+        run_migration: true,
     }
 }
 
@@ -75,6 +85,11 @@ pub struct MysqlStorageConfig {
     pub create_timeout_secs: u32,
     /// Timeout in seconds before recycling an idle connection.
     pub recycle_timeout_secs: u32,
+    /// Whether the SDK should run schema migrations on startup. Set to
+    /// `false` when the embedding service owns and migrates the database
+    /// schema. Defaults to `true`.
+    #[serde(default = "default_run_migration")]
+    pub run_migration: bool,
 }
 
 /// Creates a default MySQL storage configuration with sensible defaults.
@@ -90,6 +105,7 @@ pub fn default_mysql_storage_config(connection_string: &str) -> MysqlStorageConf
         max_pool_size: 10,
         create_timeout_secs: 0,
         recycle_timeout_secs: 10,
+        run_migration: true,
     }
 }
 
@@ -100,8 +116,8 @@ pub struct SdkBuilder {
     seed: breez_sdk_spark::Seed,
     default_storage_dir: Option<String>,
     storage: Option<Storage>,
-    postgres_pool: Option<Rc<JsPool>>,
-    mysql_pool: Option<Rc<JsPool>>,
+    postgres_pool: Option<(Rc<JsPool>, bool)>,
+    mysql_pool: Option<(Rc<JsPool>, bool)>,
     /// Tracks whether the integrator supplied a session manager via
     /// [`with_session_manager`]. When `true`, the postgres / mysql pool
     /// branches in `build()` skip auto-creating one so they don't override
@@ -175,7 +191,7 @@ impl SdkBuilder {
     /// to multiple `SdkBuilder`s to share connections across SDKs.
     #[wasm_bindgen(js_name = "withPostgresConnectionPool")]
     pub fn with_postgres_connection_pool(mut self, pool: &PostgresConnectionPool) -> Self {
-        self.postgres_pool = Some(pool.cloned_inner());
+        self.postgres_pool = Some((pool.cloned_inner(), pool.run_migration()));
         self
     }
 
@@ -184,23 +200,25 @@ impl SdkBuilder {
     /// `SdkBuilder`s to share connections across SDKs.
     #[wasm_bindgen(js_name = "withMysqlConnectionPool")]
     pub fn with_mysql_connection_pool(mut self, pool: &MysqlConnectionPool) -> Self {
-        self.mysql_pool = Some(pool.cloned_inner());
+        self.mysql_pool = Some((pool.cloned_inner(), pool.run_migration()));
         self
     }
 
     /// **Deprecated.** Call `withPostgresConnectionPool(config)` and `withPostgresConnectionPool(pool)` instead.
     #[wasm_bindgen(js_name = "withPostgresBackend")]
     pub fn with_postgres_backend(mut self, config: PostgresStorageConfig) -> WasmResult<Self> {
+        let run_migration = config.run_migration;
         let pool = create_postgres_pool(config)?;
-        self.postgres_pool = Some(Rc::new(pool));
+        self.postgres_pool = Some((Rc::new(pool), run_migration));
         Ok(self)
     }
 
     /// **Deprecated.** Call `withMysqlConnectionPool(config)` and `withMysqlConnectionPool(pool)` instead.
     #[wasm_bindgen(js_name = "withMysqlBackend")]
     pub fn with_mysql_backend(mut self, config: MysqlStorageConfig) -> WasmResult<Self> {
+        let run_migration = config.run_migration;
         let pool = create_mysql_pool(config)?;
-        self.mysql_pool = Some(Rc::new(pool));
+        self.mysql_pool = Some((Rc::new(pool), run_migration));
         Ok(self)
     }
 
@@ -326,7 +344,7 @@ impl SdkBuilder {
                 let storage_arc = Arc::new(WasmStorage { storage });
                 self.builder = self.builder.with_storage(storage_arc);
             }
-            (None, None, Some(pool_rc), None) => {
+            (None, None, Some((pool_rc, run_migration)), None) => {
                 let pool: &JsPool = pool_rc;
                 let logger_ref = get_wasm_logger_ref();
 
@@ -344,19 +362,33 @@ impl SdkBuilder {
                 let identity_bytes = identity_pub_key.serialize();
 
                 let storage = Arc::new(WasmStorage {
-                    storage: create_postgres_storage_with_pool(pool, &identity_bytes, logger_ref)
-                        .await?,
+                    storage: create_postgres_storage_with_pool(
+                        pool,
+                        &identity_bytes,
+                        logger_ref,
+                        *run_migration,
+                    )
+                    .await?,
                 });
                 self.builder = self.builder.with_storage(storage);
 
-                let tree_store_js =
-                    create_postgres_tree_store_with_pool(pool, &identity_bytes, logger_ref).await?;
+                let tree_store_js = create_postgres_tree_store_with_pool(
+                    pool,
+                    &identity_bytes,
+                    logger_ref,
+                    *run_migration,
+                )
+                .await?;
                 let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
                 self.builder = self.builder.with_tree_store(tree_store);
 
-                let token_store_js =
-                    create_postgres_token_store_with_pool(pool, &identity_bytes, logger_ref)
-                        .await?;
+                let token_store_js = create_postgres_token_store_with_pool(
+                    pool,
+                    &identity_bytes,
+                    logger_ref,
+                    *run_migration,
+                )
+                .await?;
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
 
@@ -365,6 +397,7 @@ impl SdkBuilder {
                         pool,
                         &identity_bytes,
                         logger_ref,
+                        *run_migration,
                     )
                     .await?;
                     let session_manager = Arc::new(WasmSessionManager {
@@ -373,7 +406,7 @@ impl SdkBuilder {
                     self.builder = self.builder.with_session_manager(session_manager);
                 }
             }
-            (None, None, None, Some(pool_rc)) => {
+            (None, None, None, Some((pool_rc, run_migration))) => {
                 let pool: &JsPool = pool_rc;
                 let logger_ref = get_wasm_logger_ref();
 
@@ -391,25 +424,44 @@ impl SdkBuilder {
                 let identity_bytes = identity_pub_key.serialize();
 
                 let storage = Arc::new(WasmStorage {
-                    storage: create_mysql_storage_with_pool(pool, &identity_bytes, logger_ref)
-                        .await?,
+                    storage: create_mysql_storage_with_pool(
+                        pool,
+                        &identity_bytes,
+                        logger_ref,
+                        *run_migration,
+                    )
+                    .await?,
                 });
                 self.builder = self.builder.with_storage(storage);
 
-                let tree_store_js =
-                    create_mysql_tree_store_with_pool(pool, &identity_bytes, logger_ref).await?;
+                let tree_store_js = create_mysql_tree_store_with_pool(
+                    pool,
+                    &identity_bytes,
+                    logger_ref,
+                    *run_migration,
+                )
+                .await?;
                 let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
                 self.builder = self.builder.with_tree_store(tree_store);
 
-                let token_store_js =
-                    create_mysql_token_store_with_pool(pool, &identity_bytes, logger_ref).await?;
+                let token_store_js = create_mysql_token_store_with_pool(
+                    pool,
+                    &identity_bytes,
+                    logger_ref,
+                    *run_migration,
+                )
+                .await?;
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
 
                 if !self.user_session_manager {
-                    let session_manager_js =
-                        create_mysql_session_manager_with_pool(pool, &identity_bytes, logger_ref)
-                            .await?;
+                    let session_manager_js = create_mysql_session_manager_with_pool(
+                        pool,
+                        &identity_bytes,
+                        logger_ref,
+                        *run_migration,
+                    )
+                    .await?;
                     let session_manager = Arc::new(WasmSessionManager {
                         session_manager: session_manager_js,
                     });

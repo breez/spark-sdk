@@ -73,20 +73,29 @@ impl PostgresStorage {
     /// A new `PostgresStorage` instance or an error
     #[cfg(test)]
     pub async fn new(config: PostgresStorageConfig, identity: &[u8]) -> Result<Self, StorageError> {
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::new_with_pool(pool, identity).await
+        Self::new_with_pool(pool, identity, run_migration).await
     }
 
     /// Creates a new `PostgresStorage` using an existing connection pool.
     ///
     /// This allows sharing a single pool across multiple store implementations.
-    /// Each `PostgresStorage` is scoped to a single tenant `identity`.
-    pub async fn new_with_pool(pool: Pool, identity: &[u8]) -> Result<Self, StorageError> {
+    /// Each `PostgresStorage` is scoped to a single tenant `identity`. When
+    /// `run_migration` is `false`, initialization trusts the existing schema
+    /// and skips SDK storage migrations entirely.
+    pub async fn new_with_pool(
+        pool: Pool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<Self, StorageError> {
         let storage = Self {
             pool,
             identity: identity.to_vec(),
         };
-        storage.migrate().await?;
+        if run_migration {
+            storage.migrate().await?;
+        }
         Ok(storage)
     }
 
@@ -1907,10 +1916,10 @@ mod tests {
             let config = PostgresStorageConfig::with_defaults(connection_string);
             let pool = create_pool(&config).expect("Failed to create pool");
 
-            let a = PostgresStorage::new_with_pool(pool.clone(), &TEST_IDENTITY_A)
+            let a = PostgresStorage::new_with_pool(pool.clone(), &TEST_IDENTITY_A, true)
                 .await
                 .expect("Failed to create tenant A");
-            let b = PostgresStorage::new_with_pool(pool, &TEST_IDENTITY_B)
+            let b = PostgresStorage::new_with_pool(pool, &TEST_IDENTITY_B, true)
                 .await
                 .expect("Failed to create tenant B");
 

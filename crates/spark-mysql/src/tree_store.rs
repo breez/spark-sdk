@@ -476,17 +476,21 @@ impl MysqlTreeStore {
         config: MysqlStorageConfig,
         identity: &[u8],
     ) -> Result<Self, MysqlError> {
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::from_pool(pool, identity, run_migration).await
     }
 
     /// Creates a new `MysqlTreeStore` from an existing connection pool.
-    /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
-    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
-        Self::init(pool, identity).await
-    }
-
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
+    ///
+    /// `identity` is the 33-byte secp256k1 pubkey of the tenant. When
+    /// `run_migration` is `false`, initialization trusts the existing schema
+    /// and skips tree store migrations entirely.
+    pub async fn from_pool(
+        pool: Pool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<Self, MysqlError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
         let store = Self {
@@ -497,7 +501,9 @@ impl MysqlTreeStore {
             balance_changed_rx,
         };
 
-        store.migrate().await?;
+        if run_migration {
+            store.migrate().await?;
+        }
         store.notify_balance_change();
 
         Ok(store)
@@ -1488,11 +1494,16 @@ pub async fn create_mysql_tree_store(
 /// Creates a `MysqlTreeStore` instance from an existing connection pool.
 ///
 /// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
+/// When `run_migration` is `false`, skips SDK-managed schema migrations and
+/// trusts that all required tables, columns, and indexes exist.
 pub async fn create_mysql_tree_store_from_pool(
     pool: Pool,
     identity: &[u8],
+    run_migration: bool,
 ) -> Result<Arc<dyn TreeStore>, MysqlError> {
-    Ok(Arc::new(MysqlTreeStore::from_pool(pool, identity).await?))
+    Ok(Arc::new(
+        MysqlTreeStore::from_pool(pool, identity, run_migration).await?,
+    ))
 }
 
 #[cfg(test)]
@@ -2448,10 +2459,10 @@ mod tests {
             let config = MysqlStorageConfig::with_defaults(connection_string);
             let pool = create_pool(&config).expect("Failed to create pool");
 
-            let a = MysqlTreeStore::from_pool(pool.clone(), &TEST_IDENTITY)
+            let a = MysqlTreeStore::from_pool(pool.clone(), &TEST_IDENTITY, true)
                 .await
                 .expect("Failed to create tenant A");
-            let b = MysqlTreeStore::from_pool(pool, &TEST_IDENTITY_B)
+            let b = MysqlTreeStore::from_pool(pool, &TEST_IDENTITY_B, true)
                 .await
                 .expect("Failed to create tenant B");
 

@@ -535,22 +535,29 @@ impl MysqlTokenStore {
         config: MysqlStorageConfig,
         identity: &[u8],
     ) -> Result<Self, MysqlError> {
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::from_pool(pool, identity, run_migration).await
     }
 
-    /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
-    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
-        Self::init(pool, identity).await
-    }
-
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
+    /// Creates a new `MysqlTokenStore` from an existing connection pool.
+    ///
+    /// `identity` is the 33-byte secp256k1 pubkey of the tenant. When
+    /// `run_migration` is `false`, initialization trusts the existing schema
+    /// and skips token store migrations entirely.
+    pub async fn from_pool(
+        pool: Pool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<Self, MysqlError> {
         let store = Self {
             pool,
             identity: identity.to_vec(),
             lock_name: identity_lock_name(TOKEN_STORE_LOCK_PREFIX, identity),
         };
-        store.migrate().await?;
+        if run_migration {
+            store.migrate().await?;
+        }
         Ok(store)
     }
 
@@ -1412,11 +1419,16 @@ pub async fn create_mysql_token_store(
 /// Creates a `MysqlTokenStore` from an existing connection pool.
 ///
 /// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
+/// When `run_migration` is `false`, skips SDK-managed schema migrations and
+/// trusts that all required tables, columns, and indexes exist.
 pub async fn create_mysql_token_store_from_pool(
     pool: Pool,
     identity: &[u8],
+    run_migration: bool,
 ) -> Result<Arc<dyn TokenOutputStore>, MysqlError> {
-    Ok(Arc::new(MysqlTokenStore::from_pool(pool, identity).await?))
+    Ok(Arc::new(
+        MysqlTokenStore::from_pool(pool, identity, run_migration).await?,
+    ))
 }
 
 #[cfg(test)]
@@ -1896,10 +1908,10 @@ mod tests {
             let config = MysqlStorageConfig::with_defaults(connection_string);
             let pool = create_pool(&config).expect("Failed to create pool");
 
-            let a = MysqlTokenStore::from_pool(pool.clone(), &TEST_IDENTITY)
+            let a = MysqlTokenStore::from_pool(pool.clone(), &TEST_IDENTITY, true)
                 .await
                 .expect("Failed to create tenant A");
-            let b = MysqlTokenStore::from_pool(pool, &TEST_IDENTITY_B)
+            let b = MysqlTokenStore::from_pool(pool, &TEST_IDENTITY_B, true)
                 .await
                 .expect("Failed to create tenant B");
 

@@ -805,20 +805,21 @@ impl PostgresTreeStore {
         config: PostgresStorageConfig,
         identity: &[u8],
     ) -> Result<Self, PostgresError> {
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::from_pool(pool, identity, run_migration).await
     }
 
     /// Creates a new `PostgresTreeStore` from an existing connection pool.
     ///
-    /// This reuses the provided pool and runs tree store migrations.
     /// Useful when sharing a pool with other components (e.g., `PostgresStorage`).
-    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
-        Self::init(pool, identity).await
-    }
-
-    /// Shared initialization logic for both constructors.
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
+    /// When `run_migration` is `false`, initialization trusts the existing
+    /// schema and skips tree store migrations entirely.
+    pub async fn from_pool(
+        pool: Pool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<Self, PostgresError> {
         let (balance_changed_tx, balance_changed_rx) = watch::channel(());
 
         let store = Self {
@@ -829,7 +830,9 @@ impl PostgresTreeStore {
             balance_changed_rx,
         };
 
-        store.migrate().await?;
+        if run_migration {
+            store.migrate().await?;
+        }
         store.notify_balance_change();
 
         Ok(store)
@@ -1291,12 +1294,15 @@ pub async fn create_postgres_tree_store(
 ///
 /// * `pool` - An existing deadpool-postgres connection pool
 /// * `identity` - 33-byte secp256k1 pubkey scoping all reads and writes
+/// * `run_migration` - Whether to run tree store migrations. Set to `false`
+///   when the embedding service owns the schema.
 pub async fn create_postgres_tree_store_from_pool(
     pool: Pool,
     identity: &[u8],
+    run_migration: bool,
 ) -> Result<Arc<dyn TreeStore>, PostgresError> {
     Ok(Arc::new(
-        PostgresTreeStore::from_pool(pool, identity).await?,
+        PostgresTreeStore::from_pool(pool, identity, run_migration).await?,
     ))
 }
 
@@ -2282,10 +2288,10 @@ mod tests {
             let config = PostgresStorageConfig::with_defaults(connection_string);
             let pool = create_pool(&config).expect("Failed to create pool");
 
-            let a = PostgresTreeStore::from_pool(pool.clone(), &TEST_IDENTITY)
+            let a = PostgresTreeStore::from_pool(pool.clone(), &TEST_IDENTITY, true)
                 .await
                 .expect("Failed to create tenant A");
-            let b = PostgresTreeStore::from_pool(pool, &TEST_IDENTITY_B)
+            let b = PostgresTreeStore::from_pool(pool, &TEST_IDENTITY_B, true)
                 .await
                 .expect("Failed to create tenant B");
 

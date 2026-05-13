@@ -579,7 +579,7 @@ impl SdkBuilder {
                 .await
                 .map_err(|e| SdkError::Generic(e.to_string()))?
                 .serialize();
-            Some((pool.inner.clone(), identity))
+            Some((pool.inner.clone(), identity, pool.run_migration))
         } else {
             None
         };
@@ -595,7 +595,7 @@ impl SdkBuilder {
                 .await
                 .map_err(|e| SdkError::Generic(e.to_string()))?
                 .serialize();
-            Some((pool.inner.clone(), identity))
+            Some((pool.inner.clone(), identity, pool.run_migration))
         } else {
             None
         };
@@ -628,12 +628,13 @@ impl SdkBuilder {
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
             if s.is_none()
-                && let Some((ref pool, ref identity)) = postgres_backend
+                && let Some((ref pool, ref identity, run_migration)) = postgres_backend
             {
                 s = Some(Arc::new(
                     crate::persist::postgres::PostgresStorage::new_with_pool(
                         pool.clone(),
                         identity,
+                        run_migration,
                     )
                     .await
                     .map_err(|e| SdkError::Generic(e.to_string()))?,
@@ -645,12 +646,16 @@ impl SdkBuilder {
                 not(all(target_family = "wasm", target_os = "unknown"))
             ))]
             if s.is_none()
-                && let Some((ref pool, ref identity)) = mysql_backend
+                && let Some((ref pool, ref identity, run_migration)) = mysql_backend
             {
                 s = Some(Arc::new(
-                    crate::persist::mysql::MysqlStorage::new_with_pool(pool.clone(), identity)
-                        .await
-                        .map_err(|e| SdkError::Generic(e.to_string()))?,
+                    crate::persist::mysql::MysqlStorage::new_with_pool(
+                        pool.clone(),
+                        identity,
+                        run_migration,
+                    )
+                    .await
+                    .map_err(|e| SdkError::Generic(e.to_string()))?,
                 ));
             }
 
@@ -700,20 +705,30 @@ impl SdkBuilder {
 
         #[cfg(feature = "postgres")]
         if tree_store.is_none()
-            && let Some((ref pool, ref identity)) = postgres_backend
+            && let Some((ref pool, ref identity, run_migration)) = postgres_backend
         {
             tree_store = Some(
-                crate::persist::postgres::create_postgres_tree_store(pool.clone(), identity)
-                    .await?,
+                crate::persist::postgres::create_postgres_tree_store(
+                    pool.clone(),
+                    identity,
+                    run_migration,
+                )
+                .await?,
             );
         }
 
         #[cfg(feature = "mysql")]
         if tree_store.is_none()
-            && let Some((ref pool, ref identity)) = mysql_backend
+            && let Some((ref pool, ref identity, run_migration)) = mysql_backend
         {
-            tree_store =
-                Some(crate::persist::mysql::create_mysql_tree_store(pool.clone(), identity).await?);
+            tree_store = Some(
+                crate::persist::mysql::create_mysql_tree_store(
+                    pool.clone(),
+                    identity,
+                    run_migration,
+                )
+                .await?,
+            );
         }
 
         // Create token output store if configured
@@ -722,20 +737,29 @@ impl SdkBuilder {
 
         #[cfg(feature = "postgres")]
         if token_output_store.is_none()
-            && let Some((ref pool, ref identity)) = postgres_backend
+            && let Some((ref pool, ref identity, run_migration)) = postgres_backend
         {
             token_output_store = Some(
-                crate::persist::postgres::create_postgres_token_store(pool.clone(), identity)
-                    .await?,
+                crate::persist::postgres::create_postgres_token_store(
+                    pool.clone(),
+                    identity,
+                    run_migration,
+                )
+                .await?,
             );
         }
 
         #[cfg(feature = "mysql")]
         if token_output_store.is_none()
-            && let Some((ref pool, ref identity)) = mysql_backend
+            && let Some((ref pool, ref identity, run_migration)) = mysql_backend
         {
             token_output_store = Some(
-                crate::persist::mysql::create_mysql_token_store(pool.clone(), identity).await?,
+                crate::persist::mysql::create_mysql_token_store(
+                    pool.clone(),
+                    identity,
+                    run_migration,
+                )
+                .await?,
             );
         }
 
@@ -746,20 +770,29 @@ impl SdkBuilder {
 
         #[cfg(feature = "postgres")]
         if inner_session_manager.is_none()
-            && let Some((ref pool, ref identity)) = postgres_backend
+            && let Some((ref pool, ref identity, run_migration)) = postgres_backend
         {
             inner_session_manager = Some(
-                crate::persist::postgres::create_postgres_session_manager(pool.clone(), identity)
-                    .await?,
+                crate::persist::postgres::create_postgres_session_manager(
+                    pool.clone(),
+                    identity,
+                    run_migration,
+                )
+                .await?,
             );
         }
 
         #[cfg(feature = "mysql")]
         if inner_session_manager.is_none()
-            && let Some((ref pool, ref identity)) = mysql_backend
+            && let Some((ref pool, ref identity, run_migration)) = mysql_backend
         {
             inner_session_manager = Some(
-                crate::persist::mysql::create_mysql_session_manager(pool.clone(), identity).await?,
+                crate::persist::mysql::create_mysql_session_manager(
+                    pool.clone(),
+                    identity,
+                    run_migration,
+                )
+                .await?,
             );
         }
 

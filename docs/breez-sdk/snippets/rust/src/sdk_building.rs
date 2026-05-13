@@ -103,6 +103,8 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     // Optionally pool settings can be adjusted. Some examples:
     postgres_config.max_pool_size = 8; // Max connections in pool
     postgres_config.wait_timeout_secs = Some(30); // Timeout waiting for connection
+    // If your service owns SDK-compatible schema migrations:
+    postgres_config.run_migration = false;
 
     // Construct the connection pool. The same `Arc<PostgresConnectionPool>`
     // can be passed to multiple SdkBuilders to share connections across SDKs;

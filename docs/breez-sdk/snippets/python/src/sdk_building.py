@@ -108,6 +108,8 @@ async def init_sdk_postgres():
     # Optionally pool settings can be adjusted. Some examples:
     postgres_config.max_pool_size = 8  # Max connections in pool
     postgres_config.wait_timeout_secs = 30  # Timeout waiting for connection
+    # If your service owns SDK-compatible schema migrations:
+    postgres_config.run_migration = False
 
     # Construct the connection pool. The same pool can be passed to multiple
     # SdkBuilders to share connections across SDKs; per-tenant scoping (rows

@@ -62,7 +62,7 @@ class PostgresTreeStore {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity || identity.length !== 33) {
       throw new TreeStoreError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -72,6 +72,7 @@ class PostgresTreeStore {
     this.identity = Buffer.from(identity);
     this.lockKey = _identityLockKey(TREE_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
+    this.runMigration = runMigration;
   }
 
   /**
@@ -79,8 +80,10 @@ class PostgresTreeStore {
    */
   async initialize() {
     try {
-      const migrationManager = new TreeStoreMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool, this.identity);
+      if (this.runMigration) {
+        const migrationManager = new TreeStoreMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool, this.identity);
+      }
       return this;
     } catch (error) {
       throw new TreeStoreError(
@@ -1005,7 +1008,12 @@ async function createPostgresTreeStore(config, identity, logger = null) {
     connectionTimeoutMillis: config.createTimeoutSecs * 1000,
     idleTimeoutMillis: config.recycleTimeoutSecs * 1000,
   });
-  return createPostgresTreeStoreWithPool(pool, identity, logger);
+  return createPostgresTreeStoreWithPool(
+    pool,
+    identity,
+    logger,
+    config.runMigration !== false
+  );
 }
 
 /**
@@ -1016,8 +1024,18 @@ async function createPostgresTreeStore(config, identity, logger = null) {
  * @param {object} [logger] - Optional logger
  * @returns {Promise<PostgresTreeStore>}
  */
-async function createPostgresTreeStoreWithPool(pool, identity, logger = null) {
-  const store = new PostgresTreeStore(pool, identity, logger);
+async function createPostgresTreeStoreWithPool(
+  pool,
+  identity,
+  logger = null,
+  runMigration = true
+) {
+  const store = new PostgresTreeStore(
+    pool,
+    identity,
+    logger,
+    runMigration
+  );
   await store.initialize();
   return store;
 }

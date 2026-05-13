@@ -73,7 +73,7 @@ class MysqlTokenStore {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity || identity.length !== 33) {
       throw new TokenStoreError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -83,12 +83,15 @@ class MysqlTokenStore {
     this.identity = Buffer.from(identity);
     this.lockName = _identityLockName(TOKEN_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
+    this.runMigration = runMigration;
   }
 
   async initialize() {
     try {
-      const migrationManager = new MysqlTokenStoreMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool, this.identity);
+      if (this.runMigration) {
+        const migrationManager = new MysqlTokenStoreMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool, this.identity);
+      }
       return this;
     } catch (error) {
       throw new TokenStoreError(
@@ -963,11 +966,26 @@ function createMysqlPool(config) {
  */
 async function createMysqlTokenStore(config, identity, logger = null) {
   const pool = createMysqlPool(config);
-  return createMysqlTokenStoreWithPool(pool, identity, logger);
+  return createMysqlTokenStoreWithPool(
+    pool,
+    identity,
+    logger,
+    config.runMigration !== false
+  );
 }
 
-async function createMysqlTokenStoreWithPool(pool, identity, logger = null) {
-  const store = new MysqlTokenStore(pool, identity, logger);
+async function createMysqlTokenStoreWithPool(
+  pool,
+  identity,
+  logger = null,
+  runMigration = true
+) {
+  const store = new MysqlTokenStore(
+    pool,
+    identity,
+    logger,
+    runMigration
+  );
   await store.initialize();
   return store;
 }

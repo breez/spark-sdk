@@ -85,23 +85,28 @@ impl PostgresSessionManager {
         config: PostgresStorageConfig,
         identity: &[u8],
     ) -> Result<Self, PostgresError> {
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::from_pool(pool, identity, run_migration).await
     }
 
     /// Creates a new `PostgresSessionManager` from an existing connection pool.
     ///
     /// Useful when sharing a pool with other components (e.g., `PostgresStorage`).
-    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
-        Self::init(pool, identity).await
-    }
-
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
+    /// When `run_migration` is `false`, initialization trusts the existing
+    /// schema and skips session manager migrations entirely.
+    pub async fn from_pool(
+        pool: Pool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<Self, PostgresError> {
         let store = Self {
             pool,
             identity: identity.to_vec(),
         };
-        store.migrate().await?;
+        if run_migration {
+            store.migrate().await?;
+        }
         Ok(store)
     }
 
@@ -142,12 +147,15 @@ pub async fn create_postgres_session_manager(
 /// Creates a `PostgresSessionManager` from an existing connection pool.
 ///
 /// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
+/// When `run_migration` is `false`, skips SDK-managed schema migrations and
+/// trusts that the `sessions` table already exists.
 pub async fn create_postgres_session_manager_from_pool(
     pool: Pool,
     identity: &[u8],
+    run_migration: bool,
 ) -> Result<Arc<dyn SessionManager>, PostgresError> {
     Ok(Arc::new(
-        PostgresSessionManager::from_pool(pool, identity).await?,
+        PostgresSessionManager::from_pool(pool, identity, run_migration).await?,
     ))
 }
 

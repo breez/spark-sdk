@@ -104,7 +104,9 @@ namespace BreezSdkSnippets
             postgresConfig = postgresConfig with
             {
                 maxPoolSize = 8u,        // Max connections in pool
-                waitTimeoutSecs = 30ul   // Timeout waiting for connection
+                waitTimeoutSecs = 30ul,  // Timeout waiting for connection
+                // If your service owns SDK-compatible schema migrations:
+                runMigration = false
             };
 
             // Construct the connection pool. The same pool can be passed to

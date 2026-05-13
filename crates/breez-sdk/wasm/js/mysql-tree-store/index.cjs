@@ -80,7 +80,7 @@ class MysqlTreeStore {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity || identity.length !== 33) {
       throw new TreeStoreError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -90,12 +90,15 @@ class MysqlTreeStore {
     this.identity = Buffer.from(identity);
     this.lockName = _identityLockName(TREE_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
+    this.runMigration = runMigration;
   }
 
   async initialize() {
     try {
-      const migrationManager = new MysqlTreeStoreMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool, this.identity);
+      if (this.runMigration) {
+        const migrationManager = new MysqlTreeStoreMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool, this.identity);
+      }
       return this;
     } catch (error) {
       throw new TreeStoreError(
@@ -924,11 +927,26 @@ function createMysqlPool(config) {
 
 async function createMysqlTreeStore(config, identity, logger = null) {
   const pool = createMysqlPool(config);
-  return createMysqlTreeStoreWithPool(pool, identity, logger);
+  return createMysqlTreeStoreWithPool(
+    pool,
+    identity,
+    logger,
+    config.runMigration !== false
+  );
 }
 
-async function createMysqlTreeStoreWithPool(pool, identity, logger = null) {
-  const store = new MysqlTreeStore(pool, identity, logger);
+async function createMysqlTreeStoreWithPool(
+  pool,
+  identity,
+  logger = null,
+  runMigration = true
+) {
+  const store = new MysqlTreeStore(
+    pool,
+    identity,
+    logger,
+    runMigration
+  );
   await store.initialize();
   return store;
 }

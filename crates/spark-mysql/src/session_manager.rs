@@ -91,21 +91,28 @@ impl MysqlSessionManager {
         config: MysqlStorageConfig,
         identity: &[u8],
     ) -> Result<Self, MysqlError> {
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::from_pool(pool, identity, run_migration).await
     }
 
-    /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
-    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
-        Self::init(pool, identity).await
-    }
-
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
+    /// Creates a new `MysqlSessionManager` from an existing connection pool.
+    ///
+    /// `identity` is the 33-byte secp256k1 pubkey of the tenant. When
+    /// `run_migration` is `false`, initialization trusts the existing schema
+    /// and skips session manager migrations entirely.
+    pub async fn from_pool(
+        pool: Pool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<Self, MysqlError> {
         let store = Self {
             pool,
             identity: identity.to_vec(),
         };
-        store.migrate().await?;
+        if run_migration {
+            store.migrate().await?;
+        }
         Ok(store)
     }
 
@@ -145,12 +152,15 @@ pub async fn create_mysql_session_manager(
 /// Creates a `MysqlSessionManager` from an existing connection pool.
 ///
 /// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
+/// When `run_migration` is `false`, skips SDK-managed schema migrations and
+/// trusts that the `sessions` table already exists.
 pub async fn create_mysql_session_manager_from_pool(
     pool: Pool,
     identity: &[u8],
+    run_migration: bool,
 ) -> Result<Arc<dyn SessionManager>, MysqlError> {
     Ok(Arc::new(
-        MysqlSessionManager::from_pool(pool, identity).await?,
+        MysqlSessionManager::from_pool(pool, identity, run_migration).await?,
     ))
 }
 
