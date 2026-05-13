@@ -775,8 +775,7 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
     }
 }
 
-/// `FinalTokenOutput` carries no SO-local `id` and no `token_public_key`;
-/// those are left empty / `None`.
+/// `FinalTokenOutput` carries no `token_public_key`; left as `None`.
 impl TryFrom<(operator_rpc::spark_token::FinalTokenOutput, Network)> for TokenOutput {
     type Error = ServiceError;
 
@@ -797,7 +796,7 @@ impl TryFrom<(operator_rpc::spark_token::FinalTokenOutput, Network)> for TokenOu
                 .map_err(|_| ServiceError::Generic("Invalid token amount".to_string()))?,
         );
         Ok(TokenOutput {
-            id: String::new(),
+            id: output.id,
             owner_public_key,
             revocation_commitment,
             withdraw_bond_sats: partial.withdraw_bond_sats,
