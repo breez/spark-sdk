@@ -775,8 +775,6 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
     }
 }
 
-/// Leaves `id` empty and `token_public_key` `None` — neither is present in
-/// `FinalTokenOutput`; callers derive `id` from the parent tx hash and vout.
 impl TryFrom<(operator_rpc::spark_token::FinalTokenOutput, Network)> for TokenOutput {
     type Error = ServiceError;
 
