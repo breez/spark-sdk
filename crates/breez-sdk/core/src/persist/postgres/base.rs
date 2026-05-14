@@ -187,13 +187,18 @@ pub(crate) fn create_pool(
     spark_postgres::create_pool(&sp_config).map_err(StorageError::from)
 }
 
-/// Runs database migrations with version tracking and concurrency control.
+pub(super) use spark_postgres::SchemaRenames;
+
+/// Runs database migrations with version tracking and concurrency control,
+/// optionally applying a one-shot schema rename first (under the same
+/// transaction-level advisory lock).
 pub(super) async fn run_migrations(
     pool: &deadpool_postgres::Pool,
     migrations_table: &str,
     migrations: &[Vec<String>],
+    renames: Option<&SchemaRenames<'_>>,
 ) -> Result<(), StorageError> {
-    spark_postgres::run_migrations(pool, migrations_table, migrations)
+    spark_postgres::run_migrations(pool, migrations_table, migrations, renames)
         .await
         .map_err(StorageError::from)
 }

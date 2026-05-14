@@ -5,7 +5,7 @@
 
 const { SessionManagerError } = require("./errors.cjs");
 
-const SESSION_MIGRATIONS_TABLE = "session_schema_migrations";
+const SESSION_MIGRATIONS_TABLE = "brz_session_schema_migrations";
 const MIGRATION_LOCK_NAME = "breez_mysql_session_manager_migration_lock";
 const MIGRATION_LOCK_TIMEOUT = 60;
 
@@ -31,6 +31,8 @@ class MysqlSessionManagerMigrationManager {
       }
 
       try {
+        await this._applySchemaRenames(conn);
+
         await conn.query("START TRANSACTION");
 
         await conn.query(`
@@ -81,12 +83,41 @@ class MysqlSessionManagerMigrationManager {
     }
   }
 
+  /**
+   * Renames legacy unprefixed session objects to their `brz_` equivalents on
+   * first startup after the prefix change. Gated on the legacy
+   * `session_schema_migrations` table as canary. MySQL DDL is not
+   * transactional, so each rename is preceded by an info_schema probe to
+   * make a partial-rename replay safe.
+   * @param {import('mysql2/promise').PoolConnection} conn
+   */
+  async _applySchemaRenames(conn) {
+    if (!(await _mysqlTableExists(conn, "session_schema_migrations"))) {
+      return;
+    }
+
+    if (
+      (await _mysqlTableExists(conn, "sessions")) &&
+      !(await _mysqlTableExists(conn, "brz_sessions"))
+    ) {
+      await conn.query("RENAME TABLE `sessions` TO `brz_sessions`");
+    }
+
+    if (await _mysqlTableExists(conn, "session_schema_migrations")) {
+      if (!(await _mysqlTableExists(conn, SESSION_MIGRATIONS_TABLE))) {
+        await conn.query(
+          `RENAME TABLE \`session_schema_migrations\` TO \`${SESSION_MIGRATIONS_TABLE}\``
+        );
+      }
+    }
+  }
+
   _getMigrations() {
     return [
       {
-        name: "Create sessions table",
+        name: "Create brz_sessions table",
         sql: [
-          `CREATE TABLE IF NOT EXISTS sessions (
+          `CREATE TABLE IF NOT EXISTS brz_sessions (
             user_id VARBINARY(33) NOT NULL,
             service_identity_key VARBINARY(33) NOT NULL,
             token TEXT NOT NULL,
@@ -97,6 +128,15 @@ class MysqlSessionManagerMigrationManager {
       },
     ];
   }
+}
+
+async function _mysqlTableExists(conn, tableName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS c FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND table_name = ?`,
+    [tableName]
+  );
+  return Number(rows[0].c) > 0;
 }
 
 module.exports = { MysqlSessionManagerMigrationManager };

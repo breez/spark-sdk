@@ -154,13 +154,18 @@ pub(crate) fn create_pool(config: &MysqlStorageConfig) -> Result<mysql_async::Po
     spark_mysql::create_pool(&sm_config).map_err(StorageError::from)
 }
 
-/// Runs database migrations with version tracking and concurrency control.
+pub(super) use spark_mysql::SchemaRenames;
+
+/// Runs database migrations with version tracking and concurrency control,
+/// optionally applying a one-shot schema rename first (under the same
+/// named lock).
 pub(super) async fn run_migrations(
     pool: &mysql_async::Pool,
     migrations_table: &str,
     migrations: &[Vec<Migration>],
+    renames: Option<&SchemaRenames<'_>>,
 ) -> Result<(), StorageError> {
-    spark_mysql::run_migrations(pool, migrations_table, migrations)
+    spark_mysql::run_migrations(pool, migrations_table, migrations, renames)
         .await
         .map_err(StorageError::from)
 }

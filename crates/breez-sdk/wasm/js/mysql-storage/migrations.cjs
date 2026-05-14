@@ -11,7 +11,7 @@
  * - pg_advisory_xact_lock → GET_LOCK/RELEASE_LOCK
  * - reserved word `key` quoted with backticks
  *
- * Uses a schema_migrations table + GET_LOCK to safely run migrations from
+ * Uses a brz_schema_migrations table + GET_LOCK to safely run migrations from
  * concurrent processes. Unlike pg's transaction-scoped advisory locks, MySQL
  * named locks are session-scoped, so we explicitly RELEASE_LOCK after the
  * commit (or on error in finally).
@@ -82,17 +82,19 @@ class MysqlMigrationManager {
       }
 
       try {
+        await this._applySchemaRenames(conn);
+
         await conn.query("START TRANSACTION");
 
         await conn.query(`
-          CREATE TABLE IF NOT EXISTS schema_migrations (
+          CREATE TABLE IF NOT EXISTS brz_schema_migrations (
             version INT PRIMARY KEY,
             applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
           )
         `);
 
         const [versionRows] = await conn.query(
-          "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations"
+          "SELECT COALESCE(MAX(version), 0) AS version FROM brz_schema_migrations"
         );
         const currentVersion = versionRows[0].version;
 
@@ -119,7 +121,7 @@ class MysqlMigrationManager {
           }
 
           await conn.query(
-            "INSERT INTO schema_migrations (version) VALUES (?)",
+            "INSERT INTO brz_schema_migrations (version) VALUES (?)",
             [version]
           );
         }
@@ -153,6 +155,94 @@ class MysqlMigrationManager {
   }
 
   /**
+   * Renames legacy unprefixed core-storage objects to their `brz_`
+   * equivalents on first startup after the prefix change. Gated on the
+   * legacy `schema_migrations` table as canary. MySQL primary keys are
+   * always named `PRIMARY` (table-scoped) and there are no foreign keys
+   * in the core schema, so only tables and indexes need renaming.
+   * @param {import('mysql2/promise').PoolConnection} conn
+   */
+  async _applySchemaRenames(conn) {
+    if (!(await _mysqlTableExists(conn, "schema_migrations"))) {
+      return;
+    }
+
+    const tableRenames = [
+      ["payments", "brz_payments"],
+      ["settings", "brz_settings"],
+      ["unclaimed_deposits", "brz_unclaimed_deposits"],
+      ["payment_metadata", "brz_payment_metadata"],
+      ["payment_details_lightning", "brz_payment_details_lightning"],
+      ["payment_details_token", "brz_payment_details_token"],
+      ["payment_details_spark", "brz_payment_details_spark"],
+      ["lnurl_receive_metadata", "brz_lnurl_receive_metadata"],
+      ["sync_revision", "brz_sync_revision"],
+      ["sync_outgoing", "brz_sync_outgoing"],
+      ["sync_state", "brz_sync_state"],
+      ["sync_incoming", "brz_sync_incoming"],
+      ["contacts", "brz_contacts"],
+    ];
+    for (const [oldName, newName] of tableRenames) {
+      if (
+        (await _mysqlTableExists(conn, oldName)) &&
+        !(await _mysqlTableExists(conn, newName))
+      ) {
+        await conn.query(`RENAME TABLE \`${oldName}\` TO \`${newName}\``);
+      }
+    }
+
+    const indexRenames = [
+      ["brz_payments", "idx_payments_user_timestamp", "brz_idx_payments_user_timestamp"],
+      ["brz_payments", "idx_payments_user_payment_type", "brz_idx_payments_user_payment_type"],
+      ["brz_payments", "idx_payments_user_status", "brz_idx_payments_user_status"],
+      [
+        "brz_payment_metadata",
+        "idx_payment_metadata_user_parent",
+        "brz_idx_payment_metadata_user_parent",
+      ],
+      [
+        "brz_payment_details_lightning",
+        "idx_payment_details_lightning_user_invoice",
+        "brz_idx_payment_details_lightning_user_invoice",
+      ],
+      [
+        "brz_payment_details_lightning",
+        "idx_payment_details_lightning_user_payment_hash",
+        "brz_idx_payment_details_lightning_user_payment_hash",
+      ],
+      [
+        "brz_sync_outgoing",
+        "idx_sync_outgoing_user_record_type_data_id",
+        "brz_idx_sync_outgoing_user_record_type_data_id",
+      ],
+      [
+        "brz_sync_incoming",
+        "idx_sync_incoming_user_revision",
+        "brz_idx_sync_incoming_user_revision",
+      ],
+    ];
+    for (const [table, oldName, newName] of indexRenames) {
+      if (
+        (await _mysqlIndexExists(conn, table, oldName)) &&
+        !(await _mysqlIndexExists(conn, table, newName))
+      ) {
+        await conn.query(
+          `ALTER TABLE \`${table}\` RENAME INDEX \`${oldName}\` TO \`${newName}\``
+        );
+      }
+    }
+
+    if (
+      (await _mysqlTableExists(conn, "schema_migrations")) &&
+      !(await _mysqlTableExists(conn, "brz_schema_migrations"))
+    ) {
+      await conn.query(
+        "RENAME TABLE `schema_migrations` TO `brz_schema_migrations`"
+      );
+    }
+  }
+
+  /**
    * @param {Buffer|Uint8Array} identity - 33-byte tenant identity. Inlined as
    *   an `UNHEX('...')` literal in the multi-tenant scoping migration. Safe
    *   because the bytes come from a typed secp256k1 pubkey (character set
@@ -164,7 +254,7 @@ class MysqlMigrationManager {
 
     // Per-table backfill: ADD COLUMN nullable -> UPDATE -> SET NOT NULL +
     // drop/recreate PK. Returns an array of statements. Tables with backticked
-    // names (e.g. `settings` uses `key`) need the caller to backtick `pkCols`.
+    // names (e.g. `brz_settings` uses `key`) need the caller to backtick `pkCols`.
     const scopeTable = (table, pkCols) => [
       `ALTER TABLE \`${table}\` ADD COLUMN user_id VARBINARY(33) NULL`,
       `UPDATE \`${table}\` SET user_id = ${idLit} WHERE user_id IS NULL`,
@@ -177,7 +267,7 @@ class MysqlMigrationManager {
         name: "Create all tables at final schema",
         sql: [
           // -- Core tables --
-          `CREATE TABLE IF NOT EXISTS payments (
+          `CREATE TABLE IF NOT EXISTS brz_payments (
             id VARCHAR(255) NOT NULL PRIMARY KEY,
             payment_type VARCHAR(64) NOT NULL,
             status VARCHAR(64) NOT NULL,
@@ -190,12 +280,12 @@ class MysqlMigrationManager {
             spark TINYINT(1) NULL
           )`,
 
-          `CREATE TABLE IF NOT EXISTS settings (
+          `CREATE TABLE IF NOT EXISTS brz_settings (
             \`key\` VARCHAR(255) NOT NULL PRIMARY KEY,
             value LONGTEXT NOT NULL
           )`,
 
-          `CREATE TABLE IF NOT EXISTS unclaimed_deposits (
+          `CREATE TABLE IF NOT EXISTS brz_unclaimed_deposits (
             txid VARCHAR(255) NOT NULL,
             vout INT NOT NULL,
             amount_sats BIGINT NULL,
@@ -205,7 +295,7 @@ class MysqlMigrationManager {
             PRIMARY KEY (txid, vout)
           )`,
 
-          `CREATE TABLE IF NOT EXISTS payment_metadata (
+          `CREATE TABLE IF NOT EXISTS brz_payment_metadata (
             payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
             parent_payment_id VARCHAR(255) NULL,
             lnurl_pay_info JSON NULL,
@@ -214,7 +304,7 @@ class MysqlMigrationManager {
             conversion_info JSON NULL
           )`,
 
-          `CREATE TABLE IF NOT EXISTS payment_details_lightning (
+          `CREATE TABLE IF NOT EXISTS brz_payment_details_lightning (
             payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
             invoice LONGTEXT NOT NULL,
             payment_hash VARCHAR(255) NOT NULL,
@@ -225,7 +315,7 @@ class MysqlMigrationManager {
             htlc_expiry_time BIGINT NOT NULL
           )`,
 
-          `CREATE TABLE IF NOT EXISTS payment_details_token (
+          `CREATE TABLE IF NOT EXISTS brz_payment_details_token (
             payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
             metadata JSON NOT NULL,
             tx_hash VARCHAR(255) NOT NULL,
@@ -233,13 +323,13 @@ class MysqlMigrationManager {
             invoice_details JSON NULL
           )`,
 
-          `CREATE TABLE IF NOT EXISTS payment_details_spark (
+          `CREATE TABLE IF NOT EXISTS brz_payment_details_spark (
             payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
             invoice_details JSON NULL,
             htlc_details JSON NULL
           )`,
 
-          `CREATE TABLE IF NOT EXISTS lnurl_receive_metadata (
+          `CREATE TABLE IF NOT EXISTS brz_lnurl_receive_metadata (
             payment_hash VARCHAR(255) NOT NULL PRIMARY KEY,
             nostr_zap_request LONGTEXT NULL,
             nostr_zap_receipt LONGTEXT NULL,
@@ -247,15 +337,15 @@ class MysqlMigrationManager {
           )`,
 
           // -- Sync tables --
-          `CREATE TABLE IF NOT EXISTS sync_revision (
+          `CREATE TABLE IF NOT EXISTS brz_sync_revision (
             id INT NOT NULL PRIMARY KEY DEFAULT 1,
             revision BIGINT NOT NULL DEFAULT 0,
             CHECK (id = 1)
           )`,
-          `INSERT INTO sync_revision (id, revision) VALUES (1, 0)
+          `INSERT INTO brz_sync_revision (id, revision) VALUES (1, 0)
             ON DUPLICATE KEY UPDATE id = id`,
 
-          `CREATE TABLE IF NOT EXISTS sync_outgoing (
+          `CREATE TABLE IF NOT EXISTS brz_sync_outgoing (
             record_type VARCHAR(255) NOT NULL,
             data_id VARCHAR(255) NOT NULL,
             schema_version VARCHAR(64) NOT NULL,
@@ -264,7 +354,7 @@ class MysqlMigrationManager {
             revision BIGINT NOT NULL
           )`,
 
-          `CREATE TABLE IF NOT EXISTS sync_state (
+          `CREATE TABLE IF NOT EXISTS brz_sync_state (
             record_type VARCHAR(255) NOT NULL,
             data_id VARCHAR(255) NOT NULL,
             schema_version VARCHAR(64) NOT NULL,
@@ -274,7 +364,7 @@ class MysqlMigrationManager {
             PRIMARY KEY (record_type, data_id)
           )`,
 
-          `CREATE TABLE IF NOT EXISTS sync_incoming (
+          `CREATE TABLE IF NOT EXISTS brz_sync_incoming (
             record_type VARCHAR(255) NOT NULL,
             data_id VARCHAR(255) NOT NULL,
             schema_version VARCHAR(64) NOT NULL,
@@ -285,23 +375,23 @@ class MysqlMigrationManager {
           )`,
 
           // -- Indexes --
-          `CREATE INDEX idx_payments_timestamp ON payments(timestamp)`,
-          `CREATE INDEX idx_payments_payment_type ON payments(payment_type)`,
-          `CREATE INDEX idx_payments_status ON payments(status)`,
-          `CREATE INDEX idx_payment_details_lightning_invoice
-            ON payment_details_lightning(invoice(255))`,
-          `CREATE INDEX idx_payment_details_lightning_payment_hash
-            ON payment_details_lightning(payment_hash)`,
-          `CREATE INDEX idx_payment_metadata_parent ON payment_metadata(parent_payment_id)`,
-          `CREATE INDEX idx_sync_outgoing_data_id_record_type
-            ON sync_outgoing(record_type, data_id)`,
-          `CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision)`,
+          `CREATE INDEX brz_idx_payments_timestamp ON brz_payments(timestamp)`,
+          `CREATE INDEX brz_idx_payments_payment_type ON brz_payments(payment_type)`,
+          `CREATE INDEX brz_idx_payments_status ON brz_payments(status)`,
+          `CREATE INDEX brz_idx_payment_details_lightning_invoice
+            ON brz_payment_details_lightning(invoice(255))`,
+          `CREATE INDEX brz_idx_payment_details_lightning_payment_hash
+            ON brz_payment_details_lightning(payment_hash)`,
+          `CREATE INDEX brz_idx_payment_metadata_parent ON brz_payment_metadata(parent_payment_id)`,
+          `CREATE INDEX brz_idx_sync_outgoing_data_id_record_type
+            ON brz_sync_outgoing(record_type, data_id)`,
+          `CREATE INDEX brz_idx_sync_incoming_revision ON brz_sync_incoming(revision)`,
         ],
       },
       {
-        name: "Create contacts table",
+        name: "Create brz_contacts table",
         sql: [
-          `CREATE TABLE IF NOT EXISTS contacts (
+          `CREATE TABLE IF NOT EXISTS brz_contacts (
             id VARCHAR(255) NOT NULL PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
             payment_identifier VARCHAR(255) NOT NULL,
@@ -311,77 +401,95 @@ class MysqlMigrationManager {
         ],
       },
       {
-        name: "Add is_mature to unclaimed_deposits",
+        name: "Add is_mature to brz_unclaimed_deposits",
         sql: [
-          `ALTER TABLE unclaimed_deposits ADD COLUMN is_mature TINYINT(1) NOT NULL DEFAULT 1`,
+          `ALTER TABLE brz_unclaimed_deposits ADD COLUMN is_mature TINYINT(1) NOT NULL DEFAULT 1`,
         ],
       },
       {
-        name: "Add conversion_status to payment_metadata",
+        name: "Add conversion_status to brz_payment_metadata",
         sql: [
-          `ALTER TABLE payment_metadata ADD COLUMN conversion_status VARCHAR(64) NULL`,
+          `ALTER TABLE brz_payment_metadata ADD COLUMN conversion_status VARCHAR(64) NULL`,
         ],
       },
       {
         name: "Multi-tenant scoping: add user_id and rewrite primary keys",
         sql: [
           // Per-user tables.
-          ...scopeTable("payments", "id"),
-          `DROP INDEX idx_payments_timestamp ON payments`,
-          `DROP INDEX idx_payments_payment_type ON payments`,
-          `DROP INDEX idx_payments_status ON payments`,
-          `CREATE INDEX idx_payments_user_timestamp ON payments(user_id, timestamp)`,
-          `CREATE INDEX idx_payments_user_payment_type ON payments(user_id, payment_type)`,
-          `CREATE INDEX idx_payments_user_status ON payments(user_id, status)`,
+          ...scopeTable("brz_payments", "id"),
+          `DROP INDEX brz_idx_payments_timestamp ON brz_payments`,
+          `DROP INDEX brz_idx_payments_payment_type ON brz_payments`,
+          `DROP INDEX brz_idx_payments_status ON brz_payments`,
+          `CREATE INDEX brz_idx_payments_user_timestamp ON brz_payments(user_id, timestamp)`,
+          `CREATE INDEX brz_idx_payments_user_payment_type ON brz_payments(user_id, payment_type)`,
+          `CREATE INDEX brz_idx_payments_user_status ON brz_payments(user_id, status)`,
 
-          ...scopeTable("payment_metadata", "payment_id"),
-          `DROP INDEX idx_payment_metadata_parent ON payment_metadata`,
-          `CREATE INDEX idx_payment_metadata_user_parent
-             ON payment_metadata(user_id, parent_payment_id)`,
+          ...scopeTable("brz_payment_metadata", "payment_id"),
+          `DROP INDEX brz_idx_payment_metadata_parent ON brz_payment_metadata`,
+          `CREATE INDEX brz_idx_payment_metadata_user_parent
+             ON brz_payment_metadata(user_id, parent_payment_id)`,
 
-          ...scopeTable("payment_details_lightning", "payment_id"),
-          `DROP INDEX idx_payment_details_lightning_invoice ON payment_details_lightning`,
-          `DROP INDEX idx_payment_details_lightning_payment_hash ON payment_details_lightning`,
-          `CREATE INDEX idx_payment_details_lightning_user_invoice
-             ON payment_details_lightning(user_id, invoice(255))`,
-          `CREATE INDEX idx_payment_details_lightning_user_payment_hash
-             ON payment_details_lightning(user_id, payment_hash)`,
+          ...scopeTable("brz_payment_details_lightning", "payment_id"),
+          `DROP INDEX brz_idx_payment_details_lightning_invoice ON brz_payment_details_lightning`,
+          `DROP INDEX brz_idx_payment_details_lightning_payment_hash ON brz_payment_details_lightning`,
+          `CREATE INDEX brz_idx_payment_details_lightning_user_invoice
+             ON brz_payment_details_lightning(user_id, invoice(255))`,
+          `CREATE INDEX brz_idx_payment_details_lightning_user_payment_hash
+             ON brz_payment_details_lightning(user_id, payment_hash)`,
 
-          ...scopeTable("payment_details_token", "payment_id"),
-          ...scopeTable("payment_details_spark", "payment_id"),
-          ...scopeTable("lnurl_receive_metadata", "payment_hash"),
-          ...scopeTable("unclaimed_deposits", "txid, vout"),
-          ...scopeTable("contacts", "id"),
-          ...scopeTable("settings", "`key`"),
+          ...scopeTable("brz_payment_details_token", "payment_id"),
+          ...scopeTable("brz_payment_details_spark", "payment_id"),
+          ...scopeTable("brz_lnurl_receive_metadata", "payment_hash"),
+          ...scopeTable("brz_unclaimed_deposits", "txid, vout"),
+          ...scopeTable("brz_contacts", "id"),
+          ...scopeTable("brz_settings", "`key`"),
 
-          // sync_revision was a singleton (PK id=1, CHECK id=1). Drop the PK
+          // brz_sync_revision was a singleton (PK id=1, CHECK id=1). Drop the PK
           // and the id column, then re-key by user_id.
-          { op: "dropPrimaryKey", table: "sync_revision" },
-          `ALTER TABLE sync_revision DROP COLUMN id`,
-          `ALTER TABLE sync_revision ADD COLUMN user_id VARBINARY(33) NULL`,
-          `UPDATE sync_revision SET user_id = ${idLit} WHERE user_id IS NULL`,
-          `ALTER TABLE sync_revision MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
-          `ALTER TABLE sync_revision ADD PRIMARY KEY (user_id)`,
+          { op: "dropPrimaryKey", table: "brz_sync_revision" },
+          `ALTER TABLE brz_sync_revision DROP COLUMN id`,
+          `ALTER TABLE brz_sync_revision ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE brz_sync_revision SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE brz_sync_revision MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE brz_sync_revision ADD PRIMARY KEY (user_id)`,
 
-          // sync_outgoing has no PK, only an index — just add user_id and
+          // brz_sync_outgoing has no PK, only an index — just add user_id and
           // rewrite the index.
-          `ALTER TABLE sync_outgoing ADD COLUMN user_id VARBINARY(33) NULL`,
-          `UPDATE sync_outgoing SET user_id = ${idLit} WHERE user_id IS NULL`,
-          `ALTER TABLE sync_outgoing MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
-          `DROP INDEX idx_sync_outgoing_data_id_record_type ON sync_outgoing`,
-          `CREATE INDEX idx_sync_outgoing_user_record_type_data_id
-             ON sync_outgoing(user_id, record_type, data_id)`,
+          `ALTER TABLE brz_sync_outgoing ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE brz_sync_outgoing SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE brz_sync_outgoing MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `DROP INDEX brz_idx_sync_outgoing_data_id_record_type ON brz_sync_outgoing`,
+          `CREATE INDEX brz_idx_sync_outgoing_user_record_type_data_id
+             ON brz_sync_outgoing(user_id, record_type, data_id)`,
 
-          ...scopeTable("sync_state", "record_type, data_id"),
+          ...scopeTable("brz_sync_state", "record_type, data_id"),
 
-          ...scopeTable("sync_incoming", "record_type, data_id, revision"),
-          `DROP INDEX idx_sync_incoming_revision ON sync_incoming`,
-          `CREATE INDEX idx_sync_incoming_user_revision
-             ON sync_incoming(user_id, revision)`,
+          ...scopeTable("brz_sync_incoming", "record_type, data_id, revision"),
+          `DROP INDEX brz_idx_sync_incoming_revision ON brz_sync_incoming`,
+          `CREATE INDEX brz_idx_sync_incoming_user_revision
+             ON brz_sync_incoming(user_id, revision)`,
         ],
       },
     ];
   }
+}
+
+async function _mysqlTableExists(conn, tableName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS c FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND table_name = ?`,
+    [tableName]
+  );
+  return Number(rows[0].c) > 0;
+}
+
+async function _mysqlIndexExists(conn, tableName, indexName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS c FROM information_schema.statistics
+     WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`,
+    [tableName, indexName]
+  );
+  return Number(rows[0].c) > 0;
 }
 
 module.exports = { MysqlMigrationManager };

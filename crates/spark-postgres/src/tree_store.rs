@@ -23,11 +23,69 @@ use uuid::Uuid;
 use crate::advisory_lock::identity_lock_key;
 use crate::config::PostgresStorageConfig;
 use crate::error::PostgresError;
-use crate::migrations::run_migrations;
+use crate::migrations::{SchemaRenames, run_migrations};
 use crate::pool::create_pool;
 
 /// Name of the schema migrations table for `PostgresTreeStore`.
-const TREE_MIGRATIONS_TABLE: &str = "tree_schema_migrations";
+const TREE_MIGRATIONS_TABLE: &str = "brz_tree_schema_migrations";
+
+/// Old-to-`brz_*` rename map for the tree store schema. Applied on first
+/// startup after upgrading to the prefixed schema. The indexes listed are the
+/// ones present after the multi-tenant migration (the original pre-tenant
+/// indexes were dropped by that migration). The composite FK on `brz_tree_leaves`
+/// was added inline by the multi-tenant migration without an explicit
+/// `CONSTRAINT` name, so Postgres assigned `tree_leaves_user_id_reservation_id_fkey`.
+const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
+    old_migrations_table: "tree_schema_migrations",
+    new_migrations_table: TREE_MIGRATIONS_TABLE,
+    tables: &[
+        ("tree_reservations", "brz_tree_reservations"),
+        ("tree_leaves", "brz_tree_leaves"),
+        ("tree_spent_leaves", "brz_tree_spent_leaves"),
+        ("tree_swap_status", "brz_tree_swap_status"),
+    ],
+    indexes: &[
+        (
+            "idx_tree_leaves_user_available",
+            "brz_idx_tree_leaves_user_available",
+        ),
+        (
+            "idx_tree_leaves_user_reservation",
+            "brz_idx_tree_leaves_user_reservation",
+        ),
+        (
+            "idx_tree_leaves_user_added_at",
+            "brz_idx_tree_leaves_user_added_at",
+        ),
+    ],
+    constraints: &[
+        (
+            "brz_tree_reservations",
+            "tree_reservations_pkey",
+            "brz_tree_reservations_pkey",
+        ),
+        (
+            "brz_tree_leaves",
+            "tree_leaves_pkey",
+            "brz_tree_leaves_pkey",
+        ),
+        (
+            "brz_tree_leaves",
+            "tree_leaves_user_id_reservation_id_fkey",
+            "brz_tree_leaves_user_id_reservation_id_fkey",
+        ),
+        (
+            "brz_tree_spent_leaves",
+            "tree_spent_leaves_pkey",
+            "brz_tree_spent_leaves_pkey",
+        ),
+        (
+            "brz_tree_swap_status",
+            "tree_swap_status_pkey",
+            "brz_tree_swap_status_pkey",
+        ),
+    ],
+};
 
 /// Lightweight `(id, value)` pair used by `try_reserve_leaves` to run the
 /// selection algorithm without pulling each leaf's full `data` JSON.
@@ -86,62 +144,63 @@ fn tree_store_multi_tenant_migration(identity: &[u8]) -> Vec<String> {
     let id_lit = format!("'\\x{id_hex}'::bytea");
 
     vec![
-        // tree_leaves: drop the old single-column FK to tree_reservations(id)
-        // FIRST, before we touch the tree_reservations PK it depends on.
-        "ALTER TABLE tree_leaves DROP CONSTRAINT IF EXISTS tree_leaves_reservation_id_fkey"
+        // brz_tree_leaves: drop the old single-column FK to brz_tree_reservations(id)
+        // FIRST, before we touch the brz_tree_reservations PK it depends on.
+        "ALTER TABLE brz_tree_leaves DROP CONSTRAINT IF EXISTS brz_tree_leaves_reservation_id_fkey"
             .to_string(),
-        // tree_reservations: scope by user_id.
-        "ALTER TABLE tree_reservations ADD COLUMN user_id BYTEA".to_string(),
-        format!("UPDATE tree_reservations SET user_id = {id_lit}"),
-        "ALTER TABLE tree_reservations \
+        // brz_tree_reservations: scope by user_id.
+        "ALTER TABLE brz_tree_reservations ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE brz_tree_reservations SET user_id = {id_lit}"),
+        "ALTER TABLE brz_tree_reservations \
          ALTER COLUMN user_id SET NOT NULL, \
-         DROP CONSTRAINT IF EXISTS tree_reservations_pkey, \
+         DROP CONSTRAINT IF EXISTS brz_tree_reservations_pkey, \
          ADD PRIMARY KEY (user_id, id)"
             .to_string(),
-        // tree_leaves: add user_id, rekey, and re-add the composite FK to the
-        // new tree_reservations PK.
-        "ALTER TABLE tree_leaves ADD COLUMN user_id BYTEA".to_string(),
-        format!("UPDATE tree_leaves SET user_id = {id_lit}"),
+        // brz_tree_leaves: add user_id, rekey, and re-add the composite FK to the
+        // new brz_tree_reservations PK.
+        "ALTER TABLE brz_tree_leaves ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE brz_tree_leaves SET user_id = {id_lit}"),
         // The composite FK uses NO ACTION (the default) instead of the previous
         // single-column `ON DELETE SET NULL`: PG-only column-list SET NULL is
         // PG15+, and a whole-row SET NULL would try to null `user_id` too.
         // Callers (`cleanup_stale_reservations`, `cancel_reservation`,
         // `finalize_reservation`) explicitly clear `reservation_id` before
         // deleting the parent reservation row.
-        "ALTER TABLE tree_leaves \
+        "ALTER TABLE brz_tree_leaves \
          ALTER COLUMN user_id SET NOT NULL, \
-         DROP CONSTRAINT IF EXISTS tree_leaves_pkey, \
+         DROP CONSTRAINT IF EXISTS brz_tree_leaves_pkey, \
          ADD PRIMARY KEY (user_id, id), \
          ADD FOREIGN KEY (user_id, reservation_id) \
-            REFERENCES tree_reservations(user_id, id)"
+            REFERENCES brz_tree_reservations(user_id, id)"
             .to_string(),
-        "DROP INDEX IF EXISTS idx_tree_leaves_available".to_string(),
-        "DROP INDEX IF EXISTS idx_tree_leaves_reservation".to_string(),
-        "DROP INDEX IF EXISTS idx_tree_leaves_added_at".to_string(),
-        "CREATE INDEX idx_tree_leaves_user_available \
-         ON tree_leaves(user_id, status, is_missing_from_operators) \
+        "DROP INDEX IF EXISTS brz_idx_tree_leaves_available".to_string(),
+        "DROP INDEX IF EXISTS brz_idx_tree_leaves_reservation".to_string(),
+        "DROP INDEX IF EXISTS brz_idx_tree_leaves_added_at".to_string(),
+        "CREATE INDEX brz_idx_tree_leaves_user_available \
+         ON brz_tree_leaves(user_id, status, is_missing_from_operators) \
          WHERE status = 'Available' AND is_missing_from_operators = FALSE"
             .to_string(),
-        "CREATE INDEX idx_tree_leaves_user_reservation \
-         ON tree_leaves(user_id, reservation_id) \
+        "CREATE INDEX brz_idx_tree_leaves_user_reservation \
+         ON brz_tree_leaves(user_id, reservation_id) \
          WHERE reservation_id IS NOT NULL"
             .to_string(),
-        "CREATE INDEX idx_tree_leaves_user_added_at ON tree_leaves(user_id, added_at)".to_string(),
-        // tree_spent_leaves: scope by user_id.
-        "ALTER TABLE tree_spent_leaves ADD COLUMN user_id BYTEA".to_string(),
-        format!("UPDATE tree_spent_leaves SET user_id = {id_lit}"),
-        "ALTER TABLE tree_spent_leaves \
+        "CREATE INDEX brz_idx_tree_leaves_user_added_at ON brz_tree_leaves(user_id, added_at)"
+            .to_string(),
+        // brz_tree_spent_leaves: scope by user_id.
+        "ALTER TABLE brz_tree_spent_leaves ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE brz_tree_spent_leaves SET user_id = {id_lit}"),
+        "ALTER TABLE brz_tree_spent_leaves \
          ALTER COLUMN user_id SET NOT NULL, \
-         DROP CONSTRAINT IF EXISTS tree_spent_leaves_pkey, \
+         DROP CONSTRAINT IF EXISTS brz_tree_spent_leaves_pkey, \
          ADD PRIMARY KEY (user_id, leaf_id)"
             .to_string(),
-        // tree_swap_status was a singleton (PK id=1, CHECK id=1). Drop the id
+        // brz_tree_swap_status was a singleton (PK id=1, CHECK id=1). Drop the id
         // column (CASCADE removes both PK and CHECK), then re-key by user_id so
         // each tenant has its own swap-status row.
-        "ALTER TABLE tree_swap_status DROP COLUMN id CASCADE".to_string(),
-        "ALTER TABLE tree_swap_status ADD COLUMN user_id BYTEA".to_string(),
-        format!("UPDATE tree_swap_status SET user_id = {id_lit}"),
-        "ALTER TABLE tree_swap_status \
+        "ALTER TABLE brz_tree_swap_status DROP COLUMN id CASCADE".to_string(),
+        "ALTER TABLE brz_tree_swap_status ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE brz_tree_swap_status SET user_id = {id_lit}"),
+        "ALTER TABLE brz_tree_swap_status \
          ALTER COLUMN user_id SET NOT NULL, \
          ADD PRIMARY KEY (user_id)"
             .to_string(),
@@ -191,8 +250,8 @@ impl TreeStore for PostgresTreeStore {
             .query_one(
                 r"
                 SELECT COALESCE(SUM((l.data->>'value')::bigint), 0)::bigint AS balance
-                FROM tree_leaves l
-                LEFT JOIN tree_reservations r
+                FROM brz_tree_leaves l
+                LEFT JOIN brz_tree_reservations r
                   ON l.reservation_id = r.id AND l.user_id = r.user_id
                 WHERE l.user_id = $1
                   AND (
@@ -216,8 +275,8 @@ impl TreeStore for PostgresTreeStore {
                 r"
                 SELECT l.id, l.status, l.is_missing_from_operators, l.data,
                        l.reservation_id, r.purpose
-                FROM tree_leaves l
-                LEFT JOIN tree_reservations r
+                FROM brz_tree_leaves l
+                LEFT JOIN brz_tree_reservations r
                   ON l.reservation_id = r.id AND l.user_id = r.user_id
                 WHERE l.user_id = $1
                 ",
@@ -295,12 +354,12 @@ impl TreeStore for PostgresTreeStore {
                     r"
                     SELECT
                         EXISTS(
-                            SELECT 1 FROM tree_reservations
+                            SELECT 1 FROM brz_tree_reservations
                             WHERE user_id = $1 AND purpose = 'Swap'
                         ),
                         COALESCE(
                             (SELECT last_completed_at >= $2
-                             FROM tree_swap_status WHERE user_id = $1),
+                             FROM brz_tree_swap_status WHERE user_id = $1),
                             FALSE
                         )
                     ",
@@ -324,7 +383,7 @@ impl TreeStore for PostgresTreeStore {
         let spent_ids: HashSet<String> = {
             let rows = tx
                 .query(
-                    "SELECT leaf_id FROM tree_spent_leaves \
+                    "SELECT leaf_id FROM brz_tree_spent_leaves \
                      WHERE user_id = $1 AND spent_at >= $2",
                     &[&self.identity, &refresh_timestamp],
                 )
@@ -345,7 +404,7 @@ impl TreeStore for PostgresTreeStore {
         // (FK ON DELETE SET NULL) — those rows kept their old added_at, so they are
         // dropped here and re-fetched from the operator response in the upsert below.
         tx.execute(
-            "DELETE FROM tree_leaves \
+            "DELETE FROM brz_tree_leaves \
              WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
             &[&self.identity, &refresh_timestamp],
         )
@@ -375,7 +434,7 @@ impl TreeStore for PostgresTreeStore {
 
         let reservation = tx
             .query_opt(
-                "SELECT id FROM tree_reservations WHERE user_id = $1 AND id = $2",
+                "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
                 &[&self.identity, id],
             )
             .await
@@ -387,7 +446,7 @@ impl TreeStore for PostgresTreeStore {
 
         let prior_leaf_ids: Vec<String> = tx
             .query(
-                "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+                "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
                 &[&self.identity, id],
             )
             .await
@@ -406,14 +465,14 @@ impl TreeStore for PostgresTreeStore {
         );
 
         tx.execute(
-            "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+            "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
             &[&self.identity, id],
         )
         .await
         .map_err(map_err)?;
 
         tx.execute(
-            "DELETE FROM tree_reservations WHERE user_id = $1 AND id = $2",
+            "DELETE FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
             &[&self.identity, id],
         )
         .await
@@ -435,7 +494,7 @@ impl TreeStore for PostgresTreeStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        // Serialize against `set_leaves` so its `tree_spent_leaves` snapshot
+        // Serialize against `set_leaves` so its `brz_tree_spent_leaves` snapshot
         // and the upsert that consumes it cannot interleave with this
         // transaction's spent-marker write — otherwise the snapshot would miss
         // our marker and the upsert would write the just-spent leaf back as
@@ -445,7 +504,7 @@ impl TreeStore for PostgresTreeStore {
         // Check if reservation exists and get its purpose
         let reservation = tx
             .query_opt(
-                "SELECT id, purpose FROM tree_reservations WHERE user_id = $1 AND id = $2",
+                "SELECT id, purpose FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
                 &[&self.identity, id],
             )
             .await
@@ -455,7 +514,7 @@ impl TreeStore for PostgresTreeStore {
             let is_swap = row.get::<_, String>("purpose") == "Swap";
             let leaf_ids: Vec<String> = tx
                 .query(
-                    "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+                    "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
                     &[&self.identity, id],
                 )
                 .await
@@ -479,14 +538,14 @@ impl TreeStore for PostgresTreeStore {
             .await?;
 
         tx.execute(
-            "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+            "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
             &[&self.identity, id],
         )
         .await
         .map_err(map_err)?;
 
         tx.execute(
-            "DELETE FROM tree_reservations WHERE user_id = $1 AND id = $2",
+            "DELETE FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
             &[&self.identity, id],
         )
         .await
@@ -508,7 +567,7 @@ impl TreeStore for PostgresTreeStore {
         // that joined after migration 3 (and thus has no row) gets one created.
         if is_swap && new_leaves.is_some() {
             tx.execute(
-                "INSERT INTO tree_swap_status (user_id, last_completed_at) \
+                "INSERT INTO brz_tree_swap_status (user_id, last_completed_at) \
                  VALUES ($1, NOW()) \
                  ON CONFLICT (user_id) DO UPDATE SET last_completed_at = EXCLUDED.last_completed_at",
                 &[&self.identity],
@@ -548,7 +607,7 @@ impl TreeStore for PostgresTreeStore {
             .query_one(
                 r"
                 SELECT COALESCE(SUM((data->>'value')::bigint), 0)::bigint AS total
-                FROM tree_leaves
+                FROM brz_tree_leaves
                 WHERE user_id = $1
                   AND status = 'Available'
                   AND is_missing_from_operators = FALSE
@@ -570,7 +629,7 @@ impl TreeStore for PostgresTreeStore {
             .query(
                 r"
                 SELECT id, (data->>'value')::bigint AS value
-                FROM tree_leaves
+                FROM brz_tree_leaves
                 WHERE user_id = $1
                   AND status = 'Available'
                   AND is_missing_from_operators = FALSE
@@ -578,7 +637,7 @@ impl TreeStore for PostgresTreeStore {
                   AND (
                     (data->>'value')::bigint <= $2
                     OR id = (
-                      SELECT id FROM tree_leaves
+                      SELECT id FROM brz_tree_leaves
                       WHERE user_id = $1
                         AND status = 'Available'
                         AND is_missing_from_operators = FALSE
@@ -723,7 +782,7 @@ impl TreeStore for PostgresTreeStore {
 
         let reservation = tx
             .query_opt(
-                "SELECT id FROM tree_reservations WHERE user_id = $1 AND id = $2",
+                "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
                 &[&self.identity, reservation_id],
             )
             .await
@@ -739,7 +798,7 @@ impl TreeStore for PostgresTreeStore {
         let old_reserved_leaf_ids: Vec<String> = {
             let rows = tx
                 .query(
-                    "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+                    "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
                     &[&self.identity, reservation_id],
                 )
                 .await
@@ -751,7 +810,7 @@ impl TreeStore for PostgresTreeStore {
         self.batch_insert_spent_leaves(&tx, &old_reserved_leaf_ids)
             .await?;
         tx.execute(
-            "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+            "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
             &[&self.identity, reservation_id],
         )
         .await
@@ -772,7 +831,7 @@ impl TreeStore for PostgresTreeStore {
 
         // Clear pending change amount
         tx.execute(
-            "UPDATE tree_reservations SET pending_change_amount = 0 \
+            "UPDATE brz_tree_reservations SET pending_change_amount = 0 \
              WHERE user_id = $1 AND id = $2",
             &[&self.identity, reservation_id],
         )
@@ -844,6 +903,7 @@ impl PostgresTreeStore {
             &self.pool,
             TREE_MIGRATIONS_TABLE,
             &Self::migrations(&self.identity),
+            Some(&SCHEMA_RENAMES),
         )
         .await
     }
@@ -853,43 +913,43 @@ impl PostgresTreeStore {
         vec![
             // Migration 1: Initial tree tables
             vec![
-                "CREATE TABLE IF NOT EXISTS tree_reservations (
+                "CREATE TABLE IF NOT EXISTS brz_tree_reservations (
                     id TEXT PRIMARY KEY,
                     purpose TEXT NOT NULL,
                     pending_change_amount BIGINT NOT NULL DEFAULT 0,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )".to_string(),
-                "CREATE TABLE IF NOT EXISTS tree_leaves (
+                "CREATE TABLE IF NOT EXISTS brz_tree_leaves (
                     id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
                     is_missing_from_operators BOOLEAN NOT NULL DEFAULT FALSE,
-                    reservation_id TEXT REFERENCES tree_reservations(id) ON DELETE SET NULL,
+                    reservation_id TEXT REFERENCES brz_tree_reservations(id) ON DELETE SET NULL,
                     data JSONB NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )".to_string(),
-                "CREATE TABLE IF NOT EXISTS tree_spent_leaves (
+                "CREATE TABLE IF NOT EXISTS brz_tree_spent_leaves (
                     leaf_id TEXT PRIMARY KEY,
                     spent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )".to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_tree_leaves_available ON tree_leaves(status, is_missing_from_operators)
+                "CREATE INDEX IF NOT EXISTS brz_idx_tree_leaves_available ON brz_tree_leaves(status, is_missing_from_operators)
                     WHERE status = 'Available' AND is_missing_from_operators = FALSE".to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_tree_leaves_reservation ON tree_leaves(reservation_id)
+                "CREATE INDEX IF NOT EXISTS brz_idx_tree_leaves_reservation ON brz_tree_leaves(reservation_id)
                     WHERE reservation_id IS NOT NULL".to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_tree_leaves_added_at ON tree_leaves(added_at)".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_tree_leaves_added_at ON brz_tree_leaves(added_at)".to_string(),
             ],
             // Migration 2: Add swap status tracking for race condition fix
             vec![
-                "CREATE TABLE IF NOT EXISTS tree_swap_status (
+                "CREATE TABLE IF NOT EXISTS brz_tree_swap_status (
                     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
                     last_completed_at TIMESTAMPTZ
                 )".to_string(),
-                "INSERT INTO tree_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING".to_string(),
+                "INSERT INTO brz_tree_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING".to_string(),
             ],
             // Migration 3: Multi-tenant scoping. Adds user_id to every tree-store
             // table, backfills with the connecting tenant's identity, and rewrites
             // primary keys / FKs / indexes to lead with user_id. The
-            // `tree_swap_status` singleton is restructured the same way as
+            // `brz_tree_swap_status` singleton is restructured the same way as
             // `sync_revision` in the SDK-core storage. See `multi_tenant_migration`
             // for the SQL.
             tree_store_multi_tenant_migration(identity),
@@ -913,7 +973,7 @@ impl PostgresTreeStore {
         let row = tx
             .query_one(
                 "SELECT COALESCE(SUM(pending_change_amount), 0)::BIGINT \
-                 FROM tree_reservations WHERE user_id = $1",
+                 FROM brz_tree_reservations WHERE user_id = $1",
                 &[&self.identity],
             )
             .await
@@ -935,7 +995,7 @@ impl PostgresTreeStore {
             .map_err(|e| TreeServiceError::Generic(format!("Failed to deserialize TreeNode: {e}")))
     }
 
-    /// Batch upserts leaves into `tree_leaves` table using UNNEST.
+    /// Batch upserts leaves into `brz_tree_leaves` table using UNNEST.
     /// Optionally skips leaves whose IDs are in the `skip_ids` set.
     /// Uses ON CONFLICT DO UPDATE to replace existing leaves (matching `InMemoryTreeStore` behavior).
     async fn batch_upsert_leaves(
@@ -981,7 +1041,7 @@ impl PostgresTreeStore {
 
         tx.execute(
             r"
-            INSERT INTO tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
+            INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
             SELECT $5, id, status, missing, data, NOW()
             FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::jsonb[])
                 AS t(id, status, missing, data)
@@ -1018,7 +1078,7 @@ impl PostgresTreeStore {
 
         tx.execute(
             r"
-            UPDATE tree_leaves
+            UPDATE brz_tree_leaves
             SET reservation_id = $1
             WHERE user_id = $3 AND id = ANY($2)
             ",
@@ -1042,7 +1102,7 @@ impl PostgresTreeStore {
 
         tx.execute(
             r"
-            INSERT INTO tree_spent_leaves (user_id, leaf_id)
+            INSERT INTO brz_tree_spent_leaves (user_id, leaf_id)
             SELECT $2, leaf_id FROM UNNEST($1::text[]) AS t(leaf_id)
             ON CONFLICT DO NOTHING
             ",
@@ -1069,7 +1129,7 @@ impl PostgresTreeStore {
         let result = tx
             .execute(
                 r"
-                DELETE FROM tree_spent_leaves
+                DELETE FROM brz_tree_spent_leaves
                 WHERE user_id = $2 AND leaf_id = ANY($1)
                 ",
                 &[&leaf_ids, &self.identity],
@@ -1115,7 +1175,7 @@ impl PostgresTreeStore {
         }
         let rows = tx
             .query(
-                "SELECT id, data FROM tree_leaves WHERE user_id = $2 AND id = ANY($1)",
+                "SELECT id, data FROM brz_tree_leaves WHERE user_id = $2 AND id = ANY($1)",
                 &[&ids, &self.identity],
             )
             .await
@@ -1165,10 +1225,10 @@ impl PostgresTreeStore {
         // Release leaves still pointing at any soon-to-be-deleted reservation,
         // matching the previous `ON DELETE SET NULL` behavior.
         tx.execute(
-            r"UPDATE tree_leaves SET reservation_id = NULL
+            r"UPDATE brz_tree_leaves SET reservation_id = NULL
               WHERE user_id = $2
                 AND reservation_id IN (
-                    SELECT id FROM tree_reservations
+                    SELECT id FROM brz_tree_reservations
                     WHERE user_id = $2
                       AND created_at < NOW() - make_interval(secs => $1)
                 )",
@@ -1179,7 +1239,7 @@ impl PostgresTreeStore {
 
         let result = tx
             .execute(
-                r"DELETE FROM tree_reservations
+                r"DELETE FROM brz_tree_reservations
                   WHERE user_id = $2
                     AND created_at < NOW() - make_interval(secs => $1)",
                 &[&RESERVATION_TIMEOUT_SECS, &self.identity],
@@ -1211,7 +1271,7 @@ impl PostgresTreeStore {
 
         let result = tx
             .execute(
-                r"DELETE FROM tree_spent_leaves WHERE user_id = $2 AND spent_at < $1",
+                r"DELETE FROM brz_tree_spent_leaves WHERE user_id = $2 AND spent_at < $1",
                 &[&cleanup_cutoff, &self.identity],
             )
             .await
@@ -1239,7 +1299,7 @@ impl PostgresTreeStore {
         let pending_i64 = pending_change as i64;
 
         tx.execute(
-            "INSERT INTO tree_reservations (user_id, id, purpose, pending_change_amount) \
+            "INSERT INTO brz_tree_reservations (user_id, id, purpose, pending_change_amount) \
              VALUES ($1, $2, $3, $4)",
             &[
                 &self.identity,
@@ -1735,7 +1795,7 @@ mod tests {
         let client = fixture.store.pool.get().await.unwrap();
         client
             .execute(
-                "UPDATE tree_reservations SET created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
+                "UPDATE brz_tree_reservations SET created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
                 &[&reservation.id],
             )
             .await
@@ -1857,7 +1917,7 @@ mod tests {
         let client = fixture.store.pool.get().await.unwrap();
         client
             .execute(
-                "UPDATE tree_reservations SET created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
+                "UPDATE brz_tree_reservations SET created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
                 &[&reservation.id],
             )
             .await
