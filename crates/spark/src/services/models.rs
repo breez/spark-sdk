@@ -775,9 +775,8 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
     }
 }
 
-/// `FinalTokenOutput` carries no SO-local `id` and no `token_public_key`;
-/// the caller is expected to derive `id` from the parent transaction hash
-/// and vout, and `token_public_key` is left as `None`.
+/// Leaves `id` empty and `token_public_key` `None` — neither is present in
+/// `FinalTokenOutput`; callers derive `id` from the parent tx hash and vout.
 impl TryFrom<(operator_rpc::spark_token::FinalTokenOutput, Network)> for TokenOutput {
     type Error = ServiceError;
 

@@ -449,10 +449,6 @@ impl TokenService {
             .try_into()
     }
 
-    /// Transfers tokens using the single-phase broadcast flow.
-    ///
-    /// Uses `spark_token_primitives` to construct and hash the partial transaction, then
-    /// calls `broadcast_transaction` in a single RPC.
     pub async fn transfer_tokens(
         &self,
         receiver_outputs: Vec<TransferTokenOutput>,
@@ -465,7 +461,7 @@ impl TokenService {
             ));
         }
         let token_id = receiver_outputs[0].token_id.clone();
-        // TODO: support multi-token transfers (not supported in V2 flow either)
+        // TODO: support multi-token transfers
         if receiver_outputs.iter().any(|o| o.token_id != token_id) {
             return Err(ServiceError::Generic(
                 "All receiver outputs must have the same token id".to_string(),
@@ -544,11 +540,10 @@ impl TokenService {
         let identity_public_key = self.signer.get_identity_public_key().await?;
         let identity_public_key_bytes = identity_public_key.serialize().to_vec();
 
-        // Sort inputs by vout ascending (same ordering as v2 flow)
+        // SO sorts inputs by vout before validating owner signatures; match that here.
         let mut inputs = inputs;
         inputs.sort_by_key(|o| o.prev_tx_vout);
 
-        // Add change output if inputs exceed requested amount
         let mut receiver_outputs = receiver_outputs;
         let inputs_amount = inputs.iter().map(|o| o.output.token_amount).sum::<u128>();
         let outputs_amount = receiver_outputs.iter().map(|o| o.amount).sum::<u128>();
@@ -705,9 +700,6 @@ impl TokenService {
         let is_finalized = match broadcast_response.commit_status() {
             CommitStatus::CommitFinalized => true,
             CommitStatus::CommitProcessing => {
-                // The transaction has been accepted but not yet committed by all operators.
-                // The caller will call refresh_tokens_outputs() which will fetch the final
-                // state from the operator, so we proceed and let the refresh resolve it.
                 warn!(
                     "broadcast_transaction for tx {txid} returned COMMIT_PROCESSING; \
                      committed operators: {:?}, uncommitted operators: {:?}",
@@ -737,9 +729,6 @@ impl TokenService {
             })
             .collect();
 
-        // FinalTokenOutput carries no SO-local id; derive it from the parent
-        // transaction hash and the output's vout so downstream consumers can
-        // address these outputs without an extra refresh round trip.
         let outputs = broadcast_response
             .final_token_transaction
             .map(|ft| {
