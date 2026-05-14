@@ -737,12 +737,20 @@ impl TokenService {
             })
             .collect();
 
+        // FinalTokenOutput carries no SO-local id; derive it from the parent
+        // transaction hash and the output's vout so downstream consumers can
+        // address these outputs without an extra refresh round trip.
         let outputs = broadcast_response
             .final_token_transaction
             .map(|ft| {
                 ft.final_token_outputs
                     .into_iter()
-                    .map(|fo| (fo, self.network).try_into())
+                    .enumerate()
+                    .map(|(vout, fo)| {
+                        let mut output: TokenOutput = (fo, self.network).try_into()?;
+                        output.id = format!("{txid}:{vout}");
+                        Ok(output)
+                    })
                     .collect::<Result<Vec<TokenOutput>, ServiceError>>()
             })
             .transpose()?
