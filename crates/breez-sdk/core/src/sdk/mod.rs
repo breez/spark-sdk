@@ -6,9 +6,11 @@ mod init;
 mod lightning_address;
 mod lnurl;
 mod payments;
+mod runtime;
 mod sync;
 mod sync_coordinator;
 
+pub(crate) use runtime::{SdkRuntime, runtime_from_config};
 pub(crate) use sync_coordinator::SyncCoordinator;
 
 use bitflags::bitflags;
@@ -61,6 +63,18 @@ pub(crate) struct SyncRequest {
 }
 
 impl SyncRequest {
+    /// Builds a fire-and-forget [`SyncRequest`] with no reply channel.
+    ///
+    /// Used when `sync_wallet_internal` is invoked directly (server mode)
+    /// rather than via the periodic-sync loop's coordinator dispatch.
+    pub(crate) fn fire_and_forget(sync_type: SyncType, force: bool) -> Self {
+        Self {
+            sync_type,
+            reply: Arc::new(Mutex::new(None)),
+            force,
+        }
+    }
+
     pub(crate) async fn reply(&self, error: Option<SdkError>) {
         if let Some(reply) = self.reply.lock().await.take() {
             let _ = match error {
@@ -86,6 +100,7 @@ pub struct BreezSdk {
     pub(crate) lnurl_auth_signer: Arc<LnurlAuthSignerAdapter>,
     pub(crate) event_emitter: Arc<EventEmitter>,
     pub(crate) shutdown_sender: watch::Sender<()>,
+    pub(crate) runtime: SdkRuntime,
     /// Coordinator for coalescing duplicate sync requests
     pub(crate) sync_coordinator: SyncCoordinator,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
@@ -106,6 +121,7 @@ pub(crate) struct BreezSdkParams {
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub lnurl_auth_signer: Arc<LnurlAuthSignerAdapter>,
     pub shutdown_sender: watch::Sender<()>,
+    pub runtime: SdkRuntime,
     pub spark_wallet: Arc<SparkWallet>,
     pub event_emitter: Arc<EventEmitter>,
     pub buy_bitcoin_provider: Arc<MoonpayProvider>,
@@ -202,7 +218,44 @@ pub fn default_config(network: Network) -> Config {
         stable_balance_config: None,
         max_concurrent_claims: 4,
         spark_config: Some(default_spark_config(network)),
+        background_tasks_enabled: true,
     }
+}
+
+/// Builds a [`Config`] suitable for multi-tenant server-mode deployments.
+///
+/// This preset returns the same configuration as [`default_config`] with
+/// [`background_tasks_enabled`](Config::background_tasks_enabled) set to
+/// `false`. In server mode, the SDK is treated as a library: the host
+/// orchestrates sync, claiming, and event delivery (typically via webhooks)
+/// explicitly, so an ephemeral SDK instance stays cheap and predictable.
+///
+/// Other config fields such as
+/// [`real_time_sync_server_url`](Config::real_time_sync_server_url) and
+/// [`optimization_config.auto_enabled`](OptimizationConfig::auto_enabled)
+/// retain their default values; the runtime profile prevents the corresponding
+/// background services from being started.
+///
+/// Manual operations (`sync_wallet`, `claim_deposits`, `claim_transfers`,
+/// `recover_lightning_address`, etc.) continue to work and are the intended
+/// entry points in this mode.
+///
+/// One-time setup that the client-mode SDK applies automatically — notably
+/// [`private_enabled_default`](Config::private_enabled_default) — is NOT
+/// applied in this mode. Partners drive setup explicitly via
+/// `update_user_settings` (and any other relevant APIs) so ephemeral
+/// per-request SDK instances incur no implicit setup overhead.
+///
+/// [`get_info`](crate::BreezSdk::get_info) reads balance directly from the
+/// spark wallet in this mode rather than from the background-maintained
+/// storage cache, so balance is always fresh and
+/// [`GetInfoRequest::ensure_synced`](crate::GetInfoRequest::ensure_synced)
+/// is a no-op.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn default_server_config(network: Network) -> Config {
+    let mut config = default_config(network);
+    config.background_tasks_enabled = false;
+    config
 }
 
 /// Builds the default [`SparkConfig`](crate::models::SparkConfig) for the given network.
@@ -351,4 +404,23 @@ pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
         status,
         last_updated,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_server_config_disables_background_tasks() {
+        for network in [Network::Mainnet, Network::Regtest] {
+            let cfg = default_server_config(network);
+            assert!(!cfg.background_tasks_enabled);
+        }
+    }
+
+    #[test]
+    fn default_config_enables_background_tasks() {
+        assert!(default_config(Network::Mainnet).background_tasks_enabled);
+        assert!(default_config(Network::Regtest).background_tasks_enabled);
+    }
 }

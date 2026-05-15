@@ -38,7 +38,7 @@ use platform_utils::tokio;
 use spark_wallet::{InvoiceDescription, Preimage};
 
 use super::{
-    BreezSdk, SyncType,
+    BreezSdk,
     helpers::{InternalEventListener, get_deposit_address, is_payment_match},
 };
 
@@ -427,6 +427,21 @@ impl BreezSdk {
             .map_err(Into::into)
     }
 
+    /// Runs one pass of the pending-conversion refunder.
+    ///
+    /// Iterates over payments whose conversions failed and have a refund
+    /// pending, then attempts to refund each one. This is the same logic the
+    /// SDK runs internally on a periodic schedule when background tasks are
+    /// enabled; surfacing it as an explicit API lets server-mode partners
+    /// drive it (the periodic refunder doesn't run in server mode) and lets
+    /// client-mode partners force an immediate refund pass.
+    pub async fn refund_pending_conversions(&self) -> Result<(), SdkError> {
+        self.token_converter
+            .refund_pending()
+            .await
+            .map_err(Into::into)
+    }
+
     /// Lists payments from the storage with pagination
     ///
     /// This method provides direct access to the payment history stored in the database.
@@ -568,16 +583,14 @@ impl BreezSdk {
         } else {
             Box::pin(self.send_payment_internal(&request, amount_override)).await
         };
-        // Emit payment status event and trigger wallet state sync
-        if let Ok(response) = &res {
-            if !suppress_payment_event {
-                // Emit the payment with metadata already included
-                self.event_emitter
-                    .emit(&SdkEvent::from_payment(response.payment.clone()))
-                    .await;
-            }
-            self.sync_coordinator
-                .trigger_sync_no_wait(SyncType::WalletState, true)
+        // Emit payment status event. Client runtime listens to payment events
+        // and schedules a wallet-state refresh when background sync is active.
+        if let Ok(response) = &res
+            && !suppress_payment_event
+        {
+            // Emit the payment with metadata already included
+            self.event_emitter
+                .emit(&SdkEvent::from_payment(response.payment.clone()))
                 .await;
         }
         res
@@ -823,16 +836,6 @@ impl BreezSdk {
         caller_amount_override: Option<u64>,
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
-        // Trigger a wallet state sync if converting from Bitcoin to token
-        if matches!(
-            conversion_options.conversion_type,
-            ConversionType::FromBitcoin
-        ) {
-            self.sync_coordinator
-                .trigger_sync_no_wait(SyncType::WalletState, true)
-                .await;
-        }
-
         // Wait for the received conversion payment to complete
         let payment = self
             .wait_for_payment(
@@ -1482,7 +1485,6 @@ impl BreezSdk {
         };
         let spark_wallet = self.spark_wallet.clone();
         let storage = self.storage.clone();
-        let sync_coordinator = self.sync_coordinator.clone();
         let event_emitter = self.event_emitter.clone();
         let payment = payment.clone();
         let payment_id = payment_id.clone();
@@ -1512,9 +1514,6 @@ impl BreezSdk {
                                 }
                                 // Fetch the payment to include already stored metadata
                                 get_payment_and_emit_event(&storage, &event_emitter, payment.clone()).await;
-                                sync_coordinator
-                                    .trigger_sync_no_wait(SyncType::WalletState, true)
-                                    .await;
                                 return;
                             }
                         }

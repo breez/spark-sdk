@@ -24,6 +24,11 @@ pub fn default_config(network: Network) -> Config {
 }
 
 #[frb(sync)]
+pub fn default_server_config(network: Network) -> Config {
+    breez_sdk_spark::default_server_config(network)
+}
+
+#[frb(sync)]
 pub fn init_logging(
     log_dir: Option<String>,
     app_logger: StreamSink<LogEntry>,

@@ -11,7 +11,7 @@ use crate::{
     models::Payment, persist::UpdateDepositPayload, utils::utxo_fetcher::CachedUtxoFetcher,
 };
 
-use super::{BreezSdk, SyncType};
+use super::BreezSdk;
 
 // Retry parameters for looking up the transfer created by a static deposit
 // claim while it propagates across Spark operators.
@@ -44,9 +44,6 @@ impl BreezSdk {
                 self.storage
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
-                self.sync_coordinator
-                    .trigger_sync_no_wait(SyncType::WalletState, true)
-                    .await;
                 Ok(ClaimDepositResponse { payment })
             }
             Err(e) => {

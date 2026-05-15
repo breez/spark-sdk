@@ -32,6 +32,7 @@ impl BreezSdk {
             lnurl_auth_signer: params.lnurl_auth_signer,
             event_emitter: params.event_emitter,
             shutdown_sender: params.shutdown_sender,
+            runtime: params.runtime,
             sync_coordinator: params.sync_coordinator,
             initial_synced_watcher,
             external_input_parsers,
@@ -46,19 +47,12 @@ impl BreezSdk {
         Ok(sdk)
     }
 
-    /// Starts the SDK's background tasks
-    ///
-    /// This method initiates the following background tasks:
-    /// 1. `spawn_spark_private_mode_initialization`: initializes the spark private mode on startup
-    /// 2. `periodic_sync`: syncs the wallet with the Spark network
-    /// 3. `try_recover_lightning_address`: recovers the lightning address on startup
+    /// Starts the SDK runtime services selected during construction.
     pub(super) fn start(&self, initial_synced_sender: watch::Sender<bool>) {
-        self.spawn_spark_private_mode_initialization();
-        self.periodic_sync(initial_synced_sender);
-        self.try_recover_lightning_address();
+        self.runtime.start_sdk_services(self, initial_synced_sender);
     }
 
-    fn spawn_spark_private_mode_initialization(&self) {
+    pub(crate) fn spawn_spark_private_mode_initialization(&self) {
         let sdk = self.clone();
         let span = tracing::Span::current();
         tokio::spawn(
@@ -72,7 +66,7 @@ impl BreezSdk {
     }
 
     /// Refreshes the user's lightning address on the server on startup.
-    fn try_recover_lightning_address(&self) {
+    pub(crate) fn try_recover_lightning_address(&self) {
         let sdk = self.clone();
         let span = tracing::Span::current();
         tokio::spawn(async move {
@@ -92,6 +86,12 @@ impl BreezSdk {
     }
 
     pub(super) async fn ensure_spark_private_mode_initialized(&self) -> Result<(), SdkError> {
+        self.runtime
+            .ensure_spark_private_mode_initialized(self)
+            .await
+    }
+
+    pub(super) async fn ensure_spark_private_mode_initialized_inner(&self) -> Result<(), SdkError> {
         self.spark_private_mode_initialized
             .get_or_try_init(|| async {
                 // Check if already initialized in storage

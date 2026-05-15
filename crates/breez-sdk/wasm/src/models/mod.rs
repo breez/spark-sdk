@@ -642,6 +642,7 @@ pub struct Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
+    pub background_tasks_enabled: bool,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkConfig)]

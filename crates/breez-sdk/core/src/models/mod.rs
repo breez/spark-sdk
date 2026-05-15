@@ -587,6 +587,13 @@ pub struct Config {
     ///
     /// If set to true, the Spark private mode will be enabled on the first initialization of the SDK.
     /// If set to false, no changes will be made to the Spark private mode.
+    ///
+    /// This default is only auto-applied when
+    /// [`background_tasks_enabled`](Self::background_tasks_enabled) is `true`.
+    /// In server mode the SDK does not touch the Spark private mode on
+    /// startup; partners must call
+    /// `update_user_settings({ spark_private_mode_enabled: Some(...) })`
+    /// explicitly on a one-time setup pass.
     pub private_enabled_default: bool,
 
     /// Configuration for leaf optimization.
@@ -613,6 +620,30 @@ pub struct Config {
     /// threshold, and token settings. Use this to connect to alternative Spark
     /// deployments (e.g. dev/staging environments).
     pub spark_config: Option<SparkConfig>,
+
+    /// Runtime profile selector for per-instance background services.
+    ///
+    /// When `true` (default), the SDK runs its standard background work:
+    /// periodic sync, lightning-address recovery, private-mode initialization,
+    /// the leaf and token-output optimizers, the Spark server-event
+    /// subscription, and the real-time sync client (when
+    /// [`real_time_sync_server_url`](Self::real_time_sync_server_url) is set).
+    ///
+    /// When `false`, **no background service is started**, regardless of any
+    /// other setting on this config. This is the mode intended for
+    /// multi-tenant server deployments where the partner orchestrates sync
+    /// and claims explicitly and receives events via webhooks. Use
+    /// [`default_server_config`](crate::default_server_config) to get this
+    /// preset.
+    ///
+    /// Manual operations (`sync_wallet`, `claim_deposits`, `claim_transfers`,
+    /// `recover_lightning_address`, leaf/token optimization, etc.) work in
+    /// both modes.
+    ///
+    /// The SDK reads this once while building its internal runtime profile.
+    /// Feature code should use the runtime's sync/state/lifecycle services
+    /// rather than branching on this field directly.
+    pub background_tasks_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1025,6 +1056,12 @@ pub struct Credentials {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetInfoRequest {
+    /// In client mode, when `Some(true)` the call waits for the initial Full
+    /// sync to complete before returning.
+    ///
+    /// In server mode this flag has no effect — `get_info` reads balance
+    /// directly from the spark wallet on every call, so the response is
+    /// always fresh.
     pub ensure_synced: Option<bool>,
 }
 

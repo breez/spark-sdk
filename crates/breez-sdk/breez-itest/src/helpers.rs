@@ -741,11 +741,10 @@ pub async fn build_sdk_with_tree_store_config(
     let event_listener = Box::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
-    // Ensure initial sync completes
-    let _ = sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(true),
-        })
+    // Force an initial full sync. Works in both modes (auto sync on or off)
+    // because `sync_wallet` drives the coordinator directly rather than
+    // waiting on the auto-sync initial-synced watcher.
+    sdk.sync_wallet(breez_sdk_spark::SyncWalletRequest {})
         .await?;
 
     Ok(SdkInstance {

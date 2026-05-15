@@ -48,6 +48,7 @@ pub struct _Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
+    pub background_tasks_enabled: bool,
 }
 
 #[frb(mirror(SparkConfig))]
