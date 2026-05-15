@@ -35,7 +35,7 @@ pub(crate) type DomainSemaphores = Arc<Mutex<HashMap<String, Arc<Semaphore>>>>;
 /// Start all webhook-related background processors.
 pub fn start_background_processor<DB>(
     db: DB,
-    http_client: bitreq::Client,
+    http_client: reqwest::Client,
     trigger_rx: tokio::sync::watch::Receiver<()>,
     webhook_delivery_ttl_days: u32,
     config_cache: WebhookConfigCache,
@@ -60,7 +60,7 @@ pub(crate) fn next_retry_delay(retry_count: i32) -> i64 {
 /// Start the webhook delivery processor.
 async fn webhook_delivery_processor<DB>(
     db: DB,
-    http_client: bitreq::Client,
+    http_client: reqwest::Client,
     mut trigger_rx: tokio::sync::watch::Receiver<()>,
     config_cache: WebhookConfigCache,
 ) where
@@ -132,7 +132,7 @@ async fn get_semaphore(semaphores: &DomainSemaphores, domain: &str) -> Arc<Semap
 /// delivery per domain, so one slow domain cannot starve others.
 pub(crate) async fn process_pending_webhook_deliveries<DB>(
     db: &DB,
-    http_client: &bitreq::Client,
+    http_client: &reqwest::Client,
     domain_semaphores: &DomainSemaphores,
     config_cache: &WebhookConfigCache,
 ) where
@@ -181,7 +181,7 @@ pub(crate) async fn process_pending_webhook_deliveries<DB>(
 /// Process a single webhook delivery attempt.
 async fn process_webhook_delivery<DB>(
     db: &DB,
-    http_client: &bitreq::Client,
+    http_client: &reqwest::Client,
     delivery: &WebhookDelivery,
     config_cache: &WebhookConfigCache,
 ) where
@@ -264,7 +264,7 @@ struct WebhookError {
 }
 
 async fn send_webhook(
-    http_client: &bitreq::Client,
+    http_client: &reqwest::Client,
     url: &str,
     payload_json: &str,
     secret: &str,
@@ -274,31 +274,32 @@ async fn send_webhook(
     let hmac: Hmac<sha256::Hash> = Hmac::from_engine(engine);
     let signature_hex = hex::encode(hmac.to_byte_array());
 
-    let req = bitreq::post(url)
-        .with_header("Content-Type", "application/json")
-        .with_header(SIGNATURE_HEADER, &signature_hex)
-        .with_body(payload_json)
-        .with_timeout(WEBHOOK_TIMEOUT_SECS);
-
     let response = http_client
-        .send_async(req)
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header(SIGNATURE_HEADER, &signature_hex)
+        .body(payload_json.to_string())
+        .timeout(tokio::time::Duration::from_secs(WEBHOOK_TIMEOUT_SECS))
+        .send()
         .await
         .map_err(|e| WebhookError {
             status_code: None,
             body: Some(truncate_string(&format!("{e:?}"), MAX_ERROR_BODY_LEN)),
         })?;
 
-    if (200..300).contains(&response.status_code) {
+    let status = response.status();
+    if status.is_success() {
         return Ok(());
     }
 
     let body = response
-        .as_str()
+        .text()
+        .await
         .ok()
-        .map(|b| truncate_string(b, MAX_ERROR_BODY_LEN));
+        .map(|b| truncate_string(&b, MAX_ERROR_BODY_LEN));
 
     Err(WebhookError {
-        status_code: Some(response.status_code),
+        status_code: Some(i32::from(status.as_u16())),
         body,
     })
 }
@@ -424,7 +425,7 @@ mod tests {
         insert_domain_webhook(&pool, TEST_DOMAIN, &url, TEST_SECRET).await;
         insert_delivery(&db, "success_1", TEST_DOMAIN).await;
 
-        let client = bitreq::Client::new(10);
+        let client = reqwest::Client::new();
         let semaphores = new_semaphores();
         let config = config_cache_with(TEST_DOMAIN, &url, TEST_SECRET);
 
@@ -464,7 +465,7 @@ mod tests {
         insert_domain_webhook(&pool, TEST_DOMAIN, &url, TEST_SECRET).await;
         insert_delivery(&db, "error_1", TEST_DOMAIN).await;
 
-        let client = bitreq::Client::new(10);
+        let client = reqwest::Client::new();
         let semaphores = new_semaphores();
         let config = config_cache_with(TEST_DOMAIN, &url, TEST_SECRET);
 
@@ -497,7 +498,7 @@ mod tests {
         insert_domain_webhook(&pool, TEST_DOMAIN, url, TEST_SECRET).await;
         insert_delivery(&db, "conn_err_1", TEST_DOMAIN).await;
 
-        let client = bitreq::Client::new(10);
+        let client = reqwest::Client::new();
         let semaphores = new_semaphores();
         let config = config_cache_with(TEST_DOMAIN, url, TEST_SECRET);
 
@@ -551,7 +552,7 @@ mod tests {
         insert_domain_webhook(&pool, TEST_DOMAIN, &url, TEST_SECRET).await;
         insert_delivery(&db, "retry_1", TEST_DOMAIN).await;
 
-        let client = bitreq::Client::new(10);
+        let client = reqwest::Client::new();
         let semaphores = new_semaphores();
         let config = config_cache_with(TEST_DOMAIN, &url, TEST_SECRET);
 
@@ -609,7 +610,7 @@ mod tests {
         insert_domain_webhook(&pool, TEST_DOMAIN, &url, TEST_SECRET).await;
         insert_delivery(&db, "truncate_1", TEST_DOMAIN).await;
 
-        let client = bitreq::Client::new(10);
+        let client = reqwest::Client::new();
         let semaphores = new_semaphores();
         let config = config_cache_with(TEST_DOMAIN, &url, TEST_SECRET);
 
@@ -675,7 +676,7 @@ mod tests {
         insert_delivery(&db, "slow_1", slow_domain).await;
         insert_delivery(&db, "fast_1", fast_domain).await;
 
-        let client = bitreq::Client::new(10);
+        let client = reqwest::Client::new();
         let semaphores = new_semaphores();
         let mut config_map = HashMap::new();
         config_map.insert(
@@ -731,7 +732,7 @@ mod tests {
         insert_domain_webhook(&pool, TEST_DOMAIN, &url, TEST_SECRET).await;
         insert_delivery(&db, "throttle_1", TEST_DOMAIN).await;
 
-        let client = bitreq::Client::new(10);
+        let client = reqwest::Client::new();
         let config = config_cache_with(TEST_DOMAIN, &url, TEST_SECRET);
 
         // Pre-fill semaphores so this domain has 0 available permits.
@@ -761,7 +762,7 @@ mod tests {
 
         insert_delivery(&db, "no_config_1", "unknown.example.com").await;
 
-        let client = bitreq::Client::new(10);
+        let client = reqwest::Client::new();
         let semaphores = new_semaphores();
         let config = empty_config_cache();
 
@@ -789,7 +790,7 @@ mod tests {
             .await
             .unwrap();
 
-        let client = bitreq::Client::new(10);
+        let client = reqwest::Client::new();
         let semaphores = new_semaphores();
         let config = empty_config_cache();
 
@@ -840,7 +841,7 @@ mod tests {
         insert_domain_webhook(&pool, TEST_DOMAIN, &url, secret).await;
         insert_delivery(&db, "sig_1", TEST_DOMAIN).await;
 
-        let client = bitreq::Client::new(10);
+        let client = reqwest::Client::new();
         let semaphores = new_semaphores();
         let config = config_cache_with(TEST_DOMAIN, &url, secret);
 

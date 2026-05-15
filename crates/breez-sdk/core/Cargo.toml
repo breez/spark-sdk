@@ -13,6 +13,10 @@ passkey = ["dep:nostr", "dep:nostr-sdk"]
 postgres = [
     "dep:spark-postgres",
 ]
+# MySQL storage backend (optional, for server-side use cases). Targets MySQL 8.0+.
+mysql = [
+    "dep:spark-mysql",
+]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -39,6 +43,7 @@ nostr = { workspace = true, optional = true }
 nostr-sdk = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+spark-mysql = { workspace = true, optional = true }
 spark-postgres = { workspace = true, optional = true }
 spark-wallet.workspace = true
 thiserror.workspace = true
@@ -68,8 +73,8 @@ breez-sdk-spark = { workspace = true, features = ["test-utils"] }
 # Non-WASM dev dependencies (for PostgreSQL container tests)
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 testcontainers.workspace = true
-testcontainers-modules = { workspace = true, features = ["postgres"] }
-breez-sdk-spark = { workspace = true, features = ["postgres"] }
+testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }
+breez-sdk-spark = { workspace = true, features = ["postgres", "mysql"] }
 rcgen.workspace = true
 
 # WASM dev dependencies

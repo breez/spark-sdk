@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
 use crate::{
-    operator::rpc::{ConnectionManager, OperatorRpcError, SparkRpcClient},
+    header_provider::{CombinedHeaderProvider, HeaderProvider},
+    operator::rpc::{ConnectionManager, OperatorRpcError, SoAuthHeaderProvider, SparkRpcClient},
     session_manager::SessionManager,
     signer::Signer,
 };
@@ -106,16 +107,25 @@ impl OperatorPool {
         connection_manager: Arc<dyn ConnectionManager>,
         session_manager: Arc<dyn SessionManager>,
         signer: Arc<dyn Signer>,
+        extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     ) -> Result<Self, OperatorRpcError> {
         let mut operators = Vec::new();
         for operator in &config.operators {
             let transport = connection_manager.get_transport(operator).await?;
-            let client = SparkRpcClient::new(
-                transport,
+            let auth_provider = Arc::new(SoAuthHeaderProvider::new(
+                transport.clone(),
                 Arc::clone(&signer),
-                operator.identity_public_key,
                 session_manager.clone(),
-            );
+                operator.identity_public_key,
+            ));
+            let header_provider: Arc<dyn HeaderProvider> = match &extra_header_provider {
+                Some(extra) => Arc::new(CombinedHeaderProvider::new(vec![
+                    auth_provider,
+                    Arc::clone(extra),
+                ])),
+                None => auth_provider,
+            };
+            let client = SparkRpcClient::new(transport, header_provider);
             operators.push(Operator {
                 client,
                 id: operator.id,

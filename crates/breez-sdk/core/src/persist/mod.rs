@@ -1,3 +1,8 @@
+#[cfg(all(
+    feature = "mysql",
+    not(all(target_family = "wasm", target_os = "unknown"))
+))]
+pub mod mysql;
 pub(crate) mod path;
 #[cfg(all(
     feature = "postgres",

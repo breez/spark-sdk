@@ -2,12 +2,14 @@
 pub mod bindings;
 mod chain;
 mod common;
+mod connection_manager;
 mod error;
 mod events;
 mod issuer;
 mod lnurl;
 mod logger;
 mod models;
+mod partner_header_provider;
 #[cfg(feature = "passkey")]
 pub mod passkey;
 mod persist;
@@ -23,10 +25,14 @@ mod utils;
 
 pub use chain::{
     BitcoinChainService, ChainServiceError, RecommendedFees, TxStatus, Utxo,
+    new_rest_chain_service,
     rest_client::{ChainApiType, RestClientChainService},
 };
 pub use common::rest::{RestClient, RestResponse};
 pub use common::{fiat::*, models::*, sync_storage};
+pub use connection_manager::{
+    ConnectionManager, SspConnectionManager, new_connection_manager, new_ssp_connection_manager,
+};
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
 pub use issuer::*;
@@ -37,14 +43,27 @@ pub use persist::{
 };
 pub use sdk::{BreezSdk, default_config, get_spark_status, init_logging, parse_input};
 pub use sdk_builder::SdkBuilder;
-pub use spark_wallet::KeySet;
+pub use session_manager::{Session, SessionManager, SessionManagerError};
+pub use spark_wallet::{
+    CombinedHeaderProvider, HeaderProvider, HeaderProviderError, KeySet, PublicKey,
+};
 
 #[cfg(all(
     feature = "postgres",
     not(all(target_family = "wasm", target_os = "unknown"))
 ))]
 pub use persist::postgres::{
-    PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config,
+    PoolQueueMode, PostgresConnectionPool, PostgresStorageConfig, create_postgres_connection_pool,
+    default_postgres_storage_config,
+};
+
+#[cfg(all(
+    feature = "mysql",
+    not(all(target_family = "wasm", target_os = "unknown"))
+))]
+pub use persist::mysql::{
+    MysqlConnectionPool, MysqlForeignKeyMode, MysqlStorageConfig, create_mysql_connection_pool,
+    default_mysql_storage_config,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -68,4 +87,12 @@ uniffi::setup_scaffolding!();
 pub(crate) mod built_info {
     // The file has been placed there by the build script.
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
+}
+
+pub(crate) fn default_user_agent() -> String {
+    format!(
+        "{}/{}",
+        crate::built_info::PKG_NAME,
+        crate::built_info::GIT_VERSION.unwrap_or(crate::built_info::PKG_VERSION),
+    )
 }

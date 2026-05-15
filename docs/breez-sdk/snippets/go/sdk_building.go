@@ -102,15 +102,71 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	postgresConfig.MaxPoolSize = 8 // Max connections in pool
 	waitTimeoutSecs := uint64(30)
 	postgresConfig.WaitTimeoutSecs = &waitTimeoutSecs // Timeout waiting for connection
+	// If your service owns SDK-compatible schema migrations:
+	postgresConfig.RunMigration = false
+
+	// Construct the connection pool. The same pool can be passed to multiple
+	// SdkBuilders to share connections across SDKs; per-tenant scoping (rows
+	// isolated by seed identity) is preserved.
+	pool, err := breez_sdk_spark.CreatePostgresConnectionPool(postgresConfig)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build the SDK with PostgreSQL backend (storage, tree store, and token store)
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithPostgresBackend(postgresConfig)
+	builder.WithPostgresConnectionPool(pool)
 	sdk, err := builder.Build()
 	if err != nil {
 		return nil, err
 	}
 	// ANCHOR_END: init-sdk-postgres
+
+	return sdk, nil
+}
+
+func InitSdkMysql() (*breez_sdk_spark.BreezSdk, error) {
+	// ANCHOR: init-sdk-mysql
+	// Construct the seed using a mnemonic, entropy or passkey
+	mnemonic := "<mnemonic words>"
+	var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
+		Mnemonic:   mnemonic,
+		Passphrase: nil,
+	}
+
+	// Create the default config
+	apiKey := "<breez api key>"
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	config.ApiKey = &apiKey
+
+	// Configure MySQL backend (MySQL 8.0+).
+	// Connection string format (URL only):
+	//   "mysql://user:password@host:3306/dbname?ssl-mode=required"
+	mysqlConfig := breez_sdk_spark.DefaultMysqlStorageConfig("mysql://user:password@localhost:3306/spark")
+	// Optionally pool settings can be adjusted. Some examples:
+	mysqlConfig.MaxPoolSize = 8 // Max connections in pool
+	recycleTimeoutSecs := uint64(60)
+	mysqlConfig.RecycleTimeoutSecs = &recycleTimeoutSecs // Recycle idle connections after this many seconds
+	// Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
+	// rootCa := "-----BEGIN CERTIFICATE-----\n..."
+	// mysqlConfig.RootCaPem = &rootCa
+
+	// Construct the connection pool. The same pool can be passed to multiple
+	// SdkBuilders to share connections across SDKs; per-tenant scoping (rows
+	// isolated by seed identity) is preserved.
+	pool, err := breez_sdk_spark.CreateMysqlConnectionPool(mysqlConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build the SDK with MySQL backend (storage, tree store, and token store)
+	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+	builder.WithMysqlConnectionPool(pool)
+	sdk, err := builder.Build()
+	if err != nil {
+		return nil, err
+	}
+	// ANCHOR_END: init-sdk-mysql
 
 	return sdk, nil
 }

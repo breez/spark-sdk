@@ -19,6 +19,7 @@ from breez_sdk_spark import (
     Seed,
     StableBalanceConfig,
     StableBalanceToken,
+    create_postgres_connection_pool,
     default_config,
     default_postgres_storage_config,
     init_logging,
@@ -27,6 +28,7 @@ from breez_sdk_spark import (
 from breez_cli.commands import COMMAND_NAMES, build_command_registry
 from breez_cli.contacts import CONTACTS_COMMAND_NAMES, dispatch_contacts_command
 from breez_cli.issuer import ISSUER_COMMAND_NAMES, dispatch_issuer_command
+from breez_cli.stable_balance import STABLE_BALANCE_COMMAND_NAMES, dispatch_stable_balance_command
 from breez_cli.webhooks import WEBHOOKS_COMMAND_NAMES, dispatch_webhooks_command
 from breez_cli.passkey import create_provider, resolve_passkey_seed
 from breez_cli.persistence import CliPersistence
@@ -59,7 +61,10 @@ def expand_path(path: str) -> Path:
 )
 @click.option("--account-number", type=int, default=None, help="Account number for the Spark signer")
 @click.option("--postgres-connection-string", default=None, help="PostgreSQL connection string")
-@click.option("--stable-balance-token-identifier", default=None, help="Stable balance token identifier")
+@click.option("--stable-balance-token", "stable_balance_tokens", multiple=True,
+              help='Stable balance tokens in "LABEL:token_identifier" format (repeatable)')
+@click.option("--stable-balance-default-active-label", default=None,
+              help="Default active label for stable balance (must match a token label)")
 @click.option("--stable-balance-threshold", type=int, default=None, help="Stable balance threshold in sats")
 @click.option("--passkey", "passkey_provider", default=None, help="Use passkey with file, yubikey, or fido2 provider")
 @click.option("--label", default=None, help="Label for seed derivation (requires --passkey)")
@@ -67,7 +72,8 @@ def expand_path(path: str) -> Path:
 @click.option("--store-label", is_flag=True, default=False, help="Publish the label to Nostr (requires --passkey and --label)")
 @click.option("--rpid", default=None, help="Relying party ID for FIDO2 provider (requires --passkey)")
 async def main(data_dir, network, account_number, postgres_connection_string,
-               stable_balance_token_identifier, stable_balance_threshold,
+               stable_balance_tokens, stable_balance_default_active_label,
+               stable_balance_threshold,
                passkey_provider, label, list_labels, store_label, rpid):
     """CLI client for Breez SDK with Spark."""
     data_dir = expand_path(data_dir)
@@ -96,10 +102,18 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     config = default_config(network=network_enum)
     config.api_key = breez_api_key
 
-    if stable_balance_token_identifier:
+    if stable_balance_tokens:
+        tokens = []
+        for s in stable_balance_tokens:
+            if ":" not in s:
+                raise click.UsageError(
+                    f"Invalid token format '{s}', expected LABEL:token_identifier"
+                )
+            token_label, token_identifier = s.split(":", 1)
+            tokens.append(StableBalanceToken(label=token_label, token_identifier=token_identifier))
         config.stable_balance_config = StableBalanceConfig(
-            tokens=[StableBalanceToken(label="USDB", token_identifier=stable_balance_token_identifier)],
-            default_active_label="USDB",
+            tokens=tokens,
+            default_active_label=stable_balance_default_active_label,
             threshold_sats=stable_balance_threshold,
             max_slippage_bps=None,
         )
@@ -116,7 +130,8 @@ async def main(data_dir, network, account_number, postgres_connection_string,
 
     if postgres_connection_string:
         pg_config = default_postgres_storage_config(connection_string=postgres_connection_string)
-        await builder.with_postgres_backend(config=pg_config)
+        pool = create_postgres_connection_pool(config=pg_config)
+        await builder.with_postgres_connection_pool(pool=pool)
     else:
         await builder.with_default_storage(storage_dir=str(data_dir))
 
@@ -138,7 +153,7 @@ async def main(data_dir, network, account_number, postgres_connection_string,
 
 async def run_repl(sdk, token_issuer, network, persistence):
     history_file = persistence.history_file()
-    all_commands = sorted(set(COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + WEBHOOKS_COMMAND_NAMES + ["exit", "quit", "help"]))
+    all_commands = sorted(set(COMMAND_NAMES + CONTACTS_COMMAND_NAMES + ISSUER_COMMAND_NAMES + STABLE_BALANCE_COMMAND_NAMES + WEBHOOKS_COMMAND_NAMES + ["exit", "quit", "help"]))
     session = PromptSession(
         history=FileHistory(history_file),
         auto_suggest=AutoSuggestFromHistory(),
@@ -180,6 +195,8 @@ async def run_repl(sdk, token_issuer, network, persistence):
                 await dispatch_contacts_command(cmd_args, sdk)
             elif cmd_name == "issuer":
                 await dispatch_issuer_command(cmd_args, token_issuer)
+            elif cmd_name == "stable-balance":
+                await dispatch_stable_balance_command(cmd_args, sdk)
             elif cmd_name == "webhooks":
                 await dispatch_webhooks_command(cmd_args, sdk)
             elif cmd_name in registry:
@@ -218,6 +235,7 @@ def print_help(registry):
         print(f"  {name:40s} {desc}")
     print(f"\n  {'contacts <subcommand>':40s} Contacts commands (use 'contacts help' for details)")
     print(f"  {'issuer <subcommand>':40s} Token issuer commands (use 'issuer help' for details)")
+    print(f"  {'stable-balance <subcommand>':40s} Stable balance commands (use 'stable-balance help' for details)")
     print(f"  {'webhooks <subcommand>':40s} Webhook commands (use 'webhooks help' for details)")
     print(f"  {'exit / quit':40s} Exit the CLI")
     print(f"  {'help':40s} Show this help message")

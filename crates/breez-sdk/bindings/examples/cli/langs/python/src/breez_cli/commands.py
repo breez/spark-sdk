@@ -342,8 +342,15 @@ async def _handle_pay(sdk, _token_issuer, session, args):
 
     if prepare_response.conversion_estimate is not None:
         est = prepare_response.conversion_estimate
-        units = "sats" if isinstance(est.options.conversion_type, ConversionType.FROM_BITCOIN) else "token base units"
-        print(f"Estimated conversion of {est.amount} {units} with a {est.fee} {units} fee")
+        if isinstance(est.options.conversion_type, ConversionType.FROM_BITCOIN):
+            in_units, out_units = "sats", "token base units"
+        else:
+            in_units, out_units = "token base units", "sats"
+        print(
+            f"Estimated conversion from {est.amount_in} {in_units} "
+            f"to {est.amount_out} {out_units} "
+            f"with a {est.fee} token base units fee"
+        )
         line = await session.prompt_async("Do you want to continue (y/n): ", default="y")
         if line.strip().lower() != "y":
             print("Payment cancelled")
@@ -370,6 +377,7 @@ def _build_lnurl_pay_parser():
     p.add_argument("-v", "--validate", type=lambda v: v.lower() in ("true", "1", "yes"), default=None,
                    dest="validate_success_url")
     p.add_argument("-i", "--idempotency-key", default=None)
+    p.add_argument("-t", "--token-identifier", default=None)
     p.add_argument("--from-token", default=None)
     p.add_argument("-s", "--convert-max-slippage-bps", type=int, default=None)
     p.add_argument("--fees-included", action="store_true", default=False)
@@ -397,18 +405,24 @@ async def _handle_lnurl_pay(sdk, _token_issuer, session, args):
         print("Invalid input: expected LNURL-pay or Lightning address")
         return
 
+    token_identifier = args.token_identifier
+
     min_sendable = math.ceil(pay_request.min_sendable / 1000)
     max_sendable = pay_request.max_sendable // 1000
-    prompt = f"Amount to pay (min {min_sendable} sat, max {max_sendable} sat): "
+    if token_identifier is None:
+        prompt = f"Amount to pay (min {min_sendable} sat, max {max_sendable} sat): "
+    else:
+        prompt = f"Amount to pay (min {min_sendable} sat, max {max_sendable} sat) in token base units: "
     amount_str = await session.prompt_async(prompt)
-    amount_sats = int(amount_str.strip())
+    amount = int(amount_str.strip())
 
     prepare_response = await sdk.prepare_lnurl_pay(
         request=PrepareLnurlPayRequest(
-            amount_sats=amount_sats,
+            amount=amount,
             comment=args.comment,
             pay_request=pay_request,
             validate_success_action_url=args.validate_success_url,
+            token_identifier=token_identifier,
             conversion_options=conversion_options,
             fee_policy=fee_policy,
         )
@@ -416,7 +430,15 @@ async def _handle_lnurl_pay(sdk, _token_issuer, session, args):
 
     if prepare_response.conversion_estimate is not None:
         est = prepare_response.conversion_estimate
-        print(f"Estimated conversion of {est.amount} token base units with a {est.fee} token base units fee")
+        if isinstance(est.options.conversion_type, ConversionType.FROM_BITCOIN):
+            in_units, out_units = "sats", "token base units"
+        else:
+            in_units, out_units = "token base units", "sats"
+        print(
+            f"Estimated conversion from {est.amount_in} {in_units} "
+            f"to {est.amount_out} {out_units} "
+            f"with a {est.fee} token base units fee"
+        )
         line = await session.prompt_async("Do you want to continue (y/n): ", default="y")
         if line.strip().lower() != "y":
             print("Payment cancelled")

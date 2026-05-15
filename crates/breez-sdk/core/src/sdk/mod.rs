@@ -19,7 +19,7 @@ use spark_wallet::SparkWallet;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell, oneshot, watch};
 
-use crate::session_manager::BreezSessionManager;
+use crate::partner_header_provider::BreezPartnerHeaderProvider;
 use crate::{
     BitcoinChainService, ExternalInputParser, InputType, Logger, Network, OptimizationConfig,
     error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
@@ -94,7 +94,7 @@ pub struct BreezSdk {
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
-    pub(crate) session_manager: Arc<BreezSessionManager>,
+    pub(crate) partner_headers: Arc<BreezPartnerHeaderProvider>,
 }
 
 pub(crate) struct BreezSdkParams {
@@ -112,7 +112,7 @@ pub(crate) struct BreezSdkParams {
     pub token_converter: Arc<dyn TokenConverter>,
     pub stable_balance: Option<Arc<StableBalance>>,
     pub sync_coordinator: SyncCoordinator,
-    pub session_manager: Arc<BreezSessionManager>,
+    pub partner_headers: Arc<BreezPartnerHeaderProvider>,
 }
 
 pub async fn parse_input(
@@ -197,10 +197,58 @@ pub fn default_config(network: Network) -> Config {
         optimization_config: OptimizationConfig {
             auto_enabled: true,
             multiplicity: 1,
+            token_target_output_count: 5,
         },
         stable_balance_config: None,
         max_concurrent_claims: 4,
-        spark_config: None,
+        spark_config: Some(default_spark_config(network)),
+    }
+}
+
+/// Builds the default [`SparkConfig`](crate::models::SparkConfig) for the given network.
+///
+/// Surfaced through [`default_config`] as `Config::spark_config` so callers can read the
+/// baked-in operator and SSP endpoints and selectively override individual fields (e.g. to
+/// point at a staging environment) before passing the [`Config`] to [`connect`].
+fn default_spark_config(network: Network) -> crate::models::SparkConfig {
+    use crate::models::{SparkSigningOperator, SparkSspConfig};
+
+    let wallet_config = spark_wallet::SparkWalletConfig::default_config(network.into());
+
+    let coordinator_identifier = hex::encode(
+        wallet_config
+            .operator_pool
+            .get_coordinator()
+            .identifier
+            .serialize(),
+    );
+
+    let signing_operators = wallet_config
+        .operator_pool
+        .get_all_operators()
+        .map(|op| SparkSigningOperator {
+            id: u32::try_from(op.id).expect("operator id fits in u32"),
+            identifier: hex::encode(op.identifier.serialize()),
+            address: op.address.clone(),
+            identity_public_key: hex::encode(op.identity_public_key.serialize()),
+        })
+        .collect();
+
+    let ssp = &wallet_config.service_provider_config;
+
+    crate::models::SparkConfig {
+        coordinator_identifier,
+        threshold: wallet_config.split_secret_threshold,
+        signing_operators,
+        ssp_config: SparkSspConfig {
+            base_url: ssp.base_url.clone(),
+            identity_public_key: hex::encode(ssp.identity_public_key.serialize()),
+            schema_endpoint: ssp.schema_endpoint.clone(),
+        },
+        expected_withdraw_bond_sats: wallet_config.tokens_config.expected_withdraw_bond_sats,
+        expected_withdraw_relative_block_locktime: wallet_config
+            .tokens_config
+            .expected_withdraw_relative_block_locktime,
     }
 }
 

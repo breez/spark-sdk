@@ -227,6 +227,7 @@ where
         spark_config.service_provider_config.clone(),
         signer.clone(),
         session_manager.clone(),
+        None,
     ));
 
     // Create wallet using shared signer
@@ -238,6 +239,9 @@ where
             Arc::new(InMemoryTreeStore::default()),
             Arc::new(InMemoryTokenOutputStore::default()),
             Arc::clone(&connection_manager),
+            None,
+            None,
+            None,
             None,
             true,
             None,
@@ -272,13 +276,14 @@ where
         .transpose()?;
 
     let crl: HashSet<String> = if let Some(url) = &args.crl_url {
-        let client = bitreq::Client::new(1);
-        let response = client
-            .send_async(bitreq::get(url))
+        let client = reqwest::Client::new();
+        let body = client
+            .get(url)
+            .send()
             .await
-            .map_err(|e| anyhow!("failed to fetch crl from {url}: {e:?}"))?;
-        let body = response
-            .as_str()
+            .map_err(|e| anyhow!("failed to fetch crl from {url}: {e:?}"))?
+            .text()
+            .await
             .map_err(|e| anyhow!("failed to read crl response body: {e:?}"))?;
         body.split(',').map(str::to_string).collect()
     } else {
@@ -299,9 +304,9 @@ where
     // Create watch channel for triggering background processing
     let (invoice_paid_trigger, invoice_paid_rx) = watch::channel(());
 
-    // Create a shared HTTP client for webhook delivery (connection cache capacity —
-    // generous enough that connections to all webhook hosts stay warm).
-    let http_client = bitreq::Client::new(100);
+    // Create a shared HTTP client for webhook delivery. reqwest's default pool
+    // settings keep connections warm and HTTP/2 multiplexes requests per host.
+    let http_client = reqwest::Client::new();
 
     let webhook_service = webhooks::WebhookService::new(repository.clone());
 

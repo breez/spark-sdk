@@ -1,0 +1,26 @@
+{
+  "name": "@breez-sdk/mysql-token-store",
+  "version": "1.0.0",
+  "description": "Node.js MySQL token store implementation for Breez SDK WASM (CommonJS). Targets MySQL 8.0+.",
+  "main": "index.cjs",
+  "exports": {
+    ".": "./index.cjs",
+    "./token-store": "./index.cjs",
+    "./migrations": "./migrations.cjs",
+    "./errors": "./errors.cjs"
+  },
+  "scripts": {
+    "lint": "eslint *.cjs",
+    "lint:fix": "eslint *.cjs --fix"
+  },
+  "dependencies": {
+    "mysql2": "^3.11.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "testcontainers": "^10.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

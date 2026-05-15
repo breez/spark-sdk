@@ -5,13 +5,17 @@
 //! functionality.
 
 mod base;
+mod pool;
 mod storage;
 
 // Re-export public configuration types and functions (with UniFFI annotations)
 pub use base::{PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config};
+pub use pool::{PostgresConnectionPool, create_postgres_connection_pool};
 
-// Re-export pool factory and store factories
-pub(crate) use base::{create_pool, create_postgres_token_store, create_postgres_tree_store};
+// Re-export store factories
+pub(crate) use base::{
+    create_postgres_session_manager, create_postgres_token_store, create_postgres_tree_store,
+};
 
 // Re-export storage implementation
 pub(crate) use storage::PostgresStorage;

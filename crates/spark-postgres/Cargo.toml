@@ -11,9 +11,11 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+bitcoin.workspace = true
 chrono.workspace = true
 deadpool.workspace = true
 deadpool-postgres.workspace = true
+hex.workspace = true
 macros.workspace = true
 platform-utils.workspace = true
 rustls.workspace = true

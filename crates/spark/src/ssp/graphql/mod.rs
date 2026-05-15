@@ -1,7 +1,7 @@
-mod client;
-mod error;
+pub(crate) mod client;
+pub(crate) mod error;
 pub(crate) mod models;
-mod queries;
+pub(crate) mod queries;
 
 pub(crate) use client::GraphQLClient;
 pub(crate) use error::GraphQLError;

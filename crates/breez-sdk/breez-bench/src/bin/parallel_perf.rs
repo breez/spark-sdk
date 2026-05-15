@@ -14,7 +14,9 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use breez_sdk_itest::{RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database};
+use breez_sdk_itest::{
+    PostgresTreeStore, RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database,
+};
 use breez_sdk_spark::{
     BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
     ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest, default_config,
@@ -611,7 +613,8 @@ async fn initialize_sdk_pair(
         sender_config,
         None,
         true,
-        sender_postgres,
+        sender_postgres.map(PostgresTreeStore::ConnectionString),
+        None,
     )
     .await?;
 
@@ -632,7 +635,8 @@ async fn initialize_sdk_pair(
         receiver_config,
         None,
         true,
-        receiver_postgres,
+        receiver_postgres.map(PostgresTreeStore::ConnectionString),
+        None,
     )
     .await?;
 

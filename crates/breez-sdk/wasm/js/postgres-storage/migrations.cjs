@@ -20,9 +20,14 @@ class PostgresMigrationManager {
 
   /**
    * Run all pending migrations inside a single transaction with an advisory lock.
+   *
    * @param {import('pg').Pool} pool
+   * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
+   *   identifying the tenant. Used to backfill `user_id` columns in the
+   *   multi-tenant migration so that pre-existing single-tenant data remains
+   *   readable.
    */
-  async migrate(pool) {
+  async migrate(pool, identity) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -44,7 +49,7 @@ class PostgresMigrationManager {
       );
       const currentVersion = versionResult.rows[0].version;
 
-      const migrations = this._getMigrations();
+      const migrations = this._getMigrations(identity);
 
       if (currentVersion >= migrations.length) {
         this._log("info", `Database is up to date (version ${currentVersion})`);
@@ -97,8 +102,27 @@ class PostgresMigrationManager {
    * Single migration creating all tables at their final schema.
    * This mirrors the Rust-native PostgresStorage schema but uses camelCase
    * enum values (as produced by the WASM bridge).
+   *
+   * @param {Buffer|Uint8Array} identity - 33-byte tenant identity. Inlined as
+   *   a hex BYTEA literal in the multi-tenant scoping migration. Safe because
+   *   the bytes come from a typed secp256k1 pubkey (character set
+   *   `[0-9a-f]{66}` after hex encoding) — not user-controlled input.
    */
-  _getMigrations() {
+  _getMigrations(identity) {
+    const idHex = Buffer.from(identity).toString("hex");
+    const idLit = `'\\x${idHex}'::bytea`;
+
+    // Helper for the per-table backfill: ADD COLUMN nullable -> UPDATE -> SET
+    // NOT NULL + drop/recreate PK. Returns an array of statements.
+    const scopeTable = (table, pkCols) => [
+      `ALTER TABLE ${table} ADD COLUMN user_id BYTEA`,
+      `UPDATE ${table} SET user_id = ${idLit}`,
+      `ALTER TABLE ${table}
+         ALTER COLUMN user_id SET NOT NULL,
+         DROP CONSTRAINT IF EXISTS ${table}_pkey,
+         ADD PRIMARY KEY (user_id, ${pkCols})`,
+    ];
+
     return [
       {
         name: "Create all tables at final schema",
@@ -252,10 +276,67 @@ class PostgresMigrationManager {
           `ALTER TABLE unclaimed_deposits ADD COLUMN is_mature BOOLEAN NOT NULL DEFAULT TRUE`,
         ],
       },
-      { 
+      {
         name: "Add conversion_status to payment_metadata",
         sql: [
           `ALTER TABLE payment_metadata ADD COLUMN IF NOT EXISTS conversion_status TEXT`,
+        ],
+      },
+      {
+        name: "Multi-tenant scoping: add user_id and rewrite primary keys",
+        sql: [
+          // Per-user tables
+          ...scopeTable("payments", "id"),
+          `DROP INDEX IF EXISTS idx_payments_timestamp`,
+          `DROP INDEX IF EXISTS idx_payments_payment_type`,
+          `DROP INDEX IF EXISTS idx_payments_status`,
+          `CREATE INDEX idx_payments_user_timestamp ON payments(user_id, timestamp)`,
+          `CREATE INDEX idx_payments_user_payment_type ON payments(user_id, payment_type)`,
+          `CREATE INDEX idx_payments_user_status ON payments(user_id, status)`,
+
+          ...scopeTable("payment_metadata", "payment_id"),
+          `DROP INDEX IF EXISTS idx_payment_metadata_parent`,
+          `CREATE INDEX idx_payment_metadata_user_parent
+             ON payment_metadata(user_id, parent_payment_id)`,
+
+          ...scopeTable("payment_details_lightning", "payment_id"),
+          `DROP INDEX IF EXISTS idx_payment_details_lightning_invoice`,
+          `DROP INDEX IF EXISTS idx_payment_details_lightning_payment_hash`,
+          `CREATE INDEX idx_payment_details_lightning_user_invoice
+             ON payment_details_lightning(user_id, invoice)`,
+          `CREATE INDEX idx_payment_details_lightning_user_payment_hash
+             ON payment_details_lightning(user_id, payment_hash)`,
+
+          ...scopeTable("payment_details_token", "payment_id"),
+          ...scopeTable("payment_details_spark", "payment_id"),
+          ...scopeTable("lnurl_receive_metadata", "payment_hash"),
+          ...scopeTable("unclaimed_deposits", "txid, vout"),
+          ...scopeTable("contacts", "id"),
+          ...scopeTable("settings", "key"),
+
+          // sync_revision: drop the singleton id (CASCADE removes PK + CHECK),
+          // then re-key by user_id so each tenant has its own revision row.
+          `ALTER TABLE sync_revision DROP COLUMN id CASCADE`,
+          `ALTER TABLE sync_revision ADD COLUMN user_id BYTEA`,
+          `UPDATE sync_revision SET user_id = ${idLit}`,
+          `ALTER TABLE sync_revision
+             ALTER COLUMN user_id SET NOT NULL,
+             ADD PRIMARY KEY (user_id)`,
+
+          // sync_outgoing has no PK, only an index — just add user_id and rewrite the index.
+          `ALTER TABLE sync_outgoing ADD COLUMN user_id BYTEA`,
+          `UPDATE sync_outgoing SET user_id = ${idLit}`,
+          `ALTER TABLE sync_outgoing ALTER COLUMN user_id SET NOT NULL`,
+          `DROP INDEX IF EXISTS idx_sync_outgoing_data_id_record_type`,
+          `CREATE INDEX idx_sync_outgoing_user_record_type_data_id
+             ON sync_outgoing(user_id, record_type, data_id)`,
+
+          ...scopeTable("sync_state", "record_type, data_id"),
+
+          ...scopeTable("sync_incoming", "record_type, data_id, revision"),
+          `DROP INDEX IF EXISTS idx_sync_incoming_revision`,
+          `CREATE INDEX idx_sync_incoming_user_revision
+             ON sync_incoming(user_id, revision)`,
         ],
       },
     ];

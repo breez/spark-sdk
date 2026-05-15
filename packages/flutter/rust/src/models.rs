@@ -12,6 +12,12 @@ pub struct _BitcoinAddressDetails {
     pub source: PaymentRequestSource,
 }
 
+#[frb(mirror(Session))]
+pub struct _Session {
+    pub token: String,
+    pub expiration: u64,
+}
+
 #[frb(mirror(BitcoinNetwork))]
 pub enum _BitcoinNetwork {
     Bitcoin,
@@ -73,6 +79,7 @@ pub struct _SparkSspConfig {
 pub struct _OptimizationConfig {
     pub auto_enabled: bool,
     pub multiplicity: u8,
+    pub token_target_output_count: u32,
 }
 
 #[frb(mirror(StableBalanceToken))]

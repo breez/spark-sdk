@@ -11,6 +11,7 @@ import 'passkey.dart';
 import 'persistence.dart';
 import 'readline.dart';
 import 'serialization.dart';
+import 'stable_balance.dart';
 import 'webhooks.dart';
 
 Future<void> runCli({
@@ -18,7 +19,9 @@ Future<void> runCli({
   required String network,
   int? accountNumber,
   String? postgresConnectionString,
-  String? stableBalanceTokenIdentifier,
+  String? mysqlConnectionString,
+  List<StableBalanceToken> stableBalanceTokens = const [],
+  String? stableBalanceDefaultActiveLabel,
   BigInt? stableBalanceThreshold,
   PasskeyConfig? passkeyConfig,
 }) async {
@@ -38,11 +41,11 @@ Future<void> runCli({
     config = config.copyWith(apiKey: apiKey);
   }
 
-  if (stableBalanceTokenIdentifier != null) {
+  if (stableBalanceTokens.isNotEmpty) {
     config = config.copyWith(
       stableBalanceConfig: StableBalanceConfig(
-        tokens: [StableBalanceToken(label: "USDB", tokenIdentifier: stableBalanceTokenIdentifier)],
-        defaultActiveLabel: "USDB",
+        tokens: stableBalanceTokens,
+        defaultActiveLabel: stableBalanceDefaultActiveLabel,
         thresholdSats: stableBalanceThreshold,
         maxSlippageBps: null,
       ),
@@ -60,9 +63,13 @@ Future<void> runCli({
   var builder = SdkBuilder(config: config, seed: seed);
 
   if (postgresConnectionString != null) {
-    // PostgreSQL storage is not yet available in the Flutter/Dart SDK bindings.
     stderr.writeln(
       'Warning: --postgres-connection-string is not yet supported in the Dart CLI. '
+      'Using default SQLite storage instead.',
+    );
+  } else if (mysqlConnectionString != null) {
+    stderr.writeln(
+      'Warning: --mysql-connection-string is not yet supported in the Dart CLI. '
       'Using default SQLite storage instead.',
     );
   }
@@ -120,6 +127,7 @@ Future<void> _runRepl(
     ...issuerCommandNames,
     ...contactsCommandNames,
     ...webhookCommandNames,
+    ...stableBalanceCommandNames,
     'exit',
     'quit',
     'help',
@@ -155,6 +163,8 @@ Future<void> _runRepl(
         await dispatchContactsCommand(cmdArgs, sdk);
       } else if (cmdName == 'webhooks') {
         await dispatchWebhookCommand(cmdArgs, sdk);
+      } else if (cmdName == 'stable-balance') {
+        await dispatchStableBalanceCommand(cmdArgs, sdk);
       } else if (registry.containsKey(cmdName)) {
         final entry = registry[cmdName]!;
         await entry.handler(sdk, tokenIssuer, cmdArgs);
@@ -194,6 +204,9 @@ void _printHelp(Map<String, CommandEntry> registry) {
   );
   stdout.writeln(
     '  ${'webhooks <subcommand>'.padRight(40)} Webhook commands (use \'webhooks help\' for details)',
+  );
+  stdout.writeln(
+    '  ${'stable-balance <subcommand>'.padRight(40)} Stable balance commands (use \'stable-balance help\' for details)',
   );
   stdout.writeln('  ${'exit / quit'.padRight(40)} Exit the CLI');
   stdout.writeln('  ${'help'.padRight(40)} Show this help message');

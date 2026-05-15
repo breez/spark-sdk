@@ -103,13 +103,60 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     // Optionally pool settings can be adjusted. Some examples:
     postgres_config.max_pool_size = 8; // Max connections in pool
     postgres_config.wait_timeout_secs = Some(30); // Timeout waiting for connection
+    // If your service owns SDK-compatible schema migrations:
+    postgres_config.run_migration = false;
+
+    // Construct the connection pool. The same `Arc<PostgresConnectionPool>`
+    // can be passed to multiple SdkBuilders to share connections across SDKs;
+    // per-tenant scoping (rows isolated by seed identity) is preserved.
+    let pool = create_postgres_connection_pool(&postgres_config)?;
 
     // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
     let sdk = SdkBuilder::new(config, seed)
-        .with_postgres_backend(postgres_config)
+        .with_postgres_connection_pool(pool)
         .build()
         .await?;
     // ANCHOR_END: init-sdk-postgres
+
+    Ok(sdk)
+}
+
+pub(crate) async fn init_sdk_mysql() -> Result<BreezSdk> {
+    // ANCHOR: init-sdk-mysql
+    // Construct the seed using a mnemonic, entropy or passkey
+    let mnemonic = "<mnemonic words>".to_string();
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase: None,
+    };
+
+    // Create the default config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Configure MySQL backend (MySQL 8.0+).
+    // Connection string format (URL only):
+    //   "mysql://user:password@host:3306/dbname?ssl-mode=required"
+    let mut mysql_config = default_mysql_storage_config(
+        "mysql://user:password@localhost:3306/spark".to_string(),
+    );
+    // Optionally pool settings can be adjusted. Some examples:
+    mysql_config.max_pool_size = 8; // Max connections in pool
+    mysql_config.recycle_timeout_secs = Some(60); // Recycle idle connections after this many seconds
+    // Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
+    // mysql_config.root_ca_pem = Some("-----BEGIN CERTIFICATE-----\n...".to_string());
+
+    // Construct the connection pool. The same `Arc<MysqlConnectionPool>`
+    // can be passed to multiple SdkBuilders to share connections across SDKs;
+    // per-tenant scoping (rows isolated by seed identity) is preserved.
+    let pool = create_mysql_connection_pool(&mysql_config)?;
+
+    // Build the SDK with MySQL backend (storage, tree store, and token store)
+    let sdk = SdkBuilder::new(config, seed)
+        .with_mysql_connection_pool(pool)
+        .build()
+        .await?;
+    // ANCHOR_END: init-sdk-mysql
 
     Ok(sdk)
 }

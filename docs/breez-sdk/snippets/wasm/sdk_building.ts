@@ -1,4 +1,11 @@
-import { SdkBuilder, defaultConfig, defaultPostgresStorageConfig } from '@breeztech/breez-sdk-spark'
+import {
+  SdkBuilder,
+  defaultConfig,
+  defaultPostgresStorageConfig,
+  createPostgresConnectionPool,
+  defaultMysqlStorageConfig,
+  createMysqlConnectionPool
+} from '@breeztech/breez-sdk-spark'
 import type {
   ProvisionalPayment,
   Seed,
@@ -67,12 +74,50 @@ const exampleWithPostgresStorage = async () => {
   pgConfig.maxPoolSize = 8 // Max connections in pool
   pgConfig.createTimeoutSecs = 30 // Timeout for establishing a new connection
   pgConfig.recycleTimeoutSecs = 30 // Timeout for recycling an idle connection
+  // If your service owns SDK-compatible schema migrations:
+  pgConfig.runMigration = false
+
+  // Construct the connection pool. The same pool handle can be passed to
+  // multiple SdkBuilders to share connections across SDKs; per-tenant
+  // scoping (rows isolated by seed identity) is preserved.
+  const pool = createPostgresConnectionPool(pgConfig)
 
   // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
   let builder = SdkBuilder.new(config, seed)
-  builder = builder.withPostgresBackend(pgConfig)
+  builder = builder.withPostgresConnectionPool(pool)
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-postgres
+}
+
+const exampleWithMysqlStorage = async () => {
+  // ANCHOR: init-sdk-mysql
+  // Construct the seed using a mnemonic, entropy or passkey
+  const mnemonic = '<mnemonic words>'
+  const seed: Seed = { type: 'mnemonic', mnemonic, passphrase: undefined }
+
+  // Create the default config
+  const config = defaultConfig('mainnet')
+  config.apiKey = '<breez api key>'
+
+  // Configure MySQL backend (MySQL 8.0+).
+  // Connection string format (URL only):
+  //   "mysql://user:password@host:3306/dbname?ssl-mode=required"
+  const mysqlConfig = defaultMysqlStorageConfig('mysql://user:password@localhost:3306/spark')
+  // Optionally pool settings can be adjusted. Some examples:
+  mysqlConfig.maxPoolSize = 8 // Max connections in pool
+  mysqlConfig.createTimeoutSecs = 30 // Timeout for establishing a new connection
+  mysqlConfig.recycleTimeoutSecs = 60 // Recycle idle connections after this many seconds
+
+  // Construct the connection pool. The same pool handle can be passed to
+  // multiple SdkBuilders to share connections across SDKs; per-tenant
+  // scoping (rows isolated by seed identity) is preserved.
+  const pool = createMysqlConnectionPool(mysqlConfig)
+
+  // Build the SDK with MySQL backend (storage, tree store, and token store)
+  let builder = SdkBuilder.new(config, seed)
+  builder = builder.withMysqlConnectionPool(pool)
+  const sdk = await builder.build()
+  // ANCHOR_END: init-sdk-mysql
 }
 
 const exampleWithRestChainService = async (builder: SdkBuilder) => {

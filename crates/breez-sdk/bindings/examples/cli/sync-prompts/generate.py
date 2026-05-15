@@ -139,9 +139,16 @@ def render_template(template: str, variables: dict[str, str]) -> str:
     return result
 
 
-def generate_prompt(lang_id: str) -> str:
-    """Generate the rendered prompt for a language."""
+def generate_prompt(lang_id: str, extra_vars: dict[str, str] | None = None) -> str:
+    """Generate the rendered prompt for a language.
+
+    `extra_vars` are merged into the per-language config before rendering,
+    used by the sync workflow to inject runtime values like the diff
+    summary and base SHA. Keys are uppercased to match {{KEY}} placeholders.
+    """
     config = load_lang_config(lang_id)
+    if extra_vars:
+        config = {**config, **extra_vars}
     template = PROMPT_TEMPLATE.read_text()
     return render_template(template, config)
 

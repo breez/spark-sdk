@@ -52,7 +52,9 @@ node src/main.js [OPTIONS]
 | `--network` | `regtest` | Network to use (`regtest` or `mainnet`) |
 | `--account-number` | - | Account number for the Spark signer |
 | `--postgres-connection-string` | - | PostgreSQL connection string (uses SQLite by default) |
-| `--stable-balance-token-identifier` | - | Stable balance token identifier |
+| `--mysql-connection-string` | - | MySQL connection string (mutually exclusive with `--postgres-connection-string`) |
+| `--stable-balance-token` | - | Stable balance token in `LABEL:token_identifier` format (repeatable) |
+| `--stable-balance-default-active-label` | - | Default active label for stable balance |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
 | `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
 | `--label` | `Default` | Requires `--passkey`. The label to use |
@@ -68,6 +70,9 @@ node src/main.js --data-dir ~/.breez/my-wallet
 
 # Use PostgreSQL storage
 node src/main.js --postgres-connection-string "host=localhost user=postgres dbname=spark"
+
+# Use MySQL storage
+node src/main.js --mysql-connection-string "mysql://user:pass@localhost:3306/spark"
 
 # Use a custom account number
 node src/main.js --account-number 21
@@ -90,6 +95,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 **Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list`
 
 **Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
+
+**Stable Balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 

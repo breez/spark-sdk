@@ -116,7 +116,7 @@ pub async fn sign_refunds(
 
     for (i, leaf) in leaves.iter().enumerate() {
         let node_tx = &leaf.node.node_tx;
-        let direct_tx = leaf.node.direct_tx.as_ref();
+        let direct_tx = leaf.node.direct_refund_tx();
 
         let old_sequence = leaf
             .node
@@ -491,7 +491,7 @@ pub fn prepare_refund_so_signing_jobs(
             } = refund_tx_constructor;
             create_refund_txs(
                 &node.node_tx,
-                node.direct_tx.as_ref(),
+                node.direct_refund_tx(),
                 cpfp_sequence,
                 direct_sequence,
                 receiving_pubkey,

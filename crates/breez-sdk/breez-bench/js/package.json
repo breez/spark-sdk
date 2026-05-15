@@ -11,6 +11,7 @@
     "@breeztech/breez-sdk-spark": "file:../../../../packages/wasm",
     "better-sqlite3": "^11.10.0",
     "bip39": "^3.1.0",
-    "pg": "^8.20.0"
+    "pg": "^8.20.0",
+    "mysql2": "^3.11.0"
   }
 }

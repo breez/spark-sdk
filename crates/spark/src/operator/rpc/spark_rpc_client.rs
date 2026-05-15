@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use super::auth::OperatorAuth;
 use super::error::Result;
 use super::metadata::set_idempotency_key;
 use super::spark::*;
 use super::spark_token;
+use crate::header_provider::HeaderProvider;
 use crate::operator::rpc::OperatorRpcError;
 use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::operator::rpc::spark::spark_service_client::SparkServiceClient;
@@ -16,18 +16,14 @@ use crate::operator::rpc::spark_token::StartTransactionRequest;
 use crate::operator::rpc::spark_token::StartTransactionResponse;
 use crate::operator::rpc::spark_token::spark_token_service_client::SparkTokenServiceClient;
 use crate::operator::rpc::transport::grpc_client::Transport;
-use crate::session_manager::Session;
-use crate::session_manager::SessionManager;
-use crate::signer::Signer;
 use crate::utils::paging::{PagingFilter, PagingResult};
-use bitcoin::secp256k1::PublicKey;
 use tonic::Request;
 use tonic::Status;
 use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
-use tracing::{debug, error};
+use tracing::debug;
 
 #[derive(Clone, Default)]
 pub struct QueryNodesPaginatedRequest {
@@ -48,23 +44,14 @@ pub struct QueryAllTokenOutputsRequest {
 #[derive(Clone)]
 pub struct SparkRpcClient {
     transport: Transport,
-    auth: OperatorAuth,
-    session_manager: Arc<dyn SessionManager>,
-    identity_public_key: PublicKey,
+    header_provider: Arc<dyn HeaderProvider>,
 }
 
 impl SparkRpcClient {
-    pub fn new(
-        channel: Transport,
-        signer: Arc<dyn Signer>,
-        identity_public_key: PublicKey,
-        session_manager: Arc<dyn SessionManager>,
-    ) -> Self {
+    pub fn new(channel: Transport, header_provider: Arc<dyn HeaderProvider>) -> Self {
         Self {
-            transport: channel.clone(),
-            auth: OperatorAuth::new(channel, signer),
-            session_manager,
-            identity_public_key,
+            transport: channel,
+            header_provider,
         }
     }
 
@@ -688,57 +675,32 @@ impl SparkRpcClient {
 
     async fn spark_service_client(
         &self,
-    ) -> Result<SparkServiceClient<InterceptedService<Transport, OperatorSessionInterceptor>>> {
-        let session = self.get_session_interceptor().await?;
+    ) -> Result<SparkServiceClient<InterceptedService<Transport, HeaderInterceptor>>> {
+        let interceptor = self.build_interceptor().await?;
         Ok(SparkServiceClient::with_interceptor(
             self.transport.clone(),
-            session,
+            interceptor,
         ))
     }
 
     async fn spark_token_service_client(
         &self,
-    ) -> Result<SparkTokenServiceClient<InterceptedService<Transport, OperatorSessionInterceptor>>>
-    {
-        let session = self.get_session_interceptor().await?;
+    ) -> Result<SparkTokenServiceClient<InterceptedService<Transport, HeaderInterceptor>>> {
+        let interceptor = self.build_interceptor().await?;
         Ok(SparkTokenServiceClient::with_interceptor(
             self.transport.clone(),
-            session,
+            interceptor,
         ))
     }
 
-    async fn get_session_interceptor(&self) -> Result<OperatorSessionInterceptor> {
-        let current_session = self
-            .session_manager
-            .get_session(&self.identity_public_key)
-            .await;
-        let valid_session = match current_session {
-            Ok(session) => self.auth.get_authenticated_session(Some(session)).await,
-            Err(e) => {
-                match e {
-                    crate::session_manager::SessionManagerError::NotFound => {
-                        debug!("Operator session not found, authenticating")
-                    }
-                    crate::session_manager::SessionManagerError::Generic(e) => {
-                        error!("Failed to get operator session from session manager: {}", e)
-                    }
-                };
-                self.auth.get_authenticated_session(None).await
-            }
-        }?;
-        self.session_manager
-            .set_session(&self.identity_public_key, valid_session.clone())
-            .await?;
-        valid_session.try_into()
-    }
-}
-
-impl TryFrom<Session> for OperatorSessionInterceptor {
-    type Error = OperatorRpcError;
-
-    fn try_from(session: Session) -> std::result::Result<Self, Self::Error> {
-        let mut headers = Vec::new();
-        for (key, value) in session.headers {
+    async fn build_interceptor(&self) -> Result<HeaderInterceptor> {
+        let raw_headers = self
+            .header_provider
+            .headers()
+            .await
+            .map_err(|e| OperatorRpcError::Authentication(e.to_string()))?;
+        let mut headers = Vec::with_capacity(raw_headers.len());
+        for (key, value) in raw_headers {
             let metadata_key = key
                 .parse::<tonic::metadata::MetadataKey<Ascii>>()
                 .map_err(|_| OperatorRpcError::Generic(format!("Invalid metadata key: {key}")))?;
@@ -747,25 +709,20 @@ impl TryFrom<Session> for OperatorSessionInterceptor {
             })?;
             headers.push((metadata_key, metadata_value));
         }
-        Ok(OperatorSessionInterceptor {
-            token: session.token.parse().map_err(|_| {
-                OperatorRpcError::Authentication("Invalid session token".to_string())
-            })?,
-            headers,
-        })
+        Ok(HeaderInterceptor { headers })
     }
 }
 
+/// Tonic [`Interceptor`] adapter that stamps a snapshot of HTTP-style headers
+/// onto outgoing gRPC requests as metadata. The actual header values come from
+/// a [`HeaderProvider`] resolved at the moment the gRPC client is built.
 #[derive(Clone, Debug)]
-struct OperatorSessionInterceptor {
-    token: MetadataValue<Ascii>,
+pub struct HeaderInterceptor {
     headers: Vec<(tonic::metadata::MetadataKey<Ascii>, MetadataValue<Ascii>)>,
 }
 
-impl Interceptor for OperatorSessionInterceptor {
+impl Interceptor for HeaderInterceptor {
     fn call(&mut self, mut req: Request<()>) -> std::result::Result<Request<()>, Status> {
-        req.metadata_mut()
-            .insert("authorization", self.token.clone());
         for (key, value) in &self.headers {
             req.metadata_mut().insert(key, value.clone());
         }

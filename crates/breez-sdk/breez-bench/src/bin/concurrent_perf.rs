@@ -9,10 +9,16 @@ use tokio::sync::{Semaphore, mpsc};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use breez_sdk_itest::{RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database};
+use breez_sdk_itest::{
+    MysqlTreeStore, PostgresTreeStore, RegtestFaucet, build_sdk_with_tree_store_config,
+    drop_mysql_database, drop_postgres_database,
+};
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest, default_config,
+    BreezSdk, GetInfoRequest, MysqlConnectionPool, Network, PostgresConnectionPool,
+    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent,
+    SendPaymentRequest, SyncWalletRequest, create_mysql_connection_pool,
+    create_postgres_connection_pool, default_config, default_mysql_storage_config,
+    default_postgres_storage_config,
 };
 
 use breez_bench::events::{wait_for_claimed_event, wait_for_synced_event};
@@ -43,14 +49,23 @@ struct Args {
     #[arg(long, value_name = "MULTIPLICITY")]
     pre_optimize: Option<u8>,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "sender_mysql")]
     sender_postgres: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "receiver_mysql")]
     receiver_postgres: Option<String>,
 
     #[arg(long)]
     clean_postgres: bool,
+
+    #[arg(long)]
+    sender_mysql: Option<String>,
+
+    #[arg(long)]
+    receiver_mysql: Option<String>,
+
+    #[arg(long)]
+    clean_mysql: bool,
 
     #[arg(long, default_value = "1.5")]
     funding_buffer: f64,
@@ -123,6 +138,20 @@ async fn main() -> Result<()> {
         }
     }
 
+    if args.clean_mysql {
+        if let Some(conn_str) = &args.sender_mysql {
+            drop_mysql_database(conn_str).await?;
+        }
+        if let Some(conn_str) = &args.receiver_mysql {
+            drop_mysql_database(conn_str).await?;
+        }
+        if args.sender_mysql.is_none() && args.receiver_mysql.is_none() {
+            warn!(
+                "--clean-mysql specified but no --sender-mysql or --receiver-mysql provided, skipping cleanup"
+            );
+        }
+    }
+
     if args.total_payments == 0 {
         bail!("--total-payments must be > 0");
     }
@@ -168,11 +197,13 @@ async fn main() -> Result<()> {
     );
 
     info!("Initializing sender and receiver SDKs...");
-    let (mut sender, mut receiver, sender_seed) = initialize_sdk_pair(
+    let (mut sender, mut receiver, sender_seed, sender_backend) = initialize_sdk_pair(
         args.no_auto_optimize,
         args.pre_optimize,
         args.sender_postgres.clone(),
         args.receiver_postgres.clone(),
+        args.sender_mysql.clone(),
+        args.receiver_mysql.clone(),
     )
     .await?;
 
@@ -205,13 +236,13 @@ async fn main() -> Result<()> {
     let mut sender_instances: Vec<BenchSdkInstance> = Vec::new();
     sender_instances.push(sender);
     if args.sender_instances > 1 {
-        if args.sender_postgres.is_none() {
+        if args.sender_postgres.is_none() && args.sender_mysql.is_none() {
             bail!(
-                "--sender-instances > 1 requires --sender-postgres so the instances share a tree store"
+                "--sender-instances > 1 requires --sender-postgres or --sender-mysql so the instances share a tree store"
             );
         }
         info!(
-            "Spawning {} additional sender SDK instance(s) sharing the same wallet + postgres tree store",
+            "Spawning {} additional sender SDK instance(s) sharing the same wallet + tree store",
             args.sender_instances - 1
         );
         for i in 1..args.sender_instances {
@@ -219,7 +250,7 @@ async fn main() -> Result<()> {
                 sender_seed,
                 args.no_auto_optimize,
                 args.pre_optimize,
-                args.sender_postgres.clone(),
+                &sender_backend,
                 i,
             )
             .await?;
@@ -576,12 +607,69 @@ fn print_summary(
     println!();
 }
 
+/// Sender's shared backend, built once by `initialize_sdk_pair` and reused
+/// by every additional sender so all instances share a single connection
+/// pool. Multi-tenant scoping isolates rows by seed identity, so sharing the
+/// pool is safe even with different SDK seeds.
+#[derive(Clone)]
+enum SenderBackend {
+    None,
+    Postgres(Arc<PostgresConnectionPool>),
+    Mysql(Arc<MysqlConnectionPool>),
+}
+
+impl SenderBackend {
+    fn postgres_tree(&self) -> Option<PostgresTreeStore> {
+        match self {
+            SenderBackend::Postgres(p) => Some(PostgresTreeStore::SharedPool(p.clone())),
+            _ => None,
+        }
+    }
+
+    fn mysql_tree(&self) -> Option<MysqlTreeStore> {
+        match self {
+            SenderBackend::Mysql(p) => Some(MysqlTreeStore::SharedPool(p.clone())),
+            _ => None,
+        }
+    }
+}
+
+/// Builds (and ensures-exists) a Postgres pool for the sender side, sized
+/// for use across multiple SDK instances.
+async fn build_sender_postgres_pool(conn_str: &str) -> Result<Arc<PostgresConnectionPool>> {
+    breez_sdk_itest::ensure_postgres_database_exists(conn_str).await?;
+    let mut pg_config = default_postgres_storage_config(conn_str.to_string());
+    pg_config.max_pool_size = 30;
+    Ok(create_postgres_connection_pool(&pg_config)?)
+}
+
+/// Builds (and ensures-exists) a MySQL pool for the sender side, sized for
+/// use across multiple SDK instances.
+async fn build_sender_mysql_pool(conn_str: &str) -> Result<Arc<MysqlConnectionPool>> {
+    let (admin_url, db_name) = breez_sdk_itest::split_mysql_url(conn_str)?;
+    breez_sdk_itest::ensure_mysql_database_exists(&admin_url, &db_name).await?;
+    let mut my_config = default_mysql_storage_config(conn_str.to_string());
+    my_config.max_pool_size = 30;
+    Ok(create_mysql_connection_pool(&my_config)?)
+}
+
 async fn initialize_sdk_pair(
     no_auto_optimize: bool,
     pre_optimize: Option<u8>,
     sender_postgres: Option<String>,
     receiver_postgres: Option<String>,
-) -> Result<(BenchSdkInstance, BenchSdkInstance, [u8; 32])> {
+    sender_mysql: Option<String>,
+    receiver_mysql: Option<String>,
+) -> Result<(BenchSdkInstance, BenchSdkInstance, [u8; 32], SenderBackend)> {
+    // Build the sender backend once. All sender SDKs will share this pool.
+    let sender_backend = if let Some(ref conn_str) = sender_postgres {
+        SenderBackend::Postgres(build_sender_postgres_pool(conn_str).await?)
+    } else if let Some(ref conn_str) = sender_mysql {
+        SenderBackend::Mysql(build_sender_mysql_pool(conn_str).await?)
+    } else {
+        SenderBackend::None
+    };
+
     let sender_dir = tempfile::Builder::new()
         .prefix("concurrent-perf-sender")
         .tempdir()?;
@@ -602,7 +690,8 @@ async fn initialize_sdk_pair(
         sender_config,
         None,
         true,
-        sender_postgres,
+        sender_backend.postgres_tree(),
+        sender_backend.mysql_tree(),
     )
     .await?;
 
@@ -621,7 +710,8 @@ async fn initialize_sdk_pair(
         receiver_config,
         None,
         true,
-        receiver_postgres,
+        receiver_postgres.map(PostgresTreeStore::ConnectionString),
+        receiver_mysql.map(MysqlTreeStore::ConnectionString),
     )
     .await?;
 
@@ -637,6 +727,7 @@ async fn initialize_sdk_pair(
             temp_dir: Some(receiver_dir),
         },
         sender_seed,
+        sender_backend,
     ))
 }
 
@@ -644,7 +735,7 @@ async fn build_extra_sender(
     seed: [u8; 32],
     no_auto_optimize: bool,
     pre_optimize: Option<u8>,
-    sender_postgres: Option<String>,
+    sender_backend: &SenderBackend,
     instance_index: u32,
 ) -> Result<BenchSdkInstance> {
     let dir = tempfile::Builder::new()
@@ -659,8 +750,16 @@ async fn build_extra_sender(
     if let Some(multiplicity) = pre_optimize {
         config.optimization_config.multiplicity = multiplicity;
     }
-    let itest =
-        build_sdk_with_tree_store_config(path, seed, config, None, true, sender_postgres).await?;
+    let itest = build_sdk_with_tree_store_config(
+        path,
+        seed,
+        config,
+        None,
+        true,
+        sender_backend.postgres_tree(),
+        sender_backend.mysql_tree(),
+    )
+    .await?;
 
     Ok(BenchSdkInstance {
         sdk: itest.sdk,

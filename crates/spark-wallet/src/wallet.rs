@@ -17,6 +17,7 @@ use spark::{
     },
     bitcoin::BitcoinService,
     events::{SparkEvent, subscribe_server_events},
+    header_provider::HeaderProvider,
     operator::{
         OperatorPool,
         rpc::{
@@ -207,6 +208,9 @@ impl SparkWallet {
             Arc::new(InMemoryTokenOutputStore::default()),
             Arc::new(DefaultConnectionManager::new()),
             None,
+            None,
+            None,
+            None,
             true,
             None,
         )
@@ -221,7 +225,10 @@ impl SparkWallet {
         tree_store: Arc<dyn TreeStore>,
         token_output_store: Arc<dyn TokenOutputStore>,
         connection_manager: Arc<dyn ConnectionManager>,
+        ssp_http_client: Option<Arc<dyn platform_utils::HttpClient>>,
         transfer_observer: Option<Arc<dyn TransferObserver>>,
+        ssp_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
+        so_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
         with_background_processing: bool,
         cancellation_token: Option<watch::Receiver<()>>,
     ) -> Result<Self, SparkWalletError> {
@@ -229,11 +236,21 @@ impl SparkWallet {
         let identity_public_key = signer.get_identity_public_key().await?;
 
         let bitcoin_service = BitcoinService::new(config.network);
-        let service_provider = Arc::new(ServiceProvider::new(
-            config.service_provider_config.clone(),
-            signer.clone(),
-            session_manager.clone(),
-        ));
+        let service_provider = Arc::new(match ssp_http_client {
+            Some(client) => ServiceProvider::new_with_client(
+                config.service_provider_config.clone(),
+                Arc::clone(&signer),
+                Arc::clone(&session_manager),
+                ssp_extra_header_provider,
+                client,
+            ),
+            None => ServiceProvider::new(
+                config.service_provider_config.clone(),
+                Arc::clone(&signer),
+                Arc::clone(&session_manager),
+                ssp_extra_header_provider,
+            ),
+        });
 
         let operator_pool = Arc::new(
             OperatorPool::connect(
@@ -241,6 +258,7 @@ impl SparkWallet {
                 connection_manager,
                 Arc::clone(&session_manager),
                 Arc::clone(&signer),
+                so_extra_header_provider,
             )
             .await?,
         );
@@ -1637,6 +1655,9 @@ impl SparkWallet {
                 self.config
                     .token_outputs_optimization_options
                     .min_outputs_threshold,
+                self.config
+                    .token_outputs_optimization_options
+                    .target_output_count,
             )
             .await?;
         Ok(())
@@ -2306,6 +2327,7 @@ impl BackgroundProcessor {
                     None,
                     self.token_outputs_optimization_options
                         .min_outputs_threshold,
+                    self.token_outputs_optimization_options.target_output_count,
                 )
                 .await
             {

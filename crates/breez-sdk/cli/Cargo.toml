@@ -12,7 +12,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 bip39 = { workspace = true, features = ["rand"] }
 bitcoin.workspace = true
-breez-sdk-spark = { workspace = true, features = ["postgres", "passkey"] }
+breez-sdk-spark = { workspace = true, features = ["postgres", "mysql", "passkey"] }
 challenge_response = "0.5"
 clap = { workspace = true, features = ["derive"] }
 ctap-hid-fido2 = { version = "3.5", optional = true }

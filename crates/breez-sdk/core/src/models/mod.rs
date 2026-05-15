@@ -637,6 +637,21 @@ pub struct OptimizationConfig {
     ///
     /// Default value is 1.
     pub multiplicity: u8,
+    /// Number of token outputs to produce when token-output auto-consolidation
+    /// fires.
+    ///
+    /// Auto-consolidation triggers per-token when the wallet has more than the
+    /// configured threshold of available outputs for that token; instead of
+    /// collapsing them into a single output (which serializes subsequent
+    /// payments), the SDK splits the consolidated balance across this many
+    /// outputs of roughly equal value. Higher values preserve concurrency for
+    /// parallel sends at the cost of a slightly larger output set.
+    ///
+    /// Must be >= 1 and strictly less than the underlying
+    /// `min_outputs_threshold` (default 50).
+    ///
+    /// Default value is 5.
+    pub token_target_output_count: u32,
 }
 
 /// A stable token that can be used for automatic balance conversion.

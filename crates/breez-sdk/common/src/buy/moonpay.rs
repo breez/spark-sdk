@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{breez_server::BreezServer, grpc::SignUrlRequest};
 use anyhow::Result;
-use bitreq::Url;
+use url::Url;
 
 #[derive(Clone)]
 struct MoonPayConfig {
@@ -57,7 +57,7 @@ fn create_moonpay_url(
     // redirectURL comes after the conditional lockAmount params
     params.push(("redirectURL", redirect_url));
 
-    url.append_query_params(params);
+    url.query_pairs_mut().extend_pairs(params);
     Ok(url)
 }
 
@@ -116,8 +116,8 @@ pub(crate) mod tests {
 
         let url = create_moonpay_url(&wallet_address, Some(&quote_amount), None)?;
 
-        let query_pairs = url.query_pairs().collect::<HashMap<_, _>>();
-        assert_eq!(url.base_url(), "buy.moonpay.io");
+        let query_pairs = url.query_pairs().into_owned().collect::<HashMap<_, _>>();
+        assert_eq!(url.host_str(), Some("buy.moonpay.io"));
         assert_eq!(url.path(), "/");
         assert_eq!(query_pairs.get("apiKey"), Some(&config.api_key));
         assert_eq!(query_pairs.get("currencyCode"), Some(&config.currency_code));
@@ -139,8 +139,8 @@ pub(crate) mod tests {
 
         let url = create_moonpay_url(&wallet_address, Some(&quote_amount), Some(&redirect_url))?;
 
-        let query_pairs = url.query_pairs().collect::<HashMap<_, _>>();
-        assert_eq!(url.base_url(), "buy.moonpay.io");
+        let query_pairs = url.query_pairs().into_owned().collect::<HashMap<_, _>>();
+        assert_eq!(url.host_str(), Some("buy.moonpay.io"));
         assert_eq!(url.path(), "/");
         assert_eq!(query_pairs.get("apiKey"), Some(&config.api_key));
         assert_eq!(query_pairs.get("currencyCode"), Some(&config.currency_code));

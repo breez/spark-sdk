@@ -34,7 +34,7 @@ const exampleConfigurePrivateEnabledDefault = async () => {
 const exampleConfigureOptimizationConfiguration = async () => {
   // ANCHOR: optimization-configuration
   const config = defaultConfig('mainnet')
-  config.optimizationConfig = { autoEnabled: true, multiplicity: 1 }
+  config.optimizationConfig = { autoEnabled: true, multiplicity: 1, tokenTargetOutputCount: 5 }
   // ANCHOR_END: optimization-configuration
   console.log('Config:', config)
 }

@@ -24,6 +24,10 @@ use prost::{Message as ProstMessage, encoding};
 
 use error::AddressError;
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
+use spark_token_primitives::{
+    FinalizeTokenInvoiceRequest, PrepareTokenInvoiceRequest, PreparedTokenInvoice,
+    finalize_token_invoice, prepare_token_invoice,
+};
 use uuid::Uuid;
 
 use crate::Network;
@@ -293,33 +297,97 @@ impl SparkAddress {
             ));
         }
 
-        let spark_invoice_fields: Option<ProtoSparkInvoiceFields> = self
+        let invoice_fields = self
             .spark_invoice_fields
-            .clone()
-            .map(|f| f.try_into())
+            .as_ref()
+            .ok_or_else(|| AddressError::Other("No invoice fields".to_string()))?;
+
+        match &invoice_fields.payment_type {
+            Some(SparkAddressPaymentType::TokensPayment(payment)) => {
+                let prepared = self.prepare_token_invoice_via_primitives(payment)?;
+                let signature = signer
+                    .sign_hash_schnorr_with_identity_key(&prepared.spark_invoice_hash)
+                    .await
+                    .map_err(|e| {
+                        AddressError::Other(format!("Failed to sign invoice hash: {e}"))
+                    })?;
+                finalize_token_invoice(FinalizeTokenInvoiceRequest {
+                    receiver_identity_public_key: self.identity_public_key.serialize().to_vec(),
+                    network: network_as_u32(self.network),
+                    spark_invoice_fields_bytes: prepared.spark_invoice_fields_bytes,
+                    signature: Some(signature.serialize().to_vec()),
+                })
+                .map_err(|e| AddressError::Other(format!("Failed to finalize token invoice: {e}")))
+            }
+            Some(SparkAddressPaymentType::SatsPayment(_)) => {
+                let spark_invoice_fields: Option<ProtoSparkInvoiceFields> =
+                    Some(invoice_fields.clone().try_into()?);
+
+                let invoice_hash = self.compute_invoice_hash()?;
+
+                let signature = signer
+                    .sign_hash_schnorr_with_identity_key(&invoice_hash)
+                    .await
+                    .map_err(|e| {
+                        AddressError::Other(format!("Failed to sign invoice hash: {e}"))
+                    })?;
+
+                let proto_address = ProtoSparkAddress {
+                    identity_public_key: self.identity_public_key.serialize().to_vec(),
+                    spark_invoice_fields,
+                    signature: Some(signature.serialize().to_vec()),
+                };
+
+                let payload_bytes = encode_spark_address_canonical(&proto_address);
+                let hrp = Self::network_to_hrp(&self.network);
+                Ok(bech32::encode::<Bech32m>(hrp, &payload_bytes).unwrap())
+            }
+            None => Err(AddressError::Other("No payment type".to_string())),
+        }
+    }
+
+    fn prepare_token_invoice_via_primitives(
+        &self,
+        payment: &TokensPayment,
+    ) -> Result<PreparedTokenInvoice, AddressError> {
+        let invoice_fields = self
+            .spark_invoice_fields
+            .as_ref()
+            .ok_or_else(|| AddressError::Other("No invoice fields".to_string()))?;
+
+        let token_identifier = payment
+            .token_identifier
+            .as_deref()
+            .map(|id| {
+                bech32m_decode_token_id(id, None)
+                    .map_err(|e| AddressError::Other(format!("Invalid token identifier: {e}")))
+            })
             .transpose()?;
 
-        let invoice_hash = self.compute_invoice_hash()?;
+        let token_amount = payment.amount.map(|a| a.to_unpadded_be_bytes());
 
-        let signature = signer
-            .sign_hash_schnorr_with_identity_key(&invoice_hash)
-            .await
-            .map_err(|e| AddressError::Other(format!("Failed to sign invoice hash: {e}")))?;
+        let sender_spark_address = invoice_fields
+            .sender_public_key
+            .map(|pk| SparkAddress::new(pk, self.network, None).to_address_string())
+            .transpose()?;
 
-        let proto_address = ProtoSparkAddress {
-            identity_public_key: self.identity_public_key.serialize().to_vec(),
-            spark_invoice_fields,
-            signature: Some(signature.serialize().to_vec()),
-        };
+        let expiry_time_unix_millis = invoice_fields.expiry_time.map(|t| {
+            t.duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0)
+        });
 
-        // Use canonical encoding for server compatibility
-        let payload_bytes = encode_spark_address_canonical(&proto_address);
-
-        let hrp = Self::network_to_hrp(&self.network);
-
-        // This is safe to unwrap, because we are using a valid HRP and payload
-        let address = bech32::encode::<Bech32m>(hrp, &payload_bytes).unwrap();
-        Ok(address)
+        prepare_token_invoice(PrepareTokenInvoiceRequest {
+            receiver_identity_public_key: self.identity_public_key.serialize().to_vec(),
+            network: network_as_u32(self.network),
+            token_identifier,
+            token_amount,
+            memo: invoice_fields.memo.clone(),
+            sender_spark_address,
+            expiry_time_unix_millis,
+            invoice_id: Some(invoice_fields.id.as_bytes().to_vec()),
+        })
+        .map_err(|e| AddressError::Other(format!("Failed to prepare token invoice: {e}")))
     }
 
     fn compute_invoice_hash(&self) -> Result<Vec<u8>, AddressError> {
@@ -333,72 +401,36 @@ impl SparkAddress {
             ));
         }
 
+        let payment = match invoice_fields.payment_type.as_ref() {
+            Some(SparkAddressPaymentType::TokensPayment(payment)) => {
+                return Ok(self
+                    .prepare_token_invoice_via_primitives(payment)?
+                    .spark_invoice_hash);
+            }
+            Some(SparkAddressPaymentType::SatsPayment(payment)) => payment,
+            None => return Err(AddressError::Other("No payment type".to_string())),
+        };
+
         let mut all_hashes = vec![
             sha256::Hash::hash(&invoice_fields.version.to_be_bytes())
                 .to_byte_array()
                 .to_vec(),
-        ];
-
-        all_hashes.push(
             sha256::Hash::hash(invoice_fields.id.as_bytes())
                 .to_byte_array()
                 .to_vec(),
-        );
-
-        all_hashes.push(
             sha256::Hash::hash(
                 &sha256::Hash::hash(&get_magic_network_identifier(self.network)).to_byte_array(),
             )
             .to_byte_array()
             .to_vec(),
-        );
-
-        all_hashes.push(
             sha256::Hash::hash(&self.identity_public_key.serialize())
                 .to_byte_array()
                 .to_vec(),
-        );
-
-        match &invoice_fields.payment_type {
-            Some(SparkAddressPaymentType::TokensPayment(payment)) => {
-                all_hashes.push(sha256::Hash::hash(&[1]).to_byte_array().to_vec());
-
-                if let Some(token_identifier) = &payment.token_identifier {
-                    all_hashes.push(
-                        sha256::Hash::hash(
-                            &bech32m_decode_token_id(token_identifier, None)
-                                .map_err(|e| {
-                                    AddressError::Other(format!("Invalid token identifier: {e}"))
-                                })?
-                                .to_vec(),
-                        )
-                        .to_byte_array()
-                        .to_vec(),
-                    );
-                } else {
-                    all_hashes.push(sha256::Hash::hash(&[0; 32]).to_byte_array().to_vec());
-                }
-
-                all_hashes.push(
-                    sha256::Hash::hash(&u128::to_unpadded_be_bytes(&payment.amount.unwrap_or(0)))
-                        .to_byte_array()
-                        .to_vec(),
-                );
-            }
-            Some(SparkAddressPaymentType::SatsPayment(payment)) => {
-                all_hashes.push(sha256::Hash::hash(&[2]).to_byte_array().to_vec());
-
-                let amount = payment.amount.unwrap_or(0);
-                all_hashes.push(
-                    sha256::Hash::hash(&amount.to_be_bytes())
-                        .to_byte_array()
-                        .to_vec(),
-                );
-            }
-            None => {
-                return Err(AddressError::Other("No payment type".to_string()));
-            }
-        }
+            sha256::Hash::hash(&[2]).to_byte_array().to_vec(),
+            sha256::Hash::hash(&payment.amount.unwrap_or(0).to_be_bytes())
+                .to_byte_array()
+                .to_vec(),
+        ];
 
         if let Some(memo) = &invoice_fields.memo {
             all_hashes.push(sha256::Hash::hash(memo.as_bytes()).to_byte_array().to_vec());
@@ -430,10 +462,12 @@ impl SparkAddress {
         for hash in all_hashes {
             engine.input(&hash);
         }
-        let final_hash = sha256::Hash::from_engine(engine).to_byte_array().to_vec();
-
-        Ok(final_hash)
+        Ok(sha256::Hash::from_engine(engine).to_byte_array().to_vec())
     }
+}
+
+fn network_as_u32(network: Network) -> u32 {
+    u32::try_from(network.to_proto_network() as i32).expect("network proto value is non-negative")
 }
 
 /// Returns 4 bytes of the magic network identifier for the given network.
@@ -476,13 +510,10 @@ impl FromStr for SparkAddress {
 
         let address = SparkAddress::new(identity_public_key, network, invoice_fields);
 
-        if address.is_invoice() {
+        if address.is_invoice()
+            && let Some(sig) = signature
+        {
             let hash = address.compute_invoice_hash()?;
-
-            let Some(sig) = signature else {
-                return Err(AddressError::Other("Invoice has no signature".to_string()));
-            };
-
             let secp = Secp256k1::new();
             if secp
                 .verify_schnorr(
@@ -582,6 +613,13 @@ mod tests {
         let secp = Secp256k1::new();
         let (secret_key, _) = secp.generate_keypair(&mut bitcoin::secp256k1::rand::thread_rng());
         PublicKey::from_slice(&secret_key.public_key(&secp).serialize()).unwrap()
+    }
+
+    fn ms_aligned_now() -> SystemTime {
+        let since_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        UNIX_EPOCH + platform_utils::time::Duration::from_millis(since_epoch.as_millis() as u64)
     }
 
     #[test_all]
@@ -789,7 +827,7 @@ mod tests {
             id: uuid::Uuid::now_v7(),
             version: 1,
             sender_public_key: Some(sender_public_key),
-            expiry_time: Some(SystemTime::now()),
+            expiry_time: Some(ms_aligned_now()),
             payment_type: Some(SparkAddressPaymentType::TokensPayment(TokensPayment {
                 token_identifier: Some(
                     "btknrt15xy2yxnpacs2yl00fnajxylsljq9y0uesr6qylyxq2lxnum8r63qfues7q".to_string(),
@@ -888,7 +926,7 @@ mod tests {
             id: uuid::Uuid::now_v7(),
             version: 1,
             sender_public_key: Some(sender_public_key),
-            expiry_time: Some(SystemTime::now()),
+            expiry_time: Some(ms_aligned_now()),
             payment_type: Some(SparkAddressPaymentType::TokensPayment(TokensPayment {
                 token_identifier: Some(
                     "btknrt15xy2yxnpacs2yl00fnajxylsljq9y0uesr6qylyxq2lxnum8r63qfues7q".to_string(),
@@ -951,5 +989,147 @@ mod tests {
         // Parsing should work but then fail when converting the proto payment intent
         let result = SparkAddress::from_str(&address);
         assert!(result.is_err());
+    }
+
+    /// Cross-language signing-hash fixtures. JS is the source of truth; these vectors are
+    /// shared with Go and spark-token-primitives. If this test fails, Breez's hash has drifted
+    /// from the rest of the ecosystem and signatures produced elsewhere will not verify.
+    mod invoice_hash_fixtures {
+        use super::super::*;
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use macros::test_all;
+        use platform_utils::time::{Duration, UNIX_EPOCH};
+        use serde::Deserialize;
+
+        const FIXTURE_JSON: &str =
+            include_str!("../../testdata/token_invoice_signing_hash_cases.json");
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FixtureFile {
+            test_cases: Vec<FixtureCase>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FixtureCase {
+            name: String,
+            network: String,
+            receiver_public_key: String,
+            expected_hash: String,
+            spark_invoice_fields: FixtureFields,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FixtureFields {
+            version: u32,
+            id: String,
+            #[serde(default)]
+            memo: Option<String>,
+            #[serde(default)]
+            sender_public_key: Option<String>,
+            #[serde(default)]
+            expiry_time: Option<String>,
+            #[serde(default)]
+            tokens_payment: Option<FixtureTokens>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct FixtureTokens {
+            #[serde(default)]
+            token_identifier: Option<String>,
+            #[serde(default)]
+            amount: Option<String>,
+        }
+
+        fn b64(s: &str) -> Vec<u8> {
+            STANDARD.decode(s).unwrap()
+        }
+
+        fn parse_network(s: &str) -> Network {
+            match s {
+                "MAINNET" => Network::Mainnet,
+                "REGTEST" => Network::Regtest,
+                "TESTNET" => Network::Testnet,
+                "SIGNET" => Network::Signet,
+                other => panic!("unknown network {other}"),
+            }
+        }
+
+        // Hand-parse the single RFC3339 timestamp used by the fixtures. Keeps tests free of
+        // a time-parsing dependency; update the match arms if new fixture cases are added.
+        fn fixture_expiry_seconds(s: &str) -> u64 {
+            match s {
+                "2025-08-16T22:12:17.791Z" => 1_755_382_337,
+                other => panic!("unhandled fixture expiry time: {other}"),
+            }
+        }
+
+        fn hash_for_case(tc: &FixtureCase) -> Vec<u8> {
+            let network = parse_network(&tc.network);
+            let receiver_pk = PublicKey::from_slice(&b64(&tc.receiver_public_key)).unwrap();
+
+            let id_bytes: [u8; 16] = b64(&tc.spark_invoice_fields.id).try_into().unwrap();
+            let id = uuid::Uuid::from_bytes(id_bytes);
+
+            let sender_public_key = tc
+                .spark_invoice_fields
+                .sender_public_key
+                .as_deref()
+                .map(|s| PublicKey::from_slice(&b64(s)).unwrap());
+
+            let expiry_time = tc
+                .spark_invoice_fields
+                .expiry_time
+                .as_deref()
+                .map(|s| UNIX_EPOCH + Duration::from_secs(fixture_expiry_seconds(s)));
+
+            let payment_type = tc.spark_invoice_fields.tokens_payment.as_ref().map(|tp| {
+                let token_identifier = tp.token_identifier.as_deref().map(|s| {
+                    let raw = b64(s);
+                    assert_eq!(raw.len(), 32, "fixture token id must be 32 bytes");
+                    bech32m_encode_token_id(&raw, network).unwrap()
+                });
+                let amount = tp
+                    .amount
+                    .as_deref()
+                    .map(|s| u128::from_unpadded_be_bytes(&b64(s)).unwrap());
+                SparkAddressPaymentType::TokensPayment(TokensPayment {
+                    token_identifier,
+                    amount,
+                })
+            });
+
+            let fields = SparkInvoiceFields {
+                id,
+                version: tc.spark_invoice_fields.version,
+                memo: tc.spark_invoice_fields.memo.clone(),
+                sender_public_key,
+                expiry_time,
+                payment_type,
+            };
+
+            SparkAddress::new(receiver_pk, network, Some(fields))
+                .compute_invoice_hash()
+                .unwrap()
+        }
+
+        #[test_all]
+        fn compute_invoice_hash_matches_cross_language_fixtures() {
+            let fixture: FixtureFile = serde_json::from_str(FIXTURE_JSON).unwrap();
+            assert!(!fixture.test_cases.is_empty(), "no fixture cases loaded");
+
+            for tc in &fixture.test_cases {
+                let hash = hash_for_case(tc);
+                assert_eq!(
+                    hex::encode(&hash),
+                    tc.expected_hash,
+                    "fixture case `{}` hash mismatch",
+                    tc.name
+                );
+            }
+        }
     }
 }

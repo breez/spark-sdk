@@ -215,16 +215,13 @@ jobs:
           sys.path.insert(0, "crates/breez-sdk/bindings/examples/cli/sync-prompts")
           from generate import generate_prompt
 
-          prompt = generate_prompt(os.environ["LANG"])
-
-          # Resolve GitHub Actions expressions that would normally be
-          # evaluated in YAML but aren't when the prompt is assembled dynamically
-          replacements = {
-              "${{ steps.diff-info.outputs.diff_summary }}": os.environ.get("DIFF_SUMMARY", ""),
-              "${{ steps.diff-info.outputs.diff_base }}": os.environ.get("DIFF_BASE", ""),
-          }
-          for expr, value in replacements.items():
-              prompt = prompt.replace(expr, value)
+          prompt = generate_prompt(
+              os.environ["LANG"],
+              extra_vars={
+                  "DIFF_SUMMARY": os.environ.get("DIFF_SUMMARY", ""),
+                  "DIFF_BASE": os.environ.get("DIFF_BASE", ""),
+              },
+          )
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("content<<EOPROMPT_DELIM_7f3a\n")

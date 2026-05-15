@@ -34,7 +34,7 @@ func configurePrivateEnabledDefault() async throws {
 func configureOptimizationConfiguration() async throws {
     // ANCHOR: optimization-configuration
     var config = defaultConfig(network: Network.mainnet)
-    config.optimizationConfig = OptimizationConfig(autoEnabled: true, multiplicity: 1)
+    config.optimizationConfig = OptimizationConfig(autoEnabled: true, multiplicity: 1, tokenTargetOutputCount: 5)
     // ANCHOR_END: optimization-configuration
     print("Config: \(config)")
 }

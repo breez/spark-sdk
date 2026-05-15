@@ -3,12 +3,16 @@
 Using the SDK Builder gives you more control over the initialization and modular components used when the SDK is running. Below you can find examples of initializing the SDK using the SDK Builder and implementing modular components:
 
 - [Storage](#with-storage) to manage stored data
-- [PostgreSQL Backend](#with-postgres-backend) as an alternative storage backend
+- [PostgreSQL Connection Pool](#with-postgres-connection-pool) as an alternative storage backend
+- [MySQL Connection Pool](#with-mysql-connection-pool) as an alternative storage backend
 - [Bitcoin Chain Service](#with-chain-service) to provide network data
+- [Shared REST Chain Service](#with-shared-rest-chain-service) to share the chain service HTTP client across SDK instances
 - [LNURL Client](#with-lnurl-client) to make REST requests
 - [Fiat Service](#with-fiat-service) to provide Fiat currencies and exchange rates
 - Change the [Key Set](#with-key-set) to alter the derivation path used
 - [Payment Observer](#with-payment-observer) to be notified before payments occur
+- [SSP Connection Manager](#with-ssp-connection-manager) to share the SSP HTTP client across SDK instances
+- [Connection Manager](#with-connection-manager) to share gRPC connections across SDK instances
 
 {{#tabs sdk_building:init-sdk-advanced}}
 
@@ -21,12 +25,14 @@ When using the SDK Builder, you either have to provide a Storage implementation 
 
 **Note:** Flutter currently only supports using the default storage.
 
-<h2 id="with-postgres-backend">
-    <a class="header" href="#with-postgres-backend">With PostgreSQL Backend</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_backend">API docs</a>
+<h2 id="with-postgres-connection-pool">
+    <a class="header" href="#with-postgres-connection-pool">With PostgreSQL Connection Pool</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_connection_pool">API docs</a>
 </h2>
 
-The SDK includes a PostgreSQL backend as an alternative to file-based storage. A single {{#name with_postgres_backend}} call configures PostgreSQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling.
+The SDK includes a PostgreSQL backend as an alternative to file-based storage. Construct a connection pool once with {{#name create_postgres_connection_pool}} and pass it to the builder via {{#name with_postgres_connection_pool}} — this configures PostgreSQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. The same pool can be shared across multiple `SdkBuilder` instances; per-tenant scoping (rows isolated by seed identity) is preserved.
+
+If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config before creating the pool. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
 
 **Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
@@ -38,6 +44,30 @@ The SDK includes a PostgreSQL backend as an alternative to file-based storage. A
 Sharing the same PostgreSQL database with multiple SDK instances is incompatible with real-time sync. See [Real-time sync server URL](./config.md#real-time-sync-server-url) for how to disable it.
 
 The PostgreSQL tree store can use the same or a separate PostgreSQL database as the PostgreSQL storage. The tree store uses its own set of tables prefixed with `tree_`.
+
+</div>
+
+<h2 id="with-mysql-connection-pool">
+    <a class="header" href="#with-mysql-connection-pool">With MySQL Connection Pool</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_mysql_connection_pool">API docs</a>
+</h2>
+
+The SDK includes a MySQL backend (MySQL 8.0+) as an alternative to file-based storage. Construct a connection pool once with {{#name create_mysql_connection_pool}} and pass it to the builder via {{#name with_mysql_connection_pool}} — this configures MySQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. The same pool can be shared across multiple `SdkBuilder` instances; per-tenant scoping (rows isolated by seed identity) is preserved.
+
+If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config before creating the pool. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
+
+**Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
+
+{{#tabs sdk_building:init-sdk-mysql}}
+
+<div class="warning">
+<h4>Developer note</h4>
+
+MySQL only accepts URL-form connection strings (`mysql://user:password@host:3306/dbname`); the key=value form supported by PostgreSQL is not available. TLS is enabled by appending `?ssl-mode=required` (or `verify_ca` / `verify_identity`); when using `verify_ca` or `verify_identity` you can supply a custom `root_ca_pem`.
+
+Sharing the same MySQL database with multiple SDK instances is incompatible with real-time sync. See [Real-time sync server URL](./config.md#real-time-sync-server-url) for how to disable it.
+
+The MySQL tree store can use the same or a separate MySQL database as the MySQL storage. The tree store uses its own set of tables prefixed with `tree_`.
 
 </div>
 
@@ -56,6 +86,15 @@ The SDK provides a default Bitcoin Chain Service implementation. If you want to 
 The SDK provides a default Bitcoin Chain Service implementation. If you want to use your own, you can provide it either by using [With Chain Service](#with-chain-service) or by providing a URL and optional credentials.
 
 {{#tabs sdk_building:with-rest-chain-service}}
+
+<h2 id="with-shared-rest-chain-service">
+    <a class="header" href="#with-shared-rest-chain-service">With Shared REST Chain Service</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/fn.new_rest_chain_service.html">API docs</a>
+</h2>
+
+[With REST Chain Service](#with-rest-chain-service) builds a fresh chain service inside each SDK instance. Server processes hosting many wallets at once can share a single REST chain service between every SDK, so they reuse the same pooled HTTP client (and its HTTP/2 connection pool) instead of each opening a fresh one.
+
+Construct one via {{#name new_rest_chain_service}} and pass it to each {{#name SdkBuilder}} via {{#name with_chain_service}}. All SDK instances sharing the chain service must be configured for the same network.
 
 <h2 id="with-fiat-service">
     <a class="header" href="#with-fiat-service">With Fiat Service</a>
@@ -96,3 +135,55 @@ By implementing the Payment Observer interface you can be notified before a paym
 **Note:** Flutter currently does not support this.
 
 {{#tabs sdk_building:with-payment-observer}}
+
+<h2 id="with-ssp-connection-manager">
+    <a class="header" href="#with-ssp-connection-manager">With SSP Connection Manager</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_ssp_connection_manager">API docs</a>
+</h2>
+
+An SSP Connection Manager owns the HTTP client used for SSP GraphQL traffic. By default each SDK instance builds its own. Server processes hosting many wallets at once can share a single SSP Connection Manager between every SDK, so they reuse the same pooled HTTP client (and its HTTP/2 connection pool) instead of each opening a fresh one.
+
+Construct one via {{#name new_ssp_connection_manager}} and pass it to each {{#name SdkBuilder}} via {{#name with_ssp_connection_manager}}. Connections close when the last reference to the SSP Connection Manager is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
+
+<div class="warning">
+<h4>Developer note</h4>
+
+The user agent of the first SDK to construct the SSP Connection Manager is reused for all subsequent instances.
+
+</div>
+
+<h2 id="with-connection-manager">
+    <a class="header" href="#with-connection-manager">With Connection Manager</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_connection_manager">API docs</a>
+</h2>
+
+A Connection Manager owns the gRPC channels to the Spark operators. By default each SDK instance builds its own. Server processes hosting many wallets at once can share a single Connection Manager between every SDK, so they reuse the same channels instead of each opening a fresh set.
+
+Construct one via {{#name new_connection_manager}} and pass it to each {{#name SdkBuilder}} via {{#name with_connection_manager}}. Connections close when the last reference to the Connection Manager is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
+
+The `connections_per_operator` argument controls how many connections the manager opens to each operator:
+
+- `None` — one connection per operator, multiplexed across every SDK sharing this manager. The right choice for almost every deployment.
+- `Some(n)` — opens `n` connections per operator and balances requests across them. Worth setting only if the single shared connection has become a bottleneck — for example, latency that climbs with throughput, or operators deployed behind an L7 load balancer where you want client-side fan-out across backend instances.
+
+<div class="warning">
+<h4>Developer note</h4>
+
+All SDK instances sharing a Connection Manager must be configured for the same network and operator pool. The cache is keyed by operator address, so the TLS settings and user agent of the first SDK to connect to a given operator are reused for everyone afterwards.
+
+</div>
+
+### Browser
+
+The Connection Manager is not exposed in the browser. Browsers maintain a single HTTP/2 connection per origin and multiplex everything over it; the SDK cannot create or share more.
+
+### Node.js
+
+Node's global `fetch` (undici) negotiates HTTP/2 with the Spark operators automatically and opens additional connections per origin as needed, so most deployments need no tuning. If you do want to cap or expand the per-origin pool, configure undici globally before initialising the SDK:
+
+```js
+import { Agent, setGlobalDispatcher } from 'undici'
+setGlobalDispatcher(new Agent({ connections: 8 }))
+```
+
+This affects every `fetch` in the process, including the SDK's gRPC-web traffic.

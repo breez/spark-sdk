@@ -1,8 +1,8 @@
 use bitcoin::bip32::ChildNumber;
 use bitcoin::secp256k1::PublicKey;
-use bitreq::Url;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+use url::Url;
 
 use platform_utils::HttpClient;
 
@@ -77,23 +77,26 @@ pub async fn perform_lnurl_auth<C: HttpClient + ?Sized, S: LnurlAuthSigner>(
     let key_hex = public_key.to_string();
 
     let mut callback_url =
-        bitreq::Url::parse(&auth_request.url).map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
-    callback_url.append_query_params([("sig", sig_hex.as_str()), ("key", key_hex.as_str())]);
+        Url::parse(&auth_request.url).map_err(|e| LnurlError::InvalidUri(e.to_string()))?;
+    callback_url
+        .query_pairs_mut()
+        .append_pair("sig", sig_hex.as_str())
+        .append_pair("key", key_hex.as_str());
     let response = http_client.get(callback_url.to_string(), None).await?;
     Ok(response.json()?)
 }
 
 pub fn validate_request(url: &Url) -> Result<LnurlAuthRequestDetails, LnurlError> {
-    let k1 = url
+    let k1: String = url
         .query_pairs()
         .find(|(key, _)| key == "k1")
-        .map(|(_, v)| v)
+        .map(|(_, v)| v.into_owned())
         .ok_or(LnurlError::MissingK1)?;
 
-    let maybe_action = url
+    let maybe_action: Option<String> = url
         .query_pairs()
         .find(|(key, _)| key == "action")
-        .map(|(_, v)| v);
+        .map(|(_, v)| v.into_owned());
 
     let k1_bytes = hex::decode(&k1).map_err(|_| LnurlError::InvalidK1)?;
     if k1_bytes.len() != 32 {
@@ -106,7 +109,7 @@ pub fn validate_request(url: &Url) -> Result<LnurlAuthRequestDetails, LnurlError
         return Err(LnurlError::UnsupportedAction);
     }
 
-    let domain = url.base_url().to_ascii_lowercase();
+    let domain = url.host_str().unwrap_or_default().to_ascii_lowercase();
     if domain.is_empty() {
         return Err(LnurlError::MissingDomain);
     }
@@ -123,7 +126,7 @@ pub async fn get_derivation_path<S: LnurlAuthSigner>(
     signer: &S,
     url: Url,
 ) -> LnurlResult<Vec<ChildNumber>> {
-    let domain = url.base_url().to_ascii_lowercase();
+    let domain = url.host_str().unwrap_or_default().to_ascii_lowercase();
     if domain.is_empty() {
         return Err(LnurlError::invalid_uri("Invalid lnurl auth uri"));
     }
@@ -154,7 +157,7 @@ fn build_path_element_u32(hmac_bytes: [u8; 4]) -> u32 {
 mod tests {
     use bitcoin::bip32::ChildNumber;
     use bitcoin::secp256k1::PublicKey;
-    use bitreq::Url;
+    use url::Url;
 
     use super::*;
 

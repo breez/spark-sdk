@@ -13,7 +13,8 @@ pub use spark::operator::{OperatorConfig, OperatorError, OperatorPoolConfig};
 pub use spark::{
     Identifier, Network,
     address::{SparkAddress, SparkAddressPaymentType},
-    operator::rpc::{ConnectionManager, DefaultConnectionManager},
+    header_provider::*,
+    operator::rpc::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
         FreezeIssuerTokenResponse, InvoiceDescription, LightningSendPayment, LightningSendStatus,
@@ -52,6 +53,8 @@ pub use spark::{
 pub use wallet::SparkWallet;
 pub use wallet_builder::WalletBuilder;
 
+#[cfg(feature = "test-utils")]
+pub use spark::session_manager::tests as session_manager_tests;
 #[cfg(feature = "test-utils")]
 pub use spark::tree::tests as tree_store_tests;
 

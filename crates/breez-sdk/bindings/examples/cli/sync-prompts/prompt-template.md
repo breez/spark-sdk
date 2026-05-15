@@ -3,7 +3,7 @@
 Your job is to update the {{LANG_NAME}} CLI to match the current Rust CLI.
 
 ### What changed
-${{ steps.diff-info.outputs.diff_summary }}
+{{DIFF_SUMMARY}}
 
 ### Step 1: Learn the {{LANG_NAME}} SDK API
 Before comparing anything, read these {{LANG_NAME}} SDK snippets at `{{SNIPPET_DIR}}`:
@@ -14,7 +14,7 @@ Before comparing anything, read these {{LANG_NAME}} SDK snippets at `{{SNIPPET_D
 These snippets are compiled and tested — they are the ground truth for what methods exist and how they are called in {{LANG_NAME}}. You will need this context to identify real divergences vs naming conventions.
 
 ### Step 2: Analyze the changes
-If a diff base was provided, run: `git diff ${{ steps.diff-info.outputs.diff_base }} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
+If a diff base was provided, run: `git diff {{DIFF_BASE}} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
 The diff is a hint for what changed recently, but it may not reveal all differences.
 
 **Always read the current Rust CLI source files and compare them against the {{LANG_NAME}} CLI.** The Rust CLI is the source of truth. Read each mapped file pair (see Step 3) and perform this comparison for each pair:
@@ -26,7 +26,7 @@ For each file pair, list every SDK/builder method call in both versions:
 
 #### 2b. Compare call-by-call
 For each SDK call in the Rust file, find the corresponding call in the {{LANG_NAME}} file. Flag any of these as a **divergence**:
-- Different function name (e.g., `with_postgres_backend()` vs `create_postgres_storage()`)
+- Different function name (e.g., `with_postgres_connection_pool()` vs `create_postgres_storage()`)
 - Different arguments or parameters
 - Extra steps in one version that don't exist in the other (e.g., two-step init vs one-step)
 - Missing calls — an SDK call in Rust with no equivalent in {{LANG_NAME}}
@@ -38,7 +38,7 @@ For each SDK call in the Rust file, find the corresponding call in the {{LANG_NA
 #### 2d. Verify divergences against snippets
 For every divergence found, check the snippets you read in Step 1 (and any additional snippets from `{{SNIPPET_DIR}}` that cover the relevant command). The snippets are always up-to-date — if the Rust CLI uses a function, assume it exists in the {{LANG_NAME}} SDK unless the snippets prove otherwise.
 
-**Do NOT assume SDK API differences are "binding-level" or "expected."** If the Rust CLI calls `with_postgres_backend()` and the {{LANG_NAME}} CLI calls `create_postgres_storage() + with_storage()`, that is a divergence — check the snippets and fix it.
+**Do NOT assume SDK API differences are "binding-level" or "expected."** If the Rust CLI calls `with_postgres_connection_pool()` and the {{LANG_NAME}} CLI calls `create_postgres_storage() + with_storage()`, that is a divergence — check the snippets and fix it.
 
 Only after completing 2a–2d should you decide which divergences to fix.
 

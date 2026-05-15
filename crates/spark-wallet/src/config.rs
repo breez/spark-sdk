@@ -67,6 +67,7 @@ impl SparkWalletConfig {
                 leaf_auto_optimize_enabled: true,
                 token_outputs_optimization_options: TokenOutputsOptimizationOptions {
                     min_outputs_threshold: 50,
+                    target_output_count: 5,
                     auto_optimize_interval: Some(Duration::from_secs(60 * 2)),
                 },
                 self_payment_allowed: false,
@@ -88,6 +89,7 @@ impl SparkWalletConfig {
                 leaf_auto_optimize_enabled: true,
                 token_outputs_optimization_options: TokenOutputsOptimizationOptions {
                     min_outputs_threshold: 50,
+                    target_output_count: 5,
                     auto_optimize_interval: Some(Duration::from_secs(60 * 2)),
                 },
                 self_payment_allowed: false,
@@ -179,7 +181,15 @@ impl SparkWalletConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TokenOutputsOptimizationOptions {
+    /// Auto-consolidation fires for a token when its available output count
+    /// strictly exceeds this threshold.
     pub min_outputs_threshold: u32,
+    /// Number of outputs to produce when consolidation runs. The summed input
+    /// amount is split into this many roughly-equal outputs (any remainder
+    /// becomes a change output to the same self-address). Must be >= 1 and
+    /// strictly less than `min_outputs_threshold` so consolidation can
+    /// converge below the trigger.
+    pub target_output_count: u32,
     pub auto_optimize_interval: Option<Duration>,
 }
 
@@ -190,6 +200,78 @@ impl TokenOutputsOptimizationOptions {
                 "min_outputs_threshold must be greater than 1".to_string(),
             ));
         }
+        if self.target_output_count < 1 {
+            return Err(SparkWalletError::ValidationError(
+                "target_output_count must be at least 1".to_string(),
+            ));
+        }
+        if self.target_output_count >= self.min_outputs_threshold {
+            return Err(SparkWalletError::ValidationError(
+                "target_output_count must be strictly less than min_outputs_threshold".to_string(),
+            ));
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opts(
+        min_outputs_threshold: u32,
+        target_output_count: u32,
+    ) -> TokenOutputsOptimizationOptions {
+        TokenOutputsOptimizationOptions {
+            min_outputs_threshold,
+            target_output_count,
+            auto_optimize_interval: None,
+        }
+    }
+
+    #[test]
+    fn default_config_is_valid() {
+        SparkWalletConfig::default_config(Network::Mainnet)
+            .validate()
+            .expect("mainnet default must be valid");
+        SparkWalletConfig::default_config(Network::Regtest)
+            .validate()
+            .expect("regtest default must be valid");
+    }
+
+    #[test]
+    fn rejects_target_equal_to_threshold() {
+        let err = opts(5, 5).validate().unwrap_err();
+        assert!(
+            matches!(err, SparkWalletError::ValidationError(_)),
+            "expected ValidationError, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_target_above_threshold() {
+        opts(5, 6)
+            .validate()
+            .expect_err("target_output_count >= min_outputs_threshold must fail");
+    }
+
+    #[test]
+    fn rejects_target_zero() {
+        opts(50, 0)
+            .validate()
+            .expect_err("target_output_count of 0 must fail");
+    }
+
+    #[test]
+    fn rejects_threshold_le_one() {
+        opts(1, 1)
+            .validate()
+            .expect_err("min_outputs_threshold <= 1 must fail");
+    }
+
+    #[test]
+    fn accepts_target_below_threshold() {
+        opts(50, 5).validate().expect("5 < 50 must pass");
+        opts(3, 1).validate().expect("1 < 3 must pass");
     }
 }

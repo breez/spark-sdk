@@ -6,6 +6,7 @@ use platform_utils::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 
@@ -46,7 +47,7 @@ impl BasicAuth {
 pub struct RestClientChainService {
     base_url: String,
     network: Network,
-    client: Box<dyn HttpClient>,
+    client: Arc<dyn HttpClient>,
     max_retries: usize,
     basic_auth: Option<BasicAuth>,
     api_type: ChainApiType,
@@ -86,7 +87,7 @@ impl RestClientChainService {
         base_url: String,
         network: Network,
         max_retries: usize,
-        http_client: Box<dyn HttpClient>,
+        http_client: Arc<dyn HttpClient>,
         basic_auth: Option<BasicAuth>,
         api_type: ChainApiType,
     ) -> Self {
@@ -330,7 +331,7 @@ mod tests {
             "http://localhost:8080".to_string(),
             Network::Mainnet,
             3,
-            Box::new(mock),
+            Arc::new(mock),
             None,
             ChainApiType::Esplora,
         );

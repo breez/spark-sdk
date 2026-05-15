@@ -347,6 +347,48 @@ fn wasm_test_cmd(
                     .with_context(|| "Failed to install postgres-token-store npm dependencies.")?;
                 sh.change_dir(&current_dir);
             }
+
+            // Install mysql-storage dependencies
+            let my_storage_path = Path::new("crates/breez-sdk/wasm/js/mysql-storage");
+            if my_storage_path.exists() {
+                println!(
+                    "Installing npm dependencies in {}...",
+                    my_storage_path.display()
+                );
+                sh.change_dir(my_storage_path);
+                cmd!(sh, "npm install")
+                    .run()
+                    .with_context(|| "Failed to install mysql-storage npm dependencies.")?;
+                sh.change_dir(&current_dir);
+            }
+
+            // Install mysql-tree-store dependencies
+            let my_tree_store_path = Path::new("crates/breez-sdk/wasm/js/mysql-tree-store");
+            if my_tree_store_path.exists() {
+                println!(
+                    "Installing npm dependencies in {}...",
+                    my_tree_store_path.display()
+                );
+                sh.change_dir(my_tree_store_path);
+                cmd!(sh, "npm install")
+                    .run()
+                    .with_context(|| "Failed to install mysql-tree-store npm dependencies.")?;
+                sh.change_dir(&current_dir);
+            }
+
+            // Install mysql-token-store dependencies
+            let my_token_store_path = Path::new("crates/breez-sdk/wasm/js/mysql-token-store");
+            if my_token_store_path.exists() {
+                println!(
+                    "Installing npm dependencies in {}...",
+                    my_token_store_path.display()
+                );
+                sh.change_dir(my_token_store_path);
+                cmd!(sh, "npm install")
+                    .run()
+                    .with_context(|| "Failed to install mysql-token-store npm dependencies.")?;
+                sh.change_dir(&current_dir);
+            }
         }
 
         let package_dir = pkg

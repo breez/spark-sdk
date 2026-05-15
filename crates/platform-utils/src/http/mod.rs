@@ -1,8 +1,9 @@
 //! HTTP client abstraction for cross-platform requests.
 //!
-//! Uses bitreq on native platforms and reqwest on WASM.
+//! Uses reqwest on both native and WASM targets.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -41,42 +42,6 @@ impl HttpError {
     }
 }
 
-// Native: bitreq error conversion
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-impl From<bitreq::Error> for HttpError {
-    fn from(err: bitreq::Error) -> Self {
-        let err_str = format!("{err:?}");
-        match &err {
-            bitreq::Error::IoError(io_err) => {
-                // Check if it's a timeout error
-                if io_err.kind() == std::io::ErrorKind::TimedOut {
-                    Self::Timeout(err_str)
-                } else {
-                    Self::Connect(err_str)
-                }
-            }
-            bitreq::Error::InvalidUtf8InBody(_) | bitreq::Error::InvalidUtf8InResponse => {
-                Self::Decode(err_str)
-            }
-            // Redirect-related errors
-            bitreq::Error::TooManyRedirections
-            | bitreq::Error::InfiniteRedirectionLoop
-            | bitreq::Error::RedirectLocationMissing => Self::Redirect(err_str),
-            // Connection errors
-            bitreq::Error::AddressNotFound => Self::Connect(err_str),
-            // Request/URL errors
-            bitreq::Error::InvalidUrl(_) => Self::Request(err_str),
-            // Body errors
-            bitreq::Error::BodyOverflow => Self::Body(err_str),
-            // Other errors
-            bitreq::Error::Other(msg) => Self::Other((*msg).to_string()),
-            _ => Self::Other(err_str),
-        }
-    }
-}
-
-// WASM: reqwest error conversion
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
 impl From<reqwest::Error> for HttpError {
     fn from(err: reqwest::Error) -> Self {
         let mut err_str = err.to_string();
@@ -108,24 +73,11 @@ impl From<reqwest::Error> for HttpError {
     }
 }
 
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-mod native;
+mod client;
 
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-mod wasm;
+pub use client::ReqwestHttpClient;
 
-// Re-export platform-specific clients
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-pub use native::BitreqHttpClient;
-
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-pub use wasm::ReqwestHttpClient;
-
-/// Default HTTP client type for the current platform.
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-pub type DefaultHttpClient = BitreqHttpClient;
-
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+/// Default HTTP client type.
 pub type DefaultHttpClient = ReqwestHttpClient;
 
 /// Default request timeout in seconds.
@@ -155,8 +107,8 @@ impl HttpResponse {
 
 /// HTTP client trait for making requests.
 ///
-/// This trait provides a platform-agnostic interface for HTTP operations.
-/// Implementations use bitreq on native platforms and reqwest on WASM.
+/// This trait provides a platform-agnostic interface for HTTP operations
+/// implemented on top of reqwest.
 #[macros::async_trait]
 pub trait HttpClient: Send + Sync {
     /// Makes a GET request.
@@ -184,13 +136,6 @@ pub trait HttpClient: Send + Sync {
 }
 
 /// Create a new HTTP client with the given user agent.
-pub fn create_http_client(user_agent: Option<&str>) -> Box<dyn HttpClient> {
-    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-    {
-        Box::new(BitreqHttpClient::new(user_agent.map(String::from)))
-    }
-    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-    {
-        Box::new(ReqwestHttpClient::new(user_agent.map(String::from)))
-    }
+pub fn create_http_client(user_agent: Option<&str>) -> Arc<dyn HttpClient> {
+    Arc::new(ReqwestHttpClient::new(user_agent.map(String::from)))
 }

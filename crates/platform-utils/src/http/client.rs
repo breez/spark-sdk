@@ -1,21 +1,35 @@
-//! WASM HTTP client using reqwest.
+//! HTTP client using reqwest for both native and WASM targets.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use super::{HttpClient, HttpError, HttpResponse, REQUEST_TIMEOUT};
 
-/// HTTP client implementation using reqwest for WASM platforms.
+/// HTTP client implementation backed by reqwest.
 pub struct ReqwestHttpClient {
     client: reqwest::Client,
 }
 
 impl ReqwestHttpClient {
     /// Create a new `ReqwestHttpClient` with an optional user agent.
+    ///
+    /// Native targets layer HTTP/2 and TCP keepalives on top of reqwest's
+    /// defaults (uncapped idle pool, 90s idle timeout, `TCP_NODELAY`) so a
+    /// long-lived shared client survives intermediaries that reap idle HTTP/2
+    /// flows. On WASM the browser owns connection management and these knobs
+    /// aren't exposed.
     pub fn new(user_agent: Option<String>) -> Self {
         let mut builder = reqwest::Client::builder();
         if let Some(ua) = user_agent {
             builder = builder.user_agent(ua);
+        }
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        {
+            builder = builder
+                .tcp_keepalive(Some(Duration::from_mins(1)))
+                .http2_keep_alive_interval(Duration::from_secs(30))
+                .http2_keep_alive_timeout(Duration::from_secs(10))
+                .http2_keep_alive_while_idle(true);
         }
         let client = match builder.build() {
             Ok(client) => client,
