@@ -41,6 +41,26 @@ Future<void> withRestChainService(SdkBuilder builder) async {
   // ANCHOR_END: with-rest-chain-service
 }
 
+Future<void> withSharedRestChainService(SdkBuilder builder) async {
+  // ANCHOR: with-shared-rest-chain-service
+  // Construct one chain service handle and reuse it across every SdkBuilder
+  // — they share a single pooled HTTP client.
+  String url = "<your REST chain service URL>";
+  var chainApiType = ChainApiType.mempoolSpace;
+  var optionalCredentials = Credentials(
+    username: "<username>",
+    password: "<password>",
+  );
+  final chainService = newRestChainService(
+    url: url,
+    network: Network.mainnet,
+    apiType: chainApiType,
+    credentials: optionalCredentials,
+  );
+  builder.withChainService(handle: chainService);
+  // ANCHOR_END: with-shared-rest-chain-service
+}
+
 Future<void> withKeySet(SdkBuilder builder) async {
   // ANCHOR: with-key-set
   var keySetType = KeySetType.default_;

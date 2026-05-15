@@ -41,6 +41,26 @@ func withRestChainService(builder: SdkBuilder) async {
     // ANCHOR_END: with-rest-chain-service
 }
 
+func withSharedRestChainService(builder: SdkBuilder) async {
+    // ANCHOR: with-shared-rest-chain-service
+    // Construct one chain service handle and reuse it across every SdkBuilder
+    // — they share a single pooled HTTP client.
+    let url = "<your REST chain service URL>"
+    let chainApiType = ChainApiType.mempoolSpace
+    let optionalCredentials = Credentials(
+        username: "<username>",
+        password: "<password>"
+    )
+    let chainService = newRestChainService(
+        url: url,
+        network: Network.mainnet,
+        apiType: chainApiType,
+        credentials: optionalCredentials
+    )
+    await builder.withChainService(chainService: chainService)
+    // ANCHOR_END: with-shared-rest-chain-service
+}
+
 func withKeySet(builder: SdkBuilder) async {
     // ANCHOR: with-key-set
     let keySetType = KeySetType.default

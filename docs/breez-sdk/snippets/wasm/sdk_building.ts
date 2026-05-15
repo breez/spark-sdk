@@ -4,7 +4,8 @@ import {
   defaultPostgresStorageConfig,
   createPostgresConnectionPool,
   defaultMysqlStorageConfig,
-  createMysqlConnectionPool
+  createMysqlConnectionPool,
+  newRestChainService
 } from '@breeztech/breez-sdk-spark'
 import type {
   ProvisionalPayment,
@@ -130,6 +131,21 @@ const exampleWithRestChainService = async (builder: SdkBuilder) => {
   }
   builder = builder.withRestChainService(url, chainApiType, optionalCredentials)
   // ANCHOR_END: with-rest-chain-service
+}
+
+const exampleWithSharedRestChainService = async (builder: SdkBuilder) => {
+  // ANCHOR: with-shared-rest-chain-service
+  // Construct one chain service and reuse it across every SdkBuilder —
+  // they share a single pooled HTTP client.
+  const url = '<your REST chain service URL>'
+  const chainApiType = 'mempoolSpace'
+  const optionalCredentials: Credentials = {
+    username: '<username>',
+    password: '<password>'
+  }
+  const chainService = newRestChainService(url, 'mainnet', chainApiType, optionalCredentials)
+  builder = builder.withChainService(chainService)
+  // ANCHOR_END: with-shared-rest-chain-service
 }
 
 const exampleWithKeySet = async (builder: SdkBuilder) => {

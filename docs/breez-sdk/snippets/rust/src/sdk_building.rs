@@ -44,6 +44,29 @@ pub(crate) fn with_rest_chain_service(builder: SdkBuilder) -> SdkBuilder {
     // ANCHOR_END: with-rest-chain-service
 }
 
+pub(crate) fn with_shared_rest_chain_service(builder: SdkBuilder) -> SdkBuilder {
+    // ANCHOR: with-shared-rest-chain-service
+    // Construct one chain service handle and reuse it across every SdkBuilder
+    // — they share a single pooled HTTP client.
+    let url = "<your REST chain service URL>".to_string();
+    let chain_api_type = ChainApiType::MempoolSpace;
+    let optional_credentials = Credentials {
+        username: "<username>".to_string(),
+        password: "<password>".to_string(),
+    };
+    let handle = new_rest_chain_service(
+        url,
+        Network::Mainnet,
+        chain_api_type,
+        Some(optional_credentials),
+    );
+
+    // The Rust core builder takes an `Arc<dyn BitcoinChainService>`, so call
+    // `.inner()` on the handle. All non-Rust bindings pass the handle directly.
+    builder.with_chain_service(handle.inner())
+    // ANCHOR_END: with-shared-rest-chain-service
+}
+
 pub(crate) fn with_key_set(builder: SdkBuilder) -> SdkBuilder {
     // ANCHOR: with-key-set
     let key_set_type = KeySetType::Default;

@@ -29,7 +29,7 @@ class SdkBuilding {
         // ANCHOR_END: init-sdk-advanced
     }
 
-    suspend fun withRestChainService(builder: SdkBuilder) { 
+    suspend fun withRestChainService(builder: SdkBuilder) {
         // ANCHOR: with-rest-chain-service
         val url = "<your REST chain service URL>"
         val chainApiType = ChainApiType.MEMPOOL_SPACE
@@ -43,6 +43,26 @@ class SdkBuilding {
             credentials = optionalCredentials
         )
         // ANCHOR_END: with-rest-chain-service
+    }
+
+    suspend fun withSharedRestChainService(builder: SdkBuilder) {
+        // ANCHOR: with-shared-rest-chain-service
+        // Construct one chain service handle and reuse it across every SdkBuilder
+        // — they share a single pooled HTTP client.
+        val url = "<your REST chain service URL>"
+        val chainApiType = ChainApiType.MEMPOOL_SPACE
+        val optionalCredentials = Credentials(
+            username = "<username>",
+            password = "<password>"
+        )
+        val chainService = newRestChainService(
+            url = url,
+            network = Network.MAINNET,
+            apiType = chainApiType,
+            credentials = optionalCredentials
+        )
+        builder.withChainService(chainService)
+        // ANCHOR_END: with-shared-rest-chain-service
     }
 
     suspend fun withKeySet(builder: SdkBuilder) {

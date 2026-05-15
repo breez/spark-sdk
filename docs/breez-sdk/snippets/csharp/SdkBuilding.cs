@@ -45,6 +45,27 @@ namespace BreezSdkSnippets
             // ANCHOR_END: with-rest-chain-service
         }
 
+        async Task WithSharedRestChainService(SdkBuilder builder)
+        {
+            // ANCHOR: with-shared-rest-chain-service
+            // Construct one chain service handle and reuse it across every SdkBuilder
+            // — they share a single pooled HTTP client.
+            var url = "<your REST chain service URL>";
+            var chainApiType = ChainApiType.MempoolSpace;
+            var optionalCredentials = new Credentials(
+                username: "<username>",
+                password: "<password>"
+            );
+            var chainService = BreezSdkSparkMethods.NewRestChainService(
+                url: url,
+                network: Network.Mainnet,
+                apiType: chainApiType,
+                credentials: optionalCredentials
+            );
+            await builder.WithChainService(chainService);
+            // ANCHOR_END: with-shared-rest-chain-service
+        }
+
         async Task WithKeySet(SdkBuilder builder)
         {
             // ANCHOR: with-key-set

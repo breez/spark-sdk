@@ -6,6 +6,7 @@ from breez_sdk_spark import (
     create_postgres_connection_pool,
     default_mysql_storage_config,
     create_mysql_connection_pool,
+    new_rest_chain_service,
     Network,
     ProvisionalPayment,
     SdkBuilder,
@@ -58,6 +59,26 @@ async def with_rest_chain_service(builder: SdkBuilder):
         credentials=optional_credentials,
     )
     # ANCHOR_END: with-rest-chain-service
+
+
+async def with_shared_rest_chain_service(builder: SdkBuilder):
+    # ANCHOR: with-shared-rest-chain-service
+    # Construct one chain service handle and reuse it across every SdkBuilder
+    # — they share a single pooled HTTP client.
+    url = "<your REST chain service URL>"
+    chain_api_type = ChainApiType.MEMPOOL_SPACE
+    optional_credentials = Credentials(
+        username="<username>",
+        password="<password>",
+    )
+    chain_service = new_rest_chain_service(
+        url=url,
+        network=Network.MAINNET,
+        api_type=chain_api_type,
+        credentials=optional_credentials,
+    )
+    await builder.with_chain_service(chain_service)
+    # ANCHOR_END: with-shared-rest-chain-service
 
 
 async def with_key_set(builder: SdkBuilder):

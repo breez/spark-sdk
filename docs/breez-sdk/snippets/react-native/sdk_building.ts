@@ -5,6 +5,7 @@ import {
   Network,
   ChainApiType,
   KeySetType,
+  newRestChainService,
   type KeySetConfig,
   type ProvisionalPayment,
   type Credentials
@@ -44,6 +45,21 @@ const exampleWithRestChainService = async (builder: SdkBuilder) => {
   }
   await builder.withRestChainService(url, chainApiType, optionalCredentials)
   // ANCHOR_END: with-rest-chain-service
+}
+
+const exampleWithSharedRestChainService = async (builder: SdkBuilder) => {
+  // ANCHOR: with-shared-rest-chain-service
+  // Construct one chain service handle and reuse it across every SdkBuilder
+  // — they share a single pooled HTTP client.
+  const url = '<your REST chain service URL>'
+  const chainApiType = ChainApiType.MempoolSpace
+  const optionalCredentials: Credentials = {
+    username: '<username>',
+    password: '<password>'
+  }
+  const chainService = newRestChainService(url, Network.Mainnet, chainApiType, optionalCredentials)
+  await builder.withChainService(chainService)
+  // ANCHOR_END: with-shared-rest-chain-service
 }
 
 const exampleWithKeySet = async (builder: SdkBuilder) => {

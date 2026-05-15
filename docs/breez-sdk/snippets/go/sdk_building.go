@@ -47,6 +47,26 @@ func WithRestChainService(builder *breez_sdk_spark.SdkBuilder) {
 	// ANCHOR_END: with-rest-chain-service
 }
 
+func WithSharedRestChainService(builder *breez_sdk_spark.SdkBuilder) {
+	// ANCHOR: with-shared-rest-chain-service
+	// Construct one chain service handle and reuse it across every SdkBuilder
+	// — they share a single pooled HTTP client.
+	url := "<your REST chain service URL>"
+	chainApiType := breez_sdk_spark.ChainApiTypeMempoolSpace
+	optionalCredentials := &breez_sdk_spark.Credentials{
+		Username: "<username>",
+		Password: "<password>",
+	}
+	chainService := breez_sdk_spark.NewRestChainService(
+		url,
+		breez_sdk_spark.NetworkMainnet,
+		chainApiType,
+		optionalCredentials,
+	)
+	builder.WithChainService(chainService)
+	// ANCHOR_END: with-shared-rest-chain-service
+}
+
 func WithKeySet(builder *breez_sdk_spark.SdkBuilder) {
 	// ANCHOR: with-key-set
 	keySetType := breez_sdk_spark.KeySetTypeDefault
