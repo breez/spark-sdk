@@ -19,13 +19,13 @@ pub struct BitcoinChainServiceHandle {
 ///
 /// For one-off, non-shared use, prefer `with_rest_chain_service`.
 #[must_use]
-pub async fn new_rest_chain_service(
+pub fn new_rest_chain_service(
     url: String,
     network: Network,
     api_type: ChainApiType,
     credentials: Option<Credentials>,
 ) -> BitcoinChainServiceHandle {
     BitcoinChainServiceHandle {
-        inner: breez_sdk_spark::new_rest_chain_service(url, network, api_type, credentials).await,
+        inner: breez_sdk_spark::new_rest_chain_service(url, network, api_type, credentials).inner(),
     }
 }

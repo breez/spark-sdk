@@ -20,7 +20,7 @@ namespace BreezSdkSnippets
             await builder.WithDefaultStorage(storageDir: "./.data");
             // You can also pass your custom implementations:
             // await builder.WithStorage(<your storage implementation>)
-            // await builder.WithChainService(<your chain service implementation>)
+            // await builder.WithChainService(WrapChainService(<your chain service implementation>))
             // await builder.WithRestClient(<your rest client implementation>)
             // await builder.WithKeySet(<your key set type>, <use address index>, <account number>)
             // await builder.WithPaymentObserver(<your payment observer implementation>);

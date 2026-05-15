@@ -94,7 +94,7 @@ The SDK provides a default Bitcoin Chain Service implementation. If you want to 
 
 [With REST Chain Service](#with-rest-chain-service) builds a fresh chain service inside each SDK instance. Server processes hosting many wallets at once can share a single REST chain service between every SDK, so they reuse the same pooled HTTP client (and its HTTP/2 connection pool) instead of each opening a fresh one.
 
-Construct one via {{#name new_rest_chain_service}} and pass it to each {{#name SdkBuilder}} via {{#name with_chain_service}}. All SDK instances sharing the chain service must be configured for the same network.
+Construct one via {{#name new_rest_chain_service}} and pass the returned handle to each {{#name SdkBuilder}} via {{#name with_chain_service}}. In Rust the constructor returns an `Arc<BitcoinChainServiceHandle>`; call `.inner()` on it to extract the `Arc<dyn BitcoinChainService>` that `with_chain_service` accepts. All other bindings take the handle directly. All SDK instances sharing the chain service must be configured for the same network.
 
 <h2 id="with-fiat-service">
     <a class="header" href="#with-fiat-service">With Fiat Service</a>

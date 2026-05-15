@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::{
-    BitcoinChainService, BreezSdk, Config, ConnectionManager, Credentials, FiatService,
+    BitcoinChainServiceHandle, BreezSdk, Config, ConnectionManager, Credentials, FiatService,
     KeySetConfig, PaymentObserver, RestClient, SdkError, Seed, SessionManager,
     SspConnectionManager, Storage, chain::rest_client::ChainApiType,
 };
@@ -58,9 +58,27 @@ impl SdkBuilder {
     /// Sets the chain service to be used by the SDK.
     /// Arguments:
     /// - `chain_service`: The chain service to be used.
-    pub async fn with_chain_service(&self, chain_service: Arc<dyn BitcoinChainService>) {
+    ///   Sets the chain service to be used by the SDK.
+    ///
+    /// The bindings API takes a [`BitcoinChainServiceHandle`] rather than an
+    /// `Arc<dyn BitcoinChainService>`. The handle is an opaque `UniFFI`  Object
+    /// wrapping the underlying trait pointer privately on the Rust side, so
+    /// internal SDK calls dispatch directly to the implementation without
+    /// round-tripping through `UniFFI`'s `with_foreign` trait wrapper. (A raw
+    /// `Arc<dyn>` would force every method call to hop back through FFI even
+    /// in pure-Rust paths, and the async work inside would then run without
+    /// the surrounding tokio runtime context — see [`BitcoinChainServiceHandle`]
+    /// for the full rationale.)
+    ///
+    /// To use a Rust-built REST chain service, get a handle from
+    /// [`new_rest_chain_service`]. To use a foreign-language implementation
+    /// of `BitcoinChainService`, wrap it via [`wrap_chain_service`].
+    ///
+    /// Arguments:
+    /// - `chain_service`: The chain service handle to be used.
+    pub async fn with_chain_service(&self, chain_service: Arc<BitcoinChainServiceHandle>) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_chain_service(chain_service);
+        *builder = builder.clone().with_chain_service(chain_service.inner());
     }
 
     /// Sets the REST chain service to be used by the SDK.
