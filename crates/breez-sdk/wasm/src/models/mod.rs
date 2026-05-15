@@ -633,7 +633,8 @@ pub struct Config {
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
-    pub optimization_config: OptimizationConfig,
+    pub leaf_optimization_config: LeafOptimizationConfig,
+    pub token_optimization_config: TokenOptimizationConfig,
     pub stable_balance_config: Option<StableBalanceConfig>,
     /// Maximum number of concurrent transfer claims.
     ///
@@ -669,11 +670,17 @@ pub struct SparkSspConfig {
     pub schema_endpoint: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationConfig)]
-pub struct OptimizationConfig {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::LeafOptimizationConfig)]
+pub struct LeafOptimizationConfig {
     pub auto_enabled: bool,
     pub multiplicity: u8,
-    pub token_target_output_count: u32,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TokenOptimizationConfig)]
+pub struct TokenOptimizationConfig {
+    pub auto_enabled: bool,
+    pub target_output_count: u32,
+    pub min_outputs_threshold: u32,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::StableBalanceToken)]

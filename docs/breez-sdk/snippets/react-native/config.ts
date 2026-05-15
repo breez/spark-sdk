@@ -2,7 +2,6 @@ import {
   defaultConfig,
   Network,
   MaxFee,
-  OptimizationConfig,
   StableBalanceConfig
 } from '@breeztech/breez-sdk-spark-react-native'
 
@@ -40,7 +39,8 @@ const exampleConfigurePrivateEnabledDefault = () => {
 const exampleConfigureOptimizationConfiguration = () => {
   // ANCHOR: optimization-configuration
   const config = defaultConfig(Network.Mainnet)
-  config.optimizationConfig = { autoEnabled: true, multiplicity: 1, tokenTargetOutputCount: 5 }
+  config.leafOptimizationConfig = { autoEnabled: true, multiplicity: 1 }
+  config.tokenOptimizationConfig = { autoEnabled: true, targetOutputCount: 5, minOutputsThreshold: 50 }
   // ANCHOR_END: optimization-configuration
   console.log('Config:', config)
 }

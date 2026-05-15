@@ -694,12 +694,19 @@ impl SdkBuilder {
             .with_user_agent(Some(user_agent.clone()));
         spark_wallet_config.service_provider_config.user_agent = Some(user_agent.clone());
         spark_wallet_config.leaf_auto_optimize_enabled =
-            self.config.optimization_config.auto_enabled;
+            self.config.leaf_optimization_config.auto_enabled;
         spark_wallet_config.leaf_optimization_options.multiplicity =
-            self.config.optimization_config.multiplicity;
-        spark_wallet_config
-            .token_outputs_optimization_options
-            .target_output_count = self.config.optimization_config.token_target_output_count;
+            self.config.leaf_optimization_config.multiplicity;
+
+        let token_opt = &self.config.token_optimization_config;
+        let token_options = &mut spark_wallet_config.token_outputs_optimization_options;
+        token_options.target_output_count = token_opt.target_output_count;
+        token_options.min_outputs_threshold = token_opt.min_outputs_threshold;
+        // `auto_enabled == false` disables periodic token-output consolidation;
+        // when enabled we keep the network default interval.
+        if !token_opt.auto_enabled {
+            token_options.auto_optimize_interval = None;
+        }
         spark_wallet_config.max_concurrent_claims = self.config.max_concurrent_claims;
 
         let shutdown_sender = watch::channel::<()>(()).0;

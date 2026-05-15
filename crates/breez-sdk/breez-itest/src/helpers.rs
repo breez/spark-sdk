@@ -1629,7 +1629,7 @@ pub async fn build_sdk_with_postgres(
     // may see a temporarily lower balance (old leaves spent, new leaves not yet visible).
     // Spark will soon add visibility into pending incoming funds, which should allow
     // removing this limitation.
-    config.optimization_config.auto_enabled = false;
+    config.leaf_optimization_config.auto_enabled = false;
 
     let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
 
@@ -1683,7 +1683,7 @@ pub async fn build_sdk_with_mysql(
     config.real_time_sync_server_url = None;
     // Disable auto-optimization to avoid balance discrepancies when multiple instances run
     // concurrently. Same rationale as build_sdk_with_postgres.
-    config.optimization_config.auto_enabled = false;
+    config.leaf_optimization_config.auto_enabled = false;
 
     let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
 

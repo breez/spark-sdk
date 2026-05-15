@@ -2,13 +2,14 @@ import logging
 from breez_sdk_spark import (
     default_config,
     Network,
+    LeafOptimizationConfig,
     MaxFee,
-    OptimizationConfig,
     SparkConfig,
     SparkSigningOperator,
     SparkSspConfig,
     StableBalanceConfig,
     StableBalanceToken,
+    TokenOptimizationConfig,
 )
 
 
@@ -44,8 +45,11 @@ async def configure_private_enabled_default():
 async def configure_optimization_configuration():
     # ANCHOR: optimization-configuration
     config = default_config(network=Network.MAINNET)
-    config.optimization_config = OptimizationConfig(
-        auto_enabled=True, multiplicity=1, token_target_output_count=5
+    config.leaf_optimization_config = LeafOptimizationConfig(
+        auto_enabled=True, multiplicity=1
+    )
+    config.token_optimization_config = TokenOptimizationConfig(
+        auto_enabled=True, target_output_count=5, min_outputs_threshold=50
     )
     # ANCHOR_END: optimization-configuration
     logging.info(f"Config: {config}")
