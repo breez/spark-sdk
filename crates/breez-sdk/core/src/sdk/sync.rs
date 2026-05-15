@@ -1,14 +1,11 @@
-use platform_utils::time::{Duration, Instant, SystemTime};
+use platform_utils::time::{Instant, SystemTime};
 use platform_utils::tokio;
-use spark_wallet::WalletEvent;
 use std::sync::Arc;
-use tokio::sync::watch;
-use tracing::{Instrument, debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use super::{
     BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncRequest, SyncType,
-    helpers::{BalanceWatcher, update_balances},
-    parse_input,
+    helpers::update_balances, parse_input,
 };
 use crate::{
     DepositInfo, InputType, MaxFee, PaymentDetails, PaymentType,
@@ -20,186 +17,12 @@ use crate::{
     sync::SparkSyncService,
     utils::{
         deposit_chain_syncer::{DepositChainSyncer, TxOutput},
-        payments::get_payment_and_emit_event,
-        run_with_shutdown,
         utxo_fetcher::DetailedUtxo,
     },
 };
 
 impl BreezSdk {
-    pub(super) fn periodic_sync(&self, initial_synced_sender: watch::Sender<bool>) {
-        let sdk = self.clone();
-        let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
-        let mut subscription = sdk.spark_wallet.subscribe_events();
-        let sync_coordinator = sdk.sync_coordinator.clone();
-        let mut sync_trigger_receiver = sdk.sync_coordinator.subscribe();
-        let mut last_sync_time = SystemTime::now();
-
-        let sync_interval = u64::from(self.config.sync_interval_secs);
-        let span = tracing::Span::current();
-        tokio::spawn(async move {
-            let balance_watcher =
-                BalanceWatcher::new(sdk.spark_wallet.clone(), sdk.storage.clone());
-            let balance_watcher_id = sdk.add_event_listener(Box::new(balance_watcher)).await;
-            sdk.init_jwt().await;
-            loop {
-                tokio::select! {
-                    _ = shutdown_receiver.changed() => {
-                        if !sdk.remove_event_listener(&balance_watcher_id).await {
-                            error!("Failed to remove balance watcher listener");
-                        }
-                        info!("Deposit tracking loop shutdown signal received");
-                        return;
-                    }
-                    event = subscription.recv() => {
-                        match event {
-                            Ok(event) => {
-                                info!("Received event: {event}");
-                                trace!("Received event: {:?}", event);
-                                sdk.handle_wallet_event(event).await;
-                            }
-                            Err(e) => {
-                                error!("Failed to receive event: {e:?}");
-                            }
-                        }
-                    }
-                    sync_type_res = sync_trigger_receiver.recv() => {
-                        let Ok(sync_request) = sync_type_res else {
-                            continue;
-                        };
-                        info!("Sync trigger changed: {:?}", &sync_request);
-                        let cloned_sdk = sdk.clone();
-                        let initial_synced_sender = initial_synced_sender.clone();
-                        if let Some(true) = Box::pin(run_with_shutdown(shutdown_receiver.clone(), "Sync trigger changed", async move {
-                            if let Err(e) = cloned_sdk.sync_wallet_internal(&sync_request).await {
-                                error!("Failed to sync wallet: {e:?}");
-                                let () = sync_request.reply(Some(e)).await;
-                                return false;
-                            }
-                            // Notify that the requested sync is complete
-                            let () = sync_request.reply(None).await;
-                            // If this was a full sync, notify the initial synced watcher
-                            if sync_request.sync_type.contains(SyncType::Full) {
-                                if let Err(e) = initial_synced_sender.send(true) {
-                                    error!("Failed to send initial synced signal: {e:?}");
-                                }
-                                return true;
-                            }
-
-                            false
-                        })).await {
-                            last_sync_time = SystemTime::now();
-                        }
-                    }
-
-                    // Only executes on mainnet with API key
-                    () = sdk.jwt_refresh_interval() => {
-                        let token = match sdk.new_jwt().await {
-                            Ok(token) => token,
-                            Err(err) => {
-                                warn!("Could not fetch new JWT: {err}");
-                                continue;
-                            }
-                        };
-                        sdk.set_and_save_jwt(token).await;
-                    }
-
-                    // Ensure we sync at least the configured interval
-                    () = tokio::time::sleep(Duration::from_secs(10)) => {
-                        let now = SystemTime::now();
-                        if let Ok(elapsed) = now.duration_since(last_sync_time) && elapsed.as_secs() >= sync_interval {
-                            sync_coordinator.trigger_sync_no_wait(SyncType::Full, false).await;
-                        }
-                    }
-                }
-            }
-        }.instrument(span));
-    }
-
-    pub(super) async fn handle_wallet_event(&self, event: WalletEvent) {
-        match event {
-            WalletEvent::DepositConfirmed(_) => {
-                info!("Deposit confirmed");
-            }
-            WalletEvent::StreamConnected => {
-                info!("Stream connected");
-            }
-            WalletEvent::StreamDisconnected => {
-                info!("Stream disconnected");
-            }
-            WalletEvent::Synced => {
-                info!("Synced");
-                self.sync_coordinator
-                    .trigger_sync_no_wait(super::SyncType::Full, true)
-                    .await;
-            }
-            WalletEvent::TransferClaimed(transfer) => {
-                info!("Transfer claimed");
-                // Drop any unclaimed-deposit record for this outpoint
-                // independently of payment ingestion below, so a
-                // Payment::try_from failure does not leave the record
-                // lingering.
-                if let Some((tx_id, vout)) = claim_static_deposit_outpoint(&transfer) {
-                    self.cleanup_claimed_deposit(&tx_id, vout).await;
-                }
-                if let Ok(mut payment) = Payment::try_from(transfer) {
-                    // Insert the payment into storage to make it immediately available for listing
-                    if let Err(e) = self.storage.insert_payment(payment.clone()).await {
-                        error!("Failed to insert succeeded payment: {e:?}");
-                    }
-
-                    // Ensure potential lnurl metadata is synced before emitting the event.
-                    // Note this is already synced at TransferClaimStarting, but it might not have completed yet, so that could race.
-                    self.sync_single_lnurl_metadata(&mut payment).await;
-
-                    // Update balance before emitting the event so that listeners can immediately
-                    // query the new balance.
-                    if let Err(e) =
-                        update_balances(self.spark_wallet.clone(), self.storage.clone()).await
-                    {
-                        error!("Failed to update balances before PaymentSucceeded event: {e:?}");
-                    }
-
-                    // Fetch the payment to include already stored metadata
-                    get_payment_and_emit_event(&self.storage, &self.event_emitter, payment).await;
-                }
-                self.sync_coordinator
-                    .trigger_sync_no_wait(super::SyncType::WalletState, true)
-                    .await;
-            }
-            WalletEvent::TransferClaimStarting(transfer) => {
-                info!("Transfer claim starting");
-                if let Ok(mut payment) = Payment::try_from(transfer) {
-                    // Insert the payment into storage to make it immediately available for listing
-                    if let Err(e) = self.storage.insert_payment(payment.clone()).await {
-                        error!("Failed to insert pending payment: {e:?}");
-                    }
-
-                    // Ensure potential lnurl metadata is synced before emitting the event
-                    self.sync_single_lnurl_metadata(&mut payment).await;
-
-                    // Fetch the payment to include already stored metadata
-                    get_payment_and_emit_event(&self.storage, &self.event_emitter, payment).await;
-                }
-                self.sync_coordinator
-                    .trigger_sync_no_wait(super::SyncType::WalletState, true)
-                    .await;
-            }
-            WalletEvent::Optimization(event) => {
-                info!("Optimization event: {:?}", event);
-            }
-        }
-    }
-
-    /// Removes the unclaimed-deposit storage record for `(tx_id, vout)`,
-    /// logging on failure rather than propagating the error.
-    async fn cleanup_claimed_deposit(&self, tx_id: &str, vout: u32) {
-        if let Err(e) = self.storage.delete_deposit(tx_id.to_string(), vout).await {
-            error!("Failed to delete claimed deposit {tx_id}:{vout} from storage: {e:?}");
-        }
-    }
-
-    pub(super) async fn sync_single_lnurl_metadata(&self, payment: &mut Payment) {
+    pub(in crate::sdk) async fn sync_single_lnurl_metadata(&self, payment: &mut Payment) {
         if payment.payment_type != PaymentType::Receive {
             return;
         }
@@ -650,18 +473,6 @@ impl BreezSdk {
     }
 }
 
-/// Returns the `(txid, vout)` of the on-chain UTXO claimed by this transfer,
-/// if it was produced by a static-deposit claim.
-fn claim_static_deposit_outpoint(transfer: &spark_wallet::WalletTransfer) -> Option<(String, u32)> {
-    match transfer.user_request.as_ref()? {
-        spark_wallet::SspUserRequest::ClaimStaticDeposit(info) => {
-            let vout = u32::try_from(info.output_index).ok()?;
-            Some((info.transaction_id.clone(), vout))
-        }
-        _ => None,
-    }
-}
-
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
@@ -671,9 +482,8 @@ impl BreezSdk {
         &self,
         request: SyncWalletRequest,
     ) -> Result<SyncWalletResponse, SdkError> {
-        // Use the coordinator to coalesce duplicate sync requests
-        self.sync_coordinator
-            .trigger_sync_and_wait(super::SyncType::Full, true)
+        self.runtime
+            .run_user_sync(self, super::SyncType::Full, true)
             .await?;
         Ok(SyncWalletResponse {})
     }
@@ -729,7 +539,7 @@ mod jwt {
             matches!(self.config.network, Network::Mainnet) && self.config.api_key.is_some()
         }
 
-        pub(super) async fn set_and_save_jwt(&self, token: String) {
+        pub(in crate::sdk) async fn set_and_save_jwt(&self, token: String) {
             self.partner_headers.set_token(token.clone()).await;
             if let Err(err) = self
                 .storage
@@ -740,7 +550,7 @@ mod jwt {
             }
         }
 
-        pub(super) async fn new_jwt(&self) -> Result<String, SdkError> {
+        pub(in crate::sdk) async fn new_jwt(&self) -> Result<String, SdkError> {
             let Some(api_key) = &self.config.api_key else {
                 return Err(SdkError::Generic("Missing Breez API key".to_string()));
             };
@@ -758,7 +568,7 @@ mod jwt {
             Ok(token)
         }
 
-        pub(super) async fn init_jwt(&self) {
+        pub(in crate::sdk) async fn init_jwt(&self) {
             if !self.enable_jwt() {
                 return;
             }
@@ -776,7 +586,19 @@ mod jwt {
             }
         }
 
-        pub(super) async fn jwt_refresh_interval(&self) {
+        pub(in crate::sdk) fn spawn_jwt_init(&self) {
+            use tracing::Instrument;
+            let sdk = self.clone();
+            let span = tracing::Span::current();
+            tokio::spawn(
+                async move {
+                    sdk.init_jwt().await;
+                }
+                .instrument(span),
+            );
+        }
+
+        pub(in crate::sdk) async fn jwt_refresh_interval(&self) {
             if !self.enable_jwt() {
                 return std::future::pending::<()>().await;
             }

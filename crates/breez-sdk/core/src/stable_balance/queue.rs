@@ -276,7 +276,7 @@ impl StableBalance {
     /// 2. Recovers any pending conversions from a previous session
     /// 3. Queues a cold-start auto-convert
     /// 4. Processes tasks serially (per-receive first, then auto-convert)
-    pub(super) fn spawn_conversion_worker(&self, mut shutdown_receiver: watch::Receiver<()>) {
+    pub(crate) fn spawn_conversion_worker(&self, mut shutdown_receiver: watch::Receiver<()>) {
         let stable_balance = self.clone();
         let span = tracing::Span::current();
 
@@ -330,7 +330,7 @@ impl StableBalance {
                                             // is stale until sync completes. The next Synced event
                                             // will re-queue auto-convert if there's still excess.
                                             stable_balance.queue.clear_pending_auto_convert().await;
-                                            stable_balance.trigger_sync().await;
+                                            stable_balance.emit_conversion_completed();
                                         }
                                     }
                                     PerReceiveResult::Retry => {
@@ -352,7 +352,7 @@ impl StableBalance {
                                 debug!("Conversion worker: auto-convert done (converted={converted})");
                                 stable_balance.queue.complete_task(&task).await;
                                 if converted {
-                                    stable_balance.trigger_sync().await;
+                                    stable_balance.emit_conversion_completed();
                                 }
                             }
                             ConversionTask::Deactivation(token_id) => {
@@ -367,7 +367,7 @@ impl StableBalance {
                                 debug!("Conversion worker: completed task {task:?} (converted={converted})");
                                 stable_balance.queue.complete_task(&task).await;
                                 if converted {
-                                    stable_balance.trigger_sync().await;
+                                    stable_balance.emit_conversion_completed();
                                 }
                             }
                         }

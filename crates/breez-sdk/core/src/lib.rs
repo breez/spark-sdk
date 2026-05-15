@@ -41,7 +41,9 @@ pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, StorageListPaymentsRequest,
     StoragePaymentDetailsFilter, UpdateDepositPayload, path::default_storage_path,
 };
-pub use sdk::{BreezSdk, default_config, get_spark_status, init_logging, parse_input};
+pub use sdk::{
+    BreezSdk, default_config, default_server_config, get_spark_status, init_logging, parse_input,
+};
 pub use sdk_builder::SdkBuilder;
 pub use session_manager::{Session, SessionManager, SessionManagerError};
 pub use spark_wallet::{
