@@ -22,10 +22,10 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell, oneshot, watch};
 
 use crate::{
-    BitcoinChainService, ExternalInputParser, InputType, Logger, Network, OptimizationConfig,
-    error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
-    persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter, stable_balance::StableBalance,
-    token_conversion::TokenConverter,
+    BitcoinChainService, ExternalInputParser, InputType, LeafOptimizationConfig, Logger, Network,
+    TokenOptimizationConfig, error::SdkError, events::EventEmitter, lnurl::LnurlServerClient,
+    logger, models::Config, persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter,
+    stable_balance::StableBalance, token_conversion::TokenConverter,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -195,10 +195,14 @@ pub fn default_config(network: Network) -> Config {
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
         private_enabled_default: true,
-        optimization_config: OptimizationConfig {
+        leaf_optimization_config: LeafOptimizationConfig {
             auto_enabled: true,
             multiplicity: 1,
-            token_target_output_count: 5,
+        },
+        token_optimization_config: TokenOptimizationConfig {
+            auto_enabled: true,
+            target_output_count: 5,
+            min_outputs_threshold: 50,
         },
         stable_balance_config: None,
         max_concurrent_claims: 4,
@@ -216,8 +220,7 @@ pub fn default_config(network: Network) -> Config {
 /// explicitly, so an ephemeral SDK instance stays cheap and predictable.
 ///
 /// Config fields whose background services are gated off are reset to their
-/// inactive shape: `real_time_sync_server_url` is set to `None` and
-/// `optimization_config.auto_enabled` to `false`. The SDK rejects builds where
+/// inactive shape. The SDK rejects builds where
 /// `background_tasks_enabled` is `false` and any of those fields is left in
 /// its active shape, so flip the flag via this helper rather than by hand.
 ///
@@ -243,7 +246,8 @@ pub fn default_server_config(network: Network) -> Config {
     let mut config = default_config(network);
     config.background_tasks_enabled = false;
     config.real_time_sync_server_url = None;
-    config.optimization_config.auto_enabled = false;
+    config.leaf_optimization_config.auto_enabled = false;
+    config.token_optimization_config.auto_enabled = false;
     config
 }
 
@@ -405,7 +409,8 @@ mod tests {
             let cfg = default_server_config(network);
             assert!(!cfg.background_tasks_enabled);
             assert!(cfg.real_time_sync_server_url.is_none());
-            assert!(!cfg.optimization_config.auto_enabled);
+            assert!(!cfg.leaf_optimization_config.auto_enabled);
+            assert!(!cfg.token_optimization_config.auto_enabled);
         }
     }
 

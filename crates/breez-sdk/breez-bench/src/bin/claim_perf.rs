@@ -162,7 +162,7 @@ async fn run_single_claim_benchmark(
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
     let mut sender_config = default_config(Network::Regtest);
-    sender_config.optimization_config.auto_enabled = false;
+    sender_config.leaf_optimization_config.auto_enabled = false;
     let itest_sender = build_sdk_with_tree_store_config(
         sender_dir.path().to_string_lossy().to_string(),
         sender_seed,
@@ -181,7 +181,7 @@ async fn run_single_claim_benchmark(
         .prefix("claim-bench-receiver")
         .tempdir()?;
     let mut temp_receiver_config = default_config(Network::Regtest);
-    temp_receiver_config.optimization_config.auto_enabled = false;
+    temp_receiver_config.leaf_optimization_config.auto_enabled = false;
     let mut temp_receiver = build_sdk_with_tree_store_config(
         receiver_dir.path().to_string_lossy().to_string(),
         receiver_seed,
@@ -291,7 +291,7 @@ async fn run_single_claim_benchmark(
         concurrency
     );
     let mut receiver_config = default_config(Network::Regtest);
-    receiver_config.optimization_config.auto_enabled = false;
+    receiver_config.leaf_optimization_config.auto_enabled = false;
     receiver_config.max_concurrent_claims = concurrency;
 
     // Start timing from SDK creation since claims start during initialization
