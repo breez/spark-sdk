@@ -1,4 +1,6 @@
+import breez_sdk_spark.BitcoinChainServiceHandle
 import breez_sdk_spark.BreezSdk
+import breez_sdk_spark.ChainApiType
 import breez_sdk_spark.ConnectionManager
 import breez_sdk_spark.GetInfoRequest
 import breez_sdk_spark.MysqlConnectionPool
@@ -16,6 +18,7 @@ import breez_sdk_spark.defaultConfig
 import breez_sdk_spark.defaultMysqlStorageConfig
 import breez_sdk_spark.initLogging
 import breez_sdk_spark.newConnectionManager
+import breez_sdk_spark.newRestChainService
 import breez_sdk_spark.newSspConnectionManager
 
 import kotlinx.coroutines.coroutineScope
@@ -92,6 +95,18 @@ fun benchConfig(): breez_sdk_spark.Config {
     return c
 }
 
+/**
+ * Treasurer-flavoured [benchConfig] with leaf auto-optimization disabled.
+ * The treasurer is only used to fund + receive in the closed loop; we
+ * don't care about its leaf shape, and turning auto-optimize off avoids
+ * background optimization passes running on top of every send.
+ */
+fun treasurerConfig(): breez_sdk_spark.Config {
+    val c = benchConfig()
+    c.optimizationConfig.autoEnabled = false
+    return c
+}
+
 // --- shared SDK transports ------------------------------------------------
 
 /**
@@ -108,20 +123,41 @@ class SharedHandlers private constructor(
     val mysqlPool: MysqlConnectionPool,
     val ssp: SspConnectionManager,
     val operators: ConnectionManager,
+    val chainService: BitcoinChainServiceHandle,
 ) {
     companion object {
-        fun create(mysqlUrl: String): SharedHandlers = SharedHandlers(
-            mysqlPool = createMysqlConnectionPool(defaultMysqlStorageConfig(mysqlUrl)),
-            ssp = newSspConnectionManager(null),
-            operators = newConnectionManager(null),
-        )
+        private const val REGTEST_CHAIN_URL =
+            "https://regtest-mempool.us-west-2.sparkinfra.net/api"
+
+        fun create(mysqlUrl: String): SharedHandlers {
+            val chainCreds = breez_sdk_spark.Credentials(
+                username = System.getenv("CHAIN_SERVICE_USERNAME") ?: "spark-sdk",
+                password = System.getenv("CHAIN_SERVICE_PASSWORD") ?: "mCMk1JqlBNtetUNy",
+            )
+            val mysqlConfig = defaultMysqlStorageConfig(mysqlUrl).also {
+                it.recycleTimeoutSecs = 300UL
+            }
+            return SharedHandlers(
+                mysqlPool = createMysqlConnectionPool(mysqlConfig),
+                ssp = newSspConnectionManager(null),
+                operators = newConnectionManager(null),
+                chainService = newRestChainService(
+                    url = REGTEST_CHAIN_URL,
+                    network = Network.REGTEST,
+                    apiType = ChainApiType.MEMPOOL_SPACE,
+                    credentials = chainCreds,
+                ),
+            )
+        }
     }
 }
 
 /**
  * Builds an SDK for [seed] wired to the shared transports. All callers in
  * this harness go through here so we never accidentally drop one of the
- * three handlers.
+ * shared handlers. The session manager is auto-wired by SdkBuilder on top
+ * of the shared MySQL pool (see sdk_builder.rs::build()), keyed
+ * per-(wallet, service) inside MySQL — no extra plumbing needed here.
  */
 suspend fun buildSdk(
     config: breez_sdk_spark.Config,
@@ -132,6 +168,7 @@ suspend fun buildSdk(
     builder.withMysqlConnectionPool(handlers.mysqlPool)
     builder.withSspConnectionManager(handlers.ssp)
     builder.withConnectionManager(handlers.operators)
+    builder.withChainService(handlers.chainService)
     return builder.build()
 }
 
@@ -319,7 +356,7 @@ fun fundTreasurer(opts: Map<String, String>) = runBlocking {
 
     val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, TREASURER_USER_ID))
     val handlers = SharedHandlers.create(mysqlUrl)
-    val sdk = buildSdk(benchConfig(), seed, handlers)
+    val sdk = buildSdk(treasurerConfig(), seed, handlers)
 
     try {
         // Fast path: if the locally-cached balance is already at-or-above
@@ -436,7 +473,7 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
     val handlers = SharedHandlers.create(mysqlUrl)
 
     val treasurerSeed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, TREASURER_USER_ID))
-    val treasurer = buildSdk(config, treasurerSeed, handlers)
+    val treasurer = buildSdk(treasurerConfig(), treasurerSeed, handlers)
 
     try {
         // Cached: lower bound on true balance (sync only adds incoming).
@@ -515,14 +552,22 @@ private suspend fun seedOneSender(
         val toSend = perSenderSats - balance
         println("[seed] sender $senderIdx: $balance sats → topping up by $toSend to $perSenderSats")
 
+        println("[seed] sender $senderIdx: prepareSendPayment …")
+        val tPrep = System.currentTimeMillis()
         val prepared = treasurer.prepareSendPayment(
             PrepareSendPaymentRequest(
                 paymentRequest = sparkAddr,
                 amount = BigInteger.fromLong(toSend),
             )
         )
-        treasurer.sendPayment(SendPaymentRequest(prepareResponse = prepared))
+        println("[seed] sender $senderIdx: prepareSendPayment ${System.currentTimeMillis() - tPrep}ms")
 
+        println("[seed] sender $senderIdx: sendPayment …")
+        val tSend = System.currentTimeMillis()
+        treasurer.sendPayment(SendPaymentRequest(prepareResponse = prepared))
+        println("[seed] sender $senderIdx: sendPayment ${System.currentTimeMillis() - tSend}ms")
+
+        println("[seed] sender $senderIdx: waitForBalanceIncrease …")
         waitForBalanceIncrease(
             sender,
             balance.toULong(),
@@ -551,6 +596,15 @@ fun runServer(opts: Map<String, String>) {
     val port = opts["port"]?.toIntOrNull() ?: 8080
     val runId = opts["run-id"] ?: defaultRunId()
     val outDir = Path.of(opts["out-dir"] ?: "out/$runId").also { Files.createDirectories(it) }
+
+    // Optional Rust-side tracing for diagnosing internal serialization /
+    // bottlenecks. Off by default; set --log-filter=info|debug|trace to enable.
+    opts["log-filter"]?.let { logFilter ->
+        val logDir = opts["log-dir"] ?: outDir.resolve(".trace-logs").toString()
+        Files.createDirectories(Path.of(logDir))
+        println("[server] init_logging dir=$logDir filter=$logFilter")
+        initLogging(logDir, null, logFilter)
+    }
 
     val handlers = SharedHandlers.create(mysqlUrl)
     val provider = BenchSdkProvider(masterSecret, handlers)
