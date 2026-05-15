@@ -39,10 +39,8 @@ Future<void> configurePrivateEnabledDefault() async {
 Future<void> configureOptimizationConfiguration() async {
   // ANCHOR: optimization-configuration
   var config = defaultConfig(network: Network.mainnet).copyWith(
-      leafOptimizationConfig:
-          LeafOptimizationConfig(autoEnabled: true, multiplicity: 1),
-      tokenOptimizationConfig: TokenOptimizationConfig(
-          autoEnabled: true, targetOutputCount: 5, minOutputsThreshold: 50));
+      optimizationConfig:
+          OptimizationConfig(autoEnabled: true, multiplicity: 1, tokenTargetOutputCount: 5));
   // ANCHOR_END: optimization-configuration
   print(config);
 }

@@ -679,10 +679,10 @@ async fn initialize_sdk_pair(
 
     let mut sender_config = default_config(Network::Regtest);
     if no_auto_optimize || pre_optimize.is_some() {
-        sender_config.leaf_optimization_config.auto_enabled = false;
+        sender_config.optimization_config.auto_enabled = false;
     }
     if let Some(multiplicity) = pre_optimize {
-        sender_config.leaf_optimization_config.multiplicity = multiplicity;
+        sender_config.optimization_config.multiplicity = multiplicity;
     }
     let itest_sender = build_sdk_with_tree_store_config(
         sender_path,
@@ -703,7 +703,7 @@ async fn initialize_sdk_pair(
     rand::thread_rng().fill_bytes(&mut receiver_seed);
 
     let mut receiver_config = default_config(Network::Regtest);
-    receiver_config.leaf_optimization_config.auto_enabled = false;
+    receiver_config.optimization_config.auto_enabled = false;
     let itest_receiver = build_sdk_with_tree_store_config(
         receiver_path,
         receiver_seed,
@@ -745,10 +745,10 @@ async fn build_extra_sender(
 
     let mut config = default_config(Network::Regtest);
     if no_auto_optimize || pre_optimize.is_some() {
-        config.leaf_optimization_config.auto_enabled = false;
+        config.optimization_config.auto_enabled = false;
     }
     if let Some(multiplicity) = pre_optimize {
-        config.leaf_optimization_config.multiplicity = multiplicity;
+        config.optimization_config.multiplicity = multiplicity;
     }
     let itest = build_sdk_with_tree_store_config(
         path,

@@ -63,24 +63,13 @@ This configuration option is only relevant when the SDK is initialized for the f
 
 ## Optimization configuration
 
-The SDK can automatically optimize both the Spark leaf set and a token's
-output set. Leaf optimization and token-output optimization are configured
-independently.
+The SDK can automatically optimize the Spark leaf set to maximize unilateral exit efficiency or increase payment speed. Fewer, larger leaves allow more funds to be exited unilaterally, while having more leaves enables payments without requiring swaps, improving payment speed.
 
-### Leaf optimization
+This configuration controls optimization through the following options:
 
-Leaf optimization maximizes unilateral exit efficiency or increases payment speed. Fewer, larger leaves allow more funds to be exited unilaterally, while having more leaves enables payments without requiring swaps, improving payment speed.
-
-- **Automatic optimization enabled**: whether leaf optimization runs automatically when a payment is sent or received. Enabled by default.
+- **Automatic optimization enabled**: whether optimization runs automatically when a payment is sent or received. Enabled by default.
 - **Multiplicity**: the desired multiplicity for the leaf set. Default value is 1. Setting it to 0 fully optimizes for unilateral exit efficiency. Setting it to a value greater than 0 also optimizes for payment speed, with higher values prioritizing payment speed more aggressively at the cost of higher unilateral exit fees. Values above 5 are intended for high-throughput server environments that require maximum TPS and are not recommended for end-user wallets.
-
-### Token-output optimization
-
-Token-output optimization automatically consolidates a token's available outputs to keep the output set small while preserving enough distinct outputs for concurrent sends.
-
-- **Automatic optimization enabled**: whether token-output consolidation runs automatically. Enabled by default.
-- **Target output count**: the number of token outputs to produce when consolidation fires. Instead of collapsing a token's outputs into a single output (which would serialize subsequent sends), the SDK splits the consolidated balance across this many outputs of roughly equal value. Higher values preserve concurrency for parallel sends at the cost of a slightly larger output set. Must be at least 1 and strictly less than the minimum outputs threshold. Default value is 5.
-- **Minimum outputs threshold**: the output count that triggers per-token auto-consolidation. Consolidation runs for a token once its available output count exceeds this value. Must be greater than 1. Default value is 50.
+- **Token target output count**: the number of token outputs to produce when token-output auto-consolidation fires. Auto-consolidation triggers per-token once the wallet exceeds its available-outputs threshold for that token; instead of collapsing them into a single output (which would serialize subsequent sends), the SDK splits the consolidated balance across this many outputs of roughly equal value. Higher values preserve concurrency for parallel sends at the cost of a slightly larger output set. Must be at least 1 and strictly less than the underlying outputs threshold. Default value is 5.
 
 See [Custom leaf optimization](./optimize.md) for more information and recommendations on how to configure optimization.
 

@@ -633,7 +633,7 @@ async fn initialize_regtest_sdk_pair(
 
     let mut sender_config = default_config(Network::Regtest);
     if let Some(multiplicity) = sender_multiplicity {
-        sender_config.leaf_optimization_config.multiplicity = multiplicity;
+        sender_config.optimization_config.multiplicity = multiplicity;
     }
 
     let itest_sender =
@@ -648,7 +648,7 @@ async fn initialize_regtest_sdk_pair(
     rand::thread_rng().fill_bytes(&mut receiver_seed);
 
     let mut receiver_config = default_config(Network::Regtest);
-    receiver_config.leaf_optimization_config.multiplicity = receiver_multiplicity;
+    receiver_config.optimization_config.multiplicity = receiver_multiplicity;
 
     let itest_receiver =
         build_sdk_with_custom_config(receiver_path, receiver_seed, receiver_config, None, true)
@@ -699,7 +699,7 @@ async fn initialize_mainnet_sdk(
     let mut config = default_config(Network::Mainnet);
     config.api_key = breez_api_key;
     if let Some(multiplicity) = multiplicity {
-        config.leaf_optimization_config.multiplicity = multiplicity;
+        config.optimization_config.multiplicity = multiplicity;
     }
 
     let seed = Seed::Mnemonic {

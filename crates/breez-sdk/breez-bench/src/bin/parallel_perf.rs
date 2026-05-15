@@ -601,11 +601,11 @@ async fn initialize_sdk_pair(
     // Disable auto-optimization if requested, or if we're doing pre-optimization
     // (to avoid auto-opt triggering after funding)
     if no_auto_optimize || pre_optimize.is_some() {
-        sender_config.leaf_optimization_config.auto_enabled = false;
+        sender_config.optimization_config.auto_enabled = false;
     }
     // Set multiplicity if pre-optimization is requested
     if let Some(multiplicity) = pre_optimize {
-        sender_config.leaf_optimization_config.multiplicity = multiplicity;
+        sender_config.optimization_config.multiplicity = multiplicity;
     }
     let itest_sender = build_sdk_with_tree_store_config(
         sender_path,
@@ -628,7 +628,7 @@ async fn initialize_sdk_pair(
 
     let mut receiver_config = default_config(Network::Regtest);
     // Disable auto-optimization for receiver if requested
-    receiver_config.leaf_optimization_config.auto_enabled = false;
+    receiver_config.optimization_config.auto_enabled = false;
     let itest_receiver = build_sdk_with_tree_store_config(
         receiver_path,
         receiver_seed,

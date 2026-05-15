@@ -594,15 +594,7 @@ pub struct Config {
     /// Leaf optimization controls the denominations of leaves that are held in the wallet.
     /// Fewer, bigger leaves allow for more funds to be exited unilaterally.
     /// More leaves allow payments to be made without needing a swap, reducing payment latency.
-    pub leaf_optimization_config: LeafOptimizationConfig,
-
-    /// Configuration for token-output optimization.
-    ///
-    /// Token-output optimization controls automatic consolidation of a token's
-    /// available outputs. Keeping the output set small reduces transaction size,
-    /// while keeping enough distinct outputs preserves concurrency for parallel
-    /// sends.
-    pub token_optimization_config: TokenOptimizationConfig,
+    pub optimization_config: OptimizationConfig,
 
     /// Configuration for automatic conversion of Bitcoin to stable tokens.
     ///
@@ -623,10 +615,9 @@ pub struct Config {
     pub spark_config: Option<SparkConfig>,
 }
 
-/// Configuration for leaf optimization.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct LeafOptimizationConfig {
+pub struct OptimizationConfig {
     /// Whether automatic leaf optimization is enabled.
     ///
     /// If set to true, the SDK will automatically optimize the leaf set when it changes.
@@ -646,42 +637,21 @@ pub struct LeafOptimizationConfig {
     ///
     /// Default value is 1.
     pub multiplicity: u8,
-}
-
-/// Configuration for token-output optimization.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TokenOptimizationConfig {
-    /// Whether automatic token-output consolidation is enabled.
-    ///
-    /// If set to true, the SDK will periodically consolidate a token's outputs
-    /// once their count exceeds [`Self::min_outputs_threshold`]. Otherwise, no
-    /// automatic consolidation is performed.
-    ///
-    /// Default value is true.
-    pub auto_enabled: bool,
     /// Number of token outputs to produce when token-output auto-consolidation
     /// fires.
     ///
-    /// Instead of collapsing a token's outputs into a single output (which
-    /// serializes subsequent payments), the SDK splits the consolidated balance
-    /// across this many outputs of roughly equal value. Higher values preserve
-    /// concurrency for parallel sends at the cost of a slightly larger output
-    /// set.
+    /// Auto-consolidation triggers per-token when the wallet has more than the
+    /// configured threshold of available outputs for that token; instead of
+    /// collapsing them into a single output (which serializes subsequent
+    /// payments), the SDK splits the consolidated balance across this many
+    /// outputs of roughly equal value. Higher values preserve concurrency for
+    /// parallel sends at the cost of a slightly larger output set.
     ///
-    /// Must be >= 1 and strictly less than [`Self::min_outputs_threshold`].
+    /// Must be >= 1 and strictly less than the underlying
+    /// `min_outputs_threshold` (default 50).
     ///
     /// Default value is 5.
-    pub target_output_count: u32,
-    /// Output count that triggers per-token auto-consolidation.
-    ///
-    /// Auto-consolidation triggers for a token when its available output count
-    /// strictly exceeds this threshold.
-    ///
-    /// Must be greater than 1.
-    ///
-    /// Default value is 50.
-    pub min_outputs_threshold: u32,
+    pub token_target_output_count: u32,
 }
 
 /// A stable token that can be used for automatic balance conversion.
@@ -859,24 +829,6 @@ impl Config {
                     "default_active_label '{default_label}' not found in tokens list"
                 )));
             }
-        }
-
-        let token_opt = &self.token_optimization_config;
-        if token_opt.min_outputs_threshold <= 1 {
-            return Err(SdkError::InvalidInput(
-                "token_optimization_config.min_outputs_threshold must be greater than 1"
-                    .to_string(),
-            ));
-        }
-        if token_opt.target_output_count < 1 {
-            return Err(SdkError::InvalidInput(
-                "token_optimization_config.target_output_count must be at least 1".to_string(),
-            ));
-        }
-        if token_opt.target_output_count >= token_opt.min_outputs_threshold {
-            return Err(SdkError::InvalidInput(
-                "token_optimization_config.target_output_count must be strictly less than min_outputs_threshold".to_string(),
-            ));
         }
 
         Ok(())

@@ -21,10 +21,10 @@ use tokio::sync::{Mutex, OnceCell, oneshot, watch};
 
 use crate::partner_header_provider::BreezPartnerHeaderProvider;
 use crate::{
-    BitcoinChainService, ExternalInputParser, InputType, LeafOptimizationConfig, Logger, Network,
-    TokenOptimizationConfig, error::SdkError, events::EventEmitter, lnurl::LnurlServerClient,
-    logger, models::Config, persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter,
-    stable_balance::StableBalance, token_conversion::TokenConverter,
+    BitcoinChainService, ExternalInputParser, InputType, Logger, Network, OptimizationConfig,
+    error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
+    persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter, stable_balance::StableBalance,
+    token_conversion::TokenConverter,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -194,14 +194,10 @@ pub fn default_config(network: Network) -> Config {
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
         private_enabled_default: true,
-        leaf_optimization_config: LeafOptimizationConfig {
+        optimization_config: OptimizationConfig {
             auto_enabled: true,
             multiplicity: 1,
-        },
-        token_optimization_config: TokenOptimizationConfig {
-            auto_enabled: true,
-            target_output_count: 5,
-            min_outputs_threshold: 50,
+            token_target_output_count: 5,
         },
         stable_balance_config: None,
         max_concurrent_claims: 4,

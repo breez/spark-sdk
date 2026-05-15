@@ -2801,7 +2801,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "thiserror 2.0.16",
  "tokio",
  "tracing",
@@ -2838,9 +2838,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3538,7 +3538,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "spark-token-primitives",
  "thiserror 2.0.16",
  "tokio",
  "tonic",
@@ -3548,21 +3547,6 @@ dependencies = [
  "tracing",
  "unicode-normalization",
  "utils",
- "uuid",
-]
-
-[[package]]
-name = "spark-token-primitives"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8de059d7cbb2b65fe6c8831ff57ae0408a7624b65a74b5a31a3109707bb9f86c"
-dependencies = [
- "bech32",
- "prost",
- "prost-build",
- "prost-types",
- "sha2",
- "thiserror 1.0.69",
  "uuid",
 ]
 

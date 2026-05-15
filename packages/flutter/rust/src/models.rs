@@ -39,8 +39,7 @@ pub struct _Config {
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
-    pub leaf_optimization_config: LeafOptimizationConfig,
-    pub token_optimization_config: TokenOptimizationConfig,
+    pub optimization_config: OptimizationConfig,
     pub stable_balance_config: Option<StableBalanceConfig>,
     /// Maximum number of concurrent transfer claims.
     ///
@@ -76,17 +75,11 @@ pub struct _SparkSspConfig {
     pub schema_endpoint: Option<String>,
 }
 
-#[frb(mirror(LeafOptimizationConfig))]
-pub struct _LeafOptimizationConfig {
+#[frb(mirror(OptimizationConfig))]
+pub struct _OptimizationConfig {
     pub auto_enabled: bool,
     pub multiplicity: u8,
-}
-
-#[frb(mirror(TokenOptimizationConfig))]
-pub struct _TokenOptimizationConfig {
-    pub auto_enabled: bool,
-    pub target_output_count: u32,
-    pub min_outputs_threshold: u32,
+    pub token_target_output_count: u32,
 }
 
 #[frb(mirror(StableBalanceToken))]
