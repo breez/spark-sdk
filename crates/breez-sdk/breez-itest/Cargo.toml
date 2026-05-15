@@ -43,3 +43,4 @@ uuid.workspace = true
 futures.workspace = true
 axum = "0.7"
 bech32.workspace = true
+rustls.workspace = true

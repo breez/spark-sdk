@@ -718,6 +718,7 @@ dependencies = [
  "rand 0.8.6",
  "rstest",
  "rstest_reuse",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
