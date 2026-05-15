@@ -518,7 +518,7 @@ impl TokenService {
 
         let mut attempt = 0;
         let mut preempted_attempt = 0;
-        let token_transaction = loop {
+        let (token_transaction, reservation) = loop {
             if attempt >= MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS {
                 return Err(ServiceError::NeededTooManyOutputs);
             }
@@ -546,7 +546,7 @@ impl TokenService {
             .await;
 
             match result {
-                Ok(token_transaction) => break token_transaction,
+                Ok(token_transaction) => break (token_transaction, reservation),
                 Err(ServiceError::NeededTooManyOutputs)
                     if attempt < MAX_TRANSFER_TOKEN_TOO_MANY_OUTPUTS_RETRY_ATTEMPTS - 1 =>
                 {
@@ -572,6 +572,25 @@ impl TokenService {
                 Err(e) => return Err(e),
             }
         };
+
+        let identity_public_key = self.signer.get_identity_public_key().await?;
+        let our_outputs = token_transaction
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, output)| output.owner_public_key == identity_public_key)
+            .map(|(vout, output)| TokenOutputWithPrevOut {
+                output: output.clone(),
+                prev_tx_hash: token_transaction.hash.clone(),
+                prev_tx_vout: vout as u32,
+            })
+            .collect::<Vec<_>>();
+        self.token_output_service
+            .insert_token_outputs(&TokenOutputs {
+                metadata: reservation.token_outputs.metadata,
+                outputs: our_outputs,
+            })
+            .await?;
 
         Ok(token_transaction)
     }

@@ -11,12 +11,6 @@ use testcontainers_modules::postgres::Postgres;
 use tokio::sync::{OnceCell, mpsc};
 use tracing::{Instrument, debug, info};
 
-fn install_rustls_provider() {
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .ok();
-}
-
 use crate::SdkInstance;
 use crate::faucet::RegtestFaucet;
 use tempfile::TempDir;
@@ -190,7 +184,7 @@ pub async fn build_sdk_with_dir(
     seed_bytes: [u8; 32],
     temp_dir: Option<tempfile::TempDir>,
 ) -> Result<SdkInstance> {
-    install_rustls_provider();
+
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.lnurl_domain = None; // Avoid lnurl server in tests
@@ -352,7 +346,7 @@ pub async fn build_sdk_with_custom_config_and_backend(
     apply_sensible_test_defaults: bool,
     backend: Option<BackendChoice>,
 ) -> Result<SdkInstance> {
-    install_rustls_provider();
+
     // Apply sensible test defaults if not already configured
     if config.api_key.is_some() && matches!(config.network, Network::Regtest) {
         // In regtest we don't need an API key; drop it if present to avoid network calls
@@ -695,7 +689,7 @@ pub async fn build_sdk_with_tree_store_config(
     postgres_tree_store: Option<PostgresTreeStore>,
     mysql_tree_store: Option<MysqlTreeStore>,
 ) -> Result<SdkInstance> {
-    install_rustls_provider();
+
     // Apply sensible test defaults if not already configured
     if config.api_key.is_some() && matches!(config.network, Network::Regtest) {
         // In regtest we don't need an API key; drop it if present to avoid network calls
@@ -786,7 +780,7 @@ pub async fn build_sdk_from_mnemonic(
     passphrase: Option<String>,
     temp_dir: Option<tempfile::TempDir>,
 ) -> Result<SdkInstance> {
-    install_rustls_provider();
+
     let mut config = default_config(Network::Regtest);
     config.api_key = None; // Regtest: no API key needed
     config.lnurl_domain = None; // Avoid lnurl server in tests
@@ -838,7 +832,7 @@ pub async fn build_sdk_with_external_signer(
     mnemonic: String,
     temp_dir: Option<TempDir>,
 ) -> Result<SdkInstance> {
-    install_rustls_provider();
+
     let mut config = default_config(Network::Regtest);
     config.api_key = None;
     config.lnurl_domain = None;
@@ -1628,7 +1622,7 @@ pub async fn build_sdk_with_postgres(
     connection_string: &str,
     seed_bytes: [u8; 32],
 ) -> Result<SdkInstance> {
-    install_rustls_provider();
+
     let mut config = breez_sdk_spark::default_config(breez_sdk_spark::Network::Regtest);
     config.api_key = None;
     config.lnurl_domain = None;
