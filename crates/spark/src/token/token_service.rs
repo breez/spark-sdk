@@ -794,6 +794,28 @@ impl TokenService {
             .transpose()?
             .unwrap_or_default();
 
+        if outputs.len() != receiver_outputs.len() {
+            return Err(ServiceError::Generic(format!(
+                "broadcast returned {} final outputs but expected {} for tx {txid}",
+                outputs.len(),
+                receiver_outputs.len()
+            )));
+        }
+        for (i, (output, expected)) in outputs.iter().zip(receiver_outputs.iter()).enumerate() {
+            if output.token_amount != expected.amount {
+                return Err(ServiceError::Generic(format!(
+                    "final output {i} for tx {txid} has amount {} but expected {}",
+                    output.token_amount, expected.amount
+                )));
+            }
+            if output.token_identifier != expected.token_id {
+                return Err(ServiceError::Generic(format!(
+                    "final output {i} for tx {txid} has token identifier {} but expected {}",
+                    output.token_identifier, expected.token_id
+                )));
+            }
+        }
+
         let created_timestamp = now;
 
         Ok(TokenTransaction {
