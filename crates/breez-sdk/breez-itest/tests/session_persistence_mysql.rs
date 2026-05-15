@@ -74,7 +74,7 @@ impl MysqlSessionPersistenceFixture {
         drop(conn);
         pool.disconnect().await?;
 
-        let brz_sessions = rows
+        let sessions = rows
             .into_iter()
             .map(|(service_identity_key, token, expiration)| SessionRow {
                 service_identity_key,
@@ -82,7 +82,7 @@ impl MysqlSessionPersistenceFixture {
                 expiration: u64::try_from(expiration).unwrap_or_default(),
             })
             .collect();
-        Ok(brz_sessions)
+        Ok(sessions)
     }
 
     async fn clear_sessions(&self) -> Result<()> {

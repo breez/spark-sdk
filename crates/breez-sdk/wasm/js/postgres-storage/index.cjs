@@ -330,7 +330,7 @@ class PostgresStorage {
         }
       }
 
-      // Exclude child brz_payments
+      // Exclude child payments
       whereClauses.push("pm.parent_payment_id IS NULL");
 
       const whereSql =
@@ -347,7 +347,7 @@ class PostgresStorage {
     } catch (error) {
       if (error instanceof StorageError) throw error;
       throw new StorageError(
-        `Failed to list brz_payments (request: ${JSON.stringify(request)}): ${error.message}`,
+        `Failed to list payments (request: ${JSON.stringify(request)}): ${error.message}`,
         error
       );
     }
@@ -533,7 +533,7 @@ class PostgresStorage {
         return {};
       }
 
-      // Early exit if no related brz_payments exist for this tenant
+      // Early exit if no related payments exist for this tenant
       const hasRelatedResult = await this.pool.query(
         "SELECT EXISTS(SELECT 1 FROM brz_payment_metadata WHERE user_id = $1 AND parent_payment_id IS NOT NULL LIMIT 1)",
         [this.identity]
@@ -566,7 +566,7 @@ class PostgresStorage {
     } catch (error) {
       if (error instanceof StorageError) throw error;
       throw new StorageError(
-        `Failed to get brz_payments by parent ids: ${error.message}`,
+        `Failed to get payments by parent ids: ${error.message}`,
         error
       );
     }
@@ -875,7 +875,7 @@ class PostgresStorage {
       }));
     } catch (error) {
       throw new StorageError(
-        `Failed to list brz_contacts: ${error.message}`,
+        `Failed to list contacts: ${error.message}`,
         error
       );
     }
@@ -1377,7 +1377,7 @@ class PostgresStorage {
 }
 
 /**
- * Creates a PostgresStorageConfig with the given connection string and default pool brz_settings.
+ * Creates a PostgresStorageConfig with the given connection string and default pool settings.
  *
  * Default values (from pg.Pool):
  * - maxPoolSize: 10

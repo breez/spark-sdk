@@ -189,9 +189,7 @@ pub(crate) fn create_pool(
 
 pub(super) use spark_postgres::SchemaRenames;
 
-/// Runs database migrations with version tracking and concurrency control,
-/// optionally applying a one-shot schema rename first (under the same
-/// transaction-level advisory lock).
+/// Wraps [`spark_postgres::run_migrations`] with `StorageError` mapping.
 pub(super) async fn run_migrations(
     pool: &deadpool_postgres::Pool,
     migrations_table: &str,

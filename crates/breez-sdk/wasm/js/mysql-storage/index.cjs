@@ -354,7 +354,7 @@ class MysqlStorage {
     } catch (error) {
       if (error instanceof StorageError) throw error;
       throw new StorageError(
-        `Failed to list brz_payments (request: ${JSON.stringify(request)}): ${error.message}`,
+        `Failed to list payments (request: ${JSON.stringify(request)}): ${error.message}`,
         error
       );
     }
@@ -540,7 +540,7 @@ class MysqlStorage {
         return {};
       }
 
-      // Early exit if no related brz_payments exist for this tenant. mysql2 returns EXISTS as 0/1.
+      // Early exit if no related payments exist for this tenant. mysql2 returns EXISTS as 0/1.
       const [hasRelatedRows] = await this.pool.query(
         "SELECT EXISTS(SELECT 1 FROM brz_payment_metadata WHERE user_id = ? AND parent_payment_id IS NOT NULL LIMIT 1) AS has_related",
         [this.identity]
@@ -567,7 +567,7 @@ class MysqlStorage {
     } catch (error) {
       if (error instanceof StorageError) throw error;
       throw new StorageError(
-        `Failed to get brz_payments by parent ids: ${error.message}`,
+        `Failed to get payments by parent ids: ${error.message}`,
         error
       );
     }
@@ -844,7 +844,7 @@ class MysqlStorage {
       }));
     } catch (error) {
       throw new StorageError(
-        `Failed to list brz_contacts: ${error.message}`,
+        `Failed to list contacts: ${error.message}`,
         error
       );
     }
@@ -1301,7 +1301,7 @@ class MysqlStorage {
 }
 
 /**
- * Creates a MysqlStorageConfig with the given connection string and default pool brz_settings.
+ * Creates a MysqlStorageConfig with the given connection string and default pool settings.
  *
  * Default values:
  * - maxPoolSize: 10

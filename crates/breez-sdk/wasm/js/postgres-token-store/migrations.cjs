@@ -97,9 +97,8 @@ class TokenStoreMigrationManager {
   }
 
   /**
-   * Renames legacy unprefixed token-store objects to their `brz_` equivalents
-   * on first startup after the prefix change. Gated on the legacy
-   * `token_schema_migrations` table as canary.
+   * Pre-prefix rename. Canary-gated on the legacy `token_schema_migrations`
+   * table.
    * @param {import('pg').PoolClient} client
    */
   async _applySchemaRenames(client) {
@@ -147,6 +146,18 @@ class TokenStoreMigrationManager {
         "brz_token_outputs",
         "token_outputs_user_id_reservation_id_fkey",
         "brz_token_outputs_user_id_reservation_id_fkey",
+      ],
+      // Pre-multi-tenant FKs (single-column). Rename so the post-tenant
+      // migration's `DROP CONSTRAINT IF EXISTS brz_*_fkey` finds them.
+      [
+        "brz_token_outputs",
+        "token_outputs_token_identifier_fkey",
+        "brz_token_outputs_token_identifier_fkey",
+      ],
+      [
+        "brz_token_outputs",
+        "token_outputs_reservation_id_fkey",
+        "brz_token_outputs_reservation_id_fkey",
       ],
       ["brz_token_spent_outputs", "token_spent_outputs_pkey", "brz_token_spent_outputs_pkey"],
       ["brz_token_swap_status", "token_swap_status_pkey", "brz_token_swap_status_pkey"],

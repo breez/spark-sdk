@@ -28,12 +28,7 @@ use crate::pool::create_pool;
 /// Name of the schema migrations table for `PostgresTokenStore`.
 const TOKEN_MIGRATIONS_TABLE: &str = "brz_token_schema_migrations";
 
-/// Old-to-`brz_*` rename map for the token store schema. Applied on first
-/// startup after upgrading to the prefixed schema. The indexes listed are the
-/// ones present after the multi-tenant migration (the original pre-tenant
-/// indexes were dropped). The two composite FKs on `brz_token_outputs` were
-/// added inline by the multi-tenant migration without an explicit `CONSTRAINT`
-/// name, so Postgres assigned the listed `_fkey` names by column order.
+/// Pre-prefix rename map for upgrading token-store deployments.
 const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
     old_migrations_table: "token_schema_migrations",
     new_migrations_table: TOKEN_MIGRATIONS_TABLE,
@@ -83,6 +78,18 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
             "brz_token_outputs",
             "token_outputs_user_id_reservation_id_fkey",
             "brz_token_outputs_user_id_reservation_id_fkey",
+        ),
+        // Pre-multi-tenant FKs (single-column). Rename so the post-tenant
+        // migration's `DROP CONSTRAINT IF EXISTS brz_*_fkey` finds them.
+        (
+            "brz_token_outputs",
+            "token_outputs_token_identifier_fkey",
+            "brz_token_outputs_token_identifier_fkey",
+        ),
+        (
+            "brz_token_outputs",
+            "token_outputs_reservation_id_fkey",
+            "brz_token_outputs_reservation_id_fkey",
         ),
         (
             "brz_token_spent_outputs",

@@ -97,9 +97,8 @@ class TreeStoreMigrationManager {
   }
 
   /**
-   * Renames legacy unprefixed tree-store objects to their `brz_` equivalents
-   * on first startup after the prefix change. Gated on a canary check
-   * against the legacy `tree_schema_migrations` table.
+   * Pre-prefix rename. Canary-gated on the legacy `tree_schema_migrations`
+   * table.
    * @param {import('pg').PoolClient} client
    */
   async _applySchemaRenames(client) {
@@ -144,6 +143,13 @@ class TreeStoreMigrationManager {
         "brz_tree_leaves",
         "tree_leaves_user_id_reservation_id_fkey",
         "brz_tree_leaves_user_id_reservation_id_fkey",
+      ],
+      // Pre-multi-tenant FK (single-column). Rename so the post-tenant
+      // migration's `DROP CONSTRAINT IF EXISTS brz_*_fkey` finds it.
+      [
+        "brz_tree_leaves",
+        "tree_leaves_reservation_id_fkey",
+        "brz_tree_leaves_reservation_id_fkey",
       ],
       ["brz_tree_spent_leaves", "tree_spent_leaves_pkey", "brz_tree_spent_leaves_pkey"],
       ["brz_tree_swap_status", "tree_swap_status_pkey", "brz_tree_swap_status_pkey"],

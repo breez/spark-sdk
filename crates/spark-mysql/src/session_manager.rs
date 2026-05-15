@@ -18,11 +18,9 @@ use crate::pool::create_pool;
 
 const SESSION_MIGRATIONS_TABLE: &str = "brz_session_schema_migrations";
 
-/// Old-to-`brz_*` rename map for the session manager schema. Applied on
-/// first startup after upgrading to the prefixed schema. The sessions table
-/// only has a `PRIMARY` constraint (`MySQL` primary keys are always named
-/// `PRIMARY`, table-scoped) and no indexes / FKs, so the rename is just the
-/// table itself plus the migrations tracking table.
+/// Pre-prefix rename map for upgrading session-manager deployments.
+/// `MySQL` PKs are always named `PRIMARY` (table-scoped), so only the table
+/// and migrations tracker need renaming.
 const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
     old_migrations_table: "session_schema_migrations",
     new_migrations_table: SESSION_MIGRATIONS_TABLE,

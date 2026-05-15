@@ -155,11 +155,9 @@ class MysqlMigrationManager {
   }
 
   /**
-   * Renames legacy unprefixed core-storage objects to their `brz_`
-   * equivalents on first startup after the prefix change. Gated on the
-   * legacy `schema_migrations` table as canary. MySQL primary keys are
-   * always named `PRIMARY` (table-scoped) and there are no foreign keys
-   * in the core schema, so only tables and indexes need renaming.
+   * Pre-prefix rename. Canary-gated on the legacy `schema_migrations`
+   * table. MySQL PKs are always named `PRIMARY` and the core schema has
+   * no FKs, so only tables and indexes need renaming.
    * @param {import('mysql2/promise').PoolConnection} conn
    */
   async _applySchemaRenames(conn) {

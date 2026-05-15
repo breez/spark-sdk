@@ -97,12 +97,8 @@ class SessionManagerMigrationManager {
   }
 
   /**
-   * Renames legacy unprefixed tables / indexes / constraints to their `brz_`
-   * equivalents on first startup after the prefix change. Gated on a canary
-   * check against the legacy `session_schema_migrations` table: if it
-   * doesn't exist, either the DB is fresh or already upgraded, and no
-   * renames run. Postgres DDL is transactional, so this runs inside the
-   * caller's transaction and rolls back atomically on failure.
+   * Pre-prefix rename. Canary-gated on the legacy `session_schema_migrations`
+   * table.
    * @param {import('pg').PoolClient} client
    */
   async _applySchemaRenames(client) {

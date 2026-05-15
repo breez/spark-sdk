@@ -6,16 +6,10 @@ use tokio_postgres::Transaction;
 use crate::error::PostgresError;
 use crate::pool::{map_db_error, map_pool_error};
 
-/// One-shot rename map passed to [`run_migrations`] when upgrading an
-/// existing deployment to a renamed schema. Describes how to transition
-/// every Breez-owned schema object — tables, indexes, constraints, plus the
-/// per-store schema migrations tracking table itself — from its old name to
-/// its new name. The original use case is applying a `brz_` namespace
-/// prefix.
-///
-/// `old_migrations_table` doubles as the **canary**: the runner probes
-/// `information_schema.tables` for it; if missing, the DB is either fresh
-/// or already upgraded and the rename block is skipped.
+/// One-shot pre-prefix rename map for [`run_migrations`]. Lists every
+/// owned table / index / constraint to move, plus the migrations tracker
+/// itself. `old_migrations_table` is the canary — if missing, the rename
+/// is skipped (DB is fresh or already upgraded).
 pub struct SchemaRenames<'a> {
     /// Old name of the per-store schema migrations table; used as the canary
     /// check.
@@ -37,16 +31,12 @@ pub struct SchemaRenames<'a> {
 ///
 /// This function:
 /// - Acquires an advisory lock (derived from `migration_lock_{table_name}`) to prevent concurrent migrations
-/// - Optionally applies a one-shot schema rename before running migrations
-///   (see [`SchemaRenames`]) — useful when upgrading an existing deployment
-///   whose tables were created under different names
+/// - Optionally applies a one-shot schema rename first (see [`SchemaRenames`])
 /// - Creates the migrations tracking table if it doesn't exist
 /// - Applies only new migrations (based on version number)
 /// - Commits all changes in a single transaction
 ///
-/// The rename block and the version-tracked migrations run under the same
-/// `pg_advisory_xact_lock`, so the whole schema transition is one critical
-/// section.
+/// Rename + migrations share one transaction and one `pg_advisory_xact_lock`.
 ///
 /// # Arguments
 /// * `pool` - The connection pool to use
@@ -54,10 +44,8 @@ pub struct SchemaRenames<'a> {
 /// * `migrations` - List of migrations, where each migration is a list of SQL statements.
 ///   Statements are owned `String`s so callers can build them at runtime (e.g. inlining a
 ///   tenant identity into a backfill).
-/// * `renames` - Optional one-shot rename map for upgrading from an
-///   unprefixed schema. When `Some`, the runner probes the canary table and,
-///   if present, renames everything before processing version-tracked
-///   migrations. When `None`, no rename is attempted.
+/// * `renames` - When `Some`, applied before migrations; canary-gated so
+///   fresh / already-upgraded DBs pay only one probe.
 #[allow(clippy::arithmetic_side_effects)]
 pub async fn run_migrations(
     pool: &Pool,
@@ -128,9 +116,8 @@ pub async fn run_migrations(
     Ok(())
 }
 
-/// Applies a one-shot schema rename inside the caller's transaction. Gated
-/// on the canary check against `renames.old_migrations_table`: if that
-/// table doesn't exist, returns early (the DB is fresh or already upgraded).
+/// Applies a one-shot schema rename inside the caller's transaction.
+/// Returns early if the canary `renames.old_migrations_table` is absent.
 async fn apply_renames_in_tx(
     tx: &Transaction<'_>,
     renames: &SchemaRenames<'_>,
@@ -149,24 +136,36 @@ async fn apply_renames_in_tx(
         return Ok(());
     }
 
-    // Order matters only for readability — Postgres wraps the whole sequence
-    // in one transaction so a crash rolls everything back.
+    // Each rename is guarded — pre-prefix DBs may be at any migration version,
+    // so listed objects aren't guaranteed to exist. `RENAME CONSTRAINT`
+    // has no IF EXISTS in Postgres, hence the DO block.
     for (old, new) in renames.tables {
-        let sql = format!("ALTER TABLE {old} RENAME TO {new}");
+        let sql = format!("ALTER TABLE IF EXISTS {old} RENAME TO {new}");
         tx.execute(&sql, &[]).await.map_err(|e| {
             PostgresError::Database(format!("Failed to rename table {old} -> {new}: {e}"))
         })?;
     }
 
     for (old, new) in renames.indexes {
-        let sql = format!("ALTER INDEX {old} RENAME TO {new}");
+        let sql = format!("ALTER INDEX IF EXISTS {old} RENAME TO {new}");
         tx.execute(&sql, &[]).await.map_err(|e| {
             PostgresError::Database(format!("Failed to rename index {old} -> {new}: {e}"))
         })?;
     }
 
     for (table, old, new) in renames.constraints {
-        let sql = format!("ALTER TABLE {table} RENAME CONSTRAINT {old} TO {new}");
+        let sql = format!(
+            "DO $$ BEGIN
+               IF EXISTS (
+                 SELECT 1 FROM information_schema.table_constraints
+                 WHERE table_schema = current_schema()
+                   AND table_name = '{table}'
+                   AND constraint_name = '{old}'
+               ) THEN
+                 ALTER TABLE {table} RENAME CONSTRAINT {old} TO {new};
+               END IF;
+             END $$"
+        );
         tx.execute(&sql, &[]).await.map_err(|e| {
             PostgresError::Database(format!(
                 "Failed to rename constraint {old} -> {new} on {table}: {e}"
@@ -177,7 +176,7 @@ async fn apply_renames_in_tx(
     // Rename the migrations tracking table last; it doubles as the canary
     // signaling that the rename is complete.
     let sql = format!(
-        "ALTER TABLE {} RENAME TO {}",
+        "ALTER TABLE IF EXISTS {} RENAME TO {}",
         renames.old_migrations_table, renames.new_migrations_table
     );
     tx.execute(&sql, &[]).await.map_err(map_db_error)?;
@@ -193,11 +192,8 @@ mod tests {
     use testcontainers::{ContainerAsync, runners::AsyncRunner};
     use testcontainers_modules::postgres::Postgres;
 
-    /// Verifies that an existing deployment with the legacy unprefixed schema
-    /// gets upgraded to `brz_`-prefixed names without data loss when
-    /// `run_migrations` is called with `Some(&renames)`. Exercises the full
-    /// rename surface: tables, indexes, named PK constraint, plus the
-    /// migrations tracking table that doubles as the canary.
+    /// End-to-end rename: tables, indexes, PK constraint, and migrations
+    /// tracker all move from legacy to `brz_*` with seed data preserved.
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn test_bootstrap_rename_upgrades_legacy_schema() {
@@ -320,5 +316,70 @@ mod tests {
         run_migrations(&pool, "brz_widget_migrations", &[], Some(&renames))
             .await
             .expect("re-run should be idempotent");
+    }
+
+    /// Rename must skip listed objects that don't exist (partial pre-prefix
+    /// schema, e.g. a customer at an older migration version).
+    #[tokio::test]
+    async fn test_bootstrap_rename_tolerates_missing_objects() {
+        let container: ContainerAsync<Postgres> = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start PostgreSQL container");
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get host port");
+        let pool = create_pool(&PostgresStorageConfig::with_defaults(format!(
+            "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+        )))
+        .expect("Failed to create pool");
+
+        // Pre-populate ONLY the canary + the table — no index, no PK
+        // constraint name. The rename map below lists an index and a
+        // constraint that don't exist.
+        {
+            let client = pool.get().await.expect("get_conn");
+            client
+                .batch_execute(
+                    "CREATE TABLE widgets (id TEXT, name TEXT NOT NULL);
+                     INSERT INTO widgets (id, name) VALUES ('w1', 'alpha');
+                     CREATE TABLE legacy_widget_migrations (
+                         version INTEGER PRIMARY KEY,
+                         applied_at TIMESTAMPTZ DEFAULT NOW()
+                     );
+                     INSERT INTO legacy_widget_migrations (version) VALUES (1);",
+                )
+                .await
+                .expect("seed partial legacy schema");
+        }
+
+        let renames = SchemaRenames {
+            old_migrations_table: "legacy_widget_migrations",
+            new_migrations_table: "brz_widget_migrations",
+            tables: &[("widgets", "brz_widgets")],
+            indexes: &[("idx_widgets_missing", "brz_idx_widgets_missing")],
+            constraints: &[(
+                "brz_widgets",
+                "widgets_missing_constraint",
+                "brz_widgets_missing_constraint",
+            )],
+        };
+
+        run_migrations(&pool, "brz_widget_migrations", &[], Some(&renames))
+            .await
+            .expect("rename must skip missing objects without erroring");
+
+        let client = pool.get().await.expect("get_conn");
+        let row: Option<(String, String)> = client
+            .query_opt("SELECT id, name FROM brz_widgets WHERE id = 'w1'", &[])
+            .await
+            .expect("probe brz_widgets")
+            .map(|r| (r.get(0), r.get(1)));
+        assert_eq!(
+            row,
+            Some(("w1".to_string(), "alpha".to_string())),
+            "table + data preserved despite missing index/constraint"
+        );
     }
 }

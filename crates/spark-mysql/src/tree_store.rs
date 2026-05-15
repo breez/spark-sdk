@@ -43,11 +43,7 @@ use crate::pool::{create_pool, tx_opts};
 /// Name of the schema migrations table for `MysqlTreeStore`.
 const TREE_MIGRATIONS_TABLE: &str = "brz_tree_schema_migrations";
 
-/// Old-to-`brz_*` rename map for the tree store schema. Applied on first
-/// startup after upgrading to the prefixed schema. The indexes and FK listed
-/// are the ones present after the multi-tenant migration (the original
-/// pre-tenant index and FK names were dropped). The composite FK is dropped
-/// and re-added (`MySQL` has no `RENAME CONSTRAINT` for FKs).
+/// Pre-prefix rename map for upgrading tree-store deployments.
 const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
     old_migrations_table: "tree_schema_migrations",
     new_migrations_table: TREE_MIGRATIONS_TABLE,
@@ -79,13 +75,24 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
             "brz_idx_tree_leaves_user_slim",
         ),
     ],
-    foreign_keys: &[FkRename {
-        table: "brz_tree_leaves",
-        old_name: "fk_tree_leaves_reservation_user",
-        new_name: "brz_fk_tree_leaves_reservation_user",
-        definition: "FOREIGN KEY (user_id, reservation_id) \
-                     REFERENCES brz_tree_reservations(user_id, id)",
-    }],
+    foreign_keys: &[
+        FkRename {
+            table: "brz_tree_leaves",
+            old_name: "fk_tree_leaves_reservation_user",
+            new_name: "brz_fk_tree_leaves_reservation_user",
+            definition: "FOREIGN KEY (user_id, reservation_id) \
+                         REFERENCES brz_tree_reservations(user_id, id)",
+        },
+        // Pre-multi-tenant FK (single-column). Rename so the post-tenant
+        // migration's `DropForeignKey { name: "brz_fk_..." }` finds it.
+        FkRename {
+            table: "brz_tree_leaves",
+            old_name: "fk_tree_leaves_reservation",
+            new_name: "brz_fk_tree_leaves_reservation",
+            definition: "FOREIGN KEY (reservation_id) \
+                         REFERENCES brz_tree_reservations(id) ON DELETE SET NULL",
+        },
+    ],
 };
 
 /// Domain prefix mixed into the per-tenant `GET_LOCK` name so the tree store's

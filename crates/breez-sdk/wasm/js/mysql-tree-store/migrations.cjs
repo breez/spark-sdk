@@ -144,11 +144,8 @@ class MysqlTreeStoreMigrationManager {
   }
 
   /**
-   * Renames legacy unprefixed tree-store objects to their `brz_` equivalents
-   * on first startup after the prefix change. Gated on the legacy
-   * `tree_schema_migrations` table as canary. MySQL DDL is not transactional,
-   * so each rename is preceded by an info_schema probe to make a partial
-   * rename replayable.
+   * Pre-prefix rename. Canary-gated on the legacy `tree_schema_migrations`
+   * table.
    * @param {import('mysql2/promise').PoolConnection} conn
    */
   async _applySchemaRenames(conn) {
@@ -201,6 +198,15 @@ class MysqlTreeStoreMigrationManager {
         newName: "brz_fk_tree_leaves_reservation_user",
         definition:
           "FOREIGN KEY (user_id, reservation_id) REFERENCES `brz_tree_reservations`(user_id, id)",
+      },
+      // Pre-multi-tenant FK (single-column). Rename so the post-tenant
+      // migration's drop-foreign-key step finds it.
+      {
+        table: "brz_tree_leaves",
+        oldName: "fk_tree_leaves_reservation",
+        newName: "brz_fk_tree_leaves_reservation",
+        definition:
+          "FOREIGN KEY (reservation_id) REFERENCES `brz_tree_reservations`(id) ON DELETE SET NULL",
       },
     ];
     for (const fk of fkRenames) {

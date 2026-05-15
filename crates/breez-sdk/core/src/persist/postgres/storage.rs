@@ -34,12 +34,7 @@ use super::base::{SchemaRenames, map_db_error, map_pool_error, run_migrations};
 /// Name of the schema migrations table for `PostgresStorage`.
 const MIGRATIONS_TABLE: &str = "brz_schema_migrations";
 
-/// Old-to-`brz_*` rename map for the breez-sdk core persist schema.
-/// Applied on first startup after upgrading to the prefixed schema. The
-/// indexes listed are the ones present after the multi-tenant migration
-/// (the original pre-tenant index names were dropped by that migration).
-/// All primary keys are Postgres-default-named `<table>_pkey` and renamed
-/// alongside their tables.
+/// Pre-prefix rename map for upgrading core persist deployments.
 const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
     old_migrations_table: "schema_migrations",
     new_migrations_table: MIGRATIONS_TABLE,
@@ -1687,7 +1682,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             let htlc_status: SparkHtlcStatus = htlc_status_str
                 .ok_or_else(|| {
                     StorageError::Implementation(
-                        "htlc_status is required for Lightning brz_payments".to_string(),
+                        "htlc_status is required for Lightning payments".to_string(),
                     )
                 })
                 .and_then(|s| {
@@ -2398,7 +2393,7 @@ mod tests {
                     .unwrap();
             }
 
-            // Step 2: Insert Lightning brz_payments with different statuses
+            // Step 2: Insert Lightning payments with different statuses
             // Completed payment
             client
                 .execute(
@@ -2596,5 +2591,305 @@ mod tests {
         assert!(result.is_ok(), "Expected valid PEM to parse successfully");
         let store = result.unwrap();
         assert_eq!(store.len(), 1, "Expected exactly one certificate in store");
+    }
+
+    /// Validates the real `SCHEMA_RENAMES` constant against a hand-rolled
+    /// snapshot of the pre-`brz_*` post-multi-tenant schema (i.e. a customer
+    /// upgrading from the version of the SDK immediately prior to this PR).
+    /// Seeds a payment, runs the SDK's `migrate()` (which fires the rename),
+    /// then verifies the renamed schema is functional via the storage trait.
+    ///
+    /// A typo in `SCHEMA_RENAMES` — wrong table, index, or constraint name —
+    /// would fail here either at the rename step or when storage queries
+    /// hit a missing identifier.
+    #[tokio::test]
+    async fn test_rename_against_real_legacy_schema() {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start PostgreSQL container");
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get host port");
+        let connection_string = format!(
+            "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+        );
+
+        // Seed the legacy (pre-prefix) post-multi-tenant schema directly.
+        // Captures the state of a customer at the migration version
+        // immediately prior to this PR — `schema_migrations` at version 16,
+        // every table user_id-scoped, post-tenant indexes in place.
+        let pool = create_pool(&PostgresStorageConfig::with_defaults(
+            connection_string.clone(),
+        ))
+        .expect("create pool");
+        let id_lit = format!("'\\x{}'::bytea", hex::encode(TEST_IDENTITY_A));
+        {
+            let client = pool.get().await.expect("get_conn");
+            for stmt in legacy_schema_sql() {
+                client
+                    .batch_execute(&stmt)
+                    .await
+                    .unwrap_or_else(|e| panic!("legacy schema setup failed at\n{stmt}\n=> {e}"));
+            }
+            // Seed: a payment + a setting. Both must survive the rename
+            // and be readable via the storage trait after.
+            client
+                .execute(
+                    &format!(
+                        "INSERT INTO payments
+                         (user_id, id, payment_type, status, amount, fees, timestamp, method)
+                         VALUES ({id_lit}, 'p1', 'receive', 'completed', '1000', '0', 100, 'lightning')"
+                    ),
+                    &[],
+                )
+                .await
+                .expect("seed payment");
+            client
+                .execute(
+                    &format!(
+                        "INSERT INTO settings (user_id, key, value)
+                         VALUES ({id_lit}, 'seed_key', 'seed_value')"
+                    ),
+                    &[],
+                )
+                .await
+                .expect("seed setting");
+        }
+
+        // Build storage with run_migration=true — fires the rename block,
+        // then run_migrations sees schema_migrations at version 16 (now
+        // renamed to brz_schema_migrations) and skips all version-tracked
+        // steps. Net effect: schema is renamed, no migrations re-run.
+        let storage = PostgresStorage::new(
+            PostgresStorageConfig::with_defaults(connection_string),
+            &TEST_IDENTITY_A,
+        )
+        .await
+        .expect("migrate against legacy schema");
+
+        // Legacy tracker is gone; new one carries the same version row.
+        let client = pool.get().await.expect("get_conn");
+        let legacy_gone: bool = client
+            .query_one(
+                "SELECT NOT EXISTS (SELECT 1 FROM information_schema.tables
+                                    WHERE table_schema = current_schema()
+                                      AND table_name = 'schema_migrations')",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(legacy_gone, "legacy schema_migrations must be renamed");
+
+        let version: i32 = client
+            .query_one("SELECT MAX(version) FROM brz_schema_migrations", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(version, 16, "migration version must be preserved");
+
+        // Seed payment row is preserved on the renamed table — proves the
+        // table + PK constraint rename worked and the columns line up.
+        let payment_row_count: i64 = client
+            .query_one("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(payment_row_count, 1, "seed payment must survive rename");
+
+        // Settings round-trip via the trait — proves brz_settings is wired.
+        let setting = storage
+            .get_cached_item("seed_key".to_string())
+            .await
+            .expect("get_cached_item");
+        assert_eq!(setting.as_deref(), Some("seed_value"));
+
+        // Write through the trait — proves the post-rename schema accepts
+        // new writes via every index/constraint the SDK uses.
+        storage
+            .set_cached_item(
+                "post_rename_key".to_string(),
+                "post_rename_value".to_string(),
+            )
+            .await
+            .expect("set_cached_item");
+        let written = storage
+            .get_cached_item("post_rename_key".to_string())
+            .await
+            .expect("get_cached_item");
+        assert_eq!(written.as_deref(), Some("post_rename_value"));
+    }
+
+    /// Hand-rolled snapshot of the pre-PR schema in its terminal
+    /// (post-multi-tenant, version-16) state. Maintained alongside
+    /// `SCHEMA_RENAMES` — when adding a new table, index, or constraint
+    /// to the SDK schema, mirror the addition here so this test continues
+    /// to validate that the rename map covers it.
+    #[allow(clippy::too_many_lines)]
+    fn legacy_schema_sql() -> Vec<String> {
+        vec![
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMPTZ DEFAULT NOW()
+            )"
+            .to_string(),
+            "INSERT INTO schema_migrations (version)
+             SELECT generate_series(1, 16)"
+                .to_string(),
+            "CREATE TABLE payments (
+                user_id BYTEA NOT NULL,
+                id TEXT NOT NULL,
+                payment_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                fees TEXT NOT NULL,
+                timestamp BIGINT NOT NULL,
+                method TEXT,
+                withdraw_tx_id TEXT,
+                deposit_tx_id TEXT,
+                spark BOOLEAN,
+                PRIMARY KEY (user_id, id)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_payments_user_timestamp ON payments(user_id, timestamp)".to_string(),
+            "CREATE INDEX idx_payments_user_payment_type ON payments(user_id, payment_type)"
+                .to_string(),
+            "CREATE INDEX idx_payments_user_status ON payments(user_id, status)".to_string(),
+            "CREATE TABLE settings (
+                user_id BYTEA NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (user_id, key)
+            )"
+            .to_string(),
+            "CREATE TABLE unclaimed_deposits (
+                user_id BYTEA NOT NULL,
+                txid TEXT NOT NULL,
+                vout INTEGER NOT NULL,
+                amount_sats BIGINT,
+                claim_error JSONB,
+                refund_tx TEXT,
+                refund_tx_id TEXT,
+                is_mature BOOLEAN NOT NULL DEFAULT TRUE,
+                PRIMARY KEY (user_id, txid, vout)
+            )"
+            .to_string(),
+            "CREATE TABLE payment_metadata (
+                user_id BYTEA NOT NULL,
+                payment_id TEXT NOT NULL,
+                parent_payment_id TEXT,
+                lnurl_pay_info JSONB,
+                lnurl_withdraw_info JSONB,
+                lnurl_description TEXT,
+                conversion_info JSONB,
+                conversion_status TEXT,
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_payment_metadata_user_parent
+             ON payment_metadata(user_id, parent_payment_id)"
+                .to_string(),
+            "CREATE TABLE payment_details_lightning (
+                user_id BYTEA NOT NULL,
+                payment_id TEXT NOT NULL,
+                invoice TEXT NOT NULL,
+                payment_hash TEXT NOT NULL,
+                destination_pubkey TEXT NOT NULL,
+                description TEXT,
+                htlc_status TEXT NOT NULL DEFAULT 'WaitingForPreimage',
+                htlc_expiry_time BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_payment_details_lightning_user_invoice
+             ON payment_details_lightning(user_id, invoice)"
+                .to_string(),
+            "CREATE INDEX idx_payment_details_lightning_user_payment_hash
+             ON payment_details_lightning(user_id, payment_hash)"
+                .to_string(),
+            "CREATE TABLE payment_details_token (
+                user_id BYTEA NOT NULL,
+                payment_id TEXT NOT NULL,
+                metadata JSONB NOT NULL,
+                tx_hash TEXT NOT NULL,
+                invoice_details JSONB,
+                tx_type TEXT NOT NULL DEFAULT 'transfer',
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_spark (
+                user_id BYTEA NOT NULL,
+                payment_id TEXT NOT NULL,
+                invoice_details JSONB,
+                htlc_details JSONB,
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE TABLE lnurl_receive_metadata (
+                user_id BYTEA NOT NULL,
+                payment_hash TEXT NOT NULL,
+                nostr_zap_request TEXT,
+                nostr_zap_receipt TEXT,
+                sender_comment TEXT,
+                PRIMARY KEY (user_id, payment_hash)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_revision (
+                user_id BYTEA NOT NULL,
+                revision BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_outgoing (
+                user_id BYTEA NOT NULL,
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                updated_fields_json JSONB NOT NULL,
+                revision BIGINT NOT NULL
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_outgoing_user_record_type_data_id
+             ON sync_outgoing(user_id, record_type, data_id)"
+                .to_string(),
+            "CREATE TABLE sync_state (
+                user_id BYTEA NOT NULL,
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSONB NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY (user_id, record_type, data_id)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_incoming (
+                user_id BYTEA NOT NULL,
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSONB NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY (user_id, record_type, data_id, revision)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_incoming_user_revision
+             ON sync_incoming(user_id, revision)"
+                .to_string(),
+            "CREATE TABLE contacts (
+                user_id BYTEA NOT NULL,
+                id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                payment_identifier TEXT NOT NULL,
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL,
+                PRIMARY KEY (user_id, id)
+            )"
+            .to_string(),
+        ]
     }
 }

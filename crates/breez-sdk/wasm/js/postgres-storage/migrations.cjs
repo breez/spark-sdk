@@ -93,9 +93,7 @@ class PostgresMigrationManager {
   }
 
   /**
-   * Renames legacy unprefixed core-storage objects to their `brz_` equivalents
-   * on first startup after the prefix change. Gated on a canary check against
-   * the legacy `schema_migrations` table.
+   * Pre-prefix rename. Canary-gated on the legacy `schema_migrations` table.
    * @param {import('pg').PoolClient} client
    */
   async _applySchemaRenames(client) {

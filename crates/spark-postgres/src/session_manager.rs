@@ -18,8 +18,7 @@ use crate::pool::create_pool;
 
 const SESSION_MIGRATIONS_TABLE: &str = "brz_session_schema_migrations";
 
-/// Old-to-`brz_*` rename map for the session manager schema. Applied on
-/// first startup after upgrading to the prefixed schema.
+/// Pre-prefix rename map for upgrading session-manager deployments.
 const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
     old_migrations_table: "session_schema_migrations",
     new_migrations_table: SESSION_MIGRATIONS_TABLE,

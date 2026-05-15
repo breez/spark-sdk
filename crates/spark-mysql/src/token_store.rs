@@ -28,10 +28,7 @@ use crate::pool::{create_pool, tx_opts};
 
 const TOKEN_MIGRATIONS_TABLE: &str = "brz_token_schema_migrations";
 
-/// Old-to-`brz_*` rename map for the token store schema. Applied on first
-/// startup after upgrading to the prefixed schema. The indexes and FKs listed
-/// are the ones present after the multi-tenant migration. Composite FKs are
-/// dropped and re-added (`MySQL` has no `RENAME CONSTRAINT` for FKs).
+/// Pre-prefix rename map for upgrading token-store deployments.
 const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
     old_migrations_table: "token_schema_migrations",
     new_migrations_table: TOKEN_MIGRATIONS_TABLE,
@@ -73,6 +70,22 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
             new_name: "brz_fk_token_outputs_reservation_user",
             definition: "FOREIGN KEY (user_id, reservation_id) \
                          REFERENCES brz_token_reservations(user_id, id)",
+        },
+        // Pre-multi-tenant FKs (single-column). Rename so the post-tenant
+        // migration's `DropForeignKey { name: "brz_fk_..." }` finds them.
+        FkRename {
+            table: "brz_token_outputs",
+            old_name: "fk_token_outputs_metadata",
+            new_name: "brz_fk_token_outputs_metadata",
+            definition: "FOREIGN KEY (token_identifier) \
+                         REFERENCES brz_token_metadata(identifier)",
+        },
+        FkRename {
+            table: "brz_token_outputs",
+            old_name: "fk_token_outputs_reservation",
+            new_name: "brz_fk_token_outputs_reservation",
+            definition: "FOREIGN KEY (reservation_id) \
+                         REFERENCES brz_token_reservations(id) ON DELETE SET NULL",
         },
     ],
 };

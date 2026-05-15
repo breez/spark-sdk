@@ -84,11 +84,8 @@ class MysqlSessionManagerMigrationManager {
   }
 
   /**
-   * Renames legacy unprefixed session objects to their `brz_` equivalents on
-   * first startup after the prefix change. Gated on the legacy
-   * `session_schema_migrations` table as canary. MySQL DDL is not
-   * transactional, so each rename is preceded by an info_schema probe to
-   * make a partial-rename replay safe.
+   * Pre-prefix rename. Canary-gated on the legacy `session_schema_migrations`
+   * table.
    * @param {import('mysql2/promise').PoolConnection} conn
    */
   async _applySchemaRenames(conn) {

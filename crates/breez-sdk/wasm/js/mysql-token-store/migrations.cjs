@@ -161,9 +161,8 @@ class MysqlTokenStoreMigrationManager {
    *   encoding) — not user-controlled input.
    */
   /**
-   * Renames legacy unprefixed token-store objects to their `brz_` equivalents
-   * on first startup after the prefix change. Gated on the legacy
-   * `token_schema_migrations` table as canary.
+   * Pre-prefix rename. Canary-gated on the legacy `token_schema_migrations`
+   * table.
    * @param {import('mysql2/promise').PoolConnection} conn
    */
   async _applySchemaRenames(conn) {
@@ -229,6 +228,22 @@ class MysqlTokenStoreMigrationManager {
         newName: "brz_fk_token_outputs_reservation_user",
         definition:
           "FOREIGN KEY (user_id, reservation_id) REFERENCES `brz_token_reservations`(user_id, id)",
+      },
+      // Pre-multi-tenant FKs (single-column). Rename so the post-tenant
+      // migration's drop-foreign-key steps find them.
+      {
+        table: "brz_token_outputs",
+        oldName: "fk_token_outputs_metadata",
+        newName: "brz_fk_token_outputs_metadata",
+        definition:
+          "FOREIGN KEY (token_identifier) REFERENCES `brz_token_metadata`(identifier)",
+      },
+      {
+        table: "brz_token_outputs",
+        oldName: "fk_token_outputs_reservation",
+        newName: "brz_fk_token_outputs_reservation",
+        definition:
+          "FOREIGN KEY (reservation_id) REFERENCES `brz_token_reservations`(id) ON DELETE SET NULL",
       },
     ];
     for (const fk of fkRenames) {

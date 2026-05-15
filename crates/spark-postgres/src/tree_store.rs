@@ -29,12 +29,7 @@ use crate::pool::create_pool;
 /// Name of the schema migrations table for `PostgresTreeStore`.
 const TREE_MIGRATIONS_TABLE: &str = "brz_tree_schema_migrations";
 
-/// Old-to-`brz_*` rename map for the tree store schema. Applied on first
-/// startup after upgrading to the prefixed schema. The indexes listed are the
-/// ones present after the multi-tenant migration (the original pre-tenant
-/// indexes were dropped by that migration). The composite FK on `brz_tree_leaves`
-/// was added inline by the multi-tenant migration without an explicit
-/// `CONSTRAINT` name, so Postgres assigned `tree_leaves_user_id_reservation_id_fkey`.
+/// Pre-prefix rename map for upgrading tree-store deployments.
 const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
     old_migrations_table: "tree_schema_migrations",
     new_migrations_table: TREE_MIGRATIONS_TABLE,
@@ -73,6 +68,13 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
             "brz_tree_leaves",
             "tree_leaves_user_id_reservation_id_fkey",
             "brz_tree_leaves_user_id_reservation_id_fkey",
+        ),
+        // Pre-multi-tenant FK (single-column). Rename so the post-tenant
+        // migration's `DROP CONSTRAINT IF EXISTS brz_*_fkey` finds it.
+        (
+            "brz_tree_leaves",
+            "tree_leaves_reservation_id_fkey",
+            "brz_tree_leaves_reservation_id_fkey",
         ),
         (
             "brz_tree_spent_leaves",

@@ -145,69 +145,48 @@ impl Migration {
     }
 }
 
-/// Rename map for a single foreign key. `MySQL` has no `RENAME CONSTRAINT`
-/// for foreign keys, so [`run_migrations`] drops the old FK and re-adds it
-/// under `new_name` using `definition`. The `table` field is the table's
-/// **new** name (the table is renamed before FK changes are applied).
+/// `MySQL` FK rename. `MySQL` has no `RENAME CONSTRAINT` for foreign keys, so
+/// [`run_migrations`] drops the old FK and re-adds it under `new_name`
+/// using `definition`. `table` is the new (post-rename) table name.
 pub struct FkRename<'a> {
     pub table: &'a str,
     pub old_name: &'a str,
     pub new_name: &'a str,
     /// Body after `ADD CONSTRAINT <new_name>`, e.g.
-    /// `"FOREIGN KEY (user_id, reservation_id) REFERENCES new_parent(user_id, id)"`.
+    /// `"FOREIGN KEY (col) REFERENCES other(col) ON DELETE SET NULL"`.
     pub definition: &'a str,
 }
 
-/// One-shot rename map passed to [`run_migrations`] when upgrading an
-/// existing deployment to a renamed schema. Describes how to transition
-/// every Breez-owned schema object — tables, indexes, foreign keys, plus
-/// the per-store schema migrations tracking table itself — from its old
-/// name to its new name. The original use case is applying a `brz_`
-/// namespace prefix.
+/// One-shot pre-prefix rename map for [`run_migrations`]. Lists every
+/// owned table / index / FK to move, plus the migrations tracker itself.
+/// `old_migrations_table` is the canary — if missing, the rename is
+/// skipped (DB is fresh or already upgraded).
 ///
-/// `old_migrations_table` doubles as the **canary**: the helper probes
-/// `information_schema.tables` for it; if missing, the DB is either fresh or
-/// already upgraded and the call is a near-no-op.
-///
-/// `MySQL` primary keys are always named `PRIMARY` (table-scoped), so unlike
-/// the Postgres counterpart this struct has no separate `pk_constraints`
-/// field — PKs travel with their tables automatically.
+/// `MySQL` PKs are always named `PRIMARY` (table-scoped), so PKs travel
+/// with their tables automatically.
 pub struct SchemaRenames<'a> {
     /// Old name of the per-store schema migrations table; used as the
     /// canary check.
     pub old_migrations_table: &'a str,
-    /// New name of the per-store schema migrations table. Also doubles as
-    /// the named-lock identity, so this helper and `run_migrations`
-    /// serialize on the same `GET_LOCK` key.
+    /// New name of the per-store schema migrations table. Must match the
+    /// `migrations_table` argument to [`run_migrations`].
     pub new_migrations_table: &'a str,
     /// `(old_table, new_table)` pairs.
     pub tables: &'a [(&'a str, &'a str)],
-    /// `(parent_table_new_name, old_index, new_index)` triples. `MySQL`
-    /// indexes are scoped to a table and renamed via
-    /// `ALTER TABLE <table> RENAME INDEX <old> TO <new>`.
+    /// `(parent_table_new_name, old_index, new_index)` triples — `MySQL`
+    /// indexes are renamed via `ALTER TABLE <table> RENAME INDEX <old> TO <new>`.
     pub indexes: &'a [(&'a str, &'a str, &'a str)],
     /// Foreign keys to drop-and-recreate under the new name.
     pub foreign_keys: &'a [FkRename<'a>],
 }
 
-/// Renames every object listed in `renames` from its old name to its new
-/// name. Intended to run once before [`run_migrations`] when upgrading an
-/// existing deployment to a renamed schema (the original use case is
-/// applying a `brz_` namespace prefix).
+/// Applies a one-shot schema rename on the caller's connection. Returns
+/// early if the canary `renames.old_migrations_table` is absent.
 ///
-/// Gated on the canary check against `renames.old_migrations_table`: if
-/// that table doesn't exist, the function returns early. The DB is either
-/// fresh (no objects to rename yet) or already upgraded (the migrations
-/// tracking table has already been renamed to `new_migrations_table`). In
-/// both cases there is nothing to do.
-///
-/// All renames run while holding the same named lock that [`run_migrations`]
-/// uses (derived from `new_migrations_table`), so concurrent SDK instances
-/// starting at the same time serialize cleanly. `MySQL` DDL implicitly
-/// commits, so the migrations tracking table is renamed **last** — a crash
-/// mid-rename leaves the canary pointing at the old name and the next
-/// attempt re-runs (each rename is guarded by an `information_schema` probe,
-/// making the replay idempotent).
+/// `MySQL` DDL auto-commits, so renames aren't transactional — the migrations
+/// tracking table is renamed **last** so a crash mid-sequence leaves the
+/// canary pointing at the old name. Each step is `information_schema`-guarded
+/// so the replay is idempotent.
 async fn apply_renames(
     conn: &mut mysql_async::Conn,
     renames: &SchemaRenames<'_>,
@@ -217,9 +196,8 @@ async fn apply_renames(
         return Ok(());
     }
 
-    // Each step is guarded with an information_schema probe so a crash
-    // mid-sequence can be replayed safely (`MySQL` DDL implicitly commits, so
-    // we cannot rely on transactional rollback).
+    // Each step is information_schema-guarded for replay safety after a
+    // crash mid-sequence (DDL auto-commits in `MySQL`).
     for (old, new) in renames.tables {
         if !table_exists(conn, old).await? || table_exists(conn, new).await? {
             continue;
@@ -302,25 +280,19 @@ async fn table_exists(conn: &mut mysql_async::Conn, table: &str) -> Result<bool,
 ///
 /// This function:
 /// - Acquires a named lock (derived from the migrations table name) to prevent concurrent migrations
-/// - Optionally applies a one-shot schema rename before running migrations
-///   (see [`SchemaRenames`]) — useful when upgrading an existing deployment
-///   whose tables were created under different names
+/// - Optionally applies a one-shot schema rename first (see [`SchemaRenames`])
 /// - Creates the migrations tracking table if it doesn't exist
 /// - Applies only new migrations (based on version number)
 /// - Releases the lock before returning
 ///
-/// The rename block and the version-tracked migrations run under the same
-/// `GET_LOCK`, so the whole schema transition is one critical section on
-/// the session connection.
+/// Rename + migrations share one `GET_LOCK` on the session connection.
 ///
 /// # Arguments
 /// * `pool` - The connection pool to use
 /// * `migrations_table` - Name of the table to track migration versions (e.g., `schema_migrations`)
 /// * `migrations` - List of migrations, where each migration is a list of [`Migration`] steps
-/// * `renames` - Optional one-shot rename map for upgrading from an
-///   unprefixed schema. When `Some`, the runner probes the canary table and,
-///   if present, renames everything before processing version-tracked
-///   migrations. When `None`, no rename is attempted.
+/// * `renames` - When `Some`, applied before migrations; canary-gated so
+///   fresh / already-upgraded DBs pay only one probe.
 #[allow(clippy::arithmetic_side_effects)]
 pub async fn run_migrations(
     pool: &Pool,
@@ -627,7 +599,7 @@ mod tests {
         let container: ContainerAsync<Mysql> = Mysql::default()
             .start()
             .await
-            .expect("Failed to start MySQL container");
+            .expect("Failed to start `MySQL` container");
         let host_port = container
             .get_host_port_ipv4(3306)
             .await
@@ -687,18 +659,16 @@ mod tests {
             .expect("second re-run should be a no-op");
     }
 
-    /// Verifies that an existing deployment with the legacy unprefixed schema
-    /// gets upgraded to `brz_`-prefixed names without data loss when
-    /// `run_migrations` is called with `Some(&renames)`. Exercises the full
-    /// rename surface: tables, indexes, foreign keys (drop+recreate), plus
-    /// the migrations tracking table that doubles as the canary.
+    /// End-to-end rename: tables, indexes, FK (drop+recreate), and
+    /// migrations tracker all move from legacy to `brz_*` with seed data
+    /// preserved.
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn test_bootstrap_rename_upgrades_legacy_schema() {
         let container: ContainerAsync<Mysql> = Mysql::default()
             .start()
             .await
-            .expect("Failed to start MySQL container");
+            .expect("Failed to start `MySQL` container");
         let host_port = container
             .get_host_port_ipv4(3306)
             .await
@@ -848,5 +818,82 @@ mod tests {
         run_migrations(&pool, "brz_widget_migrations", &[], Some(&renames))
             .await
             .expect("re-run should be idempotent");
+    }
+
+    /// Rename must skip listed objects that don't exist (partial pre-prefix
+    /// schema, e.g. a customer at an older migration version).
+    #[tokio::test]
+    async fn test_bootstrap_rename_tolerates_missing_objects() {
+        let container: ContainerAsync<Mysql> = Mysql::default()
+            .start()
+            .await
+            .expect("Failed to start MySQL container");
+        let host_port = container
+            .get_host_port_ipv4(3306)
+            .await
+            .expect("Failed to get host port");
+        let pool = create_pool(&MysqlStorageConfig::with_defaults(format!(
+            "mysql://root@127.0.0.1:{host_port}/test"
+        )))
+        .expect("Failed to create pool");
+
+        // Pre-populate the canary + a bare table — no index, no FK. The
+        // rename map below lists objects that don't exist.
+        let mut conn = pool.get_conn().await.expect("get_conn");
+        conn.query_drop(
+            "CREATE TABLE widgets (
+                id VARCHAR(64) NOT NULL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL
+            )",
+        )
+        .await
+        .expect("create table");
+        conn.query_drop("INSERT INTO widgets (id, name) VALUES ('w1', 'alpha')")
+            .await
+            .expect("seed row");
+        conn.query_drop(
+            "CREATE TABLE legacy_widget_migrations (
+                version INT PRIMARY KEY,
+                applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            )",
+        )
+        .await
+        .expect("create canary");
+        conn.query_drop("INSERT INTO legacy_widget_migrations (version) VALUES (1)")
+            .await
+            .expect("seed version row");
+        drop(conn);
+
+        let renames = SchemaRenames {
+            old_migrations_table: "legacy_widget_migrations",
+            new_migrations_table: "brz_widget_migrations",
+            tables: &[("widgets", "brz_widgets")],
+            indexes: &[(
+                "brz_widgets",
+                "idx_widgets_missing",
+                "brz_idx_widgets_missing",
+            )],
+            foreign_keys: &[FkRename {
+                table: "brz_widgets",
+                old_name: "fk_widgets_missing",
+                new_name: "brz_fk_widgets_missing",
+                definition: "FOREIGN KEY (id) REFERENCES brz_widgets(id)",
+            }],
+        };
+
+        run_migrations(&pool, "brz_widget_migrations", &[], Some(&renames))
+            .await
+            .expect("rename must skip missing objects without erroring");
+
+        let mut conn = pool.get_conn().await.expect("get_conn");
+        let row: Option<(String, String)> = conn
+            .exec_first("SELECT id, name FROM brz_widgets WHERE id = 'w1'", ())
+            .await
+            .expect("probe brz_widgets");
+        assert_eq!(
+            row,
+            Some(("w1".to_string(), "alpha".to_string())),
+            "table + data preserved despite missing index/FK"
+        );
     }
 }
