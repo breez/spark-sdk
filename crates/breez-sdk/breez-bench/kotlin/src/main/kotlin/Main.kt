@@ -1,4 +1,4 @@
-import breez_sdk_spark.BitcoinChainServiceHandle
+import breez_sdk_spark.BitcoinChainService
 import breez_sdk_spark.BreezSdk
 import breez_sdk_spark.ChainApiType
 import breez_sdk_spark.ConnectionManager
@@ -123,13 +123,13 @@ class SharedHandlers private constructor(
     val mysqlPool: MysqlConnectionPool,
     val ssp: SspConnectionManager,
     val operators: ConnectionManager,
-    val chainService: BitcoinChainServiceHandle,
+    val chainService: BitcoinChainService,
 ) {
     companion object {
         private const val REGTEST_CHAIN_URL =
             "https://regtest-mempool.us-west-2.sparkinfra.net/api"
 
-        fun create(mysqlUrl: String): SharedHandlers {
+        suspend fun create(mysqlUrl: String): SharedHandlers {
             val chainCreds = breez_sdk_spark.Credentials(
                 username = System.getenv("CHAIN_SERVICE_USERNAME") ?: "spark-sdk",
                 password = System.getenv("CHAIN_SERVICE_PASSWORD") ?: "mCMk1JqlBNtetUNy",
@@ -606,7 +606,7 @@ fun runServer(opts: Map<String, String>) {
         initLogging(logDir, null, logFilter)
     }
 
-    val handlers = SharedHandlers.create(mysqlUrl)
+    val handlers = runBlocking { SharedHandlers.create(mysqlUrl) }
     val provider = BenchSdkProvider(masterSecret, handlers)
 
     val requestsWriter = JsonlWriter(outDir.resolve("requests.jsonl"), ServerRequestLogEntry.serializer())
