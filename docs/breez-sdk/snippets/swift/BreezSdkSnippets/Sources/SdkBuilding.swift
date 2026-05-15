@@ -15,7 +15,7 @@ func initSdkAdvanced() async throws -> BreezSdk {
     await builder.withDefaultStorage(storageDir: "./.data")
     // You can also pass your custom implementations:
     // await builder.withStorage(<your storage implementation>)
-    // await builder.withChainService(wrapChainService(<your chain service implementation>))
+    // await builder.withChainService(<your chain service implementation>)
     // await builder.withRestClient(<your rest client implementation>)
     // await builder.withKeySet(<your key set type>, <use address index>, <account number>)
     // await builder.withPaymentObserver(<your payment observer implementation>)

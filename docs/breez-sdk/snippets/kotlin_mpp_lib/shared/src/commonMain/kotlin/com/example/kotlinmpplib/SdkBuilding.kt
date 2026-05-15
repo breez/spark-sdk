@@ -18,7 +18,7 @@ class SdkBuilding {
             builder.withDefaultStorage("./.data")
             // You can also pass your custom implementations:
             // builder.withStorage(<your storage implementation>)
-            // builder.withChainService(wrapChainService(<your chain service implementation>))
+            // builder.withChainService(<your chain service implementation>)
             // builder.withRestClient(<your rest client implementation>)
             // builder.withKeySet(<your key set type>, <use address index>, <account number>)
             // builder.withPaymentObserver(<your payment observer implementation>)

@@ -25,7 +25,7 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 	builder.WithDefaultStorage("./.data")
 	// You can also pass your custom implementations:
 	// builder.WithStorage(<your storage implementation>)
-	// builder.WithChainService(WrapChainService(<your chain service implementation>))
+	// builder.WithChainService(<your chain service implementation>)
 	// builder.WithRestClient(<your rest client implementation>)
 	// builder.WithKeySet(<your key set type>, <use address index>, <account number>)
 	// builder.WithPaymentObserver(<your payment observer implementation>)

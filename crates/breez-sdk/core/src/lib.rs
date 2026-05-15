@@ -24,8 +24,8 @@ pub mod token_conversion;
 mod utils;
 
 pub use chain::{
-    BitcoinChainService, BitcoinChainServiceHandle, ChainServiceError, RecommendedFees, TxStatus,
-    Utxo, new_rest_chain_service,
+    BitcoinChainService, ChainServiceError, RecommendedFees, TxStatus, Utxo,
+    new_rest_chain_service,
     rest_client::{ChainApiType, RestClientChainService},
 };
 pub use common::rest::{RestClient, RestResponse};
