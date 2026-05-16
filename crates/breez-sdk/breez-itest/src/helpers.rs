@@ -1100,6 +1100,42 @@ async fn ensure_funded_inner(sdk_instance: &mut SdkInstance, min_balance: u64) -
     Ok(())
 }
 
+/// Server-mode variant of [`ensure_funded`].
+///
+/// Identical contract, but routes through `receive_and_fund(.., must_be_claimer=false)`
+/// so the wait loop never depends on a `ClaimedDeposits` SDK event. Server-mode
+/// SDKs don't run the spark-wallet `BackgroundProcessor`, so the event would
+/// never fire on its own; `wait_for_balance` (which polls `sync_wallet` +
+/// `get_info`) is the only mechanism that works in both modes.
+pub async fn ensure_funded_via_polling(
+    sdk_instance: &mut SdkInstance,
+    min_balance: u64,
+) -> Result<()> {
+    let span = sdk_instance.span.clone();
+    return ensure_funded_via_polling_inner(sdk_instance, min_balance)
+        .instrument(span)
+        .await;
+}
+
+async fn ensure_funded_via_polling_inner(
+    sdk_instance: &mut SdkInstance,
+    min_balance: u64,
+) -> Result<()> {
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let info = sdk_instance
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+    if info.balance_sats < min_balance {
+        let needed = min_balance - info.balance_sats;
+        info!("Funding wallet via faucet (polling): need {} sats", needed);
+        receive_and_fund(sdk_instance, needed.clamp(10000, 50000), false).await?;
+    }
+    Ok(())
+}
+
 /// Get a deposit address and fund it from the faucet in one operation
 ///
 /// This helper generates a deposit address, funds it, and waits for the claim event.
@@ -1705,6 +1741,98 @@ pub async fn build_sdk_with_mysql(
             ensure_synced: Some(true),
         })
         .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        span: tracing::Span::current(),
+        temp_dir: None,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}
+
+/// Server-mode variant of [`build_sdk_with_postgres`].
+///
+/// Same wiring (shared PG pool, shared seed, regtest, no LNURL/RT-sync), but
+/// the config comes from `default_server_config` so the SDK runs with
+/// `background_tasks_enabled=false`: no periodic-sync loop, no spark-wallet
+/// `BackgroundProcessor`, no event-driven payment refresh. Callers must drive
+/// every reconciliation via `sync_wallet` (or use polling helpers like
+/// [`ensure_funded_via_polling`] / [`wait_for_balance`]).
+pub async fn build_sdk_with_postgres_server_mode(
+    connection_string: &str,
+    seed_bytes: [u8; 32],
+) -> Result<SdkInstance> {
+    let mut config = breez_sdk_spark::default_server_config(breez_sdk_spark::Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+    config.optimization_config.auto_enabled = false;
+
+    let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
+
+    let postgres_config =
+        breez_sdk_spark::default_postgres_storage_config(connection_string.to_string());
+    let pool = breez_sdk_spark::create_postgres_connection_pool(&postgres_config)?;
+
+    let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
+        .with_postgres_connection_pool(pool)
+        .build()
+        .await?;
+
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    // `ensure_synced=true` is a no-op in server mode; issue an explicit
+    // sync_wallet so the initial tree-store hydrate completes before
+    // returning.
+    sdk.sync_wallet(SyncWalletRequest {}).await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        span: tracing::Span::current(),
+        temp_dir: None,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}
+
+/// Server-mode variant of [`build_sdk_with_mysql`]. See
+/// [`build_sdk_with_postgres_server_mode`] for the rationale.
+pub async fn build_sdk_with_mysql_server_mode(
+    connection_string: &str,
+    seed_bytes: [u8; 32],
+) -> Result<SdkInstance> {
+    let mut config = breez_sdk_spark::default_server_config(breez_sdk_spark::Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+    config.optimization_config.auto_enabled = false;
+
+    let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
+
+    let mut mysql_config =
+        breez_sdk_spark::default_mysql_storage_config(connection_string.to_string());
+    mysql_config.max_pool_size = 30;
+    let pool = breez_sdk_spark::create_mysql_connection_pool(&mysql_config)?;
+
+    let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
+        .with_mysql_connection_pool(pool)
+        .build()
+        .await?;
+
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok(SdkInstance {
         sdk,
