@@ -95,10 +95,22 @@ const exampleConfigureSparkConfig = async () => {
   console.log('Config:', config)
 }
 
+const exampleConfigureBackgroundTasks = async () => {
+  // ANCHOR: config-background-tasks
+  // Server-mode profile: equivalent to defaultServerConfig('mainnet').
+  // Recommended when you build the SDK per request in a multi-tenant server
+  // deployment. See the "Server mode" page for the full profile.
+  const config = defaultConfig('mainnet')
+  config.backgroundTasksEnabled = false
+  // ANCHOR_END: config-background-tasks
+  console.log('Config:', config)
+}
+
 export {
   exampleConfigureSdk,
   exampleConfigurePrivateEnabledDefault,
   exampleConfigureOptimizationConfiguration,
   exampleConfigureStableBalance,
-  exampleConfigureSparkConfig
+  exampleConfigureSparkConfig,
+  exampleConfigureBackgroundTasks
 }

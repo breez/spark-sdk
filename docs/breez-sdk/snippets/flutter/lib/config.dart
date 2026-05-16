@@ -101,3 +101,14 @@ Future<void> configureSparkConfig() async {
   // ANCHOR_END: spark-config
   print(config);
 }
+
+void configureBackgroundTasks() {
+  // ANCHOR: config-background-tasks
+  // Server-mode profile: equivalent to defaultServerConfig(network: Network.mainnet).
+  // Recommended when you build the SDK per request in a multi-tenant server
+  // deployment. See the "Server mode" page for the full profile.
+  final config = defaultConfig(network: Network.mainnet)
+      .copyWith(backgroundTasksEnabled: false);
+  // ANCHOR_END: config-background-tasks
+  print(config);
+}

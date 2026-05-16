@@ -54,3 +54,14 @@ func configureStableBalance() async throws {
     // ANCHOR_END: stable-balance-config
     print("Config: \(config)")
 }
+
+func configureBackgroundTasks() {
+    // ANCHOR: config-background-tasks
+    // Server-mode profile: equivalent to defaultServerConfig(network: .mainnet).
+    // Recommended when you build the SDK per request in a multi-tenant server
+    // deployment. See the "Server mode" page for the full profile.
+    var config = defaultConfig(network: Network.mainnet)
+    config.backgroundTasksEnabled = false
+    // ANCHOR_END: config-background-tasks
+    print("Config: \(config)")
+}

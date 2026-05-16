@@ -29,6 +29,23 @@ The synchronization process is used to detect some payment status updates that a
 
 A shorter synchronization interval provides more responsive detection of payment updates but increases resource usage and may trigger API rate limits. The default interval balances responsiveness with resource efficiency for most use cases.
 
+## Background tasks enabled
+
+Master switch for all per-instance background tasks. Defaults to `true`, which is the right choice for mobile and single-instance deployments — the SDK runs its periodic sync, real-time sync client, lightning-address recovery, spark private-mode init, leaf and token-output optimizers, the spark-wallet background processor, and the flashnet conversion refunder.
+
+Set to `false` for multi-tenant server deployments where the SDK is built per request and the host orchestrates sync, claiming, and event delivery (typically via webhooks) explicitly. No background work is started; manual operations (`sync_wallet`, `claim_deposits`, `claim_transfers`, `refund_pending_conversions`, etc.) continue to work and are the intended entry points in this mode.
+
+The recommended way to opt into server mode is via {{#name default_server_config}}, which returns the same `Config` as {{#name default_config}} with this flag flipped off. See [Server mode](./server_mode.md) for the full profile, lifecycle pattern, and shared-infrastructure wiring. Configuring this field directly is supported if you build your `Config` another way:
+
+{{#tabs config:config-background-tasks}}
+
+<div class="warning">
+<h4>Developer note</h4>
+
+When this flag is `false`, related per-field options such as [`real_time_sync_server_url`](#real-time-sync-server-url) and [`optimization_config.auto_enabled`](#optimization-configuration) retain their configured values but the corresponding background services are not started. Their values stay visible on the `Config` so your code reads what it set, but they have no runtime effect in server mode.
+
+</div>
+
 ## LNURL Domain
 
 The LNURL domain to be used for receiving LNURL and Lightning address payments. By default, the [Breez LNURL server](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/lnurl) instance will be used. You may configure a different domain, or set no domain to disable receiving payments using LNURL. For more information, see [Receiving payments using LNURL-Pay](./receive_lnurl_pay.md).

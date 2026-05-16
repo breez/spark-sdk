@@ -279,6 +279,10 @@ impl BreezSdk {
         self.inner.list_webhooks().await
     }
 
+    pub async fn refund_pending_conversions(&self) -> Result<(), SdkError> {
+        self.inner.refund_pending_conversions().await
+    }
+
     pub async fn add_contact(&self, request: AddContactRequest) -> Result<Contact, SdkError> {
         self.inner.add_contact(request).await
     }
