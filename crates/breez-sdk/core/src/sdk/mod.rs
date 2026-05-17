@@ -236,9 +236,13 @@ pub fn default_config(network: Network) -> Config {
 /// retain their default values; the runtime profile prevents the corresponding
 /// background services from being started.
 ///
-/// Manual operations (`sync_wallet`, `claim_deposits`, `claim_transfers`,
-/// `recover_lightning_address`, etc.) continue to work and are the intended
+/// Explicit operations (`sync_wallet`, `claim_deposit`,
+/// `list_unclaimed_deposits`, `refund_deposit`,
+/// `refund_pending_conversions`, etc.) continue to work and are the intended
 /// entry points in this mode.
+///
+/// Stable Balance is not supported in this mode because its conversion worker
+/// is a background service.
 ///
 /// One-time setup that the client-mode SDK applies automatically — notably
 /// [`private_enabled_default`](Config::private_enabled_default) — is NOT

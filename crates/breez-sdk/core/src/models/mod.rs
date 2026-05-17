@@ -636,9 +636,13 @@ pub struct Config {
     /// [`default_server_config`](crate::default_server_config) to get this
     /// preset.
     ///
-    /// Manual operations (`sync_wallet`, `claim_deposits`, `claim_transfers`,
-    /// `recover_lightning_address`, leaf/token optimization, etc.) work in
+    /// Explicit operations (`sync_wallet`, `claim_deposit`,
+    /// `list_unclaimed_deposits`, `refund_deposit`,
+    /// `refund_pending_conversions`, leaf/token optimization, etc.) work in
     /// both modes.
+    ///
+    /// Stable Balance is not supported when this is `false`, because its
+    /// conversion worker is a background service.
     ///
     /// The SDK reads this once while building its internal runtime profile.
     /// Feature code should use the runtime's sync/state/lifecycle services

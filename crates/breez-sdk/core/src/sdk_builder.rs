@@ -472,6 +472,12 @@ impl SdkBuilder {
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
         // Validate configuration
         self.config.validate()?;
+        let runtime = runtime_from_config(&self.config);
+        if !runtime.starts_background_services() && self.config.stable_balance_config.is_some() {
+            return Err(SdkError::InvalidInput(
+                "Stable Balance is not supported in server mode".to_string(),
+            ));
+        }
 
         // Create the base signer based on the signer source
         let signer: Arc<dyn crate::signer::BreezSigner> = match self.signer_source {
@@ -664,7 +670,6 @@ impl SdkBuilder {
 
         let user_agent = crate::default_user_agent();
         info!("Building sdk with user agent: {}", user_agent);
-        let runtime = runtime_from_config(&self.config);
 
         let breez_server = Arc::new(
             BreezServer::new(PRODUCTION_BREEZSERVER_URL, None, &user_agent)
@@ -968,7 +973,10 @@ fn default_storage(
 #[cfg(test)]
 mod tests {
     use super::SdkBuilder;
-    use crate::{Network, default_config};
+    use crate::{
+        Network, SdkError, Seed, StableBalanceConfig, StableBalanceToken, default_config,
+        default_server_config,
+    };
 
     #[test]
     fn default_config_spark_config_builds_valid_wallet_config() {
@@ -985,6 +993,34 @@ mod tests {
                     )
                 },
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn server_mode_rejects_stable_balance_config() {
+        let mut config = default_server_config(Network::Regtest);
+        config.stable_balance_config = Some(StableBalanceConfig {
+            tokens: vec![StableBalanceToken {
+                label: "USDB".to_string(),
+                token_identifier: "btkn1test".to_string(),
+            }],
+            default_active_label: None,
+            threshold_sats: None,
+            max_slippage_bps: None,
+        });
+
+        let seed = Seed::Mnemonic {
+            mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            passphrase: None,
+        };
+
+        let result = SdkBuilder::new(config, seed).build().await;
+        match result {
+            Err(SdkError::InvalidInput(message)) => {
+                assert!(message.contains("Stable Balance is not supported in server mode"));
+            }
+            Err(err) => panic!("expected InvalidInput error, got {err:?}"),
+            Ok(_) => panic!("expected server mode with Stable Balance config to fail"),
         }
     }
 }

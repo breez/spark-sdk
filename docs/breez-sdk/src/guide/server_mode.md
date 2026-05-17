@@ -65,7 +65,7 @@ The standard claim flow documented in [Claiming on-chain deposits](onchain_claim
 
 Stable Balance is not available in server mode. The feature depends on the client runtime's background conversion worker, so server-mode SDKs will not automatically convert received Bitcoin to the active stable token and will not process Stable Balance activation/deactivation conversions in the background.
 
-Explicit token conversion flows used by payment APIs can still be used, but do not configure Stable Balance for a server-mode deployment unless a dedicated server-side driver is added.
+If [`stable_balance_config`](./config.md#stable-balance-configuration) is set while using server mode, SDK initialization fails with an invalid input error. Explicit token conversion flows used by payment APIs can still be used, but do not configure Stable Balance for a server-mode deployment.
 
 ### Token conversion refunds
 
