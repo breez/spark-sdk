@@ -33,8 +33,9 @@ None of the following per-instance background work is started when `background_t
 - **Lightning-address recovery** — the SDK does not refresh the registered lightning address on startup.
 - **Spark private-mode init** — the [`private_enabled_default`](./config.md#private-mode-enabled-by-default) preset is **not** applied automatically on first startup; you must opt in once via {{#name update_user_settings}} (see [User settings](user_settings.md)).
 - **Flashnet conversion refunder** — no periodic refund pass for failed token conversions.
+- **Stable Balance** — Stable Balance is not supported in server mode because its conversion worker is a background service. Do not rely on automatic Bitcoin-to-token conversion on receive, activation/deactivation conversion, or other Stable Balance background behavior in this profile.
 
-Manual operations (`sync_wallet`, `claim_deposits`, `claim_transfers`, `recover_lightning_address`, `refund_pending_conversions`, etc.) continue to work and are the intended entry points in this mode.
+Explicit operations such as `sync_wallet`, `claim_deposit`, `list_unclaimed_deposits`, `refund_deposit`, and `refund_pending_conversions` continue to work and are the intended entry points in this mode.
 
 ## Driving the SDK explicitly
 
@@ -53,7 +54,18 @@ The {{#enum SdkEvent::Synced}} event pattern documented in [Listening to events]
 
 ### Claiming on-chain deposits
 
-Call {{#name claim_deposits}} from your on-chain deposit webhook (or chain watcher) after you observe a confirmed deposit. The standard claim flow documented in [Claiming on-chain deposits](onchain_claims.md) applies; the only difference is that server-mode SDKs do not run the periodic claim sweep that the mobile profile uses.
+Server-mode SDKs do not run the periodic deposit detection and claim sweep that the mobile profile uses. When your webhook or chain watcher observes a relevant on-chain deposit, handle it explicitly:
+
+- Call {{#name sync_wallet}} to run the SDK's deposit sync and automatic claim logic using your configured [`max_deposit_claim_fee`](./config.md#max-deposit-claim-fee).
+- If your backend already knows the deposit outpoint and wants to drive a specific claim, call {{#name claim_deposit}} for that `txid`/`vout`.
+
+The standard claim flow documented in [Claiming on-chain deposits](onchain_claims.md) applies.
+
+### Stable Balance
+
+Stable Balance is not available in server mode. The feature depends on the client runtime's background conversion worker, so server-mode SDKs will not automatically convert received Bitcoin to the active stable token and will not process Stable Balance activation/deactivation conversions in the background.
+
+Explicit token conversion flows used by payment APIs can still be used, but do not configure Stable Balance for a server-mode deployment unless a dedicated server-side driver is added.
 
 ### Token conversion refunds
 
@@ -72,7 +84,7 @@ Without the background processor, the SDK doesn't emit `PaymentSucceeded` / `Pay
 - [Managing webhooks](webhooks.md) describes the supported event types and registration flow.
 - [Lightning Address payment notifications](lnurl_webhooks.md) covers the LNURL server's webhook for incoming LNURL payments.
 
-A typical pipeline: webhook arrives → webhook handler builds a per-request SDK, calls `sync_wallet()` + the relevant operation (e.g. `claim_deposits`), disconnects.
+A typical pipeline: webhook arrives → webhook handler builds a per-request SDK, calls `sync_wallet()` or the relevant explicit operation (e.g. `claim_deposit`), disconnects.
 
 ## Lifecycle pattern
 
@@ -106,10 +118,10 @@ Anything driven by an external signal that the wallet state changed. The exact o
     webhook in  →  build SDK  →  sync_wallet()  →  disconnect()
 ```
 
-- **On-chain deposit webhook** (or chain watcher) — call `claim_deposits` to finalize the claim:
+- **On-chain deposit webhook** (or chain watcher) — call `sync_wallet()` to run the deposit sync and automatic claim sweep, or call `claim_deposit` if you want to claim a known outpoint explicitly:
 
 ```text
-    webhook in  →  build SDK  →  claim_deposits()  →  disconnect()
+    webhook in  →  build SDK  →  sync_wallet() / claim_deposit()  →  disconnect()
 ```
 
 ### One-time provisioning
