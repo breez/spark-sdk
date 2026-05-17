@@ -973,10 +973,7 @@ fn default_storage(
 #[cfg(test)]
 mod tests {
     use super::SdkBuilder;
-    use crate::{
-        Network, SdkError, Seed, StableBalanceConfig, StableBalanceToken, default_config,
-        default_server_config,
-    };
+    use crate::{Network, default_config};
 
     #[test]
     fn default_config_spark_config_builds_valid_wallet_config() {
@@ -996,8 +993,17 @@ mod tests {
         }
     }
 
+    // tokio::test requires `rt`, which the workspace only enables on
+    // non-wasm targets. Gate this test (and its imports) accordingly so
+    // `cargo clippy --target wasm32-unknown-unknown --all-targets` stays
+    // clean.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     #[tokio::test]
     async fn server_mode_rejects_stable_balance_config() {
+        use crate::{
+            SdkError, Seed, StableBalanceConfig, StableBalanceToken, default_server_config,
+        };
+
         let mut config = default_server_config(Network::Regtest);
         config.stable_balance_config = Some(StableBalanceConfig {
             tokens: vec![StableBalanceToken {
