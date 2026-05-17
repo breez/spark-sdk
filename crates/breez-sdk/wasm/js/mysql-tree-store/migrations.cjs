@@ -177,6 +177,11 @@ class MysqlTreeStoreMigrationManager {
       ],
       ["brz_tree_leaves", "idx_tree_leaves_user_added_at", "brz_idx_tree_leaves_user_added_at"],
       ["brz_tree_leaves", "idx_tree_leaves_user_slim", "brz_idx_tree_leaves_user_slim"],
+      // Pre-multi-tenant indexes (dropped by the multi-tenant migration).
+      ["brz_tree_leaves", "idx_tree_leaves_available", "brz_idx_tree_leaves_available"],
+      ["brz_tree_leaves", "idx_tree_leaves_reservation", "brz_idx_tree_leaves_reservation"],
+      ["brz_tree_leaves", "idx_tree_leaves_added_at", "brz_idx_tree_leaves_added_at"],
+      ["brz_tree_leaves", "idx_tree_leaves_slim", "brz_idx_tree_leaves_slim"],
     ];
     for (const [table, oldName, newName] of indexRenames) {
       if (

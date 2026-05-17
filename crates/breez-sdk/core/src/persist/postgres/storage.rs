@@ -54,6 +54,7 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
         ("contacts", "brz_contacts"),
     ],
     indexes: &[
+        // Post-multi-tenant indexes (current state on version >= 16 DBs).
         (
             "idx_payments_user_timestamp",
             "brz_idx_payments_user_timestamp",
@@ -82,6 +83,32 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
         (
             "idx_sync_incoming_user_revision",
             "brz_idx_sync_incoming_user_revision",
+        ),
+        // Pre-multi-tenant indexes (still present on version < 16 DBs).
+        // The multi-tenant migration drops these via `DROP INDEX IF EXISTS
+        // brz_idx_*`, so the rename moves them under the prefix first.
+        ("idx_payments_timestamp", "brz_idx_payments_timestamp"),
+        ("idx_payments_payment_type", "brz_idx_payments_payment_type"),
+        ("idx_payments_status", "brz_idx_payments_status"),
+        (
+            "idx_payment_metadata_parent",
+            "brz_idx_payment_metadata_parent",
+        ),
+        (
+            "idx_payment_details_lightning_invoice",
+            "brz_idx_payment_details_lightning_invoice",
+        ),
+        (
+            "idx_payment_details_lightning_payment_hash",
+            "brz_idx_payment_details_lightning_payment_hash",
+        ),
+        (
+            "idx_sync_outgoing_data_id_record_type",
+            "brz_idx_sync_outgoing_data_id_record_type",
+        ),
+        (
+            "idx_sync_incoming_revision",
+            "brz_idx_sync_incoming_revision",
         ),
     ],
     constraints: &[
@@ -2888,6 +2915,264 @@ mod tests {
                 created_at BIGINT NOT NULL,
                 updated_at BIGINT NOT NULL,
                 PRIMARY KEY (user_id, id)
+            )"
+            .to_string(),
+        ]
+    }
+
+    /// End-to-end rename against a **pre-multi-tenant** legacy schema
+    /// (version=15): unprefixed tables without `user_id`, pre-tenant
+    /// indexes only. After `migrate()`, the rename moves pre-tenant indexes
+    /// under `brz_*`, then migration 16 (multi-tenant) drops them and
+    /// creates `brz_*_user_*` variants. No unprefixed `idx_*` should
+    /// survive on any brz_ table.
+    #[tokio::test]
+    async fn test_rename_against_pre_tenant_legacy_schema() {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start PostgreSQL container");
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get host port");
+        let connection_string = format!(
+            "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+        );
+
+        let pool = create_pool(&PostgresStorageConfig::with_defaults(
+            connection_string.clone(),
+        ))
+        .expect("create pool");
+        {
+            let client = pool.get().await.expect("get_conn");
+            for stmt in pre_tenant_legacy_schema_sql() {
+                client.batch_execute(&stmt).await.unwrap_or_else(|e| {
+                    panic!("pre-tenant legacy schema setup failed at\n{stmt}\n=> {e}")
+                });
+            }
+            // Seed data must survive the rename + the multi-tenant
+            // migration's user_id backfill.
+            client
+                .execute(
+                    "INSERT INTO payments
+                     (id, payment_type, status, amount, fees, timestamp, method)
+                     VALUES ('p1', 'receive', 'completed', '1000', '0', 100, 'lightning')",
+                    &[],
+                )
+                .await
+                .expect("seed payment");
+            client
+                .execute(
+                    "INSERT INTO settings (key, value) VALUES ('seed_key', 'seed_value')",
+                    &[],
+                )
+                .await
+                .expect("seed setting");
+        }
+
+        // Build storage with run_migration=true — fires rename then runs
+        // migration 16 (the only one left after seed at version=15).
+        let storage = PostgresStorage::new(
+            PostgresStorageConfig::with_defaults(connection_string),
+            &TEST_IDENTITY_A,
+        )
+        .await
+        .expect("migrate against pre-tenant schema");
+
+        let client = pool.get().await.expect("get_conn");
+
+        // The bug check: no unprefixed `idx_*` index should remain on any
+        // brz_ table after the rename + multi-tenant migration.
+        let orphan_rows = client
+            .query(
+                "SELECT indexname, tablename FROM pg_indexes
+                 WHERE schemaname = current_schema()
+                   AND tablename LIKE 'brz_%'
+                   AND indexname LIKE 'idx_%'",
+                &[],
+            )
+            .await
+            .expect("scan orphan indexes");
+        let orphans: Vec<(String, String)> = orphan_rows
+            .iter()
+            .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
+            .collect();
+        assert!(
+            orphans.is_empty(),
+            "found orphan unprefixed indexes after upgrade: {orphans:?}"
+        );
+
+        // Migration version advanced from 15 to 16.
+        let version: i32 = client
+            .query_one("SELECT MAX(version) FROM brz_schema_migrations", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(version, 16, "migration must advance to 16");
+
+        // Seed data preserved (multi-tenant backfilled user_id to current tenant).
+        let payment_count: i64 = client
+            .query_one("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(payment_count, 1, "seed payment must survive upgrade");
+
+        let setting = storage
+            .get_cached_item("seed_key".to_string())
+            .await
+            .expect("get_cached_item");
+        assert_eq!(setting.as_deref(), Some("seed_value"));
+    }
+
+    /// Pre-multi-tenant schema snapshot (version=15): unprefixed tables
+    /// without `user_id`, pre-tenant indexes, no post-tenant indexes.
+    /// Captures the SDK schema state just before migration 16.
+    #[allow(clippy::too_many_lines)]
+    fn pre_tenant_legacy_schema_sql() -> Vec<String> {
+        vec![
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMPTZ DEFAULT NOW()
+            )"
+            .to_string(),
+            "INSERT INTO schema_migrations (version)
+             SELECT generate_series(1, 15)"
+                .to_string(),
+            // Core tables (migration 1) — no user_id, simple PKs.
+            "CREATE TABLE payments (
+                id TEXT PRIMARY KEY,
+                payment_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                fees TEXT NOT NULL,
+                timestamp BIGINT NOT NULL,
+                method TEXT,
+                withdraw_tx_id TEXT,
+                deposit_tx_id TEXT,
+                spark BOOLEAN
+            )"
+            .to_string(),
+            "CREATE TABLE settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )"
+            .to_string(),
+            "CREATE TABLE unclaimed_deposits (
+                txid TEXT NOT NULL,
+                vout INTEGER NOT NULL,
+                amount_sats BIGINT,
+                claim_error JSONB,
+                refund_tx TEXT,
+                refund_tx_id TEXT,
+                is_mature BOOLEAN NOT NULL DEFAULT TRUE,
+                PRIMARY KEY (txid, vout)
+            )"
+            .to_string(),
+            "CREATE TABLE payment_metadata (
+                payment_id TEXT PRIMARY KEY,
+                parent_payment_id TEXT,
+                lnurl_pay_info JSONB,
+                lnurl_withdraw_info JSONB,
+                lnurl_description TEXT,
+                conversion_info JSONB,
+                conversion_status TEXT
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_lightning (
+                payment_id TEXT PRIMARY KEY,
+                invoice TEXT NOT NULL,
+                payment_hash TEXT NOT NULL,
+                destination_pubkey TEXT NOT NULL,
+                description TEXT,
+                htlc_status TEXT NOT NULL DEFAULT 'WaitingForPreimage',
+                htlc_expiry_time BIGINT NOT NULL DEFAULT 0
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_token (
+                payment_id TEXT PRIMARY KEY,
+                metadata JSONB NOT NULL,
+                tx_hash TEXT NOT NULL,
+                invoice_details JSONB,
+                tx_type TEXT NOT NULL DEFAULT 'transfer'
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_spark (
+                payment_id TEXT PRIMARY KEY,
+                invoice_details JSONB,
+                htlc_details JSONB
+            )"
+            .to_string(),
+            "CREATE TABLE lnurl_receive_metadata (
+                payment_hash TEXT PRIMARY KEY,
+                nostr_zap_request TEXT,
+                nostr_zap_receipt TEXT,
+                sender_comment TEXT
+            )"
+            .to_string(),
+            // Sync tables (migration 2) — including pre-tenant indexes.
+            "CREATE TABLE sync_revision (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                revision BIGINT NOT NULL DEFAULT 0,
+                CHECK (id = 1)
+            )"
+            .to_string(),
+            "INSERT INTO sync_revision (id, revision) VALUES (1, 0)".to_string(),
+            "CREATE TABLE sync_outgoing (
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                updated_fields_json JSONB NOT NULL,
+                revision BIGINT NOT NULL
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_outgoing_data_id_record_type
+             ON sync_outgoing(record_type, data_id)"
+                .to_string(),
+            "CREATE TABLE sync_state (
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSONB NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY(record_type, data_id)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_incoming (
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSONB NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY(record_type, data_id, revision)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision)".to_string(),
+            // Pre-tenant indexes on payments etc. (migration 3).
+            "CREATE INDEX idx_payments_timestamp ON payments(timestamp)".to_string(),
+            "CREATE INDEX idx_payments_payment_type ON payments(payment_type)".to_string(),
+            "CREATE INDEX idx_payments_status ON payments(status)".to_string(),
+            "CREATE INDEX idx_payment_details_lightning_invoice
+             ON payment_details_lightning(invoice)"
+                .to_string(),
+            "CREATE INDEX idx_payment_metadata_parent
+             ON payment_metadata(parent_payment_id)"
+                .to_string(),
+            // Migration 10 index on payment_hash.
+            "CREATE INDEX idx_payment_details_lightning_payment_hash
+             ON payment_details_lightning(payment_hash)"
+                .to_string(),
+            // Migration 11 contacts table.
+            "CREATE TABLE contacts (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                payment_identifier TEXT NOT NULL,
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL
             )"
             .to_string(),
         ]

@@ -128,6 +128,10 @@ class TokenStoreMigrationManager {
       ["idx_token_metadata_user_issuer_pk", "brz_idx_token_metadata_user_issuer_pk"],
       ["idx_token_outputs_user_identifier", "brz_idx_token_outputs_user_identifier"],
       ["idx_token_outputs_user_reservation", "brz_idx_token_outputs_user_reservation"],
+      // Pre-multi-tenant indexes (dropped by the multi-tenant migration).
+      ["idx_token_metadata_issuer_pk", "brz_idx_token_metadata_issuer_pk"],
+      ["idx_token_outputs_identifier", "brz_idx_token_outputs_identifier"],
+      ["idx_token_outputs_reservation", "brz_idx_token_outputs_reservation"],
     ];
     for (const [oldName, newName] of indexRenames) {
       await client.query(`ALTER INDEX IF EXISTS ${oldName} RENAME TO ${newName}`);

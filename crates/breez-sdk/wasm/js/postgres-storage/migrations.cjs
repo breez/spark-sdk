@@ -145,6 +145,24 @@ class PostgresMigrationManager {
         "brz_idx_sync_outgoing_user_record_type_data_id",
       ],
       ["idx_sync_incoming_user_revision", "brz_idx_sync_incoming_user_revision"],
+      // Pre-multi-tenant indexes (still present on version < 16 DBs).
+      ["idx_payments_timestamp", "brz_idx_payments_timestamp"],
+      ["idx_payments_payment_type", "brz_idx_payments_payment_type"],
+      ["idx_payments_status", "brz_idx_payments_status"],
+      ["idx_payment_metadata_parent", "brz_idx_payment_metadata_parent"],
+      [
+        "idx_payment_details_lightning_invoice",
+        "brz_idx_payment_details_lightning_invoice",
+      ],
+      [
+        "idx_payment_details_lightning_payment_hash",
+        "brz_idx_payment_details_lightning_payment_hash",
+      ],
+      [
+        "idx_sync_outgoing_data_id_record_type",
+        "brz_idx_sync_outgoing_data_id_record_type",
+      ],
+      ["idx_sync_incoming_revision", "brz_idx_sync_incoming_revision"],
     ];
     for (const [oldName, newName] of indexRenames) {
       await client.query(`ALTER INDEX IF EXISTS ${oldName} RENAME TO ${newName}`);

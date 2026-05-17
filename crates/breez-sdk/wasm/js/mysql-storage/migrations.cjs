@@ -218,6 +218,35 @@ class MysqlMigrationManager {
         "idx_sync_incoming_user_revision",
         "brz_idx_sync_incoming_user_revision",
       ],
+      // Pre-multi-tenant indexes (still present on version < 16 DBs).
+      ["brz_payments", "idx_payments_timestamp", "brz_idx_payments_timestamp"],
+      ["brz_payments", "idx_payments_payment_type", "brz_idx_payments_payment_type"],
+      ["brz_payments", "idx_payments_status", "brz_idx_payments_status"],
+      [
+        "brz_payment_metadata",
+        "idx_payment_metadata_parent",
+        "brz_idx_payment_metadata_parent",
+      ],
+      [
+        "brz_payment_details_lightning",
+        "idx_payment_details_lightning_invoice",
+        "brz_idx_payment_details_lightning_invoice",
+      ],
+      [
+        "brz_payment_details_lightning",
+        "idx_payment_details_lightning_payment_hash",
+        "brz_idx_payment_details_lightning_payment_hash",
+      ],
+      [
+        "brz_sync_outgoing",
+        "idx_sync_outgoing_data_id_record_type",
+        "brz_idx_sync_outgoing_data_id_record_type",
+      ],
+      [
+        "brz_sync_incoming",
+        "idx_sync_incoming_revision",
+        "brz_idx_sync_incoming_revision",
+      ],
     ];
     for (const [table, oldName, newName] of indexRenames) {
       if (

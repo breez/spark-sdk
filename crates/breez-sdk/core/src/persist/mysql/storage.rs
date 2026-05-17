@@ -92,6 +92,48 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
             "idx_sync_incoming_user_revision",
             "brz_idx_sync_incoming_user_revision",
         ),
+        // Pre-multi-tenant indexes (still present on version < 16 DBs).
+        // The multi-tenant migration drops these via the post-rename names.
+        (
+            "brz_payments",
+            "idx_payments_timestamp",
+            "brz_idx_payments_timestamp",
+        ),
+        (
+            "brz_payments",
+            "idx_payments_payment_type",
+            "brz_idx_payments_payment_type",
+        ),
+        (
+            "brz_payments",
+            "idx_payments_status",
+            "brz_idx_payments_status",
+        ),
+        (
+            "brz_payment_metadata",
+            "idx_payment_metadata_parent",
+            "brz_idx_payment_metadata_parent",
+        ),
+        (
+            "brz_payment_details_lightning",
+            "idx_payment_details_lightning_invoice",
+            "brz_idx_payment_details_lightning_invoice",
+        ),
+        (
+            "brz_payment_details_lightning",
+            "idx_payment_details_lightning_payment_hash",
+            "brz_idx_payment_details_lightning_payment_hash",
+        ),
+        (
+            "brz_sync_outgoing",
+            "idx_sync_outgoing_data_id_record_type",
+            "brz_idx_sync_outgoing_data_id_record_type",
+        ),
+        (
+            "brz_sync_incoming",
+            "idx_sync_incoming_revision",
+            "brz_idx_sync_incoming_revision",
+        ),
     ],
     foreign_keys: &[],
 };
@@ -2657,6 +2699,240 @@ mod tests {
                 created_at BIGINT NOT NULL,
                 updated_at BIGINT NOT NULL,
                 PRIMARY KEY (user_id, id)
+            )"
+            .to_string(),
+        ]
+    }
+
+    /// `MySQL` counterpart of the Postgres
+    /// `test_rename_against_pre_tenant_legacy_schema`. Validates that the
+    /// rename + multi-tenant migration leaves no orphan unprefixed indexes
+    /// on any brz_ table.
+    #[tokio::test]
+    async fn test_rename_against_pre_tenant_legacy_schema() {
+        let container = Mysql::default()
+            .start()
+            .await
+            .expect("Failed to start MySQL container");
+        let host_port = container
+            .get_host_port_ipv4(3306)
+            .await
+            .expect("Failed to get host port");
+        let connection_string = format!("mysql://root@127.0.0.1:{host_port}/test");
+
+        let pool = create_pool(&MysqlStorageConfig::with_defaults(
+            connection_string.clone(),
+        ))
+        .expect("create pool");
+        {
+            let mut conn = pool.get_conn().await.expect("get_conn");
+            for stmt in pre_tenant_legacy_schema_sql() {
+                conn.query_drop(&stmt).await.unwrap_or_else(|e| {
+                    panic!("pre-tenant legacy schema setup failed at\n{stmt}\n=> {e}")
+                });
+            }
+            conn.query_drop(
+                "INSERT INTO payments
+                 (id, payment_type, status, amount, fees, timestamp, method)
+                 VALUES ('p1', 'receive', 'completed', '1000', '0', 100, 'lightning')",
+            )
+            .await
+            .expect("seed payment");
+            conn.query_drop(
+                "INSERT INTO settings (`key`, value) VALUES ('seed_key', 'seed_value')",
+            )
+            .await
+            .expect("seed setting");
+        }
+
+        let storage = MysqlStorage::new(
+            MysqlStorageConfig::with_defaults(connection_string),
+            &TEST_IDENTITY_A,
+        )
+        .await
+        .expect("migrate against pre-tenant schema");
+
+        let mut conn = pool.get_conn().await.expect("get_conn");
+
+        // The bug check: no unprefixed `idx_*` index on any brz_ table.
+        // `information_schema.statistics` lists one row per (table, index,
+        // column) — DISTINCT collapses to unique (table, index) pairs.
+        let orphan_rows: Vec<(String, String)> = conn
+            .exec(
+                "SELECT DISTINCT table_name, index_name
+                 FROM information_schema.statistics
+                 WHERE table_schema = DATABASE()
+                   AND table_name LIKE 'brz\\_%'
+                   AND index_name LIKE 'idx\\_%'",
+                (),
+            )
+            .await
+            .expect("scan orphan indexes");
+        assert!(
+            orphan_rows.is_empty(),
+            "found orphan unprefixed indexes after upgrade: {orphan_rows:?}"
+        );
+
+        let version: Option<i32> = conn
+            .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
+            .await
+            .unwrap();
+        assert_eq!(version, Some(16), "migration must advance to 16");
+
+        let payment_count: Option<i64> = conn
+            .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
+            .await
+            .unwrap();
+        assert_eq!(payment_count, Some(1), "seed payment must survive upgrade");
+
+        let setting = storage
+            .get_cached_item("seed_key".to_string())
+            .await
+            .expect("get_cached_item");
+        assert_eq!(setting.as_deref(), Some("seed_value"));
+    }
+
+    /// Pre-multi-tenant `MySQL` schema snapshot (version=15).
+    #[allow(clippy::too_many_lines)]
+    fn pre_tenant_legacy_schema_sql() -> Vec<String> {
+        vec![
+            "CREATE TABLE schema_migrations (
+                version INT PRIMARY KEY,
+                applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            )"
+            .to_string(),
+            (1..=15)
+                .map(|v| format!("INSERT INTO schema_migrations (version) VALUES ({v})"))
+                .collect::<Vec<_>>()
+                .join(";"),
+            "CREATE TABLE payments (
+                id VARCHAR(255) NOT NULL PRIMARY KEY,
+                payment_type VARCHAR(64) NOT NULL,
+                status VARCHAR(64) NOT NULL,
+                amount VARCHAR(64) NOT NULL,
+                fees VARCHAR(64) NOT NULL,
+                timestamp BIGINT NOT NULL,
+                method VARCHAR(64) NULL,
+                withdraw_tx_id VARCHAR(255) NULL,
+                deposit_tx_id VARCHAR(255) NULL,
+                spark TINYINT(1) NULL
+            )"
+            .to_string(),
+            "CREATE TABLE settings (
+                `key` VARCHAR(255) NOT NULL PRIMARY KEY,
+                value LONGTEXT NOT NULL
+            )"
+            .to_string(),
+            "CREATE TABLE unclaimed_deposits (
+                txid VARCHAR(255) NOT NULL,
+                vout INT NOT NULL,
+                amount_sats BIGINT NULL,
+                claim_error JSON NULL,
+                refund_tx LONGTEXT NULL,
+                refund_tx_id VARCHAR(255) NULL,
+                is_mature TINYINT(1) NOT NULL DEFAULT 1,
+                PRIMARY KEY (txid, vout)
+            )"
+            .to_string(),
+            "CREATE TABLE payment_metadata (
+                payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                parent_payment_id VARCHAR(255) NULL,
+                lnurl_pay_info JSON NULL,
+                lnurl_withdraw_info JSON NULL,
+                lnurl_description LONGTEXT NULL,
+                conversion_info JSON NULL,
+                conversion_status VARCHAR(64) NULL
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_lightning (
+                payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                invoice LONGTEXT NOT NULL,
+                payment_hash VARCHAR(255) NOT NULL,
+                destination_pubkey VARCHAR(255) NOT NULL,
+                description LONGTEXT NULL,
+                htlc_status VARCHAR(64) NOT NULL DEFAULT 'WaitingForPreimage',
+                htlc_expiry_time BIGINT NOT NULL DEFAULT 0
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_token (
+                payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                metadata JSON NOT NULL,
+                tx_hash VARCHAR(255) NOT NULL,
+                invoice_details JSON NULL,
+                tx_type VARCHAR(64) NOT NULL DEFAULT 'transfer'
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_spark (
+                payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                invoice_details JSON NULL,
+                htlc_details JSON NULL
+            )"
+            .to_string(),
+            "CREATE TABLE lnurl_receive_metadata (
+                payment_hash VARCHAR(255) NOT NULL PRIMARY KEY,
+                nostr_zap_request LONGTEXT NULL,
+                nostr_zap_receipt LONGTEXT NULL,
+                sender_comment LONGTEXT NULL
+            )"
+            .to_string(),
+            "CREATE TABLE sync_revision (
+                id INT NOT NULL PRIMARY KEY DEFAULT 1,
+                revision BIGINT NOT NULL DEFAULT 0,
+                CHECK (id = 1)
+            )"
+            .to_string(),
+            "INSERT INTO sync_revision (id, revision) VALUES (1, 0)".to_string(),
+            "CREATE TABLE sync_outgoing (
+                record_type VARCHAR(255) NOT NULL,
+                data_id VARCHAR(255) NOT NULL,
+                schema_version VARCHAR(64) NOT NULL,
+                commit_time BIGINT NOT NULL,
+                updated_fields_json JSON NOT NULL,
+                revision BIGINT NOT NULL
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_outgoing_data_id_record_type
+             ON sync_outgoing(record_type, data_id)"
+                .to_string(),
+            "CREATE TABLE sync_state (
+                record_type VARCHAR(255) NOT NULL,
+                data_id VARCHAR(255) NOT NULL,
+                schema_version VARCHAR(64) NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSON NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY(record_type, data_id)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_incoming (
+                record_type VARCHAR(255) NOT NULL,
+                data_id VARCHAR(255) NOT NULL,
+                schema_version VARCHAR(64) NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSON NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY(record_type, data_id, revision)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision)".to_string(),
+            "CREATE INDEX idx_payments_timestamp ON payments(timestamp)".to_string(),
+            "CREATE INDEX idx_payments_payment_type ON payments(payment_type)".to_string(),
+            "CREATE INDEX idx_payments_status ON payments(status)".to_string(),
+            "CREATE INDEX idx_payment_details_lightning_invoice
+             ON payment_details_lightning(invoice(255))"
+                .to_string(),
+            "CREATE INDEX idx_payment_metadata_parent
+             ON payment_metadata(parent_payment_id)"
+                .to_string(),
+            "CREATE INDEX idx_payment_details_lightning_payment_hash
+             ON payment_details_lightning(payment_hash)"
+                .to_string(),
+            "CREATE TABLE contacts (
+                id VARCHAR(255) NOT NULL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                payment_identifier VARCHAR(255) NOT NULL,
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL
             )"
             .to_string(),
         ]

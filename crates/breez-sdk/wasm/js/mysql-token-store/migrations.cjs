@@ -202,6 +202,22 @@ class MysqlTokenStoreMigrationManager {
         "idx_token_outputs_user_reservation",
         "brz_idx_token_outputs_user_reservation",
       ],
+      // Pre-multi-tenant indexes (dropped by the multi-tenant migration).
+      [
+        "brz_token_metadata",
+        "idx_token_metadata_issuer_pk",
+        "brz_idx_token_metadata_issuer_pk",
+      ],
+      [
+        "brz_token_outputs",
+        "idx_token_outputs_identifier",
+        "brz_idx_token_outputs_identifier",
+      ],
+      [
+        "brz_token_outputs",
+        "idx_token_outputs_reservation",
+        "brz_idx_token_outputs_reservation",
+      ],
     ];
     for (const [table, oldName, newName] of indexRenames) {
       if (

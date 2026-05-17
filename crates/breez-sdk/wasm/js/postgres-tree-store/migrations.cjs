@@ -129,6 +129,10 @@ class TreeStoreMigrationManager {
       ["idx_tree_leaves_user_available", "brz_idx_tree_leaves_user_available"],
       ["idx_tree_leaves_user_reservation", "brz_idx_tree_leaves_user_reservation"],
       ["idx_tree_leaves_user_added_at", "brz_idx_tree_leaves_user_added_at"],
+      // Pre-multi-tenant indexes (dropped by the multi-tenant migration).
+      ["idx_tree_leaves_available", "brz_idx_tree_leaves_available"],
+      ["idx_tree_leaves_reservation", "brz_idx_tree_leaves_reservation"],
+      ["idx_tree_leaves_added_at", "brz_idx_tree_leaves_added_at"],
     ];
     for (const [oldName, newName] of indexRenames) {
       await client.query(

@@ -40,6 +40,7 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
         ("tree_swap_status", "brz_tree_swap_status"),
     ],
     indexes: &[
+        // Post-multi-tenant indexes.
         (
             "idx_tree_leaves_user_available",
             "brz_idx_tree_leaves_user_available",
@@ -52,6 +53,13 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
             "idx_tree_leaves_user_added_at",
             "brz_idx_tree_leaves_user_added_at",
         ),
+        // Pre-multi-tenant indexes (dropped by the multi-tenant migration).
+        ("idx_tree_leaves_available", "brz_idx_tree_leaves_available"),
+        (
+            "idx_tree_leaves_reservation",
+            "brz_idx_tree_leaves_reservation",
+        ),
+        ("idx_tree_leaves_added_at", "brz_idx_tree_leaves_added_at"),
     ],
     constraints: &[
         (

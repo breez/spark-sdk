@@ -40,6 +40,7 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
         ("token_swap_status", "brz_token_swap_status"),
     ],
     indexes: &[
+        // Post-multi-tenant indexes.
         (
             "brz_token_metadata",
             "idx_token_metadata_user_issuer_pk",
@@ -54,6 +55,22 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
             "brz_token_outputs",
             "idx_token_outputs_user_reservation",
             "brz_idx_token_outputs_user_reservation",
+        ),
+        // Pre-multi-tenant indexes (dropped by the multi-tenant migration).
+        (
+            "brz_token_metadata",
+            "idx_token_metadata_issuer_pk",
+            "brz_idx_token_metadata_issuer_pk",
+        ),
+        (
+            "brz_token_outputs",
+            "idx_token_outputs_identifier",
+            "brz_idx_token_outputs_identifier",
+        ),
+        (
+            "brz_token_outputs",
+            "idx_token_outputs_reservation",
+            "brz_idx_token_outputs_reservation",
         ),
     ],
     foreign_keys: &[
