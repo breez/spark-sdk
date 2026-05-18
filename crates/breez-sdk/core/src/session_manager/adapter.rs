@@ -7,10 +7,11 @@ use super::SessionManager;
 /// Internal adapter that exposes a user-supplied [`SessionManager`] to
 /// [`spark_wallet`] (which has its own identical-shape trait).
 ///
-/// When no session manager is provided, the SDK uses
-/// [`spark_wallet::InMemorySessionManager`] directly without going through
-/// this adapter — there's no point round-tripping in-memory state through a
-/// wrapper trait.
+/// Used only by the WASM bindings to plumb a JS-side session manager
+/// (constructed from a JS storage backend) into the core wallet stack. The
+/// public Rust API no longer accepts user-supplied session managers; the
+/// canonical session manager is derived from the [`SdkContext`](crate::SdkContext)'s
+/// DB pool (or defaulted to in-memory).
 pub(crate) struct SessionManagerAdapter(pub Arc<dyn SessionManager>);
 
 #[macros::async_trait]

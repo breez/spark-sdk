@@ -32,10 +32,9 @@ pub struct SspConnectionManager {
 
 /// Construct a new shared SSP connection manager.
 ///
-/// Pass the returned `Arc<SspConnectionManager>` to
-/// [`SdkBuilder::with_ssp_connection_manager`](crate::SdkBuilder::with_ssp_connection_manager)
-/// when building each SDK instance that should share the underlying HTTP
-/// connection pool.
+/// Typically built inside an [`SdkContext`](crate::SdkContext) by
+/// [`new_sdk_context`](crate::new_sdk_context); SDKs that share the same
+/// `SdkContext` automatically share the underlying HTTP connection pool.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn new_ssp_connection_manager(user_agent: Option<String>) -> Arc<SspConnectionManager> {
     let user_agent = user_agent.unwrap_or_else(default_user_agent);
@@ -46,10 +45,10 @@ pub fn new_ssp_connection_manager(user_agent: Option<String>) -> Arc<SspConnecti
 
 /// A shareable manager for gRPC connections to the Spark operators.
 ///
-/// Construct one via [`new_connection_manager`] and pass the same `Arc` to
-/// multiple [`SdkBuilder`](crate::SdkBuilder)s via
-/// [`SdkBuilder::with_connection_manager`](crate::SdkBuilder::with_connection_manager).
-/// Connections close when the last `Arc<ConnectionManager>` is dropped;
+/// Typically built inside an [`SdkContext`](crate::SdkContext); SDKs that
+/// share the same `SdkContext` automatically share the underlying gRPC
+/// channels to the Spark operators. Channels close when the last
+/// `Arc<ConnectionManager>` (via its containing `SdkContext`) is dropped;
 /// [`BreezSdk::disconnect`](crate::BreezSdk::disconnect) does not affect them.
 ///
 /// All SDK instances sharing a `ConnectionManager` must be configured for the

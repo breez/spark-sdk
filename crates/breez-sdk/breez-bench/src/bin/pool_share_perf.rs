@@ -18,8 +18,8 @@ use tracing_subscriber::EnvFilter;
 
 use breez_sdk_itest::{drop_postgres_database, ensure_postgres_database_exists};
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, Network, PostgresConnectionPool, SdkBuilder, Seed,
-    create_postgres_connection_pool, default_config, default_postgres_storage_config,
+    BreezSdk, GetInfoRequest, Network, SdkBuilder, SdkContext, SdkContextConfig, Seed,
+    default_config, default_postgres_storage_config, new_sdk_context,
 };
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -100,9 +100,9 @@ async fn main() -> Result<()> {
     // Snapshot before anything is built.
     let conn_idle_baseline = pg_connection_count(&args.postgres, &dbname).await?;
 
-    // Build one shared pool up-front (or None for the per-instance path).
-    let shared_pool: Option<Arc<PostgresConnectionPool>> = match args.mode {
-        Mode::Shared => Some(make_pool(&args.postgres, args.max_pool_size)?),
+    // Build one shared SdkContext up-front (or None for the per-instance path).
+    let shared_context: Option<Arc<SdkContext>> = match args.mode {
+        Mode::Shared => Some(make_context(&args.postgres, args.max_pool_size)?),
         Mode::Separate => None,
     };
 
@@ -120,11 +120,11 @@ async fn main() -> Result<()> {
         config.optimization_config.auto_enabled = false;
 
         let mut builder = SdkBuilder::new(config, Seed::Entropy(seed.to_vec()));
-        builder = match (&shared_pool, args.mode) {
-            (Some(pool), _) => builder.with_postgres_connection_pool(Arc::clone(pool)),
+        builder = match (&shared_context, args.mode) {
+            (Some(ctx), _) => builder.with_context(Arc::clone(ctx)),
             (None, Mode::Separate) => {
-                let pool = make_pool(&args.postgres, args.max_pool_size)?;
-                builder.with_postgres_connection_pool(pool)
+                let ctx = make_context(&args.postgres, args.max_pool_size)?;
+                builder.with_context(ctx)
             }
             (None, Mode::Shared) => unreachable!(),
         };
@@ -160,13 +160,14 @@ async fn main() -> Result<()> {
     }
     drop(sdks);
 
-    // For separate-pool mode, dropping the SDKs drops their pools — connections close.
-    // For shared-pool mode, the pool is still alive (held by `shared_pool`),
-    // so connections stay until we drop it below.
+    // For separate-context mode, dropping the SDKs drops their contexts (and
+    // pools) — connections close. For shared-context mode, the context is
+    // still alive (held by `shared_context`), so connections stay until we
+    // drop it below.
     tokio::time::sleep(Duration::from_millis(500)).await;
     let conn_after_disconnect = pg_connection_count(&args.postgres, &dbname).await?;
 
-    drop(shared_pool);
+    drop(shared_context);
     tokio::time::sleep(Duration::from_millis(500)).await;
     let conn_after_pool_drop = pg_connection_count(&args.postgres, &dbname).await?;
 
@@ -190,10 +191,13 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn make_pool(conn_str: &str, max_pool_size: u32) -> Result<Arc<PostgresConnectionPool>> {
+fn make_context(conn_str: &str, max_pool_size: u32) -> Result<Arc<SdkContext>> {
     let mut cfg = default_postgres_storage_config(conn_str.to_string());
     cfg.max_pool_size = max_pool_size;
-    Ok(create_postgres_connection_pool(&cfg)?)
+    Ok(new_sdk_context(SdkContextConfig {
+        postgres_config: Some(cfg),
+        ..Default::default()
+    })?)
 }
 
 struct Snapshots {

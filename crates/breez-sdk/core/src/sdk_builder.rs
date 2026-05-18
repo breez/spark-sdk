@@ -24,7 +24,6 @@ use crate::{
         BitcoinChainService,
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
     },
-    connection_manager::ConnectionManager,
     error::SdkError,
     jwt_header_provider::BreezJwtHeaderProvider,
     lnurl::{DefaultLnurlServerClient, LnurlServerClient},
@@ -33,6 +32,7 @@ use crate::{
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams, SyncCoordinator, runtime_from_config},
+    sdk_context::{SdkContext, SdkContextConfig, new_sdk_context},
     session_manager::{SessionManager, SessionManagerAdapter},
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
@@ -78,8 +78,7 @@ pub struct SdkBuilder {
     payment_observer: Option<Arc<dyn PaymentObserver>>,
     tree_store: Option<Arc<dyn TreeStore>>,
     token_output_store: Option<Arc<dyn TokenOutputStore>>,
-    ssp_connection_manager: Option<Arc<crate::SspConnectionManager>>,
-    connection_manager: Option<Arc<ConnectionManager>>,
+    context: Option<Arc<SdkContext>>,
     session_manager: Option<Arc<dyn SessionManager>>,
 }
 
@@ -115,8 +114,7 @@ impl SdkBuilder {
             payment_observer: None,
             tree_store: None,
             token_output_store: None,
-            ssp_connection_manager: None,
-            connection_manager: None,
+            context: None,
             session_manager: None,
         }
     }
@@ -145,8 +143,7 @@ impl SdkBuilder {
             payment_observer: None,
             tree_store: None,
             token_output_store: None,
-            ssp_connection_manager: None,
-            connection_manager: None,
+            context: None,
             session_manager: None,
         }
     }
@@ -194,16 +191,31 @@ impl SdkBuilder {
         self
     }
 
+    /// Threads a shared [`SdkContext`] into this builder.
+    ///
+    /// Construct the context once via [`new_sdk_context`] and pass the same
+    /// `Arc` to every `SdkBuilder` whose SDKs should share its underlying
+    /// resources (operator gRPC channels, SSP HTTP client, database pool).
+    ///
+    /// If not set, `build()` calls `new_sdk_context(SdkContextConfig::default())`
+    /// internally — fine for a single-SDK process with no DB backend.
+    #[must_use]
+    pub fn with_context(mut self, context: Arc<SdkContext>) -> Self {
+        self.context = Some(context);
+        self
+    }
+
     /// Sets a shared `PostgreSQL` connection pool as the backend for all
     /// stores (storage, tree store, and token store).
     ///
     /// Construct the pool once via
-    /// [`create_postgres_connection_pool`](crate::create_postgres_connection_pool) and pass the same
-    /// `Arc` to multiple `SdkBuilder` instances to share connections across
-    /// SDKs. Per-tenant scoping is derived from each SDK's seed.
+    /// [`create_postgres_connection_pool`](crate::create_postgres_connection_pool) and pass the
+    /// same `Arc` to multiple `SdkBuilder` instances to share connections
+    /// across SDKs. Per-tenant scoping is derived from each SDK's seed.
     ///
-    /// # Arguments
-    /// - `pool`: The shared `PostgreSQL` connection pool.
+    /// If you've also threaded an [`SdkContext`] (via [`with_context`](Self::with_context))
+    /// that already carries a Postgres pool, `build()` will error — pick one
+    /// source. Most integrators use either this method *or* a context, not both.
     #[must_use]
     #[cfg(feature = "postgres")]
     pub fn with_postgres_connection_pool(
@@ -217,13 +229,14 @@ impl SdkBuilder {
     /// Sets a shared `MySQL` connection pool as the backend for all stores
     /// (storage, tree store, and token store).
     ///
-    /// Construct the pool once via [`create_mysql_connection_pool`](crate::create_mysql_connection_pool)
-    /// and pass the same `Arc` to multiple `SdkBuilder` instances to share
-    /// connections across SDKs. Per-tenant scoping is derived from each
-    /// SDK's seed.
+    /// Construct the pool once via
+    /// [`create_mysql_connection_pool`](crate::create_mysql_connection_pool) and pass the same
+    /// `Arc` to multiple `SdkBuilder` instances to share connections across
+    /// SDKs. Per-tenant scoping is derived from each SDK's seed.
     ///
-    /// # Arguments
-    /// - `pool`: The shared `MySQL` connection pool.
+    /// If you've also threaded an [`SdkContext`] (via [`with_context`](Self::with_context))
+    /// that already carries a `MySQL` pool, `build()` will error — pick one
+    /// source. Most integrators use either this method *or* a context, not both.
     #[must_use]
     #[cfg(feature = "mysql")]
     pub fn with_mysql_connection_pool(
@@ -234,16 +247,11 @@ impl SdkBuilder {
         self
     }
 
-    /// Sets a shared `PostgreSQL` connection pool as the backend for all
-    /// stores (storage, tree store, and token store).
+    /// Sets `PostgreSQL` as the backend by building a fresh pool from a
+    /// config. The store instances will be created during `build()`.
     ///
-    /// Construct the pool once via
-    /// [`create_postgres_connection_pool`](crate::create_postgres_connection_pool) and pass the same
-    /// `Arc` to multiple `SdkBuilder` instances to share connections across
-    /// SDKs. Per-tenant scoping is derived from each SDK's seed.
-    ///
-    /// # Arguments
-    /// - `pool`: The shared `PostgreSQL` connection pool.
+    /// Arguments:
+    /// - `config`: The `PostgreSQL` storage configuration.
     #[cfg(feature = "postgres")]
     #[deprecated(
         note = "Call `create_postgres_connection_pool(&config)` and `with_postgres_connection_pool(pool)` instead."
@@ -257,8 +265,9 @@ impl SdkBuilder {
         Ok(self.with_postgres_connection_pool(pool))
     }
 
-    /// Sets `MySQL` as the backend for all stores (storage, tree store, and token store).
+    /// Sets `MySQL` as the backend by building a fresh pool from a config.
     /// The store instances will be created during `build()`.
+    ///
     /// Arguments:
     /// - `config`: The `MySQL` storage configuration.
     #[cfg(feature = "mysql")]
@@ -272,6 +281,17 @@ impl SdkBuilder {
     ) -> Result<Self, SdkError> {
         let pool = crate::persist::mysql::create_mysql_connection_pool(&config)?;
         Ok(self.with_mysql_connection_pool(pool))
+    }
+
+    /// Internal: plumb a pre-built session manager into the builder. Used by
+    /// the WASM bindings to inject a JS-side DB-backed session manager. Not
+    /// part of the public Rust API surface — Rust integrators should rely on
+    /// the session manager derived from the [`SdkContext`]'s DB pool.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_session_manager(mut self, session_manager: Arc<dyn SessionManager>) -> Self {
+        self.session_manager = Some(session_manager);
+        self
     }
 
     /// Sets the chain service to be used by the SDK.
@@ -359,55 +379,6 @@ impl SdkBuilder {
         token_output_store: Arc<dyn TokenOutputStore>,
     ) -> Self {
         self.token_output_store = Some(token_output_store);
-        self
-    }
-
-    /// Reuses a shared SSP connection across SDK instances.
-    ///
-    /// Pass the same [`SspConnectionManager`](crate::SspConnectionManager) to every
-    /// `SdkBuilder` whose SSP traffic should share a single underlying
-    /// `reqwest::Client` (and its HTTP/2 connection pool). Useful for
-    /// multi-tenant servers running many SDK instances in one process.
-    ///
-    /// If not set, each SDK instance constructs its own internal HTTP client.
-    #[must_use]
-    pub fn with_ssp_connection_manager(
-        mut self,
-        manager: Arc<crate::SspConnectionManager>,
-    ) -> Self {
-        self.ssp_connection_manager = Some(manager);
-        self
-    }
-
-    /// Sets a shared [`ConnectionManager`] for the SDK to use.
-    ///
-    /// Pass the same `Arc` to multiple `SdkBuilder` instances to reuse one set
-    /// of gRPC channels to the Spark operators across many SDK instances. All
-    /// SDKs sharing a connection manager must be configured for the same
-    /// network and operator pool.
-    ///
-    /// # Arguments
-    /// - `connection_manager`: The shared connection manager.
-    #[must_use]
-    pub fn with_connection_manager(mut self, connection_manager: Arc<ConnectionManager>) -> Self {
-        self.connection_manager = Some(connection_manager);
-        self
-    }
-
-    /// Sets a custom session manager implementation.
-    ///
-    /// The session manager is used to persist authentication sessions for the
-    /// Spark Service Provider and the Spark Operators. Providing a shared
-    /// implementation (e.g. backed by `PostgreSQL` or Redis) allows multiple SDK
-    /// instances to share authentication state and bootstrap quickly.
-    ///
-    /// If not set, an in-memory session manager is used.
-    ///
-    /// # Arguments
-    /// - `session_manager`: The session manager implementation to use.
-    #[must_use]
-    pub fn with_session_manager(mut self, session_manager: Arc<dyn SessionManager>) -> Self {
-        self.session_manager = Some(session_manager);
         self
     }
 
@@ -523,6 +494,47 @@ impl SdkBuilder {
         );
         let lnurl_auth_signer = Arc::new(LnurlAuthSignerAdapter::new(signer.clone()));
 
+        // Resolve the shared resources: use the caller-supplied context if
+        // present, otherwise spin up a default one. Either way, downstream
+        // wiring reads from `context` for connection managers.
+        let context = match self.context {
+            Some(ctx) => ctx,
+            None => new_sdk_context(SdkContextConfig::default())?,
+        };
+
+        // Resolve the DB pools from at most one source: the legacy
+        // `with_postgres_connection_pool` / `with_mysql_connection_pool`
+        // setters take precedence-by-exclusion over a pool carried by the
+        // context. Passing both is a configuration error.
+        #[cfg(feature = "postgres")]
+        let postgres_pool: Option<Arc<crate::persist::postgres::PostgresConnectionPool>> = match (
+            self.postgres_pool,
+            context.postgres_pool.clone(),
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(SdkError::Generic(
+                        "multiple postgres pools configured: passed both via with_postgres_connection_pool and SdkContext"
+                            .to_string(),
+                    ));
+            }
+            (Some(p), None) | (None, Some(p)) => Some(p),
+            (None, None) => None,
+        };
+        #[cfg(feature = "mysql")]
+        let mysql_pool: Option<Arc<crate::persist::mysql::MysqlConnectionPool>> = match (
+            self.mysql_pool,
+            context.mysql_pool.clone(),
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(SdkError::Generic(
+                        "multiple mysql pools configured: passed both via with_mysql_connection_pool and SdkContext"
+                            .to_string(),
+                    ));
+            }
+            (Some(p), None) | (None, Some(p)) => Some(p),
+            (None, None) => None,
+        };
+
         let chain_service: Arc<dyn BitcoinChainService> = if let Some(service) = self.chain_service
         {
             service
@@ -569,12 +581,12 @@ impl SdkBuilder {
 
         // Validate storage configuration
         #[cfg(feature = "postgres")]
-        let has_postgres = self.postgres_pool.is_some();
+        let has_postgres = postgres_pool.is_some();
         #[cfg(not(feature = "postgres"))]
         let has_postgres = false;
 
         #[cfg(feature = "mysql")]
-        let has_mysql = self.mysql_pool.is_some();
+        let has_mysql = mysql_pool.is_some();
         #[cfg(not(feature = "mysql"))]
         let has_mysql = false;
 
@@ -597,12 +609,11 @@ impl SdkBuilder {
             _ => {}
         }
 
-        // Read the shared PostgreSQL pool if configured, bundled with the
-        // tenant identity used to scope every read/write so storage, tree
-        // store, and token store share the same scope. The pool itself is
-        // owned by the integrator and may be shared with other SDK instances.
+        // Bundle the resolved Postgres pool with the tenant identity used to
+        // scope every read/write so storage, tree store, and token store
+        // share the same scope. The pool itself may back many SDK instances.
         #[cfg(feature = "postgres")]
-        let postgres_backend = if let Some(ref pool) = self.postgres_pool {
+        let postgres_backend = if let Some(ref pool) = postgres_pool {
             let identity = spark_signer
                 .get_identity_public_key()
                 .await
@@ -613,12 +624,9 @@ impl SdkBuilder {
             None
         };
 
-        // Read the shared MySQL pool if configured, bundled with the tenant
-        // identity used to scope every read/write so storage, tree store, and
-        // token store share the same scope. The pool itself is owned by the
-        // integrator and may be shared with other SDK instances.
+        // Same for MySQL.
         #[cfg(feature = "mysql")]
-        let mysql_backend = if let Some(ref pool) = self.mysql_pool {
+        let mysql_backend = if let Some(ref pool) = mysql_pool {
             let identity = spark_signer
                 .get_identity_public_key()
                 .await
@@ -877,14 +885,10 @@ impl SdkBuilder {
         if let Some(token_output_store) = token_output_store {
             wallet_builder = wallet_builder.with_token_output_store(token_output_store);
         }
-        if let Some(ssp_connection_manager) = &self.ssp_connection_manager {
-            wallet_builder =
-                wallet_builder.with_ssp_http_client(ssp_connection_manager.client.clone());
-        }
-        if let Some(connection_manager) = &self.connection_manager {
-            wallet_builder =
-                wallet_builder.with_connection_manager(connection_manager.inner.clone());
-        }
+        wallet_builder =
+            wallet_builder.with_ssp_http_client(context.ssp_connection_manager.client.clone());
+        wallet_builder =
+            wallet_builder.with_connection_manager(context.so_connection_manager.inner.clone());
         let spark_wallet = Arc::new(wallet_builder.build().await?);
 
         let lnurl_server_client: Option<Arc<dyn LnurlServerClient>> = match self.lnurl_server_client

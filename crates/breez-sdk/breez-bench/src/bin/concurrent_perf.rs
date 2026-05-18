@@ -14,11 +14,10 @@ use breez_sdk_itest::{
     drop_mysql_database, drop_postgres_database,
 };
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, MysqlConnectionPool, Network, PostgresConnectionPool,
-    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent,
-    SendPaymentRequest, SyncWalletRequest, create_mysql_connection_pool,
-    create_postgres_connection_pool, default_mysql_storage_config, default_postgres_storage_config,
-    default_server_config,
+    BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
+    ReceivePaymentRequest, SdkContext, SdkContextConfig, SdkEvent, SendPaymentRequest,
+    SyncWalletRequest, default_mysql_storage_config, default_postgres_storage_config,
+    default_server_config, new_sdk_context,
 };
 
 use breez_bench::stats::DurationStats;
@@ -605,43 +604,49 @@ fn print_summary(
 #[derive(Clone)]
 enum SenderBackend {
     None,
-    Postgres(Arc<PostgresConnectionPool>),
-    Mysql(Arc<MysqlConnectionPool>),
+    Postgres(Arc<SdkContext>),
+    Mysql(Arc<SdkContext>),
 }
 
 impl SenderBackend {
     fn postgres_tree(&self) -> Option<PostgresTreeStore> {
         match self {
-            SenderBackend::Postgres(p) => Some(PostgresTreeStore::SharedPool(p.clone())),
+            SenderBackend::Postgres(ctx) => Some(PostgresTreeStore::SharedContext(ctx.clone())),
             _ => None,
         }
     }
 
     fn mysql_tree(&self) -> Option<MysqlTreeStore> {
         match self {
-            SenderBackend::Mysql(p) => Some(MysqlTreeStore::SharedPool(p.clone())),
+            SenderBackend::Mysql(ctx) => Some(MysqlTreeStore::SharedContext(ctx.clone())),
             _ => None,
         }
     }
 }
 
-/// Builds (and ensures-exists) a Postgres pool for the sender side, sized
-/// for use across multiple SDK instances.
-async fn build_sender_postgres_pool(conn_str: &str) -> Result<Arc<PostgresConnectionPool>> {
+/// Builds an `SdkContext` backed by a Postgres pool for the sender side,
+/// sized for use across multiple SDK instances.
+async fn build_sender_postgres_context(conn_str: &str) -> Result<Arc<SdkContext>> {
     breez_sdk_itest::ensure_postgres_database_exists(conn_str).await?;
     let mut pg_config = default_postgres_storage_config(conn_str.to_string());
     pg_config.max_pool_size = 30;
-    Ok(create_postgres_connection_pool(&pg_config)?)
+    Ok(new_sdk_context(SdkContextConfig {
+        postgres_config: Some(pg_config),
+        ..Default::default()
+    })?)
 }
 
-/// Builds (and ensures-exists) a MySQL pool for the sender side, sized for
-/// use across multiple SDK instances.
-async fn build_sender_mysql_pool(conn_str: &str) -> Result<Arc<MysqlConnectionPool>> {
+/// Builds an `SdkContext` backed by a MySQL pool for the sender side, sized
+/// for use across multiple SDK instances.
+async fn build_sender_mysql_context(conn_str: &str) -> Result<Arc<SdkContext>> {
     let (admin_url, db_name) = breez_sdk_itest::split_mysql_url(conn_str)?;
     breez_sdk_itest::ensure_mysql_database_exists(&admin_url, &db_name).await?;
     let mut my_config = default_mysql_storage_config(conn_str.to_string());
     my_config.max_pool_size = 30;
-    Ok(create_mysql_connection_pool(&my_config)?)
+    Ok(new_sdk_context(SdkContextConfig {
+        mysql_config: Some(my_config),
+        ..Default::default()
+    })?)
 }
 
 async fn initialize_sdk_pair(
@@ -652,11 +657,11 @@ async fn initialize_sdk_pair(
     sender_mysql: Option<String>,
     receiver_mysql: Option<String>,
 ) -> Result<(BenchSdkInstance, BenchSdkInstance, [u8; 32], SenderBackend)> {
-    // Build the sender backend once. All sender SDKs will share this pool.
+    // Build the sender SdkContext once. All sender SDKs will share it.
     let sender_backend = if let Some(ref conn_str) = sender_postgres {
-        SenderBackend::Postgres(build_sender_postgres_pool(conn_str).await?)
+        SenderBackend::Postgres(build_sender_postgres_context(conn_str).await?)
     } else if let Some(ref conn_str) = sender_mysql {
-        SenderBackend::Mysql(build_sender_mysql_pool(conn_str).await?)
+        SenderBackend::Mysql(build_sender_mysql_context(conn_str).await?)
     } else {
         SenderBackend::None
     };

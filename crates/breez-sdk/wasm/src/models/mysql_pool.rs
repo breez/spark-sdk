@@ -8,11 +8,9 @@ use crate::error::WasmResult;
 use crate::persist::pool::{JsPool, create_mysql_pool};
 use crate::sdk_builder::{MysqlForeignKeyMode, MysqlStorageConfig};
 
-/// A shareable MySQL connection pool. See [`PostgresConnectionPool`](super::postgres_pool::PostgresConnectionPool)
+/// A shareable `MySQL` connection pool. See
+/// [`PostgresConnectionPool`](super::postgres_pool::PostgresConnectionPool)
 /// for sharing semantics and lifecycle.
-///
-/// Snapshots the `foreignKeyMode` from the originating config so every SDK
-/// instance built on top of this pool migrates with the same FK policy.
 #[wasm_bindgen]
 pub struct MysqlConnectionPool {
     pub(crate) inner: Rc<JsPool>,
@@ -34,7 +32,7 @@ impl MysqlConnectionPool {
     }
 }
 
-/// Creates a shareable MySQL connection pool from the given config.
+/// Creates a shareable `MySQL` connection pool from the given config.
 #[wasm_bindgen(js_name = "createMysqlConnectionPool")]
 pub fn create_mysql_connection_pool(config: MysqlStorageConfig) -> WasmResult<MysqlConnectionPool> {
     let run_migration = config.run_migration;

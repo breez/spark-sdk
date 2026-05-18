@@ -21,7 +21,10 @@ use tracing::info;
 async fn test_shared_connection_manager_spark_transfer(
     #[case] connections_per_operator: Option<u32>,
 ) -> Result<()> {
-    let connection_manager = new_connection_manager(connections_per_operator);
+    let context = new_sdk_context(SdkContextConfig {
+        connections_per_operator,
+        ..Default::default()
+    })?;
 
     let alice_dir = Builder::new()
         .prefix("breez-sdk-shared-cm-alice")
@@ -33,17 +36,17 @@ async fn test_shared_connection_manager_spark_transfer(
     let mut bob_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bob_seed);
 
-    let mut alice = build_sdk_with_shared_connection_manager(
+    let mut alice = build_sdk_with_shared_context(
         alice_dir.path().to_string_lossy().to_string(),
         alice_seed,
-        connection_manager.clone(),
+        Arc::clone(&context),
         Some(alice_dir),
     )
     .await?;
-    let mut bob = build_sdk_with_shared_connection_manager(
+    let mut bob = build_sdk_with_shared_context(
         bob_dir.path().to_string_lossy().to_string(),
         bob_seed,
-        connection_manager.clone(),
+        Arc::clone(&context),
         Some(bob_dir),
     )
     .await?;
@@ -127,8 +130,8 @@ async fn test_shared_connection_manager_spark_transfer(
     );
 
     info!(
-        "Shared ConnectionManager strong count: {}",
-        Arc::strong_count(&connection_manager)
+        "Shared SdkContext strong count: {}",
+        Arc::strong_count(&context)
     );
     alice.sdk.disconnect().await?;
     bob.sdk.disconnect().await?;

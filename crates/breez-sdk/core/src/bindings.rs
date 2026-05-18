@@ -3,9 +3,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::{
-    BitcoinChainService, BreezSdk, Config, ConnectionManager, Credentials, FiatService,
-    KeySetConfig, PaymentObserver, RestClient, SdkError, Seed, SessionManager,
-    SspConnectionManager, Storage, chain::rest_client::ChainApiType,
+    BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
+    RestClient, SdkContext, SdkError, Seed, Storage, chain::rest_client::ChainApiType,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -101,30 +100,15 @@ impl SdkBuilder {
         *builder = builder.clone().with_payment_observer(payment_observer);
     }
 
-    /// Sets a shared SSP connection manager to be reused across SDK instances.
-    /// Arguments:
-    /// - `manager`: The shared SSP connection manager.
-    pub async fn with_ssp_connection_manager(&self, manager: Arc<SspConnectionManager>) {
-        let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_ssp_connection_manager(manager);
-    }
-
-    /// Sets a shared connection manager to be reused across SDK instances.
-    /// Arguments:
-    /// - `connection_manager`: The shared connection manager.
-    pub async fn with_connection_manager(&self, connection_manager: Arc<ConnectionManager>) {
-        let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_connection_manager(connection_manager);
-    }
-
-    /// Sets a custom session manager used to persist authentication sessions.
+    /// Threads a shared [`SdkContext`](crate::SdkContext) into the builder.
     ///
-    /// Provide a shared, persistent implementation (e.g. backed by `PostgreSQL`
-    /// or Redis) to let multiple SDK instances share authentication state and
-    /// bootstrap quickly. If not set, an in-memory session manager is used.
-    pub async fn with_session_manager(&self, session_manager: Arc<dyn SessionManager>) {
+    /// Construct the context once via
+    /// [`new_sdk_context`](crate::new_sdk_context) and pass the same `Arc` to
+    /// every `SdkBuilder` whose SDKs should share its resources (operator
+    /// gRPC channels, SSP HTTP client, database pool).
+    pub async fn with_context(&self, context: Arc<SdkContext>) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_session_manager(session_manager);
+        *builder = builder.clone().with_context(context);
     }
 
     /// Builds the `BreezSdk` instance with the configured components.
@@ -143,6 +127,9 @@ impl SdkBuilder {
     /// stores (storage, tree store, and token store). Construct the pool
     /// via [`create_postgres_connection_pool`](crate::create_postgres_connection_pool) and pass the
     /// same `Arc` to multiple builders to share connections across SDKs.
+    ///
+    /// If the same builder also receives an [`SdkContext`](crate::SdkContext)
+    /// carrying a Postgres pool, `build()` will error — pick one source.
     pub async fn with_postgres_connection_pool(
         &self,
         pool: Arc<crate::persist::postgres::PostgresConnectionPool>,
@@ -151,12 +138,8 @@ impl SdkBuilder {
         *builder = builder.clone().with_postgres_connection_pool(pool);
     }
 
-    /// **Deprecated.** Call `with_postgres_connection_pool(&config)` and `with_postgres_connection_pool(pool) instead`.
-    ///
-    /// Sets `PostgreSQL` as the backend for all stores (storage, tree store, and token store).
-    /// The store instances will be created during `build()`.
-    /// Arguments:
-    /// - `config`: The `PostgreSQL` storage configuration.
+    /// **Deprecated.** Call `create_postgres_connection_pool(&config)` and
+    /// `with_postgres_connection_pool(pool)` instead.
     #[allow(deprecated)]
     pub async fn with_postgres_backend(
         &self,
@@ -178,6 +161,9 @@ impl SdkBuilder {
     /// (storage, tree store, and token store). Construct the pool via
     /// [`create_mysql_connection_pool`](crate::create_mysql_connection_pool) and pass the same `Arc`
     /// to multiple builders to share connections across SDKs.
+    ///
+    /// If the same builder also receives an [`SdkContext`](crate::SdkContext)
+    /// carrying a `MySQL` pool, `build()` will error — pick one source.
     pub async fn with_mysql_connection_pool(
         &self,
         pool: Arc<crate::persist::mysql::MysqlConnectionPool>,
@@ -186,12 +172,8 @@ impl SdkBuilder {
         *builder = builder.clone().with_mysql_connection_pool(pool);
     }
 
-    /// **Deprecated.** Call `with_mysql_connection_pool(&config)` and `with_mysql_connection_pool(pool) instead`.
-    ///
-    /// Sets `MySQL` as the backend for all stores (storage, tree store, and token store).
-    /// The store instances will be created during `build()`.
-    /// Arguments:
-    /// - `config`: The `MySQL` storage configuration.
+    /// **Deprecated.** Call `create_mysql_connection_pool(&config)` and
+    /// `with_mysql_connection_pool(pool)` instead.
     #[allow(deprecated)]
     pub async fn with_mysql_backend(
         &self,
