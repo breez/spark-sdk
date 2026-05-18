@@ -76,13 +76,12 @@ pub struct SignInRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// Per-call assertion allow-list forwarded to
+    /// Forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::allow_credential_ids`].
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub allow_credential_ids: Vec<Vec<u8>>,
 
-    /// Per-call control over the platform's "fast-fail when no local
-    /// credential is available" behavior, forwarded to
+    /// Forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::prefer_immediately_available_credentials`].
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub prefer_immediately_available_credentials: Option<bool>,

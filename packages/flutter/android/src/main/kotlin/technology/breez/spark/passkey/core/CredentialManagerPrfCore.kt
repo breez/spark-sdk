@@ -40,8 +40,8 @@ import java.security.SecureRandom
 //     technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt
 //
 // It is shared into four Android artifacts via two mechanisms:
-//   1. gradle `srcDirs` — bindings-android + breez-sdk-spark-kmp
-//   2. `cargo xtask sync-passkey-core` — packages/flutter + packages/react-native
+//   1. gradle `srcDirs`: bindings-android + breez-sdk-spark-kmp
+//   2. `cargo xtask sync-passkey-core`: packages/flutter + packages/react-native
 //
 // Never hand-edit the Flutter or React Native copies. Edit the canonical
 // file, then run `cargo xtask sync-passkey-core` and commit the diff.
@@ -531,7 +531,7 @@ public object CredentialManagerPrfCore {
      * the `/.well-known/assetlinks.json` file on the RP domain doesn't list
      * your package (either because it was never added, or because Google's
      * cache is stale), subsequent WebAuthn calls fail with opaque
-     * `GetCredentialException` / `CreateCredentialException` variants —
+     * `GetCredentialException` / `CreateCredentialException` variants : 
      * typically mapped to `CredentialNotFound` or a generic "cannot be
      * validated" error. Those are indistinguishable from "no credential
      * found" at the error layer.
@@ -544,7 +544,7 @@ public object CredentialManagerPrfCore {
      *
      * and looks for an `android_app` statement matching this app's
      * package name **and** signing-certificate SHA-256 fingerprint. Both
-     * must match — a package-only match would accept a MITM'd package
+     * must match: a package-only match would accept a MITM'd package
      * signed by a different key.
      *
      * # Return semantics
@@ -618,7 +618,7 @@ public object CredentialManagerPrfCore {
         // Response-format note: the `.well-known/assetlinks.json` FILE
         // format uses snake_case (`android_app`, `package_name`,
         // `sha256_cert_fingerprints` as an array). The Digital Asset
-        // Links API response format is DIFFERENT — it's proto3 JSON
+        // Links API response format is DIFFERENT: it's proto3 JSON
         // with camelCase field names and de-nests each fingerprint into
         // its own statement. A matching API statement looks like:
         //
@@ -686,7 +686,7 @@ public object CredentialManagerPrfCore {
                 signingInfo.signingCertificateHistory
             }
         } else {
-            // Pre-API 28 path — not reachable since CredentialManagerPrfCore
+            // Pre-API 28 path: not reachable since CredentialManagerPrfCore
             // gates on API 28, but defensively included.
             val packageInfo = context.packageManager.getPackageInfo(
                 packageName,
@@ -1266,7 +1266,7 @@ public object CredentialManagerPrfCore {
          * path instead of treating it as a generic registration failure.
          */
         CredentialAlreadyExists,
-        /** Any other unexpected error — message contains the details. */
+        /** Any other unexpected error: message contains the details. */
         Generic,
     }
 }

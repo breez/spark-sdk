@@ -5,7 +5,7 @@ const { BreezSdkSparkPasskey } = NativeModules;
 /**
  * Build a diagnostic error thrown when the native passkey module isn't
  * reachable from JS. The most common cause on iOS is running on a version
- * older than iOS 18 — the Swift class is marked `@available(iOS 18.0, *)`
+ * older than iOS 18: the Swift class is marked `@available(iOS 18.0, *)`
  * so the ObjC runtime cannot load it on earlier releases. On Android the
  * native module should always load, so the fallback message blames linking.
  */
@@ -99,7 +99,7 @@ export interface PasskeyProviderOptions {
    * credential sharing.
    *
    * Changing this after users have registered passkeys will make their
-   * existing credentials undiscoverable — they would need to create
+   * existing credentials undiscoverable: they would need to create
    * new passkeys. Pass {@link PasskeyProvider.BREEZ_RP_ID} to opt into
    * Breez's shared `keys.breez.technology` RP (only valid for
    * Breez-registered apps).
@@ -434,7 +434,7 @@ export class PasskeyProvider {
    * exactly 1 platform prompt. Use this to separate credential
    * creation from derivation in multi-step onboarding flows.
    *
-   * `excludeCredentialIds` is the only per-call knob — branding
+   * `excludeCredentialIds` is the only per-call knob: branding
    * fields (`userName`, `userDisplayName`) live on the constructor.
    * `user.id` is never host-supplied: the native plugin mints a fresh
    * random 16-byte handle per call and returns it via the result's

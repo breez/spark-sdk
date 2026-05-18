@@ -144,7 +144,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
             result(FlutterError(code: "ERR_PASSKEY", message: "Invalid arguments", details: nil))
             return
         }
-        // Optional explicit team ID — most callers leave it nil and let
+        // Optional explicit team ID: most callers leave it nil and let
         // the canonical core auto-detect from the running app's
         // signing info. Useful for unit tests / sandboxed contexts
         // where SecTask / provisioning-profile lookup doesn't work.

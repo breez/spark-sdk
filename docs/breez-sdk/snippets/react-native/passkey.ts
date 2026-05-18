@@ -138,9 +138,9 @@ const storeLabel = async () => {
   const prfProvider = new PasskeyProvider({ rpId: 'my-app.com' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
-  // For a new label on an existing identity, signIn(newLabel) seeds the
-  // identity cache via setup_wallet, then labels().store() runs free off
-  // the cached identity (1 OS prompt total).
+  // For a new label on an existing identity, signIn(newLabel) warms
+  // the identity cache, then labels().store() runs free off the cached
+  // identity (1 OS prompt total).
   await passkey.labels().store('personal')
   // ANCHOR_END: store-label
 }
@@ -197,7 +197,7 @@ const checkDomain = async () => {
       return
     case 'Skipped':
       // Verification could not be performed (offline, endpoint timeout).
-      // Proceed normally — this is NOT a negative signal.
+      // Proceed normally: this is NOT a negative signal.
       break
   }
   // ANCHOR_END: domain-association
@@ -248,7 +248,7 @@ const handleTimeout = async () => {
     if (error instanceof PasskeyTimedOutError) {
       // Show a sticky retry screen with timeout-specific copy.
       // Do NOT auto-retry without user input.
-      console.log('Sign-in timed out — show "Try Again" UI.')
+      console.log('Sign-in timed out: show "Try Again" UI.')
     }
     throw error
   }

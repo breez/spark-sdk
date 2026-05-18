@@ -103,7 +103,7 @@ func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	// For a brand-new user with no existing passkey: Register() creates
 	// the credential AND derives the wallet seed in one orchestrated
 	// call. On iOS+Android this is 2 OS prompts total (1 create + 1
-	// dual-salt assert) thanks to the SDK's bulk-PRF setup_wallet path.
+	// dual-salt assert) thanks to the SDK's bulk-PRF path.
 	prfProvider := &CustomPrfProvider{}
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
@@ -169,7 +169,7 @@ func StoreLabel() error {
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, &breezApiKey, nil)
 
 	// For a new label on an existing identity, call SignIn(newLabel)
-	// first to seed the SDK's identity cache via setup_wallet, THEN
+	// first to warm the SDK's identity cache, THEN
 	// Labels().Store() uses the cached identity for free (1 OS prompt total).
 	err := passkey.Labels().Store("personal")
 	if err != nil {

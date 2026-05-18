@@ -170,7 +170,7 @@ impl Passkey {
     /// in one PRF ceremony (dual-salt where the platform supports it).
     /// Primes the identity cache so subsequent [`Self::list_labels`] /
     /// [`Self::store_label`] need no extra PRF prompts.
-    /// `publish_label = false` skips the Nostr write — used by
+    /// `publish_label = false` skips the Nostr write: used by
     /// speculative cold-restore.
     pub async fn setup_wallet(
         &self,

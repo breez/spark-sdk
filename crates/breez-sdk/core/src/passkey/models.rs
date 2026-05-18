@@ -28,15 +28,13 @@ pub struct SetupWalletRequest {
 
     /// Forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::allow_credential_ids`].
-    /// Lets server-driven flows pass a discovery-provided allow-list
-    /// per ceremony instead of pinning it on the provider instance.
-    /// Empty (default) preserves the historical behavior.
+    /// Useful for server-driven flows that resolve the credential set
+    /// out-of-band.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub allow_credential_ids: Vec<Vec<u8>>,
 
     /// Forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::prefer_immediately_available_credentials`].
-    /// `None` (default) keeps the provider's existing behavior.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub prefer_immediately_available_credentials: Option<bool>,
 }
@@ -72,11 +70,6 @@ pub struct RegisteredCredential {
 }
 
 /// Optional configuration for [`crate::passkey::PasskeyClient::new`].
-///
-/// Currently carries a single optional field; kept as a struct so
-/// future cross-cutting knobs can be added without breaking call
-/// sites. Provider-scoped knobs (`rp_id`, `credential_registry`,
-/// etc.) live on the platform `PasskeyProvider` constructor.
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PasskeyConfig {

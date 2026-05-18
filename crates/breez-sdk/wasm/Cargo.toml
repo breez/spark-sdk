@@ -5,7 +5,7 @@ version.workspace = true
 
 # Disable wasm-pack's post-build wasm-opt step. wasm-opt is distributed
 # via `binaryen` and wasm-pack downloads it on-demand from
-# https://github.com/WebAssembly/binaryen/releases — that endpoint
+# https://github.com/WebAssembly/binaryen/releases: that endpoint
 # flakes on busy CI runners / rate-limited IPs and the download
 # failure hard-fails the whole wasm build with a confusing
 # "failed downloading" message.

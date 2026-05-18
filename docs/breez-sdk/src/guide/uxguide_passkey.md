@@ -10,8 +10,8 @@
 The simplest user-facing UX is a single primary CTA ("Use Passkey") that does the right thing regardless of whether the user is new or returning:
 
 1. Call {{#name PasskeyClient.sign_in}} with `label = None` (discovery mode) or your default label (`Some("Default")`). On iOS+Android, the platform's `preferImmediatelyAvailableCredentials` flag means this is a **silent assertion**: a returning user gets one biometric prompt and is signed in; a fresh-device user with no credential fast-fails (no UI shown) with {{#enum PrfProviderError::CredentialNotFound}} in under 300ms.
-2. Catch {{#enum PrfProviderError::CredentialNotFound}} (and on iOS also `UserCancelled` returned in under ~300ms — Apple's API conflates the two when no UI was shown). Call {{#name PasskeyClient.register}} to create + derive.
-3. On {{#enum PrfProviderError::UserCancelled}} taking longer than ~300ms, the user actively dismissed the prompt — show a sticky retry screen, do NOT auto-fall-through to register.
+2. Catch {{#enum PrfProviderError::CredentialNotFound}} (and on iOS also `UserCancelled` returned in under ~300ms: Apple's API conflates the two when no UI was shown). Call {{#name PasskeyClient.register}} to create + derive.
+3. On {{#enum PrfProviderError::UserCancelled}} taking longer than ~300ms, the user actively dismissed the prompt: show a sticky retry screen, do NOT auto-fall-through to register.
 
 Total OS prompt count for the user-visible flow:
 
@@ -20,23 +20,23 @@ Total OS prompt count for the user-visible flow:
 | Returning user (silent sign-in succeeds) | **1** prompt (single dual-salt assertion derives master + label) |
 | New user (silent sign-in fast-fails → register) | **2** prompts (1 create + 1 dual-salt assertion) |
 
-The SDK's bulk-PRF path collapses what used to be three separate ceremonies (create → store label → assert) into the two prompts above.
+The SDK's bulk-PRF path runs the create + label-store + assertion as the two prompts above; a naive sequence would cost three.
 
 ### Adding a new label to an existing identity
 
 For a user who already has a passkey and wants to create another wallet under a new label:
 
 1. {{#name PasskeyClient.sign_in}} with the new label. This derives master + new-label seeds in one assertion AND seeds the SDK's identity cache.
-2. {{#name PasskeyLabels.store}} (via {{#name PasskeyClient.labels}}) to publish the new label to Nostr. This uses the cached identity for free — no additional prompt.
+2. {{#name PasskeyLabels.store}} (via {{#name PasskeyClient.labels}}) to publish the new label to Nostr. This uses the cached identity for free: no additional prompt.
 
-Total: **1** OS prompt. The earlier order (label store then `sign_in`) cost 2 prompts because each call derived the master salt independently.
+Total: **1** OS prompt. The reverse order (`labels().store` before `sign_in`) costs 2 prompts because each call would derive the master salt independently.
 
 ### Credential ID and user-handle management
 
 `createPasskey()` returns a `RegisteredCredential` carrying:
 
 - `credentialId` - the opaque ID the authenticator assigned to the new credential.
-- `userId` - the WebAuthn `user.id` (user handle). The SDK generates a fresh random 16-byte value per call and surfaces it here for host-side correlation; hosts can no longer supply one. Reusing a value across creates on the same `rpId` silently overwrites the prior credential on some authenticators (Apple Passwords), destroying the PRF secret the wallet derives from; the SDK locks this down by always randomizing.
+- `userId` - the WebAuthn `user.id` (user handle). The SDK generates a fresh random 16-byte value per call and surfaces it here for host-side correlation. Hosts cannot supply one: reusing a value across creates on the same `rpId` silently overwrites the prior credential on some authenticators (Apple Passwords), destroying the PRF secret the wallet derives from. The SDK locks this down by always randomizing.
 - `aaguid` - 16-byte authenticator provider identifier parsed from attestation. `null` when the platform doesn't surface enough authenticator data.
 - `backupEligible` - the BE flag indicating whether the credential can sync across devices. `null` when not extractable.
 
@@ -64,7 +64,7 @@ const newCredential = await prfProvider.createPasskey({ excludeCredentialIds: ex
 
 ### Recovery paths
 
-The canonical branch point is `error.kind()` — it collapses the nine `PrfProviderError` variants into seven actionable [`ErrorKind`](https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/enum.ErrorKind.html) values. Match on `ErrorKind` instead of the individual variants:
+The canonical branch point is `error.kind()`: it collapses the nine `PrfProviderError` variants into seven actionable [`ErrorKind`](https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/enum.ErrorKind.html) values. Match on `ErrorKind` instead of the individual variants:
 
 | `ErrorKind` | What it means | Recommended UX |
 |---|---|---|
@@ -73,17 +73,17 @@ The canonical branch point is `error.kind()` — it collapses the nine `PrfProvi
 | `AlreadyExists` | OS rejected create because a credential already exists in the user's password manager (`matchedExcludedCredential` on iOS, `InvalidStateError` on Android) | Switch path to {{#name PasskeyClient.sign_in}} so the OS picker surfaces the existing cred |
 | `Configuration` | Associated Domains entitlement missing or AASA misconfigured | Developer-facing error; surface {{#name check_domain_association}}'s `NotAssociated` reason text |
 | `PrfUnsupported` | Device or authenticator doesn't support the PRF extension | Fall back to mnemonic onboarding, gated on {{#name PasskeyClient.check_availability}} at startup |
-| `Timeout` (≥ 55s elapsed) | OS biometric inactivity timeout | Sticky retry with timeout-specific copy ("Sign-in timed out — the system stopped waiting for biometrics") |
+| `Timeout` (≥ 55s elapsed) | OS biometric inactivity timeout | Sticky retry with timeout-specific copy ("Sign-in timed out: the system stopped waiting for biometrics") |
 | `Internal` | Network / library / generic failure | Generic "try again later" UI; log details for diagnostics |
 
-The SDK does the sub-300ms / 300ms-55s / 55s+ classification internally on iOS — hosts that branch on `error.kind()` see the distilled `NoCredential` / `Cancel` / `Timeout` outcomes directly, no host-side stopwatch needed.
+The SDK does the sub-300ms / 300ms-55s / 55s+ classification internally on iOS: hosts that branch on `error.kind()` see the distilled `NoCredential` / `Cancel` / `Timeout` outcomes directly, no host-side stopwatch needed.
 
 ### Guidelines
 
 1. **Gate passkey UI on availability.** Call {{#name PasskeyClient.check_availability}} at startup and fall back to mnemonic onboarding on unsupported devices (Android < 9, iOS < 18, browsers without WebAuthn PRF). The same call surfaces domain-association failures, so a single check covers both "device can't" and "config is broken".
-2. **Use the silent-sign-in-fallback-create flow.** Don't gate registration behind a separate "I understand" review screen for the typical user — the OS already shows its own consent UI. {{#name PasskeyClient.sign_in}} returns the wallet directly; pass `wallet.seed` straight to {{#name connect}}.
+2. **Use the silent-sign-in-fallback-create flow.** Don't gate registration behind a separate "I understand" review screen for the typical user: the OS already shows its own consent UI. {{#name PasskeyClient.sign_in}} returns the wallet directly; pass `wallet.seed` straight to {{#name connect}}.
 3. **Cache the derived seed within a session.** The SDK caches the Nostr identity inside the {{#name PasskeyClient}} instance for the duration of a sign-in / register call, so subsequent {{#name PasskeyLabels.list}} / {{#name PasskeyLabels.store}} calls (via {{#name PasskeyClient.labels}}) don't re-prompt. For longer-lived caching (e.g. across a router rebuild on app launch), store the seed in your own in-memory cache and pass it to {{#name connect}} when reconnecting; do not persist to disk.
 4. **Never persist the derived mnemonic.** Re-derive from the passkey and label on each session. Persisting the mnemonic would bypass the OS authentication prompt.
 5. **Allow manual mnemonic backup.** Offer a user-initiated "Show recovery phrase" path that derives the mnemonic on demand via {{#name PasskeyClient.sign_in}}. This gives users a recovery option if they lose access to their passkey.
-6. **Branch on `error.kind()`, not on individual variants.** `ErrorKind` (7 values) is the canonical surface; `PrfProviderError` (9 variants) is for diagnostic detail. The SDK already classifies the iOS sub-300ms-vs-55s+ wall-clock ambiguity internally so `error.kind()` distills it to `NoCredential` / `Cancel` / `Timeout` — no host-side stopwatch needed.
+6. **Branch on `error.kind()`, not on individual variants.** `ErrorKind` (7 values) is the canonical surface; `PrfProviderError` (9 variants) is for diagnostic detail. The SDK already classifies the iOS sub-300ms-vs-55s+ wall-clock ambiguity internally so `error.kind()` distills it to `NoCredential` / `Cancel` / `Timeout`: no host-side stopwatch needed.
 7. **Don't auto-retry on dismissed prompts.** The SDK guarantees it never re-fires the OS prompt without an explicit retry from the host. Build your state machine the same way: dismiss → sticky error screen with Try Again button → user-driven retry.

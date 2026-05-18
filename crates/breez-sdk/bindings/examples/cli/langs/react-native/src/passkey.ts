@@ -267,7 +267,7 @@ function isPasskeyCreationNeeded(error: unknown): boolean {
  * Nostr label storage / discovery, matching the WASM, Go, Python, and Rust CLIs.
  *
  * For Platform providers: if the user cancels or has no credential, this
- * automatically calls createPasskey() and retries — matching the glow-web
+ * automatically calls createPasskey() and retries: matching the glow-web
  * onboarding flow.
  *
  * @param provider - The PRF provider to use

@@ -269,7 +269,7 @@ public struct IosRegisteredCredential {
 /// `Skipped` is the catch-all for verification-level failures: missing
 /// team ID, missing bundle ID, network errors, malformed JSON. Callers
 /// treat `Skipped` as advisory ("we couldn't tell") and proceed with
-/// the WebAuthn ceremony — the SDK never blocks on it.
+/// the WebAuthn ceremony: the SDK never blocks on it.
 @available(iOS 18.0, macOS 15.0, *)
 public enum IosDomainAssociation {
     case associated

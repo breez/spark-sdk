@@ -87,7 +87,7 @@ func registerNewPasskey() async throws -> BreezSdk {
     // For a brand-new user with no existing passkey: register() creates
     // the credential AND derives the wallet seed in one orchestrated
     // call. On iOS+Android this is 2 OS prompts total (1 create + 1
-    // dual-salt assert) thanks to the SDK's bulk-PRF setup_wallet path.
+    // dual-salt assert) thanks to the SDK's bulk-PRF path.
     let prfProvider = PasskeyProvider(rpId: "my-app.com")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 

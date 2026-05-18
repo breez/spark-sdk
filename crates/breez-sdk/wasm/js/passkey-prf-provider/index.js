@@ -438,7 +438,7 @@ export class PasskeyProvider {
     /**
      * Register a new passkey with PRF support. One ceremony, no seed
      * derivation. Browsers allow multiple credentials per RP, so this
-     * may add a sibling credential — pass `excludeCredentialIds` to
+     * may add a sibling credential: pass `excludeCredentialIds` to
      * surface that case as `PasskeyAlreadyExistsError`.
      *
      * @param {Uint8Array[]} [excludeCredentialIds] - Credential IDs the
@@ -479,13 +479,13 @@ export class PasskeyProvider {
      * `navigator.credentials.get / create` time: `rpId` must be a
      * registrable suffix of `window.location.hostname`, OR equal to it.
      * There is no equivalent of Apple's AASA CDN or Google's Digital Asset
-     * Links API — no external file, no TTL, no caching. The browser's own
+     * Links API: no external file, no TTL, no caching. The browser's own
      * check is synchronous and deterministic.
      *
      * This method mirrors that browser-side rule so a misconfigured `rpId`
      * (e.g. running a staging build pointed at `keys.breez.technology`
      * while hosted at `staging.example.com`) can be diagnosed before any
-     * WebAuthn ceremony runs — producing a `NotAssociated` result with a
+     * WebAuthn ceremony runs: producing a `NotAssociated` result with a
      * concrete reason instead of the opaque `SecurityError` the browser
      * would throw.
      *
@@ -494,7 +494,7 @@ export class PasskeyProvider {
      * - `rpId` matches the registrable-suffix rule → `Associated`
      * - `rpId` violates the rule → `NotAssociated` with a concrete reason
      * - No `window` / `location.hostname` available (SSR, test runner,
-     *   Deno) → `Skipped` — the browser will enforce its own rule at
+     *   Deno) → `Skipped`: the browser will enforce its own rule at
      *   WebAuthn call time anyway, so this is never a false-negative.
      *
      * @returns {Promise<{kind: 'Associated'} |
@@ -577,15 +577,7 @@ export class PasskeyProvider {
         const enc = new TextEncoder();
         const salt1Bytes = enc.encode(salt1);
         const salt2Bytes = enc.encode(salt2);
-        try {
-            return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes, options);
-        } catch (error) {
-            if (this.autoRegister && this._isNoCredentialError(error)) {
-                await this._autoRegister();
-                return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes, options);
-            }
-            throw error;
-        }
+        return await this._getDualSaltAssertionWithPrf(salt1Bytes, salt2Bytes, options);
     }
 
     /**
@@ -874,7 +866,7 @@ export class PasskeyProvider {
         // Verify PRF extension was acknowledged. The credential is now
         // registered with the active credential provider, but if that
         // provider lacks PRF support (e.g. Chrome Password Manager and
-        // 1Password on iOS — only iCloud Keychain implements PRF), the
+        // 1Password on iOS: only iCloud Keychain implements PRF), the
         // assertion side will silently fail later. Surface this here as
         // an actionable message so the user knows where to look.
         // WebAuthn doesn't expose a deletion API, so the orphan
@@ -930,28 +922,6 @@ export class PasskeyProvider {
         if (Array.isArray(callerIds)) for (const id of callerIds) push(id);
         for (const id of stored) push(id);
         return out;
-    }
-
-    /**
-     * Check if the error indicates no credential was found.
-     * @param {Error} error
-     * @returns {boolean}
-     * @private
-     */
-    _isNoCredentialError(error) {
-        if (!error) return false;
-        const message = error.message || '';
-        // Browsers throw NotAllowedError when user cancels or no credential is available.
-        // Some browsers distinguish these; we treat "no credentials" as recoverable.
-        // The message varies by browser, so check common patterns.
-        return (
-            message.includes('Credential not found') ||
-            message.includes('no credentials') ||
-            message.includes('No credentials') ||
-            message.includes('empty allowCredentials') ||
-            // Chrome-specific: no credential available for the given RP
-            (error.name === 'NotAllowedError' && message.includes('not allowed'))
-        );
     }
 
     /**
