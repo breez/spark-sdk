@@ -71,6 +71,7 @@ pub struct SdkBuilder {
     #[cfg(feature = "mysql")]
     mysql_pool: Option<Arc<crate::persist::mysql::MysqlConnectionPool>>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
+    rest_chain_service_config: Option<(String, ChainApiType, Option<Credentials>)>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn platform_utils::HttpClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
@@ -107,6 +108,7 @@ impl SdkBuilder {
             #[cfg(feature = "mysql")]
             mysql_pool: None,
             chain_service: None,
+            rest_chain_service_config: None,
             fiat_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
@@ -136,6 +138,7 @@ impl SdkBuilder {
             #[cfg(feature = "mysql")]
             mysql_pool: None,
             chain_service: None,
+            rest_chain_service_config: None,
             fiat_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
@@ -277,6 +280,7 @@ impl SdkBuilder {
     #[must_use]
     pub fn with_chain_service(mut self, chain_service: Arc<dyn BitcoinChainService>) -> Self {
         self.chain_service = Some(chain_service);
+        self.rest_chain_service_config = None;
         self
     }
 
@@ -292,14 +296,8 @@ impl SdkBuilder {
         api_type: ChainApiType,
         credentials: Option<Credentials>,
     ) -> Self {
-        self.chain_service = Some(Arc::new(RestClientChainService::new(
-            url,
-            self.config.network,
-            5,
-            Arc::new(DefaultHttpClient::default()),
-            credentials.map(|c| BasicAuth::new(c.username, c.password)),
-            api_type,
-        )));
+        self.chain_service = None;
+        self.rest_chain_service_config = Some((url, api_type, credentials));
         self
     }
 
@@ -504,8 +502,18 @@ impl SdkBuilder {
         );
         let lnurl_auth_signer = Arc::new(LnurlAuthSignerAdapter::new(signer.clone()));
 
-        let chain_service = if let Some(service) = self.chain_service {
+        let chain_service: Arc<dyn BitcoinChainService> = if let Some(service) = self.chain_service
+        {
             service
+        } else if let Some((url, api_type, credentials)) = self.rest_chain_service_config {
+            Arc::new(RestClientChainService::new(
+                url,
+                self.config.network,
+                5,
+                Arc::new(DefaultHttpClient::default()),
+                credentials.map(|c| BasicAuth::new(c.username, c.password)),
+                api_type,
+            ))
         } else {
             let inner_client: Arc<dyn platform_utils::HttpClient> =
                 Arc::new(DefaultHttpClient::default());

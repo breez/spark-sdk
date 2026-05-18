@@ -78,6 +78,7 @@ pub struct RestClientChainService {
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Clone, Copy, Debug)]
 pub enum ChainApiType {
     Esplora,
     MempoolSpace,
