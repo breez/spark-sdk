@@ -764,10 +764,6 @@ impl TokenService {
             .broadcast_transaction(broadcast_req)
             .await?;
 
-        // The SO indexes outputs by the finalized transaction hash (which includes
-        // revocation commitments added by the SO), not the partial hash the SDK
-        // signed. Compute the finalized hash from the broadcast response so that
-        // subsequent transfers reference outputs by the same id the SO uses.
         let commit_status = broadcast_response.commit_status();
         let commit_progress = broadcast_response.commit_progress;
         let final_token_transaction =
