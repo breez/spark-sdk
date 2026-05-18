@@ -30,7 +30,9 @@ func (p *CustomPrfProvider) IsSupported() (bool, error) {
 }
 
 func (p *CustomPrfProvider) CreatePasskey(request breez_sdk_spark.CreatePasskeyRequest) (breez_sdk_spark.RegisteredCredential, error) {
-	// Register a new credential and return its ID + AAGUID + BE flag.
+	// Register a new credential and return its ID, the WebAuthn user.id
+	// the platform recorded (returned for host-side correlation, never
+	// host-supplied), AAGUID, and BE flag.
 	panic("Implement registration via native passkey API")
 }
 
@@ -49,12 +51,23 @@ func (p *CustomPrfProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAsso
 func CheckAvailability() {
 	// ANCHOR: check-availability
 	prfProvider := &CustomPrfProvider{}
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil)
 
-	available, err := prfProvider.IsSupported()
-	if err == nil && available {
-		// Show passkey as primary option
-	} else {
-		// Fall back to mnemonic flow
+	// CheckAvailability collapses IsSupported + CheckDomainAssociation
+	// into a single tagged value. Branch on the variant the host needs.
+	availability, err := passkey.CheckAvailability()
+	if err != nil {
+		return
+	}
+	switch r := availability.(type) {
+	case breez_sdk_spark.PasskeyAvailabilityAvailable:
+		_ = r // Show passkey as primary option.
+	case breez_sdk_spark.PasskeyAvailabilityPrfUnsupported:
+		_ = r // Fall back to mnemonic flow.
+	case breez_sdk_spark.PasskeyAvailabilityNotAssociated:
+		log.Printf("Domain association failed (source=%s): %s", r.Source, r.Reason)
+	case breez_sdk_spark.PasskeyAvailabilitySkipped:
+		_ = r // No verification source on this platform; proceed normally.
 	}
 	// ANCHOR_END: check-availability
 }
@@ -108,6 +121,12 @@ func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 		return nil, err
 	}
 
+	// Hosts SHOULD persist Credential.CredentialId (for ExcludeCredentialIds
+	// bookkeeping) and Credential.UserId (for server-side correlation).
+	// The SDK generates UserId; it is never host-supplied.
+	_ = response.Credential.CredentialId
+	_ = response.Credential.UserId
+
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
 	sdk, err := breez_sdk_spark.Connect(breez_sdk_spark.ConnectRequest{
 		Config:     config,
@@ -125,15 +144,20 @@ func ListLabels() ([]string, error) {
 	// ANCHOR: list-labels
 	prfProvider := &CustomPrfProvider{}
 	breezApiKey := "<breez api key>"
-	relayConfig := &breez_sdk_spark.NostrRelayConfig{
+	defaultLabel := "personal"
+	config := &breez_sdk_spark.PasskeyConfig{
 		BreezApiKey: &breezApiKey,
+		// Optional: override the default wallet label used when Register /
+		// SignIn receive `Label = nil`. Falls back to the SDK's internal
+		// "Default" when unset.
+		DefaultLabel: &defaultLabel,
 	}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, relayConfig)
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, config)
 
 	// SignIn with no label runs in discovery mode: it derives the master
 	// seed AND lists labels in the same ceremony, so a follow-up
-	// ListLabels() reads from the cached identity for free.
-	labels, err := passkey.ListLabels()
+	// Labels().List() reads from the cached identity for free.
+	labels, err := passkey.Labels().List()
 	if err != nil {
 		return nil, err
 	}
@@ -149,15 +173,15 @@ func StoreLabel() error {
 	// ANCHOR: store-label
 	prfProvider := &CustomPrfProvider{}
 	breezApiKey := "<breez api key>"
-	relayConfig := &breez_sdk_spark.NostrRelayConfig{
+	config := &breez_sdk_spark.PasskeyConfig{
 		BreezApiKey: &breezApiKey,
 	}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, relayConfig)
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, config)
 
 	// For a new label on an existing identity, call SignIn(newLabel)
 	// first to seed the SDK's identity cache via setup_wallet, THEN
-	// StoreLabel uses the cached identity for free (1 OS prompt total).
-	err := passkey.StoreLabel("personal")
+	// Labels().Store() uses the cached identity for free (1 OS prompt total).
+	err := passkey.Labels().Store("personal")
 	if err != nil {
 		return err
 	}
@@ -174,9 +198,9 @@ func SingleCtaOnboarding() (*breez_sdk_spark.Wallet, error) {
 	prfProvider := &CustomPrfProvider{}
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil)
 
-	// Discovery mode (Label=nil): derives master + DEFAULT label in a
-	// single ceremony. The fresh-device user fast-fails in <300ms with
-	// no UI shown.
+	// Discovery mode (Label=nil): derives master + configured default
+	// label in a single ceremony. The fresh-device user fast-fails in
+	// <300ms with no UI shown.
 	response, err := passkey.SignIn(breez_sdk_spark.SignInRequest{
 		Label:      nil,
 		ExtraSalts: []breez_sdk_spark.NamedSalt{},
@@ -187,7 +211,8 @@ func SingleCtaOnboarding() (*breez_sdk_spark.Wallet, error) {
 
 	// CredentialNotFound is the SDK's classification for "no matching
 	// credential on this device", including iOS's <300ms fast-fail case
-	// where the platform conflates no-cred with user-cancel.
+	// where the platform conflates no-cred with user-cancel. The error
+	// now carries a string payload with diagnostic detail.
 	if !errors.Is(err, breez_sdk_spark.ErrPrfProviderErrorCredentialNotFound) {
 		return nil, err
 	}

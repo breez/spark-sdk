@@ -1,8 +1,8 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
-    CreatePasskeyRequest, DomainAssociation, NostrRelayConfig, PasskeyClient, PasskeyError,
-    PrfProvider, PrfProviderError, RegisterRequest, RegisteredCredential, SignInRequest,
-    SignInResponse, Wallet,
+    CreatePasskeyRequest, DeriveSeedsRequest, DomainAssociation, PasskeyAvailability,
+    PasskeyClient, PasskeyConfig, PasskeyError, PrfProvider, PrfProviderError, RegisterRequest,
+    RegisteredCredential, SignInRequest, SignInResponse, Wallet,
 };
 use breez_sdk_spark::{ConnectRequest, Network, connect, default_config};
 use std::sync::Arc;
@@ -20,7 +20,7 @@ struct CustomPrfProvider;
 impl PrfProvider for CustomPrfProvider {
     async fn derive_seeds(
         &self,
-        _salts: Vec<String>,
+        _request: DeriveSeedsRequest,
     ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
         // Call platform passkey API with PRF extension. Use the dual-salt
         // ceremony when the authenticator supports it (one OS prompt for
@@ -39,7 +39,9 @@ impl PrfProvider for CustomPrfProvider {
         &self,
         _request: CreatePasskeyRequest,
     ) -> Result<RegisteredCredential, PrfProviderError> {
-        // Register a new credential and return its ID + AAGUID + BE flag.
+        // Register a new credential and return its ID, the WebAuthn
+        // user.id the platform recorded (returned for host-side
+        // correlation, never host-supplied), AAGUID, and BE flag.
         todo!("Implement registration via WebAuthn create() / native API")
     }
 
@@ -58,11 +60,23 @@ impl PrfProvider for CustomPrfProvider {
 async fn check_availability() -> Result<()> {
     // ANCHOR: check-availability
     let prf_provider = Arc::new(CustomPrfProvider);
+    let passkey = PasskeyClient::new(prf_provider, None);
 
-    if prf_provider.is_supported().await? {
-        // Show passkey as primary option
-    } else {
-        // Fall back to mnemonic flow
+    // check_availability collapses is_supported + check_domain_association
+    // into a single tagged value. Branch on the variant the host needs.
+    match passkey.check_availability().await? {
+        PasskeyAvailability::Available => {
+            // Show passkey as primary option.
+        }
+        PasskeyAvailability::PrfUnsupported => {
+            // Fall back to mnemonic flow.
+        }
+        PasskeyAvailability::NotAssociated { source, reason } => {
+            eprintln!("Domain association failed (source={source}): {reason}");
+        }
+        PasskeyAvailability::Skipped { reason: _ } => {
+            // No verification source on this platform; proceed normally.
+        }
     }
     // ANCHOR_END: check-availability
     Ok(())
@@ -80,6 +94,7 @@ async fn connect_with_passkey() -> Result<breez_sdk_spark::BreezSdk> {
         .sign_in(SignInRequest {
             label: Some("personal".to_string()),
             extra_salts: vec![],
+            ..Default::default()
         })
         .await?;
 
@@ -112,6 +127,14 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
         })
         .await?;
 
+    // Hosts SHOULD persist credential.credential_id (for excludeCredentialIds
+    // bookkeeping) and credential.user_id (for server-side correlation).
+    // The SDK generates user_id; it is never host-supplied.
+    let _persist = (
+        response.credential.credential_id.clone(),
+        response.credential.user_id.clone(),
+    );
+
     let config = default_config(Network::Mainnet);
     let sdk = connect(ConnectRequest {
         config,
@@ -126,16 +149,19 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
 async fn list_labels() -> Result<Vec<String>> {
     // ANCHOR: list-labels
     let prf_provider = Arc::new(CustomPrfProvider);
-    let relay_config = NostrRelayConfig {
+    let config = PasskeyConfig {
         breez_api_key: Some("<breez api key>".to_string()),
-        ..NostrRelayConfig::default()
+        // Optional: override the default wallet label used when
+        // register / sign_in receive `label = None`. Falls back to the
+        // SDK's internal "Default" when unset.
+        default_label: Some("personal".to_string()),
     };
-    let passkey = PasskeyClient::new(prf_provider, Some(relay_config));
+    let passkey = PasskeyClient::new(prf_provider, Some(config));
 
     // sign_in with no label runs in discovery mode: it derives the
     // master seed AND lists labels in the same ceremony, so a follow-up
-    // list_labels() reads from the cached identity for free.
-    let labels = passkey.list_labels().await?;
+    // labels().list() reads from the cached identity for free.
+    let labels = passkey.labels().list().await?;
 
     for label in &labels {
         println!("Found label: {label}");
@@ -147,16 +173,16 @@ async fn list_labels() -> Result<Vec<String>> {
 async fn store_label() -> Result<()> {
     // ANCHOR: store-label
     let prf_provider = Arc::new(CustomPrfProvider);
-    let relay_config = NostrRelayConfig {
+    let config = PasskeyConfig {
         breez_api_key: Some("<breez api key>".to_string()),
-        ..NostrRelayConfig::default()
+        default_label: None,
     };
-    let passkey = PasskeyClient::new(prf_provider, Some(relay_config));
+    let passkey = PasskeyClient::new(prf_provider, Some(config));
 
     // For a new label on an existing identity, call sign_in(new_label)
     // first to seed the SDK's identity cache via setup_wallet, THEN
-    // store_label uses the cached identity for free (1 OS prompt total).
-    passkey.store_label("personal".to_string()).await?;
+    // labels().store() uses the cached identity for free (1 OS prompt total).
+    passkey.labels().store("personal".to_string()).await?;
     // ANCHOR_END: store-label
     Ok(())
 }
@@ -177,6 +203,7 @@ async fn single_cta_onboarding() -> Result<Wallet> {
         .sign_in(SignInRequest {
             label: None,
             extra_salts: vec![],
+            ..Default::default()
         })
         .await
     {
@@ -184,7 +211,9 @@ async fn single_cta_onboarding() -> Result<Wallet> {
         // CredentialNotFound is the SDK's classification for "no matching
         // credential on this device", including iOS's <300ms fast-fail
         // case where the platform conflates no-cred with user-cancel.
-        Err(PasskeyError::Prf(PrfProviderError::CredentialNotFound)) => {
+        // The payload carries diagnostic detail (e.g. the
+        // CredentialRegistry help suffix when applicable).
+        Err(PasskeyError::Prf(PrfProviderError::CredentialNotFound(_))) => {
             // No credential. Onboard a new user.
             let response = passkey
                 .register(RegisterRequest {
@@ -257,6 +286,7 @@ async fn recover_from_already_exists() -> Result<Wallet> {
                 .sign_in(SignInRequest {
                     label: Some("personal".to_string()),
                     extra_salts: vec![],
+                    ..Default::default()
                 })
                 .await?;
             Ok(response.wallet)
@@ -280,6 +310,7 @@ async fn handle_timeout() -> Result<SignInResponse> {
         .sign_in(SignInRequest {
             label: Some("personal".to_string()),
             extra_salts: vec![],
+            ..Default::default()
         })
         .await
     {

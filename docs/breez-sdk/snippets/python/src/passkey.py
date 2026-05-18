@@ -4,8 +4,9 @@ from breez_sdk_spark import (
     CreatePasskeyRequest,
     DomainAssociation,
     Network,
-    NostrRelayConfig,
+    PasskeyAvailability,
     PasskeyClient,
+    PasskeyConfig,
     PrfProvider,
     PrfProviderError,
     RegisterRequest,
@@ -36,7 +37,9 @@ class CustomPrfProvider(PrfProvider):
         raise NotImplementedError("Check platform passkey availability")
 
     async def create_passkey(self, request: CreatePasskeyRequest) -> RegisteredCredential:
-        # Register a new credential and return its ID + AAGUID + BE flag.
+        # Register a new credential and return its ID, the WebAuthn
+        # user.id the platform recorded (returned for host-side
+        # correlation, never host-supplied), AAGUID, and BE flag.
         raise NotImplementedError("Implement registration via native passkey API")
 
     async def check_domain_association(self) -> DomainAssociation:
@@ -53,11 +56,19 @@ class CustomPrfProvider(PrfProvider):
 async def check_availability():
     # ANCHOR: check-availability
     prf_provider = CustomPrfProvider()
+    passkey = PasskeyClient(prf_provider, None)
 
-    if await prf_provider.is_supported():
-        pass  # Show passkey as primary option
-    else:
-        pass  # Fall back to mnemonic flow
+    # check_availability collapses is_supported + check_domain_association
+    # into a single tagged value. Branch on the variant the host needs.
+    availability = await passkey.check_availability()
+    if isinstance(availability, PasskeyAvailability.AVAILABLE):
+        pass  # Show passkey as primary option.
+    elif isinstance(availability, PasskeyAvailability.PRF_UNSUPPORTED):
+        pass  # Fall back to mnemonic flow.
+    elif isinstance(availability, PasskeyAvailability.NOT_ASSOCIATED):
+        print(f"Domain association failed (source={availability.source}): {availability.reason}")
+    elif isinstance(availability, PasskeyAvailability.SKIPPED):
+        pass  # No verification source on this platform; proceed normally.
     # ANCHOR_END: check-availability
 
 
@@ -96,6 +107,12 @@ async def register_new_passkey():
         )
     )
 
+    # Hosts SHOULD persist credential.credential_id (for excludeCredentialIds
+    # bookkeeping) and credential.user_id (for server-side correlation).
+    # The SDK generates user_id; it is never host-supplied.
+    _persisted_credential_id = response.credential.credential_id
+    _persisted_user_id = response.credential.user_id
+
     config = default_config(network=Network.MAINNET)
     sdk = await connect(
         ConnectRequest(config=config, seed=response.wallet.seed, storage_dir="./.data")
@@ -107,13 +124,19 @@ async def register_new_passkey():
 async def list_labels() -> list[str]:
     # ANCHOR: list-labels
     prf_provider = CustomPrfProvider()
-    relay_config = NostrRelayConfig(breez_api_key="<breez api key>")
-    passkey = PasskeyClient(prf_provider, relay_config)
+    config = PasskeyConfig(
+        breez_api_key="<breez api key>",
+        # Optional: override the default wallet label used when
+        # register / sign_in receive `label = None`. Falls back to the
+        # SDK's internal "Default" when unset.
+        default_label="personal",
+    )
+    passkey = PasskeyClient(prf_provider, config)
 
     # sign_in with no label runs in discovery mode: it derives the
     # master seed AND lists labels in the same ceremony, so a follow-up
-    # list_labels() reads from the cached identity for free.
-    labels = await passkey.list_labels()
+    # labels().list() reads from the cached identity for free.
+    labels = await passkey.labels().list()
 
     for label in labels:
         print(f"Found label: {label}")
@@ -124,13 +147,13 @@ async def list_labels() -> list[str]:
 async def store_label():
     # ANCHOR: store-label
     prf_provider = CustomPrfProvider()
-    relay_config = NostrRelayConfig(breez_api_key="<breez api key>")
-    passkey = PasskeyClient(prf_provider, relay_config)
+    config = PasskeyConfig(breez_api_key="<breez api key>")
+    passkey = PasskeyClient(prf_provider, config)
 
     # For a new label on an existing identity, call sign_in(new_label)
     # first to seed the SDK's identity cache via setup_wallet, THEN
-    # store_label uses the cached identity for free (1 OS prompt total).
-    await passkey.store_label(label="personal")
+    # labels().store() uses the cached identity for free (1 OS prompt total).
+    await passkey.labels().store(label="personal")
     # ANCHOR_END: store-label
 
 
@@ -144,15 +167,16 @@ async def single_cta_onboarding():
     passkey = PasskeyClient(prf_provider, None)
 
     try:
-        # Discovery mode (label=None): derives master + DEFAULT label
-        # in a single ceremony. The fresh-device user fast-fails in
-        # <300ms with no UI shown.
+        # Discovery mode (label=None): derives master + configured
+        # default label in a single ceremony. The fresh-device user
+        # fast-fails in <300ms with no UI shown.
         response = await passkey.sign_in(SignInRequest(label=None, extra_salts=[]))
         return response.wallet
     except PrfProviderError.CredentialNotFound:
         # CredentialNotFound is the SDK's classification for "no matching
         # credential on this device", including iOS's <300ms fast-fail
         # case where the platform conflates no-cred with user-cancel.
+        # The variant carries a string payload with diagnostic detail.
         response = await passkey.register(
             RegisterRequest(
                 label="personal",

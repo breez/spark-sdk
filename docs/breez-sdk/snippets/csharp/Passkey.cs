@@ -28,7 +28,9 @@ namespace BreezSdkSnippets
 
         public async Task<RegisteredCredential> CreatePasskey(CreatePasskeyRequest request)
         {
-            // Register a new credential and return its ID + AAGUID + BE flag.
+            // Register a new credential and return its ID, the WebAuthn
+            // user.id the platform recorded (returned for host-side
+            // correlation, never host-supplied), AAGUID, and BE flag.
             throw new NotImplementedException("Implement registration via native passkey API");
         }
 
@@ -51,14 +53,24 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: check-availability
             var prfProvider = new CustomPrfProvider();
+            var passkey = new PasskeyClient(prfProvider, null);
 
-            if (await prfProvider.IsSupported())
+            // CheckAvailability collapses IsSupported + CheckDomainAssociation
+            // into a single tagged value. Branch on the variant the host needs.
+            switch (await passkey.CheckAvailability())
             {
-                // Show passkey as primary option
-            }
-            else
-            {
-                // Fall back to mnemonic flow
+                case PasskeyAvailability.Available:
+                    // Show passkey as primary option.
+                    break;
+                case PasskeyAvailability.PrfUnsupported:
+                    // Fall back to mnemonic flow.
+                    break;
+                case PasskeyAvailability.NotAssociated notAssociated:
+                    Console.WriteLine($"Domain association failed (source={notAssociated.source}): {notAssociated.reason}");
+                    break;
+                case PasskeyAvailability.Skipped:
+                    // No verification source on this platform; proceed normally.
+                    break;
             }
             // ANCHOR_END: check-availability
         }
@@ -107,6 +119,12 @@ namespace BreezSdkSnippets
                 excludeCredentialIds: new List<byte[]>()
             ));
 
+            // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
+            // bookkeeping) and credential.userId (for server-side correlation).
+            // The SDK generates userId; it is never host-supplied.
+            var _persistedCredentialId = response.credential.credentialId;
+            var _persistedUserId = response.credential.userId;
+
             var config = BreezSdkSparkMethods.DefaultConfig(network: Network.Mainnet);
             var sdk = await BreezSdkSparkMethods.Connect(new ConnectRequest(
                 config: config,
@@ -121,15 +139,19 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: list-labels
             var prfProvider = new CustomPrfProvider();
-            var relayConfig = new NostrRelayConfig(
-                breezApiKey: "<breez api key>"
+            var config = new PasskeyConfig(
+                breezApiKey: "<breez api key>",
+                // Optional: override the default wallet label used when
+                // Register / SignIn receive `label = null`. Falls back to
+                // the SDK's internal "Default" when unset.
+                defaultLabel: "personal"
             );
-            var passkey = new PasskeyClient(prfProvider, relayConfig);
+            var passkey = new PasskeyClient(prfProvider, config);
 
             // SignIn with no label runs in discovery mode: it derives the
             // master seed AND lists labels in the same ceremony, so a
-            // follow-up ListLabels() reads from the cached identity for free.
-            var labels = await passkey.ListLabels();
+            // follow-up Labels().List() reads from the cached identity for free.
+            var labels = await passkey.Labels().List();
 
             foreach (var label in labels)
             {
@@ -143,15 +165,16 @@ namespace BreezSdkSnippets
         {
             // ANCHOR: store-label
             var prfProvider = new CustomPrfProvider();
-            var relayConfig = new NostrRelayConfig(
-                breezApiKey: "<breez api key>"
+            var config = new PasskeyConfig(
+                breezApiKey: "<breez api key>",
+                defaultLabel: null
             );
-            var passkey = new PasskeyClient(prfProvider, relayConfig);
+            var passkey = new PasskeyClient(prfProvider, config);
 
             // For a new label on an existing identity, call SignIn(newLabel)
             // first to seed the SDK's identity cache via setup_wallet, THEN
-            // StoreLabel uses the cached identity for free (1 OS prompt total).
-            await passkey.StoreLabel(label: "personal");
+            // Labels().Store() uses the cached identity for free (1 OS prompt total).
+            await passkey.Labels().Store(label: "personal");
             // ANCHOR_END: store-label
         }
 
@@ -168,8 +191,8 @@ namespace BreezSdkSnippets
 
             try
             {
-                // Discovery mode (label=null): derives master + DEFAULT
-                // label in a single ceremony. The fresh-device user
+                // Discovery mode (label=null): derives master + configured
+                // default label in a single ceremony. The fresh-device user
                 // fast-fails in <300ms with no UI shown.
                 var response = await passkey.SignIn(new SignInRequest(
                     label: null,
@@ -182,7 +205,8 @@ namespace BreezSdkSnippets
                 // CredentialNotFound is the SDK's classification for "no
                 // matching credential on this device", including iOS's
                 // <300ms fast-fail case where the platform conflates
-                // no-cred with user-cancel.
+                // no-cred with user-cancel. The variant carries a string
+                // payload with diagnostic detail.
                 var response = await passkey.Register(new RegisterRequest(
                     label: "personal",
                     extraSalts: new List<NamedSalt>(),

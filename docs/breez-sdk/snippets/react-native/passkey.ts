@@ -1,14 +1,17 @@
-import type { NostrRelayConfig, RegisteredCredential } from '@breeztech/breez-sdk-spark-react-native'
+import type {
+  PasskeyConfig,
+  RegisteredCredential,
+} from '@breeztech/breez-sdk-spark-react-native'
 import {
   PasskeyClient,
   connect,
   defaultConfig,
-  Network
+  Network,
 } from '@breeztech/breez-sdk-spark-react-native'
 import {
   PasskeyAlreadyExistsError,
   PasskeyProvider,
-  PasskeyTimedOutError
+  PasskeyTimedOutError,
 } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
 
 // ANCHOR: implement-prf-provider
@@ -24,8 +27,11 @@ class CustomPrfProvider {
   }
 
   createPasskey = async (
-    request: { excludeCredentialIds?: Uint8Array[]; userId?: Uint8Array; userName?: string; userDisplayName?: string }
+    request: { excludeCredentialIds?: Uint8Array[]; userName?: string; userDisplayName?: string }
   ): Promise<RegisteredCredential> => {
+    // Register a new credential and return its ID, the WebAuthn user.id
+    // the native plugin minted for it (returned for host-side
+    // correlation, never host-supplied), AAGUID, and BE flag.
     throw new Error('Implement registration via native passkey API')
   }
 
@@ -38,10 +44,26 @@ class CustomPrfProvider {
 const checkAvailability = async () => {
   // ANCHOR: check-availability
   const prfProvider = new PasskeyProvider()
-  if (await prfProvider.isSupported()) {
-    // Show passkey as primary option
-  } else {
-    // Fall back to mnemonic flow
+  const passkey = new PasskeyClient(prfProvider as any, undefined)
+
+  // checkAvailability collapses isSupported + checkDomainAssociation
+  // into a single tagged value. Branch on the variant the host needs.
+  const availability = await passkey.checkAvailability()
+  switch (availability.type) {
+    case 'available':
+      // Show passkey as primary option.
+      break
+    case 'prfUnsupported':
+      // Fall back to mnemonic flow.
+      break
+    case 'notAssociated':
+      console.error(
+        `Domain association failed (source=${availability.source}): ${availability.reason}`
+      )
+      break
+    case 'skipped':
+      // No verification source on this platform; proceed normally.
+      break
   }
   // ANCHOR_END: check-availability
 }
@@ -91,6 +113,14 @@ const registerNewPasskey = async () => {
     excludeCredentialIds: [],
   })
 
+  // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
+  // bookkeeping) and credential.userId (for server-side correlation).
+  // The SDK generates userId; it is never host-supplied.
+  const _persist = {
+    credentialId: response.credential.credentialId,
+    userId: response.credential.userId,
+  }
+
   const config = defaultConfig(Network.Mainnet)
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })
   // ANCHOR_END: register-passkey
@@ -100,15 +130,18 @@ const registerNewPasskey = async () => {
 const listLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
   const prfProvider = new PasskeyProvider()
-  const relayConfig: NostrRelayConfig = {
+  const config: PasskeyConfig = {
     breezApiKey: '<breez api key>',
-    timeoutSecs: undefined
+    // Optional: override the default wallet label used when register /
+    // signIn receive `label = undefined`. Falls back to the SDK's
+    // internal "Default" when unset.
+    defaultLabel: 'personal',
   }
-  const passkey = new PasskeyClient(prfProvider as any, relayConfig)
+  const passkey = new PasskeyClient(prfProvider as any, config)
 
   // signIn with discovery mode (no label) lists labels in the same
-  // ceremony; subsequent listLabels reads from the cached identity.
-  const labels = await passkey.listLabels()
+  // ceremony; subsequent labels().list() reads from the cached identity.
+  const labels = await passkey.labels().list()
 
   for (const label of labels) {
     console.log(`Found label: ${label}`)
@@ -120,16 +153,15 @@ const listLabels = async (): Promise<string[]> => {
 const storeLabel = async () => {
   // ANCHOR: store-label
   const prfProvider = new PasskeyProvider()
-  const relayConfig: NostrRelayConfig = {
+  const config: PasskeyConfig = {
     breezApiKey: '<breez api key>',
-    timeoutSecs: undefined
   }
-  const passkey = new PasskeyClient(prfProvider as any, relayConfig)
+  const passkey = new PasskeyClient(prfProvider as any, config)
 
   // For a new label on an existing identity, signIn(newLabel) seeds the
-  // identity cache via setup_wallet, then storeLabel runs free off the
-  // cached identity (1 OS prompt total).
-  await passkey.storeLabel('personal')
+  // identity cache via setup_wallet, then labels().store() runs free off
+  // the cached identity (1 OS prompt total).
+  await passkey.labels().store('personal')
   // ANCHOR_END: store-label
 }
 
@@ -143,9 +175,9 @@ const singleCtaOnboarding = async () => {
   const passkey = new PasskeyClient(prfProvider as any, undefined)
 
   try {
-    // Discovery mode (label undefined): derives master + DEFAULT label
-    // in a single ceremony. The fresh-device user fast-fails in <300ms
-    // with no UI shown.
+    // Discovery mode (label undefined): derives master + configured
+    // default label in a single ceremony. The fresh-device user
+    // fast-fails in <300ms with no UI shown.
     const response = await passkey.signIn({ label: undefined, extraSalts: [] })
     return response.wallet
   } catch (error) {
@@ -256,11 +288,11 @@ const handleTimeout = async () => {
 
 const withCredentialRegistry = async () => {
   // ANCHOR: with-credential-registry
-  // Opt-in CredentialRegistry. The Dart/JS-side wrapper merges
-  // stored IDs into allowCredentials on assertion and
-  // excludeCredentials on registration, then auto-adds new
-  // credential IDs after success. The native plugin never sees the
-  // registry: all bookkeeping is done in JS.
+  // Opt-in CredentialRegistry. The JS-side wrapper merges stored IDs
+  // into allowCredentials on assertion and excludeCredentials on
+  // registration, then auto-adds new credential IDs after success.
+  // The native module never sees the registry: all bookkeeping is
+  // done in JS.
   //
   // The SDK doesn't ship a default impl: copy the iOS Keychain or
   // Android Block Store reference impl from the passkey guide and
@@ -285,8 +317,13 @@ const withCredentialRegistry = async () => {
   // register: registry IDs are auto-merged into excludeCredentials.
   await passkey.register({ label: 'personal', extraSalts: [] })
 
+  // Inspect / mutate the registry via the credentials() sub-object.
+  // get() returns the stored IDs; remove() / clear() drop entries.
+  const known = await passkey.credentials().get()
+  console.log(`Known credentials: ${known.length}`)
+
   // On logout, clear the registry so a fresh device-pairing
   // wouldn't pin to the old credential.
-  await registry.clear('keys.breez.technology')
+  await passkey.credentials().clear()
   // ANCHOR_END: with-credential-registry
 }

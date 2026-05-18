@@ -109,15 +109,17 @@ If you're using Expo, the Breez SDK plugin can configure this automatically. See
 
 <div class="warning">
 <h4>Associated Domains entitlement must be enabled</h4>
-Without the Associated Domains entitlement, passkey operations will fail with a configuration error even though {{#name is_available}} returns `true` (the OS-level check can't verify entitlements at runtime).
+Without the Associated Domains entitlement, passkey operations will fail with a configuration error even though {{#name check_availability}} returns {{#enum PasskeyAvailability::Available}} (the OS-level check can't verify entitlements at runtime).
 </div>
 
-### Nostr relay configuration
+### Configuring the PasskeyClient
 
-The SDK uses Nostr relays to store and discover labels. Configure relay access by passing a {{#name NostrRelayConfig}} when constructing the {{#name PasskeyClient}} instance:
+The optional {{#name PasskeyConfig}} parameter on {{#name PasskeyClient}} carries the two cross-cutting knobs that are not provider-scoped:
 
-- {{#name breez_api_key}} - Your Breez API key. When provided, the SDK connects to the Breez-managed relay with <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a> authentication.
-- {{#name timeout_secs}} - Connection timeout in seconds (defaults to 30).
+- {{#name breez_api_key}} - Your Breez API key. When provided, the SDK connects to the Breez-managed relay with <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a> authentication for label storage and discovery.
+- {{#name default_label}} - The wallet label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive `label = None`. Falls back to the SDK's internal `"Default"` when unset. Useful when your app brands a single wallet under a stable name.
+
+All other knobs (`rp_id`, `auto_register`, `credential_registry`, etc.) live on the platform `PasskeyProvider` constructor instead — they are provider-scoped, not client-scoped.
 
 The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy. See the [Listing labels](#listing-labels) and [Storing a label](#storing-a-label) code examples below for usage.
 
@@ -420,7 +422,7 @@ If your app previously relied on the auto-magic behaviour (the bundled `KnownCre
 
 ## Checking passkey availability
 
-Use {{#name is_available}} to gate passkey UI elements. This returns `false` on unsupported platforms (e.g., Android < 9, iOS < 18), allowing you to fall back to mnemonic-based onboarding gracefully:
+Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The single call collapses {{#name PrfProvider.is_supported}} and {{#name PrfProvider.check_domain_association}} into a tagged {{#name PasskeyAvailability}} value with four variants — `Available`, `PrfUnsupported`, `NotAssociated { source, reason }`, `Skipped { reason }` — so hosts can fall back to mnemonic-based onboarding on unsupported platforms (Android < 9, iOS < 18) and surface configuration mistakes (missing entitlement, AASA not deployed) without firing a WebAuthn ceremony:
 
 {{#tabs passkey:check-availability}}
 
@@ -439,19 +441,19 @@ For a brand-new user with no existing passkey, call {{#name PasskeyClient.regist
 
 <h2 id="listing-labels">
     <a class="header" href="#listing-labels">Listing labels</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.list_labels">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyLabels.html#method.list">API docs</a>
 </h2>
 
-Discover labels associated to the passkey using Nostr. {{#name PasskeyClient.sign_in}} already lists labels in discovery mode (when no `label` is specified), so a separate `list_labels` call is only needed when re-fetching the label set after sign-in.
+Discover labels associated to the passkey using Nostr. {{#name PasskeyClient.sign_in}} already lists labels in discovery mode (when no `label` is specified), so a separate {{#name PasskeyLabels.list}} call (via {{#name PasskeyClient.labels}}) is only needed when re-fetching the label set after sign-in.
 
 {{#tabs passkey:list-labels}}
 
 <h2 id="storing-a-label">
     <a class="header" href="#storing-a-label">Storing a label</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.store_label">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyLabels.html#method.store">API docs</a>
 </h2>
 
-Publish a label to Nostr so it can be discovered later. {{#name PasskeyClient.register}} publishes the label automatically on registration; use {{#name PasskeyClient.store_label}} only when adding a new label to an existing identity (e.g. a "create a new wallet" path on a returning user).
+Publish a label to Nostr so it can be discovered later. {{#name PasskeyClient.register}} publishes the label automatically on registration; use {{#name PasskeyLabels.store}} (via {{#name PasskeyClient.labels}}) only when adding a new label to an existing identity (e.g. a "create a new wallet" path on a returning user).
 
 {{#tabs passkey:store-label}}
 
