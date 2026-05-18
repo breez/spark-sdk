@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
+use breez_sdk_common::breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL};
+use platform_utils::{HttpClient, create_http_client};
+
 use crate::{
-    SdkError, SspConnectionManager,
-    connection_manager::{ConnectionManager, new_connection_manager, new_ssp_connection_manager},
+    SdkError,
+    connection_manager::{ConnectionManager, new_connection_manager},
+    default_user_agent,
 };
 
 #[cfg(feature = "mysql")]
@@ -18,9 +22,10 @@ use crate::persist::postgres::{
 ///
 /// Construct one with [`new_sdk_context`] and pass the same `Arc` to every
 /// [`SdkBuilder`](crate::SdkBuilder) whose SDKs should share those resources
-/// (gRPC channels to the Spark operators, the SSP HTTP client, a database
-/// connection pool, …). Useful for multi-tenant servers that load many
-/// wallets in one process.
+/// (a single HTTP client across SSP / chain / LNURL / JWT / etc., a gRPC
+/// channel pool to the Spark operators, the Breez backend gRPC client, a
+/// database connection pool, …). Useful for multi-tenant servers that load
+/// many wallets in one process.
 ///
 /// The struct is intentionally opaque — all fields are crate-private. There
 /// is no way to inject pre-built sub-components: the factory builds them
@@ -28,7 +33,12 @@ use crate::persist::postgres::{
 /// connection-manager wiring, or pool plumbing.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SdkContext {
-    pub(crate) ssp_connection_manager: Arc<SspConnectionManager>,
+    /// Single shared HTTP client used for every reqwest-based call out of the
+    /// SDK: SSP GraphQL, chain service, LNURL, JWT fetch, etc.
+    pub(crate) http_client: Arc<dyn HttpClient>,
+    /// Single shared gRPC client to the Breez backend (fiat, `MoonPay`, payment
+    /// notifier, signer, support, swapper).
+    pub(crate) breez_server: Arc<BreezServer>,
     pub(crate) so_connection_manager: Arc<ConnectionManager>,
     #[cfg(feature = "postgres")]
     pub(crate) postgres_pool: Option<Arc<PostgresConnectionPool>>,
@@ -72,7 +82,12 @@ pub struct SdkContextConfig {
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn new_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkError> {
-    let ssp_connection_manager = new_ssp_connection_manager(None);
+    let user_agent = default_user_agent();
+    let http_client = create_http_client(Some(&user_agent));
+    let breez_server = Arc::new(
+        BreezServer::new(PRODUCTION_BREEZSERVER_URL, None, &user_agent)
+            .map_err(|e| SdkError::Generic(e.to_string()))?,
+    );
     let so_connection_manager = new_connection_manager(config.connections_per_operator);
 
     #[cfg(feature = "postgres")]
@@ -88,7 +103,8 @@ pub fn new_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkE
     };
 
     Ok(Arc::new(SdkContext {
-        ssp_connection_manager,
+        http_client,
+        breez_server,
         so_connection_manager,
         #[cfg(feature = "postgres")]
         postgres_pool,
@@ -97,16 +113,16 @@ pub fn new_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkE
     }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
 
-    #[test]
-    fn default_config_yields_context_with_default_managers_and_no_db() {
+    #[tokio::test]
+    async fn default_config_yields_context_with_shared_clients_and_no_db() {
         let ctx = new_sdk_context(SdkContextConfig::default()).expect("default context");
-        // Connection managers are always present; we don't reach into their
-        // internals here — just confirming the Arcs are non-null is enough.
-        let _ssp = Arc::clone(&ctx.ssp_connection_manager);
+        // Just confirming the Arcs are non-null.
+        let _http = Arc::clone(&ctx.http_client);
+        let _breez = Arc::clone(&ctx.breez_server);
         let _so = Arc::clone(&ctx.so_connection_manager);
         #[cfg(feature = "postgres")]
         assert!(ctx.postgres_pool.is_none());

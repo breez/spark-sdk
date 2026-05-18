@@ -48,6 +48,7 @@ impl FlashnetTokenConverter {
         storage: Arc<dyn Storage>,
         spark_wallet: Arc<SparkWallet>,
         network: Network,
+        http_client: Arc<dyn platform_utils::HttpClient>,
     ) -> Self {
         let integrator_fee_bps = flashnet_config
             .integrator_config
@@ -58,6 +59,7 @@ impl FlashnetTokenConverter {
             flashnet_config,
             spark_wallet.clone(),
             Arc::new(CacheStore::default()),
+            http_client,
         ));
 
         let (refund_trigger, _) = broadcast::channel(10);

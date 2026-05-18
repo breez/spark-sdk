@@ -31,9 +31,7 @@ pub use chain::{
 };
 pub use common::rest::{RestClient, RestResponse};
 pub use common::{fiat::*, models::*, sync_storage};
-pub use connection_manager::{
-    ConnectionManager, SspConnectionManager, new_connection_manager, new_ssp_connection_manager,
-};
+pub use connection_manager::{ConnectionManager, new_connection_manager};
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
 pub use issuer::*;

@@ -8,9 +8,10 @@ use rstest::*;
 use tempfile::Builder;
 use tracing::info;
 
-/// Two SDK instances share a single SspConnectionManager and successfully exchange
-/// a Spark transfer. The shared HTTP client is exercised on the SSP-backed sync
-/// path (transfer history queries, token metadata) on both sides while each SDK
+/// Two SDK instances share a single `SdkContext` (and therefore the same
+/// shared HTTP client used for SSP traffic) and successfully exchange a Spark
+/// transfer. The shared HTTP client is exercised on the SSP-backed sync path
+/// (transfer history queries, token metadata) on both sides while each SDK
 /// keeps its own session/auth state.
 #[rstest]
 #[test_log::test(tokio::test)]

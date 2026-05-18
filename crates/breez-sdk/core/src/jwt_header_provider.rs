@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use breez_sdk_common::utils::now;
+use platform_utils::HttpClient;
 use platform_utils::time::Duration;
 use platform_utils::tokio;
 use platform_utils::tokio::sync::RwLock;
-use platform_utils::{DefaultHttpClient, HttpClient as _};
 use serde::Deserialize;
 use spark_wallet::{HeaderProvider, HeaderProviderError};
 use tokio::sync::oneshot;
@@ -38,6 +38,7 @@ struct Inner {
     token: RwLock<Option<String>>,
     api_key: String,
     storage: Option<Arc<dyn Storage>>,
+    http_client: Arc<dyn HttpClient>,
 }
 
 /// Header provider that injects the Breez partner JWT (`x-partner-jwt`) into
@@ -63,11 +64,19 @@ pub struct BreezJwtHeaderProvider {
 impl BreezJwtHeaderProvider {
     /// Constructs the provider and spawns its background refresh task.
     /// Does not block on the initial JWT load.
-    pub fn new(api_key: String, storage: Option<Arc<dyn Storage>>) -> Arc<Self> {
+    ///
+    /// `http_client` is the shared client used for the JWT refresh fetch
+    /// (typically supplied from the surrounding [`SdkContext`](crate::SdkContext)).
+    pub fn new(
+        api_key: String,
+        storage: Option<Arc<dyn Storage>>,
+        http_client: Arc<dyn HttpClient>,
+    ) -> Arc<Self> {
         let inner = Arc::new(Inner {
             token: RwLock::new(None),
             api_key,
             storage,
+            http_client,
         });
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -129,11 +138,10 @@ async fn store_token(inner: &Inner, token: String) {
     }
 }
 
-async fn fetch_new_jwt(api_key: &str) -> Result<String, String> {
-    let client = DefaultHttpClient::new(None);
+async fn fetch_new_jwt(api_key: &str, http_client: &Arc<dyn HttpClient>) -> Result<String, String> {
     let mut headers = HashMap::new();
     headers.insert("authorization".to_string(), format!("Bearer {api_key}"));
-    let res = client
+    let res = http_client
         .get(format!("{JWT_BREEZSERVER_URL}/api/jwt"), Some(headers))
         .await
         .map_err(|err| format!("Could not retrieve JWT token: {err}"))?;
@@ -198,7 +206,7 @@ fn spawn_refresh_task(inner: Arc<Inner>, mut shutdown_rx: oneshot::Receiver<()>)
 
             let mut backoff_attempt: u32 = 0;
             loop {
-                match fetch_new_jwt(&inner.api_key).await {
+                match fetch_new_jwt(&inner.api_key, &inner.http_client).await {
                     Ok(token) => {
                         store_token(&inner, token).await;
                         backoff_attempt = 0;

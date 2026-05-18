@@ -4,11 +4,7 @@
 )]
 use std::sync::Arc;
 
-use breez_sdk_common::{
-    breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL},
-    buy::moonpay::MoonpayProvider,
-};
-use platform_utils::DefaultHttpClient;
+use breez_sdk_common::buy::moonpay::MoonpayProvider;
 
 #[cfg(not(target_family = "wasm"))]
 use spark_wallet::Signer;
@@ -46,6 +42,18 @@ use crate::{
     },
 };
 
+/// Configuration captured by [`SdkBuilder::with_rest_chain_service`].
+///
+/// Stored on the builder and resolved during `build()` so the resulting
+/// `RestClientChainService` reuses the shared HTTP client from the
+/// [`SdkContext`](crate::SdkContext).
+#[derive(Clone)]
+struct RestChainServiceConfig {
+    url: String,
+    api_type: ChainApiType,
+    credentials: Option<Credentials>,
+}
+
 /// Source for the signer - either a seed or an external signer implementation
 #[derive(Clone)]
 enum SignerSource {
@@ -71,7 +79,7 @@ pub struct SdkBuilder {
     #[cfg(feature = "mysql")]
     mysql_pool: Option<Arc<crate::persist::mysql::MysqlConnectionPool>>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
-    rest_chain_service_config: Option<(String, ChainApiType, Option<Credentials>)>,
+    rest_chain_service_config: Option<RestChainServiceConfig>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn platform_utils::HttpClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
@@ -304,7 +312,11 @@ impl SdkBuilder {
         self
     }
 
-    /// Sets the REST chain service to be used by the SDK.
+    /// Configures a REST chain service to be used by the SDK.
+    ///
+    /// The service is constructed during [`build()`](Self::build) so it can
+    /// reuse the shared HTTP client carried by the [`SdkContext`](crate::SdkContext).
+    ///
     /// Arguments:
     /// - `url`: The base URL of the REST API.
     /// - `api_type`: The API type to be used.
@@ -317,7 +329,11 @@ impl SdkBuilder {
         credentials: Option<Credentials>,
     ) -> Self {
         self.chain_service = None;
-        self.rest_chain_service_config = Some((url, api_type, credentials));
+        self.rest_chain_service_config = Some(RestChainServiceConfig {
+            url,
+            api_type,
+            credentials,
+        });
         self
     }
 
@@ -538,18 +554,18 @@ impl SdkBuilder {
         let chain_service: Arc<dyn BitcoinChainService> = if let Some(service) = self.chain_service
         {
             service
-        } else if let Some((url, api_type, credentials)) = self.rest_chain_service_config {
+        } else if let Some(cfg) = self.rest_chain_service_config {
             Arc::new(RestClientChainService::new(
-                url,
+                cfg.url,
                 self.config.network,
                 5,
-                Arc::new(DefaultHttpClient::default()),
-                credentials.map(|c| BasicAuth::new(c.username, c.password)),
-                api_type,
+                context.http_client.clone(),
+                cfg.credentials
+                    .map(|c| BasicAuth::new(c.username, c.password)),
+                cfg.api_type,
             ))
         } else {
-            let inner_client: Arc<dyn platform_utils::HttpClient> =
-                Arc::new(DefaultHttpClient::default());
+            let inner_client: Arc<dyn platform_utils::HttpClient> = context.http_client.clone();
             match self.config.network {
                 Network::Mainnet => Arc::new(RestClientChainService::new(
                     "https://blockstream.info/api".to_string(),
@@ -707,10 +723,7 @@ impl SdkBuilder {
         let user_agent = crate::default_user_agent();
         info!("Building sdk with user agent: {}", user_agent);
 
-        let breez_server = Arc::new(
-            BreezServer::new(PRODUCTION_BREEZSERVER_URL, None, &user_agent)
-                .map_err(|e| SdkError::Generic(e.to_string()))?,
-        );
+        let breez_server = Arc::clone(&context.breez_server);
 
         let fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService> = match self.fiat_service {
             Some(service) => Arc::new(FiatServiceWrapper::new(service)),
@@ -719,7 +732,7 @@ impl SdkBuilder {
 
         let lnurl_client: Arc<dyn platform_utils::HttpClient> = match self.lnurl_client {
             Some(client) => client,
-            None => Arc::new(DefaultHttpClient::default()),
+            None => context.http_client.clone(),
         };
         let mut spark_wallet_config = if let Some(env_config) = &self.config.spark_config {
             Self::build_spark_wallet_config(self.config.network.into(), env_config)?
@@ -860,7 +873,11 @@ impl SdkBuilder {
             if matches!(self.config.network, Network::Mainnet)
                 && let Some(api_key) = self.config.api_key.clone()
             {
-                Some(BreezJwtHeaderProvider::new(api_key, Some(storage.clone())))
+                Some(BreezJwtHeaderProvider::new(
+                    api_key,
+                    Some(storage.clone()),
+                    context.http_client.clone(),
+                ))
             } else {
                 None
             };
@@ -885,8 +902,7 @@ impl SdkBuilder {
         if let Some(token_output_store) = token_output_store {
             wallet_builder = wallet_builder.with_token_output_store(token_output_store);
         }
-        wallet_builder =
-            wallet_builder.with_ssp_http_client(context.ssp_connection_manager.client.clone());
+        wallet_builder = wallet_builder.with_ssp_http_client(context.http_client.clone());
         wallet_builder =
             wallet_builder.with_connection_manager(context.so_connection_manager.inner.clone());
         let spark_wallet = Arc::new(wallet_builder.build().await?);
@@ -895,16 +911,12 @@ impl SdkBuilder {
         {
             Some(client) => Some(client),
             None => match &self.config.lnurl_domain {
-                Some(domain) => {
-                    let http_client: Arc<dyn platform_utils::HttpClient> =
-                        Arc::new(DefaultHttpClient::default());
-                    Some(Arc::new(DefaultLnurlServerClient::new(
-                        http_client,
-                        domain.clone(),
-                        self.config.api_key.clone(),
-                        Arc::clone(&spark_wallet),
-                    )))
-                }
+                Some(domain) => Some(Arc::new(DefaultLnurlServerClient::new(
+                    context.http_client.clone(),
+                    domain.clone(),
+                    self.config.api_key.clone(),
+                    Arc::clone(&spark_wallet),
+                ))),
                 None => None,
             },
         };
@@ -949,6 +961,7 @@ impl SdkBuilder {
             Arc::clone(&storage),
             Arc::clone(&spark_wallet),
             self.config.network,
+            context.http_client.clone(),
         ));
         let token_converter: Arc<dyn TokenConverter> = flashnet_converter;
 

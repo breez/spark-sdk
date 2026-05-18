@@ -1,47 +1,15 @@
-//! Shareable transports for cross-SDK-instance connection reuse.
+//! Shareable gRPC channel manager for the Spark operators.
+//!
+//! HTTP transport (SSP, Breez server, chain service, JWT fetch, LNURL) is now
+//! consolidated under the single `http_client` field on
+//! [`SdkContext`](crate::SdkContext); see that type for the HTTP side.
 
 use std::sync::Arc;
 
-use platform_utils::{HttpClient, create_http_client};
 use spark_wallet::{
     BalancedConnectionManager, ConnectionManager as InnerConnectionManager,
     DefaultConnectionManager,
 };
-
-use crate::default_user_agent;
-
-/// A shared HTTP transport for SSP GraphQL traffic.
-///
-/// All SDK instances that are built with the same `SspConnectionManager` send
-/// SSP requests over the same pooled `reqwest::Client`. This means each
-/// process opens at most one TCP+TLS+HTTP/2 connection to the SSP regardless
-/// of how many wallets are loaded — useful for multi-tenant servers running
-/// many SDK instances.
-///
-/// # Caveats
-///
-/// - The user-agent of the first SDK to construct this manager is reused for
-///   all subsequent instances. This is rarely a problem since SDK instances
-///   in one process typically share a build version.
-/// - Connections close when the last `Arc<SspConnectionManager>` is dropped.
-///   `BreezSdk::disconnect` does not close them.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
-pub struct SspConnectionManager {
-    pub(crate) client: Arc<dyn HttpClient>,
-}
-
-/// Construct a new shared SSP connection manager.
-///
-/// Typically built inside an [`SdkContext`](crate::SdkContext) by
-/// [`new_sdk_context`](crate::new_sdk_context); SDKs that share the same
-/// `SdkContext` automatically share the underlying HTTP connection pool.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn new_ssp_connection_manager(user_agent: Option<String>) -> Arc<SspConnectionManager> {
-    let user_agent = user_agent.unwrap_or_else(default_user_agent);
-    Arc::new(SspConnectionManager {
-        client: create_http_client(Some(&user_agent)),
-    })
-}
 
 /// A shareable manager for gRPC connections to the Spark operators.
 ///
