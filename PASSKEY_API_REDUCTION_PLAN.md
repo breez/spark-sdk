@@ -30,7 +30,9 @@ execute is here; no prior session context required.
 | Q3 | Known-cred get/remove/clear via `client.credentials()` sub-object — off the top-level surface. |
 | Q4 | Label list/store via `client.labels()` sub-object — reachable from all bindings. |
 | Naming | Rename `LabelStore::ensure_label_published` → `store_label`; idempotency documented, not in the name. |
-| Default label | Configurable via a new **`PasskeyConfig`** struct passed to `PasskeyClient::new` (see §1.1). Replaces the bare `relay_config` ctor arg. Falls back to the internal `DEFAULT_LABEL` const (`"Default"`) when unset. |
+| Default label | Configurable via a new **`PasskeyConfig`** struct passed to `PasskeyClient::new` (see §1.1). Falls back to the internal `DEFAULT_LABEL` const (`"Default"`) when unset. |
+| Relay config | **Delete `NostrRelayConfig`** (one-field wrapper after `timeout_secs` was already dropped). Fold its `breez_api_key` into `PasskeyConfig`. Removes a public type from all 5 bindings. |
+| Provider naming | The platform provider class is already **`PasskeyProvider`** on all 5 platforms (iOS/Android/JS/Flutter/RN) — verify, do **not** rename. Residual `prf` cruft (filenames, `PasskeyPrfException`, JS subpath) handled in opt-in Stage D (§6). |
 
 ### Confirmed decisions
 
@@ -49,13 +51,20 @@ execute is here; no prior session context required.
 ### 1.1 `PasskeyConfig`
 
 New public record (added to every binding) — **replaces** the bare
-`relay_config: Option<NostrRelayConfig>` constructor parameter:
+`relay_config: Option<NostrRelayConfig>` constructor parameter and the
+now-deleted `NostrRelayConfig` type. Exactly two optional fields; nothing
+else belongs here (all other knobs — `rp_id`, `auto_register`,
+`credential_registry`, etc. — are provider-scoped, see §1.3):
 
 ```rust
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PasskeyConfig {
+    /// Breez API key for the authenticated Breez Nostr relay (NIP-42).
+    /// `None` ⇒ public relays only (label sync still works, less robust).
+    /// Only consulted by the default Nostr label store; ignored when a
+    /// custom `LabelStore` is injected via `with_label_store`.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub relay_config: Option<NostrRelayConfig>,
+    pub breez_api_key: Option<String>,
     /// Wallet label used when register/sign_in receive `label = None`.
     /// `None` ⇒ internal `DEFAULT_LABEL` ("Default").
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
@@ -66,7 +75,33 @@ pub struct PasskeyConfig {
 The resolved default label is stored on `Passkey` at construction and used
 everywhere `DEFAULT_LABEL` is currently referenced (`setup_wallet`, the
 `sign_in` discovery path). `from_config(&crate::Config)` builds a
-`PasskeyConfig` (api_key → `relay_config`, `default_label = None`).
+`PasskeyConfig` (`config.api_key` → `breez_api_key`, `default_label =
+None`).
+
+### 1.2 Canonical naming (aligned across all platforms)
+
+| Concept | Canonical name | Status |
+|---|---|---|
+| Orchestrator entry point | `PasskeyClient` | exists |
+| Platform provider class | `PasskeyProvider` | **already consistent on all 5 platforms** — verify, do NOT rename |
+| PRF contract trait/interface | `PrfProvider` | exists |
+| Client config record | `PasskeyConfig` | NEW |
+| Availability result | `PasskeyAvailability` | NEW |
+| Label sub-object | `PasskeyLabels` | NEW |
+| Credential sub-object | `PasskeyCredentials` | NEW |
+| Label-store trait (Rust-only) | `LabelStore` | exists, reshaped |
+| Provider exception (Flutter/RN) | `PasskeyException` | Stage D rename (from `PasskeyPrfException`) |
+| JS provider subpath | `@breeztech/breez-sdk-spark/passkey-provider` | Stage D rename (from `passkey-prf-provider`) |
+| Removed type | ~~`NostrRelayConfig`~~, ~~`Identity`~~ | deleted |
+
+### 1.3 Provider-scoped knobs — explicitly NOT moved to `PasskeyConfig`
+
+These stay on the platform `PasskeyProvider` constructor (provider concern;
+`PasskeyClient` is provider-agnostic — CLI File/YubiKey/FIDO2 providers have
+no `rp_id`). Do **not** lift them up: `rp_id`, `rp_name`, `user_name`,
+`user_display_name`, `auto_register`, `allow_credential_ids`,
+`credential_registry`, `on_registry_error`, `hints`, `default_timeout_ms`,
+`authenticator_attachment`, `team_id`.
 
 ---
 
@@ -150,8 +185,11 @@ PasskeyLabels                       PasskeyCredentials
   `from_config` take `Option<PasskeyConfig>`.
 - **`models.rs`** — add `PasskeyAvailability` (`#[cfg_attr(feature="uniffi",
   derive(uniffi::Enum))]`), reuse the `source`/`reason` shape from
-  `DomainAssociation`. Add **`PasskeyConfig`** (`uniffi::Record`, see §1.1)
-  next to `NostrRelayConfig`.
+  `DomainAssociation`. Add **`PasskeyConfig`** (`uniffi::Record`, see §1.1).
+  **Delete `NostrRelayConfig`** entirely; remove its `pub use` re-export
+  and every reference (the only field, `breez_api_key`, now lives on
+  `PasskeyConfig`). `NostrSaltClient` takes `breez_api_key: Option<String>`
+  directly.
 - **`passkey_client.rs`**:
   - `#[uniffi::export]` impl block: `new(prf_provider, config?)` where
     `config: Option<PasskeyConfig>`, `check_availability`, `register`,
@@ -171,7 +209,8 @@ PasskeyLabels                       PasskeyCredentials
   `NostrRelayConfig`. Add `checkAvailability` (returns
   `PasskeyAvailability`), `labels()` / `credentials()` returning
   `#[wasm_bindgen]` sub-structs with their methods. Add
-  `PasskeyAvailability` and `PasskeyConfig` extern bindings.
+  `PasskeyAvailability` and `PasskeyConfig` extern bindings; **delete the
+  `NostrRelayConfig` extern binding**.
 - **`src/models/passkey_prf_provider.rs`** — add Reflect-based optional
   probes + bridging for `getKnownCredentialIds` /
   `removeKnownCredentialId` / `clearKnownCredentialIds` (mirror the
@@ -250,7 +289,37 @@ build per `docs/breez-sdk`.
 
 ---
 
-## 6. Decisions — all confirmed
+## 6. Stage D — naming alignment (commit 4, opt-in)
+
+Cosmetic-only; touches two public names + file moves. Land it as a
+separate, clearly-scoped commit (or skip without affecting Stages A–C).
+
+- **Verify, do NOT rename:** provider class is already `PasskeyProvider`
+  on iOS (`PasskeyProvider.swift`), Android (`PasskeyProvider.kt`),
+  Browser JS, Flutter (`passkey_prf_provider.dart` → `class
+  PasskeyProvider`), RN (`passkey-prf-provider.ts` → `class
+  PasskeyProvider`). Just confirm consistency.
+- **Public renames:**
+  - `PasskeyPrfException` → `PasskeyException` (Flutter
+    `lib/src/passkey_prf_provider.dart`, RN `src/passkey-prf-provider.ts`).
+  - JS subpath `@breeztech/breez-sdk-spark/passkey-prf-provider` →
+    `…/passkey-provider` (update `packages/wasm/package.json` exports +
+    all docs/snippets import lines).
+- **Internal file moves (no API change):**
+  `crates/breez-sdk/core/src/passkey/passkey_prf_provider.rs` →
+  `prf_provider.rs`; `packages/flutter/lib/src/passkey_prf_provider.dart`
+  → `passkey_provider.dart`; `packages/react-native/src/passkey-prf-provider.ts`
+  → `passkey-provider.ts`; the WASM `js/passkey-prf-provider/` dir →
+  `js/passkey-provider/`. Update all `mod`/`import`/`export` paths.
+- Update docs/snippets (9 langs) + `guide/passkey.md` import lines.
+
+**Stage D verification:** `make check`; `make build-wasm`; snippet build;
+grep for residual `passkey_prf_provider` / `PasskeyPrfException` /
+`passkey-prf-provider`.
+
+---
+
+## 7. Decisions — all confirmed
 
 All design questions are resolved; no open items. Execute the plan
 top-to-bottom.
@@ -258,14 +327,18 @@ top-to-bottom.
 - Q1–Q4: locked (see §1 table).
 - R1 = **Option A** (concrete-internal Nostr default + Rust-only
   pubkey-boundary `LabelStore` trait).
-- R2 = **3 staged commits** (Stage A / B / C, each independently
-  compilable).
-- Default label = **`PasskeyConfig` struct** passed to
-  `PasskeyClient::new`, replacing the bare `relay_config` arg (see §1.1).
+- R2 = **3 staged commits** (Stages A / B / C) **+ opt-in Stage D**
+  (naming alignment, commit 4). Each stage independently compilable.
+- Default label + relay key = **`PasskeyConfig { breez_api_key?,
+  default_label? }`** passed to `PasskeyClient::new`. **`NostrRelayConfig`
+  deleted** (folded in). Nothing else moves to `PasskeyConfig` — other
+  knobs are provider-scoped (§1.3).
+- Provider class name `PasskeyProvider` is **already aligned** across all
+  5 platforms; only residual `prf` cruft (Stage D) remains.
 
 ---
 
-## 7. Git workflow
+## 8. Git workflow
 
 - One commit per stage; clear messages.
 - Push: `git push -u origin passkey/api-reduction` (retry 2s/4s/8s/16s on
