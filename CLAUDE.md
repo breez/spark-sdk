@@ -204,14 +204,23 @@ When a comment is technically accurate but reads like a kernel-debug log to anyo
 
 Real production identifiers (Apple Team IDs, internal infra hostnames, employee names, customer IDs) don't belong in example comments. Use a placeholder (`<TEAM_ID>`, `your-app.com`, `<your api key>`). Same for stack-trace excerpts, error strings that contain user data, debugging breadcrumbs from one-off investigations — strip before committing.
 
-### 5. Don't reference the current task
+### 5. Strip narrative; keep implementation facts
 
-Comments outlive the PR that wrote them. Drop:
-- "Added for ticket #1234"
-- "Per the discussion in the design review"
-- "Recently fixed: …"
+Comments describe the code that exists, not the history of how it got there. Implementation-focused only. Strip:
 
-If the reason is genuinely durable, restate it as a fact about the code (constraint, invariant, contract). If it's PR-context, put it in the commit message.
+- **Development history** — "we used to do X, now we do Y because…", "originally returned Z but switched after…"
+- **Step-by-step decision narrative** — "first we tried A, then B, finally C"
+- **PR/ticket context** — "added for #1234", "per design review", "recently fixed"
+- **TODOs about the past** — "this used to be wrong, now corrected"
+- **Chronicling intermediate choices** — alternatives considered, why they were rejected
+
+The *only* acceptable narrative is a concise sketch (1–3 sentences) of a non-obvious **problem**, **why it couldn't be solved directly**, and the **workaround applied**. Frame this as a present-tense fact about the code, not a story:
+
+> ✘ "We tried using `foo()` here but it deadlocks when called from the main thread, so we switched to `bar()`."
+>
+> ✓ "Uses `bar()` instead of `foo()`: `foo()` deadlocks on the main thread."
+
+Durable reasoning (a constraint, invariant, or contract) belongs in the comment as a fact. Decision *history* belongs in the commit message.
 
 ---
 
