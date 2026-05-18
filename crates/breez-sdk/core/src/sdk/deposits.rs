@@ -7,8 +7,11 @@ use tracing::{error, trace};
 
 use crate::{
     ClaimDepositRequest, ClaimDepositResponse, ListUnclaimedDepositsRequest,
-    ListUnclaimedDepositsResponse, RefundDepositRequest, RefundDepositResponse, error::SdkError,
-    models::Payment, persist::UpdateDepositPayload, utils::utxo_fetcher::CachedUtxoFetcher,
+    ListUnclaimedDepositsResponse, RefundDepositRequest, RefundDepositResponse,
+    error::SdkError,
+    models::Payment,
+    persist::UpdateDepositPayload,
+    utils::{payments::get_payment_and_emit_event, utxo_fetcher::CachedUtxoFetcher},
 };
 
 use super::BreezSdk;
@@ -44,6 +47,8 @@ impl BreezSdk {
                 self.storage
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
+                get_payment_and_emit_event(&self.storage, &self.event_emitter, payment.clone())
+                    .await;
                 Ok(ClaimDepositResponse { payment })
             }
             Err(e) => {

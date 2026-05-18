@@ -1786,9 +1786,9 @@ pub async fn build_sdk_with_postgres_server_mode(
     let event_listener = Box::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
-    // `ensure_synced=true` is a no-op in server mode; issue an explicit
-    // sync_wallet so the initial tree-store hydrate completes before
-    // returning.
+    // `ensure_synced=true` is rejected when `background_tasks_enabled` is
+    // false; issue an explicit sync_wallet so the initial tree-store hydrate
+    // completes before returning.
     sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok(SdkInstance {

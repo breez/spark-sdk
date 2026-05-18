@@ -1058,9 +1058,9 @@ pub struct GetInfoRequest {
     /// When `Some(true)`, and `background_tasks_enabled` is `true`, the call
     /// waits for the initial Full sync to complete before returning.
     ///
-    /// When `background_tasks_enabled` is `false` this flag has no effect:
-    /// `get_info` reads balance directly from the spark wallet on every call,
-    /// so the response is always fresh.
+    /// When `background_tasks_enabled` is `false`, setting this to `Some(true)`
+    /// is rejected with an invalid-input error. There is no background sync to
+    /// wait on; call `sync_wallet` explicitly first if you need fresh state.
     pub ensure_synced: Option<bool>,
 }
 

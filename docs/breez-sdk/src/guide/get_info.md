@@ -37,5 +37,5 @@ The recommended pattern is:
 
 When the SDK is built with [Server mode](server_mode.md), {{#name get_info}} reads the balance live from the spark wallet's local tree store rather than from the background-maintained cache. As a result:
 
-- {{#name ensure_synced}} = **true** is a **no-op**. The SDK has no initial-sync watcher to await.
+- {{#name ensure_synced}} = **true** is rejected with an invalid-input error. The SDK has no initial-sync watcher to await; call {{#name sync_wallet}} explicitly if you need to refresh state first.
 - The returned balance reflects whatever is currently in the local tree store. If you need the freshest possible balance after an external state change (an incoming Spark transfer claimed elsewhere, an on-chain deposit confirmed, etc.), call {{#name sync_wallet}} first.

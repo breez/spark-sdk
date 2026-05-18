@@ -34,8 +34,14 @@ impl RuntimeProfile for ServerRuntime {
     async fn get_info(
         &self,
         sdk: &BreezSdk,
-        _request: GetInfoRequest,
+        request: GetInfoRequest,
     ) -> Result<GetInfoResponse, SdkError> {
+        if request.ensure_synced.unwrap_or_default() {
+            return Err(SdkError::InvalidInput(
+                "ensure_synced is not supported when background_tasks_enabled is false; call sync_wallet explicitly instead".to_string(),
+            ));
+        }
+
         let (balance_sats, token_balances) = tokio::try_join!(
             sdk.spark_wallet.get_balance(),
             sdk.spark_wallet.get_token_balances(),
