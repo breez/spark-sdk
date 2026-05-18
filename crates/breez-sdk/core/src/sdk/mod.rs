@@ -63,18 +63,6 @@ pub(crate) struct SyncRequest {
 }
 
 impl SyncRequest {
-    /// Builds a fire-and-forget [`SyncRequest`] with no reply channel.
-    ///
-    /// Used when `sync_wallet_internal` is invoked directly (server mode)
-    /// rather than via the periodic-sync loop's coordinator dispatch.
-    pub(crate) fn fire_and_forget(sync_type: SyncType, force: bool) -> Self {
-        Self {
-            sync_type,
-            reply: Arc::new(Mutex::new(None)),
-            force,
-        }
-    }
-
     pub(crate) async fn reply(&self, error: Option<SdkError>) {
         if let Some(reply) = self.reply.lock().await.take() {
             let _ = match error {

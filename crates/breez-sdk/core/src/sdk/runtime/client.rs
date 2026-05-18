@@ -223,7 +223,10 @@ async fn on_sync_request(
             shutdown_receiver.clone(),
             "Sync trigger changed",
             async move {
-                if let Err(e) = cloned_sdk.sync_wallet_internal(&sync_request).await {
+                if let Err(e) = cloned_sdk
+                    .sync_wallet_internal(sync_request.sync_type.clone(), sync_request.force)
+                    .await
+                {
                     error!("Failed to sync wallet: {e:?}");
                     let () = sync_request.reply(Some(e)).await;
                     return false;

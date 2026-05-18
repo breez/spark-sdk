@@ -1011,9 +1011,7 @@ mod tests {
 
     #[macros::async_test_not_wasm]
     async fn server_mode_rejects_stable_balance_config() {
-        use crate::{
-            SdkError, StableBalanceConfig, StableBalanceToken, default_server_config,
-        };
+        use crate::{SdkError, StableBalanceConfig, StableBalanceToken, default_server_config};
 
         let mut config = default_server_config(Network::Regtest);
         config.stable_balance_config = Some(StableBalanceConfig {

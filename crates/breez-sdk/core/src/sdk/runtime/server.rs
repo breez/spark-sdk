@@ -3,7 +3,7 @@ use tokio::sync::watch;
 use crate::{GetInfoRequest, GetInfoResponse, error::SdkError};
 
 use super::RuntimeProfile;
-use crate::sdk::{BreezSdk, SyncRequest, SyncType};
+use crate::sdk::{BreezSdk, SyncType};
 
 pub(super) struct ServerRuntime;
 
@@ -27,8 +27,7 @@ impl RuntimeProfile for ServerRuntime {
         sync_type: SyncType,
         force: bool,
     ) -> Result<(), SdkError> {
-        let request = SyncRequest::fire_and_forget(sync_type, force);
-        sdk.sync_wallet_internal(&request).await
+        sdk.sync_wallet_internal(sync_type, force).await
     }
 
     async fn get_info(

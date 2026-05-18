@@ -4,8 +4,8 @@ use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
 use super::{
-    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncRequest, SyncType,
-    helpers::update_balances, parse_input,
+    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType, helpers::update_balances,
+    parse_input,
 };
 use crate::{
     DepositInfo, InputType, MaxFee, PaymentDetails, PaymentType,
@@ -107,7 +107,11 @@ impl BreezSdk {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) async fn sync_wallet_internal(&self, request: &SyncRequest) -> Result<(), SdkError> {
+    pub(super) async fn sync_wallet_internal(
+        &self,
+        sync_type: SyncType,
+        force: bool,
+    ) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let sync_interval_secs = u64::from(self.config.sync_interval_secs);
 
@@ -116,7 +120,7 @@ impl BreezSdk {
             .map_or(0, |d| d.as_secs());
 
         // Skip if we synced recently (unless forced).
-        if !request.force
+        if !force
             && let Some(last) = cache.get_last_sync_time().await?
             && now.saturating_sub(last) < sync_interval_secs
         {
@@ -129,7 +133,7 @@ impl BreezSdk {
         }
 
         // Update last sync time if this is a full sync.
-        if request.sync_type.contains(SyncType::Full)
+        if sync_type.contains(SyncType::Full)
             && let Err(e) = cache.set_last_sync_time(now).await
         {
             error!("sync_wallet_internal: Failed to update last sync time: {e:?}");
@@ -138,7 +142,7 @@ impl BreezSdk {
         let start_time = Instant::now();
 
         let sync_wallet = async {
-            let wallet_synced = if request.sync_type.contains(SyncType::Wallet) {
+            let wallet_synced = if sync_type.contains(SyncType::Wallet) {
                 debug!("sync_wallet_internal: Starting Wallet sync");
                 let wallet_start = Instant::now();
                 match self.spark_wallet.sync().await {
@@ -162,7 +166,7 @@ impl BreezSdk {
                 false
             };
 
-            let wallet_state_synced = if request.sync_type.contains(SyncType::WalletState) {
+            let wallet_state_synced = if sync_type.contains(SyncType::WalletState) {
                 debug!("sync_wallet_internal: Starting WalletState sync");
                 let wallet_state_start = Instant::now();
                 match self.sync_wallet_state_to_storage().await {
@@ -190,7 +194,7 @@ impl BreezSdk {
         };
 
         let sync_lnurl = async {
-            if request.sync_type.contains(SyncType::LnurlMetadata) {
+            if sync_type.contains(SyncType::LnurlMetadata) {
                 debug!("sync_wallet_internal: Starting LnurlMetadata sync");
                 let lnurl_start = Instant::now();
                 match self.sync_lnurl_metadata().await {
@@ -216,7 +220,7 @@ impl BreezSdk {
         };
 
         let sync_deposits = async {
-            if request.sync_type.contains(SyncType::Deposits) {
+            if sync_type.contains(SyncType::Deposits) {
                 debug!("sync_wallet_internal: Starting Deposits sync");
                 let deposits_start = Instant::now();
                 match self.check_and_claim_static_deposits().await {
