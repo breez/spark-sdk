@@ -3,15 +3,11 @@
 //! (label store + identity cache) and the [`PrfProvider`] trait into a
 //! handful of named flows that match real onboarding UI states.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::Passkey;
 use super::error::PasskeyError;
-use super::models::{
-    CreatePasskeyRequest, NamedSalt, PasskeyConfig, RegisteredCredential, SetupWalletRequest,
-    Wallet,
-};
+use super::models::{PasskeyConfig, RegisteredCredential, SetupWalletRequest, Wallet};
 use super::passkey_prf_provider::PrfProvider;
 
 /// Single-value result of [`PasskeyClient::check_availability`].
@@ -48,26 +44,12 @@ pub struct RegisterRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// Extra app-scoped salts to derive in the same PRF ceremony as
-    /// the wallet seed. See [`NamedSalt`]; outputs are returned via
-    /// [`RegisterResponse::extra_seeds`].
-    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub extra_salts: Vec<NamedSalt>,
-
     /// Forwarded to [`PrfProvider::create_passkey`]; routes "this
     /// device already has a credential" to
     /// [`crate::passkey::PrfProviderError::CredentialAlreadyExists`]
     /// so the host can flip to the sign-in path.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub exclude_credential_ids: Vec<Vec<u8>>,
-
-    /// Forwarded to [`CreatePasskeyRequest::user_name`].
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub user_name: Option<String>,
-
-    /// Forwarded to [`CreatePasskeyRequest::user_display_name`].
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub user_display_name: Option<String>,
 }
 
 /// Response from [`PasskeyClient::register`].
@@ -81,8 +63,6 @@ pub struct RegisterResponse {
     /// can populate `exclude_credential_ids` on future
     /// [`PasskeyClient::register`] calls.
     pub credential: RegisteredCredential,
-    /// 32 bytes per [`NamedSalt`] in [`RegisterRequest::extra_salts`].
-    pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
 /// Request shape for [`PasskeyClient::sign_in`].
@@ -95,10 +75,6 @@ pub struct SignInRequest {
     /// [`SignInResponse::labels`].
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
-
-    /// Same as [`RegisterRequest::extra_salts`].
-    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub extra_salts: Vec<NamedSalt>,
 
     /// Per-call assertion allow-list forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::allow_credential_ids`].
@@ -120,7 +96,6 @@ pub struct SignInResponse {
     /// Empty on the fast path. Populated on discovery (or empty if
     /// the label store was unreachable).
     pub labels: Vec<String>,
-    pub extra_seeds: HashMap<String, Vec<u8>>,
     /// The credential ID the user used for this sign-in, when the
     /// underlying [`PrfProvider`] surfaces it. `None` for providers
     /// that don't expose this signal (CLI / file-backed / hardware
@@ -140,6 +115,10 @@ pub struct SignInResponse {
 ///
 /// Label and credential management hang off the [`Self::labels`] and
 /// [`Self::credentials`] sub-objects.
+///
+/// The `breez_api_key` is the Breez relay key used for authenticated
+/// (NIP-42) label storage. Hosts that already construct the SDK
+/// [`crate::Config`] can use [`Self::from_config`] to forward it.
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct PasskeyClient {
@@ -150,9 +129,13 @@ pub struct PasskeyClient {
 impl PasskeyClient {
     /// Construct with the default Nostr-backed label store.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(prf_provider: Arc<dyn PrfProvider>, config: Option<PasskeyConfig>) -> Self {
+    pub fn new(
+        prf_provider: Arc<dyn PrfProvider>,
+        breez_api_key: Option<String>,
+        config: Option<PasskeyConfig>,
+    ) -> Self {
         Self {
-            passkey: Passkey::new(prf_provider, config),
+            passkey: Passkey::new(prf_provider, breez_api_key, config),
         }
     }
 
@@ -166,9 +149,8 @@ impl PasskeyClient {
 
     /// First-time setup. Drives [`PrfProvider::create_passkey`] (one
     /// ceremony) followed by the wallet-derivation flow that backs
-    /// [`Passkey::setup_wallet`] (one or two ceremonies depending on
-    /// `extra_salts` and dual-salt support). The label is always
-    /// published on success.
+    /// [`Passkey::setup_wallet`] (one ceremony, dual-salt where
+    /// supported). The label is always published on success.
     pub async fn register(
         &self,
         request: RegisterRequest,
@@ -176,11 +158,7 @@ impl PasskeyClient {
         let credential = self
             .passkey
             .prf_provider()
-            .create_passkey(CreatePasskeyRequest {
-                exclude_credential_ids: request.exclude_credential_ids,
-                user_name: request.user_name,
-                user_display_name: request.user_display_name,
-            })
+            .create_passkey(request.exclude_credential_ids)
             .await?;
 
         let setup = self
@@ -188,7 +166,6 @@ impl PasskeyClient {
             .setup_wallet(SetupWalletRequest {
                 label: request.label,
                 publish_label: true,
-                extra_salts: request.extra_salts,
                 // Registration always derives via the just-created
                 // credential; callers don't drive sign-in pinning here.
                 allow_credential_ids: Vec::new(),
@@ -199,7 +176,6 @@ impl PasskeyClient {
         Ok(RegisterResponse {
             wallet: setup.wallet,
             credential,
-            extra_seeds: setup.extra_seeds,
         })
     }
 
@@ -215,7 +191,6 @@ impl PasskeyClient {
             .setup_wallet(SetupWalletRequest {
                 label: request.label,
                 publish_label: false,
-                extra_salts: request.extra_salts,
                 allow_credential_ids: request.allow_credential_ids,
                 prefer_immediately_available_credentials: request
                     .prefer_immediately_available_credentials,
@@ -239,7 +214,6 @@ impl PasskeyClient {
         Ok(SignInResponse {
             wallet: setup.wallet,
             labels,
-            extra_seeds: setup.extra_seeds,
             credential_id,
         })
     }
@@ -265,10 +239,12 @@ impl PasskeyClient {
 impl PasskeyClient {
     /// Build from the SDK's [`crate::Config`], reusing its `api_key`
     /// for the default Nostr-backed label store.
-    pub fn from_config(prf_provider: Arc<dyn PrfProvider>, config: &crate::Config) -> Self {
-        Self {
-            passkey: Passkey::from_config(prf_provider, config),
-        }
+    pub fn from_config(
+        prf_provider: Arc<dyn PrfProvider>,
+        sdk_config: &crate::Config,
+        passkey_config: Option<PasskeyConfig>,
+    ) -> Self {
+        Self::new(prf_provider, sdk_config.api_key.clone(), passkey_config)
     }
 }
 
@@ -395,7 +371,7 @@ mod tests {
 
         async fn create_passkey(
             &self,
-            _request: CreatePasskeyRequest,
+            _exclude_credential_ids: Vec<Vec<u8>>,
         ) -> Result<RegisteredCredential, PrfProviderError> {
             if self.fail_create {
                 return Err(PrfProviderError::PrfNotSupported);
@@ -414,7 +390,7 @@ mod tests {
     #[macros::async_test_all]
     async fn register_returns_credential_and_publishes_label() {
         let provider = Arc::new(MockProvider::new([7u8; 32]));
-        let client = PasskeyClient::new(provider.clone(), None);
+        let client = PasskeyClient::new(provider.clone(), None, None);
         let response = client
             .register(RegisterRequest {
                 label: Some("alice".to_string()),
@@ -432,7 +408,7 @@ mod tests {
     #[macros::async_test_all]
     async fn register_propagates_create_passkey_failure() {
         let provider = Arc::new(MockProvider::unsupported());
-        let client = PasskeyClient::new(provider, None);
+        let client = PasskeyClient::new(provider, None, None);
         let result = client.register(RegisterRequest::default()).await;
         assert!(matches!(
             result.unwrap_err(),
@@ -443,7 +419,7 @@ mod tests {
     #[macros::async_test_all]
     async fn sign_in_fast_path_returns_wallet_without_listing() {
         let provider = Arc::new(MockProvider::new([0u8; 32]));
-        let client = PasskeyClient::new(provider.clone(), None);
+        let client = PasskeyClient::new(provider.clone(), None, None);
         let response = client
             .sign_in(SignInRequest {
                 label: Some("personal".to_string()),
@@ -459,30 +435,12 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn sign_in_propagates_extra_seeds() {
-        let provider = Arc::new(MockProvider::new([0u8; 32]));
-        let client = PasskeyClient::new(provider, None);
-        let response = client
-            .sign_in(SignInRequest {
-                label: None,
-                extra_salts: vec![NamedSalt {
-                    name: "db_key".to_string(),
-                }],
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(response.extra_seeds.len(), 1);
-        assert!(response.extra_seeds.contains_key("db_key"));
-    }
-
-    #[macros::async_test_all]
     async fn default_label_from_config_overrides_internal_default() {
         let provider = Arc::new(MockProvider::new([0u8; 32]));
         let client = PasskeyClient::new(
             provider,
+            None,
             Some(PasskeyConfig {
-                breez_api_key: None,
                 default_label: Some("my-app".to_string()),
             }),
         );

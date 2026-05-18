@@ -2,8 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
-import 'rust/models.dart'
-    show CreatePasskeyRequest, DeriveSeedsRequest, RegisteredCredential;
+import 'rust/models.dart' show DeriveSeedsRequest, RegisteredCredential;
 
 /// Result of a domain-association verification check against the
 /// platform's well-known configuration source. Mirrors the Rust
@@ -89,13 +88,15 @@ void _registryAddFireAndForget(
   });
 }
 
-/// Options for constructing a [PasskeyProvider].
+/// Options for constructing a [PasskeyProvider]. `rpId` is required —
+/// pass [PasskeyProvider.breezRpId] to opt into Breez's shared RP.
 class PasskeyProviderOptions {
   /// Relying Party ID. Must match the domain configured for cross-platform
   /// credential sharing. Changing this after users have registered passkeys
   /// will make their existing credentials undiscoverable.
   ///
-  /// Defaults to `'keys.breez.technology'`.
+  /// Pass [PasskeyProvider.breezRpId] to opt into the Breez-managed
+  /// `keys.breez.technology` RP (only valid for Breez-registered apps).
   final String rpId;
 
   /// RP display name shown during credential registration. Only used when
@@ -113,21 +114,6 @@ class PasskeyProviderOptions {
   /// Defaults to [userName]. Only used during registration.
   final String? userDisplayName;
 
-  /// When `true`, [PasskeyProvider.deriveSeeds] automatically creates a
-  /// new passkey if none exists, then retries the assertion. When `false`
-  /// (default), throws [PasskeyPrfException] with code `noCredential` and
-  /// the caller drives registration via [PasskeyProvider.createPasskey].
-  final bool autoRegister;
-
-  /// Restrict assertion (sign-in) to one of these credential IDs.
-  /// The platform refuses any other credential for this RP. Use this
-  /// to bind sign-in to a specific passkey the caller has registered,
-  /// instead of letting the platform pick any sibling credential that
-  /// happens to share the RP. When null or empty, the platform picks
-  /// any credential matching the RP. Critical for deterministic seed
-  /// derivation when multiple credentials might exist for the same RP.
-  final List<Uint8List>? allowCredentialIds;
-
   /// Optional opt-in registry. When set, the Dart-side wrapper
   /// merges stored IDs into `allowCredentialIds` / `excludeCredentialIds`
   /// before the MethodChannel call and writes the asserted /
@@ -142,12 +128,10 @@ class PasskeyProviderOptions {
   final void Function(RegistryOperation, Object)? onRegistryError;
 
   const PasskeyProviderOptions({
-    this.rpId = 'keys.breez.technology',
+    required this.rpId,
     this.rpName = 'Breez SDK',
     this.userName,
     this.userDisplayName,
-    this.autoRegister = false,
-    this.allowCredentialIds,
     this.credentialRegistry,
     this.onRegistryError,
   });
@@ -189,28 +173,29 @@ class PasskeyPrfException implements Exception {
 /// );
 /// ```
 class PasskeyProvider {
+  /// Constant identifying Breez's shared `keys.breez.technology` RP.
+  /// Pass as `rpId` when opting into the Breez-managed Relying Party
+  /// (only valid for apps registered with Breez). Apps with their own
+  /// RP domain pass their own string.
+  static const String breezRpId = 'keys.breez.technology';
+
   static const _channel = MethodChannel('breez_sdk_spark_passkey');
 
   final String _rpId;
   final String _rpName;
   final String _userName;
   final String _userDisplayName;
-  final bool _autoRegister;
-  final List<Uint8List>? _allowCredentialIds;
   final CredentialRegistry? _credentialRegistry;
   final void Function(RegistryOperation, Object)? _onRegistryError;
   Uint8List? _lastObservedCredentialId;
 
-  PasskeyProvider([PasskeyProviderOptions? options])
-    : _rpId = options?.rpId ?? 'keys.breez.technology',
-      _rpName = options?.rpName ?? 'Breez SDK',
-      _userName = options?.userName ?? (options?.rpName ?? 'Breez SDK'),
-      _userDisplayName =
-          options?.userDisplayName ?? (options?.userName ?? (options?.rpName ?? 'Breez SDK')),
-      _autoRegister = options?.autoRegister ?? false,
-      _allowCredentialIds = options?.allowCredentialIds,
-      _credentialRegistry = options?.credentialRegistry,
-      _onRegistryError = options?.onRegistryError;
+  PasskeyProvider(PasskeyProviderOptions options)
+    : _rpId = options.rpId,
+      _rpName = options.rpName,
+      _userName = options.userName ?? options.rpName,
+      _userDisplayName = options.userDisplayName ?? (options.userName ?? options.rpName),
+      _credentialRegistry = options.credentialRegistry,
+      _onRegistryError = options.onRegistryError;
 
   /// Take ownership of the credential ID captured by the most recent
   /// successful assertion. Returns `null` if no assertion has
@@ -234,14 +219,11 @@ class PasskeyProvider {
       'rpName': _rpName,
       'userName': _userName,
       'userDisplayName': _userDisplayName,
-      'autoRegister': _autoRegister,
+      'autoRegister': false,
     };
-    // Per-call overrides win over per-instance defaults; an empty
-    // per-call list defers to the constructor's allowCredentialIds.
-    final perCallAllow = request.allowCredentialIds;
-    List<Uint8List> effectiveAllow = perCallAllow.isNotEmpty
-        ? perCallAllow.map(Uint8List.fromList).toList()
-        : (_allowCredentialIds ?? const []);
+    List<Uint8List> effectiveAllow = request.allowCredentialIds
+        .map(Uint8List.fromList)
+        .toList();
     // Auto-merge registry IDs into the allow-list. Dart-side dance:
     // the native plugin never sees the registry.
     final registry = _credentialRegistry;
@@ -289,22 +271,22 @@ class PasskeyProvider {
     }
   }
 
-  /// Register a new passkey with PRF support. Per-call overrides on
-  /// `request` (excludeCredentialIds, userName, userDisplayName) fall
-  /// back to the constructor values when omitted.
+  /// Register a new passkey with PRF support. `excludeCredentialIds`
+  /// is the only per-call knob — branding fields (`userName`,
+  /// `userDisplayName`) live on the constructor.
   ///
   /// `user.id` is never host-supplied: the native plugin mints a fresh
   /// random 16-byte handle per call and surfaces it via
   /// [RegisteredCredential.userId]. Throws [PasskeyPrfException] on
   /// failure.
-  Future<RegisteredCredential> createPasskey(CreatePasskeyRequest request) async {
+  Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentialIds) async {
     final args = <String, Object?>{
       'rpId': _rpId,
       'rpName': _rpName,
-      'userName': request.userName ?? _userName,
-      'userDisplayName': request.userDisplayName ?? _userDisplayName,
+      'userName': _userName,
+      'userDisplayName': _userDisplayName,
     };
-    var excludeIds = List<Uint8List>.from(request.excludeCredentialIds);
+    var excludeIds = List<Uint8List>.from(excludeCredentialIds);
     final registry = _credentialRegistry;
     if (registry != null) {
       final registryIds = await _registryReadBestEffort(registry, _rpId, _onRegistryError);

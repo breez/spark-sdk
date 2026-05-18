@@ -57,31 +57,6 @@ export interface RegisteredCredential {
   backupEligible: boolean | null;
 }
 
-/**
- * Per-call overrides for `createPasskey`. All fields are optional;
- * omitted fields fall back to the constructor values.
- *
- * Note: `userId` is intentionally not a request field. The native
- * plugin mints a fresh random 16-byte handle per call and returns it
- * via [RegisteredCredential.userId]; the SDK does not let hosts
- * supply one.
- */
-export interface CreatePasskeyRequest {
-  /**
-   * Credential IDs the authenticator must refuse to duplicate. When
-   * any entry matches a credential already on the device, the platform
-   * raises an "already exists" error which surfaces as a typed
-   * `PasskeyPrfException` with code `credentialAlreadyExists`. Defaults
-   * to none.
-   */
-  excludeCredentialIds?: Uint8Array[];
-
-  /** Override for the WebAuthn `user.name` field. */
-  userName?: string;
-
-  /** Override for the WebAuthn `user.displayName` field. */
-  userDisplayName?: string;
-}
 
 /**
  * Result of {@link PasskeyProvider.checkDomainAssociation}. Mirrors the
@@ -123,11 +98,13 @@ export interface PasskeyProviderOptions {
    * Relying Party ID. Must match the domain configured for cross-platform
    * credential sharing.
    *
-   * Changing this after users have registered passkeys will make their existing
-   * credentials undiscoverable — they would need to create new passkeys.
-   * @default 'keys.breez.technology'
+   * Changing this after users have registered passkeys will make their
+   * existing credentials undiscoverable — they would need to create
+   * new passkeys. Pass {@link PasskeyProvider.BREEZ_RP_ID} to opt into
+   * Breez's shared `keys.breez.technology` RP (only valid for
+   * Breez-registered apps).
    */
-  rpId?: string;
+  rpId: string;
 
   /**
    * RP display name shown during credential registration. Only used when
@@ -149,24 +126,6 @@ export interface PasskeyProviderOptions {
    * not affect existing credentials.
    */
   userDisplayName?: string;
-
-  /**
-   * When true, `deriveSeeds` automatically creates a new passkey if
-   * none exists for this RP ID, then retries the assertion. When false
-   * (default), throws an error instead, letting the caller control
-   * registration separately via `createPasskey()`.
-   * @default false
-   */
-  autoRegister?: boolean;
-
-  /**
-   * Restrict assertion (sign-in) to one of these credential IDs. The
-   * platform refuses any other credential for this RP. When null or
-   * empty, the platform picks any credential matching the RP. Critical
-   * for deterministic seed derivation when multiple credentials might
-   * exist for the same RP.
-   */
-  allowCredentialIds?: Uint8Array[];
 
   /**
    * Optional opt-in registry. When set, the JS-side wrapper merges
@@ -323,28 +282,34 @@ function mapNativeError(err: unknown): PasskeyPrfException {
  * ```
  */
 export class PasskeyProvider {
+  /**
+   * Constant identifying Breez's shared `keys.breez.technology` RP.
+   * Pass as `rpId` when opting into the Breez-managed Relying Party
+   * (only valid for apps registered with Breez). Apps with their own
+   * RP domain pass their own string.
+   */
+  static readonly BREEZ_RP_ID: string = 'keys.breez.technology';
+
   private rpId: string;
   private rpName: string;
   private userName: string;
   private userDisplayName: string;
-  private autoRegister: boolean;
-  private allowCredentialIds: Uint8Array[];
   private credentialRegistry: CredentialRegistry | undefined;
   private onRegistryError: ((op: RegistryOperation, err: Error) => void) | undefined;
   private _lastObservedCredentialId: Uint8Array | null = null;
 
-  constructor(options?: PasskeyProviderOptions) {
-    this.rpId = options?.rpId ?? 'keys.breez.technology';
-    this.rpName = options?.rpName ?? 'Breez SDK';
-    this.userName = options?.userName ?? this.rpName;
-    this.userDisplayName = options?.userDisplayName ?? this.userName;
-    // Default to false (matching every other binding's behaviour
-    // post-5f.1). When unset, deriveSeeds throws CredentialNotFound
-    // on missing creds; the host then drives registration explicitly
-    // via createPasskey.
-    this.autoRegister = options?.autoRegister ?? false;
-    this.allowCredentialIds = options?.allowCredentialIds ?? [];
-    this.credentialRegistry = options?.credentialRegistry;
+  constructor(options: PasskeyProviderOptions) {
+    if (!options?.rpId || options.rpId.length === 0) {
+      throw new Error(
+        "PasskeyProvider: rpId is required. Pass your app's RP domain, " +
+          'or PasskeyProvider.BREEZ_RP_ID if you registered with Breez.'
+      );
+    }
+    this.rpId = options.rpId;
+    this.rpName = options.rpName ?? 'Breez SDK';
+    this.userName = options.userName ?? this.rpName;
+    this.userDisplayName = options.userDisplayName ?? this.userName;
+    this.credentialRegistry = options.credentialRegistry;
     if (this.credentialRegistry) {
       for (const method of ['read', 'add', 'remove', 'clear'] as const) {
         if (typeof this.credentialRegistry[method] !== 'function') {
@@ -355,7 +320,7 @@ export class PasskeyProvider {
         }
       }
     }
-    this.onRegistryError = options?.onRegistryError;
+    this.onRegistryError = options.onRegistryError;
   }
 
   /**
@@ -391,11 +356,7 @@ export class PasskeyProvider {
       throw passkeyModuleUnavailableError('deriveSeeds');
     }
 
-    // Per-call overrides win over per-instance defaults; an empty
-    // per-call list defers to the constructor's allowCredentialIds.
-    const perCallAllow = request.allowCredentialIds ?? [];
-    let effectiveAllow =
-      perCallAllow.length > 0 ? perCallAllow : this.allowCredentialIds;
+    let effectiveAllow = request.allowCredentialIds ?? [];
     // Auto-merge registry IDs into the allow-list. JS-side dance:
     // the native module never sees the registry.
     if (this.credentialRegistry) {
@@ -428,7 +389,7 @@ export class PasskeyProvider {
         this.rpName,
         this.userName,
         this.userDisplayName,
-        this.autoRegister,
+        false,
         allowBase64,
         preferImmediate
       );
@@ -469,12 +430,12 @@ export class PasskeyProvider {
   /**
    * Create a new passkey with PRF support.
    *
-   * Only registers the credential, no seed derivation. Triggers exactly
-   * 1 platform prompt. Use this to separate credential creation from
-   * derivation in multi-step onboarding flows.
+   * Only registers the credential, no seed derivation. Triggers
+   * exactly 1 platform prompt. Use this to separate credential
+   * creation from derivation in multi-step onboarding flows.
    *
-   * Per-call overrides on `request` (excludeCredentialIds, userName,
-   * userDisplayName) fall back to the constructor values when omitted.
+   * `excludeCredentialIds` is the only per-call knob — branding
+   * fields (`userName`, `userDisplayName`) live on the constructor.
    * `user.id` is never host-supplied: the native plugin mints a fresh
    * random 16-byte handle per call and returns it via the result's
    * `userId` field.
@@ -484,13 +445,12 @@ export class PasskeyProvider {
    *   `backupEligible` are null when the attestation can't be parsed.
    * @throws If the user cancels or PRF is not supported by the authenticator.
    */
-  async createPasskey(request?: CreatePasskeyRequest): Promise<RegisteredCredential> {
+  async createPasskey(excludeCredentialIds: Uint8Array[] = []): Promise<RegisteredCredential> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('createPasskey');
     }
 
-    const req = request ?? {};
-    let excludeIds = req.excludeCredentialIds ?? [];
+    let excludeIds = excludeCredentialIds;
     // Merge registry IDs into the exclude list before the native call.
     if (this.credentialRegistry) {
       const registryIds = await _registryReadBestEffort(
@@ -522,8 +482,8 @@ export class PasskeyProvider {
       } = await BreezSdkSparkPasskey.createPasskey(
         this.rpId,
         this.rpName,
-        req.userName ?? this.userName,
-        req.userDisplayName ?? this.userDisplayName,
+        this.userName,
+        this.userDisplayName,
         excludeBase64
       );
 

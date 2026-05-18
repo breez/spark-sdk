@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use wasm_bindgen::prelude::*;
@@ -11,14 +10,10 @@ use crate::{
     },
 };
 
-/// Optional configuration for `PasskeyClient`. Replaces the legacy
-/// bare relay config; all other knobs (`rpId`, `autoRegister`,
-/// `credentialRegistry`, etc.) live on `PasskeyProvider`.
+/// Optional configuration for `PasskeyClient`. Provider-scoped knobs
+/// (`rpId`, `credentialRegistry`, etc.) live on `PasskeyProvider`.
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyConfig)]
 pub struct PasskeyConfig {
-    /// Optional Breez API key for authenticated access to the Breez relay (NIP-42).
-    /// When provided, the Breez relay is added.
-    pub breez_api_key: Option<String>,
     /// Wallet label used when `register` / `signIn` receive `label = undefined`.
     /// `undefined` falls back to the internal default `"Default"`.
     pub default_label: Option<String>,
@@ -44,14 +39,6 @@ pub struct Wallet {
     pub label: String,
 }
 
-/// Caller-supplied salt for `extraSalts` on `PasskeyClient.register`
-/// and `signIn`. Yields a 32-byte output keyed by `name` in the
-/// response's `extraSeeds` map.
-#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::NamedSalt)]
-pub struct NamedSalt {
-    pub name: String,
-}
-
 /// Authenticator metadata returned by `PasskeyClient.register`.
 /// `userId` is the WebAuthn user handle the provider generated for
 /// this credential (never host-supplied). `aaguid` (16-byte
@@ -70,10 +57,7 @@ pub struct RegisteredCredential {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::RegisterRequest)]
 pub struct RegisterRequest {
     pub label: Option<String>,
-    pub extra_salts: Vec<NamedSalt>,
     pub exclude_credential_ids: Vec<Vec<u8>>,
-    pub user_name: Option<String>,
-    pub user_display_name: Option<String>,
 }
 
 /// Response shape for `PasskeyClient.register`.
@@ -81,14 +65,12 @@ pub struct RegisterRequest {
 pub struct RegisterResponse {
     pub wallet: Wallet,
     pub credential: RegisteredCredential,
-    pub extra_seeds: HashMap<String, Vec<u8>>,
 }
 
 /// Request shape for `PasskeyClient.signIn`.
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::SignInRequest)]
 pub struct SignInRequest {
     pub label: Option<String>,
-    pub extra_salts: Vec<NamedSalt>,
     pub allow_credential_ids: Vec<Vec<u8>>,
     pub prefer_immediately_available_credentials: Option<bool>,
 }
@@ -98,7 +80,6 @@ pub struct SignInRequest {
 pub struct SignInResponse {
     pub wallet: Wallet,
     pub labels: Vec<String>,
-    pub extra_seeds: HashMap<String, Vec<u8>>,
     pub credential_id: Option<Vec<u8>>,
 }
 
@@ -114,12 +95,21 @@ pub struct PasskeyClient {
 impl PasskeyClient {
     /// Create a `PasskeyClient` backed by the supplied `PrfProvider`
     /// and the default Nostr-backed label store.
+    ///
+    /// `breezApiKey` enables authenticated (NIP-42) access to the
+    /// Breez relay for label storage. Pass `undefined` for public
+    /// relays only.
     #[wasm_bindgen(constructor)]
-    pub fn new(prf_provider: PrfProvider, config: Option<PasskeyConfig>) -> Self {
+    pub fn new(
+        prf_provider: PrfProvider,
+        breez_api_key: Option<String>,
+        config: Option<PasskeyConfig>,
+    ) -> Self {
         let wasm_provider = WasmPrfProvider::new(prf_provider);
         Self {
             inner: breez_sdk_spark::passkey::PasskeyClient::new(
                 Arc::new(wasm_provider),
+                breez_api_key,
                 config.map(Into::into),
             ),
         }
@@ -133,8 +123,8 @@ impl PasskeyClient {
     }
 
     /// First-time setup. Drives the platform's create-passkey ceremony
-    /// then derives the wallet seed and any extra salts in the same
-    /// PRF assertion ceremony where the platform supports it.
+    /// then derives the wallet seed in the same PRF assertion ceremony
+    /// where the platform supports it.
     #[wasm_bindgen(js_name = "register")]
     pub async fn register(&self, request: RegisterRequest) -> WasmResult<RegisterResponse> {
         Ok(self.inner.register(request.into()).await?.into())

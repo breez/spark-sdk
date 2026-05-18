@@ -4,9 +4,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
-use breez_sdk_spark::passkey::{
-    CreatePasskeyRequest, DeriveSeedsRequest, PrfProviderError, RegisteredCredential,
-};
+use breez_sdk_spark::passkey::{DeriveSeedsRequest, PrfProviderError, RegisteredCredential};
 
 pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderError {
     // Map typed JS error classes thrown by the bundled JS provider
@@ -175,7 +173,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
 
     async fn create_passkey(
         &self,
-        request: CreatePasskeyRequest,
+        exclude_credential_ids: Vec<Vec<u8>>,
     ) -> Result<RegisteredCredential, PrfProviderError> {
         // Custom providers may not implement explicit creation; fall
         // back to the trait default (`PrfNotSupported`).
@@ -191,9 +189,9 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
                 PrfProviderError::Generic("createPasskey is not a function".to_string())
             })?;
 
-        let js_request = build_create_passkey_request(&request)?;
+        let js_exclude = build_exclude_credential_ids(&exclude_credential_ids);
         let result_promise = func
-            .call1(target, &js_request)
+            .call1(target, &js_exclude)
             .map_err(js_error_to_prf_provider_error)?
             .dyn_into::<Promise>()
             .map_err(|_| {
@@ -321,41 +319,16 @@ fn build_derive_seeds_options(request: &DeriveSeedsRequest) -> Result<JsValue, P
     Ok(obj.into())
 }
 
-/// Marshal a [`CreatePasskeyRequest`] into a JS object literal shaped
-/// per `index.d.ts#CreatePasskeyRequest`. `Vec<u8>` payloads cross as
-/// `Uint8Array` (not plain arrays) to match what the JS provider's
-/// `navigator.credentials.create` call expects.
-fn build_create_passkey_request(
-    request: &CreatePasskeyRequest,
-) -> Result<JsValue, PrfProviderError> {
-    let obj = js_sys::Object::new();
-
-    if !request.exclude_credential_ids.is_empty() {
-        let arr = js_sys::Array::new();
-        for id in &request.exclude_credential_ids {
-            arr.push(&js_sys::Uint8Array::from(id.as_slice()));
-        }
-        js_sys::Reflect::set(&obj, &JsValue::from_str("excludeCredentialIds"), &arr)
-            .map_err(js_error_to_prf_provider_error)?;
+/// Marshal `exclude_credential_ids` into a JS `Uint8Array[]` for the
+/// `createPasskey(excludeCredentialIds)` provider call. `Vec<u8>`
+/// entries cross as `Uint8Array` (not plain arrays) to match what
+/// `navigator.credentials.create` expects.
+fn build_exclude_credential_ids(exclude_credential_ids: &[Vec<u8>]) -> JsValue {
+    let arr = js_sys::Array::new();
+    for id in exclude_credential_ids {
+        arr.push(&js_sys::Uint8Array::from(id.as_slice()));
     }
-    if let Some(user_name) = &request.user_name {
-        js_sys::Reflect::set(
-            &obj,
-            &JsValue::from_str("userName"),
-            &JsValue::from_str(user_name),
-        )
-        .map_err(js_error_to_prf_provider_error)?;
-    }
-    if let Some(user_display_name) = &request.user_display_name {
-        js_sys::Reflect::set(
-            &obj,
-            &JsValue::from_str("userDisplayName"),
-            &JsValue::from_str(user_display_name),
-        )
-        .map_err(js_error_to_prf_provider_error)?;
-    }
-
-    Ok(obj.into())
+    arr.into()
 }
 
 /// Parse the JS `RegisteredCredential` returned by the provider's
@@ -464,11 +437,16 @@ export interface PrfProvider {
      * server-side correlation. Custom providers without an explicit
      * creation step can omit this method.
      *
+     * `excludeCredentialIds` is the only per-call knob: when any entry
+     * matches a credential already on the device, the provider raises
+     * `PasskeyAlreadyExistsError`. Branding fields (rpName, userName,
+     * userDisplayName) live on the provider constructor.
+     *
      * @throws `PasskeyAlreadyExistsError` when an entry in
      *   `excludeCredentialIds` matches a credential already on the
      *   device.
      */
-    createPasskey?(request: CreatePasskeyRequestJSON): Promise<RegisteredCredentialJSON>;
+    createPasskey?(excludeCredentialIds: Uint8Array[]): Promise<RegisteredCredentialJSON>;
 
     /**
      * Whether this provider can produce PRF outputs on the current
@@ -519,18 +497,6 @@ export interface DeriveSeedsOptionsJSON {
      * Omitted lets the provider's default apply.
      */
     preferImmediatelyAvailableCredentials?: boolean;
-}
-
-/**
- * Plain-object shape passed to {@link PrfProvider.createPasskey}. The
- * bundled `PasskeyProvider` accepts the same shape under the name
- * `CreatePasskeyRequest`; this name is reserved for the Rust-bridge
- * boundary.
- */
-export interface CreatePasskeyRequestJSON {
-    excludeCredentialIds?: Uint8Array[];
-    userName?: string;
-    userDisplayName?: string;
 }
 
 /**

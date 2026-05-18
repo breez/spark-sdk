@@ -114,12 +114,15 @@ Without the Associated Domains entitlement, passkey operations will fail with a 
 
 ### Configuring the PasskeyClient
 
-The optional {{#name PasskeyConfig}} parameter on {{#name PasskeyClient}} carries the two cross-cutting knobs that are not provider-scoped:
+`PasskeyClient` takes three arguments: the `PrfProvider`, an optional `breezApiKey`, and an optional {{#name PasskeyConfig}}.
 
-- {{#name breez_api_key}} - Your Breez API key. When provided, the SDK connects to the Breez-managed relay with <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a> authentication for label storage and discovery.
+- **`breezApiKey`** — Your Breez API key. When provided, the SDK connects to the Breez-managed relay with <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a> authentication for label storage and discovery. Pass `None` / `undefined` for public-relay-only label sync. Hosts that already pass the SDK's main `Config` to `connect()` can forward the same `api_key` here.
+
+The optional {{#name PasskeyConfig}} record currently carries one field:
+
 - {{#name default_label}} - The wallet label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive `label = None`. Falls back to the SDK's internal `"Default"` when unset. Useful when your app brands a single wallet under a stable name.
 
-All other knobs (`rp_id`, `auto_register`, `credential_registry`, etc.) live on the platform `PasskeyProvider` constructor instead — they are provider-scoped, not client-scoped.
+All other knobs (`rpId`, `credentialRegistry`, etc.) live on the platform `PasskeyProvider` constructor instead — they are provider-scoped, not client-scoped.
 
 The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy. See the [Listing labels](#listing-labels) and [Storing a label](#storing-a-label) code examples below for usage.
 
@@ -137,14 +140,13 @@ Built-in providers are not currently available for C#, Go, and Python.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| {{#name rp_id}} | `keys.breez.technology` | Relying Party ID. Changing this means existing passkeys produce a different seed; see [migration considerations](https://github.com/breez/passkey-login/blob/main/SDK%20implementation.md#passkey-migration-considerations). |
+| {{#name rp_id}} | **required** | Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` (= `keys.breez.technology`) if your app is Breez-registered. Changing this means existing passkeys produce a different seed; see [migration considerations](https://github.com/breez/passkey-login/blob/main/SDK%20implementation.md#passkey-migration-considerations). |
 | {{#name rp_name}} | `Breez SDK` | RP display name (registration only, does not affect existing credentials) |
 | {{#name user_name}} | {{#name rp_name}} | User name stored with the credential (registration only). On iOS this is the only field surfaced in the iCloud Keychain / passkey picker — the platform's `ASAuthorizationPlatformPublicKeyCredentialProvider` API has no `displayName` slot. Pass the per-credential friendly label here if you want users to see it. |
 | {{#name user_display_name}} | {{#name user_name}} | Primary label shown in passkey picker on platforms that surface a separate display name (Android via WebAuthn JSON `user.displayName`, web via WebAuthn L3). iOS ignores. |
-| {{#name auto_register}} | `false` | When `true`, {{#name derive_seeds}} auto-creates a new passkey on `CredentialNotFound` and retries. When `false` (default), throws so the host can drive registration explicitly via {{#name create_passkey}}. |
-| {{#name allow_credential_ids}} | empty | Pin assertion to specific credential IDs. Empty = the platform picks any credential matching the RP. Set when binding sign-in to a specific cred (e.g. when multiple Glow passkeys exist for the same RP). |
+| {{#name credential_registry}} | none | Opt-in app-side store of known credential IDs. When supplied, the SDK auto-merges stored IDs into `allowCredentialIds` / `excludeCredentialIds` and writes new IDs back after success. See [Implementing CredentialRegistry](#credentialregistry) below. |
 
-Apps that share an RP ID, whether the default `keys.breez.technology` or a custom domain, recognize the same user's passkey without per-app enrollment.
+`rpId` is required — there is no shared default. Pass `PasskeyProvider.BREEZ_RP_ID` to opt into Breez's `keys.breez.technology` shared RP (only valid for Breez-registered apps); apps with their own RP domain pass their own string. Apps that share an RP ID recognize the same user's passkey without per-app enrollment.
 
 Pass a `PasskeyProvider` instance to `PasskeyClient` as shown in the [Connecting with a passkey](#connecting-with-passkey) snippets below. That is the recommended path for almost every app.
 

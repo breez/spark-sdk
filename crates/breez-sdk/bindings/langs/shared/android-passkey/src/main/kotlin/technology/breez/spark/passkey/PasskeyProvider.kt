@@ -71,15 +71,23 @@ import technology.breez.spark.passkey.core.RegistryOperation
  */
 public class PasskeyProvider(
     private val activityProvider: () -> Activity,
-    private val rpId: String = CredentialManagerPrfCore.DEFAULT_RP_ID,
+    private val rpId: String,
     private val rpName: String = CredentialManagerPrfCore.DEFAULT_RP_NAME,
     userName: String? = null,
     userDisplayName: String? = null,
-    private val autoRegister: Boolean = false,
-    private val allowCredentialIds: List<ByteArray> = emptyList(),
     private val credentialRegistry: CredentialRegistry? = null,
     private val onRegistryError: ((RegistryOperation, Throwable) -> Unit)? = null,
 ) : PrfProvider {
+
+    public companion object {
+        /**
+         * Constant identifying Breez's shared `keys.breez.technology` RP.
+         * Pass as `rpId` when opting into the Breez-managed Relying Party
+         * (only valid for apps registered with Breez). Apps with their
+         * own RP domain pass their own string.
+         */
+        public const val BREEZ_RP_ID: String = CredentialManagerPrfCore.DEFAULT_RP_ID
+    }
 
     private val userName: String = userName ?: rpName
     private val userDisplayName: String = userDisplayName ?: (userName ?: rpName)
@@ -115,13 +123,8 @@ public class PasskeyProvider(
      */
     override suspend fun deriveSeeds(request: DeriveSeedsRequest): List<ByteArray> {
         try {
-            // Per-call overrides win over per-instance defaults; an
-            // empty per-call list defers to the constructor's
-            // `allowCredentialIds`.
-            val perCallAllow = request.allowCredentialIds
-            val effectiveAllow = if (perCallAllow.isEmpty()) allowCredentialIds else perCallAllow
             val options = DeriveSeedsOptions(
-                allowCredentialIds = effectiveAllow,
+                allowCredentialIds = request.allowCredentialIds,
                 preferImmediatelyAvailableCredentials = request.preferImmediatelyAvailableCredentials,
                 credentialRegistry = credentialRegistry,
                 onRegistryError = onRegistryError,
@@ -133,7 +136,7 @@ public class PasskeyProvider(
                 rpName = rpName,
                 userName = userName,
                 userDisplayName = userDisplayName,
-                autoRegister = autoRegister,
+                autoRegister = false,
                 captureCredentialId = { id -> lastObservedCredentialId = id },
                 options = options,
             )
@@ -196,27 +199,27 @@ public class PasskeyProvider(
 
     /**
      * Register a new passkey with PRF support. One ceremony, no seed
-     * derivation. Per-call overrides on `request` (userName,
-     * userDisplayName) fall back to constructor values when omitted.
+     * derivation.
      *
      * `user.id` is never host-supplied: the core mints a fresh random
      * 16-byte handle per call and surfaces it via
-     * [RegisteredCredential.userId].
+     * [RegisteredCredential.userId]. Branding fields (`userName`,
+     * `userDisplayName`) live on this provider's constructor.
      *
      * When the provider was constructed with a `credentialRegistry`,
      * the registry's stored IDs are auto-merged into
-     * `request.excludeCredentialIds` and the new credential ID is
-     * auto-added on success.
+     * `excludeCredentialIds` and the new credential ID is auto-added
+     * on success.
      */
-    override suspend fun createPasskey(request: CreatePasskeyRequest): RegisteredCredential {
+    override suspend fun createPasskey(excludeCredentialIds: List<ByteArray>): RegisteredCredential {
         try {
             val core = CredentialManagerPrfCore.createCredential(
                 activity = activityProvider(),
                 rpId = rpId,
                 rpName = rpName,
-                userName = request.userName ?: userName,
-                userDisplayName = request.userDisplayName ?: userDisplayName,
-                excludeCredentialIds = request.excludeCredentialIds,
+                userName = userName,
+                userDisplayName = userDisplayName,
+                excludeCredentialIds = excludeCredentialIds,
                 options = CreatePasskeyOptions(
                     credentialRegistry = credentialRegistry,
                     onRegistryError = onRegistryError,

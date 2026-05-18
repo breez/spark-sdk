@@ -27,12 +27,16 @@ import Security
 /// ```
 @available(iOS 18.0, macOS 15.0, *)
 public class PasskeyProvider: PrfProvider {
+    /// Constant identifying Breez's shared `keys.breez.technology` RP.
+    /// Pass as `rpId` when opting into the Breez-managed Relying Party
+    /// (only valid for apps registered with Breez). Apps with their
+    /// own RP domain pass their own string.
+    public static let BREEZ_RP_ID: String = "keys.breez.technology"
+
     private let rpId: String
     private let rpName: String
     private let userName: String
     private let userDisplayName: String
-    private let autoRegister: Bool
-    private let allowCredentialIds: [Data]
     private let explicitTeamId: String?
     private let urlSession: URLSession
     private let core: PasskeyAssertionCore
@@ -90,15 +94,13 @@ public class PasskeyProvider: PrfProvider {
     ///     who registered separately on multiple devices). When empty
     ///     (default), iOS picks any credential matching the RP.
     public init(
-        rpId: String = "keys.breez.technology",
+        rpId: String,
         rpName: String = "Breez SDK",
         userName: String? = nil,
         userDisplayName: String? = nil,
         anchorProvider: PresentationAnchorProvider? = nil,
         teamId: String? = nil,
         urlSession: URLSession = .shared,
-        autoRegister: Bool = false,
-        allowCredentialIds: [Data] = [],
         credentialRegistry: CredentialRegistry? = nil,
         onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) {
@@ -106,8 +108,6 @@ public class PasskeyProvider: PrfProvider {
         self.rpName = rpName
         self.userName = userName ?? rpName
         self.userDisplayName = userDisplayName ?? (userName ?? rpName)
-        self.autoRegister = autoRegister
-        self.allowCredentialIds = allowCredentialIds
         self.explicitTeamId = teamId
         self.urlSession = urlSession
         self.core = PasskeyAssertionCore(anchorProvider: anchorProvider)
@@ -136,14 +136,9 @@ public class PasskeyProvider: PrfProvider {
         guard saltDatas.count == request.salts.count else {
             throw PrfProviderError.Generic("Failed to encode salts as UTF-8")
         }
-        // Per-call overrides win over the per-instance defaults: an
-        // empty per-call list defers to the constructor's
-        // `allowCredentialIds`. `nil` defers to the platform default
-        // (immediate mediation on).
         let perCallAllow = request.allowCredentialIds.map { Data($0) }
-        let effectiveAllow = perCallAllow.isEmpty ? allowCredentialIds : perCallAllow
         let options = DeriveSeedsOptions(
-            allowCredentialIds: effectiveAllow,
+            allowCredentialIds: perCallAllow,
             preferImmediatelyAvailableCredentials: request.preferImmediatelyAvailableCredentials,
             credentialRegistry: credentialRegistry,
             onRegistryError: onRegistryError
@@ -155,7 +150,7 @@ public class PasskeyProvider: PrfProvider {
                 rpName: rpName,
                 userName: userName,
                 userDisplayName: userDisplayName,
-                autoRegister: autoRegister,
+                autoRegister: false,
                 options: options
             )
         } catch let err as PasskeyAssertionError {
@@ -165,27 +160,27 @@ public class PasskeyProvider: PrfProvider {
 
     /// Create a new passkey with PRF support. Single platform prompt;
     /// separates credential creation from derivation in multi-step
-    /// onboarding flows. Per-call overrides on `request` (userName,
-    /// userDisplayName) fall back to the constructor values.
+    /// onboarding flows.
     ///
     /// `user.id` is never host-supplied: the core mints a fresh random
     /// 16-byte handle per call and surfaces it via
-    /// `RegisteredCredential.userId`.
+    /// `RegisteredCredential.userId`. Branding fields (`userName`,
+    /// `userDisplayName`) live on this provider's constructor.
     ///
     /// Auto-merges previously-registered credential IDs from the
-    /// optional `CredentialRegistry` into `request.excludeCredentialIds`
-    /// so the platform refuses to create a duplicate even after a
-    /// reinstall (the registry is iCloud-synced when host-backed).
-    /// Records the new credential ID after a successful create.
+    /// optional `CredentialRegistry` into `excludeCredentialIds` so the
+    /// platform refuses to create a duplicate even after a reinstall
+    /// (the registry is iCloud-synced when host-backed). Records the
+    /// new credential ID after a successful create.
     @discardableResult
-    public func createPasskey(request: CreatePasskeyRequest) async throws -> RegisteredCredential {
+    public func createPasskey(excludeCredentialIds: [Data]) async throws -> RegisteredCredential {
         do {
             let credential = try await core.createPasskey(
                 rpId: rpId,
                 rpName: rpName,
-                userName: request.userName ?? userName,
-                userDisplayName: request.userDisplayName ?? userDisplayName,
-                excludeCredentialIds: request.excludeCredentialIds,
+                userName: userName,
+                userDisplayName: userDisplayName,
+                excludeCredentialIds: excludeCredentialIds,
                 options: CreatePasskeyOptions(
                     credentialRegistry: credentialRegistry,
                     onRegistryError: onRegistryError

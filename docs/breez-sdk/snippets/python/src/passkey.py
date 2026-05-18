@@ -1,7 +1,6 @@
 # pylint: disable=duplicate-code
 from breez_sdk_spark import (
     ConnectRequest,
-    CreatePasskeyRequest,
     DomainAssociation,
     Network,
     PasskeyAvailability,
@@ -19,10 +18,9 @@ from breez_sdk_spark import (
 
 # ANCHOR: implement-prf-provider
 # Implement the PrfProvider trait for custom logic if no built-in
-# PasskeyProvider ships for your target. Single API surface:
-# derive_seeds for derivation, create_passkey for registration,
-# is_supported / check_domain_association for diagnostics.
-# Single-salt derivation is the trivial 1-element bulk case.
+# PasskeyProvider ships for your target. Three required methods:
+# derive_seeds for derivation, is_supported for the capability probe;
+# create_passkey for registration is optional.
 class CustomPrfProvider(PrfProvider):
     async def derive_seeds(self, salts: list[str]) -> list[bytes]:
         # Call platform passkey API with PRF extension. Use the dual-salt
@@ -36,7 +34,7 @@ class CustomPrfProvider(PrfProvider):
         # platform / device.
         raise NotImplementedError("Check platform passkey availability")
 
-    async def create_passkey(self, request: CreatePasskeyRequest) -> RegisteredCredential:
+    async def create_passkey(self, exclude_credential_ids: list[bytes]) -> RegisteredCredential:
         # Register a new credential and return its ID, the WebAuthn
         # user.id the platform recorded (returned for host-side
         # correlation, never host-supplied), AAGUID, and BE flag.
@@ -56,7 +54,7 @@ class CustomPrfProvider(PrfProvider):
 async def check_availability():
     # ANCHOR: check-availability
     prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None)
+    passkey = PasskeyClient(prf_provider, None, None)
 
     # check_availability collapses is_supported + check_domain_association
     # into a single tagged value. Branch on the variant the host needs.
@@ -75,12 +73,12 @@ async def check_availability():
 async def connect_with_passkey():
     # ANCHOR: connect-with-passkey
     prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None)
+    passkey = PasskeyClient(prf_provider, None, None)
 
     # sign_in derives the wallet seed for an existing credential. With
     # bulk PRF on iOS+Android this is a single OS prompt that derives
     # master + label seeds in one ceremony.
-    response = await passkey.sign_in(SignInRequest(label="personal", extra_salts=[]))
+    response = await passkey.sign_in(SignInRequest(label="personal"))
 
     config = default_config(network=Network.MAINNET)
     sdk = await connect(
@@ -97,15 +95,9 @@ async def register_new_passkey():
     # call. On iOS+Android this is 2 OS prompts total (1 create + 1
     # dual-salt assert) thanks to the SDK's bulk-PRF setup_wallet path.
     prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None)
+    passkey = PasskeyClient(prf_provider, None, None)
 
-    response = await passkey.register(
-        RegisterRequest(
-            label="personal",
-            extra_salts=[],
-            exclude_credential_ids=[],
-        )
-    )
+    response = await passkey.register(RegisterRequest(label="personal"))
 
     # Hosts SHOULD persist credential.credential_id (for excludeCredentialIds
     # bookkeeping) and credential.user_id (for server-side correlation).
@@ -125,13 +117,14 @@ async def list_labels() -> list[str]:
     # ANCHOR: list-labels
     prf_provider = CustomPrfProvider()
     config = PasskeyConfig(
-        breez_api_key="<breez api key>",
         # Optional: override the default wallet label used when
         # register / sign_in receive `label = None`. Falls back to the
         # SDK's internal "Default" when unset.
         default_label="personal",
     )
-    passkey = PasskeyClient(prf_provider, config)
+    # breez_api_key enables authenticated (NIP-42) Breez relay access
+    # for label sync; pass None for public-relay-only.
+    passkey = PasskeyClient(prf_provider, "<breez api key>", config)
 
     # sign_in with no label runs in discovery mode: it derives the
     # master seed AND lists labels in the same ceremony, so a follow-up
@@ -147,8 +140,7 @@ async def list_labels() -> list[str]:
 async def store_label():
     # ANCHOR: store-label
     prf_provider = CustomPrfProvider()
-    config = PasskeyConfig(breez_api_key="<breez api key>")
-    passkey = PasskeyClient(prf_provider, config)
+    passkey = PasskeyClient(prf_provider, "<breez api key>", None)
 
     # For a new label on an existing identity, call sign_in(new_label)
     # first to seed the SDK's identity cache via setup_wallet, THEN
@@ -164,26 +156,15 @@ async def single_cta_onboarding():
     # returning user (silent assertion succeeds), TWO for a new user
     # (silent assertion fast-fails, then create + dual-salt assert).
     prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None)
+    passkey = PasskeyClient(prf_provider, None, None)
 
     try:
         # Discovery mode (label=None): derives master + configured
-        # default label in a single ceremony. The fresh-device user
-        # fast-fails in <300ms with no UI shown.
-        response = await passkey.sign_in(SignInRequest(label=None, extra_salts=[]))
+        # default label in a single ceremony.
+        response = await passkey.sign_in(SignInRequest(label=None))
         return response.wallet
     except PrfProviderError.CredentialNotFound:
-        # CredentialNotFound is the SDK's classification for "no matching
-        # credential on this device", including iOS's <300ms fast-fail
-        # case where the platform conflates no-cred with user-cancel.
-        # The variant carries a string payload with diagnostic detail.
-        response = await passkey.register(
-            RegisterRequest(
-                label="personal",
-                extra_salts=[],
-                exclude_credential_ids=[],
-            )
-        )
+        response = await passkey.register(RegisterRequest(label="personal"))
         return response.wallet
     # ANCHOR_END: signin-fallback-register
 
@@ -196,18 +177,12 @@ async def check_domain():
     result = await prf_provider.check_domain_association()
 
     if isinstance(result, DomainAssociation.ASSOCIATED):
-        # Safe to proceed.
-        pass
+        pass  # Safe to proceed.
     elif isinstance(result, DomainAssociation.NOT_ASSOCIATED):
-        # Configuration is wrong (entitlement missing, AASA stale,
-        # assetlinks malformed). Surface a developer-facing error.
         print(f"Domain association failed (source={result.source}): {result.reason}")
         return
     elif isinstance(result, DomainAssociation.SKIPPED):
-        # Verification could not be performed (offline, endpoint
-        # timeout, no public-suffix match). Proceed normally: this
-        # is NOT a negative signal.
-        pass
+        pass  # Verification could not be performed; proceed normally.
     # ANCHOR_END: domain-association
 
 
@@ -219,13 +194,12 @@ async def recover_from_already_exists():
     # the existing credential and the SDK's identity cache will warm
     # up on the assertion.
     prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None)
+    passkey = PasskeyClient(prf_provider, None, None)
 
     try:
         await passkey.register(
             RegisterRequest(
                 label="personal",
-                extra_salts=[],
                 exclude_credential_ids=[
                     # app-persisted credential IDs from prior registrations
                 ],
@@ -234,9 +208,7 @@ async def recover_from_already_exists():
     except PrfProviderError.CredentialAlreadyExists:
         # Flip to sign-in. The existing credential's PRF output is
         # the same wallet seed the host would have minted on register.
-        response = await passkey.sign_in(
-            SignInRequest(label="personal", extra_salts=[])
-        )
+        response = await passkey.sign_in(SignInRequest(label="personal"))
         return response.wallet
     # ANCHOR_END: recover-already-exists
 
@@ -249,13 +221,11 @@ async def handle_timeout():
     # out. The SDK fires PrfProviderError.UserTimedOut when assertion
     # or register elapsed time crosses 55_000 ms.
     prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None)
+    passkey = PasskeyClient(prf_provider, None, None)
 
     try:
-        return await passkey.sign_in(SignInRequest(label="personal", extra_salts=[]))
+        return await passkey.sign_in(SignInRequest(label="personal"))
     except PrfProviderError.UserTimedOut:
-        # Show a sticky retry screen with timeout-specific copy.
-        # Do NOT auto-retry without user input.
         print("Sign-in timed out: show \"Try Again\" UI.")
         raise
     # ANCHOR_END: handle-timeout

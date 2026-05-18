@@ -5,9 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::Seed;
-use breez_sdk_spark::passkey::{
-    PasskeyClient, PasskeyConfig as SdkPasskeyConfig, PrfProvider, PrfProviderError, SignInRequest,
-};
+use breez_sdk_spark::passkey::{PasskeyClient, PrfProvider, PrfProviderError, SignInRequest};
 
 #[cfg(feature = "fido2")]
 pub mod fido2_prf;
@@ -90,11 +88,7 @@ pub async fn resolve_passkey_seed(
     list_labels: bool,
     store_label: bool,
 ) -> Result<Seed> {
-    let sdk_config = SdkPasskeyConfig {
-        breez_api_key,
-        default_label: None,
-    };
-    let client = PasskeyClient::new(provider, Some(sdk_config));
+    let client = PasskeyClient::new(provider, breez_api_key, None);
 
     // --list-labels: discovery sign-in (no cached label) returns the
     // discovered label set; prompt user to pick.
@@ -103,7 +97,6 @@ pub async fn resolve_passkey_seed(
         let response = client
             .sign_in(SignInRequest {
                 label: None,
-                extra_salts: vec![],
                 ..Default::default()
             })
             .await
@@ -151,7 +144,6 @@ pub async fn resolve_passkey_seed(
     let response = client
         .sign_in(SignInRequest {
             label,
-            extra_salts: vec![],
             ..Default::default()
         })
         .await

@@ -1287,7 +1287,6 @@ pub struct _UnregisterWebhookRequest {
 
 #[frb(mirror(PasskeyConfig))]
 pub struct _PasskeyConfig {
-    pub breez_api_key: Option<String>,
     pub default_label: Option<String>,
 }
 
@@ -1305,11 +1304,6 @@ pub struct _Wallet {
     pub label: String,
 }
 
-#[frb(mirror(NamedSalt))]
-pub struct _NamedSalt {
-    pub name: String,
-}
-
 #[frb(mirror(RegisteredCredential))]
 pub struct _RegisteredCredential {
     pub credential_id: Vec<u8>,
@@ -1318,33 +1312,21 @@ pub struct _RegisteredCredential {
     pub backup_eligible: Option<bool>,
 }
 
-#[frb(mirror(CreatePasskeyRequest))]
-pub struct _CreatePasskeyRequest {
-    pub exclude_credential_ids: Vec<Vec<u8>>,
-    pub user_name: Option<String>,
-    pub user_display_name: Option<String>,
-}
-
 #[frb(mirror(RegisterRequest))]
 pub struct _RegisterRequest {
     pub label: Option<String>,
-    pub extra_salts: Vec<NamedSalt>,
     pub exclude_credential_ids: Vec<Vec<u8>>,
-    pub user_name: Option<String>,
-    pub user_display_name: Option<String>,
 }
 
 #[frb(mirror(RegisterResponse))]
 pub struct _RegisterResponse {
     pub wallet: Wallet,
     pub credential: RegisteredCredential,
-    pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
 }
 
 #[frb(mirror(SignInRequest))]
 pub struct _SignInRequest {
     pub label: Option<String>,
-    pub extra_salts: Vec<NamedSalt>,
     pub allow_credential_ids: Vec<Vec<u8>>,
     pub prefer_immediately_available_credentials: Option<bool>,
 }
@@ -1360,6 +1342,5 @@ pub struct _DeriveSeedsRequest {
 pub struct _SignInResponse {
     pub wallet: Wallet,
     pub labels: Vec<String>,
-    pub extra_seeds: std::collections::HashMap<String, Vec<u8>>,
     pub credential_id: Option<Vec<u8>>,
 }
