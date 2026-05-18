@@ -19,23 +19,23 @@ Build the config with {{#name default_server_config}} instead of {{#name default
 
 {{#tabs sdk_building:init-sdk-server}}
 
-`default_server_config` returns the same `Config` as `default_config` with [`background_tasks_enabled`](./config.md#background-tasks-enabled) set to `false`. All other fields are unchanged; the runtime profile prevents the background services from being started even when their per-field configuration (e.g. [`real_time_sync_server_url`](./config.md#real-time-sync-server-url), [`optimization_config.auto_enabled`](./config.md#optimization-configuration)) is left at its default.
+{{#name default_server_config}} returns the same `Config` as {{#name default_config}} with [{{#name background_tasks_enabled}}](./config.md#background-tasks-enabled) set to `false`. All other fields are unchanged; the runtime profile prevents the background services from being started even when their per-field configuration (e.g. [{{#name real_time_sync_server_url}}](./config.md#real-time-sync-server-url), [{{#name optimization_config.auto_enabled}}](./config.md#optimization-configuration)) is left at its default.
 
 Server mode usually pairs with **shared infrastructure** across SDK instances. See [Customizing the SDK](customizing.md) and the [Shared infrastructure](#shared-infrastructure) section below for the exact wiring.
 
 ## What server mode turns off
 
-None of the following per-instance background work is started when `background_tasks_enabled` is `false`:
+None of the following per-instance background work is started when {{#name background_tasks_enabled}} is `false`:
 
 - **Periodic sync loop** — the SDK does not auto-sync with the Spark network.
 - **Real-time sync client** — no WebSocket subscription to the [real-time sync server](./config.md#real-time-sync-server-url).
 - **Spark wallet background processor** — no operator-event subscription, leaf optimizer, or token-output optimizer.
 - **Lightning-address recovery** — the SDK does not refresh the registered lightning address on startup.
-- **Spark private-mode init** — the [`private_enabled_default`](./config.md#private-mode-enabled-by-default) preset is **not** applied automatically on first startup; you must opt in once via {{#name update_user_settings}} (see [User settings](user_settings.md)).
+- **Spark private-mode init** — the [{{#name private_enabled_default}}](./config.md#private-mode-enabled-by-default) preset is **not** applied automatically on first startup; you must opt in once via {{#name update_user_settings}} (see [User settings](user_settings.md)).
 - **Flashnet conversion refunder** — no periodic refund pass for failed token conversions.
 - **Stable Balance** — Stable Balance is not supported in server mode because its conversion worker is a background service. Do not rely on automatic Bitcoin-to-token conversion on receive, activation/deactivation conversion, or other Stable Balance background behavior in this profile.
 
-Explicit operations such as `sync_wallet`, `claim_deposit`, `list_unclaimed_deposits`, `refund_deposit`, and `refund_pending_conversions` continue to work and are the intended entry points in this mode.
+Explicit operations such as {{#name sync_wallet}}, {{#name claim_deposit}}, {{#name list_unclaimed_deposits}}, {{#name refund_deposit}}, and {{#name refund_pending_conversions}} continue to work and are the intended entry points in this mode.
 
 ## Driving the SDK explicitly
 
@@ -48,15 +48,15 @@ Call {{#name sync_wallet}} **only when an external event tells you the wallet st
 1. **A webhook fires for an incoming payment** — a Lightning receive completes, an on-chain deposit confirms, an incoming Spark transfer lands. Run `sync_wallet()` from the webhook handler so the wallet picks up the new state before downstream consumers (balance reads, payment lists, etc.) need it.
 2. **You explicitly need to reconcile state** — e.g. a periodic reconciliation job for a specific wallet, or a manual admin action. This is rare in practice; the webhook path covers the steady state.
 
-**Do not** call `sync_wallet` from user-facing request handlers (e.g. a `GET /balance` endpoint) as a precaution — it's a network round-trip to operators and is not needed if your webhooks are wired up. {{#name get_info}} reads from the local tree store directly and is the right primitive for read paths.
+**Do not** call {{#name sync_wallet}} from user-facing request handlers (e.g. a `GET /balance` endpoint) as a precaution — it's a network round-trip to operators and is not needed if your webhooks are wired up. {{#name get_info}} reads from the local tree store directly and is the right primitive for read paths.
 
-The {{#enum SdkEvent::Synced}} event pattern documented in [Listening to events](events.md) is **not available** in server mode — the SDK has no background subscriber to emit it. Treat `sync_wallet` as the synchronous primitive instead.
+The {{#enum SdkEvent::Synced}} event pattern documented in [Listening to events](events.md) is **not available** in server mode — the SDK has no background subscriber to emit it. Treat {{#name sync_wallet}} as the synchronous primitive instead.
 
 ### Claiming on-chain deposits
 
 Server-mode SDKs do not run the periodic deposit detection and claim sweep that the mobile profile uses. When your webhook or chain watcher observes a relevant on-chain deposit, handle it explicitly:
 
-- Call {{#name sync_wallet}} to run the SDK's deposit sync and automatic claim logic using your configured [`max_deposit_claim_fee`](./config.md#max-deposit-claim-fee).
+- Call {{#name sync_wallet}} to run the SDK's deposit sync and automatic claim logic using your configured [{{#name max_deposit_claim_fee}}](./config.md#max-deposit-claim-fee).
 - If your backend already knows the deposit outpoint and wants to drive a specific claim, call {{#name claim_deposit}} for that `txid`/`vout`.
 
 The standard claim flow documented in [Claiming on-chain deposits](onchain_claims.md) applies.
@@ -65,7 +65,7 @@ The standard claim flow documented in [Claiming on-chain deposits](onchain_claim
 
 Stable Balance is not available in server mode. The feature depends on the client runtime's background conversion worker, so server-mode SDKs will not automatically convert received Bitcoin to the active stable token and will not process Stable Balance activation/deactivation conversions in the background.
 
-If [`stable_balance_config`](./config.md#stable-balance-configuration) is set while using server mode, SDK initialization fails with an invalid input error. Explicit token conversion flows used by payment APIs can still be used, but do not configure Stable Balance for a server-mode deployment.
+If [{{#name stable_balance_config}}](./config.md#stable-balance-configuration) is set while using server mode, SDK initialization fails with an invalid input error. Explicit token conversion flows used by payment APIs can still be used, but do not configure Stable Balance for a server-mode deployment.
 
 ### Token conversion refunds
 
@@ -75,7 +75,7 @@ The flashnet conversion refunder doesn't run in the background in server mode. I
 
 ### One-time setup: Spark private mode
 
-The client-mode SDK applies [`private_enabled_default`](./config.md#private-mode-enabled-by-default) on first startup. Server-mode SDKs do not — each per-request SDK would otherwise pay a redundant storage read to check the flag. At provisioning time (when a new wallet is first registered), call {{#name update_user_settings}} with `spark_private_mode_enabled: true`. See [User settings](user_settings.md).
+The client-mode SDK applies [{{#name private_enabled_default}}](./config.md#private-mode-enabled-by-default) on first startup. Server-mode SDKs do not — each per-request SDK would otherwise pay a redundant storage read to check the flag. At provisioning time (when a new wallet is first registered), call {{#name update_user_settings}} with {{#name spark_private_mode_enabled}} set to `true`. See [User settings](user_settings.md).
 
 ## Event delivery via webhooks
 
@@ -84,7 +84,7 @@ Without the background processor, the SDK doesn't emit `PaymentSucceeded` / `Pay
 - [Managing webhooks](webhooks.md) describes the supported event types and registration flow.
 - [Lightning Address payment notifications](lnurl_webhooks.md) covers the LNURL server's webhook for incoming LNURL payments.
 
-A typical pipeline: webhook arrives → webhook handler builds a per-request SDK, calls `sync_wallet()` or the relevant explicit operation (e.g. `claim_deposit`), disconnects.
+A typical pipeline: webhook arrives → webhook handler builds a per-request SDK, calls {{#name sync_wallet}} or the relevant explicit operation (e.g. {{#name claim_deposit}}), disconnects.
 
 ## Lifecycle pattern
 
@@ -92,7 +92,7 @@ There are three distinct shapes for a server-mode interaction, depending on what
 
 ### User-facing request handlers
 
-Generate an invoice, send a payment, list history, etc. **Do not call `sync_wallet()` here** — operations that read from local storage (`get_info`, `list_payments`, etc.) do not need a defensive sync, and a network round-trip to operators on every request adds latency without changing the answer.
+Generate an invoice, send a payment, list history, etc. **Do not call {{#name sync_wallet}} here** — operations that read from local storage ({{#name get_info}}, {{#name list_payments}}, etc.) do not need a defensive sync, and a network round-trip to operators on every request adds latency without changing the answer.
 
 ```text
     request in
@@ -112,13 +112,13 @@ Generate an invoice, send a payment, list history, etc. **Do not call `sync_wall
 
 Anything driven by an external signal that the wallet state changed. The exact operation depends on the trigger — they're not chained together in the same handler.
 
-- **Incoming Lightning / Spark transfer webhook** — call `sync_wallet()` so downstream reads see the new payment:
+- **Incoming Lightning / Spark transfer webhook** — call {{#name sync_wallet}} so downstream reads see the new payment:
 
 ```text
     webhook in  →  build SDK  →  sync_wallet()  →  disconnect()
 ```
 
-- **On-chain deposit webhook** (or chain watcher) — call `sync_wallet()` to run the deposit sync and automatic claim sweep, or call `claim_deposit` if you want to claim a known outpoint explicitly:
+- **On-chain deposit webhook** (or chain watcher) — call {{#name sync_wallet}} to run the deposit sync and automatic claim sweep, or call {{#name claim_deposit}} if you want to claim a known outpoint explicitly:
 
 ```text
     webhook in  →  build SDK  →  sync_wallet() / claim_deposit()  →  disconnect()
@@ -143,7 +143,7 @@ When a wallet is first registered, run a one-time setup pass to apply the config
 ### A few notes
 
 - **Building is cheap when infrastructure is shared.** With the shared chain service, MySQL/Postgres pool, and SSP/Connection Managers configured ([see below](#shared-infrastructure)), each per-request SDK reuses HTTP/2 connections, DB pool slots, and gRPC channels — there's no per-request handshake to operators.
-- **Always disconnect.** Even though no background loops are running, `disconnect()` flushes outstanding storage writes and is the documented lifecycle exit. See [Disconnecting](initializing.md#disconnecting).
+- **Always disconnect.** Even though no background loops are running, calling {{#name disconnect}} flushes outstanding storage writes and is the documented lifecycle exit. See [Disconnecting](initializing.md#disconnecting).
 - **One SDK per request, not one SDK pinned to a worker thread.** The per-request build is fast enough and avoids cross-tenant state leaks.
 
 <h2 id="shared-infrastructure">
@@ -158,8 +158,8 @@ A server-mode deployment normally pairs the profile with shared resources across
 - [SSP Connection Manager](customizing.md#with-ssp-connection-manager) — share the SSP HTTP client across SDKs.
 - [Connection Manager](customizing.md#with-connection-manager) — share gRPC channels to the Spark operators across SDKs.
 
-Pair `default_server_config` with all of these shared resources — sharing the DB pool, chain service, SSP HTTP client, and gRPC channels across SDKs is the intended deployment shape.
+Pair {{#name default_server_config}} with all of these shared resources — sharing the DB pool, chain service, SSP HTTP client, and gRPC channels across SDKs is the intended deployment shape.
 
-## Driving the `background_tasks_enabled` field directly
+## Driving the {{#name background_tasks_enabled}} field directly
 
-`default_server_config` is the recommended entry point. If you need to flip the flag on an existing config built another way, see [Background tasks enabled](./config.md#background-tasks-enabled).
+{{#name default_server_config}} is the recommended entry point. If you need to flip the flag on an existing config built another way, see [Background tasks enabled](./config.md#background-tasks-enabled).

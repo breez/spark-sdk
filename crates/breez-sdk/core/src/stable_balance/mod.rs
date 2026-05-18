@@ -143,7 +143,8 @@ use tracing::{debug, info, warn};
 use self::queue::ConversionQueue;
 pub(crate) use self::queue::PendingConversion;
 
-use crate::events::{EventEmitter, EventMiddleware, RuntimeEvent, SdkEvent};
+use crate::events::{EventEmitter, EventMiddleware, SdkEvent};
+use crate::sdk::RuntimeEvent;
 use crate::models::{
     ConversionDetails, ConversionStatus, Payment, PaymentMethod, PaymentType, StableBalanceToken,
 };

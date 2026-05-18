@@ -12,13 +12,13 @@ use tracing::{Instrument, debug, error, info, trace, warn};
 use crate::{
     GetInfoRequest, GetInfoResponse, Payment,
     error::SdkError,
-    events::{EventListener, RuntimeEvent, SdkEvent},
+    events::{EventListener, SdkEvent},
     persist::ObjectCacheRepository,
     token_conversion::TokenConverter,
     utils::{payments::get_payment_and_emit_event, run_with_shutdown},
 };
 
-use super::RuntimeProfile;
+use super::{RuntimeEvent, RuntimeProfile};
 use crate::sdk::{
     BreezSdk, SyncCoordinator, SyncRequest, SyncType,
     helpers::{BalanceWatcher, update_balances},

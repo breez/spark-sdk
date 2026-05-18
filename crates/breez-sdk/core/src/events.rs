@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::{DepositInfo, LightningAddressInfo, Payment};
+use crate::{DepositInfo, LightningAddressInfo, Payment, sdk::RuntimeEvent};
 
 /// Events emitted by the SDK
 #[allow(clippy::large_enum_variant)]
@@ -45,15 +45,6 @@ pub enum SdkEvent {
     NewDeposits {
         new_deposits: Vec<DepositInfo>,
     },
-}
-
-/// Internal runtime events consumed by the selected runtime profile.
-///
-/// These events are not forwarded to external SDK listeners; they are only used
-/// to decouple non-runtime-owned modules from runtime-specific background behavior.
-#[derive(Debug, Clone)]
-pub(crate) enum RuntimeEvent {
-    StableBalanceConversionCompleted,
 }
 
 impl SdkEvent {

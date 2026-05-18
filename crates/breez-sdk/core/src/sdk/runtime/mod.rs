@@ -14,6 +14,15 @@ use server::ServerRuntime;
 
 pub(crate) type SdkRuntime = Arc<dyn RuntimeProfile>;
 
+/// Internal runtime events consumed by the selected runtime profile.
+///
+/// These events are not forwarded to external SDK listeners; they decouple
+/// non-runtime-owned modules from runtime-specific background behavior.
+#[derive(Debug, Clone)]
+pub(crate) enum RuntimeEvent {
+    StableBalanceConversionCompleted,
+}
+
 pub(crate) fn runtime_from_config(config: &Config) -> SdkRuntime {
     if config.background_tasks_enabled {
         Arc::new(ClientRuntime)

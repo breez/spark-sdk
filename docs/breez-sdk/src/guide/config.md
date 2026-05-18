@@ -33,7 +33,7 @@ A shorter synchronization interval provides more responsive detection of payment
 
 Master switch for all per-instance background tasks. Defaults to `true`, which is the right choice for mobile and single-instance deployments — the SDK runs its periodic sync, real-time sync client, lightning-address recovery, spark private-mode init, leaf and token-output optimizers, the spark-wallet background processor, and the flashnet conversion refunder.
 
-Set to `false` for multi-tenant server deployments where the SDK is built per request and the host orchestrates sync, claiming, and event delivery (typically via webhooks) explicitly. No background work is started; explicit operations such as `sync_wallet`, `claim_deposit`, `list_unclaimed_deposits`, `refund_deposit`, and `refund_pending_conversions` continue to work and are the intended entry points in this mode.
+Set to `false` for multi-tenant server deployments where the SDK is built per request and the host orchestrates sync, claiming, and event delivery (typically via webhooks) explicitly. No background work is started; explicit operations such as {{#name sync_wallet}}, {{#name claim_deposit}}, {{#name list_unclaimed_deposits}}, {{#name refund_deposit}}, and {{#name refund_pending_conversions}} continue to work and are the intended entry points in this mode.
 
 The recommended way to opt into server mode is via {{#name default_server_config}}, which returns the same `Config` as {{#name default_config}} with this flag flipped off. See [Server mode](./server_mode.md) for the full profile, lifecycle pattern, and shared-infrastructure wiring. Configuring this field directly is supported if you build your `Config` another way:
 
@@ -42,7 +42,7 @@ The recommended way to opt into server mode is via {{#name default_server_config
 <div class="warning">
 <h4>Developer note</h4>
 
-When this flag is `false`, related per-field options such as [`real_time_sync_server_url`](#real-time-sync-server-url) and [`optimization_config.auto_enabled`](#optimization-configuration) retain their configured values but the corresponding background services are not started. Their values stay visible on the `Config` so your code reads what it set, but they have no runtime effect in server mode.
+When this flag is `false`, related per-field options such as [{{#name real_time_sync_server_url}}](#real-time-sync-server-url) and [{{#name optimization_config.auto_enabled}}](#optimization-configuration) retain their configured values but the corresponding background services are not started. Their values stay visible on the `Config` so your code reads what it set, but they have no runtime effect in server mode.
 
 </div>
 

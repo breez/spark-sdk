@@ -10,7 +10,7 @@ mod runtime;
 mod sync;
 mod sync_coordinator;
 
-pub(crate) use runtime::{SdkRuntime, runtime_from_config};
+pub(crate) use runtime::{RuntimeEvent, SdkRuntime, runtime_from_config};
 pub(crate) use sync_coordinator::SyncCoordinator;
 
 use bitflags::bitflags;
