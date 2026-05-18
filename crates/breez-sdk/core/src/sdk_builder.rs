@@ -987,6 +987,7 @@ fn default_storage(
 }
 
 #[cfg(test)]
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod tests {
     use super::SdkBuilder;
     use crate::{Network, default_config};
@@ -1009,7 +1010,7 @@ mod tests {
         }
     }
 
-    #[macros::async_test_not_wasm]
+    #[tokio::test]
     async fn server_mode_rejects_stable_balance_config() {
         use crate::{SdkError, StableBalanceConfig, StableBalanceToken, default_server_config};
 
@@ -1035,7 +1036,7 @@ mod tests {
         }
     }
 
-    #[macros::async_test_not_wasm]
+    #[tokio::test]
     async fn server_mode_rejects_real_time_sync_server_url() {
         use crate::{SdkError, default_server_config};
 
@@ -1053,7 +1054,7 @@ mod tests {
         }
     }
 
-    #[macros::async_test_not_wasm]
+    #[tokio::test]
     async fn server_mode_rejects_optimization_auto_enabled() {
         use crate::{SdkError, default_server_config};
 
