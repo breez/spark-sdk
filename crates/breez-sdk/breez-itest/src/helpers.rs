@@ -1768,7 +1768,6 @@ pub async fn build_sdk_with_postgres_server_mode(
     config.api_key = None;
     config.lnurl_domain = None;
     config.prefer_spark_over_lightning = true;
-    config.sync_interval_secs = 5;
     config.real_time_sync_server_url = None;
     config.optimization_config.auto_enabled = false;
 
@@ -1812,7 +1811,6 @@ pub async fn build_sdk_with_mysql_server_mode(
     config.api_key = None;
     config.lnurl_domain = None;
     config.prefer_spark_over_lightning = true;
-    config.sync_interval_secs = 5;
     config.real_time_sync_server_url = None;
     config.optimization_config.auto_enabled = false;
 

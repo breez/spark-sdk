@@ -994,12 +994,7 @@ mod tests {
         }
     }
 
-    // tokio::test requires `rt`, which the workspace only enables on
-    // non-wasm targets. Gate this test (and its imports) accordingly so
-    // `cargo clippy --target wasm32-unknown-unknown --all-targets` stays
-    // clean.
-    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-    #[tokio::test]
+    #[macros::async_test_not_wasm]
     async fn server_mode_rejects_stable_balance_config() {
         use crate::{
             SdkError, Seed, StableBalanceConfig, StableBalanceToken, default_server_config,

@@ -71,7 +71,7 @@ If [{{#name stable_balance_config}}](./config.md#stable-balance-configuration) i
 
 **Only relevant if your deployment uses [token conversions](token_conversion.md).** If you don't issue or convert tokens, skip this section.
 
-The flashnet conversion refunder doesn't run in the background in server mode. If you do use tokens, run {{#name refund_pending_conversions}} from your own periodic scheduler (once per minute is a reasonable default) so failed conversions are refunded promptly.
+The flashnet conversion refunder doesn't run in the background in server mode. If you do use tokens, your host needs to drive {{#name refund_pending_conversions}} per affected wallet so failed conversions get refunded. A practical pattern is to track which wallets have pending conversions (e.g. by recording them when a conversion fails) and to run the refund pass for just those wallets on a cadence you control — not to spin up an SDK per wallet every minute regardless.
 
 ### One-time setup: Spark private mode
 
@@ -133,7 +133,7 @@ When a wallet is first registered, run a one-time setup pass to apply the config
       ↓
     build SDK (default_server_config + shared infra)
       ↓
-    update_user_settings({ spark_private_mode_enabled: true })
+    apply one-time user settings
       ↓
     disconnect()
 ```
