@@ -18,17 +18,8 @@ pub struct SdkContext {
 }
 
 /// Process-shared SDK resources for Flutter integrations.
-///
-/// `connections_per_operator` controls per-operator gRPC connection pooling:
-/// `None` (or `Some(1)`) keeps a single multiplexed connection per operator
-/// (the right choice for almost every deployment); `Some(n)` opens `n`
-/// connections per operator and balances requests across them.
 #[frb(sync)]
-pub fn new_shared_sdk_context(
-    connections_per_operator: Option<u32>,
-) -> Result<SdkContext, SdkError> {
-    let inner = breez_sdk_spark::new_shared_sdk_context(SdkContextConfig {
-        connections_per_operator,
-    })?;
+pub fn new_shared_sdk_context(config: SdkContextConfig) -> Result<SdkContext, SdkError> {
+    let inner = breez_sdk_spark::new_shared_sdk_context(config)?;
     Ok(SdkContext { inner })
 }

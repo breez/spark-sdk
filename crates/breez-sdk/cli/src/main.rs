@@ -182,13 +182,13 @@ async fn run_interactive_mode(
     if let Some(connection_string) = postgres_connection_string {
         let context = new_shared_sdk_context(SdkContextConfig {
             postgres_config: Some(default_postgres_storage_config(connection_string)),
-            ..Default::default()
+            ..SdkContextConfig::new(network)
         })?;
         sdk_builder = sdk_builder.with_shared_context(context);
     } else if let Some(connection_string) = mysql_connection_string {
         let context = new_shared_sdk_context(SdkContextConfig {
             mysql_config: Some(default_mysql_storage_config(connection_string)),
-            ..Default::default()
+            ..SdkContextConfig::new(network)
         })?;
         sdk_builder = sdk_builder.with_shared_context(context);
     } else {

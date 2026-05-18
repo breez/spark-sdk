@@ -632,7 +632,7 @@ async fn build_sender_postgres_context(conn_str: &str) -> Result<Arc<SdkContext>
     pg_config.max_pool_size = 30;
     Ok(new_shared_sdk_context(SdkContextConfig {
         postgres_config: Some(pg_config),
-        ..Default::default()
+        ..SdkContextConfig::new(Network::Regtest)
     })?)
 }
 
@@ -645,7 +645,7 @@ async fn build_sender_mysql_context(conn_str: &str) -> Result<Arc<SdkContext>> {
     my_config.max_pool_size = 30;
     Ok(new_shared_sdk_context(SdkContextConfig {
         mysql_config: Some(my_config),
-        ..Default::default()
+        ..SdkContextConfig::new(Network::Regtest)
     })?)
 }
 

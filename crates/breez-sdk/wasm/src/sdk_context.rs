@@ -8,6 +8,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     error::WasmResult,
+    models::Network,
     persist::pool::{JsPool, create_mysql_pool, create_postgres_pool},
     sdk_builder::{MysqlForeignKeyMode, MysqlStorageConfig, PostgresStorageConfig},
 };
@@ -24,11 +25,22 @@ pub struct WasmSdkContext {
     pub(crate) mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
 }
 
-/// Settings for `newSharedSdkContext`. Fields are optional with sensible defaults.
-#[derive(Default, Clone, serde::Serialize, serde::Deserialize, tsify_next::Tsify)]
+/// Settings for `newSharedSdkContext`. `network` is required; all other
+/// fields are optional.
+#[derive(Clone, serde::Serialize, serde::Deserialize, tsify_next::Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmSdkContextConfig {
+    /// Network the shared resources target. Used to gate the partner JWT
+    /// header provider — only constructed on Mainnet.
+    pub network: Network,
+
+    /// Breez API key. When set together with `network == Mainnet`, the
+    /// context constructs a shared partner JWT header provider that all
+    /// SDKs built from this context will attach to their SO requests.
+    #[tsify(optional)]
+    pub api_key: Option<String>,
+
     /// Number of gRPC connections per Spark operator. `None` (or `Some(1)`)
     /// keeps a single connection per operator (right for most deployments);
     /// `Some(n)` opens `n` channels per operator and balances requests.
@@ -50,6 +62,8 @@ pub struct WasmSdkContextConfig {
 #[wasm_bindgen(js_name = "newSharedSdkContext")]
 pub fn new_shared_sdk_context(config: WasmSdkContextConfig) -> WasmResult<WasmSdkContext> {
     let inner = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
+        network: config.network.into(),
+        api_key: config.api_key,
         connections_per_operator: config.connections_per_operator,
     })?;
 

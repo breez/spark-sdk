@@ -5,7 +5,7 @@ use platform_utils::{HttpClient, create_http_client};
 
 use spark_wallet::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager};
 
-use crate::{SdkError, default_user_agent};
+use crate::{Network, SdkError, default_user_agent, jwt_header_provider::BreezJwtHeaderProvider};
 
 #[cfg(feature = "mysql")]
 use crate::persist::mysql::{
@@ -37,6 +37,11 @@ pub struct SdkContext {
     /// Single shared gRPC client to the Breez backend (fiat, `MoonPay`, payment
     /// notifier, signer, support, swapper).
     pub(crate) breez_server: Arc<BreezServer>,
+    /// Shared Breez partner JWT header provider. Only set when
+    /// `network == Mainnet && api_key.is_some()` at context construction.
+    /// All SDKs sharing the context reuse one in-memory JWT and one
+    /// background refresh task.
+    pub(crate) jwt_header_provider: Option<Arc<BreezJwtHeaderProvider>>,
     pub(crate) connection_manager: Arc<dyn ConnectionManager>,
     #[cfg(feature = "postgres")]
     pub(crate) postgres_pool: Option<Arc<PostgresConnectionPool>>,
@@ -46,9 +51,19 @@ pub struct SdkContext {
 
 /// Settings for [`new_shared_sdk_context`]. All fields are optional; the defaults
 /// match the single-SDK happy path.
-#[derive(Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SdkContextConfig {
+    /// Network the shared resources target. Defaults to [`Network::Mainnet`].
+    /// Used to gate the partner JWT header provider — only constructed on
+    /// Mainnet, since Regtest has no JWT-issuing Breez endpoint.
+    pub network: Network,
+
+    /// Breez API key. When set together with `network == Mainnet`, the
+    /// context constructs a shared partner JWT header provider that all
+    /// SDKs built from this context will attach to their SO requests.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub api_key: Option<String>,
+
     /// Number of gRPC connections per Spark operator. `None` (or `Some(1)`)
     /// keeps a single connection per operator (the right choice for most
     /// deployments); `Some(n)` opens `n` channels per operator and balances
@@ -71,12 +86,31 @@ pub struct SdkContextConfig {
     pub mysql_config: Option<MysqlStorageConfig>,
 }
 
+impl SdkContextConfig {
+    /// Config with the given network and every other field defaulted. Use
+    /// directly for the bare case, or with struct update syntax to override
+    /// specific fields: `SdkContextConfig { postgres_config: Some(cfg),
+    /// ..SdkContextConfig::new(network) }`.
+    #[must_use]
+    pub fn new(network: Network) -> Self {
+        Self {
+            network,
+            api_key: None,
+            connections_per_operator: None,
+            #[cfg(feature = "postgres")]
+            postgres_config: None,
+            #[cfg(feature = "mysql")]
+            mysql_config: None,
+        }
+    }
+}
+
 /// Constructs an [`SdkContext`] from a `SdkContextConfig`.
 ///
-/// The returned `Arc` is cheap to clone and can back many SDK instances. The
-/// default config (`SdkContextConfig::default()`) yields an in-memory,
-/// single-tenant setup; supply a DB config to back the SDKs with a shared
-/// `PostgreSQL` or `MySQL` pool.
+/// The returned `Arc` is cheap to clone and can back many SDK instances.
+/// `SdkContextConfig::new(network)` yields an in-memory, single-tenant setup;
+/// supply a DB config to back the SDKs with a shared `PostgreSQL` or `MySQL`
+/// pool.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkError> {
@@ -86,6 +120,21 @@ pub fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext
         BreezServer::new(PRODUCTION_BREEZSERVER_URL, None, &user_agent)
             .map_err(|e| SdkError::Generic(e.to_string()))?,
     );
+    // The Breez partner JWT is only issued by the mainnet Breez endpoint, and
+    // only when an API key is configured. Skip the provider entirely otherwise
+    // — there is no token to fetch. SDKs sharing this context will share the
+    // one in-memory JWT and one background refresh task.
+    let jwt_header_provider = if matches!(config.network, Network::Mainnet)
+        && let Some(api_key) = config.api_key
+    {
+        Some(BreezJwtHeaderProvider::new(
+            api_key,
+            None,
+            http_client.clone(),
+        ))
+    } else {
+        None
+    };
     // SDKs that share the same context share the same gRPC channels to the
     // Spark operators. `connections_per_operator` lets the rare deployment
     // open multiple connections per operator and balance requests across
@@ -110,6 +159,7 @@ pub fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext
     Ok(Arc::new(SdkContext {
         http_client,
         breez_server,
+        jwt_header_provider,
         connection_manager,
         #[cfg(feature = "postgres")]
         postgres_pool,
@@ -124,11 +174,14 @@ mod tests {
 
     #[tokio::test]
     async fn default_config_yields_context_with_shared_clients_and_no_db() {
-        let ctx = new_shared_sdk_context(SdkContextConfig::default()).expect("default context");
+        let ctx = new_shared_sdk_context(SdkContextConfig::new(Network::Regtest))
+            .expect("default context");
         // Just confirming the Arcs are non-null.
         let _http = Arc::clone(&ctx.http_client);
         let _breez = Arc::clone(&ctx.breez_server);
         let _so = Arc::clone(&ctx.connection_manager);
+        // Default config has no api_key, so no JWT provider is constructed.
+        assert!(ctx.jwt_header_provider.is_none());
         #[cfg(feature = "postgres")]
         assert!(ctx.postgres_pool.is_none());
         #[cfg(feature = "mysql")]

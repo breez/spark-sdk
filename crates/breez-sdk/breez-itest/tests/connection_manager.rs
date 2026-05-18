@@ -23,7 +23,7 @@ async fn test_shared_connection_manager_spark_transfer(
 ) -> Result<()> {
     let context = new_shared_sdk_context(SdkContextConfig {
         connections_per_operator,
-        ..Default::default()
+        ..SdkContextConfig::new(Network::Regtest)
     })?;
 
     let alice_dir = Builder::new()

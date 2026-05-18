@@ -585,6 +585,13 @@ pub enum _Network {
     Regtest,
 }
 
+#[frb(mirror(SdkContextConfig))]
+pub struct _SdkContextConfig {
+    pub network: Network,
+    pub api_key: Option<String>,
+    pub connections_per_operator: Option<u32>,
+}
+
 #[frb(mirror(Payment))]
 pub struct _Payment {
     pub id: String,

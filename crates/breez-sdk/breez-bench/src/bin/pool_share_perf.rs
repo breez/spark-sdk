@@ -196,7 +196,7 @@ fn make_context(conn_str: &str, max_pool_size: u32) -> Result<Arc<SdkContext>> {
     cfg.max_pool_size = max_pool_size;
     Ok(new_shared_sdk_context(SdkContextConfig {
         postgres_config: Some(cfg),
-        ..Default::default()
+        ..SdkContextConfig::new(Network::Regtest)
     })?)
 }
 

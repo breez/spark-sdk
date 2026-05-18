@@ -21,7 +21,6 @@ use crate::{
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
     },
     error::SdkError,
-    jwt_header_provider::BreezJwtHeaderProvider,
     lnurl::{DefaultLnurlServerClient, LnurlServerClient},
     models::Config,
     payment_observer::{PaymentObserver, SparkTransferObserver},
@@ -205,9 +204,9 @@ impl SdkBuilder {
     /// same `Arc` to every `SdkBuilder` whose SDKs should share its underlying
     /// resources (operator gRPC channels, SSP HTTP client, database pool).
     ///
-    /// If not set, `build()` calls
-    /// `new_shared_sdk_context(SdkContextConfig::default())` internally — fine
-    /// for a single-SDK process with no DB backend.
+    /// If not set, `build()` constructs a context internally from the SDK's
+    /// own network and api key — fine for a single-SDK process with no DB
+    /// backend.
     #[must_use]
     pub fn with_shared_context(mut self, context: Arc<SdkContext>) -> Self {
         self.context = Some(context);
@@ -292,13 +291,10 @@ impl SdkBuilder {
         Ok(self.with_mysql_connection_pool(pool))
     }
 
-    /// WASM-only bridge for the JS-side DB-backed session manager.
+    /// Injects a foreign-implementable session manager.
     ///
-    /// Not exposed on native targets: Rust integrators rely on the session
-    /// manager derived from the [`SdkContext`]'s DB pool. Cfg-gated to the
-    /// WASM target rather than `#[doc(hidden)]` so the method literally
-    /// doesn't exist outside WASM and can't be misused.
-    #[cfg(target_family = "wasm")]
+    /// Used by the WASM and Flutter bindings to plumb a session store
+    /// implemented in JS / Dart.
     #[must_use]
     pub fn with_session_manager(mut self, session_manager: Arc<dyn SessionManager>) -> Self {
         self.session_manager = Some(session_manager);
@@ -518,7 +514,10 @@ impl SdkBuilder {
         // wiring reads from `context` for connection managers.
         let context = match self.context {
             Some(ctx) => ctx,
-            None => new_shared_sdk_context(SdkContextConfig::default())?,
+            None => new_shared_sdk_context(SdkContextConfig {
+                api_key: self.config.api_key.clone(),
+                ..SdkContextConfig::new(self.config.network)
+            })?,
         };
 
         // Resolve the DB pools from at most one source: the legacy
@@ -872,24 +871,12 @@ impl SdkBuilder {
         let inner_session_manager: Arc<dyn spark_wallet::SessionManager> = Arc::new(
             crate::session_manager::CachingSessionManager::new(inner_session_manager),
         );
-        let jwt_header_provider: Option<Arc<BreezJwtHeaderProvider>> =
-            if matches!(self.config.network, Network::Mainnet)
-                && let Some(api_key) = self.config.api_key.clone()
-            {
-                Some(BreezJwtHeaderProvider::new(
-                    api_key,
-                    Some(storage.clone()),
-                    context.http_client.clone(),
-                ))
-            } else {
-                None
-            };
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
                 .with_cancellation_token(shutdown_sender.subscribe())
                 .with_session_manager(inner_session_manager)
                 .with_background_processing(background_services_enabled);
-        if let Some(provider) = &jwt_header_provider {
+        if let Some(provider) = &context.jwt_header_provider {
             wallet_builder = wallet_builder.with_so_extra_header_provider(
                 Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
             );
