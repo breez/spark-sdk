@@ -35,7 +35,7 @@ pub(crate) fn runtime_from_config(config: &Config) -> SdkRuntime {
 pub(crate) trait RuntimeProfile: Send + Sync {
     fn starts_background_services(&self) -> bool;
 
-    fn start_sdk_services(&self, sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>);
+    async fn start_sdk_services(&self, sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>);
 
     async fn run_user_sync(
         &self,

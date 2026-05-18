@@ -32,8 +32,8 @@ impl RuntimeProfile for ClientRuntime {
         true
     }
 
-    fn start_sdk_services(&self, sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>) {
-        register_client_sync_listener(sdk);
+    async fn start_sdk_services(&self, sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>) {
+        register_client_sync_listener(sdk).await;
         sdk.spawn_spark_private_mode_initialization();
         spawn_client_runtime_loop(sdk, initial_synced_sender);
         sdk.try_recover_lightning_address();
@@ -336,21 +336,13 @@ fn claim_static_deposit_outpoint(transfer: &WalletTransfer) -> Option<(String, u
     }
 }
 
-fn register_client_sync_listener(sdk: &BreezSdk) {
-    let event_emitter = sdk.event_emitter.clone();
+async fn register_client_sync_listener(sdk: &BreezSdk) {
     let listener = ClientSyncListener {
         sync_coordinator: sdk.sync_coordinator.clone(),
     };
-    let span = tracing::Span::current();
-
-    tokio::spawn(
-        async move {
-            event_emitter
-                .add_internal_listener(Box::new(listener))
-                .await;
-        }
-        .instrument(span),
-    );
+    sdk.event_emitter
+        .add_internal_listener(Box::new(listener))
+        .await;
 }
 
 struct ClientSyncListener {

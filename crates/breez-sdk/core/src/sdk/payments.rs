@@ -431,10 +431,11 @@ impl BreezSdk {
     ///
     /// Iterates over payments whose conversions failed and have a refund
     /// pending, then attempts to refund each one. This is the same logic the
-    /// SDK runs internally on a periodic schedule when background tasks are
-    /// enabled; surfacing it as an explicit API lets server-mode partners
-    /// drive it (the periodic refunder doesn't run in server mode) and lets
-    /// client-mode partners force an immediate refund pass.
+    /// SDK runs internally on a periodic schedule when
+    /// `background_tasks_enabled` is `true`. When background tasks are
+    /// disabled the periodic refunder does not run, and this method is the
+    /// explicit entry point for driving the pass; when background tasks are
+    /// enabled, it can be called to force an immediate refund pass.
     pub async fn refund_pending_conversions(&self) -> Result<(), SdkError> {
         self.token_converter
             .refund_pending()

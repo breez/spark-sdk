@@ -144,11 +144,11 @@ use self::queue::ConversionQueue;
 pub(crate) use self::queue::PendingConversion;
 
 use crate::events::{EventEmitter, EventMiddleware, SdkEvent};
-use crate::sdk::RuntimeEvent;
 use crate::models::{
     ConversionDetails, ConversionStatus, Payment, PaymentMethod, PaymentType, StableBalanceToken,
 };
 use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
+use crate::sdk::RuntimeEvent;
 use crate::{
     SdkError,
     models::StableBalanceConfig,

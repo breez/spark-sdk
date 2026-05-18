@@ -13,7 +13,11 @@ impl RuntimeProfile for ServerRuntime {
         false
     }
 
-    fn start_sdk_services(&self, sdk: &BreezSdk, _initial_synced_sender: watch::Sender<bool>) {
+    async fn start_sdk_services(
+        &self,
+        sdk: &BreezSdk,
+        _initial_synced_sender: watch::Sender<bool>,
+    ) {
         sdk.spawn_jwt_init();
     }
 
@@ -32,11 +36,12 @@ impl RuntimeProfile for ServerRuntime {
         sdk: &BreezSdk,
         _request: GetInfoRequest,
     ) -> Result<GetInfoResponse, SdkError> {
-        let balance_sats = sdk.spark_wallet.get_balance().await?;
-        let token_balances = sdk
-            .spark_wallet
-            .get_token_balances()
-            .await?
+        let (balance_sats, token_balances) = tokio::try_join!(
+            sdk.spark_wallet.get_balance(),
+            sdk.spark_wallet.get_token_balances(),
+        )?;
+
+        let token_balances = token_balances
             .into_iter()
             .map(|(k, v)| (k, v.into()))
             .collect();

@@ -9,7 +9,7 @@ use super::{BreezSdk, BreezSdkParams, helpers::validate_breez_api_key};
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
-    pub(crate) fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
+    pub(crate) async fn init_and_start(params: BreezSdkParams) -> Result<Self, SdkError> {
         // In Regtest we allow running without a Breez API key to facilitate local
         // integration tests. For non-regtest networks, a valid API key is required.
         if !matches!(params.config.network, Network::Regtest) {
@@ -43,13 +43,15 @@ impl BreezSdk {
             partner_headers: params.partner_headers,
         };
 
-        sdk.start(initial_synced_sender);
+        sdk.start(initial_synced_sender).await;
         Ok(sdk)
     }
 
     /// Starts the SDK runtime services selected during construction.
-    pub(super) fn start(&self, initial_synced_sender: watch::Sender<bool>) {
-        self.runtime.start_sdk_services(self, initial_synced_sender);
+    pub(super) async fn start(&self, initial_synced_sender: watch::Sender<bool>) {
+        self.runtime
+            .start_sdk_services(self, initial_synced_sender)
+            .await;
     }
 
     pub(crate) fn spawn_spark_private_mode_initialization(&self) {

@@ -952,7 +952,8 @@ impl SdkBuilder {
             stable_balance,
             sync_coordinator,
             partner_headers,
-        })?;
+        })
+        .await?;
         debug!("Initialized and started breez sdk.");
 
         Ok(sdk)
