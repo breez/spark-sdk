@@ -216,7 +216,6 @@ class BreezSdkSparkPasskeyModule(
         userName: String,
         userDisplayName: String,
         excludeCredentialIdsBase64: com.facebook.react.bridge.ReadableArray,
-        userIdBase64: String?,
         promise: Promise,
     ) {
         val activity = currentActivity
@@ -233,7 +232,6 @@ class BreezSdkSparkPasskeyModule(
 
         scope.launch {
             try {
-                val userIdOverride = userIdBase64?.let { Base64.decode(it, Base64.NO_WRAP) }
                 val credential = CredentialManagerPrfCore.createCredential(
                     activity = activity,
                     rpId = rpId,
@@ -241,7 +239,6 @@ class BreezSdkSparkPasskeyModule(
                     userName = userName,
                     userDisplayName = userDisplayName,
                     excludeCredentialIds = excludeIds,
-                    userIdOverride = userIdOverride,
                 )
                 // Hold the next derive call for up to 800ms so the
                 // immediate post-register assertion doesn't race the
@@ -249,6 +246,7 @@ class BreezSdkSparkPasskeyModule(
                 graceTracker.arm(POST_CREATE_GRACE_TOTAL_MS)
                 val map = Arguments.createMap()
                 map.putString("credentialId", Base64.encodeToString(credential.credentialId, Base64.NO_WRAP))
+                map.putString("userId", Base64.encodeToString(credential.userId, Base64.NO_WRAP))
                 if (credential.aaguid != null) {
                     map.putString("aaguid", Base64.encodeToString(credential.aaguid, Base64.NO_WRAP))
                 } else {

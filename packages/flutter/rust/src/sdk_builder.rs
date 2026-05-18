@@ -4,8 +4,8 @@ use breez_sdk_spark::{ChainApiType, Config, Credentials, SdkError, Seed, Session
 use flutter_rust_bridge::{DartFnFuture, frb};
 
 use crate::{
-    chain_service::BitcoinChainServiceHandle, connection_manager::ConnectionManager,
-    sdk::BreezSdk, session_manager::CallbackSessionManager, ssp_connection_manager::SspConnectionManager,
+    chain_service::BitcoinChainServiceHandle, connection_manager::ConnectionManager, sdk::BreezSdk,
+    session_manager::CallbackSessionManager, ssp_connection_manager::SspConnectionManager,
 };
 
 pub struct SdkBuilder {

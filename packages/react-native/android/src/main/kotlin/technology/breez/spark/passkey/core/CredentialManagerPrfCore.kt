@@ -68,9 +68,13 @@ import java.security.SecureRandom
  * is the BE flag indicating whether the credential can sync across
  * devices. Both are null when the attestation can't be parsed. AAGUID is
  * unverified attestation: display hint only, never a trust decision.
+ *
+ * [userId] is the WebAuthn user handle the core minted for this
+ * credential. Always populated; the SDK never lets hosts supply one.
  */
 public data class RegisteredCredential(
     public val credentialId: ByteArray,
+    public val userId: ByteArray,
     public val aaguid: ByteArray?,
     public val backupEligible: Boolean?,
 )
@@ -716,14 +720,13 @@ public object CredentialManagerPrfCore {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: List<ByteArray> = emptyList(),
-        userIdOverride: ByteArray? = null,
         options: CreatePasskeyOptions = CreatePasskeyOptions(),
     ): RegisteredCredential = withContext(Dispatchers.Main) {
         val startedAtMs = System.currentTimeMillis()
         try {
             registerCredential(
                 activity, rpId, rpName, userName, userDisplayName,
-                excludeCredentialIds, userIdOverride,
+                excludeCredentialIds,
                 credentialRegistry = options.credentialRegistry,
                 onRegistryError = options.onRegistryError,
             )
@@ -960,7 +963,6 @@ public object CredentialManagerPrfCore {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: List<ByteArray> = emptyList(),
-        userIdOverride: ByteArray? = null,
         credentialRegistry: CredentialRegistry? = null,
         onRegistryError: ((RegistryOperation, Throwable) -> Unit)? = null,
     ): RegisteredCredential {
@@ -983,9 +985,16 @@ public object CredentialManagerPrfCore {
         }
         val credentialManager = credentialManager(activity)
         val challenge = randomBase64Url(32)
-        val userId = userIdOverride
-            ?.let { Base64.encodeToString(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING) }
-            ?: randomBase64Url(16)
+        // Mint a fresh random 16-byte user handle per call; the SDK
+        // never lets hosts supply one. Both the URL-safe base64 string
+        // used to build the WebAuthn JSON request and the raw bytes
+        // surfaced via `RegisteredCredential.userId` are derived from
+        // the same buffer.
+        val userIdBytes = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+        val userId = Base64.encodeToString(
+            userIdBytes,
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        )
 
         // Build request via JSONObject so integrator-provided strings
         // (rpId, rpName, userName, userDisplayName) are escaped correctly.
@@ -1069,7 +1078,7 @@ public object CredentialManagerPrfCore {
         if (credentialRegistry != null) {
             registryAddFireAndForget(credentialRegistry, rpId, credentialId, onRegistryError)
         }
-        return RegisteredCredential(credentialId, aaguid, backupEligible)
+        return RegisteredCredential(credentialId, userIdBytes, aaguid, backupEligible)
     }
 
     /**

@@ -29,8 +29,7 @@ fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
 /// `SessionManagerError::NotFound`). Any panic thrown from the Dart side is
 /// caught and surfaced as `SessionManagerError::Generic`.
 pub(crate) struct CallbackSessionManager {
-    pub(crate) get_session_fn:
-        Arc<dyn Fn(String) -> DartFnFuture<Option<Session>> + Send + Sync>,
+    pub(crate) get_session_fn: Arc<dyn Fn(String) -> DartFnFuture<Option<Session>> + Send + Sync>,
     pub(crate) set_session_fn: Arc<dyn Fn(String, Session) -> DartFnFuture<()> + Send + Sync>,
 }
 
@@ -60,4 +59,3 @@ impl SessionManager for CallbackSessionManager {
             .map_err(|e| SessionManagerError::Generic(panic_message(e)))
     }
 }
-

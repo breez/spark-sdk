@@ -85,12 +85,10 @@ class BreezSdkSparkPasskey: NSObject {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: [String],
-        userId: String?,
         resolve: @escaping RCTPromiseResolveBlock,
         reject: @escaping RCTPromiseRejectBlock
     ) {
         let excludeIds: [Data] = excludeCredentialIds.compactMap { Data(base64Encoded: $0) }
-        let userIdOverride: Data? = userId.flatMap { Data(base64Encoded: $0) }
 
         Task { @MainActor in
             do {
@@ -99,11 +97,11 @@ class BreezSdkSparkPasskey: NSObject {
                     rpName: rpName,
                     userName: userName,
                     userDisplayName: userDisplayName,
-                    excludeCredentialIds: excludeIds,
-                    userId: userIdOverride
+                    excludeCredentialIds: excludeIds
                 )
                 resolve([
                     "credentialId": registered.credentialId.base64EncodedString(),
+                    "userId": registered.userId.base64EncodedString(),
                     "aaguid": registered.aaguid?.base64EncodedString() as Any?,
                     "backupEligible": registered.backupEligible as Any?,
                 ])

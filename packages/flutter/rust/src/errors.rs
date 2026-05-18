@@ -1,7 +1,5 @@
 pub use breez_sdk_spark::passkey::{PasskeyError, PrfProviderError};
-pub use breez_sdk_spark::{
-    DepositClaimError, Fee, SdkError, SessionManagerError, StorageError,
-};
+pub use breez_sdk_spark::{DepositClaimError, Fee, SdkError, SessionManagerError, StorageError};
 use flutter_rust_bridge::frb;
 
 #[frb(mirror(DepositClaimError))]

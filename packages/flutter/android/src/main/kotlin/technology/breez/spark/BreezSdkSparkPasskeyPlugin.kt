@@ -234,8 +234,6 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             (call.argument<List<String>>("excludeCredentialIds") ?: emptyList()).map {
                 Base64.decode(it, Base64.NO_WRAP)
             }
-        val userIdOverride: ByteArray? =
-            call.argument<String>("userId")?.let { Base64.decode(it, Base64.NO_WRAP) }
 
         scope.launch {
             try {
@@ -246,7 +244,6 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                     userName = userName,
                     userDisplayName = userDisplayName,
                     excludeCredentialIds = excludeIds,
-                    userIdOverride = userIdOverride,
                 )
                 // Hold the next derive call for up to 800ms so the
                 // immediate post-register assertion doesn't race the
@@ -254,6 +251,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                 graceTracker.arm(POST_CREATE_GRACE_TOTAL_MS)
                 result.success(mapOf(
                     "credentialId" to Base64.encodeToString(credential.credentialId, Base64.NO_WRAP),
+                    "userId" to Base64.encodeToString(credential.userId, Base64.NO_WRAP),
                     "aaguid" to credential.aaguid?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
                     "backupEligible" to credential.backupEligible,
                 ))

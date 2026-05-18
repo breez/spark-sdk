@@ -2,7 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
-import 'rust/models.dart' show CreatePasskeyRequest, DeriveSeedsRequest, RegisteredCredential;
+import 'rust/models.dart'
+    show CreatePasskeyRequest, DeriveSeedsRequest, RegisteredCredential;
 
 /// Result of a domain-association verification check against the
 /// platform's well-known configuration source. Mirrors the Rust
@@ -182,6 +183,9 @@ class PasskeyPrfException implements Exception {
 ///   deriveSeeds: provider.deriveSeeds,
 ///   isSupported: provider.isSupported,
 ///   createPasskey: provider.createPasskey,
+///   getKnownCredentialIds: provider.getKnownCredentialIds,
+///   removeKnownCredentialId: provider.removeKnownCredentialId,
+///   clearKnownCredentialIds: provider.clearKnownCredentialIds,
 /// );
 /// ```
 class PasskeyProvider {
@@ -286,9 +290,13 @@ class PasskeyProvider {
   }
 
   /// Register a new passkey with PRF support. Per-call overrides on
-  /// `request` (excludeCredentialIds, userId, userName, userDisplayName)
-  /// fall back to the constructor values when omitted. Throws
-  /// [PasskeyPrfException] on failure.
+  /// `request` (excludeCredentialIds, userName, userDisplayName) fall
+  /// back to the constructor values when omitted.
+  ///
+  /// `user.id` is never host-supplied: the native plugin mints a fresh
+  /// random 16-byte handle per call and surfaces it via
+  /// [RegisteredCredential.userId]. Throws [PasskeyPrfException] on
+  /// failure.
   Future<RegisteredCredential> createPasskey(CreatePasskeyRequest request) async {
     final args = <String, Object?>{
       'rpId': _rpId,
@@ -313,13 +321,11 @@ class PasskeyProvider {
     if (excludeIds.isNotEmpty) {
       args['excludeCredentialIds'] = excludeIds.map(base64Encode).toList();
     }
-    if (request.userId != null) {
-      args['userId'] = base64Encode(request.userId!);
-    }
     try {
       final result = await _channel.invokeMethod<Map<Object?, Object?>>('createPasskey', args);
       final map = result!;
       final credentialId = base64Decode(map['credentialId'] as String);
+      final userId = base64Decode(map['userId'] as String);
       final aaguidB64 = map['aaguid'] as String?;
       final aaguid = aaguidB64 == null ? null : base64Decode(aaguidB64);
       final backupEligible = map['backupEligible'] as bool?;
@@ -329,11 +335,47 @@ class PasskeyProvider {
       }
       return RegisteredCredential(
         credentialId: credentialId,
+        userId: userId,
         aaguid: aaguid,
         backupEligible: backupEligible,
       );
     } on PlatformException catch (e) {
       throw _mapPlatformException(e);
+    }
+  }
+
+  /// Read the credential IDs the configured [CredentialRegistry] has
+  /// stored for the current `rpId`. Empty list when no registry is
+  /// configured. Backs `PasskeyClient.credentials().get()`.
+  Future<List<Uint8List>> getKnownCredentialIds() async {
+    final registry = _credentialRegistry;
+    if (registry == null) return const [];
+    return _registryReadBestEffort(registry, _rpId, _onRegistryError);
+  }
+
+  /// Drop a single credential ID from the configured registry. No-op
+  /// when no registry is configured. Backs
+  /// `PasskeyClient.credentials().remove(id)`.
+  Future<void> removeKnownCredentialId(Uint8List credentialId) async {
+    final registry = _credentialRegistry;
+    if (registry == null) return;
+    try {
+      await registry.remove(_rpId, credentialId).timeout(_registryTimeout);
+    } catch (e) {
+      _onRegistryError?.call(RegistryOperation.remove, e);
+    }
+  }
+
+  /// Clear the configured registry's persisted credential-ID list for
+  /// the current `rpId`. No-op when no registry is configured. Backs
+  /// `PasskeyClient.credentials().clear()`.
+  Future<void> clearKnownCredentialIds() async {
+    final registry = _credentialRegistry;
+    if (registry == null) return;
+    try {
+      await registry.clear(_rpId).timeout(_registryTimeout);
+    } catch (e) {
+      _onRegistryError?.call(RegistryOperation.clear, e);
     }
   }
 

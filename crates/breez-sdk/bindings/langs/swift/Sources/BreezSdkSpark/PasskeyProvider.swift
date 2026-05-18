@@ -165,14 +165,18 @@ public class PasskeyProvider: PrfProvider {
 
     /// Create a new passkey with PRF support. Single platform prompt;
     /// separates credential creation from derivation in multi-step
-    /// onboarding flows. Per-call overrides on `request` (userId,
-    /// userName, userDisplayName) fall back to the constructor values.
+    /// onboarding flows. Per-call overrides on `request` (userName,
+    /// userDisplayName) fall back to the constructor values.
     ///
-    /// Auto-merges previously-registered credential IDs from
-    /// [`KnownCredentialsStore`] into `request.excludeCredentialIds`
+    /// `user.id` is never host-supplied: the core mints a fresh random
+    /// 16-byte handle per call and surfaces it via
+    /// `RegisteredCredential.userId`.
+    ///
+    /// Auto-merges previously-registered credential IDs from the
+    /// optional `CredentialRegistry` into `request.excludeCredentialIds`
     /// so the platform refuses to create a duplicate even after a
-    /// reinstall (the store is iCloud-synced). Records the new
-    /// credential ID after a successful create.
+    /// reinstall (the registry is iCloud-synced when host-backed).
+    /// Records the new credential ID after a successful create.
     @discardableResult
     public func createPasskey(request: CreatePasskeyRequest) async throws -> RegisteredCredential {
         do {
@@ -182,7 +186,6 @@ public class PasskeyProvider: PrfProvider {
                 userName: request.userName ?? userName,
                 userDisplayName: request.userDisplayName ?? userDisplayName,
                 excludeCredentialIds: request.excludeCredentialIds,
-                userId: request.userId,
                 options: CreatePasskeyOptions(
                     credentialRegistry: credentialRegistry,
                     onRegistryError: onRegistryError
@@ -190,11 +193,40 @@ public class PasskeyProvider: PrfProvider {
             )
             return RegisteredCredential(
                 credentialId: credential.credentialId,
+                userId: credential.userId,
                 aaguid: credential.aaguid,
                 backupEligible: credential.backupEligible
             )
         } catch let err as PasskeyAssertionError {
             throw Self.toPrfProviderError(err)
+        }
+    }
+
+    public func getKnownCredentialIds() async throws -> [Data] {
+        guard let reg = credentialRegistry else { return [] }
+        do {
+            return try await reg.read(rpId: rpId)
+        } catch {
+            onRegistryError?(.read, error)
+            return []
+        }
+    }
+
+    public func removeKnownCredentialId(id: Data) async throws {
+        guard let reg = credentialRegistry else { return }
+        do {
+            try await reg.remove(rpId: rpId, credentialId: id)
+        } catch {
+            onRegistryError?(.remove, error)
+        }
+    }
+
+    public func clearKnownCredentialIds() async throws {
+        guard let reg = credentialRegistry else { return }
+        do {
+            try await reg.clear(rpId: rpId)
+        } catch {
+            onRegistryError?(.clear, error)
         }
     }
 

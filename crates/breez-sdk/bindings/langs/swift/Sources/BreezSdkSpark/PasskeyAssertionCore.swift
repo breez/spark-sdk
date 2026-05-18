@@ -242,14 +242,19 @@ public struct CreatePasskeyOptions {
 /// Result of a successful registration. Named `Ios*` so it does not
 /// collide with the UniFFI-generated `RegisteredCredential` in the
 /// upstream Swift wrapper; that wrapper translates to the FFI type.
+///
+/// `userId` is the WebAuthn user handle the core minted for this
+/// credential. Always populated; the SDK never lets hosts supply one.
 @available(iOS 18.0, macOS 15.0, *)
 public struct IosRegisteredCredential {
     public let credentialId: Data
+    public let userId: Data
     public let aaguid: Data?
     public let backupEligible: Bool?
 
-    public init(credentialId: Data, aaguid: Data?, backupEligible: Bool?) {
+    public init(credentialId: Data, userId: Data, aaguid: Data?, backupEligible: Bool?) {
         self.credentialId = credentialId
+        self.userId = userId
         self.aaguid = aaguid
         self.backupEligible = backupEligible
     }
@@ -653,6 +658,10 @@ public final class PasskeyAssertionCore {
     /// duplicate even after a reinstall) and the new credential ID is
     /// auto-added to the registry on success. Arms the post-create
     /// grace tracker either way.
+    ///
+    /// `userId` is never host-supplied: the core mints a fresh random
+    /// 16-byte value per call and surfaces it via the returned
+    /// `IosRegisteredCredential.userId`.
     @discardableResult
     public func createPasskey(
         rpId: String,
@@ -660,7 +669,6 @@ public final class PasskeyAssertionCore {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: [Data] = [],
-        userId: Data? = nil,
         options: CreatePasskeyOptions = CreatePasskeyOptions()
     ) async throws -> IosRegisteredCredential {
         let credential = try await registerCredential(
@@ -669,7 +677,6 @@ public final class PasskeyAssertionCore {
             userName: userName,
             userDisplayName: userDisplayName,
             excludeCredentialIds: excludeCredentialIds,
-            userId: userId,
             credentialRegistry: options.credentialRegistry,
             onRegistryError: options.onRegistryError
         )
@@ -933,13 +940,12 @@ public final class PasskeyAssertionCore {
         userName: String,
         userDisplayName: String,
         excludeCredentialIds: [Data] = [],
-        userId: Data? = nil,
         credentialRegistry: CredentialRegistry? = nil,
         onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) async throws -> IosRegisteredCredential {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = Self.randomBytes(count: 32)
-        let resolvedUserId = userId ?? Self.randomBytes(count: 16)
+        let resolvedUserId = Self.randomBytes(count: 16)
         // `ASAuthorizationPlatformPublicKeyCredentialProvider` only
         // exposes a 3-arg overload (challenge:name:userID:) on the
         // current iOS / macOS SDKs; the 4-arg displayName overload is
@@ -981,6 +987,11 @@ public final class PasskeyAssertionCore {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
+        // Hand the freshly-minted user handle to the delegate so it can
+        // attach it to the returned `IosRegisteredCredential`. The
+        // platform never echoes `user.id` back through the credential
+        // object, so we surface the value we chose ourselves.
+        delegate.registrationUserId = resolvedUserId
 
         let credential: IosRegisteredCredential = try await withCheckedThrowingContinuation { continuation in
             delegate.registrationContinuation = continuation
@@ -1133,6 +1144,11 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
     var continuation: CheckedContinuation<Data, Error>?
     var dualSaltContinuation: CheckedContinuation<(Data, Data?), Error>?
     var registrationContinuation: CheckedContinuation<IosRegisteredCredential, Error>?
+    /// User handle the core chose for the in-flight registration. The
+    /// platform never echoes `user.id` back through the credential
+    /// object, so the delegate copies this into the returned
+    /// `IosRegisteredCredential.userId` field.
+    var registrationUserId: Data = Data()
     var anchor: ASPresentationAnchor = ASPresentationAnchor()
     var extractPrf = true
     var extractSecondPrf = false
@@ -1206,6 +1222,7 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
             registrationContinuation?.resume(
                 returning: IosRegisteredCredential(
                     credentialId: credential.credentialID,
+                    userId: registrationUserId,
                     aaguid: aaguid,
                     backupEligible: backupEligible
                 ))

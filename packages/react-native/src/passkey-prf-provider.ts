@@ -46,17 +46,25 @@ function passkeyModuleUnavailableError(operation: string): Error {
  * is the BE flag indicating whether the credential can sync across
  * devices. Both are `null` when the attestation can't be parsed. AAGUID
  * is unverified attestation: display hint only, never a trust decision.
+ *
+ * `userId` is the WebAuthn user handle the native plugin minted for
+ * this credential. Always returned; never host-supplied.
  */
 export interface RegisteredCredential {
   credentialId: Uint8Array;
+  userId: Uint8Array;
   aaguid: Uint8Array | null;
   backupEligible: boolean | null;
 }
 
 /**
  * Per-call overrides for `createPasskey`. All fields are optional;
- * omitted fields fall back to the constructor values (random 16-byte
- * `userId`, ctor `userName`, ctor `userDisplayName`).
+ * omitted fields fall back to the constructor values.
+ *
+ * Note: `userId` is intentionally not a request field. The native
+ * plugin mints a fresh random 16-byte handle per call and returns it
+ * via [RegisteredCredential.userId]; the SDK does not let hosts
+ * supply one.
  */
 export interface CreatePasskeyRequest {
   /**
@@ -67,16 +75,6 @@ export interface CreatePasskeyRequest {
    * to none.
    */
   excludeCredentialIds?: Uint8Array[];
-
-  /**
-   * Override for the WebAuthn `user.id` field. Must be 1-64 bytes per
-   * WebAuthn spec. Defaults to a fresh random 16-byte value chosen by
-   * the native plugin per call. Always randomize per call: a hardcoded
-   * value across a fresh-install + create flow can silently destroy
-   * the user's prior credential and the data tied to it on consumer
-   * authenticators.
-   */
-  userId?: Uint8Array;
 
   /** Override for the WebAuthn `user.name` field. */
   userName?: string;
@@ -475,13 +473,15 @@ export class PasskeyProvider {
    * 1 platform prompt. Use this to separate credential creation from
    * derivation in multi-step onboarding flows.
    *
-   * Per-call overrides on `request` (excludeCredentialIds, userId,
-   * userName, userDisplayName) fall back to the constructor values when
-   * omitted.
+   * Per-call overrides on `request` (excludeCredentialIds, userName,
+   * userDisplayName) fall back to the constructor values when omitted.
+   * `user.id` is never host-supplied: the native plugin mints a fresh
+   * random 16-byte handle per call and returns it via the result's
+   * `userId` field.
    *
-   * @returns Credential ID plus AAGUID and backup-eligibility parsed from
-   *   the attestation object. AAGUID and `backupEligible` are null when
-   *   the attestation can't be parsed.
+   * @returns Credential ID, the generated user handle, plus AAGUID and
+   *   backup-eligibility parsed from the attestation object. AAGUID and
+   *   `backupEligible` are null when the attestation can't be parsed.
    * @throws If the user cancels or PRF is not supported by the authenticator.
    */
   async createPasskey(request?: CreatePasskeyRequest): Promise<RegisteredCredential> {
@@ -512,11 +512,11 @@ export class PasskeyProvider {
       }
     }
     const excludeBase64 = excludeIds.map(id => uint8ArrayToBase64(id));
-    const userIdBase64 = req.userId ? uint8ArrayToBase64(req.userId) : null;
 
     try {
       const result: {
         credentialId: string;
+        userId: string;
         aaguid: string | null;
         backupEligible: boolean | null;
       } = await BreezSdkSparkPasskey.createPasskey(
@@ -524,11 +524,11 @@ export class PasskeyProvider {
         this.rpName,
         req.userName ?? this.userName,
         req.userDisplayName ?? this.userDisplayName,
-        excludeBase64,
-        userIdBase64
+        excludeBase64
       );
 
       const credentialId = base64ToUint8Array(result.credentialId);
+      const userId = base64ToUint8Array(result.userId);
       // Persist new credential ID to the registry post-success.
       if (this.credentialRegistry) {
         _registryAddFireAndForget(
@@ -540,11 +540,76 @@ export class PasskeyProvider {
       }
       return {
         credentialId,
+        userId,
         aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
         backupEligible: result.backupEligible,
       };
     } catch (err) {
       throw mapNativeError(err);
+    }
+  }
+
+  /**
+   * Return the credential IDs the configured {@link CredentialRegistry}
+   * has stored for the current `rpId`. Empty list when no registry is
+   * configured. Backs `PasskeyClient.credentials().get()`.
+   */
+  async getKnownCredentialIds(): Promise<Uint8Array[]> {
+    if (!this.credentialRegistry) {
+      return [];
+    }
+    return _registryReadBestEffort(
+      this.credentialRegistry,
+      this.rpId,
+      this.onRegistryError
+    );
+  }
+
+  /**
+   * Drop a single credential ID from the configured registry. No-op
+   * when no registry is configured. Backs
+   * `PasskeyClient.credentials().remove(id)`.
+   */
+  async removeKnownCredentialId(credentialId: Uint8Array): Promise<void> {
+    if (!this.credentialRegistry) {
+      return;
+    }
+    try {
+      const result = await _withRegistryTimeout(
+        this.credentialRegistry.remove(this.rpId, credentialId)
+      );
+      if (result === _REGISTRY_TIMEOUT) {
+        const err = new Error('CredentialRegistry.remove timed out');
+        console.warn('[CredentialRegistry] remove timed out');
+        this.onRegistryError?.('remove', err);
+      }
+    } catch (err) {
+      console.warn('[CredentialRegistry] remove failed', err);
+      this.onRegistryError?.('remove', err as Error);
+    }
+  }
+
+  /**
+   * Clear the configured registry's persisted credential-ID list for
+   * the current `rpId`. No-op when no registry is configured. Backs
+   * `PasskeyClient.credentials().clear()`.
+   */
+  async clearKnownCredentialIds(): Promise<void> {
+    if (!this.credentialRegistry) {
+      return;
+    }
+    try {
+      const result = await _withRegistryTimeout(
+        this.credentialRegistry.clear(this.rpId)
+      );
+      if (result === _REGISTRY_TIMEOUT) {
+        const err = new Error('CredentialRegistry.clear timed out');
+        console.warn('[CredentialRegistry] clear timed out');
+        this.onRegistryError?.('clear', err);
+      }
+    } catch (err) {
+      console.warn('[CredentialRegistry] clear failed', err);
+      this.onRegistryError?.('clear', err as Error);
     }
   }
 
