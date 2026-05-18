@@ -291,10 +291,11 @@ impl SdkBuilder {
         Ok(self.with_mysql_connection_pool(pool))
     }
 
-    /// Injects a foreign-implementable session manager.
+    /// WASM-only seam for the JS-side DB-backed session manager.
     ///
-    /// Used by the WASM and Flutter bindings to plumb a session store
-    /// implemented in JS / Dart.
+    /// Cfg-gated to the WASM target so it literally doesn't exist on native
+    /// builds and can't be misused.
+    #[cfg(target_family = "wasm")]
     #[must_use]
     pub fn with_session_manager(mut self, session_manager: Arc<dyn SessionManager>) -> Self {
         self.session_manager = Some(session_manager);

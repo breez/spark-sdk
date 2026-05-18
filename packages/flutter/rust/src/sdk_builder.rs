@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use breez_sdk_spark::{ChainApiType, Config, Credentials, SdkError, Seed, Session};
-use flutter_rust_bridge::{DartFnFuture, frb};
+use breez_sdk_spark::{ChainApiType, Config, Credentials, SdkError, Seed};
+use flutter_rust_bridge::frb;
 
 use crate::{
     chain_service::BitcoinChainServiceHandle, sdk::BreezSdk, sdk_context::SdkContext,
-    session_manager::CallbackSessionManager,
 };
 
 pub struct SdkBuilder {
@@ -74,29 +73,6 @@ impl SdkBuilder {
     pub fn with_shared_context(self, context: &SdkContext) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
             .with_shared_context(context.inner.clone());
-        Self {
-            inner: Arc::new(builder),
-        }
-    }
-
-    /// Provide a custom session manager backed by Dart callbacks.
-    ///
-    /// Both callbacks receive the service identity public key as a
-    /// hex-encoded string. `getSession` returns `null` when no session is
-    /// cached (which the SDK treats as "needs authentication"). Throwing from
-    /// either callback surfaces as a generic session manager error.
-    #[frb(sync)]
-    pub fn with_session_manager(
-        self,
-        get_session: impl Fn(String) -> DartFnFuture<Option<Session>> + Send + Sync + 'static,
-        set_session: impl Fn(String, Session) -> DartFnFuture<()> + Send + Sync + 'static,
-    ) -> Self {
-        let session_manager = Arc::new(CallbackSessionManager {
-            get_session_fn: Arc::new(get_session),
-            set_session_fn: Arc::new(set_session),
-        });
-        let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
-            .with_session_manager(session_manager);
         Self {
             inner: Arc::new(builder),
         }

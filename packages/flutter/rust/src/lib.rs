@@ -9,7 +9,6 @@ pub mod passkey;
 pub mod sdk;
 pub mod sdk_builder;
 pub mod sdk_context;
-pub mod session_manager;
 
 pub use passkey::Passkey;
 pub use sdk::BreezSdk;
