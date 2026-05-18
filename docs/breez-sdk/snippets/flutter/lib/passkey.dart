@@ -3,8 +3,9 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 // ANCHOR: implement-prf-provider
 // Implement custom callbacks if the built-in PasskeyProvider doesn't
-// fit your needs. Three callbacks: deriveSeeds for derivation,
-// createPasskey for registration, isSupported for availability.
+// fit your needs. Six callbacks: deriveSeeds for derivation,
+// createPasskey for registration, isSupported for availability, and
+// get/remove/clearKnownCredentialIds for the credentials() sub-object.
 // Single-salt derivation is the trivial 1-element bulk case.
 Future<List<Uint8List>> deriveSeeds(List<String> salts) async {
   // Call platform passkey API with PRF extension. Use the dual-salt
@@ -15,7 +16,9 @@ Future<List<Uint8List>> deriveSeeds(List<String> salts) async {
 }
 
 Future<RegisteredCredential> createPasskey(CreatePasskeyRequest request) async {
-  // Register a new credential and return its ID + AAGUID + BE flag.
+  // Register a new credential and return its ID, the WebAuthn user.id
+  // the native plugin minted for it (returned for host-side
+  // correlation, never host-supplied), AAGUID, and BE flag.
   throw UnimplementedError('Implement registration via native passkey API');
 }
 
@@ -24,15 +27,35 @@ Future<bool> isSupported() async {
   // platform / device.
   throw UnimplementedError('Check platform passkey availability');
 }
+
+Future<List<Uint8List>> getKnownCredentialIds() async => const [];
+Future<void> removeKnownCredentialId(Uint8List _) async {}
+Future<void> clearKnownCredentialIds() async {}
 // ANCHOR_END: implement-prf-provider
 
 Future<void> checkAvailability() async {
   // ANCHOR: check-availability
   final prfProvider = PasskeyProvider();
-  if (await prfProvider.isSupported()) {
-    // Show passkey as primary option
-  } else {
-    // Fall back to mnemonic flow
+  final passkey = PasskeyClient(
+    deriveSeeds: prfProvider.deriveSeeds,
+    isSupported: prfProvider.isSupported,
+    createPasskey: prfProvider.createPasskey,
+    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
+    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
+    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
+  );
+
+  // checkAvailability collapses isSupported + checkDomainAssociation
+  // into a single tagged value. Branch on the variant the host needs.
+  final availability = await passkey.checkAvailability();
+  if (availability is PasskeyAvailability_Available) {
+    // Show passkey as primary option.
+  } else if (availability is PasskeyAvailability_PrfUnsupported) {
+    // Fall back to mnemonic flow.
+  } else if (availability is PasskeyAvailability_NotAssociated) {
+    print("Domain association failed (source=${availability.source}): ${availability.reason}");
+  } else if (availability is PasskeyAvailability_Skipped) {
+    // No verification source on this platform; proceed normally.
   }
   // ANCHOR_END: check-availability
 }
@@ -45,6 +68,9 @@ Future<BreezSdk> connectWithPasskey() async {
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
     createPasskey: prfProvider.createPasskey,
+    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
+    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
+    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
   );
 
   // signIn derives the wallet seed for an existing credential. With
@@ -73,6 +99,9 @@ Future<BreezSdk> registerNewPasskey() async {
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
     createPasskey: prfProvider.createPasskey,
+    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
+    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
+    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
   );
 
   final response = await passkey.register(
@@ -82,6 +111,12 @@ Future<BreezSdk> registerNewPasskey() async {
       excludeCredentialIds: [],
     ),
   );
+
+  // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
+  // bookkeeping) and credential.userId (for server-side correlation).
+  // The SDK generates userId; it is never host-supplied.
+  final _persistedCredentialId = response.credential.credentialId;
+  final _persistedUserId = response.credential.userId;
 
   final config = defaultConfig(network: Network.mainnet);
   final sdk = await connect(
@@ -94,20 +129,27 @@ Future<BreezSdk> registerNewPasskey() async {
 Future<List<String>> listLabels() async {
   // ANCHOR: list-labels
   final prfProvider = PasskeyProvider();
-  final relayConfig = NostrRelayConfig(
+  final config = PasskeyConfig(
     breezApiKey: '<breez api key>',
+    // Optional: override the default wallet label used when register /
+    // signIn receive `label = null`. Falls back to the SDK's internal
+    // "Default" when unset.
+    defaultLabel: 'personal',
   );
   final passkey = PasskeyClient(
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
     createPasskey: prfProvider.createPasskey,
-    relayConfig: relayConfig,
+    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
+    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
+    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
+    config: config,
   );
 
   // signIn with no label runs in discovery mode: it derives the master
   // seed AND lists labels in the same ceremony, so a follow-up
-  // listLabels() reads from the cached identity for free.
-  final labels = await passkey.listLabels();
+  // labels().list() reads from the cached identity for free.
+  final labels = await passkey.labels().list();
 
   for (final label in labels) {
     print("Found label: $label");
@@ -119,20 +161,23 @@ Future<List<String>> listLabels() async {
 Future<void> storeLabel() async {
   // ANCHOR: store-label
   final prfProvider = PasskeyProvider();
-  final relayConfig = NostrRelayConfig(
+  final config = PasskeyConfig(
     breezApiKey: '<breez api key>',
   );
   final passkey = PasskeyClient(
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
     createPasskey: prfProvider.createPasskey,
-    relayConfig: relayConfig,
+    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
+    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
+    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
+    config: config,
   );
 
   // For a new label on an existing identity, call signIn(newLabel)
   // first to seed the SDK's identity cache via setup_wallet, THEN
-  // storeLabel uses the cached identity for free (1 OS prompt total).
-  await passkey.storeLabel(label: "personal");
+  // labels().store() uses the cached identity for free (1 OS prompt total).
+  await passkey.labels().store(label: "personal");
   // ANCHOR_END: store-label
 }
 
@@ -147,12 +192,15 @@ Future<Wallet> singleCtaOnboarding() async {
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
     createPasskey: prfProvider.createPasskey,
+    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
+    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
+    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
   );
 
   try {
-    // Discovery mode (label=null): derives master + DEFAULT label in
-    // a single ceremony. The fresh-device user fast-fails in <300ms
-    // with no UI shown.
+    // Discovery mode (label=null): derives master + configured default
+    // label in a single ceremony. The fresh-device user fast-fails in
+    // <300ms with no UI shown.
     final response = await passkey.signIn(
       request: SignInRequest(label: null, extraSalts: []),
     );
@@ -208,6 +256,9 @@ Future<Wallet?> recoverFromAlreadyExists() async {
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
     createPasskey: prfProvider.createPasskey,
+    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
+    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
+    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
   );
 
   try {
@@ -245,6 +296,9 @@ Future<SignInResponse> handleTimeout() async {
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
     createPasskey: prfProvider.createPasskey,
+    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
+    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
+    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
   );
 
   try {

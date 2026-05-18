@@ -27,7 +27,9 @@ class CustomPrfProvider : PrfProvider {
     }
 
     override suspend fun createPasskey(request: CreatePasskeyRequest): RegisteredCredential {
-        // Register a new credential and return its ID + AAGUID + BE flag.
+        // Register a new credential and return its ID, the WebAuthn
+        // user.id the platform recorded (returned for host-side
+        // correlation, never host-supplied), AAGUID, and BE flag.
         TODO("Implement registration via native passkey API")
     }
 
@@ -48,10 +50,23 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity }, // provide the current Activity
         )
-        if (prfProvider.isSupported()) {
-            // Show passkey as primary option
-        } else {
-            // Fall back to mnemonic flow
+        val passkey = PasskeyClient(prfProvider, null)
+
+        // checkAvailability collapses isSupported + checkDomainAssociation
+        // into a single tagged value. Branch on the variant the host needs.
+        when (val availability = passkey.checkAvailability()) {
+            is PasskeyAvailability.Available -> {
+                // Show passkey as primary option.
+            }
+            is PasskeyAvailability.PrfUnsupported -> {
+                // Fall back to mnemonic flow.
+            }
+            is PasskeyAvailability.NotAssociated -> {
+                // Log.e("Breez", "Domain association failed (source=${availability.source}): ${availability.reason}")
+            }
+            is PasskeyAvailability.Skipped -> {
+                // No verification source on this platform; proceed normally.
+            }
         }
         // ANCHOR_END: check-availability
     }
@@ -93,6 +108,12 @@ class PasskeySnippets(private val activity: Activity) {
             )
         )
 
+        // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
+        // bookkeeping) and credential.userId (for server-side correlation).
+        // The SDK generates userId; it is never host-supplied.
+        val persistedCredentialId = response.credential.credentialId
+        val persistedUserId = response.credential.userId
+
         val config = defaultConfig(Network.MAINNET)
         val sdk = connect(ConnectRequest(config, response.wallet.seed, "./.data"))
         // ANCHOR_END: register-passkey
@@ -104,13 +125,19 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity }, // provide the current Activity
         )
-        val relayConfig = NostrRelayConfig(breezApiKey = "<breez api key>")
-        val passkey = PasskeyClient(prfProvider, relayConfig)
+        val config = PasskeyConfig(
+            breezApiKey = "<breez api key>",
+            // Optional: override the default wallet label used when
+            // register / signIn receive `label = null`. Falls back to the
+            // SDK's internal "Default" when unset.
+            defaultLabel = "personal",
+        )
+        val passkey = PasskeyClient(prfProvider, config)
 
         // signIn with no label runs in discovery mode: it derives the
         // master seed AND lists labels in the same ceremony, so a follow-up
-        // listLabels() reads from the cached identity for free.
-        val labels = passkey.listLabels()
+        // labels().list() reads from the cached identity for free.
+        val labels = passkey.labels().list()
 
         for (label in labels) {
             // Log.v("Breez", "Found label: $label")
@@ -124,13 +151,13 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity }, // provide the current Activity
         )
-        val relayConfig = NostrRelayConfig(breezApiKey = "<breez api key>")
-        val passkey = PasskeyClient(prfProvider, relayConfig)
+        val config = PasskeyConfig(breezApiKey = "<breez api key>")
+        val passkey = PasskeyClient(prfProvider, config)
 
         // For a new label on an existing identity, call signIn(newLabel)
         // first to seed the SDK's identity cache via setup_wallet, THEN
-        // storeLabel uses the cached identity for free (1 OS prompt total).
-        passkey.storeLabel("personal")
+        // labels().store() uses the cached identity for free (1 OS prompt total).
+        passkey.labels().store("personal")
         // ANCHOR_END: store-label
     }
 
@@ -146,16 +173,17 @@ class PasskeySnippets(private val activity: Activity) {
         val passkey = PasskeyClient(prfProvider, null)
 
         return try {
-            // Discovery mode (label=null): derives master + DEFAULT label
-            // in a single ceremony. The fresh-device user fast-fails in
-            // <300ms with no UI shown.
+            // Discovery mode (label=null): derives master + configured
+            // default label in a single ceremony. The fresh-device user
+            // fast-fails in <300ms with no UI shown.
             val response = passkey.signIn(SignInRequest(label = null, extraSalts = emptyList()))
             response.wallet
         } catch (e: PrfProviderException.CredentialNotFound) {
             // CredentialNotFound is the SDK's classification for "no
             // matching credential on this device", including iOS's
             // <300ms fast-fail case where the platform conflates no-cred
-            // with user-cancel.
+            // with user-cancel. The exception carries a String payload
+            // with diagnostic detail.
             val response = passkey.register(
                 RegisterRequest(
                     label = "personal",

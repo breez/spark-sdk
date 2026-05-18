@@ -24,7 +24,9 @@ class CustomPrfProvider: PrfProvider {
     }
 
     func createPasskey(request: CreatePasskeyRequest) async throws -> RegisteredCredential {
-        // Register a new credential and return its ID + AAGUID + BE flag.
+        // Register a new credential and return its ID, the WebAuthn
+        // user.id the platform recorded (returned for host-side
+        // correlation, never host-supplied), AAGUID, and BE flag.
         fatalError("Implement registration via WebAuthn create() / native API")
     }
 
@@ -42,10 +44,22 @@ class CustomPrfProvider: PrfProvider {
 func checkAvailability() async throws {
     // ANCHOR: check-availability
     let prfProvider = PasskeyProvider()
-    if try await prfProvider.isSupported() {
-        // Show passkey as primary option
-    } else {
-        // Fall back to mnemonic flow
+    let passkey = PasskeyClient(prfProvider: prfProvider, config: nil)
+
+    // checkAvailability collapses isSupported + checkDomainAssociation
+    // into a single tagged value. Branch on the variant the host needs.
+    switch try await passkey.checkAvailability() {
+    case .available:
+        // Show passkey as primary option.
+        break
+    case .prfUnsupported:
+        // Fall back to mnemonic flow.
+        break
+    case .notAssociated(let source, let reason):
+        print("Domain association failed (source=\(source)): \(reason)")
+    case .skipped:
+        // No verification source on this platform; proceed normally.
+        break
     }
     // ANCHOR_END: check-availability
 }
@@ -54,7 +68,7 @@ func connectWithPasskey() async throws -> BreezSdk {
     // ANCHOR: connect-with-passkey
     // Use the built-in platform PRF provider (or pass a custom implementation).
     let prfProvider = PasskeyProvider()
-    let passkey = PasskeyClient(prfProvider: prfProvider, relayConfig: nil)
+    let passkey = PasskeyClient(prfProvider: prfProvider, config: nil)
 
     // signIn derives the wallet seed for an existing credential. With
     // bulk PRF on iOS+Android this is a single OS prompt that derives
@@ -81,7 +95,7 @@ func registerNewPasskey() async throws -> BreezSdk {
     // call. On iOS+Android this is 2 OS prompts total (1 create + 1
     // dual-salt assert) thanks to the SDK's bulk-PRF setup_wallet path.
     let prfProvider = PasskeyProvider()
-    let passkey = PasskeyClient(prfProvider: prfProvider, relayConfig: nil)
+    let passkey = PasskeyClient(prfProvider: prfProvider, config: nil)
 
     let response = try await passkey.register(
         request: RegisterRequest(
@@ -90,6 +104,11 @@ func registerNewPasskey() async throws -> BreezSdk {
             excludeCredentialIds: []
         )
     )
+
+    // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
+    // bookkeeping) and credential.userId (for server-side correlation).
+    // The SDK generates userId; it is never host-supplied.
+    let _ = (response.credential.credentialId, response.credential.userId)
 
     let config = defaultConfig(network: .mainnet)
     let sdk = try await connect(
@@ -105,13 +124,19 @@ func registerNewPasskey() async throws -> BreezSdk {
 func listLabels() async throws -> [String] {
     // ANCHOR: list-labels
     let prfProvider = PasskeyProvider()
-    let relayConfig = NostrRelayConfig(breezApiKey: "<breez api key>")
-    let passkey = PasskeyClient(prfProvider: prfProvider, relayConfig: relayConfig)
+    let config = PasskeyConfig(
+        breezApiKey: "<breez api key>",
+        // Optional: override the default wallet label used when
+        // register / signIn receive `label = nil`. Falls back to the
+        // SDK's internal "Default" when unset.
+        defaultLabel: "personal"
+    )
+    let passkey = PasskeyClient(prfProvider: prfProvider, config: config)
 
     // signIn with no label runs in discovery mode: it derives the
     // master seed AND lists labels in the same ceremony, so a follow-up
-    // listLabels() reads from the cached identity for free.
-    let labels = try await passkey.listLabels()
+    // labels().list() reads from the cached identity for free.
+    let labels = try await passkey.labels().list()
 
     for label in labels {
         print("Found label: \(label)")
@@ -123,13 +148,13 @@ func listLabels() async throws -> [String] {
 func storeLabel() async throws {
     // ANCHOR: store-label
     let prfProvider = PasskeyProvider()
-    let relayConfig = NostrRelayConfig(breezApiKey: "<breez api key>")
-    let passkey = PasskeyClient(prfProvider: prfProvider, relayConfig: relayConfig)
+    let config = PasskeyConfig(breezApiKey: "<breez api key>", defaultLabel: nil)
+    let passkey = PasskeyClient(prfProvider: prfProvider, config: config)
 
     // For a new label on an existing identity, call signIn(newLabel)
     // first to seed the SDK's identity cache via setup_wallet, THEN
-    // storeLabel uses the cached identity for free (1 OS prompt total).
-    try await passkey.storeLabel(label: "personal")
+    // labels().store() uses the cached identity for free (1 OS prompt total).
+    try await passkey.labels().store(label: "personal")
     // ANCHOR_END: store-label
 }
 
@@ -140,12 +165,12 @@ func singleCtaOnboarding() async throws -> Wallet {
     // returning user (silent assertion succeeds), TWO for a new user
     // (silent assertion fast-fails, then create + dual-salt assert).
     let prfProvider = PasskeyProvider()
-    let passkey = PasskeyClient(prfProvider: prfProvider, relayConfig: nil)
+    let passkey = PasskeyClient(prfProvider: prfProvider, config: nil)
 
     do {
-        // Discovery mode (label = nil): derives master + DEFAULT label
-        // in a single ceremony. The fresh-device user fast-fails in
-        // <300ms with no UI shown.
+        // Discovery mode (label = nil): derives master + configured
+        // default label in a single ceremony. The fresh-device user
+        // fast-fails in <300ms with no UI shown.
         let response = try await passkey.signIn(
             request: SignInRequest(label: nil, extraSalts: [])
         )
@@ -154,6 +179,7 @@ func singleCtaOnboarding() async throws -> Wallet {
         // CredentialNotFound is the SDK's classification for "no matching
         // credential on this device", including iOS's <300ms fast-fail
         // case where the platform conflates no-cred with user-cancel.
+        // The variant carries a String payload with diagnostic detail.
         let response = try await passkey.register(
             request: RegisterRequest(
                 label: "personal",
@@ -199,7 +225,7 @@ func recoverFromAlreadyExists() async throws -> Wallet {
     // the existing credential and the SDK's identity cache will warm
     // up on the assertion.
     let prfProvider = PasskeyProvider()
-    let passkey = PasskeyClient(prfProvider: prfProvider, relayConfig: nil)
+    let passkey = PasskeyClient(prfProvider: prfProvider, config: nil)
 
     do {
         let response = try await passkey.register(
@@ -231,7 +257,7 @@ func handleTimeout() async throws -> SignInResponse {
     // out. The SDK fires PrfProviderError.UserTimedOut when assertion
     // or register elapsed time crosses 55_000 ms.
     let prfProvider = PasskeyProvider()
-    let passkey = PasskeyClient(prfProvider: prfProvider, relayConfig: nil)
+    let passkey = PasskeyClient(prfProvider: prfProvider, config: nil)
 
     do {
         return try await passkey.signIn(
