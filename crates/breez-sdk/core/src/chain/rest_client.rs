@@ -44,7 +44,7 @@ impl BasicAuth {
     }
 }
 
-pub struct RestClientChainService {
+struct RestClientChainServiceInner {
     base_url: String,
     network: Network,
     client: Arc<dyn HttpClient>,
@@ -53,7 +53,32 @@ pub struct RestClientChainService {
     api_type: ChainApiType,
 }
 
+/// REST-backed [`BitcoinChainService`].
+///
+/// The trait is exported through `UniFFI` with `with_foreign`, which makes
+/// `UniFFI` re-wrap every `Arc<dyn BitcoinChainService>` that round-trips
+/// across the FFI boundary in a foreign-callback proxy — even when both
+/// sides are Rust in the same process. That proxy routes calls back into
+/// Rust via `UniFFI`'s `RustFuture`, which is polled outside the surrounding
+/// tokio runtime context, so `reqwest`'s `tokio::time::sleep` panics with
+/// "no reactor running".
+///
+/// To stay correct under round-tripping (e.g. shared-chain-service in a
+/// server-side harness that builds the service in Rust, hands it to a
+/// foreign-language integration, and passes it back into multiple SDK
+/// instances), we capture a [`tokio::runtime::Handle`] at construction
+/// time and dispatch each trait-method body onto it via
+/// [`tokio::runtime::Handle::spawn`]. The outer future we return to
+/// `UniFFI` is just a `JoinHandle` await — a channel-wakeup poll that
+/// needs no tokio context.
+pub struct RestClientChainService {
+    inner: Arc<RestClientChainServiceInner>,
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    runtime_handle: tokio::runtime::Handle,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Clone, Copy, Debug)]
 pub enum ChainApiType {
     Esplora,
     MempoolSpace,
@@ -92,15 +117,52 @@ impl RestClientChainService {
         api_type: ChainApiType,
     ) -> Self {
         Self {
-            base_url,
-            network,
-            client: http_client,
-            max_retries,
-            basic_auth,
-            api_type,
+            inner: Arc::new(RestClientChainServiceInner {
+                base_url,
+                network,
+                client: http_client,
+                max_retries,
+                basic_auth,
+                api_type,
+            }),
+            // Captured here so each trait-method body can re-enter the
+            // surrounding runtime even when invoked from a `UniFFI`
+            // foreign-callback proxy that polls outside any tokio context.
+            // Callers reach this constructor from within an async path
+            // (`new_rest_chain_service`, `SdkBuilder::build`, etc.), so
+            // `Handle::current()` is guaranteed to find a runtime.
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+            runtime_handle: tokio::runtime::Handle::current(),
         }
     }
 
+    /// Runs `work` on the captured tokio runtime (non-WASM) or inline
+    /// (WASM, where there's no separate runtime to dispatch onto).
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    async fn run_on_runtime<F, Fut, T>(&self, work: F) -> Result<T, ChainServiceError>
+    where
+        F: FnOnce(Arc<RestClientChainServiceInner>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<T, ChainServiceError>> + Send,
+        T: Send + 'static,
+    {
+        let inner = self.inner.clone();
+        self.runtime_handle
+            .spawn(async move { work(inner).await })
+            .await
+            .map_err(|e| ChainServiceError::Generic(format!("join error: {e}")))?
+    }
+
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    async fn run_on_runtime<F, Fut, T>(&self, work: F) -> Result<T, ChainServiceError>
+    where
+        F: FnOnce(Arc<RestClientChainServiceInner>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ChainServiceError>>,
+    {
+        work(self.inner.clone()).await
+    }
+}
+
+impl RestClientChainServiceInner {
     async fn get_response_json<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -198,11 +260,11 @@ impl RestClientChainService {
             .await?;
         Ok(response.into())
     }
-}
 
-#[macros::async_trait]
-impl BitcoinChainService for RestClientChainService {
-    async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
+    // ---- BitcoinChainService method bodies (run on the captured runtime
+    //      via the outer struct's `run_on_runtime` helper) ---------------
+
+    async fn do_get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
         let address = address
             .parse::<Address<NetworkUnchecked>>()?
             .require_network(self.network.into())?;
@@ -214,7 +276,7 @@ impl BitcoinChainService for RestClientChainService {
         Ok(utxos)
     }
 
-    async fn get_transaction_status(
+    async fn do_get_transaction_status(
         &self,
         txid: String,
     ) -> Result<super::TxStatus, ChainServiceError> {
@@ -224,24 +286,55 @@ impl BitcoinChainService for RestClientChainService {
         Ok(tx_info.status)
     }
 
-    async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {
+    async fn do_get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {
         let tx = self
             .get_response_text(format!("/tx/{txid}/hex").as_str())
             .await?;
         Ok(tx)
     }
 
-    async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
+    async fn do_broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
         let url = format!("{}{}", self.base_url, "/tx");
         self.post(&url, Some(tx)).await?;
         Ok(())
     }
 
-    async fn recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError> {
+    async fn do_recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError> {
         match self.api_type {
             ChainApiType::Esplora => self.recommended_fees_esplora().await,
             ChainApiType::MempoolSpace => self.recommended_fees_mempool_space().await,
         }
+    }
+}
+
+#[macros::async_trait]
+impl BitcoinChainService for RestClientChainService {
+    async fn get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
+        self.run_on_runtime(|inner| async move { inner.do_get_address_utxos(address).await })
+            .await
+    }
+
+    async fn get_transaction_status(
+        &self,
+        txid: String,
+    ) -> Result<super::TxStatus, ChainServiceError> {
+        self.run_on_runtime(|inner| async move { inner.do_get_transaction_status(txid).await })
+            .await
+    }
+
+    async fn get_transaction_hex(&self, txid: String) -> Result<String, ChainServiceError> {
+        self.run_on_runtime(|inner| async move { inner.do_get_transaction_hex(txid).await })
+            .await
+    }
+
+    async fn broadcast_transaction(&self, tx: String) -> Result<(), ChainServiceError> {
+        self.run_on_runtime(|inner| async move { inner.do_broadcast_transaction(tx).await })
+            .await
+    }
+
+    async fn recommended_fees(&self) -> Result<RecommendedFees, ChainServiceError> {
+        self.run_on_runtime(|inner| async move { inner.do_recommended_fees().await })
+            .await
     }
 }
 
