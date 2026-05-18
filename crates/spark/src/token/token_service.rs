@@ -712,12 +712,12 @@ impl TokenService {
             })
             .collect::<Vec<_>>();
 
-        let txid = hex::encode(&result.partial_token_transaction_hash);
+        let partial_txid = hex::encode(&result.partial_token_transaction_hash);
 
         if let Some(observer) = &self.transfer_observer {
             observer
                 .before_send_token(
-                    &txid,
+                    &partial_txid,
                     token_id,
                     receiver_outputs
                         .iter()
@@ -752,7 +752,7 @@ impl TokenService {
         let broadcast_req = BroadcastTransactionRequest::decode(broadcast_bytes.as_slice())
             .map_err(|e| {
                 ServiceError::Generic(format!(
-                    "Failed to decode broadcast request for tx {txid} (encoded bytes len={}): {e}",
+                    "Failed to decode broadcast request for tx {partial_txid} (encoded bytes len={}): {e}",
                     broadcast_bytes.len()
                 ))
             })?;
@@ -764,18 +764,38 @@ impl TokenService {
             .broadcast_transaction(broadcast_req)
             .await?;
 
-        let is_finalized = match broadcast_response.commit_status() {
+        // The SO indexes outputs by the finalized transaction hash (which includes
+        // revocation commitments added by the SO), not the partial hash the SDK
+        // signed. Compute the finalized hash from the broadcast response so that
+        // subsequent transfers reference outputs by the same id the SO uses.
+        let commit_status = broadcast_response.commit_status();
+        let commit_progress = broadcast_response.commit_progress;
+        let final_token_transaction =
+            broadcast_response.final_token_transaction.ok_or_else(|| {
+                ServiceError::Generic(format!(
+                    "broadcast response missing final_token_transaction for tx {partial_txid}"
+                ))
+            })?;
+        let final_tx_hash = spark_token_primitives::hash_final_token_transaction(
+            final_token_transaction.encode_to_vec(),
+        )
+        .map_err(|e| {
+            ServiceError::Generic(format!(
+                "Failed to compute final token transaction hash for tx {partial_txid}: {e}"
+            ))
+        })?;
+        let txid = hex::encode(&final_tx_hash);
+
+        let is_finalized = match commit_status {
             CommitStatus::CommitFinalized => true,
             CommitStatus::CommitProcessing => {
                 warn!(
                     "broadcast_transaction for tx {txid} returned COMMIT_PROCESSING; \
                      committed operators: {:?}, uncommitted operators: {:?}",
-                    broadcast_response
-                        .commit_progress
+                    commit_progress
                         .as_ref()
                         .map(|p| &p.committed_operator_public_keys),
-                    broadcast_response
-                        .commit_progress
+                    commit_progress
                         .as_ref()
                         .map(|p| &p.uncommitted_operator_public_keys),
                 );
@@ -796,21 +816,16 @@ impl TokenService {
             })
             .collect();
 
-        let outputs = broadcast_response
-            .final_token_transaction
-            .map(|ft| {
-                ft.final_token_outputs
-                    .into_iter()
-                    .enumerate()
-                    .map(|(vout, fo)| {
-                        let mut output: TokenOutput = (fo, self.network).try_into()?;
-                        output.id = format!("{txid}:{vout}");
-                        Ok(output)
-                    })
-                    .collect::<Result<Vec<TokenOutput>, ServiceError>>()
+        let outputs = final_token_transaction
+            .final_token_outputs
+            .into_iter()
+            .enumerate()
+            .map(|(vout, fo)| {
+                let mut output: TokenOutput = (fo, self.network).try_into()?;
+                output.id = format!("{txid}:{vout}");
+                Ok(output)
             })
-            .transpose()?
-            .unwrap_or_default();
+            .collect::<Result<Vec<TokenOutput>, ServiceError>>()?;
 
         if outputs.len() != receiver_outputs.len() {
             return Err(ServiceError::Generic(format!(
