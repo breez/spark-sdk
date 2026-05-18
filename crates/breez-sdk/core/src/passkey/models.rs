@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
-
 use crate::Seed;
 
 /// A wallet derived from a passkey.
@@ -30,7 +28,9 @@ pub struct NamedSalt {
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SetupWalletRequest {
-    /// User-chosen label. Defaults to `"Default"` when `None`.
+    /// User-chosen label. Defaults to the configured default label
+    /// (`PasskeyConfig::default_label`, or `"Default"` when unset) when
+    /// `None`.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
     /// Whether to publish `label` to Nostr after deriving. Pass `false`
@@ -80,14 +80,6 @@ pub struct CreatePasskeyRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub exclude_credential_ids: Vec<Vec<u8>>,
 
-    /// Override for the `WebAuthn` `user.id` field. Must be 1-64 bytes
-    /// per spec; rejected otherwise. Always randomize per call:
-    /// reusing a `user_id` across creates on the same `rp_id` causes
-    /// some authenticators (Apple Passwords) to silently destroy the
-    /// existing credential. Default is a fresh 16 random bytes.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub user_id: Option<Vec<u8>>,
-
     /// Override for `user.name`. Defaults to the provider's `user_name`.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub user_name: Option<String>,
@@ -98,6 +90,12 @@ pub struct CreatePasskeyRequest {
 }
 
 /// Result of a successful [`crate::passkey::PrfProvider::create_passkey`].
+///
+/// `user_id` is the `WebAuthn` `user.id` (user handle) the provider
+/// generated for this credential. Always returned so hosts can
+/// correlate server-side; never host-supplied (see the SDK's
+/// passkey guide for the rationale).
+///
 /// `aaguid` (16-byte authenticator identifier) and `backup_eligible`
 /// (BE flag) are parsed from authenticator data when available; they
 /// are `None` on platforms that don't expose attestation data (e.g.
@@ -107,20 +105,28 @@ pub struct CreatePasskeyRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RegisteredCredential {
     pub credential_id: Vec<u8>,
+    /// The `WebAuthn` `user.id` (user handle) the provider generated
+    /// for this credential. 1-64 bytes per spec.
+    pub user_id: Vec<u8>,
     pub aaguid: Option<Vec<u8>>,
     pub backup_eligible: Option<bool>,
 }
 
-/// Configuration for Nostr relay connections used in `Passkey`.
+/// Optional configuration for [`crate::passkey::PasskeyClient::new`].
 ///
-/// Relay URLs are managed internally by the client:
-/// - Public relays are always included
-/// - Breez relay is added when `breez_api_key` is provided (enables NIP-42 auth)
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+/// Replaces the legacy bare `NostrRelayConfig` constructor parameter.
+/// Only fields that are not provider-scoped belong here; all other
+/// knobs (`rp_id`, `auto_register`, `credential_registry`, etc.) live
+/// on the platform `PasskeyProvider` constructor.
+#[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct NostrRelayConfig {
-    /// Optional Breez API key for authenticated access to the Breez relay.
-    /// When provided, the Breez relay is added and NIP-42 authentication is enabled.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+pub struct PasskeyConfig {
+    /// Breez API key for the authenticated Breez Nostr relay (NIP-42).
+    /// `None` ⇒ public relays only (label sync still works, less robust).
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub breez_api_key: Option<String>,
+    /// Wallet label used when `register` / `sign_in` receive
+    /// `label = None`. `None` ⇒ internal `DEFAULT_LABEL` (`"Default"`).
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub default_label: Option<String>,
 }

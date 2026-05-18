@@ -83,12 +83,13 @@ export interface PasskeyPrfPlugin {
      * Register a new passkey with PRF support. Triggers exactly one
      * biometric / passkey prompt.
      *
-     * @returns the credential ID plus optional authenticator metadata.
-     *   `aaguid` (16-byte provider identifier) and `backupEligible`
-     *   (BE flag) are `null` when the platform doesn't surface enough
-     *   authenticator data to extract them. AAGUID is unverified
-     *   attestation: use as a display hint only, never for trust
-     *   decisions.
+     * @returns the credential ID, the WebAuthn user handle the
+     *   plugin minted for this credential (`userId`, base64), plus
+     *   optional authenticator metadata. `aaguid` (16-byte provider
+     *   identifier) and `backupEligible` (BE flag) are `null` when the
+     *   platform doesn't surface enough authenticator data to extract
+     *   them. AAGUID is unverified attestation: use as a display hint
+     *   only, never for trust decisions.
      */
     createPasskey(options: {
         rpId?: string;
@@ -98,41 +99,10 @@ export interface PasskeyPrfPlugin {
         excludeCredentialIds?: string[];
     }): Promise<{
         credentialId: string;
+        userId: string;
         aaguid: string | null;
         backupEligible: boolean | null;
     }>;
-
-    /**
-     * Derive a 32-byte seed from passkey PRF for the given salt. If
-     * `autoRegister` is true and no credential is available, the
-     * plugin auto-registers one and then derives. Triggers one or
-     * two biometric prompts depending on the path.
-     *
-     * @param allowCredentialIds optional base64-encoded credential IDs
-     *   to constrain the assertion. When non-empty, the OS picker
-     *   shows only these credentials (single-row auto-pick on iOS via
-     *   `preferImmediatelyAvailableCredentials`). When empty / omitted,
-     *   sign-in is fully discoverable.
-     *
-     * @returns the base64-encoded 32-byte seed plus the base64-encoded
-     *   credential ID that was actually used. `credentialId` may be
-     *   `null` when the platform did not surface it (rare; e.g. the
-     *   call resolved through an auto-register path that completed
-     *   before the assertion delegate fired).
-     */
-    deriveSeed(options: {
-        rpId?: string;
-        salt: string;
-        autoRegister?: boolean;
-        allowCredentialIds?: string[];
-        /**
-         * Per-call override for the platform's "fast-fail when no
-         * local credential is available" behavior. `true` (default)
-         * suppresses the cross-device picker on iOS / hybrid sheet on
-         * Android; `false` re-enables it.
-         */
-        preferImmediatelyAvailableCredentials?: boolean;
-    }): Promise<{ seed: string; credentialId: string | null }>;
 
     /**
      * Bulk derive: collapse multiple PRF salts into as few biometric

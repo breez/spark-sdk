@@ -11,14 +11,28 @@ use crate::{
     },
 };
 
-/// Nostr relay configuration for passkey label operations.
-///
-/// Used by `Passkey.listLabels` and `Passkey.storeLabel`.
-#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::NostrRelayConfig)]
-pub struct NostrRelayConfig {
-    /// Optional Breez API key for authenticated access to the Breez relay.
-    /// When provided, the Breez relay is added and NIP-42 authentication is enabled.
+/// Optional configuration for `PasskeyClient`. Replaces the legacy
+/// bare relay config; all other knobs (`rpId`, `autoRegister`,
+/// `credentialRegistry`, etc.) live on `PasskeyProvider`.
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyConfig)]
+pub struct PasskeyConfig {
+    /// Optional Breez API key for authenticated access to the Breez relay (NIP-42).
+    /// When provided, the Breez relay is added.
     pub breez_api_key: Option<String>,
+    /// Wallet label used when `register` / `signIn` receive `label = undefined`.
+    /// `undefined` falls back to the internal default `"Default"`.
+    pub default_label: Option<String>,
+}
+
+/// One-shot capability + configuration probe returned by
+/// `PasskeyClient.checkAvailability`. Collapses `isSupported` +
+/// `checkDomainAssociation` into one tagged value hosts branch on.
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyAvailability)]
+pub enum PasskeyAvailability {
+    Available,
+    PrfUnsupported,
+    NotAssociated { source: String, reason: String },
+    Skipped { reason: String },
 }
 
 /// A wallet derived from a passkey.
@@ -39,12 +53,15 @@ pub struct NamedSalt {
 }
 
 /// Authenticator metadata returned by `PasskeyClient.register`.
-/// `aaguid` (16-byte authenticator identifier) and `backupEligible`
-/// (BE flag) are best-effort: platforms that don't expose
-/// authenticator data leave them `null`.
+/// `userId` is the WebAuthn user handle the provider generated for
+/// this credential (never host-supplied). `aaguid` (16-byte
+/// authenticator identifier) and `backupEligible` (BE flag) are
+/// best-effort: platforms that don't expose authenticator data leave
+/// them `null`.
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::RegisteredCredential)]
 pub struct RegisteredCredential {
     pub credential_id: Vec<u8>,
+    pub user_id: Vec<u8>,
     pub aaguid: Option<Vec<u8>>,
     pub backup_eligible: Option<bool>,
 }
@@ -55,7 +72,6 @@ pub struct RegisterRequest {
     pub label: Option<String>,
     pub extra_salts: Vec<NamedSalt>,
     pub exclude_credential_ids: Vec<Vec<u8>>,
-    pub user_id: Option<Vec<u8>>,
     pub user_name: Option<String>,
     pub user_display_name: Option<String>,
 }
@@ -99,14 +115,21 @@ impl PasskeyClient {
     /// Create a `PasskeyClient` backed by the supplied `PrfProvider`
     /// and the default Nostr-backed label store.
     #[wasm_bindgen(constructor)]
-    pub fn new(prf_provider: PrfProvider, relay_config: Option<NostrRelayConfig>) -> Self {
+    pub fn new(prf_provider: PrfProvider, config: Option<PasskeyConfig>) -> Self {
         let wasm_provider = WasmPrfProvider::new(prf_provider);
         Self {
             inner: breez_sdk_spark::passkey::PasskeyClient::new(
                 Arc::new(wasm_provider),
-                relay_config.map(|rc| rc.into()),
+                config.map(Into::into),
             ),
         }
+    }
+
+    /// One-shot capability probe (PRF support + domain association)
+    /// hosts can gate UX on.
+    #[wasm_bindgen(js_name = "checkAvailability")]
+    pub async fn check_availability(&self) -> WasmResult<PasskeyAvailability> {
+        Ok(self.inner.check_availability().await?.into())
     }
 
     /// First-time setup. Drives the platform's create-passkey ceremony
@@ -120,28 +143,79 @@ impl PasskeyClient {
     /// Returning-user sign-in. With `label` set, uses the fast path
     /// (one ceremony, no Nostr round-trip). With `label` omitted,
     /// derives the default-label wallet and discovers the user's
-    /// label set in the same ceremony — host shows a picker if the
-    /// default isn't the one they want.
+    /// label set in the same ceremony.
     #[wasm_bindgen(js_name = "signIn")]
     pub async fn sign_in(&self, request: SignInRequest) -> WasmResult<SignInResponse> {
         Ok(self.inner.sign_in(request.into()).await?.into())
     }
 
+    /// Label sub-object. List / publish labels for this passkey's identity.
+    #[wasm_bindgen(js_name = "labels")]
+    pub fn labels(&self) -> PasskeyLabels {
+        PasskeyLabels {
+            inner: self.inner.labels(),
+        }
+    }
+
+    /// Credential sub-object. Inspect / mutate the provider's
+    /// persisted credential-ID set.
+    #[wasm_bindgen(js_name = "credentials")]
+    pub fn credentials(&self) -> PasskeyCredentials {
+        PasskeyCredentials {
+            inner: self.inner.credentials(),
+        }
+    }
+}
+
+/// Label sub-object surfaced from `PasskeyClient.labels()`.
+#[wasm_bindgen]
+pub struct PasskeyLabels {
+    inner: Arc<breez_sdk_spark::passkey::PasskeyLabels>,
+}
+
+#[wasm_bindgen]
+impl PasskeyLabels {
     /// List labels published for this passkey's identity.
-    #[wasm_bindgen(js_name = "listLabels")]
-    pub async fn list_labels(&self) -> WasmResult<Vec<String>> {
-        Ok(self.inner.list_labels().await?)
+    #[wasm_bindgen(js_name = "list")]
+    pub async fn list(&self) -> WasmResult<Vec<String>> {
+        Ok(self.inner.list().await?)
     }
 
     /// Idempotently publish `label` for this passkey's identity.
-    #[wasm_bindgen(js_name = "storeLabel")]
-    pub async fn store_label(&self, label: String) -> WasmResult<()> {
-        Ok(self.inner.store_label(label).await?)
+    #[wasm_bindgen(js_name = "store")]
+    pub async fn store(&self, label: String) -> WasmResult<()> {
+        Ok(self.inner.store(label).await?)
+    }
+}
+
+/// Credential sub-object surfaced from `PasskeyClient.credentials()`.
+/// Reads / mutates the provider's persisted credential-ID set.
+#[wasm_bindgen]
+pub struct PasskeyCredentials {
+    inner: Arc<breez_sdk_spark::passkey::PasskeyCredentials>,
+}
+
+#[wasm_bindgen]
+impl PasskeyCredentials {
+    /// Read the persisted set of credential IDs for the current RP.
+    #[wasm_bindgen(js_name = "get")]
+    pub async fn get(&self) -> WasmResult<Vec<js_sys::Uint8Array>> {
+        let ids = self.inner.get().await?;
+        Ok(ids
+            .into_iter()
+            .map(|id| js_sys::Uint8Array::from(id.as_slice()))
+            .collect())
     }
 
-    /// Pass-through to `Passkey.isAvailable`.
-    #[wasm_bindgen(js_name = "isAvailable")]
-    pub async fn is_available(&self) -> WasmResult<bool> {
-        Ok(self.inner.is_available().await?)
+    /// Drop a single credential ID from the persisted set.
+    #[wasm_bindgen(js_name = "remove")]
+    pub async fn remove(&self, credential_id: Vec<u8>) -> WasmResult<()> {
+        Ok(self.inner.remove(credential_id).await?)
+    }
+
+    /// Clear the persisted credential-ID set for the current RP.
+    #[wasm_bindgen(js_name = "clear")]
+    pub async fn clear(&self) -> WasmResult<()> {
+        Ok(self.inner.clear().await?)
     }
 }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::Seed;
 use breez_sdk_spark::passkey::{
-    NostrRelayConfig, PasskeyClient, PrfProvider, PrfProviderError, SignInRequest,
+    PasskeyClient, PasskeyConfig as SdkPasskeyConfig, PrfProvider, PrfProviderError, SignInRequest,
 };
 
 #[cfg(feature = "fido2")]
@@ -90,8 +90,11 @@ pub async fn resolve_passkey_seed(
     list_labels: bool,
     store_label: bool,
 ) -> Result<Seed> {
-    let relay_config = NostrRelayConfig { breez_api_key };
-    let client = PasskeyClient::new(provider, Some(relay_config));
+    let sdk_config = SdkPasskeyConfig {
+        breez_api_key,
+        default_label: None,
+    };
+    let client = PasskeyClient::new(provider, Some(sdk_config));
 
     // --list-labels: discovery sign-in (no cached label) returns the
     // discovered label set; prompt user to pick.
@@ -138,7 +141,8 @@ pub async fn resolve_passkey_seed(
     if store_label && let Some(label) = &label {
         println!("Publishing label '{label}' to Nostr...");
         client
-            .store_label(label.clone())
+            .labels()
+            .store(label.clone())
             .await
             .map_err(|e| anyhow!("Failed to store label: {e}"))?;
         println!("Label '{label}' published successfully.");

@@ -29,7 +29,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use breez_sdk_spark::passkey::{NostrRelayConfig, PasskeyClient, SignInRequest};
+//! use breez_sdk_spark::passkey::{PasskeyClient, PasskeyConfig, SignInRequest};
 //!
 //! // Platform provides a PrfProvider implementation
 //! let prf_provider = Arc::new(MyPrfProvider::new());
@@ -47,7 +47,6 @@
 
 mod derivation;
 mod error;
-mod label_store;
 mod models;
 mod nostr_client;
 mod passkey_client;
@@ -56,13 +55,13 @@ mod passkey_prf_provider;
 pub use derivation::ACCOUNT_MASTER_SALT;
 use derivation::prf_to_mnemonic;
 pub use error::{ErrorKind, PasskeyError, PrfProviderError};
-pub use label_store::{Identity, LabelStore};
 pub use models::{
-    CreatePasskeyRequest, NamedSalt, NostrRelayConfig, RegisteredCredential, SetupWalletRequest,
+    CreatePasskeyRequest, NamedSalt, PasskeyConfig, RegisteredCredential, SetupWalletRequest,
     Wallet, WalletSetup,
 };
 pub use passkey_client::{
-    PasskeyClient, RegisterRequest, RegisterResponse, SignInRequest, SignInResponse,
+    PasskeyAvailability, PasskeyClient, PasskeyCredentials, PasskeyLabels, RegisterRequest,
+    RegisterResponse, SignInRequest, SignInResponse,
 };
 pub use passkey_prf_provider::{DeriveSeedsRequest, DomainAssociation, PrfProvider};
 
@@ -102,30 +101,68 @@ fn validate_label(label: &str) -> Result<(), PasskeyError> {
     Ok(())
 }
 
-/// Orchestrates passkey-based wallet derivation and label
-/// management. Composes a [`PrfProvider`] (for the deterministic
-/// 32-byte derivation) with a [`LabelStore`] (for label sync). The
-/// default label store is Nostr-backed; integrators can swap it for
-/// a server-mediated store via [`Passkey::with_label_store`].
+/// Orchestrates passkey-based wallet derivation and label management.
+/// Composes a [`PrfProvider`] (for the deterministic 32-byte
+/// derivation) with the internal Nostr-backed label store.
 ///
-/// The passkey identity (derived from the account-master PRF salt)
-/// is cached after the first derivation so subsequent label ops on
-/// the same instance need no additional PRF prompts.
+/// The passkey-derived Nostr keys (derived from the account-master
+/// PRF salt) are cached after the first derivation so subsequent
+/// label ops on the same instance need no additional PRF prompts.
 #[derive(Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
-pub struct Passkey {
+pub(crate) struct Passkey {
     prf_provider: Arc<dyn PrfProvider>,
-    label_store: Arc<dyn LabelStore>,
-    /// Cached identity (Nostr keypair) derived from the passkey's
-    /// account-master salt; populated lazily on first label op.
-    identity: Arc<OnceCell<Identity>>,
+    breez_api_key: Option<String>,
+    default_label: String,
+    /// Cached Nostr label store, lazily built on first label op.
+    nostr_client: Arc<OnceCell<NostrSaltClient>>,
 }
 
 impl Passkey {
-    /// Derive or retrieve the cached identity. One PRF call per
-    /// `Passkey` instance lifetime; the cache is shared via `Arc`.
-    async fn derive_identity(&self) -> Result<Identity, PasskeyError> {
-        self.identity
+    /// Create a new `Passkey` with the supplied config (or all defaults
+    /// when `None`).
+    pub fn new(prf_provider: Arc<dyn PrfProvider>, config: Option<PasskeyConfig>) -> Self {
+        let config = config.unwrap_or_default();
+        Self {
+            prf_provider,
+            breez_api_key: config.breez_api_key,
+            default_label: config
+                .default_label
+                .unwrap_or_else(|| DEFAULT_LABEL.to_string()),
+            nostr_client: Arc::new(OnceCell::new()),
+        }
+    }
+
+    /// Build a `Passkey` from the SDK [`crate::Config`] the rest of
+    /// the app passes to [`crate::connect`]. Reads `config.api_key`
+    /// into the default Nostr-backed label store.
+    pub fn from_config(prf_provider: Arc<dyn PrfProvider>, config: &crate::Config) -> Self {
+        Self::new(
+            prf_provider,
+            Some(PasskeyConfig {
+                breez_api_key: config.api_key.clone(),
+                default_label: None,
+            }),
+        )
+    }
+
+    /// Returns a reference to the underlying [`PrfProvider`].
+    pub fn prf_provider(&self) -> &Arc<dyn PrfProvider> {
+        &self.prf_provider
+    }
+
+    /// Derive (or retrieve cached) Nostr keys for the passkey's
+    /// label-store identity. Test-only helper that exercises the same
+    /// cache the runtime path goes through; production code reads via
+    /// [`Self::nostr_client`].
+    #[cfg(test)]
+    async fn derive_keys(&self) -> Result<nostr::Keys, PasskeyError> {
+        let client = self.nostr_client().await?;
+        Ok(client.keys().clone())
+    }
+
+    /// Lazily build (or retrieve cached) the Nostr label-store client.
+    async fn nostr_client(&self) -> Result<&NostrSaltClient, PasskeyError> {
+        self.nostr_client
             .get_or_try_init(|| async {
                 let mut seeds = self
                     .prf_provider
@@ -138,22 +175,9 @@ impl Passkey {
                     PrfProviderError::Generic("derive_seeds returned no output".to_string())
                 })?;
                 let keys = derive_nostr_keypair(&account_master)?;
-                Ok(Identity { keys })
+                Ok(NostrSaltClient::new(keys, self.breez_api_key.clone()))
             })
             .await
-            .cloned()
-    }
-}
-
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-impl Passkey {
-    /// Create a `Passkey` with the default Nostr-backed label store.
-    /// `relay_config` of `None` falls back to default relays (no API
-    /// key, default timeout).
-    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(prf_provider: Arc<dyn PrfProvider>, relay_config: Option<NostrRelayConfig>) -> Self {
-        let nostr = NostrSaltClient::new(relay_config.unwrap_or_default());
-        Self::with_label_store(prf_provider, Arc::new(nostr))
     }
 
     /// Derive the Nostr identity, the wallet seed for `request.label`,
@@ -166,7 +190,7 @@ impl Passkey {
         &self,
         request: SetupWalletRequest,
     ) -> Result<WalletSetup, PasskeyError> {
-        let label = request.label.unwrap_or_else(|| DEFAULT_LABEL.to_string());
+        let label = request.label.unwrap_or_else(|| self.default_label.clone());
         validate_label(&label)?;
 
         // Compose: [account_master, label, app.<name1>, app.<name2>, ...].
@@ -198,10 +222,12 @@ impl Passkey {
             ))));
         }
 
-        let identity = Identity {
-            keys: derive_nostr_keypair(&seeds[0])?,
-        };
-        let _ = self.identity.set(identity.clone());
+        // Prime the Nostr client cache with the keys derived in this
+        // ceremony so subsequent label ops don't trigger another PRF.
+        let keys = derive_nostr_keypair(&seeds[0])?;
+        let _ = self
+            .nostr_client
+            .set(NostrSaltClient::new(keys, self.breez_api_key.clone()));
 
         // Build the wallet before reaching out to the label store so a
         // transient publish failure can't burn the PRF ceremony.
@@ -222,12 +248,10 @@ impl Passkey {
             .collect();
 
         if request.publish_label
-            && let Err(e) = self
-                .label_store
-                .ensure_label_published(&identity, &label)
-                .await
+            && let Ok(client) = self.nostr_client().await
+            && let Err(e) = client.store_label(&label).await
         {
-            warn!("setup_wallet: ensure_label_published failed, returning wallet anyway: {e}");
+            warn!("setup_wallet: store_label failed, returning wallet anyway: {e}");
         }
 
         Ok(WalletSetup {
@@ -240,62 +264,32 @@ impl Passkey {
     /// one PRF call to derive the identity (cached after the first
     /// call on this `Passkey` instance).
     pub async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
-        let identity = self.derive_identity().await?;
-        self.label_store.list_labels(&identity).await
+        let client = self.nostr_client().await?;
+        client.list_labels().await
     }
 
     /// Idempotently publish `label` for this passkey's identity.
     /// Requires one PRF call to derive the identity (cached).
     pub async fn store_label(&self, label: String) -> Result<(), PasskeyError> {
         validate_label(&label)?;
-        let identity = self.derive_identity().await?;
-        self.label_store
-            .ensure_label_published(&identity, &label)
-            .await
+        let client = self.nostr_client().await?;
+        client.store_label(&label).await
     }
 
-    /// Check if passkey PRF is available on this device.
-    ///
-    /// Delegates to the platform's `PrfProvider` implementation.
-    pub async fn is_available(&self) -> Result<bool, PasskeyError> {
-        self.prf_provider
-            .is_supported()
-            .await
-            .map_err(PasskeyError::from)
-    }
-}
-
-/// Convenience constructors that don't cross the `UniFFI` boundary.
-/// Bindings that expose `Passkey` via `UniFFI` use [`Passkey::new`]
-/// from the exported impl above; native Rust callers can use these
-/// to inject a custom [`LabelStore`] or to avoid duplicating
-/// `api_key` between `Passkey` and [`crate::connect`].
-impl Passkey {
-    /// Build a `Passkey` from the SDK [`crate::Config`] the rest of
-    /// the app passes to [`crate::connect`]. Reads `config.api_key`
-    /// into the default Nostr-backed label store.
-    pub fn from_config(prf_provider: Arc<dyn PrfProvider>, config: &crate::Config) -> Self {
-        Self::new(
-            prf_provider,
-            Some(NostrRelayConfig {
-                breez_api_key: config.api_key.clone(),
-            }),
-        )
-    }
-
-    /// Build a `Passkey` with a caller-supplied [`LabelStore`]. Use
-    /// to opt out of the default Nostr-backed sync (server-mediated
-    /// store, in-memory tests, etc.). Custom store injection is
-    /// Rust-only; `UniFFI` bindings see only [`Passkey::new`].
-    pub fn with_label_store(
-        prf_provider: Arc<dyn PrfProvider>,
-        label_store: Arc<dyn LabelStore>,
-    ) -> Self {
-        Self {
-            prf_provider,
-            label_store,
-            identity: Arc::new(OnceCell::new()),
+    /// Map [`PrfProvider`] capability + domain-association probes into a
+    /// single [`PasskeyAvailability`].
+    pub async fn check_availability(&self) -> Result<PasskeyAvailability, PasskeyError> {
+        if !self.prf_provider.is_supported().await? {
+            return Ok(PasskeyAvailability::PrfUnsupported);
         }
+        let association = self.prf_provider.check_domain_association().await?;
+        Ok(match association {
+            DomainAssociation::Associated => PasskeyAvailability::Available,
+            DomainAssociation::NotAssociated { source, reason } => {
+                PasskeyAvailability::NotAssociated { source, reason }
+            }
+            DomainAssociation::Skipped { reason } => PasskeyAvailability::Skipped { reason },
+        })
     }
 }
 
@@ -380,37 +374,40 @@ mod tests {
     #[macros::test_all]
     fn test_passkey_new() {
         let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
-        let config = NostrRelayConfig::default();
+        let config = PasskeyConfig::default();
 
         let _passkey = Passkey::new(prf_provider, Some(config));
     }
 
     #[macros::async_test_all]
-    async fn test_is_available() {
+    async fn test_check_availability_available() {
         let prf_provider = Arc::new(MockPrfProvider::new([0u8; 32]));
         let passkey = Passkey::new(prf_provider, None);
 
-        let available = passkey.is_available().await.unwrap();
-        assert!(available);
+        let availability = passkey.check_availability().await.unwrap();
+        assert!(matches!(
+            availability,
+            PasskeyAvailability::Available | PasskeyAvailability::Skipped { .. }
+        ));
     }
 
     #[macros::async_test_all]
-    async fn test_is_available_false() {
+    async fn test_check_availability_prf_unsupported() {
         let prf_provider = Arc::new(UnavailablePrfProvider);
         let passkey = Passkey::new(prf_provider, None);
 
-        let available = passkey.is_available().await.unwrap();
-        assert!(!available);
+        let availability = passkey.check_availability().await.unwrap();
+        assert!(matches!(availability, PasskeyAvailability::PrfUnsupported));
     }
 
     #[macros::async_test_all]
-    async fn test_is_available_error() {
+    async fn test_check_availability_error() {
         let prf_provider = Arc::new(FailingPrfProvider::new(
             PrfProviderError::AuthenticationFailed("Test error".to_string()),
         ));
         let passkey = Passkey::new(prf_provider, None);
 
-        let result = passkey.is_available().await;
+        let result = passkey.check_availability().await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -430,37 +427,37 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn test_derive_identity_deterministic() {
+    async fn test_derive_keys_deterministic() {
         let prf_provider1 = Arc::new(MockPrfProvider::new([99u8; 32]));
         let prf_provider2 = Arc::new(MockPrfProvider::new([99u8; 32]));
 
         let passkey1 = Passkey::new(prf_provider1, None);
         let passkey2 = Passkey::new(prf_provider2, None);
 
-        let id1 = passkey1.derive_identity().await.unwrap();
-        let id2 = passkey2.derive_identity().await.unwrap();
+        let keys1 = passkey1.derive_keys().await.unwrap();
+        let keys2 = passkey2.derive_keys().await.unwrap();
 
         assert_eq!(
-            id1.public_key_bytes(),
-            id2.public_key_bytes(),
+            keys1.public_key(),
+            keys2.public_key(),
             "Same PRF output should produce same identity"
         );
     }
 
     #[macros::async_test_all]
-    async fn test_derive_identity_different_providers() {
+    async fn test_derive_keys_different_providers() {
         let prf_provider1 = Arc::new(MockPrfProvider::new([1u8; 32]));
         let prf_provider2 = Arc::new(MockPrfProvider::new([2u8; 32]));
 
         let passkey1 = Passkey::new(prf_provider1, None);
         let passkey2 = Passkey::new(prf_provider2, None);
 
-        let id1 = passkey1.derive_identity().await.unwrap();
-        let id2 = passkey2.derive_identity().await.unwrap();
+        let keys1 = passkey1.derive_keys().await.unwrap();
+        let keys2 = passkey2.derive_keys().await.unwrap();
 
         assert_ne!(
-            id1.public_key_bytes(),
-            id2.public_key_bytes(),
+            keys1.public_key(),
+            keys2.public_key(),
             "Different PRF outputs should produce different identities"
         );
     }
