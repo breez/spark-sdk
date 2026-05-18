@@ -136,6 +136,10 @@ jobs:
           path: ~/.cargo/bin/gobley-uniffi-bindgen
           key: gobley-uniffi-bindgen-${{ env.GOBLEY_REF }}-${{ runner.os }}
 
+      - name: Add cargo bin to PATH
+        if: runner.os == 'macOS'
+        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
       - name: Generate KMP bindings (host)
         if: matrix.lang == 'kotlin-multiplatform-ios' || matrix.lang == 'kotlin-multiplatform-macos'
         working-directory: crates/breez-sdk/bindings
