@@ -762,6 +762,7 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
                 .try_into()
                 .map_err(|_| ServiceError::Generic("Invalid token amount".to_string()))?,
         );
+
         Ok(TokenOutput {
             id,
             owner_public_key,
