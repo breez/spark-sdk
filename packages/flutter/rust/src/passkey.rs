@@ -2,9 +2,9 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    CreatePasskeyRequest, DeriveSeedsRequest, PasskeyAvailability, PasskeyConfig, PasskeyError,
-    PrfProvider, PrfProviderError, RegisterRequest, RegisterResponse, RegisteredCredential,
-    SignInRequest, SignInResponse,
+    DeriveSeedsRequest, PasskeyAvailability, PasskeyConfig, PasskeyError, PrfProvider,
+    PrfProviderError, RegisterRequest, RegisterResponse, RegisteredCredential, SignInRequest,
+    SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -32,9 +32,7 @@ struct CallbackPrfProvider {
         Arc<dyn Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>> + Send + Sync>,
     is_supported_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync>,
     create_passkey_fn: Arc<
-        dyn Fn(CreatePasskeyRequest) -> DartFnFuture<anyhow::Result<RegisteredCredential>>
-            + Send
-            + Sync,
+        dyn Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<RegisteredCredential>> + Send + Sync,
     >,
     get_known_credential_ids_fn:
         Arc<dyn Fn() -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>> + Send + Sync>,
@@ -88,9 +86,9 @@ impl PrfProvider for CallbackPrfProvider {
 
     async fn create_passkey(
         &self,
-        request: CreatePasskeyRequest,
+        exclude_credential_ids: Vec<Vec<u8>>,
     ) -> Result<RegisteredCredential, PrfProviderError> {
-        let result = AssertUnwindSafe((self.create_passkey_fn)(request))
+        let result = AssertUnwindSafe((self.create_passkey_fn)(exclude_credential_ids))
             .catch_unwind()
             .await
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
@@ -143,9 +141,7 @@ impl PasskeyClient {
         + Sync
         + 'static,
         is_supported: impl Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync + 'static,
-        create_passkey: impl Fn(
-            CreatePasskeyRequest,
-        ) -> DartFnFuture<anyhow::Result<RegisteredCredential>>
+        create_passkey: impl Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<RegisteredCredential>>
         + Send
         + Sync
         + 'static,
@@ -161,6 +157,7 @@ impl PasskeyClient {
         + Send
         + Sync
         + 'static,
+        breez_api_key: Option<String>,
         config: Option<PasskeyConfig>,
     ) -> Self {
         let provider = Arc::new(CallbackPrfProvider {
@@ -172,7 +169,7 @@ impl PasskeyClient {
             clear_known_credential_ids_fn: Arc::new(clear_known_credential_ids),
         });
         Self {
-            inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, config),
+            inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, breez_api_key, config),
         }
     }
 

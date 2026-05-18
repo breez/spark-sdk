@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::Seed;
 
 /// A wallet derived from a passkey.
@@ -12,16 +10,6 @@ pub struct Wallet {
     pub seed: Seed,
     /// The label used for derivation (either user-provided or the default).
     pub label: String,
-}
-
-/// A caller-supplied salt to derive an extra 32-byte seed in the same
-/// PRF ceremony as the wallet seed. Output keyed by `name` in
-/// [`WalletSetup::extra_seeds`].
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct NamedSalt {
-    /// Caller-chosen name; appears as the lookup key on the result.
-    pub name: String,
 }
 
 /// Request for [`crate::passkey::Passkey::setup_wallet`].
@@ -37,12 +25,6 @@ pub struct SetupWalletRequest {
     /// for speculative derivations (cold restore).
     #[cfg_attr(feature = "uniffi", uniffi(default = false))]
     pub publish_label: bool,
-    /// Extra salts to derive in the same ceremony. Each yields a
-    /// 32-byte output keyed by name in [`WalletSetup::extra_seeds`].
-    /// On platforms that pair `prf.eval.first` + `prf.eval.second` per
-    /// ceremony, N extra salts cost ⌈(2 + N) / 2⌉ user prompts.
-    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub extra_salts: Vec<NamedSalt>,
 
     /// Forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::allow_credential_ids`].
@@ -64,29 +46,6 @@ pub struct SetupWalletRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct WalletSetup {
     pub wallet: Wallet,
-    /// 32 bytes per [`NamedSalt`] in the request, keyed by name.
-    pub extra_seeds: HashMap<String, Vec<u8>>,
-}
-
-/// Per-call overrides for [`crate::passkey::PrfProvider::create_passkey`].
-/// All fields optional; missing values fall back to the provider's
-/// configured defaults.
-#[derive(Debug, Default, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct CreatePasskeyRequest {
-    /// Credential IDs the authenticator must refuse to duplicate.
-    /// Surfaces as `PrfProviderError::CredentialAlreadyExists` when
-    /// any entry matches a credential already on the device.
-    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub exclude_credential_ids: Vec<Vec<u8>>,
-
-    /// Override for `user.name`. Defaults to the provider's `user_name`.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub user_name: Option<String>,
-
-    /// Override for `user.displayName`. Defaults to the provider's `user_display_name`.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub user_display_name: Option<String>,
 }
 
 /// Result of a successful [`crate::passkey::PrfProvider::create_passkey`].
@@ -114,17 +73,13 @@ pub struct RegisteredCredential {
 
 /// Optional configuration for [`crate::passkey::PasskeyClient::new`].
 ///
-/// Replaces the legacy bare `NostrRelayConfig` constructor parameter.
-/// Only fields that are not provider-scoped belong here; all other
-/// knobs (`rp_id`, `auto_register`, `credential_registry`, etc.) live
-/// on the platform `PasskeyProvider` constructor.
+/// Currently carries a single optional field; kept as a struct so
+/// future cross-cutting knobs can be added without breaking call
+/// sites. Provider-scoped knobs (`rp_id`, `credential_registry`,
+/// etc.) live on the platform `PasskeyProvider` constructor.
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PasskeyConfig {
-    /// Breez API key for the authenticated Breez Nostr relay (NIP-42).
-    /// `None` ⇒ public relays only (label sync still works, less robust).
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub breez_api_key: Option<String>,
     /// Wallet label used when `register` / `sign_in` receive
     /// `label = None`. `None` ⇒ internal `DEFAULT_LABEL` (`"Default"`).
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]

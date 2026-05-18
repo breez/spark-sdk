@@ -21,7 +21,12 @@
  * ```
  */
 
-const DEFAULT_RP_ID = 'keys.breez.technology';
+/**
+ * Breez's shared `keys.breez.technology` RP ID. Exposed as
+ * `PasskeyProvider.BREEZ_RP_ID` for hosts opting into the Breez-
+ * managed Relying Party (only valid for Breez-registered apps).
+ */
+const BREEZ_RP_ID = 'keys.breez.technology';
 const DEFAULT_RP_NAME = 'Breez SDK';
 
 /**
@@ -218,12 +223,19 @@ function _registryAddFireAndForget(registry, rpId, credentialId, onRegistryError
  */
 export class PasskeyProvider {
     /**
-     * @param {object} [options]
-     * @param {string} [options.rpId='keys.breez.technology'] - Relying Party ID.
-     *   Must match the domain hosting your passkeys. On native platforms this
-     *   corresponds to the AASA / assetlinks.json domain. Changing this after users have registered passkeys will
-     *   make their existing credentials undiscoverable — they would need to create
-     *   new passkeys with the new RP ID.
+     * Constant identifying Breez's shared `keys.breez.technology` RP.
+     * Pass as `rpId` when opting into the Breez-managed Relying Party
+     * (only valid for apps registered with Breez). Apps with their
+     * own RP domain pass their own string.
+     */
+    static get BREEZ_RP_ID() { return BREEZ_RP_ID; }
+
+    /**
+     * @param {object} options
+     * @param {string} options.rpId - **Required.** Relying Party ID.
+     *   Must match the domain hosting your passkeys. Pass
+     *   `PasskeyProvider.BREEZ_RP_ID` to opt into the Breez-managed
+     *   shared RP (only valid for Breez-registered apps).
      * @param {string} [options.rpName='Breez SDK'] - RP display name shown during
      *   credential registration. Only used when creating new passkeys; changing it
      *   does not affect existing credentials.
@@ -233,12 +245,6 @@ export class PasskeyProvider {
      * @param {string} [options.userDisplayName] - User display name shown as the
      *   primary label in the passkey picker. Defaults to userName. Only used during
      *   registration; changing it does not affect existing credentials.
-     * @param {boolean} [options.autoRegister=false] - When `true`,
-     *   `deriveSeed` automatically creates a new passkey if none exists
-     *   for this RP ID, then retries the assertion. When `false`
-     *   (default), throws on missing credential — hosts drive
-     *   registration explicitly via `PasskeyClient.register` /
-     *   `createPasskey()`.
      * @param {'platform'|'cross-platform'} [options.authenticatorAttachment]
      *   When set, narrows the create-time UI to the chosen authenticator
      *   class. `'platform'` scopes registration to the local platform
@@ -259,12 +265,17 @@ export class PasskeyProvider {
      *   standards-track lever for influencing the sign-in picker
      *   (since `authenticatorAttachment` is not allowed there).
      */
-    constructor(options = {}) {
-        this.rpId = options.rpId || DEFAULT_RP_ID;
+    constructor(options) {
+        if (!options || typeof options.rpId !== 'string' || options.rpId.length === 0) {
+            throw new Error(
+                'PasskeyProvider: rpId is required. Pass your app\'s RP domain, '
+                + 'or PasskeyProvider.BREEZ_RP_ID if you registered with Breez.'
+            );
+        }
+        this.rpId = options.rpId;
         this.rpName = options.rpName || DEFAULT_RP_NAME;
         this.userName = options.userName || this.rpName;
         this.userDisplayName = options.userDisplayName || this.userName;
-        this.autoRegister = options.autoRegister === true;
         this.authenticatorAttachment = options.authenticatorAttachment;
         this.hints = options.hints;
         /**
@@ -310,9 +321,6 @@ export class PasskeyProvider {
          * @private
          */
         this._lastObservedCredentialId = null;
-
-        /** @private shared Promise so concurrent auto-register paths fire one ceremony */
-        this._autoRegisterInFlight = null;
     }
 
     /**
@@ -383,15 +391,7 @@ export class PasskeyProvider {
      */
     async _deriveSeed(salt, options = {}) {
         const saltBytes = new TextEncoder().encode(salt);
-        try {
-            return await this._getAssertionWithPrf(saltBytes, options);
-        } catch (error) {
-            if (this.autoRegister && this._isNoCredentialError(error)) {
-                await this._autoRegister();
-                return await this._getAssertionWithPrf(saltBytes, options);
-            }
-            throw error;
-        }
+        return await this._getAssertionWithPrf(saltBytes, options);
     }
 
     /**
@@ -441,12 +441,13 @@ export class PasskeyProvider {
      * may add a sibling credential — pass `excludeCredentialIds` to
      * surface that case as `PasskeyAlreadyExistsError`.
      *
-     * @param {CreatePasskeyRequest} [request]
+     * @param {Uint8Array[]} [excludeCredentialIds] - Credential IDs the
+     *   authenticator must refuse to duplicate.
      * @returns {Promise<RegisteredCredential>} `aaguid`/`backupEligible`
      *   are null on browsers without `getAuthenticatorData()`.
      */
-    async createPasskey(request = {}) {
-        return await this._registerCredential(request);
+    async createPasskey(excludeCredentialIds = []) {
+        return await this._registerCredential(excludeCredentialIds);
     }
 
     /**
@@ -780,37 +781,13 @@ export class PasskeyProvider {
     }
 
     /**
-     * Deduped auto-register. Public `createPasskey()` skips this and
-     * always issues a fresh ceremony.
-     * @private
-     */
-    async _autoRegister() {
-        if (this._autoRegisterInFlight) {
-            return this._autoRegisterInFlight;
-        }
-        this._autoRegisterInFlight = (async () => {
-            try {
-                return await this._registerCredential();
-            } finally {
-                this._autoRegisterInFlight = null;
-            }
-        })();
-        return this._autoRegisterInFlight;
-    }
-
-    /**
      * Register a new discoverable credential with PRF extension enabled.
-     * @param {CreatePasskeyRequest} [request={}] - Per-call overrides.
+     * @param {Uint8Array[]} [excludeCredentialIds=[]] - Credential IDs
+     *   the authenticator must refuse to duplicate.
      * @returns {Promise<{ credentialId: Uint8Array, userId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
      * @private
      */
-    async _registerCredential(request = {}) {
-        const {
-            excludeCredentialIds = [],
-            userName,
-            userDisplayName,
-        } = request;
-
+    async _registerCredential(excludeCredentialIds = []) {
         // WebAuthn spec: user.id must be 1-64 bytes. The provider
         // always mints a fresh 16 random bytes per call and returns
         // them via `RegisteredCredential.userId` (never host-supplied).
@@ -835,8 +812,8 @@ export class PasskeyProvider {
             },
             user: {
                 id: resolvedUserId,
-                name: userName ?? this.userName,
-                displayName: userDisplayName ?? this.userDisplayName,
+                name: this.userName,
+                displayName: this.userDisplayName,
             },
             pubKeyCredParams: [
                 { type: 'public-key', alg: -7 },   // ES256 (P-256)

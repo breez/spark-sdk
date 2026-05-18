@@ -1,5 +1,5 @@
 use super::error::PrfProviderError;
-use super::models::{CreatePasskeyRequest, RegisteredCredential};
+use super::models::RegisteredCredential;
 
 /// Per-call inputs for [`PrfProvider::derive_seeds`]. Bundles the salt
 /// list with optional ceremony-shaping fields so providers can apply
@@ -98,11 +98,18 @@ pub trait PrfProvider: Send + Sync {
     /// hosts need for `exclude_credential_ids` bookkeeping. CLI /
     /// hardware providers register lazily inside [`Self::derive_seeds`]
     /// and inherit the default `PrfNotSupported`.
+    ///
+    /// `exclude_credential_ids` is the only per-call knob: when any
+    /// entry matches a credential already on the device, the platform
+    /// raises `CredentialAlreadyExists`. Branding fields (`user_name`,
+    /// `user_display_name`) live on the platform `PasskeyProvider`
+    /// constructor; the `user.id` is always provider-minted and
+    /// surfaced on `RegisteredCredential.user_id`.
     async fn create_passkey(
         &self,
-        request: CreatePasskeyRequest,
+        exclude_credential_ids: Vec<Vec<u8>>,
     ) -> Result<RegisteredCredential, PrfProviderError> {
-        let _ = request;
+        let _ = exclude_credential_ids;
         Err(PrfProviderError::PrfNotSupported)
     }
 
