@@ -7,7 +7,7 @@ use tokio::{
     select,
     sync::{broadcast, watch},
 };
-use tracing::{Instrument, debug, error, info, trace, warn};
+use tracing::{Instrument, debug, error, info, trace};
 
 use crate::{
     GetInfoRequest, GetInfoResponse, Payment,
@@ -107,7 +107,6 @@ fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sende
             let balance_watcher =
                 BalanceWatcher::new(sdk.spark_wallet.clone(), sdk.storage.clone());
             let balance_watcher_id = sdk.add_event_listener(Box::new(balance_watcher)).await;
-            sdk.init_jwt().await;
 
             loop {
                 select! {
@@ -134,10 +133,6 @@ fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sende
                         {
                             last_sync_time = SystemTime::now();
                         }
-                    }
-
-                    () = sdk.jwt_refresh_interval() => {
-                        refresh_jwt(&sdk).await;
                     }
 
                     () = tokio::time::sleep(Duration::from_secs(10)) => {
@@ -250,17 +245,6 @@ async fn on_sync_request(
         .await,
         Some(true)
     )
-}
-
-async fn refresh_jwt(sdk: &BreezSdk) {
-    let token = match sdk.new_jwt().await {
-        Ok(token) => token,
-        Err(err) => {
-            warn!("Could not fetch new JWT: {err}");
-            return;
-        }
-    };
-    sdk.set_and_save_jwt(token).await;
 }
 
 async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {

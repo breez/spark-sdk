@@ -6,10 +6,10 @@ mod connection_manager;
 mod error;
 mod events;
 mod issuer;
+mod jwt_header_provider;
 mod lnurl;
 mod logger;
 mod models;
-mod partner_header_provider;
 #[cfg(feature = "passkey")]
 pub mod passkey;
 mod persist;

@@ -26,9 +26,9 @@ use crate::{
     },
     connection_manager::ConnectionManager,
     error::SdkError,
+    jwt_header_provider::BreezJwtHeaderProvider,
     lnurl::{DefaultLnurlServerClient, LnurlServerClient},
     models::Config,
-    partner_header_provider::BreezPartnerHeaderProvider,
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
@@ -848,13 +848,24 @@ impl SdkBuilder {
         let inner_session_manager: Arc<dyn spark_wallet::SessionManager> = Arc::new(
             crate::session_manager::CachingSessionManager::new(inner_session_manager),
         );
-        let partner_headers = Arc::new(BreezPartnerHeaderProvider::new());
+        let jwt_header_provider: Option<Arc<BreezJwtHeaderProvider>> =
+            if matches!(self.config.network, Network::Mainnet)
+                && let Some(api_key) = self.config.api_key.clone()
+            {
+                Some(BreezJwtHeaderProvider::new(api_key, Some(storage.clone())))
+            } else {
+                None
+            };
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
                 .with_cancellation_token(shutdown_sender.subscribe())
                 .with_session_manager(inner_session_manager)
-                .with_so_extra_header_provider(partner_headers.clone())
                 .with_background_processing(background_services_enabled);
+        if let Some(provider) = &jwt_header_provider {
+            wallet_builder = wallet_builder.with_so_extra_header_provider(
+                Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
+            );
+        }
         if let Some(observer) = self.payment_observer {
             let observer: Arc<dyn spark_wallet::TransferObserver> =
                 Arc::new(SparkTransferObserver::new(observer));
@@ -981,7 +992,6 @@ impl SdkBuilder {
             token_converter,
             stable_balance,
             sync_coordinator,
-            partner_headers,
         })
         .await?;
         debug!("Initialized and started breez sdk.");

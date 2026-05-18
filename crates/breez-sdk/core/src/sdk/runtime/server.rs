@@ -19,7 +19,6 @@ impl RuntimeProfile for ServerRuntime {
         sdk: &BreezSdk,
         _initial_synced_sender: watch::Sender<bool>,
     ) {
-        sdk.spawn_jwt_init();
         sdk.event_emitter
             .add_runtime_event_handler(Box::new(ServerRuntimeEventHandler { sdk: sdk.clone() }))
             .await;
