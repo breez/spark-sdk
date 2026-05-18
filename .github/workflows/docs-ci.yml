@@ -90,10 +90,6 @@ jobs:
           # crates/breez-sdk/bindings/Makefile changes.
           key: gobley-uniffi-bindgen-v0.3.7-with-fixes-${{ runner.os }}
 
-      - name: Add cargo bin to PATH
-        if: runner.os == 'macOS'
-        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
       - name: Install Rust targets (iOS)
         if: matrix.ios-targets
         run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
