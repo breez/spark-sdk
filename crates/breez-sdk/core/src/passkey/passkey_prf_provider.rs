@@ -82,7 +82,7 @@ pub trait PrfProvider: Send + Sync {
     /// `request.allow_credential_ids` and
     /// `request.prefer_immediately_available_credentials` shape the
     /// platform ceremony for this single call. Custom providers that
-    /// don't model those concepts (file-backed, YubiKey HMAC, etc.)
+    /// don't model those concepts (file-backed, `YubiKey` HMAC, etc.)
     /// can ignore them.
     async fn derive_seeds(
         &self,
@@ -132,8 +132,33 @@ pub trait PrfProvider: Send + Sync {
     /// Built-in platform passkey providers (iOS, Android, Web JS)
     /// override this so [`PasskeyClient::sign_in`] can populate
     /// [`SignInResponse::credential_id`]. CLI / hardware providers
-    /// (file-backed, FIDO2, YubiKey) inherit the `None` default.
+    /// (file-backed, FIDO2, `YubiKey`) inherit the `None` default.
     async fn take_last_observed_credential_id(&self) -> Option<Vec<u8>> {
         None
+    }
+
+    /// List credential IDs the provider has persisted for the current
+    /// RP. Backs `PasskeyClient::credentials().get()`. Platform passkey
+    /// providers delegate to their `CredentialRegistry` / native
+    /// `KnownCredentialsStore`; file / `YubiKey` / FIDO2 providers
+    /// inherit the empty-list default.
+    async fn get_known_credential_ids(&self) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        Ok(vec![])
+    }
+
+    /// Drop a single credential ID from the provider's persisted set
+    /// for the current RP. Backs
+    /// `PasskeyClient::credentials().remove(id)`. Default no-op for
+    /// providers without a persistent registry.
+    async fn remove_known_credential_id(&self, id: Vec<u8>) -> Result<(), PrfProviderError> {
+        let _ = id;
+        Ok(())
+    }
+
+    /// Clear the provider's persisted credential-ID set for the
+    /// current RP. Backs `PasskeyClient::credentials().clear()`.
+    /// Default no-op for providers without a persistent registry.
+    async fn clear_known_credential_ids(&self) -> Result<(), PrfProviderError> {
+        Ok(())
     }
 }

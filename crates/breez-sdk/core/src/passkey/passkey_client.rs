@@ -2,27 +2,48 @@
 //! entry point for hosts: it composes the lower-level [`Passkey`]
 //! (label store + identity cache) and the [`PrfProvider`] trait into a
 //! handful of named flows that match real onboarding UI states.
-//!
-//! For the lower-level building blocks, use [`Passkey`] directly.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::Passkey;
 use super::error::PasskeyError;
-use super::label_store::LabelStore;
 use super::models::{
-    CreatePasskeyRequest, NamedSalt, NostrRelayConfig, RegisteredCredential, SetupWalletRequest,
+    CreatePasskeyRequest, NamedSalt, PasskeyConfig, RegisteredCredential, SetupWalletRequest,
     Wallet,
 };
 use super::passkey_prf_provider::PrfProvider;
+
+/// Single-value result of [`PasskeyClient::check_availability`].
+/// Collapses [`PrfProvider::is_supported`] +
+/// [`PrfProvider::check_domain_association`] into one variant per
+/// distinct host UX reaction.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PasskeyAvailability {
+    /// PRF is supported and the platform's domain-association check
+    /// (when present) passed. Safe to proceed with register / sign-in.
+    Available,
+    /// The authenticator does not implement the `WebAuthn` PRF
+    /// extension. Hosts gate the passkey UX path off this value.
+    PrfUnsupported,
+    /// PRF is supported but the platform's out-of-band verification
+    /// (iOS AASA / Android assetlinks / browser `rpId` scope) reports a
+    /// configuration mismatch. The strings carry the verification
+    /// origin and the concrete reason for diagnostic UI.
+    NotAssociated { source: String, reason: String },
+    /// Domain-association verification was not performed (no source,
+    /// SSR context, etc.). Not a negative signal; passkey flows are
+    /// still safe to attempt.
+    Skipped { reason: String },
+}
 
 /// Request shape for [`PasskeyClient::register`].
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RegisterRequest {
-    /// User-chosen label for the new wallet. Defaults to
-    /// [`DEFAULT_LABEL`] when `None`. Always published to the label
+    /// User-chosen label for the new wallet. Defaults to the configured
+    /// default label when `None`. Always published to the label
     /// store as part of registration.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
@@ -39,12 +60,6 @@ pub struct RegisterRequest {
     /// so the host can flip to the sign-in path.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub exclude_credential_ids: Vec<Vec<u8>>,
-
-    /// Forwarded to [`CreatePasskeyRequest::user_id`]. Always provide a
-    /// fresh random value per call; reusing one across registrations
-    /// can silently destroy the prior credential on some authenticators.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub user_id: Option<Vec<u8>>,
 
     /// Forwarded to [`CreatePasskeyRequest::user_name`].
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
@@ -75,8 +90,8 @@ pub struct RegisterResponse {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SignInRequest {
     /// `Some(label)` is the fast path: one ceremony, no label-store
-    /// query. `None` triggers discovery: derives `DEFAULT_LABEL` and
-    /// also returns the user's full label set in
+    /// query. `None` triggers discovery: derives the configured
+    /// default label and also returns the user's full label set in
     /// [`SignInResponse::labels`].
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
@@ -87,23 +102,12 @@ pub struct SignInRequest {
 
     /// Per-call assertion allow-list forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::allow_credential_ids`].
-    /// Hosts driving server-mediated authentication pass the list
-    /// returned from `/passkey/options` here so the assertion is
-    /// pinned to credentials known to the server. Empty (default)
-    /// preserves the historical behavior (the provider's per-instance
-    /// `allow_credential_ids`, if any, applies; otherwise the OS
-    /// picker chooses).
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub allow_credential_ids: Vec<Vec<u8>>,
 
     /// Per-call control over the platform's "fast-fail when no local
     /// credential is available" behavior, forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::prefer_immediately_available_credentials`].
-    /// `Some(true)` (the historical default for built-in providers)
-    /// suppresses the cross-device picker. `Some(false)` re-enables
-    /// it (cross-device QR sign-in on iOS / hybrid transports on
-    /// Android / `mediation: undefined` on web). `None` (default)
-    /// defers to the provider's default.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub prefer_immediately_available_credentials: Option<bool>,
 }
@@ -117,17 +121,16 @@ pub struct SignInResponse {
     /// the label store was unreachable).
     pub labels: Vec<String>,
     pub extra_seeds: HashMap<String, Vec<u8>>,
-    /// The credential ID of the credential the user used for this
-    /// sign-in, when surfaced by the underlying [`PrfProvider`].
-    /// Hosts can pass this to a `CredentialRegistry::add(...)` to
-    /// remember the credential, or to populate `allowCredentialIds`
-    /// on subsequent calls. `None` for providers that don't surface
-    /// this signal (CLI / file-backed / hardware providers).
+    /// The credential ID the user used for this sign-in, when the
+    /// underlying [`PrfProvider`] surfaces it. `None` for providers
+    /// that don't expose this signal (CLI / file-backed / hardware
+    /// providers).
     pub credential_id: Option<Vec<u8>>,
 }
 
-/// High-level orchestration over a [`PrfProvider`] and a
-/// [`LabelStore`]. Two named flows match the real onboarding states:
+/// High-level orchestration over a [`PrfProvider`] and the internal
+/// Nostr-backed label store. Two named flows match the real onboarding
+/// states:
 ///
 /// - [`Self::register`]: first-time setup (create credential + derive
 ///   wallet + publish label) in one ceremony where the platform
@@ -135,25 +138,30 @@ pub struct SignInResponse {
 /// - [`Self::sign_in`]: returning user. Fast path when the host has
 ///   the label cached locally; cold-restore-with-discovery when not.
 ///
-/// Construct via [`Self::new`] (default Nostr-backed label store) or
-/// [`Self::from_config`] (re-use the SDK's API key).
+/// Label and credential management hang off the [`Self::labels`] and
+/// [`Self::credentials`] sub-objects.
 #[derive(Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct PasskeyClient {
     passkey: Passkey,
-    prf_provider: Arc<dyn PrfProvider>,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl PasskeyClient {
     /// Construct with the default Nostr-backed label store.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(prf_provider: Arc<dyn PrfProvider>, relay_config: Option<NostrRelayConfig>) -> Self {
-        let passkey = Passkey::new(Arc::clone(&prf_provider), relay_config);
+    pub fn new(prf_provider: Arc<dyn PrfProvider>, config: Option<PasskeyConfig>) -> Self {
         Self {
-            passkey,
-            prf_provider,
+            passkey: Passkey::new(prf_provider, config),
         }
+    }
+
+    /// One-shot capability + configuration probe. Collapses
+    /// [`PrfProvider::is_supported`] and
+    /// [`PrfProvider::check_domain_association`] into a single value
+    /// hosts can branch on.
+    pub async fn check_availability(&self) -> Result<PasskeyAvailability, PasskeyError> {
+        self.passkey.check_availability().await
     }
 
     /// First-time setup. Drives [`PrfProvider::create_passkey`] (one
@@ -166,10 +174,10 @@ impl PasskeyClient {
         request: RegisterRequest,
     ) -> Result<RegisterResponse, PasskeyError> {
         let credential = self
-            .prf_provider
+            .passkey
+            .prf_provider()
             .create_passkey(CreatePasskeyRequest {
                 exclude_credential_ids: request.exclude_credential_ids,
-                user_id: request.user_id,
                 user_name: request.user_name,
                 user_display_name: request.user_display_name,
             })
@@ -197,11 +205,8 @@ impl PasskeyClient {
 
     /// Returning-user sign-in. Fast path (`label` set) skips the
     /// label-store query; discovery path (`label = None`) derives
-    /// `DEFAULT_LABEL` and lists the user's labels in the same
-    /// ceremony. Never re-publishes the label — call
-    /// [`Self::store_label`] separately if needed. The discovery
-    /// label-store query is best-effort; transient failures leave
-    /// `labels` empty.
+    /// the configured default label and lists the user's labels in
+    /// the same ceremony. Never re-publishes the label.
     pub async fn sign_in(&self, request: SignInRequest) -> Result<SignInResponse, PasskeyError> {
         let discovery = request.label.is_none();
 
@@ -219,7 +224,11 @@ impl PasskeyClient {
 
         // Capture the credential ID from the just-completed assertion
         // before any subsequent PRF call (list_labels) overwrites it.
-        let credential_id = self.prf_provider.take_last_observed_credential_id().await;
+        let credential_id = self
+            .passkey
+            .prf_provider()
+            .take_last_observed_credential_id()
+            .await;
 
         let labels = if discovery {
             self.passkey.list_labels().await.unwrap_or_default()
@@ -235,22 +244,20 @@ impl PasskeyClient {
         })
     }
 
-    /// List labels published for this passkey's identity. Pass-through
-    /// to [`Passkey::list_labels`] (one PRF call to seed the identity
-    /// cache, then free for subsequent calls on the same instance).
-    pub async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
-        self.passkey.list_labels().await
+    /// Label sub-object. List or publish labels for this passkey's
+    /// identity.
+    pub fn labels(&self) -> Arc<PasskeyLabels> {
+        Arc::new(PasskeyLabels {
+            passkey: self.passkey.clone(),
+        })
     }
 
-    /// Idempotently publish `label`. Pass-through to
-    /// [`Passkey::store_label`].
-    pub async fn store_label(&self, label: String) -> Result<(), PasskeyError> {
-        self.passkey.store_label(label).await
-    }
-
-    /// Pass-through to [`Passkey::is_available`].
-    pub async fn is_available(&self) -> Result<bool, PasskeyError> {
-        self.passkey.is_available().await
+    /// Credential sub-object. Inspect or mutate the provider's
+    /// persisted credential-ID set.
+    pub fn credentials(&self) -> Arc<PasskeyCredentials> {
+        Arc::new(PasskeyCredentials {
+            prf_provider: Arc::clone(self.passkey.prf_provider()),
+        })
     }
 }
 
@@ -259,33 +266,58 @@ impl PasskeyClient {
     /// Build from the SDK's [`crate::Config`], reusing its `api_key`
     /// for the default Nostr-backed label store.
     pub fn from_config(prf_provider: Arc<dyn PrfProvider>, config: &crate::Config) -> Self {
-        let passkey = Passkey::from_config(Arc::clone(&prf_provider), config);
         Self {
-            passkey,
-            prf_provider,
+            passkey: Passkey::from_config(prf_provider, config),
         }
     }
+}
 
-    /// Build with a caller-supplied [`LabelStore`] (server-mediated,
-    /// in-memory tests, etc). Rust-only; `UniFFI` bindings see only
-    /// [`Self::new`].
-    pub fn with_label_store(
-        prf_provider: Arc<dyn PrfProvider>,
-        label_store: Arc<dyn LabelStore>,
-    ) -> Self {
-        let passkey = Passkey::with_label_store(Arc::clone(&prf_provider), label_store);
-        Self {
-            passkey,
-            prf_provider,
-        }
+/// Label sub-object surfaced from [`PasskeyClient::labels`]. Holds a
+/// clone of the parent [`Passkey`] so calls re-use its cached identity.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+pub struct PasskeyLabels {
+    passkey: Passkey,
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+impl PasskeyLabels {
+    /// List labels published for this passkey's identity.
+    pub async fn list(&self) -> Result<Vec<String>, PasskeyError> {
+        self.passkey.list_labels().await
     }
 
-    /// Access the underlying [`Passkey`] for low-level operations not
-    /// covered by the higher-level flows (custom orchestration,
-    /// migrations, diagnostics).
-    #[must_use]
-    pub fn passkey(&self) -> &Passkey {
-        &self.passkey
+    /// Idempotently publish `label` for this passkey's identity.
+    pub async fn store(&self, label: String) -> Result<(), PasskeyError> {
+        self.passkey.store_label(label).await
+    }
+}
+
+/// Credential sub-object surfaced from [`PasskeyClient::credentials`].
+/// Reads / mutates the provider's persisted credential-ID set; methods
+/// no-op on providers without a registry (CLI / file / `YubiKey`).
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+pub struct PasskeyCredentials {
+    prf_provider: Arc<dyn PrfProvider>,
+}
+
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+impl PasskeyCredentials {
+    /// Read the persisted set of credential IDs for the current RP.
+    pub async fn get(&self) -> Result<Vec<Vec<u8>>, PasskeyError> {
+        Ok(self.prf_provider.get_known_credential_ids().await?)
+    }
+
+    /// Drop a single credential ID from the persisted set.
+    pub async fn remove(&self, credential_id: Vec<u8>) -> Result<(), PasskeyError> {
+        Ok(self
+            .prf_provider
+            .remove_known_credential_id(credential_id)
+            .await?)
+    }
+
+    /// Clear the persisted credential-ID set for the current RP.
+    pub async fn clear(&self) -> Result<(), PasskeyError> {
+        Ok(self.prf_provider.clear_known_credential_ids().await?)
     }
 }
 
@@ -372,6 +404,7 @@ mod tests {
             *count = count.checked_add(1).expect("create_calls overflow");
             Ok(RegisteredCredential {
                 credential_id: vec![0xab, 0xcd, 0xef],
+                user_id: vec![0u8; 16],
                 aaguid: Some(vec![0; 16]),
                 backup_eligible: Some(true),
             })
@@ -391,6 +424,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.credential.credential_id, vec![0xab, 0xcd, 0xef]);
+        assert_eq!(response.credential.user_id.len(), 16);
         assert_eq!(*provider.create_calls.lock().unwrap(), 1);
         assert_eq!(response.wallet.label, "alice");
     }
@@ -440,5 +474,25 @@ mod tests {
             .unwrap();
         assert_eq!(response.extra_seeds.len(), 1);
         assert!(response.extra_seeds.contains_key("db_key"));
+    }
+
+    #[macros::async_test_all]
+    async fn default_label_from_config_overrides_internal_default() {
+        let provider = Arc::new(MockProvider::new([0u8; 32]));
+        let client = PasskeyClient::new(
+            provider,
+            Some(PasskeyConfig {
+                breez_api_key: None,
+                default_label: Some("my-app".to_string()),
+            }),
+        );
+        let response = client
+            .sign_in(SignInRequest {
+                label: None,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.wallet.label, "my-app");
     }
 }

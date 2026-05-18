@@ -376,15 +376,12 @@ export class PasskeyProvider {
     }
 
     /**
-     * Derive a 32-byte seed from passkey PRF.
-     *
-     * @param {string} salt
-     * @param {DeriveSeedOptions} [options] - Per-call overrides:
-     *   `allowCredentialIds`, `preferImmediatelyAvailableCredentials`,
-     *   `onCredentialId`. See `index.d.ts` for full semantics.
-     * @returns {Promise<Uint8Array>}
+     * Single-salt seed derivation. Private helper backing
+     * {@link deriveSeeds}; the public surface only exposes the bulk
+     * form.
+     * @private
      */
-    async deriveSeed(salt, options = {}) {
+    async _deriveSeed(salt, options = {}) {
         const saltBytes = new TextEncoder().encode(salt);
         try {
             return await this._getAssertionWithPrf(saltBytes, options);
@@ -414,7 +411,7 @@ export class PasskeyProvider {
             return [];
         }
         if (salts.length === 1) {
-            return [await this.deriveSeed(salts[0], options)];
+            return [await this._deriveSeed(salts[0], options)];
         }
 
         const out = [];
@@ -428,10 +425,10 @@ export class PasskeyProvider {
                     idx += 2;
                     continue;
                 }
-                out.push(await this.deriveSeed(salts[idx + 1], options));
+                out.push(await this._deriveSeed(salts[idx + 1], options));
                 idx += 2;
             } else {
-                out.push(await this.deriveSeed(salts[idx], options));
+                out.push(await this._deriveSeed(salts[idx], options));
                 idx += 1;
             }
         }
@@ -716,6 +713,73 @@ export class PasskeyProvider {
     }
 
     /**
+     * Return the credential IDs the configured `CredentialRegistry`
+     * has stored for the current `rpId`. Empty list when no registry
+     * is configured. Backs `PasskeyClient.credentials().get()`.
+     * @returns {Promise<Uint8Array[]>}
+     */
+    async getKnownCredentialIds() {
+        if (!this.credentialRegistry) {
+            return [];
+        }
+        const stored = await _registryReadBestEffort(
+            this.credentialRegistry, this.rpId, this.onRegistryError,
+        );
+        return Array.isArray(stored) ? stored : [];
+    }
+
+    /**
+     * Drop a single credential ID from the configured registry. No-op
+     * when no registry is configured. Backs
+     * `PasskeyClient.credentials().remove(id)`.
+     * @param {Uint8Array} credentialId
+     * @returns {Promise<void>}
+     */
+    async removeKnownCredentialId(credentialId) {
+        if (!this.credentialRegistry) {
+            return;
+        }
+        try {
+            const result = await _withRegistryTimeout(
+                this.credentialRegistry.remove(this.rpId, credentialId),
+            );
+            if (result === _REGISTRY_TIMEOUT) {
+                const err = new Error('CredentialRegistry.remove timed out');
+                console.warn('[CredentialRegistry] remove timed out');
+                this.onRegistryError?.('remove', err);
+            }
+        } catch (err) {
+            console.warn('[CredentialRegistry] remove failed', err);
+            this.onRegistryError?.('remove', err);
+        }
+    }
+
+    /**
+     * Clear the configured registry's persisted credential-ID list for
+     * the current `rpId`. No-op when no registry is configured. Backs
+     * `PasskeyClient.credentials().clear()`.
+     * @returns {Promise<void>}
+     */
+    async clearKnownCredentialIds() {
+        if (!this.credentialRegistry) {
+            return;
+        }
+        try {
+            const result = await _withRegistryTimeout(
+                this.credentialRegistry.clear(this.rpId),
+            );
+            if (result === _REGISTRY_TIMEOUT) {
+                const err = new Error('CredentialRegistry.clear timed out');
+                console.warn('[CredentialRegistry] clear timed out');
+                this.onRegistryError?.('clear', err);
+            }
+        } catch (err) {
+            console.warn('[CredentialRegistry] clear failed', err);
+            this.onRegistryError?.('clear', err);
+        }
+    }
+
+    /**
      * Deduped auto-register. Public `createPasskey()` skips this and
      * always issues a fresh ceremony.
      * @private
@@ -737,29 +801,22 @@ export class PasskeyProvider {
     /**
      * Register a new discoverable credential with PRF extension enabled.
      * @param {CreatePasskeyRequest} [request={}] - Per-call overrides.
-     * @returns {Promise<{ credentialId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
+     * @returns {Promise<{ credentialId: Uint8Array, userId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
      * @private
      */
     async _registerCredential(request = {}) {
         const {
             excludeCredentialIds = [],
-            userId,
             userName,
             userDisplayName,
         } = request;
 
-        // WebAuthn spec: user.id must be 1-64 bytes.
-        let resolvedUserId;
-        if (userId !== undefined) {
-            if (!(userId instanceof Uint8Array) || userId.length < 1 || userId.length > 64) {
-                throw new Error(
-                    'CreatePasskeyRequest.userId must be a Uint8Array of length 1-64 bytes'
-                );
-            }
-            resolvedUserId = userId;
-        } else {
-            resolvedUserId = randomBytes(16);
-        }
+        // WebAuthn spec: user.id must be 1-64 bytes. The provider
+        // always mints a fresh 16 random bytes per call and returns
+        // them via `RegisteredCredential.userId` (never host-supplied).
+        // Reusing a userId across creates on the same rpId silently
+        // overwrites the prior credential on some authenticators.
+        const resolvedUserId = randomBytes(16);
 
         const authenticatorSelection = {
             residentKey: 'required',
@@ -866,6 +923,7 @@ export class PasskeyProvider {
         }
         return {
             credentialId: credentialIdBytes,
+            userId: resolvedUserId,
             aaguid: meta ? meta.aaguid : null,
             backupEligible: meta ? meta.backupEligible : null,
         };
