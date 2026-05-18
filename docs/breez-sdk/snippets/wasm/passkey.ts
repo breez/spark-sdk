@@ -91,7 +91,7 @@ const registerNewPasskey = async () => {
   // For a brand-new user with no existing passkey: register() creates
   // the credential AND derives the wallet seed in one orchestrated call.
   // On iOS+Android this is 2 OS prompts total (1 create + 1 dual-salt
-  // assert) thanks to the SDK's bulk-PRF setup_wallet path.
+  // assert) thanks to the SDK's bulk-PRF path.
   const prfProvider = new PasskeyProvider({ rpId: 'my-app.com' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
@@ -142,7 +142,7 @@ const storeLabel = async () => {
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
   // For a new label on an existing identity, call signIn(newLabel)
-  // first to seed the SDK's identity cache via setup_wallet, THEN
+  // first to warm the SDK's identity cache, THEN
   // labels().store() uses the cached identity for free (1 OS prompt total).
   await passkey.labels().store('personal')
   // ANCHOR_END: store-label
@@ -203,7 +203,7 @@ const checkDomain = async () => {
       return
     case 'Skipped':
       // Verification could not be performed (offline, endpoint
-      // timeout, no public-suffix match). Proceed normally — this
+      // timeout, no public-suffix match). Proceed normally: this
       // is NOT a negative signal.
       break
   }
@@ -255,7 +255,7 @@ const handleTimeout = async () => {
     if (error instanceof PasskeyTimedOutError) {
       // Show a sticky retry screen with timeout-specific copy.
       // Do NOT auto-retry without user input.
-      console.log('Sign-in timed out — show "Try Again" UI.')
+      console.log('Sign-in timed out: show "Try Again" UI.')
     }
     throw error
   }

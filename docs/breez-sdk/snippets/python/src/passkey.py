@@ -93,7 +93,7 @@ async def register_new_passkey():
     # For a brand-new user with no existing passkey: register() creates
     # the credential AND derives the wallet seed in one orchestrated
     # call. On iOS+Android this is 2 OS prompts total (1 create + 1
-    # dual-salt assert) thanks to the SDK's bulk-PRF setup_wallet path.
+    # dual-salt assert) thanks to the SDK's bulk-PRF path.
     prf_provider = CustomPrfProvider()
     passkey = PasskeyClient(prf_provider, None, None)
 
@@ -143,7 +143,7 @@ async def store_label():
     passkey = PasskeyClient(prf_provider, "<breez api key>", None)
 
     # For a new label on an existing identity, call sign_in(new_label)
-    # first to seed the SDK's identity cache via setup_wallet, THEN
+    # first to warm the SDK's identity cache, THEN
     # labels().store() uses the cached identity for free (1 OS prompt total).
     await passkey.labels().store(label="personal")
     # ANCHOR_END: store-label

@@ -128,7 +128,7 @@ export interface CredentialRegistry {
 export type RegistryOperation = 'read' | 'add' | 'remove' | 'clear';
 
 /**
- * Options for constructing a PasskeyProvider. `rpId` is required — pass
+ * Options for constructing a PasskeyProvider. `rpId` is required: pass
  * {@link PasskeyProvider.BREEZ_RP_ID} to opt into Breez's shared RP.
  */
 export interface PasskeyProviderOptions {

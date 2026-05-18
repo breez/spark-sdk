@@ -63,7 +63,7 @@ private const val POST_CREATE_GRACE_TOTAL_MS: Long = 800L
  * and maps [CredentialManagerPrfCoreException] into MethodChannel error
  * codes understood by the Dart side.
  *
- * Do not hand-edit [CredentialManagerPrfCore.kt] here — it is a generated
+ * Do not hand-edit [CredentialManagerPrfCore.kt] here: it is a generated
  * mirror of the canonical copy under
  * `crates/breez-sdk/bindings/langs/shared/android-passkey/`. Run
  * `cargo xtask sync-passkey-core` after editing the canonical file.

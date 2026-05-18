@@ -3,33 +3,11 @@ import Foundation
 import PasskeyPRFHelperObjC
 import Security
 
-/// Built-in passkey-based PRF provider for iOS/macOS using the
-/// AuthenticationServices framework.
-///
-/// Uses `ASAuthorizationPlatformPublicKeyCredentialProvider` with the PRF extension
-/// to derive deterministic 32-byte seeds from passkeys.
-///
-/// On first use, if no credential exists for the RP ID, a new passkey is
-/// automatically created (registered), then the assertion is retried.
-///
-/// Requirements:
-/// - iOS 18.0+ / macOS 15.0+
-/// - Associated Domains entitlement: `webcredentials:<rpId>`
-/// - The domain's `apple-app-site-association` must list your app
-///
-/// Example:
-/// ```swift
-/// let prfProvider = PasskeyProvider()
-/// let passkey = PasskeyClient(prfProvider: prfProvider, relayConfig: nil)
-/// let response = try await passkey.signIn(
-///     request: SignInRequest(label: "personal")
-/// )
-/// ```
 /// iOS / macOS platform-specific options for [`PasskeyProvider`].
 ///
 /// Bundles the three iOS-only knobs (team ID, URLSession, presentation
-/// anchor) that integrators almost never need to set. Defaults work
-/// for every signed app store, App Store / TestFlight build.
+/// anchor) that integrators rarely need to set. Defaults work for any
+/// signed App Store / TestFlight build.
 @available(iOS 18.0, macOS 15.0, *)
 public struct IOSOptions {
     /// Apple Developer Team ID (10-character alphanumeric). Used by
@@ -59,6 +37,16 @@ public struct IOSOptions {
     }
 }
 
+/// Built-in passkey-based PRF provider for iOS / macOS using the
+/// AuthenticationServices framework.
+///
+/// Uses `ASAuthorizationPlatformPublicKeyCredentialProvider` with the
+/// PRF extension to derive deterministic 32-byte seeds from passkeys.
+///
+/// Requirements:
+/// - iOS 18.0+ / macOS 15.0+
+/// - Associated Domains entitlement: `webcredentials:<rpId>`
+/// - The domain's `apple-app-site-association` must list your app
 @available(iOS 18.0, macOS 15.0, *)
 public class PasskeyProvider: PrfProvider {
     /// Constant identifying Breez's shared `keys.breez.technology` RP.
@@ -332,14 +320,6 @@ public class PasskeyProvider: PrfProvider {
             return .skipped(reason: reason)
         }
     }
-
-    /// Auto-detect the Apple Developer Team ID from the running app's
-    /// signing information.
-    ///
-    // Team-ID detection lives in `PasskeyAssertionCore`'s
-    // `PasskeyTeamIdDetector` so Flutter / RN plugins can use the same
-    // logic. `checkDomainAssociation` above delegates to the core which
-    // calls into the detector when no explicit team ID is supplied.
 
     // MARK: - PasskeyAssertionError -> PrfProviderError mapping
 

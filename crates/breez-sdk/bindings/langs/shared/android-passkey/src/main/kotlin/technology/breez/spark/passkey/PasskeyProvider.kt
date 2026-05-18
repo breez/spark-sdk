@@ -23,9 +23,6 @@ import technology.breez.spark.passkey.core.RegistryOperation
  * passkeys. A thin wrapper around [CredentialManagerPrfCore] that adapts the
  * core's exceptions into the UniFFI-generated [PrfProviderException] variants.
  *
- * On first use, if no credential exists for the Relying Party, a new passkey
- * is automatically created (registered), then the assertion is retried.
- *
  * ## Requirements
  *
  * - Android 9+ (API 28) with Google Play Services, or Android 14+ (API 34)
@@ -34,42 +31,23 @@ import technology.breez.spark.passkey.core.RegistryOperation
  * - A physical device: emulators cannot complete the WebAuthn registration
  *   handshake.
  *
- * ## Example
- *
- * ```kotlin
- * val prfProvider = PasskeyProvider(
- *     activityProvider = { MainActivity.currentInstance!! },
- * )
- * val passkey = PasskeyClient(prfProvider, relayConfig = null)
- * val response = passkey.signIn(SignInRequest(label = "personal"))
- * ```
- *
- * @param activityProvider Called lazily on every PRF / registration request
- *   to obtain the current top Activity. Using a lambda (rather than a direct
- *   Activity reference) avoids holding a stale instance across configuration
+ * @param activityProvider Called lazily on every request to obtain the
+ *   current top Activity. Using a lambda (rather than a direct Activity
+ *   reference) avoids holding a stale instance across configuration
  *   changes.
  * @param rpId Relying Party ID. Must match the domain configured for
- *   cross-platform credential sharing. Changing this after users have
- *   registered passkeys will make their existing credentials undiscoverable.
- * @param rpName Display name for the RP, shown during credential registration.
- *   Only used when creating new passkeys.
+ *   cross-platform credential sharing.
+ * @param rpName Display name for the RP, shown during credential
+ *   registration.
  * @param userName User name stored with the credential. Defaults to [rpName].
- *   Only used during registration.
  * @param userDisplayName User display name shown in the passkey picker.
- *   Defaults to [userName] (or [rpName] if [userName] is null). Only used
- *   during registration.
- * @param autoRegister When `true`, [deriveSeed] automatically creates
- *   a new passkey if none exists, then retries the assertion. When
- *   `false` (default), throws [PrfProviderException.CredentialNotFound]
- *   and the caller drives registration via [createPasskey].
- * @param allowCredentialIds When non-empty, restricts assertion (sign-in)
- *   to one of the listed credential IDs. The platform refuses any other
- *   credential for this RP. Use this to bind sign-in to a specific
- *   passkey the caller has registered, instead of letting the platform
- *   pick any sibling credential that happens to share the RP. Critical
- *   for deterministic seed derivation when multiple credentials might
- *   exist for the same RP. When empty (default), the platform picks any
- *   credential matching the RP.
+ *   Defaults to [userName] (or [rpName] if [userName] is null).
+ * @param credentialRegistry Opt-in app-side store of known credential
+ *   IDs. When supplied, the SDK auto-merges stored IDs into
+ *   `allowCredentialIds` / `excludeCredentialIds` and writes new IDs
+ *   back after success.
+ * @param onRegistryError Best-effort callback for registry failures;
+ *   never blocks the ceremony.
  */
 public class PasskeyProvider(
     private val activityProvider: () -> Activity,
@@ -175,7 +153,7 @@ public class PasskeyProvider(
             // (NoCredentialException, GetCredentialProviderConfiguration
             // Exception, etc.) that the subsequent CredentialManager call
             // produces a recognizable error when the credential truly
-            // can't be used. iOS has the opposite property —
+            // can't be used. iOS has the opposite property : 
             // ASAuthorizationError collapses AASA failures into
             // `CredentialNotFound`, so iOS keeps NotAssociated as a
             // hard-block (that's the whole point of the pre-check there).

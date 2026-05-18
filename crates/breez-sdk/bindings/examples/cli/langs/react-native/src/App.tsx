@@ -482,7 +482,7 @@ const CliScreen: React.FC<CliScreenProps> = ({ config, onDisconnect }) => {
     commandHistoryRef.current.push(trimmed)
     persistence.addToHistory(trimmed).catch(() => {})
 
-    // Handle 'exit' / 'quit' locally — disconnect and go back
+    // Handle 'exit' / 'quit' locally: disconnect and go back
     if (trimmed === 'exit' || trimmed === 'quit') {
       appendLog('Disconnecting...')
       await disconnectAndGoBack()

@@ -145,7 +145,7 @@ impl PasskeyError {
     /// Coarse classification of the underlying failure. Non-PRF
     /// variants (Nostr, key derivation, mnemonic) all map to
     /// `Internal` because they're caused by SDK / network state, not
-    /// authenticator state — the caller should surface a generic
+    /// authenticator state: the caller should surface a generic
     /// retry / "try again later" UI.
     #[must_use]
     pub fn kind(&self) -> ErrorKind {

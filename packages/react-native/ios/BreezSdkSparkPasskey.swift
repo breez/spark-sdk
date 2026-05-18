@@ -131,7 +131,7 @@ class BreezSdkSparkPasskey: NSObject {
     /// (`app-site-association.cdn-apple.com`) for the bundle ID's
     /// `webcredentials` listing. Verification-level failures (no
     /// team ID, network errors, malformed JSON) all map to `Skipped`
-    /// — the SDK never blocks on this check, it's diagnostic.
+    ///: the SDK never blocks on this check, it's diagnostic.
     @objc
     func checkDomainAssociation(
         _ rpId: String,

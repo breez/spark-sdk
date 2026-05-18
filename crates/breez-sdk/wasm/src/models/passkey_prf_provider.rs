@@ -45,10 +45,10 @@ pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderEr
 
 pub struct WasmPrfProvider {
     pub inner: PrfProvider,
-    /// Cached `createPasskey` presence probe — JS providers may omit
+    /// Cached `createPasskey` presence probe: JS providers may omit
     /// it (only platform passkey backends implement registration).
     supports_create: OnceLock<bool>,
-    /// Cached `takeLastObservedCredentialId` presence probe — JS
+    /// Cached `takeLastObservedCredentialId` presence probe: JS
     /// providers may omit it (only the bundled platform-passkey
     /// provider currently implements the read-and-clear slot).
     supports_take_last_observed: OnceLock<bool>,
@@ -485,16 +485,16 @@ export interface PrfProvider {
  * the same shaping fields the Rust-side `DeriveSeedsRequest` carries.
  */
 export interface DeriveSeedsOptionsJSON {
-    /** Per-call allow-list; empty / omitted lets the provider default apply. */
+    /** Allow-list; empty / omitted lets the provider default apply. */
     allowCredentialIds?: Uint8Array[];
     /**
-     * Per-call control over the platform's "fast-fail when no local
-     * credential is available" behavior. On the web this maps to the
-     * WebAuthn `mediation: 'immediate'` / `uiMode: 'immediate'` flag:
-     * `true` (the historical default) opts into immediate mediation
-     * when the browser advertises the capability; `false` falls back
-     * to the standard picker (cross-device QR, hybrid transports).
-     * Omitted lets the provider's default apply.
+     * Controls the platform's "fast-fail when no local credential is
+     * available" behavior. On the web this maps to the WebAuthn
+     * `mediation: 'immediate'` / `uiMode: 'immediate'` flag: `true`
+     * opts into immediate mediation when the browser advertises the
+     * capability; `false` falls back to the standard picker
+     * (cross-device QR, hybrid transports). Omitted lets the provider
+     * default apply.
      */
     preferImmediatelyAvailableCredentials?: boolean;
 }

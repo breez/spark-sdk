@@ -21,7 +21,7 @@ fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
 
 /// Callback-based [`SessionManager`] for Flutter.
 ///
-/// Wraps two Dart callbacks — one to read a session, one to write it — and
+/// Wraps two Dart callbacks: one to read a session, one to write it: and
 /// exposes them as a `SessionManager` implementation for the SDK builder. The
 /// Dart callbacks see the service identity public key as a hex string.
 ///

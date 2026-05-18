@@ -112,7 +112,7 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
     // For a brand-new user with no existing passkey: register() creates
     // the credential AND derives the wallet seed in one orchestrated
     // call. On iOS+Android this is 2 OS prompts total (1 create + 1
-    // dual-salt assert) thanks to the SDK's bulk-PRF setup_wallet path.
+    // dual-salt assert) thanks to the SDK's bulk-PRF path.
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
@@ -176,7 +176,7 @@ async fn store_label() -> Result<()> {
     let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None);
 
     // For a new label on an existing identity, call sign_in(new_label)
-    // first to seed the SDK's identity cache via setup_wallet, THEN
+    // first to warm the SDK's identity cache, THEN
     // labels().store() uses the cached identity for free (1 OS prompt total).
     passkey.labels().store("personal".to_string()).await?;
     // ANCHOR_END: store-label
@@ -203,7 +203,7 @@ async fn single_cta_onboarding() -> Result<Wallet> {
         .await
     {
         Ok(response) => Ok(response.wallet),
-        // Branch on `error.kind()` — the canonical 7-value enum. The
+        // Branch on `error.kind()`: the canonical 7-value enum. The
         // SDK collapses iOS's sub-300ms fast-fail (reported as
         // UserCancelled by the OS) into `NoCredential` so the host
         // sees the right outcome without timing the call.

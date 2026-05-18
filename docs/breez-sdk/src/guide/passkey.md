@@ -116,13 +116,11 @@ Without the Associated Domains entitlement, passkey operations will fail with a 
 
 `PasskeyClient` takes three arguments: the `PrfProvider`, an optional `breezApiKey`, and an optional {{#name PasskeyConfig}}.
 
-- **`breezApiKey`** — Your Breez API key. When provided, the SDK connects to the Breez-managed relay with <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a> authentication for label storage and discovery. Pass `None` / `undefined` for public-relay-only label sync. Hosts that already pass the SDK's main `Config` to `connect()` can forward the same `api_key` here.
+- **`breezApiKey`**: Your Breez API key. When provided, the SDK connects to the Breez-managed relay with <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a> authentication for label storage and discovery. Pass `None` / `undefined` for public-relay-only label sync. Hosts that already pass the SDK's main `Config` to `connect()` can forward the same `api_key` here.
 
-The optional {{#name PasskeyConfig}} record currently carries one field:
+{{#name PasskeyConfig}} carries one field:
 
-- {{#name default_label}} - The wallet label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive `label = None`. Falls back to the SDK's internal `"Default"` when unset. Useful when your app brands a single wallet under a stable name.
-
-All other knobs (`rpId`, `credentialRegistry`, etc.) live on the platform `PasskeyProvider` constructor instead — they are provider-scoped, not client-scoped.
+- {{#name default_label}}: the wallet label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive no label. Falls back to the SDK's internal `"Default"` when unset. Useful when your app brands a single wallet under a stable name.
 
 The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy. See the [Listing labels](#listing-labels) and [Storing a label](#storing-a-label) code examples below for usage.
 
@@ -134,7 +132,7 @@ A PRF provider handles passkey credential registration, assertion, and PRF evalu
 
 The SDK ships a built-in `PasskeyProvider` on every platform with native passkey support: Web (browsers), iOS, macOS, Android, Kotlin Multiplatform, React Native, and Flutter. Each one implements the underlying `PrfProvider` trait against the platform's WebAuthn / Credential Manager / AuthenticationServices APIs, so most apps can use it as-is without writing any glue code.
 
-Built-in providers are not currently available for C#, Go, and Python.
+Built-in providers are not available for C#, Go, and Python.
 
 **Constructor options** (all built-in providers):
 
@@ -142,11 +140,11 @@ Built-in providers are not currently available for C#, Go, and Python.
 |--------|---------|-------------|
 | {{#name rp_id}} | **required** | Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` (= `keys.breez.technology`) if your app is Breez-registered. Changing this means existing passkeys produce a different seed; see [migration considerations](https://github.com/breez/passkey-login/blob/main/SDK%20implementation.md#passkey-migration-considerations). |
 | {{#name rp_name}} | `Breez SDK` | RP display name (registration only, does not affect existing credentials) |
-| {{#name user_name}} | {{#name rp_name}} | User name stored with the credential (registration only). On iOS this is the only field surfaced in the iCloud Keychain / passkey picker — the platform's `ASAuthorizationPlatformPublicKeyCredentialProvider` API has no `displayName` slot. Pass the per-credential friendly label here if you want users to see it. |
+| {{#name user_name}} | {{#name rp_name}} | User name stored with the credential (registration only). On iOS this is the only field surfaced in the iCloud Keychain / passkey picker: the platform's `ASAuthorizationPlatformPublicKeyCredentialProvider` API has no `displayName` slot. Pass the per-credential friendly label here if you want users to see it. |
 | {{#name user_display_name}} | {{#name user_name}} | Primary label shown in passkey picker on platforms that surface a separate display name (Android via WebAuthn JSON `user.displayName`, web via WebAuthn L3). iOS ignores. |
 | {{#name credential_registry}} | none | Opt-in app-side store of known credential IDs. When supplied, the SDK auto-merges stored IDs into `allowCredentialIds` / `excludeCredentialIds` and writes new IDs back after success. See [Implementing CredentialRegistry](#credentialregistry) below. |
 
-`rpId` is required — there is no shared default. Pass `PasskeyProvider.BREEZ_RP_ID` to opt into Breez's `keys.breez.technology` shared RP (only valid for Breez-registered apps); apps with their own RP domain pass their own string. Apps that share an RP ID recognize the same user's passkey without per-app enrollment.
+`rpId` is required: there is no shared default. Pass `PasskeyProvider.BREEZ_RP_ID` to opt into Breez's `keys.breez.technology` shared RP (only valid for Breez-registered apps); apps with their own RP domain pass their own string. Apps that share an RP ID recognize the same user's passkey without per-app enrollment.
 
 Pass a `PasskeyProvider` instance to `PasskeyClient` as shown in the [Connecting with a passkey](#connecting-with-passkey) snippets below. That is the recommended path for almost every app.
 
@@ -253,7 +251,7 @@ let provider = PasskeyProvider(credentialRegistry: KeychainCredentialRegistry())
 
 ### Android Block Store + SharedPreferences fallback
 
-Add the dependencies your registry needs (the SDK no longer ships them):
+Add the dependencies your registry needs:
 
 ```gradle
 implementation "com.google.android.gms:play-services-auth-blockstore:16.4.0"
@@ -412,19 +410,15 @@ const provider = new PasskeyProvider({
 - Web/RN/Flutter perform a constructor-time conformance check. A registry object missing one of `read` / `add` / `remove` / `clear` throws on construction so misconfiguration surfaces at startup. iOS / Kotlin / Rust enforce conformance at compile time.
 - When a `CredentialNotFound` would propagate to the host AND no `allowCredentialIds` AND no `credentialRegistry` were supplied, the SDK appends a help URL to the error message pointing here.
 
-### Migration note
-
-If your app previously relied on the auto-magic behaviour (the bundled `KnownCredentialsStore` on iOS / Android), copy the matching reference impl above into your codebase, instantiate it, and pass it via the new `credentialRegistry` constructor parameter. The behaviour is preserved end-to-end (iCloud-keychain sync on iOS, Block Store sync on Android, localStorage on web).
-
 ## Domain association diagnostic
 
-{{#name check_domain_association}} performs an Apple-app-site-association probe (iOS) or Digital Asset Links lookup (Android) against the configured RP and returns a typed {{#name DomainAssociation}} — `Associated`, `NotAssociated { source, reason }`, or `Skipped { reason }`. Use it to surface configuration mistakes (entitlement missing, AASA file not deployed) before a WebAuthn ceremony fails opaquely. The SDK never blocks on this check; treat `Skipped` as advisory.
+{{#name check_domain_association}} performs an Apple-app-site-association probe (iOS) or Digital Asset Links lookup (Android) against the configured RP and returns a typed {{#name DomainAssociation}}: `Associated`, `NotAssociated { source, reason }`, or `Skipped { reason }`. Use it to surface configuration mistakes (entitlement missing, AASA file not deployed) before a WebAuthn ceremony fails opaquely. The SDK never blocks on this check; treat `Skipped` as advisory.
 
 {{#tabs passkey:domain-association}}
 
 ## Checking passkey availability
 
-Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The single call collapses {{#name PrfProvider.is_supported}} and {{#name PrfProvider.check_domain_association}} into a tagged {{#name PasskeyAvailability}} value with four variants — `Available`, `PrfUnsupported`, `NotAssociated { source, reason }`, `Skipped { reason }` — so hosts can fall back to mnemonic-based onboarding on unsupported platforms (Android < 9, iOS < 18) and surface configuration mistakes (missing entitlement, AASA not deployed) without firing a WebAuthn ceremony:
+Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The single call collapses {{#name PrfProvider.is_supported}} and {{#name PrfProvider.check_domain_association}} into a tagged {{#name PasskeyAvailability}} value with four variants: `Available`, `PrfUnsupported`, `NotAssociated { source, reason }`, `Skipped { reason }`. Hosts can fall back to mnemonic-based onboarding on unsupported platforms (Android < 9, iOS < 18) and surface configuration mistakes (missing entitlement, AASA not deployed) without firing a WebAuthn ceremony:
 
 {{#tabs passkey:check-availability}}
 
@@ -437,7 +431,7 @@ To connect with a passkey, instantiate the built-in `PasskeyProvider`, pass it t
 
 {{#tabs passkey:connect-with-passkey}}
 
-For a brand-new user with no existing passkey, call {{#name PasskeyClient.register}} instead — it creates the credential AND derives the wallet seed in one orchestrated call. Hosts that want a single-CTA onboarding can try `sign_in` first and fall through to `register` when the SDK returns {{#enum PrfProviderError::CredentialNotFound}}; on iOS+Android with `preferImmediatelyAvailableCredentials` this fast-fails (sub-300ms, no UI) when no credential exists, so the silent probe is cheap.
+For a brand-new user with no existing passkey, call {{#name PasskeyClient.register}} instead: it creates the credential AND derives the wallet seed in one orchestrated call. Hosts that want a single-CTA onboarding can try `sign_in` first and fall through to `register` when the SDK returns {{#enum PrfProviderError::CredentialNotFound}}; on iOS+Android with `preferImmediatelyAvailableCredentials` this fast-fails (sub-300ms, no UI) when no credential exists, so the silent probe is cheap.
 
 {{#tabs passkey:signin-fallback-register}}
 
@@ -461,21 +455,21 @@ Publish a label to Nostr so it can be discovered later. {{#name PasskeyClient.re
 
 ## Error recovery
 
-The SDK collapses every passkey failure into seven actionable [`ErrorKind`](https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/enum.ErrorKind.html) values — branching on `error.kind()` is the canonical recovery pattern:
+The SDK collapses every passkey failure into seven actionable [`ErrorKind`](https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/enum.ErrorKind.html) values: branching on `error.kind()` is the canonical recovery pattern:
 
 | `ErrorKind` | What it means | Recommended action |
 |---|---|---|
 | `Cancel` | User dismissed the OS prompt (≥ 300ms, < 55s) | Sticky retry UI with "Try Again" |
 | `NoCredential` | No matching credential on this device (includes iOS sub-300ms fast-fail) | Fall through to {{#name PasskeyClient.register}} |
 | `AlreadyExists` | Register hit a credential in `excludeCredentialIds` | Flip to {{#name PasskeyClient.sign_in}}; the OS picker surfaces the existing credential |
-| `Timeout` | OS biometric inactivity timeout (≥ 55s) — distinct from a user-cancel | Sticky retry with timeout-specific copy. **Do not** auto-retry |
+| `Timeout` | OS biometric inactivity timeout (≥ 55s): distinct from a user-cancel | Sticky retry with timeout-specific copy. **Do not** auto-retry |
 | `PrfUnsupported` | Authenticator doesn't implement the PRF extension | Fall back to mnemonic onboarding |
 | `Configuration` | Entitlement missing, AASA stale, or assetlinks malformed | Developer-facing error; surface {{#name check_domain_association}}'s `NotAssociated` reason |
 | `Internal` | Network / library / generic failure | Generic "try again later" UI |
 
 Web also exposes typed exception classes (`PasskeyAlreadyExistsError`, `PasskeyTimedOutError`, `PasskeyCredentialNotFoundError`) as an alternative to `error.kind()` for `instanceof` matching.
 
-Two recovery paths are common enough to warrant runnable examples — `AlreadyExists` (flip to sign-in) and `Timeout` (sticky retry):
+Two recovery paths are common enough to warrant runnable examples: `AlreadyExists` (flip to sign-in) and `Timeout` (sticky retry):
 
 {{#tabs passkey:recover-already-exists}}
 

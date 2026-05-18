@@ -1,11 +1,9 @@
 use super::error::PrfProviderError;
 use super::models::RegisteredCredential;
 
-/// Per-call inputs for [`PrfProvider::derive_seeds`]. Bundles the salt
-/// list with optional ceremony-shaping fields so providers can apply
-/// them per call without forcing every host to reconstruct the
-/// provider for each ceremony. Hosts that don't care fall back to
-/// [`Default`] (= `salts` only, all overrides empty / `None`).
+/// Per-call inputs for [`PrfProvider::derive_seeds`]. Hosts that
+/// don't need per-ceremony overrides fall back to [`Default`]
+/// (`salts` only, all overrides empty / `None`).
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct DeriveSeedsRequest {
@@ -13,25 +11,20 @@ pub struct DeriveSeedsRequest {
     /// returned per salt, in the same order.
     pub salts: Vec<String>,
 
-    /// Per-call assertion allow-list. When non-empty, the platform is
-    /// asked to refuse any credential whose ID is not in this list.
-    /// Server-driven authentication (`/passkey/options` returning the
-    /// user's known credentials) is the canonical use case. Empty
-    /// (default) lets the provider's configured default apply (built-in
-    /// providers fall through to their per-instance `allow_credential_ids`
-    /// or to "any matching credential" when that is also empty).
+    /// Assertion allow-list. When non-empty, the platform refuses any
+    /// credential whose ID is not in this list (canonical use case:
+    /// server-driven auth where `/passkey/options` returns the user's
+    /// known credentials). Empty falls through to the provider's
+    /// configured default.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub allow_credential_ids: Vec<Vec<u8>>,
 
-    /// Per-call control over the platform's "fast-fail when no local
-    /// credential is available" behavior. `Some(true)` (the historical
-    /// default) suppresses the cross-device picker and lets a missing
-    /// credential surface as `CredentialNotFound` immediately.
-    /// `Some(false)` opts back into the OS picker (e.g. cross-device
-    /// QR sign-in on iOS, hybrid transports on Android, browser
-    /// `mediation: undefined` on web). `None` means "use the
-    /// provider's default" (same as `Some(true)` for built-in
-    /// providers).
+    /// Restrict the assertion to credentials already present on this
+    /// device. When `true`, the OS skips the cross-device picker (iOS
+    /// QR, Android hybrid, web `mediation: undefined`) and surfaces a
+    /// missing local credential as `CredentialNotFound` immediately.
+    /// When `false`, the OS picker is shown as usual. Unset uses the
+    /// provider's default (`true` for built-in providers).
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub prefer_immediately_available_credentials: Option<bool>,
 }
@@ -103,7 +96,7 @@ pub trait PrfProvider: Send + Sync {
     /// entry matches a credential already on the device, the platform
     /// raises `CredentialAlreadyExists`. Branding fields (`user_name`,
     /// `user_display_name`) live on the platform `PasskeyProvider`
-    /// constructor; the `user.id` is always provider-minted and
+    /// constructor. The `user.id` is always provider-minted and
     /// surfaced on `RegisteredCredential.user_id`.
     async fn create_passkey(
         &self,

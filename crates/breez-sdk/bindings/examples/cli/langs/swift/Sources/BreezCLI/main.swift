@@ -112,7 +112,7 @@ class CliEventListener: EventListener {
             FileHandle.standardError.write(Data("\r\u{1b}[K\(msg)\n".utf8))
             rl_forced_update_display()
         } else {
-            // Command is running — just print the event normally.
+            // Command is running: just print the event normally.
             FileHandle.standardError.write(Data("\(msg)\n".utf8))
         }
     }

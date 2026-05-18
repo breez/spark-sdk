@@ -89,7 +89,7 @@ void _registryAddFireAndForget(
   });
 }
 
-/// Options for constructing a [PasskeyProvider]. `rpId` is required —
+/// Options for constructing a [PasskeyProvider]. `rpId` is required : 
 /// pass [PasskeyProvider.breezRpId] to opt into Breez's shared RP.
 class PasskeyProviderOptions {
   /// Relying Party ID. Must match the domain configured for cross-platform
@@ -273,7 +273,7 @@ class PasskeyProvider {
   }
 
   /// Register a new passkey with PRF support. `excludeCredentialIds`
-  /// is the only per-call knob — branding fields (`userName`,
+  /// is the only per-call knob: branding fields (`userName`,
   /// `userDisplayName`) live on the constructor.
   ///
   /// `user.id` is never host-supplied: the native plugin mints a fresh

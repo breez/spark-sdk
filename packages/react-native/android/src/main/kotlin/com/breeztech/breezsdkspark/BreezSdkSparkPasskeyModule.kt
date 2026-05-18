@@ -59,7 +59,7 @@ private const val POST_CREATE_GRACE_TOTAL_MS: Long = 800L
  * maps [CredentialManagerPrfCoreException] into Promise rejection codes
  * understood by the JS side.
  *
- * Do not hand-edit [CredentialManagerPrfCore.kt] here — it is a generated
+ * Do not hand-edit [CredentialManagerPrfCore.kt] here: it is a generated
  * mirror of the canonical copy under
  * `crates/breez-sdk/bindings/langs/shared/android-passkey/`. Run
  * `cargo xtask sync-passkey-core` after editing the canonical file.

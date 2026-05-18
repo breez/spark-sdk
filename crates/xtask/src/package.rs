@@ -263,7 +263,7 @@ fn parse_wasm_exports(dts_path: &Path) -> Result<WasmExports> {
 
     anyhow::ensure!(
         !functions.is_empty() && !classes.is_empty(),
-        "Failed to parse WASM exports from {} — found {} functions, {} classes. \
+        "Failed to parse WASM exports from {}: found {} functions, {} classes. \
          wasm-bindgen output format may have changed.",
         dts_path.display(),
         functions.len(),
@@ -297,7 +297,7 @@ fn create_ssr_entry_point(pkg_dir: &Path) -> Result<()> {
     let mut js = String::new();
     js.push_str(
         r#"// SSR-safe entry point for Breez SDK
-// Safe to import during server-side rendering — no WASM, no browser APIs, no Node.js APIs.
+// Safe to import during server-side rendering: no WASM, no browser APIs, no Node.js APIs.
 // Call init() on the client before using any SDK functions.
 
 let _module = null;
@@ -334,7 +334,7 @@ export default async function init(wasmInput) {
         ));
     }
 
-    // Class stubs — after init(), delegate to the real class via `return new`
+    // Class stubs: after init(), delegate to the real class via `return new`
     for name in &exports.classes {
         js.push_str(&format!(
             "export class {name} {{\n  \
@@ -471,7 +471,7 @@ fn create_nodejs_esm_wrapper(pkg_dir: &Path) -> Result<()> {
 
     let mut mjs = String::new();
     mjs.push_str(
-        "// ESM wrapper for the CJS Node.js entry — re-exports named bindings\n\
+        "// ESM wrapper for the CJS Node.js entry: re-exports named bindings\n\
          // so that `import { connect } from '@breeztech/breez-sdk-spark'` works\n\
          // in ESM contexts.\n\
          import pkg from './index.js';\n\n\
