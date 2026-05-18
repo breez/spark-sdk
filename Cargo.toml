@@ -200,7 +200,7 @@ shlex = "1.3.0"
 spark = { path = "crates/spark", default-features = false }
 spark-mysql = { path = "crates/spark-mysql" }
 spark-postgres = { path = "crates/spark-postgres" }
-spark-token-primitives = "0.1.2"
+spark-token-primitives = "0.1.3"
 spark-wallet = { path = "crates/spark-wallet", default-features = false }
 syn = "2.0.105"
 test-log = { version = "0.2.18", default-features = false }
@@ -234,7 +234,3 @@ wasm-bindgen-test = "0.3.50"
 web-sys = { version = "0.3.77", features = ["console", "DomException"] }
 webpki-roots = "1.0"
 xshell = "0.2"
-
-[patch.crates-io]
-# Local override until spark-token-primitives 0.1.3 (with hash_final_token_transaction) is published.
-spark-token-primitives = { path = "/Users/peterrojs/Projects/spark/signer/spark-token-primitives" }
