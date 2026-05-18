@@ -330,7 +330,7 @@ impl StableBalance {
                                             // is stale until sync completes. The next Synced event
                                             // will re-queue auto-convert if there's still excess.
                                             stable_balance.queue.clear_pending_auto_convert().await;
-                                            stable_balance.emit_conversion_completed();
+                                            stable_balance.emit_conversion_completed().await;
                                         }
                                     }
                                     PerReceiveResult::Retry => {
@@ -352,7 +352,7 @@ impl StableBalance {
                                 debug!("Conversion worker: auto-convert done (converted={converted})");
                                 stable_balance.queue.complete_task(&task).await;
                                 if converted {
-                                    stable_balance.emit_conversion_completed();
+                                    stable_balance.emit_conversion_completed().await;
                                 }
                             }
                             ConversionTask::Deactivation(token_id) => {
@@ -367,7 +367,7 @@ impl StableBalance {
                                 debug!("Conversion worker: completed task {task:?} (converted={converted})");
                                 stable_balance.queue.complete_task(&task).await;
                                 if converted {
-                                    stable_balance.emit_conversion_completed();
+                                    stable_balance.emit_conversion_completed().await;
                                 }
                             }
                         }

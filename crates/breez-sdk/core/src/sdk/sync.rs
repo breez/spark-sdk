@@ -277,7 +277,7 @@ impl BreezSdk {
     }
 
     pub(super) async fn check_and_claim_static_deposits(&self) -> Result<(), SdkError> {
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
         let existing_deposits = self.storage.list_deposits().await?;
         let existing_keys: std::collections::HashSet<TxOutput> = existing_deposits
             .iter()

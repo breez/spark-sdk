@@ -7,11 +7,9 @@ use tracing::{error, trace};
 
 use crate::{
     ClaimDepositRequest, ClaimDepositResponse, ListUnclaimedDepositsRequest,
-    ListUnclaimedDepositsResponse, RefundDepositRequest, RefundDepositResponse,
-    error::SdkError,
-    models::Payment,
-    persist::UpdateDepositPayload,
-    utils::{payments::get_payment_and_emit_event, utxo_fetcher::CachedUtxoFetcher},
+    ListUnclaimedDepositsResponse, RefundDepositRequest, RefundDepositResponse, error::SdkError,
+    models::Payment, persist::UpdateDepositPayload, sdk::RuntimeEvent,
+    utils::utxo_fetcher::CachedUtxoFetcher,
 };
 
 use super::BreezSdk;
@@ -28,7 +26,7 @@ impl BreezSdk {
         &self,
         request: ClaimDepositRequest,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
         let detailed_utxo =
             CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
                 .fetch_detailed_utxo(&request.txid, request.vout)
@@ -47,7 +45,10 @@ impl BreezSdk {
                 self.storage
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
-                get_payment_and_emit_event(&self.storage, &self.event_emitter, payment.clone())
+                self.event_emitter
+                    .emit_runtime_event(RuntimeEvent::DepositClaimed {
+                        payment: Box::new(payment.clone()),
+                    })
                     .await;
                 Ok(ClaimDepositResponse { payment })
             }

@@ -34,6 +34,7 @@ impl RuntimeProfile for ClientRuntime {
 
     async fn start_sdk_services(&self, sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>) {
         register_client_sync_listener(sdk).await;
+        register_client_runtime_event_handler(sdk).await;
         sdk.spawn_spark_private_mode_initialization();
         spawn_client_runtime_loop(sdk, initial_synced_sender);
         sdk.try_recover_lightning_address();
@@ -84,7 +85,10 @@ impl RuntimeProfile for ClientRuntime {
         })
     }
 
-    async fn ensure_spark_private_mode_initialized(&self, sdk: &BreezSdk) -> Result<(), SdkError> {
+    async fn maybe_ensure_spark_private_mode_initialized(
+        &self,
+        sdk: &BreezSdk,
+    ) -> Result<(), SdkError> {
         sdk.ensure_spark_private_mode_initialized_inner().await
     }
 }
@@ -93,7 +97,6 @@ fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sende
     let sdk = sdk.clone();
     let mut shutdown_receiver = sdk.shutdown_sender.subscribe();
     let mut wallet_events = sdk.spark_wallet.subscribe_events();
-    let mut runtime_events = sdk.event_emitter.subscribe_runtime_events();
     let mut sync_requests = sdk.sync_coordinator.subscribe();
     let mut last_sync_time = SystemTime::now();
     let sync_interval = u64::from(sdk.config.sync_interval_secs);
@@ -118,12 +121,6 @@ fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sende
 
                     event = wallet_events.recv() => {
                         on_wallet_event(&sdk, event).await;
-                    }
-
-                    runtime_event = runtime_events.recv() => {
-                        if on_runtime_event(&sdk, runtime_event).await.is_break() {
-                            return;
-                        }
                     }
 
                     sync_request = sync_requests.recv() => {
@@ -184,24 +181,33 @@ async fn on_wallet_event(sdk: &BreezSdk, event: Result<WalletEvent, broadcast::e
     }
 }
 
-async fn on_runtime_event(
-    sdk: &BreezSdk,
-    event: Result<RuntimeEvent, broadcast::error::RecvError>,
-) -> std::ops::ControlFlow<()> {
-    match event {
-        Ok(RuntimeEvent::StableBalanceConversionCompleted) => {
-            sdk.sync_coordinator
-                .trigger_sync_no_wait(SyncType::Full, true)
-                .await;
-            std::ops::ControlFlow::Continue(())
-        }
-        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-            warn!("Runtime event receiver lagged, skipped {skipped} events");
-            std::ops::ControlFlow::Continue(())
-        }
-        Err(broadcast::error::RecvError::Closed) => {
-            info!("Runtime event sender closed");
-            std::ops::ControlFlow::Break(())
+async fn register_client_runtime_event_handler(sdk: &BreezSdk) {
+    sdk.event_emitter
+        .add_runtime_event_handler(Box::new(ClientRuntimeEventHandler { sdk: sdk.clone() }))
+        .await;
+}
+
+struct ClientRuntimeEventHandler {
+    sdk: BreezSdk,
+}
+
+#[macros::async_trait]
+impl crate::events::RuntimeEventHandler for ClientRuntimeEventHandler {
+    async fn handle(&self, event: RuntimeEvent) {
+        match event {
+            RuntimeEvent::StableBalanceConversionCompleted => {
+                self.sdk
+                    .sync_coordinator
+                    .trigger_sync_no_wait(SyncType::Full, true)
+                    .await;
+            }
+            RuntimeEvent::DepositClaimed { .. } => {
+                if let Err(e) =
+                    update_balances(self.sdk.spark_wallet.clone(), self.sdk.storage.clone()).await
+                {
+                    error!("Failed to refresh balances after claim_deposit: {e:?}");
+                }
+            }
         }
     }
 }

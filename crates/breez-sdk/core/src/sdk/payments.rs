@@ -49,7 +49,7 @@ impl BreezSdk {
         &self,
         request: ReceivePaymentRequest,
     ) -> Result<ReceivePaymentResponse, SdkError> {
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
         match request.payment_method {
             ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
                 fee: 0,
@@ -413,7 +413,7 @@ impl BreezSdk {
         &self,
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
         Box::pin(self.maybe_convert_token_send_payment(request, false, None)).await
     }
 

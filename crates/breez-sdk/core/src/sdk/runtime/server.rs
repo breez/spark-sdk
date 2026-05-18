@@ -2,8 +2,9 @@ use tokio::sync::watch;
 
 use crate::{GetInfoRequest, GetInfoResponse, error::SdkError};
 
-use super::RuntimeProfile;
+use super::{RuntimeEvent, RuntimeProfile};
 use crate::sdk::{BreezSdk, SyncType};
+use crate::utils::payments::get_payment_and_emit_event;
 
 pub(super) struct ServerRuntime;
 
@@ -19,6 +20,9 @@ impl RuntimeProfile for ServerRuntime {
         _initial_synced_sender: watch::Sender<bool>,
     ) {
         sdk.spawn_jwt_init();
+        sdk.event_emitter
+            .add_runtime_event_handler(Box::new(ServerRuntimeEventHandler { sdk: sdk.clone() }))
+            .await;
     }
 
     async fn run_user_sync(
@@ -58,7 +62,27 @@ impl RuntimeProfile for ServerRuntime {
         })
     }
 
-    async fn ensure_spark_private_mode_initialized(&self, _sdk: &BreezSdk) -> Result<(), SdkError> {
+    async fn maybe_ensure_spark_private_mode_initialized(
+        &self,
+        _sdk: &BreezSdk,
+    ) -> Result<(), SdkError> {
         Ok(())
+    }
+}
+
+struct ServerRuntimeEventHandler {
+    sdk: BreezSdk,
+}
+
+#[macros::async_trait]
+impl crate::events::RuntimeEventHandler for ServerRuntimeEventHandler {
+    async fn handle(&self, event: RuntimeEvent) {
+        match event {
+            RuntimeEvent::DepositClaimed { payment } => {
+                get_payment_and_emit_event(&self.sdk.storage, &self.sdk.event_emitter, *payment)
+                    .await;
+            }
+            RuntimeEvent::StableBalanceConversionCompleted => {}
+        }
     }
 }

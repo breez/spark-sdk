@@ -187,7 +187,7 @@ impl BreezSdk {
     /// Some settings are fetched from the Spark network so network requests are performed.
     pub async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
         // Ensure spark private mode is initialized to avoid race conditions with the initialization task.
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
 
         let spark_user_settings = self.spark_wallet.query_wallet_settings().await?;
 

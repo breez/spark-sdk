@@ -21,6 +21,9 @@ pub(crate) type SdkRuntime = Arc<dyn RuntimeProfile>;
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeEvent {
     StableBalanceConversionCompleted,
+    DepositClaimed {
+        payment: Box<crate::models::Payment>,
+    },
 }
 
 pub(crate) fn runtime_from_config(config: &Config) -> SdkRuntime {
@@ -50,7 +53,10 @@ pub(crate) trait RuntimeProfile: Send + Sync {
         request: GetInfoRequest,
     ) -> Result<GetInfoResponse, SdkError>;
 
-    async fn ensure_spark_private_mode_initialized(&self, sdk: &BreezSdk) -> Result<(), SdkError>;
+    async fn maybe_ensure_spark_private_mode_initialized(
+        &self,
+        sdk: &BreezSdk,
+    ) -> Result<(), SdkError>;
 }
 
 #[cfg(test)]

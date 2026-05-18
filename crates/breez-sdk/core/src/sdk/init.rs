@@ -59,7 +59,7 @@ impl BreezSdk {
         let span = tracing::Span::current();
         tokio::spawn(
             async move {
-                if let Err(e) = sdk.ensure_spark_private_mode_initialized().await {
+                if let Err(e) = sdk.maybe_ensure_spark_private_mode_initialized().await {
                     error!("Failed to initialize spark private mode: {e:?}");
                 }
             }
@@ -87,9 +87,9 @@ impl BreezSdk {
         }.instrument(span));
     }
 
-    pub(super) async fn ensure_spark_private_mode_initialized(&self) -> Result<(), SdkError> {
+    pub(super) async fn maybe_ensure_spark_private_mode_initialized(&self) -> Result<(), SdkError> {
         self.runtime
-            .ensure_spark_private_mode_initialized(self)
+            .maybe_ensure_spark_private_mode_initialized(self)
             .await
     }
 

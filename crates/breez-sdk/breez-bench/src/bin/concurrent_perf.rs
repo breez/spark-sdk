@@ -21,7 +21,6 @@ use breez_sdk_spark::{
     default_server_config,
 };
 
-use breez_bench::events::wait_for_claimed_event;
 use breez_bench::stats::DurationStats;
 
 #[derive(Parser, Debug)]
@@ -98,6 +97,7 @@ struct PaymentResult {
 
 struct BenchSdkInstance {
     sdk: BreezSdk,
+    #[allow(dead_code)]
     events: mpsc::Receiver<SdkEvent>,
     #[allow(dead_code)]
     temp_dir: Option<TempDir>,
@@ -900,14 +900,29 @@ async fn fund_via_faucet(
             let extra = needed.clamp(FAUCET_MIN_PER_CALL, FAUCET_MAX_PER_CALL);
             let txid = faucet.fund_address(&deposit_address, extra).await?;
             info!("Top-up faucet txid: {}", txid);
-            wait_for_claimed_event(&mut sdk_instance.events, 240).await?;
-            sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
-            let after = sdk_instance
-                .sdk
-                .get_info(GetInfoRequest {
-                    ensure_synced: Some(false),
-                })
-                .await?;
+
+            let claim_start = Instant::now();
+            let claim_timeout = Duration::from_secs(240);
+            let balance_before = info.balance_sats;
+            let after = loop {
+                sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+                let snap = sdk_instance
+                    .sdk
+                    .get_info(GetInfoRequest {
+                        ensure_synced: Some(false),
+                    })
+                    .await?;
+                if snap.balance_sats > balance_before {
+                    break snap;
+                }
+                if claim_start.elapsed() >= claim_timeout {
+                    bail!(
+                        "Timeout waiting for top-up to land (balance still {} sats)",
+                        snap.balance_sats
+                    );
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            };
             if after.balance_sats >= min_required {
                 info!("Funded after top-up: {} sats", after.balance_sats);
                 return Ok(());

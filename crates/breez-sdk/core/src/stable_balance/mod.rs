@@ -573,9 +573,10 @@ impl StableBalance {
     }
 
     /// Emits the fact that a conversion changed balances and payments.
-    pub(super) fn emit_conversion_completed(&self) {
+    pub(super) async fn emit_conversion_completed(&self) {
         self.event_emitter
-            .emit_runtime_event(RuntimeEvent::StableBalanceConversionCompleted);
+            .emit_runtime_event(RuntimeEvent::StableBalanceConversionCompleted)
+            .await;
     }
 }
 

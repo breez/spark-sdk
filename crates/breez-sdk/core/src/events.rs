@@ -6,7 +6,7 @@ use std::{
 
 use platform_utils::time::Instant;
 use serde::Serialize;
-use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 use uuid::Uuid;
 
@@ -185,7 +185,7 @@ pub struct EventEmitter {
     has_real_time_sync: bool,
     rtsync_failed: AtomicBool,
     listener_index: AtomicU64,
-    runtime_event_sender: broadcast::Sender<RuntimeEvent>,
+    runtime_event_handlers: RwLock<Vec<Box<dyn RuntimeEventHandler>>>,
     /// Internal listeners see ALL events before middleware processing
     internal_listeners: RwLock<BTreeMap<String, Box<dyn EventListener>>>,
     /// Middleware chain that can transform/suppress events
@@ -195,15 +195,19 @@ pub struct EventEmitter {
     synced_event_buffer: Mutex<Option<InternalSyncedEvent>>,
 }
 
+#[macros::async_trait]
+pub(crate) trait RuntimeEventHandler: Send + Sync {
+    async fn handle(&self, event: RuntimeEvent);
+}
+
 impl EventEmitter {
     /// Create a new event emitter
     pub fn new(has_real_time_sync: bool) -> Self {
-        let (runtime_event_sender, _) = broadcast::channel(256);
         Self {
             has_real_time_sync,
             rtsync_failed: AtomicBool::new(false),
             listener_index: AtomicU64::new(0),
-            runtime_event_sender,
+            runtime_event_handlers: RwLock::new(Vec::new()),
             internal_listeners: RwLock::new(BTreeMap::new()),
             middleware: RwLock::new(Vec::new()),
             external_listeners: RwLock::new(BTreeMap::new()),
@@ -268,12 +272,16 @@ impl EventEmitter {
         mw.push(middleware);
     }
 
-    pub(crate) fn subscribe_runtime_events(&self) -> broadcast::Receiver<RuntimeEvent> {
-        self.runtime_event_sender.subscribe()
+    pub(crate) async fn add_runtime_event_handler(&self, handler: Box<dyn RuntimeEventHandler>) {
+        let mut handlers = self.runtime_event_handlers.write().await;
+        handlers.push(handler);
     }
 
-    pub(crate) fn emit_runtime_event(&self, event: RuntimeEvent) {
-        let _ = self.runtime_event_sender.send(event);
+    pub(crate) async fn emit_runtime_event(&self, event: RuntimeEvent) {
+        let handlers = self.runtime_event_handlers.read().await;
+        for handler in handlers.iter() {
+            handler.handle(event.clone()).await;
+        }
     }
 
     /// Emit an event through the three-phase pipeline:
