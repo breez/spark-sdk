@@ -292,11 +292,13 @@ impl SdkBuilder {
         Ok(self.with_mysql_connection_pool(pool))
     }
 
-    /// Internal: plumb a pre-built session manager into the builder. Used by
-    /// the WASM bindings to inject a JS-side DB-backed session manager. Not
-    /// part of the public Rust API surface — Rust integrators should rely on
-    /// the session manager derived from the [`SdkContext`]'s DB pool.
-    #[doc(hidden)]
+    /// WASM-only bridge for the JS-side DB-backed session manager.
+    ///
+    /// Not exposed on native targets: Rust integrators rely on the session
+    /// manager derived from the [`SdkContext`]'s DB pool. Cfg-gated to the
+    /// WASM target rather than `#[doc(hidden)]` so the method literally
+    /// doesn't exist outside WASM and can't be misused.
+    #[cfg(target_family = "wasm")]
     #[must_use]
     pub fn with_session_manager(mut self, session_manager: Arc<dyn SessionManager>) -> Self {
         self.session_manager = Some(session_manager);
