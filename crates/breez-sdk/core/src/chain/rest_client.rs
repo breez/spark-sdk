@@ -55,21 +55,22 @@ struct RestClientChainServiceInner {
 
 /// REST-backed [`BitcoinChainService`].
 ///
-/// The trait is exported through UniFFI with `with_foreign`, which makes
-/// UniFFI re-wrap every `Arc<dyn BitcoinChainService>` that round-trips
+/// The trait is exported through `UniFFI` with `with_foreign`, which makes
+/// `UniFFI` re-wrap every `Arc<dyn BitcoinChainService>` that round-trips
 /// across the FFI boundary in a foreign-callback proxy — even when both
 /// sides are Rust in the same process. That proxy routes calls back into
-/// Rust via UniFFI's `RustFuture`, which is polled outside the surrounding
+/// Rust via `UniFFI`'s `RustFuture`, which is polled outside the surrounding
 /// tokio runtime context, so `reqwest`'s `tokio::time::sleep` panics with
 /// "no reactor running".
 ///
 /// To stay correct under round-tripping (e.g. shared-chain-service in a
-/// server-side harness that builds the service in Rust, hands it to
-/// Kotlin/Swift/etc., and passes it back into multiple SDK instances), we
-/// capture a [`tokio::runtime::Handle`] at construction time and dispatch
-/// each trait-method body onto it via [`Handle::spawn`]. The outer future
-/// we return to UniFFI is just a `JoinHandle` await — a channel-wakeup
-/// poll that needs no tokio context.
+/// server-side harness that builds the service in Rust, hands it to a
+/// foreign-language integration, and passes it back into multiple SDK
+/// instances), we capture a [`tokio::runtime::Handle`] at construction
+/// time and dispatch each trait-method body onto it via
+/// [`tokio::runtime::Handle::spawn`]. The outer future we return to
+/// `UniFFI` is just a `JoinHandle` await — a channel-wakeup poll that
+/// needs no tokio context.
 pub struct RestClientChainService {
     inner: Arc<RestClientChainServiceInner>,
     #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -124,7 +125,7 @@ impl RestClientChainService {
                 api_type,
             }),
             // Captured here so each trait-method body can re-enter the
-            // surrounding runtime even when invoked from a UniFFI
+            // surrounding runtime even when invoked from a `UniFFI`
             // foreign-callback proxy that polls outside any tokio context.
             // Callers reach this constructor from within an async path
             // (`new_rest_chain_service`, `SdkBuilder::build`, etc.), so
@@ -136,7 +137,7 @@ impl RestClientChainService {
 
     /// Runs `work` on the captured tokio runtime (non-WASM) or inline
     /// (WASM, where there's no separate runtime to dispatch onto).
-    #[allow(clippy::unused_async)] // wasm branch is sync-looking but consumes the future
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     async fn run_on_runtime<F, Fut, T>(&self, work: F) -> Result<T, ChainServiceError>
     where
         F: FnOnce(Arc<RestClientChainServiceInner>) -> Fut + Send + 'static,
@@ -144,17 +145,19 @@ impl RestClientChainService {
         T: Send + 'static,
     {
         let inner = self.inner.clone();
-        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-        {
-            self.runtime_handle
-                .spawn(async move { work(inner).await })
-                .await
-                .map_err(|e| ChainServiceError::Generic(format!("join error: {e}")))?
-        }
-        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-        {
-            work(inner).await
-        }
+        self.runtime_handle
+            .spawn(async move { work(inner).await })
+            .await
+            .map_err(|e| ChainServiceError::Generic(format!("join error: {e}")))?
+    }
+
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    async fn run_on_runtime<F, Fut, T>(&self, work: F) -> Result<T, ChainServiceError>
+    where
+        F: FnOnce(Arc<RestClientChainServiceInner>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ChainServiceError>>,
+    {
+        work(self.inner.clone()).await
     }
 }
 
@@ -260,10 +263,7 @@ impl RestClientChainServiceInner {
     // ---- BitcoinChainService method bodies (run on the captured runtime
     //      via the outer struct's `run_on_runtime` helper) ---------------
 
-    async fn do_get_address_utxos(
-        &self,
-        address: String,
-    ) -> Result<Vec<Utxo>, ChainServiceError> {
+    async fn do_get_address_utxos(&self, address: String) -> Result<Vec<Utxo>, ChainServiceError> {
         let address = address
             .parse::<Address<NetworkUnchecked>>()?
             .require_network(self.network.into())?;
