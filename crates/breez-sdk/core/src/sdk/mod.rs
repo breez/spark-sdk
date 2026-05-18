@@ -238,9 +238,9 @@ pub fn default_config(network: Network) -> Config {
 /// ephemeral per-request SDK instances incur no implicit setup overhead.
 ///
 /// `get_info` reads balance directly from the spark wallet in this mode
-/// rather than from the background-maintained storage cache, so balance is
-/// always fresh and `ensure_synced=true` is rejected with an invalid-input
-/// error.
+/// rather than from the background-maintained storage cache, so balance 
+/// reflects the latest local sync and `ensure_synced=true` is rejected with 
+/// an invalid-input error
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_server_config(network: Network) -> Config {
     let mut config = default_config(network);
