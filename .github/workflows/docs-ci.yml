@@ -90,10 +90,6 @@ jobs:
           # crates/breez-sdk/bindings/Makefile changes.
           key: gobley-uniffi-bindgen-v0.3.7-with-fixes-${{ runner.os }}
 
-      - name: Ensure Rust toolchain active
-        if: runner.os == 'macOS'
-        run: rustup default stable
-
       - name: Install Rust targets (iOS)
         if: matrix.ios-targets
         run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
