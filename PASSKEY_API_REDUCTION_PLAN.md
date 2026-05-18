@@ -33,6 +33,7 @@ execute is here; no prior session context required.
 | Default label | Configurable via a new **`PasskeyConfig`** struct passed to `PasskeyClient::new` (see §1.1). Falls back to the internal `DEFAULT_LABEL` const (`"Default"`) when unset. |
 | Relay config | **Delete `NostrRelayConfig`** (one-field wrapper after `timeout_secs` was already dropped). Fold its `breez_api_key` into `PasskeyConfig`. Removes a public type from all 5 bindings. |
 | Provider naming | The platform provider class is already **`PasskeyProvider`** on all 5 platforms (iOS/Android/JS/Flutter/RN) — verify, do **not** rename. Residual `prf` cruft (filenames, `PasskeyPrfException`, JS subpath) handled in opt-in Stage D (§6). |
+| `user_id` return-only | Drop `user_id` from `RegisterRequest` + `CreatePasskeyRequest`; add required `user_id` to `RegisteredCredential` (SDK generates, host reads back). Footgun removal — see §1.4. |
 
 ### Confirmed decisions
 
@@ -100,6 +101,29 @@ no `rp_id`). Do **not** lift them up: `rp_id`, `rp_name`, `user_name`,
 `user_display_name`, `auto_register`, `allow_credential_ids`,
 `credential_registry`, `on_registry_error`, `hints`, `default_timeout_ms`,
 `authenticator_attachment`, `team_id`.
+
+### 1.4 `user_id` is return-only (footgun removal)
+
+WebAuthn `user.id` (user handle) is opaque, never shown in any OS UI, and
+reusing the same value across creates on the same `rp_id` silently
+overwrites the prior credential on some authenticators (Apple Passwords) —
+destroying the PRF secret the wallet derives from. Branding/identification
+belongs in `user_name` / `user_display_name` (picker-visible). There is no
+legitimate reason for a host to *supply* `user.id` in this SDK.
+
+- **Remove `user_id` from `RegisterRequest`** (core `passkey_client.rs`).
+- **Remove `user_id` from `CreatePasskeyRequest`** (core `models.rs`). It
+  now carries only `exclude_credential_ids`, `user_name`,
+  `user_display_name`.
+- **Add `user_id: Vec<u8>` (required, non-optional) to
+  `RegisteredCredential`** (core `models.rs`). Providers already generate
+  a fresh random 16 bytes per create; they now **return** it so a host
+  can correlate server-side. Only platform providers produce
+  `RegisteredCredential` (CLI File/YubiKey/FIDO2 inherit the erroring
+  `create_passkey` default), so non-optional is safe.
+- Generation stays provider-side (unchanged); the only change is "can't
+  pass in" + "must return". Update every `RegisteredCredential`
+  constructor incl. test mocks.
 
 ---
 
@@ -182,19 +206,24 @@ PasskeyLabels                       PasskeyCredentials
   **Delete `NostrRelayConfig`** entirely; remove its `pub use` re-export
   and every reference (the only field, `breez_api_key`, now lives on
   `PasskeyConfig`). `NostrSaltClient` takes `breez_api_key: Option<String>`
-  directly.
+  directly. **`CreatePasskeyRequest`**: remove `user_id` field (keep
+  `exclude_credential_ids`, `user_name`, `user_display_name`).
+  **`RegisteredCredential`**: add required `user_id: Vec<u8>` (see §1.4).
 - **`passkey_client.rs`**:
   - `#[uniffi::export]` impl block: `new(prf_provider, config?)` where
     `config: Option<PasskeyConfig>`, `check_availability`, `register`,
     `sign_in`, `labels()`, `credentials()`. **Remove** `list_labels`,
     `store_label`, `is_available`.
+  - **`RegisterRequest`**: remove `user_id` field. `register()` no longer
+    forwards it into `CreatePasskeyRequest`.
   - Plain `impl` block (Rust-only): `from_config` (builds `PasskeyConfig`
     from `crate::Config`), `passkey()`. (`with_label_store` deleted.)
   - New `#[uniffi::Object]` types `PasskeyLabels` (holds a `Passkey`
     clone → `list`, `store`) and `PasskeyCredentials` (holds
     `Arc<dyn PrfProvider>` → `get`, `remove`, `clear`).
   - Update the in-file test mocks (no `LabelStore` mock needed anymore;
-    keep the `PrfProvider` mock).
+    keep the `PrfProvider` mock; its `create_passkey` mock must return a
+    `RegisteredCredential` with the new `user_id` field).
 
 ### WASM — `crates/breez-sdk/wasm/`
 
@@ -204,19 +233,26 @@ PasskeyLabels                       PasskeyCredentials
   `PasskeyAvailability`), `labels()` / `credentials()` returning
   `#[wasm_bindgen]` sub-structs with their methods. Add
   `PasskeyAvailability` and `PasskeyConfig` extern bindings; **delete the
-  `NostrRelayConfig` extern binding**.
+  `NostrRelayConfig` extern binding**. `RegisterRequest` extern: drop
+  `user_id`. `RegisteredCredential` extern: add `user_id`.
 - **`src/models/passkey_prf_provider.rs`** — add Reflect-based optional
   probes + bridging for `getKnownCredentialIds` /
   `removeKnownCredentialId` / `clearKnownCredentialIds` (mirror the
-  existing `createPasskey` optional-probe pattern).
+  existing `createPasskey` optional-probe pattern). In
+  `build_create_passkey_request`: **remove the `userId` marshalling**. In
+  `parse_registered_credential`: **add required `userId` parsing**.
 - **`js/passkey-prf-provider/index.d.ts` + `index.js`** — remove
   `deriveSeed(salt)` from the class and its doc refs; keep
   `deriveSeeds(salts)`. Add `getKnownCredentialIds` /
   `removeKnownCredentialId` / `clearKnownCredentialIds` to the class,
-  delegating to the configured `credentialRegistry`.
+  delegating to the configured `credentialRegistry`. **`CreatePasskeyRequest`:
+  drop `userId`** (provider always generates internally).
+  **`RegisteredCredential`: add `userId: Uint8Array`** (return the
+  generated handle).
 - **`js/passkey-capacitor-bridge/index.d.ts`** — remove `deriveSeed`; keep
   `deriveSeeds`. Keep the three known-cred methods (they now back
-  `client.credentials()`).
+  `client.credentials()`). `createPasskey` return shape: **add `userId`**
+  (base64); its options never had `userId` — no change there.
 
 **Stage A verification:**
 ```bash
@@ -229,25 +265,40 @@ make build-wasm
 
 ## 4. Stage B — Flutter / RN / native providers (commit 2)
 
+All bullets also apply the §1.4 `user_id` change: drop `user_id` from
+`RegisterRequest`/`CreatePasskeyRequest` mirrors, add required `user_id`
+to `RegisteredCredential` mirrors, and have native providers **return**
+the generated handle.
+
 - **`packages/flutter/rust/src/passkey.rs`** — drop `list_labels` /
   `store_label` / `is_available`; add `check_availability`, `labels()`,
   `credentials()`. Constructor takes `PasskeyConfig`. Extend
-  `CallbackPrfProvider` with optional known-cred callbacks.
+  `CallbackPrfProvider` with optional known-cred callbacks. Mirror the
+  `RegisterRequest`/`CreatePasskeyRequest`/`RegisteredCredential` field
+  changes.
 - **`packages/flutter/rust/src/models.rs`** + **`src/sdk.rs`** — mirror
-  `PasskeyAvailability`, **`PasskeyConfig`**, and the sub-object handles.
+  `PasskeyAvailability`, **`PasskeyConfig`**, the sub-object handles, and
+  the §1.4 struct field changes.
 - **`packages/flutter/lib/src/passkey_prf_provider.dart`** — drop
-  single-salt; add known-cred passthrough.
+  single-salt; add known-cred passthrough; drop `userId` from the create
+  request type, add `userId` to the returned credential.
 - **`packages/flutter/{android,ios}/.../BreezSdkSparkPasskeyPlugin.{kt,swift}`**
-  — wire known-cred methods to the native `KnownCredentialsStore`.
+  — wire known-cred methods to the native `KnownCredentialsStore`; return
+  the generated `userId` from the create-passkey path.
 - **`packages/react-native/src/passkey-prf-provider.ts`** — drop
-  `deriveSeed`; add known-cred passthrough.
+  `deriveSeed`; add known-cred passthrough; drop `userId` input, add
+  `userId` to the returned credential.
 - **`packages/react-native/.../BreezSdkSparkPasskeyModule.kt` /
-  `ios/BreezSdkSparkPasskey.swift`** — known-cred wiring.
+  `ios/BreezSdkSparkPasskey.swift`** — known-cred wiring; return `userId`.
 - **`crates/breez-sdk/bindings/langs/swift/.../PasskeyProvider.swift`** and
   **`bindings/langs/shared/android-passkey/.../PasskeyProvider.kt`** — add
   `get/remove/clearKnownCredentialIds` delegating to the existing
   `KnownCredentialsStore`. Confirm no public single-salt (`deriveSeeds`
-  only).
+  only). Drop `request.userId` usage in `createPasskey`; populate
+  `RegisteredCredential.userId` with the value the native core generated
+  (the cores in `PasskeyAssertionCore.swift` /
+  `CredentialManagerPrfCore.kt` already mint a random handle — surface
+  it instead of discarding it).
 
 **Stage B verification:** `make build` ; Flutter `dart analyze` (if local
 toolchain available); RN/TS typecheck.
@@ -263,17 +314,21 @@ toolchain available); RN/TS typecheck.
   `--label` plumbing can populate `default_label`). (Rust CLI is the
   source of truth — modification allowed.)
 - **Interface checklist (CLAUDE.md "Updating SDK Interfaces"):** confirm
-  `PasskeyAvailability`, `PasskeyConfig` + sub-objects exported from
-  `crates/breez-sdk/core/src/passkey/models.rs`,
+  `PasskeyAvailability`, `PasskeyConfig` + sub-objects, and the §1.4
+  `RegisterRequest`/`CreatePasskeyRequest`/`RegisteredCredential` field
+  changes are reflected in `crates/breez-sdk/core/src/passkey/models.rs`,
   `crates/breez-sdk/wasm/src/models.rs`, `wasm/src/sdk.rs`,
   `packages/flutter/rust/src/models.rs`, `packages/flutter/rust/src/sdk.rs`.
 - **Docs/snippets:** run the **`update-snippets`** skill to regenerate the
   9 languages, then hand-adjust `docs/breez-sdk/snippets/*/passkey.*` —
   replace `listLabels`/`storeLabel` with `labels().list()`/`labels().store()`,
-  `isAvailable` → `checkAvailability`, and update the `PasskeyClient`
+  `isAvailable` → `checkAvailability`, update the `PasskeyClient`
   constructor call to pass `PasskeyConfig` (incl. a `default_label`
-  example). Update
-  `docs/breez-sdk/src/guide/passkey.md` and `uxguide_passkey.md` prose.
+  example), **remove any `userId` passed into `register`**, and where a
+  snippet shows credential bookkeeping, read it back from
+  `credential.userId`. Update `docs/breez-sdk/src/guide/passkey.md` and
+  `uxguide_passkey.md` prose (drop the "always randomize userId" warning —
+  it's no longer host-settable; note it's returned for correlation).
 - **Language CLI examples** (`bindings/examples/cli/langs/*`) — touch ONLY
   if the CLI-matrix / Flutter CI job fails; keep minimal. Full propagation
   is handled by `sync-cli.yml`.
@@ -332,6 +387,11 @@ top-to-bottom.
   knobs are provider-scoped (§1.3).
 - Provider class name `PasskeyProvider` is **already aligned** across all
   5 platforms; only residual `prf` cruft (Stage D) remains.
+- `user_id` is **return-only** (§1.4): dropped from `RegisterRequest` +
+  `CreatePasskeyRequest`, added as required field on `RegisteredCredential`
+  (SDK generates, host reads back; branding via `user_name` /
+  `user_display_name`). `create_passkey` term kept (WebAuthn-spec verb;
+  creation happens on the authenticator, never SDK-side).
 
 ---
 
