@@ -897,18 +897,17 @@ impl Config {
         let token_opt = &self.token_optimization_config;
         if token_opt.min_outputs_threshold <= 1 {
             return Err(SdkError::InvalidInput(
-                "token_optimization_config.min_outputs_threshold must be greater than 1"
-                    .to_string(),
+                "token optimization minimum outputs threshold must be greater than 1".to_string(),
             ));
         }
         if token_opt.target_output_count < 1 {
             return Err(SdkError::InvalidInput(
-                "token_optimization_config.target_output_count must be at least 1".to_string(),
+                "token optimization target output count must be at least 1".to_string(),
             ));
         }
         if token_opt.target_output_count >= token_opt.min_outputs_threshold {
             return Err(SdkError::InvalidInput(
-                "token_optimization_config.target_output_count must be strictly less than min_outputs_threshold".to_string(),
+                "token optimization target output count must be less than the minimum outputs threshold".to_string(),
             ));
         }
 

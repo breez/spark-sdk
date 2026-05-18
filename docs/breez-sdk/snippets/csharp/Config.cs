@@ -44,8 +44,15 @@ namespace BreezSdkSnippets
             // ANCHOR: optimization-configuration
             var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
             {
-                leafOptimizationConfig = new LeafOptimizationConfig(autoEnabled: true, multiplicity: 1),
-                tokenOptimizationConfig = new TokenOptimizationConfig(autoEnabled: true, targetOutputCount: 5, minOutputsThreshold: 50)
+                leafOptimizationConfig = new LeafOptimizationConfig(
+                    autoEnabled: true,
+                    multiplicity: 1
+                ),
+                tokenOptimizationConfig = new TokenOptimizationConfig(
+                    autoEnabled: true,
+                    targetOutputCount: 5,
+                    minOutputsThreshold: 50
+                )
             };
             // ANCHOR_END: optimization-configuration
         }

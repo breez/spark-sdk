@@ -772,8 +772,7 @@ impl SdkBuilder {
         let token_options = &mut spark_wallet_config.token_outputs_optimization_options;
         token_options.target_output_count = token_opt.target_output_count;
         token_options.min_outputs_threshold = token_opt.min_outputs_threshold;
-        // `auto_enabled == false` disables periodic token-output consolidation;
-        // when enabled we keep the network default interval.
+        // Only override when disabled; enabled keeps the network default interval.
         if !token_opt.auto_enabled || !background_services_enabled {
             token_options.auto_optimize_interval = None;
         }

@@ -37,8 +37,15 @@ class Config {
     fun configureOptimizationConfiguration() {
         // ANCHOR: optimization-configuration
         val config = defaultConfig(Network.MAINNET)
-        config.leafOptimizationConfig = LeafOptimizationConfig(autoEnabled = true, multiplicity = 1u)
-        config.tokenOptimizationConfig = TokenOptimizationConfig(autoEnabled = true, targetOutputCount = 5u, minOutputsThreshold = 50u)
+        config.leafOptimizationConfig = LeafOptimizationConfig(
+            autoEnabled = true,
+            multiplicity = 1u,
+        )
+        config.tokenOptimizationConfig = TokenOptimizationConfig(
+            autoEnabled = true,
+            targetOutputCount = 5u,
+            minOutputsThreshold = 50u,
+        )
         // ANCHOR_END: optimization-configuration
         println("Config: $config")
     }
