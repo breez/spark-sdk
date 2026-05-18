@@ -32,12 +32,11 @@ import Security
 /// for every signed app store, App Store / TestFlight build.
 @available(iOS 18.0, macOS 15.0, *)
 public struct IOSOptions {
-    /// Apple Developer Team ID (10-character alphanumeric, e.g.
-    /// `"F7R2LZH3W5"`). Used only by `checkDomainAssociation` to
-    /// verify the app's identity against Apple's AASA CDN. `nil`
-    /// auto-detects from the running app's signing entitlement via
-    /// `SecTaskCopyValueForEntitlement`. Override only in unit tests
-    /// or sandboxed contexts where the entitlement lookup fails.
+    /// Apple Developer Team ID (10-character alphanumeric). Used by
+    /// `checkDomainAssociation` to verify the app against Apple's
+    /// AASA CDN. `nil` auto-detects from the signing entitlement;
+    /// override only when entitlement lookup is unavailable (unit
+    /// tests, sandboxed contexts).
     public let teamId: String?
 
     /// Custom URLSession for the AASA CDN fetch. Defaults to
