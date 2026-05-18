@@ -2,9 +2,9 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    CreatePasskeyRequest, DeriveSeedsRequest, NostrRelayConfig, PasskeyError, PrfProvider,
-    PrfProviderError, RegisterRequest, RegisterResponse, RegisteredCredential, SignInRequest,
-    SignInResponse,
+    CreatePasskeyRequest, DeriveSeedsRequest, PasskeyAvailability, PasskeyConfig, PasskeyError,
+    PrfProvider, PrfProviderError, RegisterRequest, RegisterResponse, RegisteredCredential,
+    SignInRequest, SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -19,18 +19,15 @@ fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
 
 /// Wraps Dart callbacks as a [`PrfProvider`] implementation. Each
 /// callback returns a Result so Dart-side throws (e.g.
-/// `PasskeyPrfException`) propagate cleanly. frb panics on the Rust
-/// side if the callback is declared infallible and Dart throws.
-/// Hosts that don't drive registration can have `create_passkey`
-/// throw on the Dart side.
+/// `PasskeyPrfException`) propagate cleanly. The known-credential
+/// callbacks back `PasskeyClient.credentials()`; hosts without a
+/// registry can have them resolve to empty / no-op on the Dart side.
 struct CallbackPrfProvider {
     /// Bulk PRF callback. Single OS ceremony for N salts on platforms
     /// that support the WebAuthn dual-salt fast path (saltInput1 +
     /// saltInput2 on iOS, prfFirst + prfSecond on Android); the Dart
     /// side internally falls back to looping per-salt where the
-    /// platform doesn't expose the fast path. The unified bulk method
-    /// matches the trait contract: callers pass salts, the provider
-    /// returns one seed per salt in input order.
+    /// platform doesn't expose the fast path.
     derive_seeds_fn:
         Arc<dyn Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>> + Send + Sync>,
     is_supported_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync>,
@@ -39,6 +36,11 @@ struct CallbackPrfProvider {
             + Send
             + Sync,
     >,
+    get_known_credential_ids_fn:
+        Arc<dyn Fn() -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>> + Send + Sync>,
+    remove_known_credential_id_fn:
+        Arc<dyn Fn(Vec<u8>) -> DartFnFuture<anyhow::Result<()>> + Send + Sync>,
+    clear_known_credential_ids_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<()>> + Send + Sync>,
 }
 
 /// Convert a Dart-thrown error into a [`PrfProviderError`]. The Dart
@@ -69,10 +71,6 @@ impl PrfProvider for CallbackPrfProvider {
         &self,
         request: DeriveSeedsRequest,
     ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-        // The Dart-side `deriveSeeds` callback is the single PRF entry
-        // point. It internally handles dual-salt-capable platforms (one
-        // OS ceremony for N salts) and falls back to looping per-salt
-        // where the platform can't pack two salts per assertion.
         let bulk = AssertUnwindSafe((self.derive_seeds_fn)(request))
             .catch_unwind()
             .await
@@ -98,6 +96,30 @@ impl PrfProvider for CallbackPrfProvider {
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
         result.map_err(dart_error_to_prf)
     }
+
+    async fn get_known_credential_ids(&self) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        let result = AssertUnwindSafe((self.get_known_credential_ids_fn)())
+            .catch_unwind()
+            .await
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
+        result.map_err(dart_error_to_prf)
+    }
+
+    async fn remove_known_credential_id(&self, id: Vec<u8>) -> Result<(), PrfProviderError> {
+        let result = AssertUnwindSafe((self.remove_known_credential_id_fn)(id))
+            .catch_unwind()
+            .await
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
+        result.map_err(dart_error_to_prf)
+    }
+
+    async fn clear_known_credential_ids(&self) -> Result<(), PrfProviderError> {
+        let result = AssertUnwindSafe((self.clear_known_credential_ids_fn)())
+            .catch_unwind()
+            .await
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
+        result.map_err(dart_error_to_prf)
+    }
 }
 
 /// High-level orchestrator. See the [`breez_sdk_spark::passkey::PasskeyClient`]
@@ -111,28 +133,52 @@ pub struct PasskeyClient {
 impl PasskeyClient {
     /// Construct using Dart callbacks for the underlying `PrfProvider`.
     /// Hosts that don't drive registration can have `create_passkey`
-    /// throw `PrfProviderError.PrfNotSupported` on the Dart side.
+    /// throw `PrfProviderError.PrfNotSupported` on the Dart side. The
+    /// three known-credential callbacks back `PasskeyClient.credentials()`;
+    /// hosts without a registry can return empty / no-op.
     #[frb(sync)]
     pub fn new(
         derive_seeds: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
         is_supported: impl Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync + 'static,
-        create_passkey: impl Fn(CreatePasskeyRequest) -> DartFnFuture<anyhow::Result<RegisteredCredential>>
-            + Send
-            + Sync
-            + 'static,
-        relay_config: Option<NostrRelayConfig>,
+        create_passkey: impl Fn(
+            CreatePasskeyRequest,
+        ) -> DartFnFuture<anyhow::Result<RegisteredCredential>>
+        + Send
+        + Sync
+        + 'static,
+        get_known_credential_ids: impl Fn() -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
+        + Send
+        + Sync
+        + 'static,
+        remove_known_credential_id: impl Fn(Vec<u8>) -> DartFnFuture<anyhow::Result<()>>
+        + Send
+        + Sync
+        + 'static,
+        clear_known_credential_ids: impl Fn() -> DartFnFuture<anyhow::Result<()>>
+        + Send
+        + Sync
+        + 'static,
+        config: Option<PasskeyConfig>,
     ) -> Self {
         let provider = Arc::new(CallbackPrfProvider {
             derive_seeds_fn: Arc::new(derive_seeds),
             is_supported_fn: Arc::new(is_supported),
             create_passkey_fn: Arc::new(create_passkey),
+            get_known_credential_ids_fn: Arc::new(get_known_credential_ids),
+            remove_known_credential_id_fn: Arc::new(remove_known_credential_id),
+            clear_known_credential_ids_fn: Arc::new(clear_known_credential_ids),
         });
         Self {
-            inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, relay_config),
+            inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, config),
         }
+    }
+
+    /// One-shot capability + configuration probe.
+    pub async fn check_availability(&self) -> Result<PasskeyAvailability, PasskeyError> {
+        self.inner.check_availability().await
     }
 
     /// First-time setup: drives the Dart-side `create_passkey` callback
@@ -146,26 +192,68 @@ impl PasskeyClient {
 
     /// Returning-user sign-in. Fast path with `label` set; cold-restore
     /// with discovery when `label` is `None`.
-    pub async fn sign_in(
-        &self,
-        request: SignInRequest,
-    ) -> Result<SignInResponse, PasskeyError> {
+    pub async fn sign_in(&self, request: SignInRequest) -> Result<SignInResponse, PasskeyError> {
         self.inner.sign_in(request).await
     }
 
+    /// Label sub-object: list / publish labels for this passkey's identity.
+    #[frb(sync)]
+    pub fn labels(&self) -> PasskeyLabels {
+        PasskeyLabels {
+            inner: self.inner.labels(),
+        }
+    }
+
+    /// Credential sub-object: inspect / mutate the provider's persisted
+    /// credential-ID set.
+    #[frb(sync)]
+    pub fn credentials(&self) -> PasskeyCredentials {
+        PasskeyCredentials {
+            inner: self.inner.credentials(),
+        }
+    }
+}
+
+/// Label sub-object surfaced from [`PasskeyClient::labels`].
+#[derive(Clone)]
+#[frb(opaque)]
+pub struct PasskeyLabels {
+    pub(crate) inner: Arc<breez_sdk_spark::passkey::PasskeyLabels>,
+}
+
+impl PasskeyLabels {
     /// List labels published for this passkey's identity.
-    pub async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
-        self.inner.list_labels().await
+    pub async fn list(&self) -> Result<Vec<String>, PasskeyError> {
+        self.inner.list().await
     }
 
     /// Idempotently publish `label`.
-    pub async fn store_label(&self, label: String) -> Result<(), PasskeyError> {
-        self.inner.store_label(label).await
+    pub async fn store(&self, label: String) -> Result<(), PasskeyError> {
+        self.inner.store(label).await
+    }
+}
+
+/// Credential sub-object surfaced from [`PasskeyClient::credentials`].
+#[derive(Clone)]
+#[frb(opaque)]
+pub struct PasskeyCredentials {
+    pub(crate) inner: Arc<breez_sdk_spark::passkey::PasskeyCredentials>,
+}
+
+impl PasskeyCredentials {
+    /// Read the persisted set of credential IDs for the current RP.
+    pub async fn get(&self) -> Result<Vec<Vec<u8>>, PasskeyError> {
+        self.inner.get().await
     }
 
-    /// True if the device supports passkey PRF.
-    pub async fn is_available(&self) -> Result<bool, PasskeyError> {
-        self.inner.is_available().await
+    /// Drop a single credential ID from the persisted set.
+    pub async fn remove(&self, credential_id: Vec<u8>) -> Result<(), PasskeyError> {
+        self.inner.remove(credential_id).await
+    }
+
+    /// Clear the persisted credential-ID set for the current RP.
+    pub async fn clear(&self) -> Result<(), PasskeyError> {
+        self.inner.clear().await
     }
 }
 
@@ -183,15 +271,20 @@ mod tests {
 
     fn make_provider(
         derive_bulk: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
         is_available: impl Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync + 'static,
     ) -> CallbackPrfProvider {
         CallbackPrfProvider {
             derive_seeds_fn: Arc::new(derive_bulk),
             is_supported_fn: Arc::new(is_available),
-            create_passkey_fn: Arc::new(|_req| panicking::<anyhow::Result<RegisteredCredential>>("create_passkey not used")),
+            create_passkey_fn: Arc::new(|_req| {
+                panicking::<anyhow::Result<RegisteredCredential>>("create_passkey not used")
+            }),
+            get_known_credential_ids_fn: Arc::new(|| ready(Ok(vec![]))),
+            remove_known_credential_id_fn: Arc::new(|_id| ready(Ok(()))),
+            clear_known_credential_ids_fn: Arc::new(|| ready(Ok(()))),
         }
     }
 
@@ -230,7 +323,11 @@ mod tests {
     #[tokio::test]
     async fn test_derive_seeds_dart_error_mapped() {
         let provider = make_provider(
-            |_request| ready(Err(anyhow::anyhow!("PasskeyPrfException(noCredential): not found"))),
+            |_request| {
+                ready(Err(anyhow::anyhow!(
+                    "PasskeyPrfException(noCredential): not found"
+                )))
+            },
             || ready(Ok(true)),
         );
         let err = provider.derive_seeds(req(&["test"])).await.unwrap_err();
@@ -269,10 +366,7 @@ mod tests {
             },
             || ready(Ok(true)),
         );
-        let err = provider
-            .derive_seeds(req(&["a", "b"]))
-            .await
-            .unwrap_err();
+        let err = provider.derive_seeds(req(&["a", "b"])).await.unwrap_err();
         assert!(
             matches!(err, PrfProviderError::UserCancelled),
             "expected UserCancelled, got {err:?}"

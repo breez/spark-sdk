@@ -196,8 +196,12 @@ public class PasskeyProvider(
 
     /**
      * Register a new passkey with PRF support. One ceremony, no seed
-     * derivation. Per-call overrides on `request` (userId, userName,
+     * derivation. Per-call overrides on `request` (userName,
      * userDisplayName) fall back to constructor values when omitted.
+     *
+     * `user.id` is never host-supplied: the core mints a fresh random
+     * 16-byte handle per call and surfaces it via
+     * [RegisteredCredential.userId].
      *
      * When the provider was constructed with a `credentialRegistry`,
      * the registry's stored IDs are auto-merged into
@@ -213,15 +217,42 @@ public class PasskeyProvider(
                 userName = request.userName ?: userName,
                 userDisplayName = request.userDisplayName ?: userDisplayName,
                 excludeCredentialIds = request.excludeCredentialIds,
-                userIdOverride = request.userId,
                 options = CreatePasskeyOptions(
                     credentialRegistry = credentialRegistry,
                     onRegistryError = onRegistryError,
                 ),
             )
-            return RegisteredCredential(core.credentialId, core.aaguid, core.backupEligible)
+            return RegisteredCredential(core.credentialId, core.userId, core.aaguid, core.backupEligible)
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()
+        }
+    }
+
+    override suspend fun getKnownCredentialIds(): List<ByteArray> {
+        val reg = credentialRegistry ?: return emptyList()
+        return try {
+            reg.read(rpId)
+        } catch (t: Throwable) {
+            onRegistryError?.invoke(RegistryOperation.Read, t)
+            emptyList()
+        }
+    }
+
+    override suspend fun removeKnownCredentialId(id: ByteArray) {
+        val reg = credentialRegistry ?: return
+        try {
+            reg.remove(rpId, id)
+        } catch (t: Throwable) {
+            onRegistryError?.invoke(RegistryOperation.Remove, t)
+        }
+    }
+
+    override suspend fun clearKnownCredentialIds() {
+        val reg = credentialRegistry ?: return
+        try {
+            reg.clear(rpId)
+        } catch (t: Throwable) {
+            onRegistryError?.invoke(RegistryOperation.Clear, t)
         }
     }
 

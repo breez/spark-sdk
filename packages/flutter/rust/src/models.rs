@@ -1295,9 +1295,18 @@ pub struct _UnregisterWebhookRequest {
     pub webhook_id: String,
 }
 
-#[frb(mirror(NostrRelayConfig))]
-pub struct _NostrRelayConfig {
+#[frb(mirror(PasskeyConfig))]
+pub struct _PasskeyConfig {
     pub breez_api_key: Option<String>,
+    pub default_label: Option<String>,
+}
+
+#[frb(mirror(PasskeyAvailability))]
+pub enum _PasskeyAvailability {
+    Available,
+    PrfUnsupported,
+    NotAssociated { source: String, reason: String },
+    Skipped { reason: String },
 }
 
 #[frb(mirror(Wallet))]
@@ -1311,10 +1320,10 @@ pub struct _NamedSalt {
     pub name: String,
 }
 
-
 #[frb(mirror(RegisteredCredential))]
 pub struct _RegisteredCredential {
     pub credential_id: Vec<u8>,
+    pub user_id: Vec<u8>,
     pub aaguid: Option<Vec<u8>>,
     pub backup_eligible: Option<bool>,
 }
@@ -1322,7 +1331,6 @@ pub struct _RegisteredCredential {
 #[frb(mirror(CreatePasskeyRequest))]
 pub struct _CreatePasskeyRequest {
     pub exclude_credential_ids: Vec<Vec<u8>>,
-    pub user_id: Option<Vec<u8>>,
     pub user_name: Option<String>,
     pub user_display_name: Option<String>,
 }
@@ -1332,7 +1340,6 @@ pub struct _RegisterRequest {
     pub label: Option<String>,
     pub extra_salts: Vec<NamedSalt>,
     pub exclude_credential_ids: Vec<Vec<u8>>,
-    pub user_id: Option<Vec<u8>>,
     pub user_name: Option<String>,
     pub user_display_name: Option<String>,
 }

@@ -61,14 +61,6 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
             excludeCredentialIds = base64Ids.compactMap { Data(base64Encoded: $0) }
         }
 
-        var userIdOverride: Data? = nil
-        if let typed = args["userId"] as? FlutterStandardTypedData {
-            userIdOverride = typed.data
-        } else if let base64UserId = args["userId"] as? String,
-                  let decoded = Data(base64Encoded: base64UserId) {
-            userIdOverride = decoded
-        }
-
         Task { @MainActor in
             do {
                 let registered = try await core.createPasskey(
@@ -76,11 +68,11 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                     rpName: rpName,
                     userName: userName,
                     userDisplayName: userDisplayName,
-                    excludeCredentialIds: excludeCredentialIds,
-                    userId: userIdOverride
+                    excludeCredentialIds: excludeCredentialIds
                 )
                 result([
                     "credentialId": registered.credentialId.base64EncodedString(),
+                    "userId": registered.userId.base64EncodedString(),
                     "aaguid": registered.aaguid?.base64EncodedString() as Any?,
                     "backupEligible": registered.backupEligible as Any?,
                 ])
