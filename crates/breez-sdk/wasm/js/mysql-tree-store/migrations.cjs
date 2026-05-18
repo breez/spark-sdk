@@ -222,10 +222,9 @@ class MysqlTreeStoreMigrationManager {
         continue;
       }
       await conn.query(
-        `ALTER TABLE \`${fk.table}\` DROP FOREIGN KEY \`${fk.oldName}\``
-      );
-      await conn.query(
-        `ALTER TABLE \`${fk.table}\` ADD CONSTRAINT \`${fk.newName}\` ${fk.definition}`
+        `ALTER TABLE \`${fk.table}\`` +
+          ` DROP FOREIGN KEY \`${fk.oldName}\`,` +
+          ` ADD CONSTRAINT \`${fk.newName}\` ${fk.definition}`
       );
     }
 

@@ -227,24 +227,14 @@ async fn apply_renames(
         if !foreign_key_exists(conn, fk.table, fk.old_name).await? {
             continue;
         }
-        let drop_sql = format!(
-            "ALTER TABLE `{}` DROP FOREIGN KEY `{}`",
-            fk.table, fk.old_name
+        let alter_sql = format!(
+            "ALTER TABLE `{}` DROP FOREIGN KEY `{}`, ADD CONSTRAINT `{}` {}",
+            fk.table, fk.old_name, fk.new_name, fk.definition
         );
-        conn.query_drop(&drop_sql).await.map_err(|e| {
+        conn.query_drop(&alter_sql).await.map_err(|e| {
             MysqlError::Database(format!(
-                "Failed to drop old FK {} on {}: {e}",
-                fk.old_name, fk.table
-            ))
-        })?;
-        let add_sql = format!(
-            "ALTER TABLE `{}` ADD CONSTRAINT `{}` {}",
-            fk.table, fk.new_name, fk.definition
-        );
-        conn.query_drop(&add_sql).await.map_err(|e| {
-            MysqlError::Database(format!(
-                "Failed to add new FK {} on {}: {e}",
-                fk.new_name, fk.table
+                "Failed to rename FK {} -> {} on {}: {e}",
+                fk.old_name, fk.new_name, fk.table
             ))
         })?;
     }
@@ -805,6 +795,21 @@ mod tests {
             .await
             .expect("probe brz fk");
         assert_eq!(new_fk_count, Some(1), "FK must be renamed");
+
+        // The renamed FK must still functionally enforce referential
+        // integrity — inserting a row whose parent_id has no matching
+        // parent row should fail. Catches the case where the rename
+        // produced a constraint by name but lost its referent (e.g. wrong
+        // column or wrong parent in the combined ALTER).
+        let violation = conn
+            .query_drop(
+                "INSERT INTO brz_widgets (id, parent_id) VALUES ('w_orphan', 'missing_parent')",
+            )
+            .await;
+        assert!(
+            violation.is_err(),
+            "renamed FK must still reject orphan parent_id"
+        );
 
         let version: Option<i32> = conn
             .exec_first("SELECT MAX(version) FROM brz_widget_migrations", ())
