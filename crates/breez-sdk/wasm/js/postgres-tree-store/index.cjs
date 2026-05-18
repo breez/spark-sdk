@@ -197,8 +197,8 @@ class PostgresTreeStore {
       const result = await this.pool.query(
         `
         SELECT COALESCE(SUM((l.data->>'value')::bigint), 0)::bigint AS balance
-        FROM tree_leaves l
-        LEFT JOIN tree_reservations r
+        FROM brz_tree_leaves l
+        LEFT JOIN brz_tree_reservations r
           ON l.reservation_id = r.id AND l.user_id = r.user_id
         WHERE l.user_id = $1
           AND (
@@ -223,8 +223,8 @@ class PostgresTreeStore {
         `
         SELECT l.id, l.status, l.is_missing_from_operators, l.data,
                l.reservation_id, r.purpose
-        FROM tree_leaves l
-        LEFT JOIN tree_reservations r
+        FROM brz_tree_leaves l
+        LEFT JOIN brz_tree_reservations r
           ON l.reservation_id = r.id AND l.user_id = r.user_id
         WHERE l.user_id = $1
       `,
@@ -295,12 +295,12 @@ class PostgresTreeStore {
           `
           SELECT
             EXISTS(
-              SELECT 1 FROM tree_reservations
+              SELECT 1 FROM brz_tree_reservations
               WHERE user_id = $1 AND purpose = 'Swap'
             ) AS has_active_swap,
             COALESCE(
               (SELECT last_completed_at >= $2
-               FROM tree_swap_status WHERE user_id = $1),
+               FROM brz_tree_swap_status WHERE user_id = $1),
               FALSE
             ) AS swap_completed_during_refresh
         `,
@@ -317,7 +317,7 @@ class PostgresTreeStore {
         await this._cleanupSpentMarkers(client, refreshTimestamp);
 
         const spentResult = await client.query(
-          "SELECT leaf_id FROM tree_spent_leaves WHERE user_id = $1 AND spent_at >= $2",
+          "SELECT leaf_id FROM brz_tree_spent_leaves WHERE user_id = $1 AND spent_at >= $2",
           [this.identity, refreshTimestamp]
         );
         const spentIds = new Set(spentResult.rows.map((r) => r.leaf_id));
@@ -327,7 +327,7 @@ class PostgresTreeStore {
         // _cleanupStaleReservations (which now NULLs reservation_id explicitly,
         // since the composite FK uses NO ACTION).
         await client.query(
-          "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
+          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
           [this.identity, refreshTimestamp]
         );
 
@@ -361,7 +361,7 @@ class PostgresTreeStore {
     try {
       await this._withTransaction(async (client) => {
         const res = await client.query(
-          "SELECT id FROM tree_reservations WHERE user_id = $1 AND id = $2",
+          "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, id]
         );
 
@@ -370,12 +370,12 @@ class PostgresTreeStore {
         }
 
         await client.query(
-          "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, id]
         );
 
         await client.query(
-          "DELETE FROM tree_reservations WHERE user_id = $1 AND id = $2",
+          "DELETE FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, id]
         );
 
@@ -401,12 +401,12 @@ class PostgresTreeStore {
     try {
       // _withWriteTransaction acquires the advisory lock so this serializes
       // against `setLeaves`. Without it, a concurrent setLeaves could read
-      // tree_spent_leaves before our marker commits and re-insert the
+      // brz_tree_spent_leaves before our marker commits and re-insert the
       // just-spent leaf as Available.
       await this._withWriteTransaction(async (client) => {
         // Check if reservation exists and get purpose
         const res = await client.query(
-          "SELECT id, purpose FROM tree_reservations WHERE user_id = $1 AND id = $2",
+          "SELECT id, purpose FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, id]
         );
 
@@ -415,17 +415,17 @@ class PostgresTreeStore {
         if (res.rows.length > 0) {
           isSwap = res.rows[0].purpose === "Swap";
           const leafResult = await client.query(
-            "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+            "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
             [this.identity, id]
           );
           reservedLeafIds = leafResult.rows.map((r) => r.id);
           await this._batchInsertSpentLeaves(client, reservedLeafIds);
           await client.query(
-            "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+            "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
             [this.identity, id]
           );
           await client.query(
-            "DELETE FROM tree_reservations WHERE user_id = $1 AND id = $2",
+            "DELETE FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
             [this.identity, id]
           );
         }
@@ -439,7 +439,7 @@ class PostgresTreeStore {
         // that joined after migration 3 (and thus has no row) gets one created.
         if (isSwap && newLeaves && newLeaves.length > 0) {
           await client.query(
-            `INSERT INTO tree_swap_status (user_id, last_completed_at)
+            `INSERT INTO brz_tree_swap_status (user_id, last_completed_at)
              VALUES ($1, NOW())
              ON CONFLICT (user_id) DO UPDATE
                SET last_completed_at = EXCLUDED.last_completed_at`,
@@ -475,7 +475,7 @@ class PostgresTreeStore {
         const totalResult = await client.query(
           `
           SELECT COALESCE(SUM((data->>'value')::bigint), 0)::bigint AS total
-          FROM tree_leaves
+          FROM brz_tree_leaves
           WHERE user_id = $1
             AND status = 'Available'
             AND is_missing_from_operators = FALSE
@@ -493,7 +493,7 @@ class PostgresTreeStore {
         const slimResult = await client.query(
           `
           SELECT id, (data->>'value')::bigint AS value
-          FROM tree_leaves
+          FROM brz_tree_leaves
           WHERE user_id = $1
             AND status = 'Available'
             AND is_missing_from_operators = FALSE
@@ -501,7 +501,7 @@ class PostgresTreeStore {
             AND (
               (data->>'value')::bigint <= $2
               OR id = (
-                SELECT id FROM tree_leaves
+                SELECT id FROM brz_tree_leaves
                 WHERE user_id = $1
                   AND status = 'Available'
                   AND is_missing_from_operators = FALSE
@@ -612,7 +612,7 @@ class PostgresTreeStore {
   async _fetchFullLeavesByIds(client, ids) {
     if (!ids || ids.length === 0) return [];
     const result = await client.query(
-      "SELECT data FROM tree_leaves WHERE user_id = $2 AND id = ANY($1)",
+      "SELECT data FROM brz_tree_leaves WHERE user_id = $2 AND id = ANY($1)",
       [ids, this.identity]
     );
     return result.rows.map((r) => r.data);
@@ -646,7 +646,7 @@ class PostgresTreeStore {
       return await this._withTransaction(async (client) => {
         // Check if reservation exists
         const res = await client.query(
-          "SELECT id FROM tree_reservations WHERE user_id = $1 AND id = $2",
+          "SELECT id FROM brz_tree_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, reservationId]
         );
 
@@ -656,14 +656,14 @@ class PostgresTreeStore {
 
         // Get old reserved leaf IDs and mark as spent
         const oldLeavesResult = await client.query(
-          "SELECT id FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+          "SELECT id FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, reservationId]
         );
         const oldLeafIds = oldLeavesResult.rows.map((r) => r.id);
 
         await this._batchInsertSpentLeaves(client, oldLeafIds);
         await client.query(
-          "DELETE FROM tree_leaves WHERE user_id = $1 AND reservation_id = $2",
+          "DELETE FROM brz_tree_leaves WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, reservationId]
         );
 
@@ -679,7 +679,7 @@ class PostgresTreeStore {
 
         // Clear pending change amount
         await client.query(
-          "UPDATE tree_reservations SET pending_change_amount = 0 WHERE user_id = $1 AND id = $2",
+          "UPDATE brz_tree_reservations SET pending_change_amount = 0 WHERE user_id = $1 AND id = $2",
           [this.identity, reservationId]
         );
 
@@ -862,7 +862,7 @@ class PostgresTreeStore {
    */
   async _calculatePendingBalance(client) {
     const result = await client.query(
-      "SELECT COALESCE(SUM(pending_change_amount), 0)::BIGINT AS pending FROM tree_reservations WHERE user_id = $1",
+      "SELECT COALESCE(SUM(pending_change_amount), 0)::BIGINT AS pending FROM brz_tree_reservations WHERE user_id = $1",
       [this.identity]
     );
     return Number(result.rows[0].pending);
@@ -873,7 +873,7 @@ class PostgresTreeStore {
    */
   async _createReservation(client, reservationId, leaves, purpose, pendingChange) {
     await client.query(
-      "INSERT INTO tree_reservations (user_id, id, purpose, pending_change_amount) VALUES ($1, $2, $3, $4)",
+      "INSERT INTO brz_tree_reservations (user_id, id, purpose, pending_change_amount) VALUES ($1, $2, $3, $4)",
       [this.identity, reservationId, purpose, pendingChange]
     );
 
@@ -882,7 +882,7 @@ class PostgresTreeStore {
   }
 
   /**
-   * Batch upsert leaves into tree_leaves table.
+   * Batch upsert leaves into brz_tree_leaves table.
    */
   async _batchUpsertLeaves(client, leaves, isMissingFromOperators, skipIds) {
     if (!leaves || leaves.length === 0) return;
@@ -899,7 +899,7 @@ class PostgresTreeStore {
     const dataValues = filtered.map((l) => JSON.stringify(l));
 
     await client.query(
-      `INSERT INTO tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
+      `INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, added_at)
        SELECT $5, id, status, missing, data::jsonb, NOW()
        FROM UNNEST($1::text[], $2::text[], $3::bool[], $4::text[])
            AS t(id, status, missing, data)
@@ -919,7 +919,7 @@ class PostgresTreeStore {
     if (leafIds.length === 0) return;
 
     await client.query(
-      "UPDATE tree_leaves SET reservation_id = $1 WHERE user_id = $3 AND id = ANY($2)",
+      "UPDATE brz_tree_leaves SET reservation_id = $1 WHERE user_id = $3 AND id = ANY($2)",
       [reservationId, leafIds, this.identity]
     );
   }
@@ -931,7 +931,7 @@ class PostgresTreeStore {
     if (leafIds.length === 0) return;
 
     await client.query(
-      `INSERT INTO tree_spent_leaves (user_id, leaf_id)
+      `INSERT INTO brz_tree_spent_leaves (user_id, leaf_id)
        SELECT $2, leaf_id FROM UNNEST($1::text[]) AS t(leaf_id)
        ON CONFLICT DO NOTHING`,
       [leafIds, this.identity]
@@ -945,7 +945,7 @@ class PostgresTreeStore {
     if (leafIds.length === 0) return;
 
     await client.query(
-      "DELETE FROM tree_spent_leaves WHERE user_id = $2 AND leaf_id = ANY($1)",
+      "DELETE FROM brz_tree_spent_leaves WHERE user_id = $2 AND leaf_id = ANY($1)",
       [leafIds, this.identity]
     );
   }
@@ -958,17 +958,17 @@ class PostgresTreeStore {
    */
   async _cleanupStaleReservations(client) {
     await client.query(
-      `UPDATE tree_leaves SET reservation_id = NULL
+      `UPDATE brz_tree_leaves SET reservation_id = NULL
        WHERE user_id = $2
          AND reservation_id IN (
-           SELECT id FROM tree_reservations
+           SELECT id FROM brz_tree_reservations
            WHERE user_id = $2
              AND created_at < NOW() - make_interval(secs => $1)
          )`,
       [RESERVATION_TIMEOUT_SECS, this.identity]
     );
     await client.query(
-      `DELETE FROM tree_reservations
+      `DELETE FROM brz_tree_reservations
        WHERE user_id = $2
          AND created_at < NOW() - make_interval(secs => $1)`,
       [RESERVATION_TIMEOUT_SECS, this.identity]
@@ -983,7 +983,7 @@ class PostgresTreeStore {
     const cleanupCutoff = new Date(refreshTimestamp.getTime() - thresholdMs);
 
     await client.query(
-      "DELETE FROM tree_spent_leaves WHERE user_id = $2 AND spent_at < $1",
+      "DELETE FROM brz_tree_spent_leaves WHERE user_id = $2 AND spent_at < $1",
       [cleanupCutoff, this.identity]
     );
   }

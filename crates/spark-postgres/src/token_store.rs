@@ -22,11 +22,101 @@ use uuid::Uuid;
 use crate::advisory_lock::identity_lock_key;
 use crate::config::PostgresStorageConfig;
 use crate::error::PostgresError;
-use crate::migrations::run_migrations;
+use crate::migrations::{SchemaRenames, run_migrations};
 use crate::pool::create_pool;
 
 /// Name of the schema migrations table for `PostgresTokenStore`.
-const TOKEN_MIGRATIONS_TABLE: &str = "token_schema_migrations";
+const TOKEN_MIGRATIONS_TABLE: &str = "brz_token_schema_migrations";
+
+/// Pre-prefix rename map for upgrading token-store deployments.
+const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
+    old_migrations_table: "token_schema_migrations",
+    new_migrations_table: TOKEN_MIGRATIONS_TABLE,
+    tables: &[
+        ("token_metadata", "brz_token_metadata"),
+        ("token_reservations", "brz_token_reservations"),
+        ("token_outputs", "brz_token_outputs"),
+        ("token_spent_outputs", "brz_token_spent_outputs"),
+        ("token_swap_status", "brz_token_swap_status"),
+    ],
+    indexes: &[
+        // Post-multi-tenant indexes.
+        (
+            "idx_token_metadata_user_issuer_pk",
+            "brz_idx_token_metadata_user_issuer_pk",
+        ),
+        (
+            "idx_token_outputs_user_identifier",
+            "brz_idx_token_outputs_user_identifier",
+        ),
+        (
+            "idx_token_outputs_user_reservation",
+            "brz_idx_token_outputs_user_reservation",
+        ),
+        // Pre-multi-tenant indexes (dropped by the multi-tenant migration).
+        (
+            "idx_token_metadata_issuer_pk",
+            "brz_idx_token_metadata_issuer_pk",
+        ),
+        (
+            "idx_token_outputs_identifier",
+            "brz_idx_token_outputs_identifier",
+        ),
+        (
+            "idx_token_outputs_reservation",
+            "brz_idx_token_outputs_reservation",
+        ),
+    ],
+    constraints: &[
+        (
+            "brz_token_metadata",
+            "token_metadata_pkey",
+            "brz_token_metadata_pkey",
+        ),
+        (
+            "brz_token_reservations",
+            "token_reservations_pkey",
+            "brz_token_reservations_pkey",
+        ),
+        (
+            "brz_token_outputs",
+            "token_outputs_pkey",
+            "brz_token_outputs_pkey",
+        ),
+        (
+            "brz_token_outputs",
+            "token_outputs_user_id_token_identifier_fkey",
+            "brz_token_outputs_user_id_token_identifier_fkey",
+        ),
+        (
+            "brz_token_outputs",
+            "token_outputs_user_id_reservation_id_fkey",
+            "brz_token_outputs_user_id_reservation_id_fkey",
+        ),
+        // Pre-multi-tenant FKs (single-column). Rename so the post-tenant
+        // migration's `DROP CONSTRAINT IF EXISTS brz_*_fkey` finds them.
+        (
+            "brz_token_outputs",
+            "token_outputs_token_identifier_fkey",
+            "brz_token_outputs_token_identifier_fkey",
+        ),
+        (
+            "brz_token_outputs",
+            "token_outputs_reservation_id_fkey",
+            "brz_token_outputs_reservation_id_fkey",
+        ),
+        (
+            "brz_token_spent_outputs",
+            "token_spent_outputs_pkey",
+            "brz_token_spent_outputs_pkey",
+        ),
+        (
+            "brz_token_swap_status",
+            "token_swap_status_pkey",
+            "brz_token_swap_status_pkey",
+        ),
+    ],
+};
 
 /// Domain prefix mixed into the per-tenant advisory lock hash so the token
 /// store's locks never collide with the tree store's, even when two tenants
@@ -59,11 +149,11 @@ pub struct PostgresTokenStore {
 }
 
 /// Builds the multi-tenant scoping migration for the token store. Adds
-/// `user_id BYTEA` to every per-user table (including `token_metadata` —
+/// `user_id BYTEA` to every per-user table (including `brz_token_metadata` —
 /// metadata is per-tenant to avoid 0-balance leakage for tokens a tenant
 /// never owned), backfills with the connecting tenant, and rewrites primary
-/// keys / FKs to lead with `user_id`. The composite FK from `token_outputs`
-/// to `token_reservations` uses NO ACTION (the default) — column-list SET
+/// keys / FKs to lead with `user_id`. The composite FK from `brz_token_outputs`
+/// to `brz_token_reservations` uses NO ACTION (the default) — column-list SET
 /// NULL is PG15+ and a whole-row SET NULL would null `user_id` (NOT NULL).
 fn token_store_multi_tenant_migration(identity: &[u8]) -> Vec<String> {
     let id_hex = hex::encode(identity);
@@ -73,69 +163,69 @@ fn token_store_multi_tenant_migration(identity: &[u8]) -> Vec<String> {
         // Drop dependent FKs FIRST so we can rebuild the parent PKs they
         // reference. Inline `REFERENCES` clauses get auto-named
         // `<table>_<column>_fkey` so we drop those exact names if present.
-        "ALTER TABLE token_outputs DROP CONSTRAINT IF EXISTS token_outputs_reservation_id_fkey"
+        "ALTER TABLE brz_token_outputs DROP CONSTRAINT IF EXISTS brz_token_outputs_reservation_id_fkey"
             .to_string(),
-        "ALTER TABLE token_outputs DROP CONSTRAINT IF EXISTS token_outputs_token_identifier_fkey"
+        "ALTER TABLE brz_token_outputs DROP CONSTRAINT IF EXISTS brz_token_outputs_token_identifier_fkey"
             .to_string(),
-        // token_metadata: scope per-tenant. Required even though metadata
+        // brz_token_metadata: scope per-tenant. Required even though metadata
         // never structurally collides — leaking a token's mere existence
         // (e.g. a 0-balance entry for a token a tenant never held) would be
         // a privacy regression.
-        "ALTER TABLE token_metadata ADD COLUMN user_id BYTEA".to_string(),
-        format!("UPDATE token_metadata SET user_id = {id_lit}"),
-        "ALTER TABLE token_metadata \
+        "ALTER TABLE brz_token_metadata ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE brz_token_metadata SET user_id = {id_lit}"),
+        "ALTER TABLE brz_token_metadata \
          ALTER COLUMN user_id SET NOT NULL, \
-         DROP CONSTRAINT IF EXISTS token_metadata_pkey, \
+         DROP CONSTRAINT IF EXISTS brz_token_metadata_pkey, \
          ADD PRIMARY KEY (user_id, identifier)"
             .to_string(),
-        "DROP INDEX IF EXISTS idx_token_metadata_issuer_pk".to_string(),
-        "CREATE INDEX idx_token_metadata_user_issuer_pk \
-         ON token_metadata (user_id, issuer_public_key)"
+        "DROP INDEX IF EXISTS brz_idx_token_metadata_issuer_pk".to_string(),
+        "CREATE INDEX brz_idx_token_metadata_user_issuer_pk \
+         ON brz_token_metadata (user_id, issuer_public_key)"
             .to_string(),
-        // token_reservations: scope by user_id.
-        "ALTER TABLE token_reservations ADD COLUMN user_id BYTEA".to_string(),
-        format!("UPDATE token_reservations SET user_id = {id_lit}"),
-        "ALTER TABLE token_reservations \
+        // brz_token_reservations: scope by user_id.
+        "ALTER TABLE brz_token_reservations ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE brz_token_reservations SET user_id = {id_lit}"),
+        "ALTER TABLE brz_token_reservations \
          ALTER COLUMN user_id SET NOT NULL, \
-         DROP CONSTRAINT IF EXISTS token_reservations_pkey, \
+         DROP CONSTRAINT IF EXISTS brz_token_reservations_pkey, \
          ADD PRIMARY KEY (user_id, id)"
             .to_string(),
-        // token_outputs: scope by user_id, rekey, re-add composite FKs.
-        "ALTER TABLE token_outputs ADD COLUMN user_id BYTEA".to_string(),
-        format!("UPDATE token_outputs SET user_id = {id_lit}"),
-        "ALTER TABLE token_outputs \
+        // brz_token_outputs: scope by user_id, rekey, re-add composite FKs.
+        "ALTER TABLE brz_token_outputs ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE brz_token_outputs SET user_id = {id_lit}"),
+        "ALTER TABLE brz_token_outputs \
          ALTER COLUMN user_id SET NOT NULL, \
-         DROP CONSTRAINT IF EXISTS token_outputs_pkey, \
+         DROP CONSTRAINT IF EXISTS brz_token_outputs_pkey, \
          ADD PRIMARY KEY (user_id, id), \
          ADD FOREIGN KEY (user_id, token_identifier) \
-            REFERENCES token_metadata(user_id, identifier), \
+            REFERENCES brz_token_metadata(user_id, identifier), \
          ADD FOREIGN KEY (user_id, reservation_id) \
-            REFERENCES token_reservations(user_id, id)"
+            REFERENCES brz_token_reservations(user_id, id)"
             .to_string(),
-        "DROP INDEX IF EXISTS idx_token_outputs_identifier".to_string(),
-        "DROP INDEX IF EXISTS idx_token_outputs_reservation".to_string(),
-        "CREATE INDEX idx_token_outputs_user_identifier \
-         ON token_outputs (user_id, token_identifier)"
+        "DROP INDEX IF EXISTS brz_idx_token_outputs_identifier".to_string(),
+        "DROP INDEX IF EXISTS brz_idx_token_outputs_reservation".to_string(),
+        "CREATE INDEX brz_idx_token_outputs_user_identifier \
+         ON brz_token_outputs (user_id, token_identifier)"
             .to_string(),
-        "CREATE INDEX idx_token_outputs_user_reservation \
-         ON token_outputs (user_id, reservation_id) \
+        "CREATE INDEX brz_idx_token_outputs_user_reservation \
+         ON brz_token_outputs (user_id, reservation_id) \
          WHERE reservation_id IS NOT NULL"
             .to_string(),
-        // token_spent_outputs: scope by user_id.
-        "ALTER TABLE token_spent_outputs ADD COLUMN user_id BYTEA".to_string(),
-        format!("UPDATE token_spent_outputs SET user_id = {id_lit}"),
-        "ALTER TABLE token_spent_outputs \
+        // brz_token_spent_outputs: scope by user_id.
+        "ALTER TABLE brz_token_spent_outputs ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE brz_token_spent_outputs SET user_id = {id_lit}"),
+        "ALTER TABLE brz_token_spent_outputs \
          ALTER COLUMN user_id SET NOT NULL, \
-         DROP CONSTRAINT IF EXISTS token_spent_outputs_pkey, \
+         DROP CONSTRAINT IF EXISTS brz_token_spent_outputs_pkey, \
          ADD PRIMARY KEY (user_id, output_id)"
             .to_string(),
-        // token_swap_status was a singleton (PK id=1, CHECK id=1). Drop the
+        // brz_token_swap_status was a singleton (PK id=1, CHECK id=1). Drop the
         // id column (CASCADE removes both PK and CHECK), then re-key by
         // user_id so each tenant has its own swap-status row.
-        "ALTER TABLE token_swap_status DROP COLUMN id CASCADE".to_string(),
-        "ALTER TABLE token_swap_status ADD COLUMN user_id BYTEA".to_string(),
-        format!("UPDATE token_swap_status SET user_id = {id_lit}"),
-        "ALTER TABLE token_swap_status \
+        "ALTER TABLE brz_token_swap_status DROP COLUMN id CASCADE".to_string(),
+        "ALTER TABLE brz_token_swap_status ADD COLUMN user_id BYTEA".to_string(),
+        format!("UPDATE brz_token_swap_status SET user_id = {id_lit}"),
+        "ALTER TABLE brz_token_swap_status \
          ALTER COLUMN user_id SET NOT NULL, \
          ADD PRIMARY KEY (user_id)"
             .to_string(),
@@ -172,12 +262,12 @@ impl TokenOutputStore for PostgresTokenStore {
                     r"
                     SELECT
                         EXISTS(
-                            SELECT 1 FROM token_reservations
+                            SELECT 1 FROM brz_token_reservations
                             WHERE user_id = $1 AND purpose = 'Swap'
                         ),
                         COALESCE(
                             (SELECT last_completed_at >= $2
-                             FROM token_swap_status WHERE user_id = $1),
+                             FROM brz_token_swap_status WHERE user_id = $1),
                             FALSE
                         )
                     ",
@@ -205,7 +295,7 @@ impl TokenOutputStore for PostgresTokenStore {
         let spent_ids: HashSet<String> = {
             let rows = tx
                 .query(
-                    "SELECT output_id FROM token_spent_outputs \
+                    "SELECT output_id FROM brz_token_spent_outputs \
                      WHERE user_id = $1 AND spent_at >= $2",
                     &[&self.identity, &refresh_timestamp],
                 )
@@ -217,7 +307,7 @@ impl TokenOutputStore for PostgresTokenStore {
         // Delete non-reserved outputs added BEFORE the refresh started.
         // Outputs added after will be preserved (they were inserted while refresh was in progress).
         tx.execute(
-            "DELETE FROM token_outputs \
+            "DELETE FROM brz_token_outputs \
              WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
             &[&self.identity, &refresh_timestamp],
         )
@@ -234,8 +324,8 @@ impl TokenOutputStore for PostgresTokenStore {
         let reserved_rows = tx
             .query(
                 r"SELECT r.id, o.id AS output_id
-                  FROM token_reservations r
-                  JOIN token_outputs o
+                  FROM brz_token_reservations r
+                  JOIN brz_token_outputs o
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
                   WHERE r.user_id = $1",
                 &[&self.identity],
@@ -277,14 +367,14 @@ impl TokenOutputStore for PostgresTokenStore {
         // Delete outputs whose reservations are being removed entirely
         if !reservations_to_delete.is_empty() {
             tx.execute(
-                "DELETE FROM token_outputs WHERE user_id = $1 AND reservation_id = ANY($2)",
+                "DELETE FROM brz_token_outputs WHERE user_id = $1 AND reservation_id = ANY($2)",
                 &[&self.identity, &reservations_to_delete],
             )
             .await
             .map_err(map_err)?;
 
             tx.execute(
-                "DELETE FROM token_reservations WHERE user_id = $1 AND id = ANY($2)",
+                "DELETE FROM brz_token_reservations WHERE user_id = $1 AND id = ANY($2)",
                 &[&self.identity, &reservations_to_delete],
             )
             .await
@@ -294,7 +384,7 @@ impl TokenOutputStore for PostgresTokenStore {
         // Delete individual reserved outputs that no longer exist
         if !outputs_to_remove_from_reservation.is_empty() {
             tx.execute(
-                "DELETE FROM token_outputs WHERE user_id = $1 AND id = ANY($2)",
+                "DELETE FROM brz_token_outputs WHERE user_id = $1 AND id = ANY($2)",
                 &[&self.identity, &outputs_to_remove_from_reservation],
             )
             .await
@@ -303,8 +393,8 @@ impl TokenOutputStore for PostgresTokenStore {
             // Check if any reservations are now empty after removing individual outputs
             let empty_reservations = tx
                 .query(
-                    r"SELECT r.id FROM token_reservations r
-                      LEFT JOIN token_outputs o
+                    r"SELECT r.id FROM brz_token_reservations r
+                      LEFT JOIN brz_token_outputs o
                         ON o.reservation_id = r.id AND o.user_id = r.user_id
                       WHERE r.user_id = $1 AND o.id IS NULL",
                     &[&self.identity],
@@ -315,7 +405,7 @@ impl TokenOutputStore for PostgresTokenStore {
                 empty_reservations.iter().map(|row| row.get("id")).collect();
             if !empty_ids.is_empty() {
                 tx.execute(
-                    "DELETE FROM token_reservations WHERE user_id = $1 AND id = ANY($2)",
+                    "DELETE FROM brz_token_reservations WHERE user_id = $1 AND id = ANY($2)",
                     &[&self.identity, &empty_ids],
                 )
                 .await
@@ -327,7 +417,7 @@ impl TokenOutputStore for PostgresTokenStore {
         let reserved_output_ids: HashSet<String> = {
             let rows = tx
                 .query(
-                    "SELECT id FROM token_outputs \
+                    "SELECT id FROM brz_token_outputs \
                      WHERE user_id = $1 AND reservation_id IS NOT NULL",
                     &[&self.identity],
                 )
@@ -338,11 +428,11 @@ impl TokenOutputStore for PostgresTokenStore {
 
         // Delete metadata not referenced by any remaining outputs (per-tenant).
         tx.execute(
-            r"DELETE FROM token_metadata
+            r"DELETE FROM brz_token_metadata
               WHERE user_id = $1
                 AND identifier NOT IN (
                     SELECT DISTINCT token_identifier
-                    FROM token_outputs WHERE user_id = $1
+                    FROM brz_token_outputs WHERE user_id = $1
                 )",
             &[&self.identity],
         )
@@ -390,10 +480,10 @@ impl TokenOutputStore for PostgresTokenStore {
                               ELSE 0
                             END
                          ), 0)::text AS balance
-                  FROM token_metadata m
-                  JOIN token_outputs o
+                  FROM brz_token_metadata m
+                  JOIN brz_token_outputs o
                     ON o.token_identifier = m.identifier AND o.user_id = m.user_id
-                  LEFT JOIN token_reservations r
+                  LEFT JOIN brz_token_reservations r
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
                   WHERE m.user_id = $1
                   GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
@@ -426,10 +516,10 @@ impl TokenOutputStore for PostgresTokenStore {
                          o.token_public_key, o.token_amount,
                          o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
                          r.purpose
-                  FROM token_metadata m
-                  LEFT JOIN token_outputs o
+                  FROM brz_token_metadata m
+                  LEFT JOIN brz_token_outputs o
                     ON o.token_identifier = m.identifier AND o.user_id = m.user_id
-                  LEFT JOIN token_reservations r
+                  LEFT JOIN brz_token_reservations r
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
                   WHERE m.user_id = $1
                   ORDER BY m.identifier, o.token_amount::NUMERIC ASC",
@@ -497,10 +587,10 @@ impl TokenOutputStore for PostgresTokenStore {
                      o.token_public_key, o.token_amount,
                      o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
                      r.purpose
-              FROM token_metadata m
-              LEFT JOIN token_outputs o
+              FROM brz_token_metadata m
+              LEFT JOIN brz_token_outputs o
                 ON o.token_identifier = m.identifier AND o.user_id = m.user_id
-              LEFT JOIN token_reservations r
+              LEFT JOIN brz_token_reservations r
                 ON o.reservation_id = r.id AND o.user_id = r.user_id
               WHERE m.user_id = $2 AND {where_clause}
               ORDER BY o.token_amount::NUMERIC ASC"
@@ -563,7 +653,7 @@ impl TokenOutputStore for PostgresTokenStore {
             .collect();
         if !output_ids.is_empty() {
             tx.execute(
-                "DELETE FROM token_spent_outputs WHERE user_id = $1 AND output_id = ANY($2)",
+                "DELETE FROM brz_token_spent_outputs WHERE user_id = $1 AND output_id = ANY($2)",
                 &[&self.identity, &output_ids],
             )
             .await
@@ -619,7 +709,7 @@ impl TokenOutputStore for PostgresTokenStore {
         // Get metadata
         let metadata_row = tx
             .query_opt(
-                "SELECT * FROM token_metadata WHERE user_id = $1 AND identifier = $2",
+                "SELECT * FROM brz_token_metadata WHERE user_id = $1 AND identifier = $2",
                 &[&self.identity, &token_identifier],
             )
             .await
@@ -638,7 +728,7 @@ impl TokenOutputStore for PostgresTokenStore {
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount, o.prev_tx_hash, o.prev_tx_vout,
                          o.token_identifier AS identifier
-                  FROM token_outputs o
+                  FROM brz_token_outputs o
                   WHERE o.user_id = $1
                     AND o.token_identifier = $2
                     AND o.reservation_id IS NULL",
@@ -712,7 +802,7 @@ impl TokenOutputStore for PostgresTokenStore {
         };
 
         tx.execute(
-            "INSERT INTO token_reservations (user_id, id, purpose) VALUES ($1, $2, $3)",
+            "INSERT INTO brz_token_reservations (user_id, id, purpose) VALUES ($1, $2, $3)",
             &[&self.identity, &reservation_id, &purpose_str],
         )
         .await
@@ -724,7 +814,7 @@ impl TokenOutputStore for PostgresTokenStore {
             .map(|o| o.output.id.clone())
             .collect();
         tx.execute(
-            "UPDATE token_outputs SET reservation_id = $1 \
+            "UPDATE brz_token_outputs SET reservation_id = $1 \
              WHERE user_id = $3 AND id = ANY($2)",
             &[&reservation_id, &selected_ids, &self.identity],
         )
@@ -755,7 +845,7 @@ impl TokenOutputStore for PostgresTokenStore {
         // ACTION (column-list SET NULL is PG15+ and a whole-row SET NULL would
         // null user_id, which is NOT NULL).
         tx.execute(
-            "UPDATE token_outputs SET reservation_id = NULL \
+            "UPDATE brz_token_outputs SET reservation_id = NULL \
              WHERE user_id = $1 AND reservation_id = $2",
             &[&self.identity, id],
         )
@@ -764,7 +854,7 @@ impl TokenOutputStore for PostgresTokenStore {
 
         // Delete the reservation
         tx.execute(
-            "DELETE FROM token_reservations WHERE user_id = $1 AND id = $2",
+            "DELETE FROM brz_token_reservations WHERE user_id = $1 AND id = $2",
             &[&self.identity, id],
         )
         .await
@@ -783,7 +873,7 @@ impl TokenOutputStore for PostgresTokenStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        // Serialize against `set_tokens_outputs` so its `token_spent_outputs`
+        // Serialize against `set_tokens_outputs` so its `brz_token_spent_outputs`
         // snapshot and the upsert that consumes it cannot interleave with this
         // transaction's spent-marker write.
         self.acquire_write_lock(&tx).await?;
@@ -791,7 +881,7 @@ impl TokenOutputStore for PostgresTokenStore {
         // Get reservation purpose and reserved output IDs
         let reservation_row = tx
             .query_opt(
-                "SELECT purpose FROM token_reservations WHERE user_id = $1 AND id = $2",
+                "SELECT purpose FROM brz_token_reservations WHERE user_id = $1 AND id = $2",
                 &[&self.identity, id],
             )
             .await
@@ -808,7 +898,7 @@ impl TokenOutputStore for PostgresTokenStore {
         let reserved_output_ids: Vec<String> = {
             let rows = tx
                 .query(
-                    "SELECT id FROM token_outputs WHERE user_id = $1 AND reservation_id = $2",
+                    "SELECT id FROM brz_token_outputs WHERE user_id = $1 AND reservation_id = $2",
                     &[&self.identity, id],
                 )
                 .await
@@ -819,7 +909,7 @@ impl TokenOutputStore for PostgresTokenStore {
         // Batch insert spent output markers
         if !reserved_output_ids.is_empty() {
             tx.execute(
-                r"INSERT INTO token_spent_outputs (user_id, output_id)
+                r"INSERT INTO brz_token_spent_outputs (user_id, output_id)
                   SELECT $2, output_id FROM UNNEST($1::text[]) AS t(output_id)
                   ON CONFLICT DO NOTHING",
                 &[&reserved_output_ids, &self.identity],
@@ -830,7 +920,7 @@ impl TokenOutputStore for PostgresTokenStore {
 
         // Delete reserved outputs
         tx.execute(
-            "DELETE FROM token_outputs WHERE user_id = $1 AND reservation_id = $2",
+            "DELETE FROM brz_token_outputs WHERE user_id = $1 AND reservation_id = $2",
             &[&self.identity, id],
         )
         .await
@@ -838,7 +928,7 @@ impl TokenOutputStore for PostgresTokenStore {
 
         // Delete the reservation
         tx.execute(
-            "DELETE FROM token_reservations WHERE user_id = $1 AND id = $2",
+            "DELETE FROM brz_token_reservations WHERE user_id = $1 AND id = $2",
             &[&self.identity, id],
         )
         .await
@@ -848,7 +938,7 @@ impl TokenOutputStore for PostgresTokenStore {
         // tenant that joined after migration 2 (and thus has no row) gets one.
         if is_swap {
             tx.execute(
-                "INSERT INTO token_swap_status (user_id, last_completed_at) \
+                "INSERT INTO brz_token_swap_status (user_id, last_completed_at) \
                  VALUES ($1, NOW()) \
                  ON CONFLICT (user_id) DO UPDATE SET last_completed_at = EXCLUDED.last_completed_at",
                 &[&self.identity],
@@ -859,11 +949,11 @@ impl TokenOutputStore for PostgresTokenStore {
 
         // Clean up any orphaned metadata (per-tenant).
         tx.execute(
-            r"DELETE FROM token_metadata
+            r"DELETE FROM brz_token_metadata
               WHERE user_id = $1
                 AND identifier NOT IN (
                     SELECT DISTINCT token_identifier
-                    FROM token_outputs WHERE user_id = $1
+                    FROM brz_token_outputs WHERE user_id = $1
                 )",
             &[&self.identity],
         )
@@ -928,6 +1018,7 @@ impl PostgresTokenStore {
             &self.pool,
             TOKEN_MIGRATIONS_TABLE,
             &Self::migrations(&self.identity),
+            Some(&SCHEMA_RENAMES),
         )
         .await
     }
@@ -937,7 +1028,7 @@ impl PostgresTokenStore {
         vec![
             // Migration 1: Token store tables with race condition protection
             vec![
-                "CREATE TABLE IF NOT EXISTS token_metadata (
+                "CREATE TABLE IF NOT EXISTS brz_token_metadata (
                     identifier TEXT PRIMARY KEY,
                     issuer_public_key TEXT NOT NULL,
                     name TEXT NOT NULL,
@@ -948,18 +1039,18 @@ impl PostgresTokenStore {
                     creation_entity_public_key TEXT
                 )"
                 .to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_token_metadata_issuer_pk
-                    ON token_metadata (issuer_public_key)"
+                "CREATE INDEX IF NOT EXISTS brz_idx_token_metadata_issuer_pk
+                    ON brz_token_metadata (issuer_public_key)"
                     .to_string(),
-                "CREATE TABLE IF NOT EXISTS token_reservations (
+                "CREATE TABLE IF NOT EXISTS brz_token_reservations (
                     id TEXT PRIMARY KEY,
                     purpose TEXT NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )"
                 .to_string(),
-                "CREATE TABLE IF NOT EXISTS token_outputs (
+                "CREATE TABLE IF NOT EXISTS brz_token_outputs (
                     id TEXT PRIMARY KEY,
-                    token_identifier TEXT NOT NULL REFERENCES token_metadata(identifier),
+                    token_identifier TEXT NOT NULL REFERENCES brz_token_metadata(identifier),
                     owner_public_key TEXT NOT NULL,
                     revocation_commitment TEXT NOT NULL,
                     withdraw_bond_sats BIGINT NOT NULL,
@@ -968,30 +1059,31 @@ impl PostgresTokenStore {
                     token_amount TEXT NOT NULL,
                     prev_tx_hash TEXT NOT NULL,
                     prev_tx_vout INTEGER NOT NULL,
-                    reservation_id TEXT REFERENCES token_reservations(id) ON DELETE SET NULL,
+                    reservation_id TEXT REFERENCES brz_token_reservations(id) ON DELETE SET NULL,
                     added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )"
                 .to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_token_outputs_identifier
-                    ON token_outputs (token_identifier)"
+                "CREATE INDEX IF NOT EXISTS brz_idx_token_outputs_identifier
+                    ON brz_token_outputs (token_identifier)"
                     .to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_token_outputs_reservation
-                    ON token_outputs (reservation_id) WHERE reservation_id IS NOT NULL"
+                "CREATE INDEX IF NOT EXISTS brz_idx_token_outputs_reservation
+                    ON brz_token_outputs (reservation_id) WHERE reservation_id IS NOT NULL"
                     .to_string(),
-                "CREATE TABLE IF NOT EXISTS token_spent_outputs (
+                "CREATE TABLE IF NOT EXISTS brz_token_spent_outputs (
                     output_id TEXT PRIMARY KEY,
                     spent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )"
                 .to_string(),
-                "CREATE TABLE IF NOT EXISTS token_swap_status (
+                "CREATE TABLE IF NOT EXISTS brz_token_swap_status (
                     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
                     last_completed_at TIMESTAMPTZ
                 )"
                 .to_string(),
-                "INSERT INTO token_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING".to_string(),
+                "INSERT INTO brz_token_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING"
+                    .to_string(),
             ],
             // Migration 2: Multi-tenant scoping. Adds user_id to every token-store
-            // table (including `token_metadata` — per-tenant to avoid 0-balance
+            // table (including `brz_token_metadata` — per-tenant to avoid 0-balance
             // leakage), backfills with the connecting tenant, and rewrites primary
             // keys / FKs / indexes to lead with user_id.
             token_store_multi_tenant_migration(identity),
@@ -1021,7 +1113,7 @@ impl PostgresTokenStore {
         output: &TokenOutputWithPrevOut,
     ) -> Result<(), TokenOutputServiceError> {
         tx.execute(
-            r"INSERT INTO token_outputs
+            r"INSERT INTO brz_token_outputs
                 (user_id, id, token_identifier, owner_public_key, revocation_commitment,
                  withdraw_bond_sats, withdraw_relative_block_locktime,
                  token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
@@ -1054,7 +1146,7 @@ impl PostgresTokenStore {
         metadata: &TokenMetadata,
     ) -> Result<(), TokenOutputServiceError> {
         tx.execute(
-            r"INSERT INTO token_metadata
+            r"INSERT INTO brz_token_metadata
                 (user_id, identifier, issuer_public_key, name, ticker, decimals, max_supply,
                  is_freezable, creation_entity_public_key)
               VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8)
@@ -1095,10 +1187,10 @@ impl PostgresTokenStore {
     ) -> Result<u64, TokenOutputServiceError> {
         // Release outputs still pointing at any soon-to-be-deleted reservation.
         tx.execute(
-            r"UPDATE token_outputs SET reservation_id = NULL
+            r"UPDATE brz_token_outputs SET reservation_id = NULL
               WHERE user_id = $2
                 AND reservation_id IN (
-                    SELECT id FROM token_reservations
+                    SELECT id FROM brz_token_reservations
                     WHERE user_id = $2
                       AND created_at < NOW() - make_interval(secs => $1)
                 )",
@@ -1109,7 +1201,7 @@ impl PostgresTokenStore {
 
         let result = tx
             .execute(
-                r"DELETE FROM token_reservations
+                r"DELETE FROM brz_token_reservations
                   WHERE user_id = $2
                     AND created_at < NOW() - make_interval(secs => $1)",
                 &[&RESERVATION_TIMEOUT_SECS, &self.identity],
@@ -1136,7 +1228,7 @@ impl PostgresTokenStore {
             .unwrap_or(refresh_timestamp);
 
         tx.execute(
-            "DELETE FROM token_spent_outputs WHERE user_id = $2 AND spent_at < $1",
+            "DELETE FROM brz_token_spent_outputs WHERE user_id = $2 AND spent_at < $1",
             &[&cleanup_cutoff, &self.identity],
         )
         .await
@@ -1592,7 +1684,7 @@ mod tests {
         let client = fixture.store.pool.get().await.unwrap();
         client
             .execute(
-                "UPDATE token_reservations SET created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
+                "UPDATE brz_token_reservations SET created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1",
                 &[&reservation.id],
             )
             .await
@@ -1743,7 +1835,7 @@ mod tests {
     }
 
     /// End-to-end isolation: every `TokenOutputStore` method must keep tenants
-    /// A and B from observing each other's data. Critically, `token_metadata`
+    /// A and B from observing each other's data. Critically, `brz_token_metadata`
     /// is per-tenant — both tenants seeding the same `identifier` ("token-1")
     /// must coexist without collision and without leaking each other's
     /// balances. Exercises set/insert/list/get/balance/reserve/finalize and
@@ -1891,7 +1983,7 @@ mod tests {
 
         // --- insert_token_outputs on A only inserts into A's namespace ---
         // Use identifier_no=2 so the metadata identifier ("token-2") collides
-        // with B's existing entry — that exercises per-tenant `token_metadata`:
+        // with B's existing entry — that exercises per-tenant `brz_token_metadata`:
         // both tenants must end up with their own row, and A's outputs/balance
         // for "token-2" must differ from B's.
         let a_token2 = shared_tests::create_token_outputs(2, vec![999]);

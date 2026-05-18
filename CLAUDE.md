@@ -94,6 +94,15 @@ All implementations run the **same shared test suite** in `crates/breez-sdk/core
 
 JS implementations also have migration files (`migrations.cjs`) alongside their `index.cjs`.
 
+### Postgres/MySQL `brz_` Naming Convention
+
+All SDK-owned Postgres and MySQL schema identifiers — tables, indexes, and named constraints (PKs, FKs) — are prefixed with `brz_` (e.g. `brz_payments`, `brz_idx_payments_user_timestamp`, `brz_fk_token_outputs_metadata_user`). This isolates the SDK's schema from customer-managed tables sharing the same database. **SQLite and IndexedDB backends do NOT use the prefix** — those are per-user isolated databases with no collision risk.
+
+When adding a new table, index, or named constraint to a Postgres/MySQL migration:
+1. Use the `brz_` prefix in the `CREATE` statement and every query that references it.
+2. Add the new identifier to the corresponding store's `SCHEMA_RENAMES` const so existing deployments upgrade cleanly. The const is consumed by `run_migrations(.., Some(&SCHEMA_RENAMES))` in `crates/spark-postgres/src/migrations.rs` / `crates/spark-mysql/src/migrations.rs`.
+3. Mirror the same change in the WASM JS package's `migrations.cjs` (the `_applySchemaRenames` method).
+
 ### Data Flow
 
 ```

@@ -62,12 +62,12 @@ const SELECT_PAYMENT_SQL = `
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id
-      FROM payments p
-      LEFT JOIN payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
-      LEFT JOIN payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
-      LEFT JOIN payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
-      LEFT JOIN payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
-      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id`;
+      FROM brz_payments p
+      LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
+      LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
+      LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
+      LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
+      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id`;
 
 class PostgresStorage {
   /**
@@ -141,7 +141,7 @@ class PostgresStorage {
   async getCachedItem(key) {
     try {
       const result = await this.pool.query(
-        "SELECT value FROM settings WHERE user_id = $1 AND key = $2",
+        "SELECT value FROM brz_settings WHERE user_id = $1 AND key = $2",
         [this.identity, key]
       );
       return result.rows.length > 0 ? result.rows[0].value : null;
@@ -156,7 +156,7 @@ class PostgresStorage {
   async setCachedItem(key, value) {
     try {
       await this.pool.query(
-        `INSERT INTO settings (user_id, key, value) VALUES ($1, $2, $3)
+        `INSERT INTO brz_settings (user_id, key, value) VALUES ($1, $2, $3)
          ON CONFLICT(user_id, key) DO UPDATE SET value = EXCLUDED.value`,
         [this.identity, key, value]
       );
@@ -171,7 +171,7 @@ class PostgresStorage {
   async deleteCachedItem(key) {
     try {
       await this.pool.query(
-        "DELETE FROM settings WHERE user_id = $1 AND key = $2",
+        "DELETE FROM brz_settings WHERE user_id = $1 AND key = $2",
         [this.identity, key]
       );
     } catch (error) {
@@ -367,7 +367,7 @@ class PostgresStorage {
         const spark = payment.details?.type === "spark" ? true : null;
 
         await client.query(
-          `INSERT INTO payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+          `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            ON CONFLICT(user_id, id) DO UPDATE SET
              payment_type=EXCLUDED.payment_type,
@@ -400,11 +400,11 @@ class PostgresStorage {
             payment.details.htlcDetails != null)
         ) {
           await client.query(
-            `INSERT INTO payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
+            `INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT(user_id, payment_id) DO UPDATE SET
-               invoice_details=COALESCE(EXCLUDED.invoice_details, payment_details_spark.invoice_details),
-               htlc_details=COALESCE(EXCLUDED.htlc_details, payment_details_spark.htlc_details)`,
+               invoice_details=COALESCE(EXCLUDED.invoice_details, brz_payment_details_spark.invoice_details),
+               htlc_details=COALESCE(EXCLUDED.htlc_details, brz_payment_details_spark.htlc_details)`,
             [
               this.identity,
               payment.id,
@@ -420,7 +420,7 @@ class PostgresStorage {
 
         if (payment.details?.type === "lightning") {
           await client.query(
-            `INSERT INTO payment_details_lightning
+            `INSERT INTO brz_payment_details_lightning
               (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
               ON CONFLICT(user_id, payment_id) DO UPDATE SET
@@ -428,9 +428,9 @@ class PostgresStorage {
                 payment_hash=EXCLUDED.payment_hash,
                 destination_pubkey=EXCLUDED.destination_pubkey,
                 description=EXCLUDED.description,
-                preimage=COALESCE(EXCLUDED.preimage, payment_details_lightning.preimage),
-                htlc_status=COALESCE(EXCLUDED.htlc_status, payment_details_lightning.htlc_status),
-                htlc_expiry_time=COALESCE(EXCLUDED.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)`,
+                preimage=COALESCE(EXCLUDED.preimage, brz_payment_details_lightning.preimage),
+                htlc_status=COALESCE(EXCLUDED.htlc_status, brz_payment_details_lightning.htlc_status),
+                htlc_expiry_time=COALESCE(EXCLUDED.htlc_expiry_time, brz_payment_details_lightning.htlc_expiry_time)`,
             [
               this.identity,
               payment.id,
@@ -447,14 +447,14 @@ class PostgresStorage {
 
         if (payment.details?.type === "token") {
           await client.query(
-            `INSERT INTO payment_details_token
+            `INSERT INTO brz_payment_details_token
               (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
               VALUES ($1, $2, $3, $4, $5, $6)
               ON CONFLICT(user_id, payment_id) DO UPDATE SET
                 metadata=EXCLUDED.metadata,
                 tx_hash=EXCLUDED.tx_hash,
                 tx_type=EXCLUDED.tx_type,
-                invoice_details=COALESCE(EXCLUDED.invoice_details, payment_details_token.invoice_details)`,
+                invoice_details=COALESCE(EXCLUDED.invoice_details, brz_payment_details_token.invoice_details)`,
             [
               this.identity,
               payment.id,
@@ -535,7 +535,7 @@ class PostgresStorage {
 
       // Early exit if no related payments exist for this tenant
       const hasRelatedResult = await this.pool.query(
-        "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE user_id = $1 AND parent_payment_id IS NOT NULL LIMIT 1)",
+        "SELECT EXISTS(SELECT 1 FROM brz_payment_metadata WHERE user_id = $1 AND parent_payment_id IS NOT NULL LIMIT 1)",
         [this.identity]
       );
       if (!hasRelatedResult.rows[0].exists) {
@@ -575,15 +575,15 @@ class PostgresStorage {
   async insertPaymentMetadata(paymentId, metadata) {
     try {
       await this.pool.query(
-        `INSERT INTO payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+        `INSERT INTO brz_payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT(user_id, payment_id) DO UPDATE SET
-           parent_payment_id = COALESCE(EXCLUDED.parent_payment_id, payment_metadata.parent_payment_id),
-           lnurl_pay_info = COALESCE(EXCLUDED.lnurl_pay_info, payment_metadata.lnurl_pay_info),
-           lnurl_withdraw_info = COALESCE(EXCLUDED.lnurl_withdraw_info, payment_metadata.lnurl_withdraw_info),
-           lnurl_description = COALESCE(EXCLUDED.lnurl_description, payment_metadata.lnurl_description),
-           conversion_info = COALESCE(EXCLUDED.conversion_info, payment_metadata.conversion_info),
-           conversion_status = COALESCE(EXCLUDED.conversion_status, payment_metadata.conversion_status)`,
+           parent_payment_id = COALESCE(EXCLUDED.parent_payment_id, brz_payment_metadata.parent_payment_id),
+           lnurl_pay_info = COALESCE(EXCLUDED.lnurl_pay_info, brz_payment_metadata.lnurl_pay_info),
+           lnurl_withdraw_info = COALESCE(EXCLUDED.lnurl_withdraw_info, brz_payment_metadata.lnurl_withdraw_info),
+           lnurl_description = COALESCE(EXCLUDED.lnurl_description, brz_payment_metadata.lnurl_description),
+           conversion_info = COALESCE(EXCLUDED.conversion_info, brz_payment_metadata.conversion_info),
+           conversion_status = COALESCE(EXCLUDED.conversion_status, brz_payment_metadata.conversion_status)`,
         [
           this.identity,
           paymentId,
@@ -614,7 +614,7 @@ class PostgresStorage {
   async addDeposit(txid, vout, amountSats, isMature) {
     try {
       await this.pool.query(
-        `INSERT INTO unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
+        `INSERT INTO brz_unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
          VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT(user_id, txid, vout) DO UPDATE SET is_mature = EXCLUDED.is_mature, amount_sats = EXCLUDED.amount_sats`,
         [this.identity, txid, vout, amountSats, isMature]
@@ -630,7 +630,7 @@ class PostgresStorage {
   async deleteDeposit(txid, vout) {
     try {
       await this.pool.query(
-        "DELETE FROM unclaimed_deposits WHERE user_id = $1 AND txid = $2 AND vout = $3",
+        "DELETE FROM brz_unclaimed_deposits WHERE user_id = $1 AND txid = $2 AND vout = $3",
         [this.identity, txid, vout]
       );
     } catch (error) {
@@ -644,7 +644,7 @@ class PostgresStorage {
   async listDeposits() {
     try {
       const result = await this.pool.query(
-        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits WHERE user_id = $1",
+        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM brz_unclaimed_deposits WHERE user_id = $1",
         [this.identity]
       );
 
@@ -669,14 +669,14 @@ class PostgresStorage {
     try {
       if (payload.type === "claimError") {
         await this.pool.query(
-          `UPDATE unclaimed_deposits
+          `UPDATE brz_unclaimed_deposits
            SET claim_error = $1, refund_tx = NULL, refund_tx_id = NULL
            WHERE user_id = $2 AND txid = $3 AND vout = $4`,
           [JSON.stringify(payload.error), this.identity, txid, vout]
         );
       } else if (payload.type === "refund") {
         await this.pool.query(
-          `UPDATE unclaimed_deposits
+          `UPDATE brz_unclaimed_deposits
            SET refund_tx = $1, refund_tx_id = $2, claim_error = NULL
            WHERE user_id = $3 AND txid = $4 AND vout = $5`,
           [payload.refundTx, payload.refundTxid, this.identity, txid, vout]
@@ -698,7 +698,7 @@ class PostgresStorage {
       await this._withTransaction(async (client) => {
         for (const item of metadata) {
           await client.query(
-            `INSERT INTO lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
              VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT(user_id, payment_hash) DO UPDATE SET
                nostr_zap_request = EXCLUDED.nostr_zap_request,
@@ -859,7 +859,7 @@ class PostgresStorage {
 
       const result = await this.pool.query(
         `SELECT id, name, payment_identifier, created_at, updated_at
-         FROM contacts
+         FROM brz_contacts
          WHERE user_id = $1
          ORDER BY name ASC
          LIMIT $2 OFFSET $3`,
@@ -885,7 +885,7 @@ class PostgresStorage {
     try {
       const result = await this.pool.query(
         `SELECT id, name, payment_identifier, created_at, updated_at
-         FROM contacts
+         FROM brz_contacts
          WHERE user_id = $1 AND id = $2`,
         [this.identity, id]
       );
@@ -913,7 +913,7 @@ class PostgresStorage {
   async insertContact(contact) {
     try {
       await this.pool.query(
-        `INSERT INTO contacts (user_id, id, name, payment_identifier, created_at, updated_at)
+        `INSERT INTO brz_contacts (user_id, id, name, payment_identifier, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT(user_id, id) DO UPDATE SET
            name = EXCLUDED.name,
@@ -939,7 +939,7 @@ class PostgresStorage {
   async deleteContact(id) {
     try {
       await this.pool.query(
-        "DELETE FROM contacts WHERE user_id = $1 AND id = $2",
+        "DELETE FROM brz_contacts WHERE user_id = $1 AND id = $2",
         [this.identity, id]
       );
     } catch (error) {
@@ -957,13 +957,13 @@ class PostgresStorage {
       return await this._withTransaction(async (client) => {
         // Local queue revision is per-tenant — two tenants don't share a queue.
         const revisionResult = await client.query(
-          "SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM sync_outgoing WHERE user_id = $1",
+          "SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM brz_sync_outgoing WHERE user_id = $1",
           [this.identity]
         );
         const revision = BigInt(revisionResult.rows[0].revision);
 
         await client.query(
-          `INSERT INTO sync_outgoing (
+          `INSERT INTO brz_sync_outgoing (
             user_id,
             record_type,
             data_id,
@@ -998,7 +998,7 @@ class PostgresStorage {
     try {
       await this._withTransaction(async (client) => {
         const deleteResult = await client.query(
-          "DELETE FROM sync_outgoing WHERE user_id = $1 AND record_type = $2 AND data_id = $3 AND revision = $4",
+          "DELETE FROM brz_sync_outgoing WHERE user_id = $1 AND record_type = $2 AND data_id = $3 AND revision = $4",
           [
             this.identity,
             record.id.type,
@@ -1008,7 +1008,7 @@ class PostgresStorage {
         );
 
         if (deleteResult.rowCount === 0) {
-          const msg = `complete_outgoing_sync: DELETE from sync_outgoing matched 0 rows (type=${record.id.type}, data_id=${record.id.dataId}, revision=${localRevision})`;
+          const msg = `complete_outgoing_sync: DELETE from brz_sync_outgoing matched 0 rows (type=${record.id.type}, data_id=${record.id.dataId}, revision=${localRevision})`;
           if (this.logger && typeof this.logger.log === "function") {
             this.logger.log({ line: msg, level: "warn" });
           } else {
@@ -1017,7 +1017,7 @@ class PostgresStorage {
         }
 
         await client.query(
-          `INSERT INTO sync_state (
+          `INSERT INTO brz_sync_state (
             user_id,
             record_type,
             data_id,
@@ -1044,8 +1044,8 @@ class PostgresStorage {
 
         // Upsert this tenant's revision row; fresh tenants without a row get one.
         await client.query(
-          `INSERT INTO sync_revision (user_id, revision) VALUES ($1, $2)
-           ON CONFLICT (user_id) DO UPDATE SET revision = GREATEST(sync_revision.revision, EXCLUDED.revision)`,
+          `INSERT INTO brz_sync_revision (user_id, revision) VALUES ($1, $2)
+           ON CONFLICT (user_id) DO UPDATE SET revision = GREATEST(brz_sync_revision.revision, EXCLUDED.revision)`,
           [this.identity, record.revision.toString()]
         );
       });
@@ -1072,8 +1072,8 @@ class PostgresStorage {
           e.commit_time as existing_commit_time,
           e.data as existing_data,
           e.revision as existing_revision
-        FROM sync_outgoing o
-        LEFT JOIN sync_state e ON
+        FROM brz_sync_outgoing o
+        LEFT JOIN brz_sync_state e ON
           o.record_type = e.record_type AND
           o.data_id = e.data_id AND
           o.user_id = e.user_id
@@ -1127,7 +1127,7 @@ class PostgresStorage {
     try {
       // A tenant that hasn't synced anything yet may have no row; treat as 0.
       const result = await this.pool.query(
-        "SELECT revision FROM sync_revision WHERE user_id = $1",
+        "SELECT revision FROM brz_sync_revision WHERE user_id = $1",
         [this.identity]
       );
       return result.rows.length > 0
@@ -1150,7 +1150,7 @@ class PostgresStorage {
       await this._withTransaction(async (client) => {
         for (const record of records) {
           await client.query(
-            `INSERT INTO sync_incoming (
+            `INSERT INTO brz_sync_incoming (
               user_id,
               record_type,
               data_id,
@@ -1187,7 +1187,7 @@ class PostgresStorage {
   async syncDeleteIncomingRecord(record) {
     try {
       await this.pool.query(
-        `DELETE FROM sync_incoming
+        `DELETE FROM brz_sync_incoming
          WHERE user_id = $1
          AND record_type = $2
          AND data_id = $3
@@ -1214,8 +1214,8 @@ class PostgresStorage {
                 e.commit_time AS existing_commit_time,
                 e.data AS existing_data,
                 e.revision AS existing_revision
-         FROM sync_incoming i
-         LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
+         FROM brz_sync_incoming i
+         LEFT JOIN brz_sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
          WHERE i.user_id = $1
          ORDER BY i.revision ASC
          LIMIT $2`,
@@ -1276,8 +1276,8 @@ class PostgresStorage {
           e.commit_time as existing_commit_time,
           e.data as existing_data,
           e.revision as existing_revision
-        FROM sync_outgoing o
-        LEFT JOIN sync_state e ON
+        FROM brz_sync_outgoing o
+        LEFT JOIN brz_sync_state e ON
           o.record_type = e.record_type AND
           o.data_id = e.data_id AND
           o.user_id = e.user_id
@@ -1335,7 +1335,7 @@ class PostgresStorage {
     try {
       await this._withTransaction(async (client) => {
         await client.query(
-          `INSERT INTO sync_state (
+          `INSERT INTO brz_sync_state (
             user_id,
             record_type,
             data_id,
@@ -1361,8 +1361,8 @@ class PostgresStorage {
         );
 
         await client.query(
-          `INSERT INTO sync_revision (user_id, revision) VALUES ($1, $2)
-           ON CONFLICT (user_id) DO UPDATE SET revision = GREATEST(sync_revision.revision, EXCLUDED.revision)`,
+          `INSERT INTO brz_sync_revision (user_id, revision) VALUES ($1, $2)
+           ON CONFLICT (user_id) DO UPDATE SET revision = GREATEST(brz_sync_revision.revision, EXCLUDED.revision)`,
           [this.identity, record.revision.toString()]
         );
       });

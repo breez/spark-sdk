@@ -13,10 +13,19 @@ use spark_wallet::{Session, SessionManager, SessionManagerError};
 
 use crate::config::PostgresStorageConfig;
 use crate::error::PostgresError;
-use crate::migrations::run_migrations;
+use crate::migrations::{SchemaRenames, run_migrations};
 use crate::pool::create_pool;
 
-const SESSION_MIGRATIONS_TABLE: &str = "session_schema_migrations";
+const SESSION_MIGRATIONS_TABLE: &str = "brz_session_schema_migrations";
+
+/// Pre-prefix rename map for upgrading session-manager deployments.
+const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
+    old_migrations_table: "session_schema_migrations",
+    new_migrations_table: SESSION_MIGRATIONS_TABLE,
+    tables: &[("sessions", "brz_sessions")],
+    indexes: &[],
+    constraints: &[("brz_sessions", "sessions_pkey", "brz_sessions_pkey")],
+};
 
 /// `PostgreSQL`-backed session manager.
 ///
@@ -39,7 +48,7 @@ impl SessionManager for PostgresSessionManager {
         let service_key = service_identity_key.serialize().to_vec();
         let row = client
             .query_opt(
-                r"SELECT token, expiration FROM sessions
+                r"SELECT token, expiration FROM brz_sessions
                   WHERE user_id = $1 AND service_identity_key = $2",
                 &[&self.identity, &service_key],
             )
@@ -64,7 +73,7 @@ impl SessionManager for PostgresSessionManager {
             .map_err(|e| SessionManagerError::Generic(format!("expiration overflow: {e}")))?;
         client
             .execute(
-                r"INSERT INTO sessions (user_id, service_identity_key, token, expiration)
+                r"INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration)
                   VALUES ($1, $2, $3, $4)
                   ON CONFLICT (user_id, service_identity_key)
                   DO UPDATE SET token = EXCLUDED.token, expiration = EXCLUDED.expiration",
@@ -111,12 +120,18 @@ impl PostgresSessionManager {
     }
 
     async fn migrate(&self) -> Result<(), PostgresError> {
-        run_migrations(&self.pool, SESSION_MIGRATIONS_TABLE, &Self::migrations()).await
+        run_migrations(
+            &self.pool,
+            SESSION_MIGRATIONS_TABLE,
+            &Self::migrations(),
+            Some(&SCHEMA_RENAMES),
+        )
+        .await
     }
 
     fn migrations() -> Vec<Vec<String>> {
         vec![vec![
-            "CREATE TABLE IF NOT EXISTS sessions (
+            "CREATE TABLE IF NOT EXISTS brz_sessions (
                 user_id BYTEA NOT NULL,
                 service_identity_key BYTEA NOT NULL,
                 token TEXT NOT NULL,
