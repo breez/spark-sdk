@@ -19,7 +19,7 @@ Build the config with {{#name default_server_config}} instead of {{#name default
 
 {{#tabs sdk_building:init-sdk-server}}
 
-{{#name default_server_config}} returns the same `Config` as {{#name default_config}} with [{{#name background_tasks_enabled}}](./config.md#background-tasks-enabled) set to `false`. All other fields are unchanged; the runtime profile prevents the background services from being started even when their per-field configuration (e.g. [{{#name real_time_sync_server_url}}](./config.md#real-time-sync-server-url), [{{#name optimization_config.auto_enabled}}](./config.md#optimization-configuration)) is left at its default.
+{{#name default_server_config}} returns the same `Config` as {{#name default_config}} with [{{#name background_tasks_enabled}}](./config.md#background-tasks-enabled) set to `false` and the fields whose background services are gated off — [{{#name real_time_sync_server_url}}](./config.md#real-time-sync-server-url) and [{{#name optimization_config.auto_enabled}}](./config.md#optimization-configuration) — reset to their inactive shape. The SDK rejects builds that leave those fields in their active shape while `background_tasks_enabled` is `false`, so prefer this preset over flipping the flag by hand.
 
 Server mode usually pairs with **shared infrastructure** across SDK instances. See [Customizing the SDK](customizing.md) and the [Shared infrastructure](#shared-infrastructure) section below for the exact wiring.
 

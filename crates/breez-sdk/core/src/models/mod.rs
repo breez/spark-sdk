@@ -640,8 +640,11 @@ pub struct Config {
     /// `refund_pending_conversions`, leaf/token optimization, etc.) work
     /// regardless of this flag.
     ///
-    /// `stable_balance_config` is not supported when this is `false`, because
-    /// its conversion worker is a background service.
+    /// When `false`, the SDK rejects builds where fields whose backing
+    /// service is gated off are still in their active shape:
+    /// `stable_balance_config` must be `None`, `real_time_sync_server_url`
+    /// must be `None`, and `optimization_config.auto_enabled` must be `false`.
+    /// `default_server_config` already sets these compatible values.
     pub background_tasks_enabled: bool,
 }
 

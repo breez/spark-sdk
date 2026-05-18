@@ -473,10 +473,25 @@ impl SdkBuilder {
         // Validate configuration
         self.config.validate()?;
         let runtime = runtime_from_config(&self.config);
-        if !runtime.starts_background_services() && self.config.stable_balance_config.is_some() {
-            return Err(SdkError::InvalidInput(
-                "Stable Balance is not supported in server mode".to_string(),
-            ));
+        if !runtime.starts_background_services() {
+            if self.config.stable_balance_config.is_some() {
+                return Err(SdkError::InvalidInput(
+                    "stable_balance_config is not supported when background_tasks_enabled is false"
+                        .to_string(),
+                ));
+            }
+            if self.config.real_time_sync_server_url.is_some() {
+                return Err(SdkError::InvalidInput(
+                    "real_time_sync_server_url must be None when background_tasks_enabled is false"
+                        .to_string(),
+                ));
+            }
+            if self.config.optimization_config.auto_enabled {
+                return Err(SdkError::InvalidInput(
+                    "optimization_config.auto_enabled must be false when background_tasks_enabled is false"
+                        .to_string(),
+                ));
+            }
         }
 
         // Create the base signer based on the signer source
@@ -997,7 +1012,7 @@ mod tests {
     #[macros::async_test_not_wasm]
     async fn server_mode_rejects_stable_balance_config() {
         use crate::{
-            SdkError, Seed, StableBalanceConfig, StableBalanceToken, default_server_config,
+            SdkError, StableBalanceConfig, StableBalanceToken, default_server_config,
         };
 
         let mut config = default_server_config(Network::Regtest);
@@ -1011,18 +1026,57 @@ mod tests {
             max_slippage_bps: None,
         });
 
-        let seed = Seed::Mnemonic {
-            mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
-            passphrase: None,
-        };
-
+        let seed = test_seed();
         let result = SdkBuilder::new(config, seed).build().await;
         match result {
             Err(SdkError::InvalidInput(message)) => {
-                assert!(message.contains("Stable Balance is not supported in server mode"));
+                assert!(message.contains("stable_balance_config"));
             }
             Err(err) => panic!("expected InvalidInput error, got {err:?}"),
             Ok(_) => panic!("expected server mode with Stable Balance config to fail"),
+        }
+    }
+
+    #[macros::async_test_not_wasm]
+    async fn server_mode_rejects_real_time_sync_server_url() {
+        use crate::{SdkError, default_server_config};
+
+        let mut config = default_server_config(Network::Regtest);
+        config.real_time_sync_server_url = Some("https://example.com".to_string());
+
+        let seed = test_seed();
+        let result = SdkBuilder::new(config, seed).build().await;
+        match result {
+            Err(SdkError::InvalidInput(message)) => {
+                assert!(message.contains("real_time_sync_server_url"));
+            }
+            Err(err) => panic!("expected InvalidInput error, got {err:?}"),
+            Ok(_) => panic!("expected server mode with real_time_sync_server_url to fail"),
+        }
+    }
+
+    #[macros::async_test_not_wasm]
+    async fn server_mode_rejects_optimization_auto_enabled() {
+        use crate::{SdkError, default_server_config};
+
+        let mut config = default_server_config(Network::Regtest);
+        config.optimization_config.auto_enabled = true;
+
+        let seed = test_seed();
+        let result = SdkBuilder::new(config, seed).build().await;
+        match result {
+            Err(SdkError::InvalidInput(message)) => {
+                assert!(message.contains("optimization_config.auto_enabled"));
+            }
+            Err(err) => panic!("expected InvalidInput error, got {err:?}"),
+            Ok(_) => panic!("expected server mode with optimization auto_enabled to fail"),
+        }
+    }
+
+    fn test_seed() -> crate::Seed {
+        crate::Seed::Mnemonic {
+            mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            passphrase: None,
         }
     }
 }

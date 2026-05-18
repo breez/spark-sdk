@@ -230,11 +230,11 @@ pub fn default_config(network: Network) -> Config {
 /// orchestrates sync, claiming, and event delivery (typically via webhooks)
 /// explicitly, so an ephemeral SDK instance stays cheap and predictable.
 ///
-/// Other config fields such as
-/// [`real_time_sync_server_url`](Config::real_time_sync_server_url) and
-/// [`optimization_config.auto_enabled`](OptimizationConfig::auto_enabled)
-/// retain their default values; the runtime profile prevents the corresponding
-/// background services from being started.
+/// Config fields whose background services are gated off are reset to their
+/// inactive shape: `real_time_sync_server_url` is set to `None` and
+/// `optimization_config.auto_enabled` to `false`. The SDK rejects builds where
+/// `background_tasks_enabled` is `false` and any of those fields is left in
+/// its active shape, so flip the flag via this helper rather than by hand.
 ///
 /// Explicit operations (`sync_wallet`, `claim_deposit`,
 /// `list_unclaimed_deposits`, `refund_deposit`,
@@ -244,21 +244,21 @@ pub fn default_config(network: Network) -> Config {
 /// Stable Balance is not supported in this mode because its conversion worker
 /// is a background service.
 ///
-/// One-time setup that the client-mode SDK applies automatically — notably
-/// [`private_enabled_default`](Config::private_enabled_default) — is NOT
-/// applied in this mode. Partners drive setup explicitly via
-/// `update_user_settings` (and any other relevant APIs) so ephemeral
-/// per-request SDK instances incur no implicit setup overhead.
+/// One-time setup that the SDK normally applies automatically — notably
+/// `private_enabled_default` — is NOT applied in this mode. Drive setup
+/// explicitly via `update_user_settings` (and any other relevant APIs) so
+/// ephemeral per-request SDK instances incur no implicit setup overhead.
 ///
-/// [`get_info`](crate::BreezSdk::get_info) reads balance directly from the
-/// spark wallet in this mode rather than from the background-maintained
-/// storage cache, so balance is always fresh and
-/// [`GetInfoRequest::ensure_synced`](crate::GetInfoRequest::ensure_synced)
-/// is a no-op.
+/// `get_info` reads balance directly from the spark wallet in this mode
+/// rather than from the background-maintained storage cache, so balance is
+/// always fresh and `ensure_synced=true` is rejected with an invalid-input
+/// error.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_server_config(network: Network) -> Config {
     let mut config = default_config(network);
     config.background_tasks_enabled = false;
+    config.real_time_sync_server_url = None;
+    config.optimization_config.auto_enabled = false;
     config
 }
 
@@ -419,6 +419,8 @@ mod tests {
         for network in [Network::Mainnet, Network::Regtest] {
             let cfg = default_server_config(network);
             assert!(!cfg.background_tasks_enabled);
+            assert!(cfg.real_time_sync_server_url.is_none());
+            assert!(!cfg.optimization_config.auto_enabled);
         }
     }
 
