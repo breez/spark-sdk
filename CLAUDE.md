@@ -210,7 +210,7 @@ Comments describe the code that exists, not the history of how it got there. Imp
 
 - **Development history** — "we used to do X, now we do Y because…", "originally returned Z but switched after…"
 - **Step-by-step decision narrative** — "first we tried A, then B, finally C"
-- **PR/ticket context** — "added for #1234", "per design review", "recently fixed"
+- **Credit-the-PR comments** — "added for #1234", "per design review", "recently fixed in PR #5678"
 - **TODOs about the past** — "this used to be wrong, now corrected"
 - **Chronicling intermediate choices** — alternatives considered, why they were rejected
 
@@ -219,6 +219,16 @@ The *only* acceptable narrative is a concise sketch (1–3 sentences) of a non-o
 > ✘ "We tried using `foo()` here but it deadlocks when called from the main thread, so we switched to `bar()`."
 >
 > ✓ "Uses `bar()` instead of `foo()`: `foo()` deadlocks on the main thread."
+
+#### Pointers to active external context are fine
+
+The "no PR/ticket context" rule is about crediting the PR that *added* the code, not about linking to the source of truth a workaround depends on. Link out when the comment would otherwise have to repeat detail that lives somewhere else:
+
+- **An open upstream bug your workaround depends on** — `// Workaround for tokio-rs/tokio#1234 (open).`
+- **A spec / RFC the implementation is reading** — `// CBOR major-type-2 byte string; see RFC 8949 §3.1.`
+- **A design doc or PR description with the long-form analysis** — `// Rationale: github.com/our-org/our-repo/pull/5678.`
+
+Rule of thumb: if the link disappeared, would a future reader lose information they need to maintain the code? If yes, keep it. If it's just a chronicle of who wrote it, drop it.
 
 Durable reasoning (a constraint, invariant, or contract) belongs in the comment as a fact. Decision *history* belongs in the commit message.
 
