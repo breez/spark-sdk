@@ -123,14 +123,14 @@ When changing the SDK's public interface, update these files:
 
 ## Documentation Inline Syntax
 
-When writing mdbook documentation in `docs/breez-sdk/src/`, use these preprocessor macros for language-aware inline code that adapts to the selected language tab:
+In mdbook docs under `docs/breez-sdk/src/`, reference every Rust identifier — functions, methods, types, struct fields, parameters, enum variants — via the preprocessor macros below. They render the identifier in the case convention of the reader's selected language tab.
 
-- `{{#name identifier}}` - For functions, methods, parameters, properties
+- `{{#name identifier}}` — functions, methods, types, struct fields, parameters
   - Rust/Python: `get_info` (snake_case)
   - Swift/Kotlin/JS/Flutter: `getInfo` (camelCase)
   - Go/C#: `GetInfo` (PascalCase)
 
-- `{{#enum Type::Variant}}` - For enum variants
+- `{{#enum Type::Variant}}` — enum variants
   - Rust: `SdkEvent::Synced`
   - Python: `SdkEvent.SYNCED`
   - Swift: `SdkEvent.synced`
@@ -138,6 +138,7 @@ When writing mdbook documentation in `docs/breez-sdk/src/`, use these preprocess
   - Others: `SdkEvent.Synced`
 
 Example:
+
 ```markdown
 Call {{#name get_info}} after each {{#enum SdkEvent::Synced}} event.
 ```
