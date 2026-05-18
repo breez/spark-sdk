@@ -34,8 +34,20 @@ struct JwtServerResponse {
     token: String,
 }
 
+/// In-memory cache entry: the JWT and its parsed `exp` claim, stored
+/// together so neither `headers()` nor the refresh loop has to re-parse the
+/// JWT on every call.
+struct CachedToken {
+    token: String,
+    /// Unix timestamp (seconds) at which the JWT expires. `0` is used as a
+    /// sentinel for tokens whose `exp` claim couldn't be parsed — those are
+    /// treated as already expired by [`is_expired`] and trigger a quick
+    /// refresh via [`next_refresh_after_success`].
+    exp: u64,
+}
+
 struct Inner {
-    token: RwLock<Option<String>>,
+    token: RwLock<Option<CachedToken>>,
     api_key: String,
     storage: Option<Arc<dyn Storage>>,
     http_client: Arc<dyn HttpClient>,
@@ -93,17 +105,17 @@ impl BreezJwtHeaderProvider {
 impl HeaderProvider for BreezJwtHeaderProvider {
     async fn headers(&self) -> Result<HashMap<String, String>, HeaderProviderError> {
         let token_lock = self.inner.token.read().await;
-        let Some(token) = token_lock.as_ref() else {
+        let Some(cached) = token_lock.as_ref() else {
             return Ok(HashMap::new());
         };
 
-        if is_jwt_expired(token) {
+        if is_expired(cached.exp) {
             return Ok(HashMap::new());
         }
 
         Ok(HashMap::from([(
             PARTNER_ID_HEADER.to_string(),
-            token.clone(),
+            cached.token.clone(),
         )]))
     }
 }
@@ -120,15 +132,26 @@ async fn load_cached_token(inner: &Inner) -> bool {
             return false;
         }
     };
-    if is_jwt_expired(&stored) {
+    let Some(exp) = jwt_exp(&stored) else {
+        return false;
+    };
+    if is_expired(exp) {
         return false;
     }
-    *inner.token.write().await = Some(stored);
+    *inner.token.write().await = Some(CachedToken { token: stored, exp });
     true
 }
 
 async fn store_token(inner: &Inner, token: String) {
-    *inner.token.write().await = Some(token.clone());
+    // Parse the `exp` claim once up front so subsequent expiry checks and
+    // refresh-scheduling don't have to re-decode the JWT. An unparseable
+    // claim is recorded as `0` (immediate expiry); the refresh loop will
+    // retry on the fallback interval rather than tight-looping.
+    let exp = jwt_exp(&token).unwrap_or(0);
+    *inner.token.write().await = Some(CachedToken {
+        token: token.clone(),
+        exp,
+    });
     if let Some(storage) = &inner.storage
         && let Err(err) = storage
             .set_cached_item(KEY_BREEZ_JWT.to_string(), token)
@@ -155,9 +178,10 @@ async fn next_refresh_after_success(inner: &Inner) -> Duration {
         .token
         .read()
         .await
-        .as_deref()
-        .and_then(jwt_exp)
-        .map_or(JWT_FALLBACK_INTERVAL_SECS, calculate_expiry);
+        .as_ref()
+        .map(|c| calculate_expiry(c.exp))
+        .filter(|&s| s > 0)
+        .unwrap_or(JWT_FALLBACK_INTERVAL_SECS);
     Duration::from_secs(secs)
 }
 
@@ -173,11 +197,18 @@ fn calculate_expiry(exp: u64) -> u64 {
     exp.saturating_sub(Into::<u64>::into(now()).saturating_add(JWT_EXPIRY_GRACE_PERIOD_SECS))
 }
 
+/// Returns `true` when the cached `exp` is within (or past) the
+/// [`JWT_EXPIRY_GRACE_PERIOD_SECS`] grace window.
+fn is_expired(exp: u64) -> bool {
+    calculate_expiry(exp) == 0
+}
+
+#[cfg(test)]
 fn is_jwt_expired(token: &str) -> bool {
     let Some(exp) = jwt_exp(token) else {
         return true;
     };
-    calculate_expiry(exp) == 0
+    is_expired(exp)
 }
 
 fn jwt_exp(token: &str) -> Option<u64> {
