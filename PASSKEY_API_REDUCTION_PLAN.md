@@ -30,20 +30,43 @@ execute is here; no prior session context required.
 | Q3 | Known-cred get/remove/clear via `client.credentials()` sub-object — off the top-level surface. |
 | Q4 | Label list/store via `client.labels()` sub-object — reachable from all bindings. |
 | Naming | Rename `LabelStore::ensure_label_published` → `store_label`; idempotency documented, not in the name. |
+| Default label | Configurable via a new **`PasskeyConfig`** struct passed to `PasskeyClient::new` (see §1.1). Replaces the bare `relay_config` ctor arg. Falls back to the internal `DEFAULT_LABEL` const (`"Default"`) when unset. |
 
-### Resolved tensions (recommendation — change if you disagree)
+### Confirmed decisions
 
-- **R1 — Nostr signing.** The default Nostr label store must *sign* kind-1
-  events, so a pubkey-only trait boundary can't drive it. Resolution: the
-  **default Nostr path stays concrete & internal** — the orchestrator owns
-  the account-master-derived `nostr::Keys` and builds `NostrSaltClient`
+- **R1 — Nostr signing — CONFIRMED: Option A.** The default Nostr label
+  store stays **concrete & internal** — the orchestrator owns the
+  account-master-derived `nostr::Keys` and builds `NostrSaltClient`
   directly; the secret never crosses a trait boundary. The pluggable
   `LabelStore` trait is **Rust-only** (`with_label_store`), for
   server-mediated stores, and its boundary carries only `pubkey: &[u8; 33]`
-  as a stable user id. This is the "previous single Nostr identity is okay"
-  shape.
-- **R2 — Delivery.** Three staged commits for reviewability (Stage A core +
-  WASM, Stage B Flutter / RN / native, Stage C CLI + mirrors + docs).
+  as a stable user id. (Rejected: B = secret across trait; C = renamed
+  opaque Identity newtype.)
+- **R2 — Delivery — CONFIRMED: 3 staged commits.** Stage A core + WASM,
+  Stage B Flutter / RN / native, Stage C CLI + mirrors + docs. Each stage
+  must compile independently.
+
+### 1.1 `PasskeyConfig`
+
+New public record (added to every binding) — **replaces** the bare
+`relay_config: Option<NostrRelayConfig>` constructor parameter:
+
+```rust
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PasskeyConfig {
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub relay_config: Option<NostrRelayConfig>,
+    /// Wallet label used when register/sign_in receive `label = None`.
+    /// `None` ⇒ internal `DEFAULT_LABEL` ("Default").
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub default_label: Option<String>,
+}
+```
+
+The resolved default label is stored on `Passkey` at construction and used
+everywhere `DEFAULT_LABEL` is currently referenced (`setup_wallet`, the
+`sign_in` discovery path). `from_config(&crate::Config)` builds a
+`PasskeyConfig` (api_key → `relay_config`, `default_label = None`).
 
 ---
 
@@ -53,7 +76,7 @@ All bindings (UniFFI / WASM / Flutter / RN):
 
 ```
 PasskeyClient
-  new(prf_provider, relay_config?)
+  new(prf_provider, config?)        // config: Option<PasskeyConfig> (see §1.1)
   check_availability()  -> PasskeyAvailability
   register(RegisterRequest)  -> RegisterResponse
   sign_in(SignInRequest)     -> SignInResponse
@@ -120,16 +143,22 @@ PasskeyLabels                       PasskeyCredentials
   from cached keys, pass to trait. Keep `setup_wallet`, `list_labels`,
   `store_label`, `is_available` on `Passkey` (internal, **not** in
   bindings). Add `check_availability()` and known-cred passthroughs
-  (delegate to `prf_provider`).
+  (delegate to `prf_provider`). Store the resolved default label
+  (`config.default_label.unwrap_or(DEFAULT_LABEL)`) on `Passkey`; replace
+  every existing `DEFAULT_LABEL` use (`setup_wallet`, `sign_in` discovery)
+  with the stored value. `Passkey::new` / `with_label_store` /
+  `from_config` take `Option<PasskeyConfig>`.
 - **`models.rs`** — add `PasskeyAvailability` (`#[cfg_attr(feature="uniffi",
   derive(uniffi::Enum))]`), reuse the `source`/`reason` shape from
-  `DomainAssociation`.
+  `DomainAssociation`. Add **`PasskeyConfig`** (`uniffi::Record`, see §1.1)
+  next to `NostrRelayConfig`.
 - **`passkey_client.rs`**:
-  - `#[uniffi::export]` impl block: `new`, `check_availability`,
-    `register`, `sign_in`, `labels()`, `credentials()`. **Remove**
-    `list_labels`, `store_label`, `is_available`.
-  - Plain `impl` block (Rust-only): `from_config`, `with_label_store`,
-    `passkey()`.
+  - `#[uniffi::export]` impl block: `new(prf_provider, config?)` where
+    `config: Option<PasskeyConfig>`, `check_availability`, `register`,
+    `sign_in`, `labels()`, `credentials()`. **Remove** `list_labels`,
+    `store_label`, `is_available`.
+  - Plain `impl` block (Rust-only): `from_config` (builds `PasskeyConfig`
+    from `crate::Config`), `with_label_store`, `passkey()`.
   - New `#[uniffi::Object]` types `PasskeyLabels` (holds a `Passkey`
     clone → `list`, `store`) and `PasskeyCredentials` (holds
     `Arc<dyn PrfProvider>` → `get`, `remove`, `clear`).
@@ -138,9 +167,11 @@ PasskeyLabels                       PasskeyCredentials
 ### WASM — `crates/breez-sdk/wasm/`
 
 - **`src/passkey.rs`** — remove `listLabels` / `storeLabel` / `isAvailable`
-  js methods. Add `checkAvailability` (returns `PasskeyAvailability`),
-  `labels()` / `credentials()` returning `#[wasm_bindgen]` sub-structs with
-  their methods. Add `PasskeyAvailability` extern binding.
+  js methods. Constructor takes `PasskeyConfig` in place of
+  `NostrRelayConfig`. Add `checkAvailability` (returns
+  `PasskeyAvailability`), `labels()` / `credentials()` returning
+  `#[wasm_bindgen]` sub-structs with their methods. Add
+  `PasskeyAvailability` and `PasskeyConfig` extern bindings.
 - **`src/models/passkey_prf_provider.rs`** — add Reflect-based optional
   probes + bridging for `getKnownCredentialIds` /
   `removeKnownCredentialId` / `clearKnownCredentialIds` (mirror the
@@ -167,10 +198,10 @@ make build-wasm
 
 - **`packages/flutter/rust/src/passkey.rs`** — drop `list_labels` /
   `store_label` / `is_available`; add `check_availability`, `labels()`,
-  `credentials()`. Extend `CallbackPrfProvider` with optional known-cred
-  callbacks.
+  `credentials()`. Constructor takes `PasskeyConfig`. Extend
+  `CallbackPrfProvider` with optional known-cred callbacks.
 - **`packages/flutter/rust/src/models.rs`** + **`src/sdk.rs`** — mirror
-  `PasskeyAvailability` and the sub-object handles.
+  `PasskeyAvailability`, **`PasskeyConfig`**, and the sub-object handles.
 - **`packages/flutter/lib/src/passkey_prf_provider.dart`** — drop
   single-salt; add known-cred passthrough.
 - **`packages/flutter/{android,ios}/.../BreezSdkSparkPasskeyPlugin.{kt,swift}`**
@@ -194,17 +225,21 @@ toolchain available); RN/TS typecheck.
 
 - **`crates/breez-sdk/cli/src/passkey/mod.rs`** — replace
   `client.list_labels()` / discovery wiring with `client.labels().list()`;
-  replace any `is_available` usage with `check_availability()`. (Rust CLI
-  is the source of truth — modification allowed.)
+  replace any `is_available` usage with `check_availability()`; update the
+  `PasskeyClient::new` call site to pass `PasskeyConfig` (the CLI's
+  `--label` plumbing can populate `default_label`). (Rust CLI is the
+  source of truth — modification allowed.)
 - **Interface checklist (CLAUDE.md "Updating SDK Interfaces"):** confirm
-  `PasskeyAvailability` + sub-objects exported from
+  `PasskeyAvailability`, `PasskeyConfig` + sub-objects exported from
   `crates/breez-sdk/core/src/passkey/models.rs`,
   `crates/breez-sdk/wasm/src/models.rs`, `wasm/src/sdk.rs`,
   `packages/flutter/rust/src/models.rs`, `packages/flutter/rust/src/sdk.rs`.
 - **Docs/snippets:** run the **`update-snippets`** skill to regenerate the
   9 languages, then hand-adjust `docs/breez-sdk/snippets/*/passkey.*` —
   replace `listLabels`/`storeLabel` with `labels().list()`/`labels().store()`,
-  `isAvailable` → `checkAvailability`. Update
+  `isAvailable` → `checkAvailability`, and update the `PasskeyClient`
+  constructor call to pass `PasskeyConfig` (incl. a `default_label`
+  example). Update
   `docs/breez-sdk/src/guide/passkey.md` and `uxguide_passkey.md` prose.
 - **Language CLI examples** (`bindings/examples/cli/langs/*`) — touch ONLY
   if the CLI-matrix / Flutter CI job fails; keep minimal. Full propagation
@@ -215,11 +250,18 @@ build per `docs/breez-sdk`.
 
 ---
 
-## 6. Open items to confirm before starting
+## 6. Decisions — all confirmed
 
-1. **R1** (concrete-internal Nostr default + Rust-only pubkey-boundary
-   trait) — confirm or override.
-2. **R2** (3 staged commits vs single commit) — confirm.
+All design questions are resolved; no open items. Execute the plan
+top-to-bottom.
+
+- Q1–Q4: locked (see §1 table).
+- R1 = **Option A** (concrete-internal Nostr default + Rust-only
+  pubkey-boundary `LabelStore` trait).
+- R2 = **3 staged commits** (Stage A / B / C, each independently
+  compilable).
+- Default label = **`PasskeyConfig` struct** passed to
+  `PasskeyClient::new`, replacing the bare `relay_config` arg (see §1.1).
 
 ---
 
