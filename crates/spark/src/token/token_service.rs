@@ -507,7 +507,6 @@ impl TokenService {
             ));
         }
         let token_id = receiver_outputs[0].token_id.clone();
-        // TODO: support multi-token transfers
         if receiver_outputs.iter().any(|o| o.token_id != token_id) {
             return Err(ServiceError::Generic(
                 "All receiver outputs must have the same token id".to_string(),
