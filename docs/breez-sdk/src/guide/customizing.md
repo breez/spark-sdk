@@ -146,7 +146,7 @@ An SDK Context bundles every process-shareable resource: the HTTP client (used f
 
 Construct one via {{#name new_shared_sdk_context}} and pass it to each {{#name SdkBuilder}} via {{#name with_shared_context}}. Connections close when the last reference to the SDK Context is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
 
-The `connections_per_operator` setting on {{#name SdkContextConfig}} controls how many gRPC connections the context opens to each Spark operator:
+The {{#name connections_per_operator}} setting on {{#name SdkContextConfig}} controls how many gRPC connections the context opens to each Spark operator:
 
 - `None` — one connection per operator, multiplexed across every SDK sharing this context. The right choice for almost every deployment.
 - `Some(n)` — opens `n` connections per operator and balances requests across them. Worth setting only if the single shared connection has become a bottleneck — for example, latency that climbs with throughput, or operators deployed behind an L7 load balancer where you want client-side fan-out across backend instances.
