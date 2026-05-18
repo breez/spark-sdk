@@ -148,12 +148,12 @@ pub struct SdkBuilder {
     /// JS Postgres pool supplied via `withPostgresConnectionPool` /
     /// `withPostgresBackend`.
     explicit_postgres_pool: Option<(Rc<JsPool>, bool)>,
-    /// JS Postgres pool supplied via `withContext(ctx_with_pool)`.
+    /// JS Postgres pool supplied via `withSharedContext(ctx_with_pool)`.
     context_postgres_pool: Option<(Rc<JsPool>, bool)>,
     /// JS MySQL pool supplied via `withMysqlConnectionPool` /
     /// `withMysqlBackend`.
     explicit_mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
-    /// JS MySQL pool supplied via `withContext(ctx_with_pool)`.
+    /// JS MySQL pool supplied via `withSharedContext(ctx_with_pool)`.
     context_mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
     key_set_type: breez_sdk_spark::KeySetType,
     use_address_index: bool,
@@ -222,12 +222,12 @@ impl SdkBuilder {
 
     /// Threads a shared [`WasmSdkContext`] into the builder.
     ///
-    /// Construct the context once via `newSdkContext` and pass the same
+    /// Construct the context once via `newSharedSdkContext` and pass the same
     /// handle to every `SdkBuilder` whose SDKs should share its resources
     /// (operator gRPC channels, SSP HTTP client, database pool).
-    #[wasm_bindgen(js_name = "withContext")]
-    pub fn with_context(mut self, context: &WasmSdkContext) -> Self {
-        self.builder = self.builder.with_context(context.inner.clone());
+    #[wasm_bindgen(js_name = "withSharedContext")]
+    pub fn with_shared_context(mut self, context: &WasmSdkContext) -> Self {
+        self.builder = self.builder.with_shared_context(context.inner.clone());
         self.context_postgres_pool = context.postgres_pool.clone();
         self.context_mysql_pool = context.mysql_pool.clone();
         self

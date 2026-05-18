@@ -17,7 +17,7 @@ use breez_sdk_spark::{
     BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
     ReceivePaymentRequest, SdkContext, SdkContextConfig, SdkEvent, SendPaymentRequest,
     SyncWalletRequest, default_mysql_storage_config, default_postgres_storage_config,
-    default_server_config, new_sdk_context,
+    default_server_config, new_shared_sdk_context,
 };
 
 use breez_bench::stats::DurationStats;
@@ -630,7 +630,7 @@ async fn build_sender_postgres_context(conn_str: &str) -> Result<Arc<SdkContext>
     breez_sdk_itest::ensure_postgres_database_exists(conn_str).await?;
     let mut pg_config = default_postgres_storage_config(conn_str.to_string());
     pg_config.max_pool_size = 30;
-    Ok(new_sdk_context(SdkContextConfig {
+    Ok(new_shared_sdk_context(SdkContextConfig {
         postgres_config: Some(pg_config),
         ..Default::default()
     })?)
@@ -643,7 +643,7 @@ async fn build_sender_mysql_context(conn_str: &str) -> Result<Arc<SdkContext>> {
     breez_sdk_itest::ensure_mysql_database_exists(&admin_url, &db_name).await?;
     let mut my_config = default_mysql_storage_config(conn_str.to_string());
     my_config.max_pool_size = 30;
-    Ok(new_sdk_context(SdkContextConfig {
+    Ok(new_shared_sdk_context(SdkContextConfig {
         mysql_config: Some(my_config),
         ..Default::default()
     })?)

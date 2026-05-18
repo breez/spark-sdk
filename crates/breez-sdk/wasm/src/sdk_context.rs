@@ -14,7 +14,7 @@ use crate::{
 
 /// Process-shared resources backing one or more `BreezSdk` instances on WASM.
 ///
-/// Construct once via `newSdkContext` and pass the handle to every
+/// Construct once via `newSharedSdkContext` and pass the handle to every
 /// `SdkBuilder` whose SDKs should share its operator gRPC channels, SSP HTTP
 /// client, and (optionally) database connection pool.
 #[wasm_bindgen]
@@ -24,7 +24,7 @@ pub struct WasmSdkContext {
     pub(crate) mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
 }
 
-/// Settings for `newSdkContext`. Fields are optional with sensible defaults.
+/// Settings for `newSharedSdkContext`. Fields are optional with sensible defaults.
 #[derive(Default, Clone, serde::Serialize, serde::Deserialize, tsify_next::Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "camelCase")]
@@ -47,9 +47,9 @@ pub struct WasmSdkContextConfig {
 }
 
 /// Constructs a [`WasmSdkContext`] from a `WasmSdkContextConfig`.
-#[wasm_bindgen(js_name = "newSdkContext")]
-pub fn new_sdk_context(config: WasmSdkContextConfig) -> WasmResult<WasmSdkContext> {
-    let inner = breez_sdk_spark::new_sdk_context(breez_sdk_spark::SdkContextConfig {
+#[wasm_bindgen(js_name = "newSharedSdkContext")]
+pub fn new_shared_sdk_context(config: WasmSdkContextConfig) -> WasmResult<WasmSdkContext> {
+    let inner = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
         connections_per_operator: config.connections_per_operator,
     })?;
 

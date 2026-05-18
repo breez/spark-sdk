@@ -11,7 +11,7 @@ use super::{PostgresStorageConfig, base::create_pool};
 /// A shareable Postgres connection pool.
 ///
 /// Typically owned by an [`SdkContext`](crate::SdkContext): supply a
-/// `PostgresStorageConfig` to [`new_sdk_context`](crate::new_sdk_context) and
+/// `PostgresStorageConfig` to [`new_shared_sdk_context`](crate::new_shared_sdk_context) and
 /// the context builds the pool internally. All SDKs sharing the same context
 /// target the same database; per-tenant isolation is derived from each SDK's
 /// seed (the identity public key scopes every row).
@@ -28,7 +28,7 @@ pub struct PostgresConnectionPool {
 
 /// Creates a shareable Postgres connection pool from the given configuration.
 ///
-/// Used internally by [`new_sdk_context`](crate::new_sdk_context). Exposed
+/// Used internally by [`new_shared_sdk_context`](crate::new_shared_sdk_context). Exposed
 /// for advanced use cases where a caller wants the pool itself.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn create_postgres_connection_pool(

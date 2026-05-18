@@ -137,19 +137,19 @@ fn apply_backend_choice(
         BackendChoice::Sqlite => Ok(builder.with_default_storage(storage_dir)),
         BackendChoice::Postgres(conn_str) => {
             let pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str.clone());
-            let ctx = breez_sdk_spark::new_sdk_context(breez_sdk_spark::SdkContextConfig {
+            let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
                 postgres_config: Some(pg_config),
                 ..Default::default()
             })?;
-            Ok(builder.with_context(ctx))
+            Ok(builder.with_shared_context(ctx))
         }
         BackendChoice::Mysql(conn_str) => {
             let my_config = breez_sdk_spark::default_mysql_storage_config(conn_str.clone());
-            let ctx = breez_sdk_spark::new_sdk_context(breez_sdk_spark::SdkContextConfig {
+            let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
                 mysql_config: Some(my_config),
                 ..Default::default()
             })?;
-            Ok(builder.with_context(ctx))
+            Ok(builder.with_shared_context(ctx))
         }
     }
 }
@@ -256,7 +256,7 @@ pub async fn build_sdk_with_shared_context(
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
     let builder = SdkBuilder::new(config, seed)
-        .with_context(context)
+        .with_shared_context(context)
         .with_default_storage(storage_dir);
     let sdk = builder.build().await?;
 
@@ -682,28 +682,28 @@ pub async fn build_sdk_with_tree_store_config(
             ensure_postgres_database_exists(&conn_str).await?;
             let mut pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
             pg_config.max_pool_size = 30;
-            let ctx = breez_sdk_spark::new_sdk_context(breez_sdk_spark::SdkContextConfig {
+            let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
                 postgres_config: Some(pg_config),
                 ..Default::default()
             })?;
-            builder = builder.with_context(ctx);
+            builder = builder.with_shared_context(ctx);
         }
         (Some(PostgresTreeStore::SharedContext(ctx)), None) => {
-            builder = builder.with_context(ctx);
+            builder = builder.with_shared_context(ctx);
         }
         (None, Some(MysqlTreeStore::ConnectionString(conn_str))) => {
             let (admin_url, db_name) = split_mysql_url(&conn_str)?;
             ensure_mysql_database_exists(&admin_url, &db_name).await?;
             let mut my_config = breez_sdk_spark::default_mysql_storage_config(conn_str);
             my_config.max_pool_size = 30;
-            let ctx = breez_sdk_spark::new_sdk_context(breez_sdk_spark::SdkContextConfig {
+            let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
                 mysql_config: Some(my_config),
                 ..Default::default()
             })?;
-            builder = builder.with_context(ctx);
+            builder = builder.with_shared_context(ctx);
         }
         (None, Some(MysqlTreeStore::SharedContext(ctx))) => {
-            builder = builder.with_context(ctx);
+            builder = builder.with_shared_context(ctx);
         }
         (None, None) => {
             builder = apply_storage(builder, storage_dir).await?;
@@ -1649,13 +1649,13 @@ pub async fn build_sdk_with_postgres(
 
     let postgres_config =
         breez_sdk_spark::default_postgres_storage_config(connection_string.to_string());
-    let ctx = breez_sdk_spark::new_sdk_context(breez_sdk_spark::SdkContextConfig {
+    let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
         postgres_config: Some(postgres_config),
         ..Default::default()
     })?;
 
     let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
-        .with_context(ctx)
+        .with_shared_context(ctx)
         .build()
         .await?;
 
@@ -1707,13 +1707,13 @@ pub async fn build_sdk_with_mysql(
     let mut mysql_config =
         breez_sdk_spark::default_mysql_storage_config(connection_string.to_string());
     mysql_config.max_pool_size = 30;
-    let ctx = breez_sdk_spark::new_sdk_context(breez_sdk_spark::SdkContextConfig {
+    let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
         mysql_config: Some(mysql_config),
         ..Default::default()
     })?;
 
     let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
-        .with_context(ctx)
+        .with_shared_context(ctx)
         .build()
         .await?;
 

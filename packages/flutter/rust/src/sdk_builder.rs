@@ -67,13 +67,13 @@ impl SdkBuilder {
     /// Threads a shared [`SdkContext`] into the builder.
     ///
     /// Construct the context once via
-    /// [`new_sdk_context`](crate::sdk_context::new_sdk_context) and pass the
-    /// same handle to every `SdkBuilder` whose SDKs should share its HTTP
-    /// client, operator gRPC channels, and Breez backend gRPC client.
+    /// [`new_shared_sdk_context`](crate::sdk_context::new_shared_sdk_context)
+    /// and pass the same handle to every `SdkBuilder` whose SDKs should share
+    /// its HTTP client, operator gRPC channels, and Breez backend gRPC client.
     #[frb(sync)]
-    pub fn with_context(self, context: &SdkContext) -> Self {
+    pub fn with_shared_context(self, context: &SdkContext) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
-            .with_context(context.inner.clone());
+            .with_shared_context(context.inner.clone());
         Self {
             inner: Arc::new(builder),
         }

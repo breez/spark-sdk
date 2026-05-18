@@ -19,7 +19,7 @@ use tracing_subscriber::EnvFilter;
 use breez_sdk_itest::{drop_postgres_database, ensure_postgres_database_exists};
 use breez_sdk_spark::{
     BreezSdk, GetInfoRequest, Network, SdkBuilder, SdkContext, SdkContextConfig, Seed,
-    default_config, default_postgres_storage_config, new_sdk_context,
+    default_config, default_postgres_storage_config, new_shared_sdk_context,
 };
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -121,10 +121,10 @@ async fn main() -> Result<()> {
 
         let mut builder = SdkBuilder::new(config, Seed::Entropy(seed.to_vec()));
         builder = match (&shared_context, args.mode) {
-            (Some(ctx), _) => builder.with_context(Arc::clone(ctx)),
+            (Some(ctx), _) => builder.with_shared_context(Arc::clone(ctx)),
             (None, Mode::Separate) => {
                 let ctx = make_context(&args.postgres, args.max_pool_size)?;
-                builder.with_context(ctx)
+                builder.with_shared_context(ctx)
             }
             (None, Mode::Shared) => unreachable!(),
         };
@@ -194,7 +194,7 @@ async fn main() -> Result<()> {
 fn make_context(conn_str: &str, max_pool_size: u32) -> Result<Arc<SdkContext>> {
     let mut cfg = default_postgres_storage_config(conn_str.to_string());
     cfg.max_pool_size = max_pool_size;
-    Ok(new_sdk_context(SdkContextConfig {
+    Ok(new_shared_sdk_context(SdkContextConfig {
         postgres_config: Some(cfg),
         ..Default::default()
     })?)

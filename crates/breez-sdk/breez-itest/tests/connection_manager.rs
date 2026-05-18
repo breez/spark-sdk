@@ -21,7 +21,7 @@ use tracing::info;
 async fn test_shared_connection_manager_spark_transfer(
     #[case] connections_per_operator: Option<u32>,
 ) -> Result<()> {
-    let context = new_sdk_context(SdkContextConfig {
+    let context = new_shared_sdk_context(SdkContextConfig {
         connections_per_operator,
         ..Default::default()
     })?;

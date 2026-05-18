@@ -28,7 +28,7 @@ use crate::{
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams, SyncCoordinator, runtime_from_config},
-    sdk_context::{SdkContext, SdkContextConfig, new_sdk_context},
+    sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context},
     session_manager::{SessionManager, SessionManagerAdapter},
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
@@ -201,14 +201,15 @@ impl SdkBuilder {
 
     /// Threads a shared [`SdkContext`] into this builder.
     ///
-    /// Construct the context once via [`new_sdk_context`] and pass the same
-    /// `Arc` to every `SdkBuilder` whose SDKs should share its underlying
+    /// Construct the context once via [`new_shared_sdk_context`] and pass the
+    /// same `Arc` to every `SdkBuilder` whose SDKs should share its underlying
     /// resources (operator gRPC channels, SSP HTTP client, database pool).
     ///
-    /// If not set, `build()` calls `new_sdk_context(SdkContextConfig::default())`
-    /// internally — fine for a single-SDK process with no DB backend.
+    /// If not set, `build()` calls
+    /// `new_shared_sdk_context(SdkContextConfig::default())` internally — fine
+    /// for a single-SDK process with no DB backend.
     #[must_use]
-    pub fn with_context(mut self, context: Arc<SdkContext>) -> Self {
+    pub fn with_shared_context(mut self, context: Arc<SdkContext>) -> Self {
         self.context = Some(context);
         self
     }
@@ -221,7 +222,7 @@ impl SdkBuilder {
     /// same `Arc` to multiple `SdkBuilder` instances to share connections
     /// across SDKs. Per-tenant scoping is derived from each SDK's seed.
     ///
-    /// If you've also threaded an [`SdkContext`] (via [`with_context`](Self::with_context))
+    /// If you've also threaded an [`SdkContext`] (via [`with_shared_context`](Self::with_shared_context))
     /// that already carries a Postgres pool, `build()` will error — pick one
     /// source. Most integrators use either this method *or* a context, not both.
     #[must_use]
@@ -242,7 +243,7 @@ impl SdkBuilder {
     /// `Arc` to multiple `SdkBuilder` instances to share connections across
     /// SDKs. Per-tenant scoping is derived from each SDK's seed.
     ///
-    /// If you've also threaded an [`SdkContext`] (via [`with_context`](Self::with_context))
+    /// If you've also threaded an [`SdkContext`] (via [`with_shared_context`](Self::with_shared_context))
     /// that already carries a `MySQL` pool, `build()` will error — pick one
     /// source. Most integrators use either this method *or* a context, not both.
     #[must_use]
@@ -515,7 +516,7 @@ impl SdkBuilder {
         // wiring reads from `context` for connection managers.
         let context = match self.context {
             Some(ctx) => ctx,
-            None => new_sdk_context(SdkContextConfig::default())?,
+            None => new_shared_sdk_context(SdkContextConfig::default())?,
         };
 
         // Resolve the DB pools from at most one source: the legacy

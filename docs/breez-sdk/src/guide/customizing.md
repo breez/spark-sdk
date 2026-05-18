@@ -13,7 +13,7 @@ The shared-pool, shared-chain-service, and shared-connection-manager components 
 - [Fiat Service](#with-fiat-service) to provide Fiat currencies and exchange rates
 - Change the [Key Set](#with-key-set) to alter the derivation path used
 - [Payment Observer](#with-payment-observer) to be notified before payments occur
-- [SDK Context](#with-context) to share connection pools and HTTP/gRPC clients across SDK instances
+- [Shared SDK Context](#with-shared-context) to share connection pools and HTTP/gRPC clients across SDK instances
 
 {{#tabs sdk_building:init-sdk-advanced}}
 
@@ -138,13 +138,13 @@ By implementing the Payment Observer interface you can be notified before a paym
 {{#tabs sdk_building:with-payment-observer}}
 
 <h2 id="with-context">
-    <a class="header" href="#with-context">With SDK Context</a>
+    <a class="header" href="#with-shared-context">With Shared SDK Context</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkContext.html">API docs</a>
 </h2>
 
 An SDK Context bundles every process-shareable resource: the HTTP client (used for SSP GraphQL, chain service, LNURL, and JWT refresh), the gRPC channels to the Spark operators, the gRPC client to the Breez backend, and — optionally — a PostgreSQL or MySQL connection pool. By default each SDK builds its own. Server processes hosting many wallets at once can construct one SDK Context and pass it to every {{#name SdkBuilder}} so they reuse the same pooled clients instead of each opening fresh ones.
 
-Construct one via {{#name new_sdk_context}} and pass it to each {{#name SdkBuilder}} via {{#name with_context}}. Connections close when the last reference to the SDK Context is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
+Construct one via {{#name new_shared_sdk_context}} and pass it to each {{#name SdkBuilder}} via {{#name with_shared_context}}. Connections close when the last reference to the SDK Context is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
 
 The `connections_per_operator` setting on {{#name SdkContextConfig}} controls how many gRPC connections the context opens to each Spark operator:
 

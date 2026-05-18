@@ -16,7 +16,7 @@ use tracing::info;
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_shared_ssp_connection_manager_spark_transfer() -> Result<()> {
-    let context = new_sdk_context(SdkContextConfig::default())?;
+    let context = new_shared_sdk_context(SdkContextConfig::default())?;
 
     let alice_dir = Builder::new()
         .prefix("breez-sdk-shared-ssp-cm-alice")

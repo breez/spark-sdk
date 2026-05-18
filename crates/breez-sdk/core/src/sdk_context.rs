@@ -18,7 +18,7 @@ use crate::persist::postgres::{
 
 /// Process-shared resources that can back many `BreezSdk` instances.
 ///
-/// Construct one with [`new_sdk_context`] and pass the same `Arc` to every
+/// Construct one with [`new_shared_sdk_context`] and pass the same `Arc` to every
 /// [`SdkBuilder`](crate::SdkBuilder) whose SDKs should share those resources
 /// (a single HTTP client across SSP / chain / LNURL / JWT / etc., a gRPC
 /// channel pool to the Spark operators, the Breez backend gRPC client, a
@@ -44,7 +44,7 @@ pub struct SdkContext {
     pub(crate) mysql_pool: Option<Arc<MysqlConnectionPool>>,
 }
 
-/// Settings for [`new_sdk_context`]. All fields are optional; the defaults
+/// Settings for [`new_shared_sdk_context`]. All fields are optional; the defaults
 /// match the single-SDK happy path.
 #[derive(Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -79,7 +79,7 @@ pub struct SdkContextConfig {
 /// `PostgreSQL` or `MySQL` pool.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
-pub fn new_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkError> {
+pub fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkError> {
     let user_agent = default_user_agent();
     let http_client = create_http_client(Some(&user_agent));
     let breez_server = Arc::new(
@@ -124,7 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_config_yields_context_with_shared_clients_and_no_db() {
-        let ctx = new_sdk_context(SdkContextConfig::default()).expect("default context");
+        let ctx = new_shared_sdk_context(SdkContextConfig::default()).expect("default context");
         // Just confirming the Arcs are non-null.
         let _http = Arc::clone(&ctx.http_client);
         let _breez = Arc::clone(&ctx.breez_server);

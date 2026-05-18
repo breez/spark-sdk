@@ -103,12 +103,12 @@ impl SdkBuilder {
     /// Threads a shared [`SdkContext`](crate::SdkContext) into the builder.
     ///
     /// Construct the context once via
-    /// [`new_sdk_context`](crate::new_sdk_context) and pass the same `Arc` to
-    /// every `SdkBuilder` whose SDKs should share its resources (operator
-    /// gRPC channels, SSP HTTP client, database pool).
-    pub async fn with_context(&self, context: Arc<SdkContext>) {
+    /// [`new_shared_sdk_context`](crate::new_shared_sdk_context) and pass the
+    /// same `Arc` to every `SdkBuilder` whose SDKs should share its resources
+    /// (operator gRPC channels, SSP HTTP client, database pool).
+    pub async fn with_shared_context(&self, context: Arc<SdkContext>) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_context(context);
+        *builder = builder.clone().with_shared_context(context);
     }
 
     /// Builds the `BreezSdk` instance with the configured components.
