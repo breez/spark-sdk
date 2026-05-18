@@ -3,11 +3,9 @@ use std::sync::Arc;
 use breez_sdk_common::breez_server::{BreezServer, PRODUCTION_BREEZSERVER_URL};
 use platform_utils::{HttpClient, create_http_client};
 
-use crate::{
-    SdkError,
-    connection_manager::{ConnectionManager, new_connection_manager},
-    default_user_agent,
-};
+use spark_wallet::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager};
+
+use crate::{SdkError, default_user_agent};
 
 #[cfg(feature = "mysql")]
 use crate::persist::mysql::{
@@ -39,7 +37,7 @@ pub struct SdkContext {
     /// Single shared gRPC client to the Breez backend (fiat, `MoonPay`, payment
     /// notifier, signer, support, swapper).
     pub(crate) breez_server: Arc<BreezServer>,
-    pub(crate) so_connection_manager: Arc<ConnectionManager>,
+    pub(crate) connection_manager: Arc<dyn ConnectionManager>,
     #[cfg(feature = "postgres")]
     pub(crate) postgres_pool: Option<Arc<PostgresConnectionPool>>,
     #[cfg(feature = "mysql")]
@@ -88,7 +86,14 @@ pub fn new_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkE
         BreezServer::new(PRODUCTION_BREEZSERVER_URL, None, &user_agent)
             .map_err(|e| SdkError::Generic(e.to_string()))?,
     );
-    let so_connection_manager = new_connection_manager(config.connections_per_operator);
+    // SDKs that share the same context share the same gRPC channels to the
+    // Spark operators. `connections_per_operator` lets the rare deployment
+    // open multiple connections per operator and balance requests across
+    // them; `None` (or `Some(1)`) keeps a single multiplexed connection.
+    let connection_manager: Arc<dyn ConnectionManager> = match config.connections_per_operator {
+        Some(n) if n > 1 => Arc::new(BalancedConnectionManager::new(n)),
+        _ => Arc::new(DefaultConnectionManager::new()),
+    };
 
     #[cfg(feature = "postgres")]
     let postgres_pool = match config.postgres_config {
@@ -105,7 +110,7 @@ pub fn new_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkE
     Ok(Arc::new(SdkContext {
         http_client,
         breez_server,
-        so_connection_manager,
+        connection_manager,
         #[cfg(feature = "postgres")]
         postgres_pool,
         #[cfg(feature = "mysql")]
@@ -123,7 +128,7 @@ mod tests {
         // Just confirming the Arcs are non-null.
         let _http = Arc::clone(&ctx.http_client);
         let _breez = Arc::clone(&ctx.breez_server);
-        let _so = Arc::clone(&ctx.so_connection_manager);
+        let _so = Arc::clone(&ctx.connection_manager);
         #[cfg(feature = "postgres")]
         assert!(ctx.postgres_pool.is_none());
         #[cfg(feature = "mysql")]

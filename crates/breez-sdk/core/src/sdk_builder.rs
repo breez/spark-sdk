@@ -903,8 +903,7 @@ impl SdkBuilder {
             wallet_builder = wallet_builder.with_token_output_store(token_output_store);
         }
         wallet_builder = wallet_builder.with_ssp_http_client(context.http_client.clone());
-        wallet_builder =
-            wallet_builder.with_connection_manager(context.so_connection_manager.inner.clone());
+        wallet_builder = wallet_builder.with_connection_manager(context.connection_manager.clone());
         let spark_wallet = Arc::new(wallet_builder.build().await?);
 
         let lnurl_server_client: Option<Arc<dyn LnurlServerClient>> = match self.lnurl_server_client

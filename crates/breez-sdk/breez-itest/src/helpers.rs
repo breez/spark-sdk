@@ -238,10 +238,9 @@ pub async fn build_sdk(storage_dir: String, seed_bytes: [u8; 32]) -> Result<SdkI
 
 /// Build and initialize a BreezSDK instance attached to a shared SdkContext.
 ///
-/// Replaces the previous `build_sdk_with_shared_ssp_connection_manager` and
-/// `build_sdk_with_shared_connection_manager` helpers: the same `Arc<SdkContext>`
-/// now bundles both the SSP HTTP client and the operator gRPC channels, so a
-/// single shared handle covers both sharing scenarios.
+/// The supplied `Arc<SdkContext>` bundles both the shared HTTP client (SSP /
+/// chain / LNURL / JWT) and the operator gRPC channels, so a single shared
+/// handle covers every cross-instance sharing scenario.
 pub async fn build_sdk_with_shared_context(
     storage_dir: String,
     seed_bytes: [u8; 32],

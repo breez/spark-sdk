@@ -4,8 +4,8 @@ use breez_sdk_spark::{ChainApiType, Config, Credentials, SdkError, Seed, Session
 use flutter_rust_bridge::{DartFnFuture, frb};
 
 use crate::{
-    chain_service::BitcoinChainServiceHandle, connection_manager::ConnectionManager,
-    sdk::BreezSdk, session_manager::CallbackSessionManager, ssp_connection_manager::SspConnectionManager,
+    chain_service::BitcoinChainServiceHandle, sdk::BreezSdk, sdk_context::SdkContext,
+    session_manager::CallbackSessionManager,
 };
 
 pub struct SdkBuilder {
@@ -64,19 +64,16 @@ impl SdkBuilder {
         }
     }
 
+    /// Threads a shared [`SdkContext`] into the builder.
+    ///
+    /// Construct the context once via
+    /// [`new_sdk_context`](crate::sdk_context::new_sdk_context) and pass the
+    /// same handle to every `SdkBuilder` whose SDKs should share its HTTP
+    /// client, operator gRPC channels, and Breez backend gRPC client.
     #[frb(sync)]
-    pub fn with_ssp_connection_manager(self, manager: SspConnectionManager) -> Self {
+    pub fn with_context(self, context: &SdkContext) -> Self {
         let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
-            .with_ssp_connection_manager(manager.inner);
-        Self {
-            inner: Arc::new(builder),
-        }
-    }
-
-    #[frb(sync)]
-    pub fn with_connection_manager(self, connection_manager: &ConnectionManager) -> Self {
-        let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
-            .with_connection_manager(connection_manager.inner.clone());
+            .with_context(context.inner.clone());
         Self {
             inner: Arc::new(builder),
         }
