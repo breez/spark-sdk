@@ -174,6 +174,45 @@ The **Rust CLI** (`crates/breez-sdk/cli/`) can be modified freely as it is the s
 - Release builds use LTO and `opt-level = "z"` for size optimization
 - Uses `cargo xtask` for build automation (aliased in `.cargo/config.toml`)
 
+## Comment Style
+
+Comments are for the reader, not the writer. Apply these rules to any new or modified comment, including doc-comments and module headers.
+
+### 1. Cut what the code already says
+
+Default to writing no comment. Add one only when the WHY is non-obvious: a hidden constraint, a workaround for a specific bug, a subtle invariant, behavior that would surprise a reader. If removing the comment wouldn't confuse a future reader, delete it. A long comment block is a code smell — it usually means the underlying code wants to be split into smaller, better-named units instead.
+
+### 2. Compact what stays
+
+Genuinely-necessary detail: target 3–5 lines. If you can't, the comment is doing the job of a separate doc — link out instead of inlining a whole essay. No multi-paragraph docstrings. One short sentence beats a tight paragraph beats a sprawling block.
+
+### 3. Calibrate to the reader
+
+Different surfaces have different audiences. Match the language:
+
+| Surface | Audience | Pitch |
+|---|---|---|
+| Public API doc-comments (`///`, `/**`, Dart `///`, Swift `///`) | App developers integrating the SDK | What it does + why the caller cares. Skip platform-internal jargon. |
+| Internal `//` comments | Engineers maintaining this file | Why the code is shaped this way (constraints, gotchas, references). Spec-level detail is fine. |
+| Guide markdown (`docs/breez-sdk/src/guide/`) | Integrators reading the website | Conceptual, task-oriented. No implementation details unless they leak into the public API. |
+| Snippets (`docs/breez-sdk/snippets/`) | Copy-paste starters | Minimal inline explanation; let the code speak. Long context belongs in the guide. |
+| Commit messages / PR descriptions | Reviewers + future code-archaeologists | What changed and why. Not what the code looks like. |
+
+When a comment is technically accurate but reads like a kernel-debug log to anyone outside the SDK team, rewrite it for the surface's audience. Pattern: "Simpler, non-tech version of: <original>" → answer *what* this does and *why* it's necessary, not *how* it works at the byte level.
+
+### 4. Don't leak internal-looking specifics
+
+Real production identifiers (Apple Team IDs, internal infra hostnames, employee names, customer IDs) don't belong in example comments. Use a placeholder (`<TEAM_ID>`, `your-app.com`, `<your api key>`). Same for stack-trace excerpts, error strings that contain user data, debugging breadcrumbs from one-off investigations — strip before committing.
+
+### 5. Don't reference the current task
+
+Comments outlive the PR that wrote them. Drop:
+- "Added for ticket #1234"
+- "Per the discussion in the design review"
+- "Recently fixed: …"
+
+If the reason is genuinely durable, restate it as a fact about the code (constraint, invariant, contract). If it's PR-context, put it in the commit message.
+
 ---
 
 ## SDK Usage Guide (For Integrators)
