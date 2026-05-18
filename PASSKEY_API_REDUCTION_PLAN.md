@@ -26,24 +26,22 @@ execute is here; no prior session context required.
 | # | Decision |
 |---|----------|
 | Q1 | One method: `check_availability() -> PasskeyAvailability`. Removes public `is_available` / `is_supported` / `check_domain_association` passthroughs. |
-| Q2 | Drop the public `Identity` type. Keep `LabelStore` trait pluggable with a `pubkey: &[u8; 33]` boundary. |
+| Q2 | **Delete the pluggable `LabelStore` trait entirely**, plus `with_label_store` and the public `Identity` type. The Nostr label store is concrete & internal-only. Re-introducible later additively (a new trait + new ctor is backward-compatible — does not change `PasskeyClient::new` or any existing method). Scope: abstraction only — the Nostr label *feature* stays (register publishes, `sign_in(label=None)` discovers, `client.labels()` works, `default_label` stays). |
 | Q3 | Known-cred get/remove/clear via `client.credentials()` sub-object — off the top-level surface. |
 | Q4 | Label list/store via `client.labels()` sub-object — reachable from all bindings. |
-| Naming | Rename `LabelStore::ensure_label_published` → `store_label`; idempotency documented, not in the name. |
+| Naming | Rename the concrete `NostrSaltClient::ensure_label_published` → `store_label` (was the `LabelStore` trait method; now just the concrete method, parity with `client.labels().store()`). Idempotency documented, not in the name. |
 | Default label | Configurable via a new **`PasskeyConfig`** struct passed to `PasskeyClient::new` (see §1.1). Falls back to the internal `DEFAULT_LABEL` const (`"Default"`) when unset. |
 | Relay config | **Delete `NostrRelayConfig`** (one-field wrapper after `timeout_secs` was already dropped). Fold its `breez_api_key` into `PasskeyConfig`. Removes a public type from all 5 bindings. |
 | Provider naming | The platform provider class is already **`PasskeyProvider`** on all 5 platforms (iOS/Android/JS/Flutter/RN) — verify, do **not** rename. Residual `prf` cruft (filenames, `PasskeyPrfException`, JS subpath) handled in opt-in Stage D (§6). |
 
 ### Confirmed decisions
 
-- **R1 — Nostr signing — CONFIRMED: Option A.** The default Nostr label
-  store stays **concrete & internal** — the orchestrator owns the
-  account-master-derived `nostr::Keys` and builds `NostrSaltClient`
-  directly; the secret never crosses a trait boundary. The pluggable
-  `LabelStore` trait is **Rust-only** (`with_label_store`), for
-  server-mediated stores, and its boundary carries only `pubkey: &[u8; 33]`
-  as a stable user id. (Rejected: B = secret across trait; C = renamed
-  opaque Identity newtype.)
+- **R1 — Nostr signing — SUPERSEDED by Q2 trait removal.** With no
+  `LabelStore` trait there is no trait boundary, so the signing tension
+  no longer exists. `NostrSaltClient` is the sole, concrete, internal
+  label store: it owns the account-master-derived `nostr::Keys` and signs
+  directly. No `pubkey: &[u8; 33]` boundary, no `LabelBackend` enum, no
+  `with_label_store`, no `Identity`.
 - **R2 — Delivery — CONFIRMED: 3 staged commits.** Stage A core + WASM,
   Stage B Flutter / RN / native, Stage C CLI + mirrors + docs. Each stage
   must compile independently.
@@ -54,15 +52,15 @@ New public record (added to every binding) — **replaces** the bare
 `relay_config: Option<NostrRelayConfig>` constructor parameter and the
 now-deleted `NostrRelayConfig` type. Exactly two optional fields; nothing
 else belongs here (all other knobs — `rp_id`, `auto_register`,
-`credential_registry`, etc. — are provider-scoped, see §1.3):
+`credential_registry`, etc. — are provider-scoped, see §1.3). With the
+`LabelStore` trait removed, `breez_api_key` always applies (the Nostr
+store is the only store):
 
 ```rust
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PasskeyConfig {
     /// Breez API key for the authenticated Breez Nostr relay (NIP-42).
     /// `None` ⇒ public relays only (label sync still works, less robust).
-    /// Only consulted by the default Nostr label store; ignored when a
-    /// custom `LabelStore` is injected via `with_label_store`.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub breez_api_key: Option<String>,
     /// Wallet label used when register/sign_in receive `label = None`.
@@ -89,10 +87,10 @@ None`).
 | Availability result | `PasskeyAvailability` | NEW |
 | Label sub-object | `PasskeyLabels` | NEW |
 | Credential sub-object | `PasskeyCredentials` | NEW |
-| Label-store trait (Rust-only) | `LabelStore` | exists, reshaped |
+| ~~Label-store trait~~ | ~~`LabelStore`~~ | **deleted** (Q2) — concrete internal Nostr only |
 | Provider exception (Flutter/RN) | `PasskeyException` | Stage D rename (from `PasskeyPrfException`) |
 | JS provider subpath | `@breeztech/breez-sdk-spark/passkey-provider` | Stage D rename (from `passkey-prf-provider`) |
-| Removed type | ~~`NostrRelayConfig`~~, ~~`Identity`~~ | deleted |
+| Removed type | ~~`NostrRelayConfig`~~, ~~`Identity`~~, ~~`LabelStore`~~ | deleted |
 
 ### 1.3 Provider-scoped knobs — explicitly NOT moved to `PasskeyConfig`
 
@@ -120,7 +118,7 @@ PasskeyClient
 ```
 
 Rust-only (separate non-`uniffi::export` impl block): `from_config`,
-`with_label_store`, `passkey()` escape hatch.
+`passkey()` escape hatch. (`with_label_store` deleted — Q2.)
 
 **Removed from public surface:** `list_labels`, `store_label`,
 `is_available`.
@@ -156,33 +154,28 @@ PasskeyLabels                       PasskeyCredentials
   async fn remove_known_credential_id(&self, _id: Vec<u8>) -> Result<(), PrfProviderError> { Ok(()) }
   async fn clear_known_credential_ids(&self) -> Result<(), PrfProviderError> { Ok(()) }
   ```
-- **`label_store.rs`** — delete `Identity` struct + impl. Trait becomes:
-  ```rust
-  trait LabelStore: Send + Sync {
-      async fn list_labels(&self, pubkey: &[u8; 33]) -> Result<Vec<String>, PasskeyError>;
-      /// Idempotent: no-op if `label` already published for `pubkey`.
-      async fn store_label(&self, pubkey: &[u8; 33], label: &str) -> Result<(), PasskeyError>;
-  }
-  ```
-- **`nostr_client.rs`** — `NostrSaltClient` keeps the **full `nostr::Keys`**
-  (owned, passed in by the orchestrator). Do **not** implement the new
-  `LabelStore` trait for it (can't sign with a pubkey-only boundary).
-  Provide concrete `list_labels()` / `store_label(label)` using owned keys.
+- **`label_store.rs`** — **delete the whole file** (`LabelStore` trait +
+  `Identity` struct). Remove `mod label_store;` and all `pub use
+  label_store::*` from `mod.rs`.
+- **`nostr_client.rs`** — `NostrSaltClient` becomes the **sole concrete,
+  internal** label store. Owns the **full `nostr::Keys`** (built from the
+  account-master PRF) + `breez_api_key`. No trait impl, no `pubkey`
+  params: concrete `async fn list_labels(&self) -> Result<Vec<String>,
+  PasskeyError>` and `async fn store_label(&self, label: &str) ->
+  Result<(), PasskeyError>` (idempotent), signing with the owned keys.
 - **`mod.rs` (`Passkey`)** — drop public `Identity` re-export. Replace
   `derive_identity()` with `derive_keys()` returning cached
-  `OnceCell<nostr::Keys>`. Introduce a backend split:
-  ```rust
-  enum LabelBackend { Nostr(NostrSaltClient), Custom(Arc<dyn LabelStore>) }
-  ```
-  Default path → `Nostr` (owned keys). Custom path → derive 33-byte pubkey
-  from cached keys, pass to trait. Keep `setup_wallet`, `list_labels`,
-  `store_label`, `is_available` on `Passkey` (internal, **not** in
-  bindings). Add `check_availability()` and known-cred passthroughs
+  `OnceCell<nostr::Keys>` (used to construct `NostrSaltClient`). **No**
+  `LabelBackend` enum, **no** `Arc<dyn LabelStore>`, **no** pubkey
+  derivation — `Passkey` holds a `NostrSaltClient` directly. Keep
+  `setup_wallet`, `list_labels`, `store_label`, `is_available` on
+  `Passkey` (internal, **not** in bindings; delegate to the concrete
+  client). Add `check_availability()` and known-cred passthroughs
   (delegate to `prf_provider`). Store the resolved default label
   (`config.default_label.unwrap_or(DEFAULT_LABEL)`) on `Passkey`; replace
   every existing `DEFAULT_LABEL` use (`setup_wallet`, `sign_in` discovery)
-  with the stored value. `Passkey::new` / `with_label_store` /
-  `from_config` take `Option<PasskeyConfig>`.
+  with the stored value. `Passkey::new` / `from_config` take
+  `Option<PasskeyConfig>`.
 - **`models.rs`** — add `PasskeyAvailability` (`#[cfg_attr(feature="uniffi",
   derive(uniffi::Enum))]`), reuse the `source`/`reason` shape from
   `DomainAssociation`. Add **`PasskeyConfig`** (`uniffi::Record`, see §1.1).
@@ -196,11 +189,12 @@ PasskeyLabels                       PasskeyCredentials
     `sign_in`, `labels()`, `credentials()`. **Remove** `list_labels`,
     `store_label`, `is_available`.
   - Plain `impl` block (Rust-only): `from_config` (builds `PasskeyConfig`
-    from `crate::Config`), `with_label_store`, `passkey()`.
+    from `crate::Config`), `passkey()`. (`with_label_store` deleted.)
   - New `#[uniffi::Object]` types `PasskeyLabels` (holds a `Passkey`
     clone → `list`, `store`) and `PasskeyCredentials` (holds
     `Arc<dyn PrfProvider>` → `get`, `remove`, `clear`).
-  - Update the in-file test mocks for the new trait shape.
+  - Update the in-file test mocks (no `LabelStore` mock needed anymore;
+    keep the `PrfProvider` mock).
 
 ### WASM — `crates/breez-sdk/wasm/`
 
@@ -324,9 +318,12 @@ grep for residual `passkey_prf_provider` / `PasskeyPrfException` /
 All design questions are resolved; no open items. Execute the plan
 top-to-bottom.
 
-- Q1–Q4: locked (see §1 table).
-- R1 = **Option A** (concrete-internal Nostr default + Rust-only
-  pubkey-boundary `LabelStore` trait).
+- Q1–Q4: locked (see §1 table). Q2 = **delete the `LabelStore` trait /
+  `with_label_store` / `Identity`** entirely; Nostr label store is
+  concrete-internal-only (re-addable later, backward-compatible). Label
+  *feature* (publish/discover/`labels()`/`default_label`) stays.
+- R1 = **superseded by Q2** — no trait boundary, so no signing tension;
+  `NostrSaltClient` is the sole concrete internal store.
 - R2 = **3 staged commits** (Stages A / B / C) **+ opt-in Stage D**
   (naming alignment, commit 4). Each stage independently compilable.
 - Default label + relay key = **`PasskeyConfig { breez_api_key?,
