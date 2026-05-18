@@ -25,6 +25,41 @@ import Security
 ///     request: SignInRequest(label: "personal")
 /// )
 /// ```
+/// iOS / macOS platform-specific options for [`PasskeyProvider`].
+///
+/// Bundles the three iOS-only knobs (team ID, URLSession, presentation
+/// anchor) that integrators almost never need to set. Defaults work
+/// for every signed app store, App Store / TestFlight build.
+@available(iOS 18.0, macOS 15.0, *)
+public struct IOSOptions {
+    /// Apple Developer Team ID (10-character alphanumeric, e.g.
+    /// `"F7R2LZH3W5"`). Used only by `checkDomainAssociation` to
+    /// verify the app's identity against Apple's AASA CDN. `nil`
+    /// auto-detects from the running app's signing entitlement via
+    /// `SecTaskCopyValueForEntitlement`. Override only in unit tests
+    /// or sandboxed contexts where the entitlement lookup fails.
+    public let teamId: String?
+
+    /// Custom URLSession for the AASA CDN fetch. Defaults to
+    /// `.shared`. Override in tests to mock the HTTP layer.
+    public let urlSession: URLSession
+
+    /// Custom presentation anchor provider for the
+    /// `ASAuthorizationController`. `nil` uses the foreground key
+    /// window (correct for ~every iOS app).
+    public let anchorProvider: PasskeyPresentationAnchorProvider?
+
+    public init(
+        teamId: String? = nil,
+        urlSession: URLSession = .shared,
+        anchorProvider: PasskeyPresentationAnchorProvider? = nil
+    ) {
+        self.teamId = teamId
+        self.urlSession = urlSession
+        self.anchorProvider = anchorProvider
+    }
+}
+
 @available(iOS 18.0, macOS 15.0, *)
 public class PasskeyProvider: PrfProvider {
     /// Constant identifying Breez's shared `keys.breez.technology` RP.
@@ -57,60 +92,44 @@ public class PasskeyProvider: PrfProvider {
     /// Create a new platform passkey PRF provider.
     ///
     /// - Parameters:
-    ///   - rpId: Relying Party ID (default: "keys.breez.technology").
-    ///     Must match the domain configured for cross-platform credential sharing.
-    ///     Changing this after users have registered passkeys will make their existing
-    ///     credentials undiscoverable.
+    ///   - rpId: **Required.** Relying Party ID. Pass your app's domain,
+    ///     or `PasskeyProvider.BREEZ_RP_ID` to opt into Breez's shared
+    ///     `keys.breez.technology` RP (only valid for Breez-registered apps).
+    ///     Changing this after users have registered passkeys will make
+    ///     their existing credentials undiscoverable.
     ///   - rpName: Display name for the RP (default: "Breez SDK").
-    ///     Shown to the user during credential registration. Only used when creating
-    ///     new passkeys; changing it does not affect existing credentials.
-    ///   - userName: User name stored with the credential. Defaults to rpName. Only used
-    ///     during registration; changing it does not affect existing credentials.
-    ///   - userDisplayName: User display name shown in the passkey picker. Defaults to
-    ///     userName. Only used during registration; changing it does not affect existing credentials.
-    ///   - anchorProvider: Custom presentation anchor provider. If nil, uses the key window.
-    ///   - teamId: Optional explicit Apple Developer Team ID (10-character
-    ///     alphanumeric, e.g. "F7R2LZH3W5"). Used only by
-    ///     `checkDomainAssociation` to verify the app's identity against
-    ///     Apple's AASA CDN. If nil, the team ID is auto-detected at call
-    ///     time from the running app's code signature via
-    ///     `SecTaskCopyValueForEntitlement(application-identifier)`. Auto-
-    ///     detection works in virtually all real deployments; provide an
-    ///     explicit value only for unit tests or sandboxed contexts where
-    ///     the entitlement lookup fails.
-    ///   - urlSession: Optional custom URLSession for the AASA CDN fetch.
-    ///     Defaults to `.shared`. Override in tests to mock the HTTP layer.
-    ///   - autoRegister: When `true`, `deriveSeed` automatically creates
-    ///     a new passkey if none exists, then retries the assertion.
-    ///     When `false` (default), throws `PrfProviderError.CredentialNotFound`
-    ///     and the caller drives registration via `createPasskey()`.
-    ///   - allowCredentialIds: When non-empty, restricts assertion (sign-in)
-    ///     to one of the listed credential IDs. iOS will refuse any other
-    ///     credential for this RP. Use this to bind sign-in to a specific
-    ///     passkey the caller has registered, instead of letting iOS pick
-    ///     any sibling credential that happens to share the RP. Critical
-    ///     for deterministic seed derivation when multiple credentials
-    ///     might exist for the same RP (e.g. test artifacts, or a user
-    ///     who registered separately on multiple devices). When empty
-    ///     (default), iOS picks any credential matching the RP.
+    ///     Shown to the user during credential registration. Only used when
+    ///     creating new passkeys; changing it does not affect existing credentials.
+    ///   - userName: User name stored with the credential. Defaults to
+    ///     rpName. Only used during registration.
+    ///   - userDisplayName: User display name shown in the passkey
+    ///     picker. Defaults to userName. Only used during registration.
+    ///   - credentialRegistry: Opt-in app-side store of known
+    ///     credential IDs. When supplied, the SDK auto-merges stored
+    ///     IDs into `allowCredentialIds` / `excludeCredentialIds` and
+    ///     writes new IDs back after success.
+    ///   - onRegistryError: Best-effort callback for registry failures;
+    ///     never blocks the WebAuthn ceremony.
+    ///   - iosOptions: iOS / macOS-specific knobs (team ID for AASA CDN,
+    ///     custom URLSession, presentation anchor). Defaults work for
+    ///     every signed App Store / TestFlight build; override only for
+    ///     unit tests or unusual presentation setups.
     public init(
         rpId: String,
         rpName: String = "Breez SDK",
         userName: String? = nil,
         userDisplayName: String? = nil,
-        anchorProvider: PresentationAnchorProvider? = nil,
-        teamId: String? = nil,
-        urlSession: URLSession = .shared,
         credentialRegistry: CredentialRegistry? = nil,
-        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
+        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil,
+        iosOptions: IOSOptions? = nil
     ) {
         self.rpId = rpId
         self.rpName = rpName
         self.userName = userName ?? rpName
         self.userDisplayName = userDisplayName ?? (userName ?? rpName)
-        self.explicitTeamId = teamId
-        self.urlSession = urlSession
-        self.core = PasskeyAssertionCore(anchorProvider: anchorProvider)
+        self.explicitTeamId = iosOptions?.teamId
+        self.urlSession = iosOptions?.urlSession ?? .shared
+        self.core = PasskeyAssertionCore(anchorProvider: iosOptions?.anchorProvider)
         self.credentialRegistry = credentialRegistry
         self.onRegistryError = onRegistryError
     }
@@ -366,5 +385,40 @@ extension PrfProviderError {
         default:
             return false
         }
+    }
+}
+
+// MARK: - PasskeyClient convenience
+
+@available(iOS 18.0, macOS 15.0, *)
+extension PasskeyClient {
+    /// Convenience factory: builds the platform `PasskeyProvider`
+    /// with sensible defaults and wires it to a new `PasskeyClient`,
+    /// forwarding the Breez API key from the SDK `Config`.
+    ///
+    /// Equivalent to:
+    /// ```swift
+    /// let provider = PasskeyProvider(rpId: rpId)
+    /// let client = PasskeyClient(
+    ///     prfProvider: provider,
+    ///     breezApiKey: sdkConfig.apiKey,
+    ///     config: passkeyConfig
+    /// )
+    /// ```
+    ///
+    /// Hosts that need a custom `PrfProvider` (CLI / YubiKey / FIDO2)
+    /// or non-default platform options should use the regular
+    /// initializer instead.
+    public static func create(
+        rpId: String,
+        sdkConfig: Config,
+        passkeyConfig: PasskeyConfig? = nil
+    ) -> PasskeyClient {
+        let provider = PasskeyProvider(rpId: rpId)
+        return PasskeyClient(
+            prfProvider: provider,
+            breezApiKey: sdkConfig.apiKey,
+            config: passkeyConfig
+        )
     }
 }

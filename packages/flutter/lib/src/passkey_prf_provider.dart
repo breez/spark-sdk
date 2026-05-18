@@ -2,7 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
-import 'rust/models.dart' show DeriveSeedsRequest, RegisteredCredential;
+import 'rust/models.dart' show Config, DeriveSeedsRequest, PasskeyConfig, RegisteredCredential;
+import 'rust/passkey.dart' show PasskeyClient;
 
 /// Result of a domain-association verification check against the
 /// platform's well-known configuration source. Mirrors the Rust
@@ -416,4 +417,46 @@ class PasskeyProvider {
       _ => PasskeyPrfException(code: 'unknown', message: message),
     };
   }
+}
+
+/// Convenience factory: builds the platform [PasskeyProvider] with
+/// sensible defaults and wires it to a new [PasskeyClient], forwarding
+/// the Breez API key from the SDK [Config].
+///
+/// Equivalent to constructing [PasskeyProvider] and passing all six
+/// callbacks plus `breezApiKey: sdkConfig.apiKey` to [PasskeyClient].
+///
+/// Hosts that need a custom `PrfProvider` (CLI / YubiKey / FIDO2) or
+/// non-default [PasskeyProviderOptions] should construct
+/// [PasskeyClient] directly with the appropriate callbacks instead.
+PasskeyClient createPasskeyClient({
+  required String rpId,
+  required Config sdkConfig,
+  PasskeyConfig? passkeyConfig,
+  String? rpName,
+  String? userName,
+  String? userDisplayName,
+  CredentialRegistry? credentialRegistry,
+  void Function(RegistryOperation, Object)? onRegistryError,
+}) {
+  final provider = PasskeyProvider(
+    PasskeyProviderOptions(
+      rpId: rpId,
+      rpName: rpName ?? 'Breez SDK',
+      userName: userName,
+      userDisplayName: userDisplayName,
+      credentialRegistry: credentialRegistry,
+      onRegistryError: onRegistryError,
+    ),
+  );
+  return PasskeyClient(
+    deriveSeeds: provider.deriveSeeds,
+    isSupported: provider.isSupported,
+    createPasskey: provider.createPasskey,
+    getKnownCredentialIds: provider.getKnownCredentialIds,
+    removeKnownCredentialId: provider.removeKnownCredentialId,
+    clearKnownCredentialIds: provider.clearKnownCredentialIds,
+    breezApiKey: sdkConfig.apiKey,
+    config: passkeyConfig,
+  );
 }

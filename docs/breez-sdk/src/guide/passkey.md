@@ -461,17 +461,27 @@ Publish a label to Nostr so it can be discovered later. {{#name PasskeyClient.re
 
 ## Error recovery
 
-Two error variants on {{#name PrfProviderError}} carry recovery actions hosts should branch on:
+The SDK collapses every passkey failure into seven actionable [`ErrorKind`](https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/enum.ErrorKind.html) values — branching on `error.kind()` is the canonical recovery pattern:
 
-- {{#enum PrfProviderError::CredentialAlreadyExists}}: the OS rejected `register` because the user's password manager already holds a matching credential. Flip to {{#name PasskeyClient.sign_in}} so the OS picker surfaces the existing credential. Web emits a typed `PasskeyAlreadyExistsError`; native bindings emit the `CredentialAlreadyExists` variant.
+| `ErrorKind` | What it means | Recommended action |
+|---|---|---|
+| `Cancel` | User dismissed the OS prompt (≥ 300ms, < 55s) | Sticky retry UI with "Try Again" |
+| `NoCredential` | No matching credential on this device (includes iOS sub-300ms fast-fail) | Fall through to {{#name PasskeyClient.register}} |
+| `AlreadyExists` | Register hit a credential in `excludeCredentialIds` | Flip to {{#name PasskeyClient.sign_in}}; the OS picker surfaces the existing credential |
+| `Timeout` | OS biometric inactivity timeout (≥ 55s) — distinct from a user-cancel | Sticky retry with timeout-specific copy. **Do not** auto-retry |
+| `PrfUnsupported` | Authenticator doesn't implement the PRF extension | Fall back to mnemonic onboarding |
+| `Configuration` | Entitlement missing, AASA stale, or assetlinks malformed | Developer-facing error; surface {{#name check_domain_association}}'s `NotAssociated` reason |
+| `Internal` | Network / library / generic failure | Generic "try again later" UI |
+
+Web also exposes typed exception classes (`PasskeyAlreadyExistsError`, `PasskeyTimedOutError`, `PasskeyCredentialNotFoundError`) as an alternative to `error.kind()` for `instanceof` matching.
+
+Two recovery paths are common enough to warrant runnable examples — `AlreadyExists` (flip to sign-in) and `Timeout` (sticky retry):
 
 {{#tabs passkey:recover-already-exists}}
 
-- {{#enum PrfProviderError::UserTimedOut}}: the OS biometric inactivity timeout (~55 seconds) tore down the prompt without user intent. Distinct from a real cancel — surface a sticky retry UI with timeout-specific copy. Do not auto-retry without user input. Web emits a typed `PasskeyTimedOutError`; native bindings emit the `UserTimedOut` variant.
-
 {{#tabs passkey:handle-timeout}}
 
-For the full recovery-path table (`UserCancelled` vs `CredentialNotFound` vs `Configuration`, plus the iOS sub-300ms fast-fail nuance), see the [UX guide](./uxguide_passkey.md).
+For the full mapping (including the iOS sub-300ms fast-fail nuance that bundles "no-credential" under `UserCancelled`), see the [UX guide](./uxguide_passkey.md).
 
 ## Custom PrfProvider (advanced)
 

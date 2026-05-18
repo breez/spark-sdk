@@ -1,8 +1,8 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
-    DeriveSeedsRequest, DomainAssociation, PasskeyAvailability, PasskeyClient, PasskeyConfig,
-    PasskeyError, PrfProvider, PrfProviderError, RegisterRequest, RegisteredCredential,
-    SignInRequest, SignInResponse, Wallet,
+    DeriveSeedsRequest, DomainAssociation, ErrorKind, PasskeyAvailability, PasskeyClient,
+    PasskeyConfig, PasskeyError, PrfProvider, PrfProviderError, RegisterRequest,
+    RegisteredCredential, SignInRequest, SignInResponse, Wallet,
 };
 use breez_sdk_spark::{ConnectRequest, Network, connect, default_config};
 use std::sync::Arc;
@@ -203,10 +203,11 @@ async fn single_cta_onboarding() -> Result<Wallet> {
         .await
     {
         Ok(response) => Ok(response.wallet),
-        // CredentialNotFound is the SDK's classification for "no matching
-        // credential on this device", including iOS's <300ms fast-fail
-        // case where the platform conflates no-cred with user-cancel.
-        Err(PasskeyError::Prf(PrfProviderError::CredentialNotFound(_))) => {
+        // Branch on `error.kind()` — the canonical 7-value enum. The
+        // SDK collapses iOS's sub-300ms fast-fail (reported as
+        // UserCancelled by the OS) into `NoCredential` so the host
+        // sees the right outcome without timing the call.
+        Err(e) if e.kind() == ErrorKind::NoCredential => {
             // No credential. Onboard a new user.
             let response = passkey
                 .register(RegisterRequest {
@@ -268,7 +269,7 @@ async fn recover_from_already_exists() -> Result<Wallet> {
         .await
     {
         Ok(response) => Ok(response.wallet),
-        Err(PasskeyError::Prf(PrfProviderError::CredentialAlreadyExists(_))) => {
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
             // Flip to sign-in. The existing credential's PRF output is
             // the same wallet seed the host would have minted on register.
             let response = passkey
@@ -289,8 +290,7 @@ async fn handle_timeout() -> Result<SignInResponse> {
     // The OS biometric inactivity timeout (~55s+) tore down the prompt
     // without user intent. Distinct from a real cancel: hosts may
     // surface a re-prompt UI without treating it as the user opting
-    // out. The SDK fires PrfProviderError::UserTimedOut when assertion
-    // or register elapsed time crosses 55_000 ms.
+    // out. The SDK reports this as `ErrorKind::Timeout`.
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
@@ -302,11 +302,11 @@ async fn handle_timeout() -> Result<SignInResponse> {
         .await
     {
         Ok(response) => Ok(response),
-        Err(PasskeyError::Prf(PrfProviderError::UserTimedOut)) => {
+        Err(e) if e.kind() == ErrorKind::Timeout => {
             // Show a sticky retry screen with timeout-specific copy.
             // Do NOT auto-retry without user input.
             println!("Sign-in timed out: show \"Try Again\" UI.");
-            Err(PasskeyError::Prf(PrfProviderError::UserTimedOut).into())
+            Err(e.into())
         }
         Err(e) => Err(e.into()),
     }
