@@ -289,8 +289,7 @@ where
     // `wait_for_balance` only synced instance_0. In client mode the periodic
     // sync loop / event-driven `TransferClaimed` refresh would have updated
     // instances 1 and 2's tree caches by now; in server mode nothing does, so
-    // `ensure_synced=true` below is a no-op and they'd return stale balances.
-    // Drive an explicit 3-way sync at the cross-instance read boundary.
+    // we drive an explicit 3-way sync at the cross-instance read boundary.
     if matches!(mode, RuntimeMode::Server) {
         let (sync_1, sync_2) = tokio::join!(
             instance_1.sdk.sync_wallet(SyncWalletRequest {}),
@@ -300,16 +299,14 @@ where
         sync_2?;
     }
 
+    let ensure_synced = match mode {
+        RuntimeMode::Client => Some(true),
+        RuntimeMode::Server => Some(false),
+    };
     let (info_0, info_1, info_2) = tokio::join!(
-        instance_0.sdk.get_info(GetInfoRequest {
-            ensure_synced: Some(true)
-        }),
-        instance_1.sdk.get_info(GetInfoRequest {
-            ensure_synced: Some(true)
-        }),
-        instance_2.sdk.get_info(GetInfoRequest {
-            ensure_synced: Some(true)
-        })
+        instance_0.sdk.get_info(GetInfoRequest { ensure_synced }),
+        instance_1.sdk.get_info(GetInfoRequest { ensure_synced }),
+        instance_2.sdk.get_info(GetInfoRequest { ensure_synced })
     );
 
     let balance_0 = info_0?.balance_sats;
