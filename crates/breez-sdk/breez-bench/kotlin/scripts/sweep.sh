@@ -14,7 +14,9 @@
 # Optional env: SWEEP_RPS (default "50,100,250,500,1000"), DURATION
 # (default 5m), MIX (info=40,receive=30,send=30),
 # USERS (10000), SENDERS (50), DIST (uniform), PAYMENT_SATS (1),
-# PORT (8080), SWEEP_ID (fresh timestamp).
+# PORT (8080), SWEEP_ID (fresh timestamp),
+# LOG_FILTER (unset = off; e.g. "warn,spark::operator::rpc=debug" turns
+# on Rust SDK tracing in the per-step server → out/<id>/rps-N/.trace-logs/).
 
 set -euo pipefail
 
@@ -37,6 +39,11 @@ PAYMENT_SATS="${PAYMENT_SATS:-1}"
 PORT="${PORT:-8080}"
 SWEEP_ID="${SWEEP_ID:-$(date +%Y-%m-%dT%H-%M-%S)}"
 INTER_STEP_SLEEP_SECS="${INTER_STEP_SLEEP_SECS:-5}"
+# Optional Rust-side SDK tracing in the per-step server. Unset = off (no
+# overhead). A tracing EnvFilter string enables it; logs land in
+# out/<id>/rps-<N>/.trace-logs/sdk.log. Scoped to the load-step server
+# only (not fund/seed) to keep volume bounded.
+LOG_FILTER="${LOG_FILTER:-}"
 # Per-sender fund safety buffer (so we never drain a sender during the
 # sweep) and treasurer buffer over total seeded amount.
 SEED_SAFETY="${SEED_SAFETY:-2.0}"
@@ -319,7 +326,8 @@ for raw_rps in "${RPS_LIST[@]}"; do
         --master-secret=$MASTER_SECRET \
         --port=$PORT \
         --run-id=$SWEEP_ID/rps-$rps \
-        --out-dir=$step_dir" \
+        --out-dir=$step_dir \
+        ${LOG_FILTER:+--log-filter=$LOG_FILTER}" \
         > "$server_log" 2>&1 &
     server_pid=$!
     # Killing gradlew alone can leak the JVM child; trap handles the SIGINT path.
@@ -366,6 +374,19 @@ for raw_rps in "${RPS_LIST[@]}"; do
 
     if [ "$loadgen_rc" -ne 0 ]; then
         echo "[sweep] loadgen exited rc=$loadgen_rc — see $step_dir/loadgen.log"
+    fi
+
+    # Stop the sweep once a step congestion-collapses. Higher-RPS steps
+    # past the collapse knee are not reproducible measurements (external
+    # operator rate limit + closed-loop funding feedback + per-step
+    # SIGKILL truncation), so running them only burns time and emits junk
+    # rows. We keep THIS step's data (it's the one collapsed point that
+    # documents the cliff) and stop before the next.
+    step_st=$(python3 "$SCRIPT_DIR/aggregate.py" --step-state "$step_dir" 2>/dev/null || echo collapsed)
+    echo "[sweep] step $i/$STEP_COUNT state: $step_st"
+    if [ "$step_st" = "collapsed" ]; then
+        echo "[sweep] congestion collapse at rps=$rps — skipping remaining steps (post-collapse data is not reproducible)"
+        break
     fi
 
     if [ "$i" -lt "$STEP_COUNT" ]; then

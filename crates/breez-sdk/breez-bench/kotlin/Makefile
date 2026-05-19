@@ -52,7 +52,7 @@ aggregate: ## Aggregate a sweep into summary.json + RESULTS.md (SWEEP_ID require
 	@test -n "$$SWEEP_ID" || (echo "SWEEP_ID is required (e.g. SWEEP_ID=2026-05-08T15-00-00)"; exit 2)
 	python3 scripts/aggregate.py --sweep-dir out/$$SWEEP_ID
 
-trace-sync: build ## Trace ensureSynced=true on a wallet with full Rust tracing (USER_ID defaults to __treasurer__; LOG_FILTER=debug)
+trace-sync: build ## Trace an explicit syncWallet() on a wallet with full Rust tracing (USER_ID defaults to __treasurer__; LOG_FILTER=debug)
 	$(GRADLE) run --console=plain --args="--mode=trace-sync --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --user-id=$${USER_ID:-__treasurer__} --log-filter=$${LOG_FILTER:-debug}"
 
 run: build ## Sweep + aggregate in one shot. Auto-funds treasurer + senders. Default fast pass (~7 min).

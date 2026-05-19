@@ -42,32 +42,45 @@ Each request runs the same flow:
 ```
 1. Acquire per-userId lock
 2. Derive seed: HMAC-SHA512(MASTER_SECRET, userId) → 64 bytes
-3. SdkBuilder(config, Seed.Entropy(…))
-     .withMysqlConnectionPool(SHARED_POOL)
-     .withSspConnectionManager(SHARED_SSP)
-     .withConnectionManager(SHARED_OPERATORS)
-     .build()
+3. SdkBuilder(defaultServerConfig(REGTEST), Seed.Entropy(…))
+     .withSharedContext(SHARED_CONTEXT)   // DB pool + SSP/LNURL/JWT/chain HTTP + operator gRPC + Breez gRPC
+     .build()                             // chain service unset → built over the context HTTP client
 4. sdk.<op>(…)
 5. sdk.disconnect()
 6. Release lock; respond
 ```
 
-Three process-wide handlers (`MysqlConnectionPool`, `SspConnectionManager`,
-`ConnectionManager`) are constructed once at server startup and threaded
-into every `SdkBuilder` call. Without sharing them, each request would
-open its own MySQL pool, redo TCP+TLS+HTTP/2 to the SSP, and dial every
-operator from scratch — multiplied by per-request SDK build, that
-dominates latency and exhausts FDs / ephemeral ports under load.
+The bench builds with **`defaultServerConfig`** (server mode). That sets
+`backgroundTasksEnabled = false`: no per-request periodic sync loop, Spark
+background processor, RT-sync websocket, lightning-address recovery, or
+private-mode init read — all wasted on a build → one op → disconnect
+lifecycle (the websocket also churned ephemeral ports, previously defused
+by hand-nulling `realTimeSyncServerUrl`). The trade: `ensureSynced=true`
+is rejected; the host syncs explicitly (see
+[Where syncs happen](#where-syncs-happen)).
 
-Multi-tenancy in the SDK scopes each instance to its own identity inside
-the DB even when the underlying pool is shared.
+One process-wide **`SdkContext`** (`newSharedSdkContext`) is built once at
+startup and threaded into every `SdkBuilder`. It bundles the shared HTTP
+client (SSP, LNURL, JWT, **and the chain service**), the operator gRPC
+channels, the Breez-backend gRPC client, and the MySQL pool, replacing the
+removed per-builder `withMysqlConnectionPool` / `withSspConnectionManager`
+/ `withConnectionManager` handles. Two constraints `build()` enforces: the
+pool comes from the context *or* `withMysqlConnectionPool` but not both,
+and the context's network/api-key must match the SDK `Config`. The chain
+service is left unset so `build()` builds the regtest default
+(`regtest-mempool.us-west-2.sparkinfra.net/api`, `CHAIN_SERVICE_*` creds)
+over the context HTTP client instead of a second pool.
 
-This is still the **worst case** for SDK lifecycle: every request pays
-cold-start (SDK build + initial sync + per-tenant migration check).
-Pinning this baseline gives a defensible **lower bound for capacity,
-upper bound for latency**. An in-process SDK pool would push these
-numbers further; the shared transports are the floor that pool-bench
-results sit on top of.
+Without this sharing, each request would open its own MySQL pool, redo
+TCP+TLS+HTTP/2 to the SSP, and redial every operator — that dominates
+latency and exhausts FDs / ephemeral ports under load. Multi-tenancy
+still scopes each instance to its own identity inside the shared DB.
+
+The context opens one multiplexed gRPC connection per operator by
+default. `CONNS_PER_OPERATOR` (off by default, = production) fans that
+out: at the top of a sweep a single connection can itself cap
+throughput, so this is a knob for isolating connection saturation from
+SDK/operator capacity.
 
 ## Per-userId lock (multi-tenancy safety)
 
@@ -86,15 +99,21 @@ parallel throughput.
 
 | Endpoint | Op | Notes |
 |---|---|---|
-| `GET /users/{userId}/info` | `getInfo({ ensureSynced: true })` | Sync forced — see below. |
+| `GET /users/{userId}/info` | `getInfo({ ensureSynced: false })` | Pure local read, no sync — see below. |
 | `POST /users/{userId}/send` | `prepareSendPayment` + `sendPayment` | Reported as a single number. |
 | `POST /users/{userId}/receive` | `receivePayment(SparkAddress)` | **Address generation only.** |
 
-- `/info` always uses `ensureSynced=true`. A fresh per-request SDK
-  has no cached state; without forcing a sync, the returned balance
-  would be meaningless.
-- `/send` latency includes both `prepareSendPayment` and
-  `sendPayment`. Single number matches what a real handler does.
+- `/info` is a **pure local balance read** — no sync. `getInfo` reads
+  from the spark wallet (loaded from the tree store on build); a real
+  server-mode deployment never syncs defensively on a read (incoming
+  syncs are webhook-driven, see [Where syncs happen](#where-syncs-happen)).
+  The headline `/info` number is per-request **build + local read** — the
+  real steady-state server cost, not a forced cold sync.
+- `/send` latency includes both `prepareSendPayment` and `sendPayment`,
+  one number, matching a real handler. No pre-sync: the sender only sends
+  (never receives) mid-run, and `transfer` self-refreshes leaves from
+  operators on contention, so its persisted post-send state suffices for
+  the next serialized request.
 - `/receive` is **address generation only** — `receivePayment` returns
   a Spark address; nothing actually arrives during the measurement
   window. The number is the cost of producing a deposit destination,
@@ -104,6 +123,24 @@ parallel throughput.
 (Spark address as destination). Closed-loop on regtest, deterministic,
 no Lightning routing dependencies (regtest's Lightning network is
 limited), and matches the SDK's most efficient payment path.
+
+## Where syncs happen
+
+Server mode makes sync explicit, so it's worth pinning.
+
+**During an RPS step: never.** `/info` is a local read, `/receive` is
+address generation, `/send` is the payment round-trip itself. The only
+sync a real server would do here is webhook-driven on an incoming
+payment, and the bench's closed loop has no wallet that is both receiving
+and balance-read mid-run (senders only send; the treasurer only
+accumulates and is never read during the window) — so the absent webhook
+plane costs no fidelity.
+
+**Out of band: explicit `syncWallet()`.** The `fund`, `seed-senders`,
+and `trace-sync` steps need real incoming/on-chain state, so they use the
+`syncedInfo()` helper (`syncWallet()` + local `getInfo`). Same `Full`
+forced sync `ensureSynced=true` used to trigger — including the
+treasurer's known multi-minute backlog — so funding timing is unchanged.
 
 ## Open-loop load generator
 

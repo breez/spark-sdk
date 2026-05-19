@@ -198,6 +198,23 @@ def aggregate_step(step_dir):
     client_errors_by_category = bucket_errors(latency_rows)
     server_errors_by_category = bucket_errors(requests_rows)
 
+    # Client outcome split. A 60s client timeout (LoadGen.kt) is NOT a
+    # server failure — at high RPS the server often completes the request
+    # well after the client gave up. Keep `timed_out` distinct from real
+    # `failed` so the report can't conflate "too slow for the client" with
+    # "the operation failed".
+    client_timed_out = client_errors_by_category.get("request_timeout", 0)
+    client_failed = total_errors - client_timed_out
+    client_ok = total_dispatched - total_dropped - total_errors
+
+    # Server-side counts come from requests.jsonl (handler invocations the
+    # server actually logged) — NOT from the client's dispatched/errors.
+    # `server_completed` < `dispatched` at collapse because many dispatched
+    # requests never reach a completed handler within the window.
+    server_completed = len(requests_rows)
+    server_err = sum(1 for r in requests_rows if r.get("error") is not None)
+    server_ok = server_completed - server_err
+
     client_lat = per_op_latency(latency_rows, duration_field="duration_ms", op_field="op")
     server_lat = per_op_latency(requests_rows, duration_field="duration_ms", op_field="op")
 
@@ -208,6 +225,12 @@ def aggregate_step(step_dir):
         "total_dispatched": total_dispatched,
         "total_dropped": total_dropped,
         "total_errors_post_dispatch": total_errors,
+        "client_ok": client_ok,
+        "client_timed_out": client_timed_out,
+        "client_failed": client_failed,
+        "server_completed": server_completed,
+        "server_ok": server_ok,
+        "server_err": server_err,
         "client_latency_ms": client_lat,
         "server_latency_ms": server_lat,
         "metrics": metrics,
@@ -240,6 +263,13 @@ def derive_p99_doubling(steps_summary):
     """
     candidates = []
     for rps, s in steps_summary:
+        # Collapsed steps have survivorship-biased latency (only the
+        # sub-60s-timeout survivors are sampled), so their p99 is
+        # meaningless here and could inflate max_safe or even become the
+        # baseline. The headline labels this "pre-collapse steps only" —
+        # enforce that.
+        if step_state(s) == "collapsed":
+            continue
         send = s.get("client_latency_ms", {}).get("send")
         if not send or send.get("count", 0) < 30:
             continue
@@ -260,6 +290,32 @@ def derive_p99_doubling(steps_summary):
         elif crossed_at is None or rps < crossed_at:
             crossed_at = rps
     return max_safe, baseline_rps, baseline, crossed_at
+
+
+# --- collapse classification ---------------------------------------------
+# Client goodput (client_ok / dispatched) thresholds. Below COLLAPSE the
+# step is in congestion collapse: its latency percentiles are
+# survivorship-biased (only the lucky sub-60s survivors counted) and its
+# step-to-step ordering is NOISE — driven by the external shared operator
+# rate limiter's time-varying state, closed-loop funding feedback (failed
+# sends don't drain senders, so a worse step can enable a better next
+# one), and per-step SIGKILL truncating in-flight retry storms. Collapsed
+# steps must not be compared to each other or read as measurements.
+OK_GOODPUT = 0.95
+COLLAPSE_GOODPUT = 0.50
+
+
+def step_state(s):
+    """Classify a step from client goodput: ok | degrading | collapsed."""
+    disp = s.get("total_dispatched", 0)
+    if disp <= 0:
+        return "collapsed"
+    gp = s.get("client_ok", 0) / disp
+    if gp >= OK_GOODPUT:
+        return "ok"
+    if gp >= COLLAPSE_GOODPUT:
+        return "degrading"
+    return "collapsed"
 
 
 # --- markdown rendering --------------------------------------------------
@@ -307,54 +363,130 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
     lines.append(f"- mix: `{manifest.get('mix', '?')}`")
     lines.append(f"- users: `{manifest.get('users', '?')}`  senders: `{manifest.get('senders', '?')}`")
     lines.append(f"- distribution: `{manifest.get('distribution', '?')}`")
+    # Keep in sync with the HttpClient timeout in LoadGen.kt.
+    lines.append(
+        "- client request timeout: `60s` — a request slower than this is "
+        "counted `timed_out` even if the server later completes it"
+    )
     lines.append("")
 
     lines.append("## Headline")
     lines.append("")
-    max_safe, baseline_rps, baseline_p99, crossed_at = headline
-    if max_safe is None:
-        lines.append("- max_safe_rps: insufficient `send` data")
+    states = [(rps, step_state(s)) for rps, s in steps_summary]
+    ok_rps = [r for r, st in states if st == "ok"]
+    deg_rps = [r for r, st in states if st == "degrading"]
+    col_rps = [r for r, st in states if st == "collapsed"]
+    sustained = max(ok_rps) if ok_rps else None
+    mix = manifest.get("mix", "?")
+
+    if not deg_rps and not col_rps:
+        all_rps = [r for r, _ in states]
+        verdict = (
+            f"**Stable across the whole sweep** (mix `{mix}`): sustained "
+            f"≥ {max(all_rps)} RPS with no degradation observed."
+        )
     else:
-        lines.append(f"- max_safe_rps: `{max_safe}` (highest swept RPS with client p99(send) < 2× baseline)")
-        lines.append(f"- baseline: `{baseline_p99:.1f}` ms p99(send) @ `{baseline_rps}` RPS")
-        if crossed_at is not None:
-            lines.append(f"- threshold crossed at: `{crossed_at}` RPS")
-        else:
-            lines.append("- threshold not crossed within sweep range")
+        head = (
+            f"sustained ~**{sustained} RPS**"
+            if sustained is not None
+            else "**no step held ≥95% goodput**"
+        )
+        first_deg = min(deg_rps) if deg_rps else None
+        tail = ""
+        if col_rps:
+            tail = f", congestion-**collapsed from {min(col_rps)} RPS**"
+        elif first_deg is not None:
+            tail = f", degrading from {first_deg} RPS (no full collapse in range)"
+        caveat = (
+            " Collapsed steps are **not reproducible measurements**: do not "
+            "compare them or trust their latency percentiles (survivorship-biased; "
+            "ordering is dominated by the external operator rate limit, closed-loop "
+            "funding feedback, and per-step SIGKILL truncation)."
+            if col_rps
+            else ""
+        )
+        verdict = f"**Verdict** (mix `{mix}`): {head}{tail}.{caveat}"
+    lines.append(f"- {verdict}")
+
+    # Per-step state + goodput. Client = caller's view (60s timeout counts
+    # against it); server = handlers actually completed, of everything offered.
+    def _pct(num, den):
+        return f"{(100.0 * num / den):.0f}%" if den else "—"
+
+    state_str = "  ".join(f"{r}→{st}" for r, st in states)
+    cli = "  ".join(
+        f"{rps}→{_pct(s['client_ok'], s['total_dispatched'])}"
+        for rps, s in steps_summary
+    )
+    srv = "  ".join(
+        f"{rps}→{_pct(s['server_ok'], s['total_dispatched'])}"
+        for rps, s in steps_summary
+    )
+    lines.append(f"- step state: {state_str}")
+    lines.append(f"- client goodput (ok / offered): {cli}")
+    lines.append(f"- server goodput (handler ok / offered): {srv}")
+
+    max_safe, baseline_rps, baseline_p99, crossed_at = headline
+    if max_safe is not None:
+        lines.append(
+            f"- max_safe_rps (client p99(send) < 2× baseline, **pre-collapse "
+            f"steps only**): `{max_safe}`, baseline `{baseline_p99:.0f}`ms @ "
+            f"`{baseline_rps}` RPS"
+        )
     lines.append("")
 
     ops = ["info", "send", "receive"]
-    lat_headers = ["RPS", "dispatched", "dropped", "errors"]
-    for op in ops:
-        lat_headers += [f"{op} p50", f"{op} p95", f"{op} p99"]
 
-    def render_lat_table(title, latency_key):
+    lines.append(
+        "> `state` ∈ ok / degrading / **collapsed**. Collapsed rows show "
+        "`n/a` for latency on purpose — those percentiles are "
+        "survivorship-biased and the rows are not comparable. Client counts "
+        "are the caller's view (`ok+timed_out+failed+dropped = dispatched`; "
+        "`timed_out` = past the 60s client timeout, server may have finished "
+        "anyway); server counts are handlers actually logged "
+        "(`completed = ok+err`, `≤ dispatched`)."
+    )
+    lines.append("")
+
+    def render_lat_table(title, latency_key, count_headers, count_cells):
         lines.append(title)
         lines.append("")
+        headers = ["RPS", "state"] + count_headers
+        for op in ops:
+            headers += [f"{op} p50", f"{op} p95", f"{op} p99"]
         rows = []
         for rps, s in steps_summary:
-            cells = [
-                str(rps),
-                str(s["total_dispatched"]),
-                str(s["total_dropped"]),
-                str(s["total_errors_post_dispatch"]),
-            ]
+            st = step_state(s)
+            cells = [str(rps), st] + [str(c) for c in count_cells(s)]
             for op in ops:
+                if st == "collapsed":
+                    cells += ["n/a", "n/a", "n/a"]
+                    continue
                 stats = s[latency_key].get(op, {})
                 cells.append(fmt_ms(stats.get("p50")))
                 cells.append(fmt_ms(stats.get("p95")))
                 cells.append(fmt_ms(stats.get("p99")))
             rows.append(cells)
-        lines.extend(render_table(lat_headers, rows))
+        lines.extend(render_table(headers, rows))
         lines.append("")
 
     render_lat_table(
-        "## Client-side latency (ms; successful requests only)",
+        "## Client-side latency (ms; client-successful requests only)",
         "client_latency_ms",
+        ["dispatched", "dropped", "ok", "timed_out", "failed"],
+        lambda s: [
+            s["total_dispatched"],
+            s["total_dropped"],
+            s["client_ok"],
+            s["client_timed_out"],
+            s["client_failed"],
+        ],
     )
     render_lat_table(
-        "## Server-side latency (ms; handler-only)",
+        "## Server-side latency (ms; handler-only, server-completed only)",
         "server_latency_ms",
+        ["completed", "ok", "err"],
+        lambda s: [s["server_completed"], s["server_ok"], s["server_err"]],
     )
 
     lines.append("## Process metrics")
@@ -433,8 +565,24 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
 
 def main():
     ap = argparse.ArgumentParser(description="Aggregate an RPS sweep")
-    ap.add_argument("--sweep-dir", required=True, help="Path to out/<sweep-id>/")
+    ap.add_argument("--sweep-dir", help="Path to out/<sweep-id>/")
+    ap.add_argument(
+        "--step-state",
+        metavar="RPS_DIR",
+        help="Classify one rps-<N> dir (ok|degrading|collapsed) to stdout "
+        "and exit. Used by sweep.sh to stop the sweep at collapse.",
+    )
     args = ap.parse_args()
+
+    if args.step_state:
+        s = aggregate_step(Path(args.step_state).resolve())
+        # No data ⇒ treat as collapsed so the sweep stops rather than
+        # marching on into more junk steps.
+        print(step_state(s) if s is not None else "collapsed")
+        return
+
+    if not args.sweep_dir:
+        ap.error("--sweep-dir is required (or use --step-state)")
 
     sweep_dir = Path(args.sweep_dir).resolve()
     if not sweep_dir.is_dir():

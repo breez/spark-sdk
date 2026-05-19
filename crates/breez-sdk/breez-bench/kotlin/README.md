@@ -61,6 +61,8 @@ All knobs are env vars. Defaults give the fast pass.
 | `PORT` | `8080` | HTTP listen port |
 | `MASTER_SECRET` | `breez-bench` | Wallet seed namespace; standardized so wallets persist between runs |
 | `MYSQL_URL` | `mysql://root:password@127.0.0.1:3306/breez_bench` | Bench DB |
+| `CONNS_PER_OPERATOR` | unset → `null` | gRPC connections per operator in the shared context. `null` = one multiplexed connection (prod default); set a positive int to fan out and check whether that single connection caps top-of-sweep throughput |
+| `LOG_FILTER` | unset → off | Rust SDK tracing in the per-step server (tracing `EnvFilter`). e.g. `warn,spark_wallet=info,spark::operator::rpc=debug` logs every operator gRPC method call + rate-limit retries to `out/<id>/rps-N/.trace-logs/sdk.log`. Off by default (no overhead) |
 | `SWEEP_ID` | fresh ISO-8601 timestamp | Set explicitly to share a directory across phases |
 
 Headline-grade run: `SWEEP_RPS=50,100,250,500,1000 DURATION=5m make run`
@@ -89,12 +91,14 @@ The server exposes three:
 
 | Endpoint | Body | Maps to |
 |---|---|---|
-| `GET /users/{userId}/info` | — | `getInfo({ ensureSynced: true })` |
+| `GET /users/{userId}/info` | — | `getInfo({ ensureSynced: false })` (local read, no sync) |
 | `POST /users/{userId}/send` | `{"destination":"<spark addr>","amountSats":N}` | `prepareSendPayment` + `sendPayment` |
 | `POST /users/{userId}/receive` | `{}` | `receivePayment(SparkAddress)` (address generation only) |
 
-Each request does a fresh `connect → op → disconnect`, sharing one
-process-wide MySQL pool, one SSP HTTP client, and one set of gRPC
-channels to the Spark operators across every SDK instance. Same-`userId`
+Each request does a fresh `connect → op → disconnect` using
+`defaultServerConfig` (server mode). All shared resources — MySQL pool,
+HTTP client (SSP, LNURL, JWT, chain), operator gRPC, Breez-backend gRPC —
+are bundled into one `SdkContext` threaded into every build. Same-`userId`
 requests serialize on a per-user mutex; different user-ids run in
-parallel.
+parallel. No request handler syncs; syncs are explicit and confined to
+the `fund` / `seed-senders` / `trace-sync` steps (see `DESIGN.md`).

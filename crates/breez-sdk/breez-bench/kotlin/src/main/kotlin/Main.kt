@@ -1,26 +1,22 @@
-import breez_sdk_spark.BitcoinChainService
 import breez_sdk_spark.BreezSdk
-import breez_sdk_spark.ChainApiType
-import breez_sdk_spark.ConnectionManager
 import breez_sdk_spark.GetInfoRequest
-import breez_sdk_spark.MysqlConnectionPool
 import breez_sdk_spark.Network
 import breez_sdk_spark.PrepareSendPaymentRequest
 import breez_sdk_spark.ReceivePaymentMethod
 import breez_sdk_spark.ReceivePaymentRequest
 import breez_sdk_spark.SdkBuilder
+import breez_sdk_spark.SdkContext
+import breez_sdk_spark.SdkContextConfig
 import breez_sdk_spark.Seed
 import breez_sdk_spark.SendPaymentMethod
 import breez_sdk_spark.SendPaymentRequest
-import breez_sdk_spark.SspConnectionManager
-import breez_sdk_spark.createMysqlConnectionPool
-import breez_sdk_spark.defaultConfig
+import breez_sdk_spark.SyncWalletRequest
 import breez_sdk_spark.defaultMysqlStorageConfig
+import breez_sdk_spark.defaultServerConfig
 import breez_sdk_spark.initLogging
-import breez_sdk_spark.newConnectionManager
-import breez_sdk_spark.newRestChainService
-import breez_sdk_spark.newSspConnectionManager
+import breez_sdk_spark.newSharedSdkContext
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -84,80 +80,59 @@ fun deriveSeedBytes(masterSecret: String, userId: String): ByteArray {
 // --- bench config ---------------------------------------------------------
 
 /**
- * Regtest defaults with real-time sync disabled. Per-request SDK
- * lifecycle can't act on RT sync deltas (the SDK is destroyed before
- * they arrive), and every build paying for a fresh websocket dial to
- * `datasync.breez.technology` was burning ephemeral ports under load.
+ * Server-mode regtest config. This bench is the server-mode use case (one
+ * ephemeral SDK per request), so it uses `defaultServerConfig`:
+ * `backgroundTasksEnabled = false`, no per-request sync loop / optimizer /
+ * RT-sync websocket. `ensureSynced=true` is rejected in this mode; the
+ * bench syncs explicitly via [syncedInfo] in the funding paths only.
  */
-fun benchConfig(): breez_sdk_spark.Config {
-    val c = defaultConfig(Network.REGTEST)
-    c.realTimeSyncServerUrl = null
-    return c
-}
-
-/**
- * Treasurer-flavoured [benchConfig] with leaf auto-optimization disabled.
- * The treasurer is only used to fund + receive in the closed loop; we
- * don't care about its leaf shape, and turning auto-optimize off avoids
- * background optimization passes running on top of every send.
- */
-fun treasurerConfig(): breez_sdk_spark.Config {
-    val c = benchConfig()
-    c.optimizationConfig.autoEnabled = false
-    return c
-}
+fun benchConfig(): breez_sdk_spark.Config = defaultServerConfig(Network.REGTEST)
 
 // --- shared SDK transports ------------------------------------------------
 
 /**
- * Bundle of process-wide SDK transports. Construct once and pass the same
- * instance to every `SdkBuilder` so all SDKs share one MySQL pool, one SSP
- * `reqwest::Client`, and one set of gRPC channels to the Spark operators.
- *
- * Without sharing, each SDK build would open its own MySQL pool + reopen
- * TCP/TLS+HTTP/2 to the SSP + dial every operator anew — multiplied by every
- * request on the server, that dominates latency and exhausts file
- * descriptors / ephemeral ports under load.
+ * Process-wide shared resources, constructed once and threaded into every
+ * `SdkBuilder`. One [SdkContext] bundles the shared HTTP client (SSP,
+ * LNURL, JWT, and the chain service), the operator gRPC channels, the
+ * Breez-backend gRPC client, and the MySQL pool. Without sharing, every
+ * per-request build would open its own pool, reopen SSP TCP/TLS, and
+ * redial operators — exhausting FDs / ephemeral ports under load.
  */
 class SharedHandlers private constructor(
-    val mysqlPool: MysqlConnectionPool,
-    val ssp: SspConnectionManager,
-    val operators: ConnectionManager,
-    val chainService: BitcoinChainService,
+    val context: SdkContext,
 ) {
     companion object {
-        private const val REGTEST_CHAIN_URL =
-            "https://regtest-mempool.us-west-2.sparkinfra.net/api"
-
         suspend fun create(mysqlUrl: String): SharedHandlers {
-            val chainCreds = breez_sdk_spark.Credentials(
-                username = System.getenv("CHAIN_SERVICE_USERNAME") ?: "spark-sdk",
-                password = System.getenv("CHAIN_SERVICE_PASSWORD") ?: "mCMk1JqlBNtetUNy",
-            )
             val mysqlConfig = defaultMysqlStorageConfig(mysqlUrl).also {
                 it.recycleTimeoutSecs = 300UL
             }
-            return SharedHandlers(
-                mysqlPool = createMysqlConnectionPool(mysqlConfig),
-                ssp = newSspConnectionManager(null),
-                operators = newConnectionManager(null),
-                chainService = newRestChainService(
-                    url = REGTEST_CHAIN_URL,
+            // CONNS_PER_OPERATOR: gRPC connections per operator, shared
+            // across every SDK. Unset → null (one multiplexed connection,
+            // the production default); set → fan out, to probe whether
+            // that single connection caps throughput at the top of a sweep.
+            val connsPerOperator: UInt? = System.getenv("CONNS_PER_OPERATOR")?.let {
+                it.toUIntOrNull()?.takeIf { n -> n > 0u }
+                    ?: error("CONNS_PER_OPERATOR must be a positive integer; got '$it'")
+            }
+            // network must match the SDK Config or build() rejects it.
+            // mysqlConfig is the single DB source — don't also call
+            // withMysqlConnectionPool (build() errors on a double source).
+            val context = newSharedSdkContext(
+                SdkContextConfig(
                     network = Network.REGTEST,
-                    apiType = ChainApiType.MEMPOOL_SPACE,
-                    credentials = chainCreds,
-                ),
+                    connectionsPerOperator = connsPerOperator,
+                    mysqlConfig = mysqlConfig,
+                )
             )
+            return SharedHandlers(context = context)
         }
     }
 }
 
 /**
- * Builds an SDK for [seed] wired to the shared transports. All callers in
- * this harness go through here so we never accidentally drop one of the
- * shared handlers. The session store is auto-wired by SdkBuilder on top
- * of the shared MySQL pool (see sdk_builder.rs::build()), keyed
- * per-(wallet, service) inside MySQL — no extra plumbing needed here.
+ * Builds an SDK for [seed] on the shared [SharedHandlers.context]. Chain
+ * service left unset so `build()` routes it over the context HTTP client.
+ * The session store is auto-wired on the context's MySQL pool.
  */
 suspend fun buildSdk(
     config: breez_sdk_spark.Config,
@@ -165,11 +140,19 @@ suspend fun buildSdk(
     handlers: SharedHandlers,
 ): BreezSdk {
     val builder = SdkBuilder(config, seed)
-    builder.withMysqlConnectionPool(handlers.mysqlPool)
-    builder.withSspConnectionManager(handlers.ssp)
-    builder.withConnectionManager(handlers.operators)
-    builder.withChainService(handlers.chainService)
+    builder.withSharedContext(handlers.context)
     return builder.build()
+}
+
+/**
+ * Explicit `syncWallet()` + local `getInfo` — the server-mode stand-in
+ * for `getInfo(ensureSynced=true)`, which is rejected when background
+ * tasks are off. Used only by the funding/diagnostic paths; user-facing
+ * handlers do a pure local read (no wallet receives mid-run).
+ */
+suspend fun BreezSdk.syncedInfo(): breez_sdk_spark.GetInfoResponse {
+    syncWallet(SyncWalletRequest)
+    return getInfo(GetInfoRequest(ensureSynced = false))
 }
 
 // --- per-request SDK lifecycle --------------------------------------------
@@ -275,12 +258,12 @@ fun smokeTest(opts: Map<String, String>) = runBlocking {
     println("[smoke] OK")
 }
 
-// --- trace-sync mode (verbose ensureSynced=true with Rust tracing) --------
+// --- trace-sync mode (verbose explicit sync with Rust tracing) ------------
 
 /**
  * Builds an SDK for a chosen user-id with full Rust-side tracing
- * enabled, then times both `getInfo(ensureSynced=false)` (cached) and
- * `getInfo(ensureSynced=true)` (full sync). The resulting log file is
+ * enabled, then times both `getInfo(ensureSynced=false)` (local read)
+ * and an explicit `syncWallet()` (full sync). The resulting log file is
  * the SDK's view of what happens during a sync — useful for any
  * "why is this wallet slow?" investigation.
  *
@@ -313,13 +296,14 @@ fun traceSync(opts: Map<String, String>) = runBlocking {
     try {
         val tCached = System.currentTimeMillis()
         val cached = sdk.getInfo(GetInfoRequest(ensureSynced = false))
-        println("[trace] getInfo(cached) ${System.currentTimeMillis() - tCached}ms — balance=${cached.balanceSats}")
+        println("[trace] getInfo(local) ${System.currentTimeMillis() - tCached}ms — balance=${cached.balanceSats}")
 
-        println("[trace] calling getInfo(ensureSynced=true) …")
+        println("[trace] calling syncWallet() …")
         val tSync = System.currentTimeMillis()
-        val synced = sdk.getInfo(GetInfoRequest(ensureSynced = true))
+        sdk.syncWallet(SyncWalletRequest)
         val syncMs = System.currentTimeMillis() - tSync
-        println("[trace] getInfo(synced) ${syncMs}ms — balance=${synced.balanceSats}")
+        val synced = sdk.getInfo(GetInfoRequest(ensureSynced = false))
+        println("[trace] syncWallet + getInfo ${syncMs}ms — balance=${synced.balanceSats}")
         println("[trace] log file: $logDir/sdk.log")
     } finally {
         try {
@@ -356,17 +340,17 @@ fun fundTreasurer(opts: Map<String, String>) = runBlocking {
 
     val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, TREASURER_USER_ID))
     val handlers = SharedHandlers.create(mysqlUrl)
-    val sdk = buildSdk(treasurerConfig(), seed, handlers)
+    val sdk = buildSdk(benchConfig(), seed, handlers)
 
     try {
-        // Fast path: if the locally-cached balance is already at-or-above
-        // target, skip the full sync entirely. Closed-loop funding lands
-        // many small sender→treasurer transfers per sweep that pile up
-        // unclaimed on the treasurer; `ensureSynced=true` claims them via
-        // O(N) FROST roundtrips to every operator and can stall for
-        // minutes. Cached is a strict lower bound on true balance (sync
-        // only adds incoming), so cached ≥ target ⇒ true ≥ target — safe
-        // to skip.
+        // Fast path: if the local balance is already at-or-above target,
+        // skip the full sync entirely. Closed-loop funding lands many
+        // small sender→treasurer transfers per sweep that pile up
+        // unclaimed on the treasurer; an explicit `syncWallet()` claims
+        // them via O(N) FROST roundtrips to every operator and can stall
+        // for minutes. The local read (from the persisted tree store) is
+        // a strict lower bound on true balance (sync only adds incoming),
+        // so local ≥ target ⇒ true ≥ target — safe to skip.
         val cachedBalance = sdk.getInfo(GetInfoRequest(ensureSynced = false)).balanceSats.toLong()
         if (cachedBalance >= targetSats) {
             println("[fund] cached balance: $cachedBalance sats (≥ $targetSats target, skipping sync)")
@@ -383,7 +367,7 @@ fun fundTreasurer(opts: Map<String, String>) = runBlocking {
 
         var chunkIdx = 0
         while (true) {
-            val info = sdk.getInfo(GetInfoRequest(ensureSynced = true))
+            val info = sdk.syncedInfo()
             val balance = info.balanceSats.toLong()
             if (balance >= targetSats) {
                 println("[fund] treasurer balance: $balance sats (target reached)")
@@ -414,7 +398,7 @@ fun fundTreasurer(opts: Map<String, String>) = runBlocking {
 }
 
 /**
- * Polls `getInfo({ensureSynced=true})` every 5s until balance moves
+ * Polls `syncWallet()` + `getInfo` every 5s until balance moves
  * above `currentBalance`. Prints a status line every 10s so a slow
  * faucet / regtest blip is visible instead of looking like a hang.
  * Throws if the deadline passes without progress.
@@ -430,7 +414,7 @@ private suspend fun waitForBalanceIncrease(
     var nextLogAtMs = startMs + 10_000
     while (System.currentTimeMillis() < deadline) {
         delay(5_000)
-        val info = sdk.getInfo(GetInfoRequest(ensureSynced = true))
+        val info = sdk.syncedInfo()
         if (info.balanceSats > currentBalance) return
         val now = System.currentTimeMillis()
         if (now >= nextLogAtMs) {
@@ -447,8 +431,10 @@ private suspend fun waitForBalanceIncrease(
 
 /**
  * Top each of K sender wallets up to `perSenderSats` from the
- * treasurer. Idempotent (skip-if-balance-already-above). Bounded
- * concurrency so the treasurer SDK isn't hit by K simultaneous sends.
+ * treasurer, concurrently up to `--parallelism`. Idempotent
+ * (skip-if-balance-already-above). A per-sender failure is logged and
+ * counted but does not abort the others; the run exits non-zero if any
+ * sender is still unfunded, and simply re-running mops up the stragglers.
  */
 fun seedSenders(opts: Map<String, String>) = runBlocking {
     val mysqlUrl = opts["mysql-url"]
@@ -473,7 +459,7 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
     val handlers = SharedHandlers.create(mysqlUrl)
 
     val treasurerSeed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, TREASURER_USER_ID))
-    val treasurer = buildSdk(treasurerConfig(), treasurerSeed, handlers)
+    val treasurer = buildSdk(benchConfig(), treasurerSeed, handlers)
 
     try {
         // Cached: lower bound on true balance (sync only adds incoming).
@@ -493,29 +479,48 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
         val sem = Semaphore(parallelism)
         var fundedCount = 0
         var skippedCount = 0
+        var failedCount = 0
         coroutineScope {
             for (i in 0 until senderCount) {
                 launch {
                     sem.withPermit {
-                        val outcome = seedOneSender(
-                            treasurer = treasurer,
-                            senderIdx = i,
-                            masterSecret = masterSecret,
-                            config = config,
-                            handlers = handlers,
-                            perSenderSats = perSenderSats,
-                        )
+                        val outcome = try {
+                            seedOneSender(
+                                treasurer = treasurer,
+                                senderIdx = i,
+                                masterSecret = masterSecret,
+                                config = config,
+                                handlers = handlers,
+                                perSenderSats = perSenderSats,
+                            )
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // A single sender's failure must NOT cancel the
+                            // scope: it shouldn't abort the other 99. Every
+                            // sender gets its turn this run; we exit non-zero
+                            // at the end if any failed. seed-senders is
+                            // idempotent, so simply re-running mops up the
+                            // stragglers.
+                            System.err.println("[seed] sender $i FAILED: ${e.message}")
+                            SeedOutcome.FAILED
+                        }
                         synchronized(this@runBlocking) {
                             when (outcome) {
                                 SeedOutcome.FUNDED -> fundedCount++
                                 SeedOutcome.SKIPPED -> skippedCount++
+                                SeedOutcome.FAILED -> failedCount++
                             }
                         }
                     }
                 }
             }
         }
-        println("[seed] OK  funded=$fundedCount  skipped=$skippedCount")
+        println("[seed] funded=$fundedCount  skipped=$skippedCount  failed=$failedCount")
+        if (failedCount > 0) {
+            error("[seed] $failedCount sender(s) still unfunded after this pass")
+        }
+        println("[seed] OK")
     } finally {
         try {
             treasurer.disconnect()
@@ -525,7 +530,7 @@ fun seedSenders(opts: Map<String, String>) = runBlocking {
     }
 }
 
-private enum class SeedOutcome { FUNDED, SKIPPED }
+private enum class SeedOutcome { FUNDED, SKIPPED, FAILED }
 
 private suspend fun seedOneSender(
     treasurer: BreezSdk,
@@ -540,7 +545,7 @@ private suspend fun seedOneSender(
     val sender = buildSdk(config, seed, handlers)
 
     return try {
-        val info = sender.getInfo(GetInfoRequest(ensureSynced = true))
+        val info = sender.syncedInfo()
         val balance = info.balanceSats.toLong()
         if (balance >= perSenderSats) {
             println("[seed] sender $senderIdx: $balance sats (≥ $perSenderSats, skip)")
@@ -552,20 +557,15 @@ private suspend fun seedOneSender(
         val toSend = perSenderSats - balance
         println("[seed] sender $senderIdx: $balance sats → topping up by $toSend to $perSenderSats")
 
-        println("[seed] sender $senderIdx: prepareSendPayment …")
-        val tPrep = System.currentTimeMillis()
+        val t0 = System.currentTimeMillis()
         val prepared = treasurer.prepareSendPayment(
             PrepareSendPaymentRequest(
                 paymentRequest = sparkAddr,
                 amount = BigInteger.fromLong(toSend),
             )
         )
-        println("[seed] sender $senderIdx: prepareSendPayment ${System.currentTimeMillis() - tPrep}ms")
-
-        println("[seed] sender $senderIdx: sendPayment …")
-        val tSend = System.currentTimeMillis()
         treasurer.sendPayment(SendPaymentRequest(prepareResponse = prepared))
-        println("[seed] sender $senderIdx: sendPayment ${System.currentTimeMillis() - tSend}ms")
+        println("[seed] sender $senderIdx: treasurer send ${System.currentTimeMillis() - t0}ms")
 
         println("[seed] sender $senderIdx: waitForBalanceIncrease …")
         waitForBalanceIncrease(
@@ -637,7 +637,8 @@ fun runServer(opts: Map<String, String>) {
                 val userId = call.parameters["userId"]!!
                 handleAndLog(call, "info", userId, requestsWriter) {
                     provider.withUser(userId) { sdk ->
-                        val info = sdk.getInfo(GetInfoRequest(ensureSynced = true))
+                        // Pure local read, no sync — the server-mode read path.
+                        val info = sdk.getInfo(GetInfoRequest(ensureSynced = false))
                         InfoResponse(balanceSats = info.balanceSats.toLong())
                     }
                 }
