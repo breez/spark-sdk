@@ -114,6 +114,15 @@ impl SdkContextConfig {
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 #[allow(clippy::needless_pass_by_value)]
 pub fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkError> {
+    // Mirror the storage-config conflict check in `SdkBuilder::build()` —
+    // fail before opening either pool rather than after.
+    #[cfg(all(feature = "postgres", feature = "mysql"))]
+    if config.postgres_config.is_some() && config.mysql_config.is_some() {
+        return Err(SdkError::Generic(
+            "Multiple storage configurations provided".to_string(),
+        ));
+    }
+
     let user_agent = default_user_agent();
     let http_client = create_http_client(Some(&user_agent));
     let breez_server = Arc::new(
