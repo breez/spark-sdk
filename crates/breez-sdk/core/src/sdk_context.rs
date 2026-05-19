@@ -117,9 +117,11 @@ impl SdkContextConfig {
 /// `SdkContextConfig::new(network)` yields an in-memory, single-tenant setup;
 /// supply a DB config to back the SDKs with a shared `PostgreSQL` or `MySQL`
 /// pool.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-#[allow(clippy::needless_pass_by_value)]
-pub fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkError> {
+// Async-on-tokio so UniFFI runs it on the managed runtime: building the
+// shared resources `tokio::spawn`s internally (gRPC channel; mainnet JWT
+// task) and aborts off-runtime, despite no `.await` here.
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkError> {
     // Mirror the storage-config conflict check in `SdkBuilder::build()` —
     // fail before opening either pool rather than after.
     #[cfg(all(feature = "postgres", feature = "mysql"))]
@@ -193,6 +195,7 @@ mod tests {
     #[tokio::test]
     async fn default_config_yields_context_with_shared_clients_and_no_db() {
         let ctx = new_shared_sdk_context(SdkContextConfig::new(Network::Regtest))
+            .await
             .expect("default context");
         // Just confirming the Arcs are non-null.
         let _http = Arc::clone(&ctx.http_client);
@@ -215,6 +218,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             ..SdkContextConfig::new(Network::Mainnet)
         })
+        .await
         .expect("mainnet context");
         assert!(ctx.jwt_header_provider.is_some());
         assert_eq!(ctx.network, Network::Mainnet);
@@ -227,6 +231,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             ..SdkContextConfig::new(Network::Regtest)
         })
+        .await
         .expect("regtest context");
         // Regtest never gets a JWT provider — there's no Breez endpoint to
         // mint a token. But the inputs are still stored so the builder

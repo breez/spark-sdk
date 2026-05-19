@@ -184,14 +184,16 @@ async fn run_interactive_mode(
             api_key: breez_api_key.clone(),
             postgres_config: Some(default_postgres_storage_config(connection_string)),
             ..SdkContextConfig::new(network)
-        })?;
+        })
+        .await?;
         sdk_builder = sdk_builder.with_shared_context(context);
     } else if let Some(connection_string) = mysql_connection_string {
         let context = new_shared_sdk_context(SdkContextConfig {
             api_key: breez_api_key.clone(),
             mysql_config: Some(default_mysql_storage_config(connection_string)),
             ..SdkContextConfig::new(network)
-        })?;
+        })
+        .await?;
         sdk_builder = sdk_builder.with_shared_context(context);
     } else {
         sdk_builder = sdk_builder.with_default_storage(data_dir.to_string_lossy().to_string());

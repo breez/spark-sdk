@@ -9,8 +9,6 @@
 
 use std::sync::Arc;
 
-use flutter_rust_bridge::frb;
-
 use breez_sdk_spark::{SdkContextConfig, SdkError};
 
 pub struct SdkContext {
@@ -18,8 +16,7 @@ pub struct SdkContext {
 }
 
 /// Process-shared SDK resources for Flutter integrations.
-#[frb(sync)]
-pub fn new_shared_sdk_context(config: SdkContextConfig) -> Result<SdkContext, SdkError> {
-    let inner = breez_sdk_spark::new_shared_sdk_context(config)?;
+pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<SdkContext, SdkError> {
+    let inner = breez_sdk_spark::new_shared_sdk_context(config).await?;
     Ok(SdkContext { inner })
 }

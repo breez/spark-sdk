@@ -128,7 +128,7 @@ pub async fn resolve_backend_choice() -> Result<BackendChoice> {
 }
 
 /// Attaches a previously-resolved [`BackendChoice`] to the builder.
-fn apply_backend_choice(
+async fn apply_backend_choice(
     builder: SdkBuilder,
     storage_dir: String,
     choice: &BackendChoice,
@@ -140,7 +140,8 @@ fn apply_backend_choice(
             let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
                 postgres_config: Some(pg_config),
                 ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
-            })?;
+            })
+            .await?;
             Ok(builder.with_shared_context(ctx))
         }
         BackendChoice::Mysql(conn_str) => {
@@ -148,7 +149,8 @@ fn apply_backend_choice(
             let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
                 mysql_config: Some(my_config),
                 ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
-            })?;
+            })
+            .await?;
             Ok(builder.with_shared_context(ctx))
         }
     }
@@ -160,7 +162,7 @@ fn apply_backend_choice(
 /// configuration is applied; if both env vars are set, postgres wins.
 async fn apply_storage(builder: SdkBuilder, storage_dir: String) -> Result<SdkBuilder> {
     let choice = resolve_backend_choice().await?;
-    apply_backend_choice(builder, storage_dir, &choice)
+    apply_backend_choice(builder, storage_dir, &choice).await
 }
 
 /// Event listener that forwards events to a channel
@@ -334,7 +336,7 @@ pub async fn build_sdk_with_custom_config_and_backend(
 
     let builder = SdkBuilder::new(config, seed);
     let builder = match backend {
-        Some(choice) => apply_backend_choice(builder, storage_dir, &choice)?,
+        Some(choice) => apply_backend_choice(builder, storage_dir, &choice).await?,
         None => apply_storage(builder, storage_dir).await?,
     };
     let sdk = builder.build().await?;
@@ -685,7 +687,8 @@ pub async fn build_sdk_with_tree_store_config(
             let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
                 postgres_config: Some(pg_config),
                 ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
-            })?;
+            })
+            .await?;
             builder = builder.with_shared_context(ctx);
         }
         (Some(PostgresTreeStore::SharedContext(ctx)), None) => {
@@ -699,7 +702,8 @@ pub async fn build_sdk_with_tree_store_config(
             let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
                 mysql_config: Some(my_config),
                 ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
-            })?;
+            })
+            .await?;
             builder = builder.with_shared_context(ctx);
         }
         (None, Some(MysqlTreeStore::SharedContext(ctx))) => {
@@ -1652,7 +1656,8 @@ pub async fn build_sdk_with_postgres(
     let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
         postgres_config: Some(postgres_config),
         ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
-    })?;
+    })
+    .await?;
 
     let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
         .with_shared_context(ctx)
@@ -1710,7 +1715,8 @@ pub async fn build_sdk_with_mysql(
     let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
         mysql_config: Some(mysql_config),
         ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
-    })?;
+    })
+    .await?;
 
     let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
         .with_shared_context(ctx)

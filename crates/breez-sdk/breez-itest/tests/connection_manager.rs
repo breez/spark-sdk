@@ -24,7 +24,8 @@ async fn test_shared_connection_manager_spark_transfer(
     let context = new_shared_sdk_context(SdkContextConfig {
         connections_per_operator,
         ..SdkContextConfig::new(Network::Regtest)
-    })?;
+    })
+    .await?;
 
     let alice_dir = Builder::new()
         .prefix("breez-sdk-shared-cm-alice")
