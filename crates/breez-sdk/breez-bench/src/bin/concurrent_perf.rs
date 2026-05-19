@@ -17,11 +17,10 @@ use breez_sdk_spark::{
     BreezSdk, GetInfoRequest, MysqlConnectionPool, Network, PostgresConnectionPool,
     PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent,
     SendPaymentRequest, SyncWalletRequest, create_mysql_connection_pool,
-    create_postgres_connection_pool, default_config, default_mysql_storage_config,
-    default_postgres_storage_config,
+    create_postgres_connection_pool, default_mysql_storage_config, default_postgres_storage_config,
+    default_server_config,
 };
 
-use breez_bench::events::{wait_for_claimed_event, wait_for_synced_event};
 use breez_bench::stats::DurationStats;
 
 #[derive(Parser, Debug)]
@@ -98,6 +97,7 @@ struct PaymentResult {
 
 struct BenchSdkInstance {
     sdk: BreezSdk,
+    #[allow(dead_code)]
     events: mpsc::Receiver<SdkEvent>,
     #[allow(dead_code)]
     temp_dir: Option<TempDir>,
@@ -197,7 +197,7 @@ async fn main() -> Result<()> {
     );
 
     info!("Initializing sender and receiver SDKs...");
-    let (mut sender, mut receiver, sender_seed, sender_backend) = initialize_sdk_pair(
+    let (mut sender, receiver, sender_seed, sender_backend) = initialize_sdk_pair(
         args.no_auto_optimize,
         args.pre_optimize,
         args.sender_postgres.clone(),
@@ -206,11 +206,6 @@ async fn main() -> Result<()> {
         args.receiver_mysql.clone(),
     )
     .await?;
-
-    info!("Waiting for sender sync...");
-    wait_for_synced_event(&mut sender.events, 120).await?;
-    info!("Waiting for receiver sync...");
-    wait_for_synced_event(&mut receiver.events, 120).await?;
 
     info!(
         "Funding sender with {} sats (need {} sats min)...",
@@ -255,10 +250,6 @@ async fn main() -> Result<()> {
             )
             .await?;
             sender_instances.push(extra);
-        }
-        for (i, inst) in sender_instances.iter_mut().enumerate() {
-            info!("Waiting for sender instance {} initial sync", i);
-            wait_for_synced_event(&mut inst.events, 120).await?;
         }
     }
 
@@ -677,7 +668,7 @@ async fn initialize_sdk_pair(
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
 
-    let mut sender_config = default_config(Network::Regtest);
+    let mut sender_config = default_server_config(Network::Regtest);
     if no_auto_optimize || pre_optimize.is_some() {
         sender_config.optimization_config.auto_enabled = false;
     }
@@ -702,8 +693,7 @@ async fn initialize_sdk_pair(
     let mut receiver_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut receiver_seed);
 
-    let mut receiver_config = default_config(Network::Regtest);
-    receiver_config.optimization_config.auto_enabled = false;
+    let receiver_config = default_server_config(Network::Regtest);
     let itest_receiver = build_sdk_with_tree_store_config(
         receiver_path,
         receiver_seed,
@@ -743,7 +733,7 @@ async fn build_extra_sender(
         .tempdir()?;
     let path = dir.path().to_string_lossy().to_string();
 
-    let mut config = default_config(Network::Regtest);
+    let mut config = default_server_config(Network::Regtest);
     if no_auto_optimize || pre_optimize.is_some() {
         config.optimization_config.auto_enabled = false;
     }
@@ -846,15 +836,29 @@ async fn fund_via_faucet(
         let txid = faucet.fund_address(&deposit_address, chunk).await?;
         info!("Faucet chunk #{} txid: {}", chunk_idx, txid);
 
-        wait_for_claimed_event(&mut sdk_instance.events, 240).await?;
-
-        sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
-        let after = sdk_instance
-            .sdk
-            .get_info(GetInfoRequest {
-                ensure_synced: Some(false),
-            })
-            .await?;
+        let claim_start = Instant::now();
+        let claim_timeout = Duration::from_secs(240);
+        let balance_before = info.balance_sats;
+        let after = loop {
+            sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+            let snap = sdk_instance
+                .sdk
+                .get_info(GetInfoRequest {
+                    ensure_synced: Some(false),
+                })
+                .await?;
+            if snap.balance_sats > balance_before {
+                break snap;
+            }
+            if claim_start.elapsed() >= claim_timeout {
+                bail!(
+                    "Timeout waiting for chunk #{} to land (balance still {} sats)",
+                    chunk_idx,
+                    snap.balance_sats
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        };
         info!(
             "Balance after chunk #{}: {} sats",
             chunk_idx, after.balance_sats
@@ -896,14 +900,29 @@ async fn fund_via_faucet(
             let extra = needed.clamp(FAUCET_MIN_PER_CALL, FAUCET_MAX_PER_CALL);
             let txid = faucet.fund_address(&deposit_address, extra).await?;
             info!("Top-up faucet txid: {}", txid);
-            wait_for_claimed_event(&mut sdk_instance.events, 240).await?;
-            sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
-            let after = sdk_instance
-                .sdk
-                .get_info(GetInfoRequest {
-                    ensure_synced: Some(false),
-                })
-                .await?;
+
+            let claim_start = Instant::now();
+            let claim_timeout = Duration::from_secs(240);
+            let balance_before = info.balance_sats;
+            let after = loop {
+                sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+                let snap = sdk_instance
+                    .sdk
+                    .get_info(GetInfoRequest {
+                        ensure_synced: Some(false),
+                    })
+                    .await?;
+                if snap.balance_sats > balance_before {
+                    break snap;
+                }
+                if claim_start.elapsed() >= claim_timeout {
+                    bail!(
+                        "Timeout waiting for top-up to land (balance still {} sats)",
+                        snap.balance_sats
+                    );
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            };
             if after.balance_sats >= min_required {
                 info!("Funded after top-up: {} sats", after.balance_sats);
                 return Ok(());

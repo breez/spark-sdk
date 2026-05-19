@@ -107,3 +107,14 @@ func ConfigureSparkConfig() {
 	// ANCHOR_END: spark-config
 	log.Printf("Config: %+v", config)
 }
+
+func ConfigureBackgroundTasks() {
+	// ANCHOR: config-background-tasks
+	// Server-mode profile: equivalent to DefaultServerConfig(NetworkMainnet).
+	// Recommended when you build the SDK per request in a multi-tenant server
+	// deployment. See the "Server mode" page for the full profile.
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	config.BackgroundTasksEnabled = false
+	// ANCHOR_END: config-background-tasks
+	log.Printf("Config: %+v", config)
+}

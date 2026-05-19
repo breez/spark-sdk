@@ -1,9 +1,8 @@
-//! Multi-instance concurrent storage integration test against MySQL.
+//! Server-mode multi-instance concurrent storage test against MySQL.
 //!
-//! Mirrors `concurrent_storage.rs`, swapping the testcontainers backend from
-//! `Postgres` to `Mysql`. Both delegate to the shared scenario in
-//! `breez_sdk_itest::run_concurrent_multi_instance_operations`, so any change
-//! to the workflow runs against both backends automatically.
+//! Mirror of `concurrent_storage_mysql.rs` with the SDK built in server mode
+//! (`default_server_config`, `background_tasks_enabled=false`). See
+//! `concurrent_storage_server_mode.rs` for the rationale.
 
 use anyhow::Result;
 use breez_sdk_itest::*;
@@ -44,12 +43,12 @@ impl MysqlConcurrentTestFixture {
     }
 
     async fn build_instance(&self) -> Result<SdkInstance> {
-        build_sdk_with_mysql(&self.connection_string, self.shared_seed).await
+        build_sdk_with_mysql_server_mode(&self.connection_string, self.shared_seed).await
     }
 }
 
 #[test_log::test(tokio::test)]
-async fn test_mysql_concurrent_multi_instance_operations() -> Result<()> {
+async fn test_mysql_concurrent_multi_instance_operations_server_mode() -> Result<()> {
     let fixture = MysqlConcurrentTestFixture::new().await?;
-    run_concurrent_multi_instance_operations(RuntimeMode::Client, || fixture.build_instance()).await
+    run_concurrent_multi_instance_operations(RuntimeMode::Server, || fixture.build_instance()).await
 }

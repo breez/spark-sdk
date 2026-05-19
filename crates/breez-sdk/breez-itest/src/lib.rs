@@ -8,7 +8,7 @@ pub mod session_manager_scenarios;
 use std::sync::Arc;
 
 pub use concurrent_scenarios::{
-    run_concurrent_multi_instance_operations, run_concurrent_token_operations,
+    RuntimeMode, run_concurrent_multi_instance_operations, run_concurrent_token_operations,
 };
 pub use faucet::RegtestFaucet;
 pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};

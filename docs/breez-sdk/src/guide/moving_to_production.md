@@ -12,3 +12,5 @@ Before moving to production, we strongly recommend verifying that these use case
 - **Claiming on-chain deposits**: Make sure you handle the case where an on-chain deposit is unclaimed. For more information see [Claiming on-chain deposits](onchain_claims.md).
 
 - **Check Spark status**: Use the Spark status check to monitor the operational status of the Spark network and display a warning to users when services are degraded or experiencing issues. For more information see [Spark status](spark_status.md).
+
+- **Server-side deployments**: If you're running the SDK in a multi-tenant server hosting many wallets at once, review [Server mode](server_mode.md) for the recommended profile, explicit sync/claim patterns, and shared-infrastructure wiring.

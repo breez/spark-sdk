@@ -121,7 +121,7 @@ impl BreezSdk {
 
     #[allow(clippy::too_many_lines)]
     pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
 
         let is_fees_included = request.prepare_response.fee_policy == FeePolicy::FeesIncluded;
 
@@ -322,7 +322,7 @@ impl BreezSdk {
         &self,
         request: LnurlWithdrawRequest,
     ) -> Result<LnurlWithdrawResponse, SdkError> {
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
         let LnurlWithdrawRequest {
             amount_sats,
             withdraw_request,

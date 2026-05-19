@@ -32,7 +32,7 @@ use crate::{
     payment_observer::{PaymentObserver, SparkTransferObserver},
     persist::Storage,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
-    sdk::{BreezSdk, BreezSdkParams, SyncCoordinator},
+    sdk::{BreezSdk, BreezSdkParams, SyncCoordinator, runtime_from_config},
     session_manager::{SessionManager, SessionManagerAdapter},
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
@@ -470,6 +470,27 @@ impl SdkBuilder {
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
         // Validate configuration
         self.config.validate()?;
+        let runtime = runtime_from_config(&self.config);
+        if !runtime.starts_background_services() {
+            if self.config.stable_balance_config.is_some() {
+                return Err(SdkError::InvalidInput(
+                    "stable_balance_config is not supported when background_tasks_enabled is false"
+                        .to_string(),
+                ));
+            }
+            if self.config.real_time_sync_server_url.is_some() {
+                return Err(SdkError::InvalidInput(
+                    "real_time_sync_server_url must be None when background_tasks_enabled is false"
+                        .to_string(),
+                ));
+            }
+            if self.config.optimization_config.auto_enabled {
+                return Err(SdkError::InvalidInput(
+                    "optimization_config.auto_enabled must be false when background_tasks_enabled is false"
+                        .to_string(),
+                ));
+            }
+        }
 
         // Create the base signer based on the signer source
         let signer: Arc<dyn crate::signer::BreezSigner> = match self.signer_source {
@@ -701,8 +722,9 @@ impl SdkBuilder {
             .operator_pool
             .with_user_agent(Some(user_agent.clone()));
         spark_wallet_config.service_provider_config.user_agent = Some(user_agent.clone());
+        let background_services_enabled = runtime.starts_background_services();
         spark_wallet_config.leaf_auto_optimize_enabled =
-            self.config.optimization_config.auto_enabled;
+            background_services_enabled && self.config.optimization_config.auto_enabled;
         spark_wallet_config.leaf_optimization_options.multiplicity =
             self.config.optimization_config.multiplicity;
         spark_wallet_config
@@ -831,7 +853,8 @@ impl SdkBuilder {
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
                 .with_cancellation_token(shutdown_sender.subscribe())
                 .with_session_manager(inner_session_manager)
-                .with_so_extra_header_provider(partner_headers.clone());
+                .with_so_extra_header_provider(partner_headers.clone())
+                .with_background_processing(background_services_enabled);
         if let Some(observer) = self.payment_observer {
             let observer: Arc<dyn spark_wallet::TransferObserver> =
                 Arc::new(SparkTransferObserver::new(observer));
@@ -871,30 +894,31 @@ impl SdkBuilder {
             },
         };
 
-        let event_emitter = Arc::new(EventEmitter::new(
-            self.config.real_time_sync_server_url.is_some(),
-        ));
+        let real_time_sync_active =
+            background_services_enabled && self.config.real_time_sync_server_url.is_some();
+        let event_emitter = Arc::new(EventEmitter::new(real_time_sync_active));
 
-        let storage = if let Some(server_url) = &self.config.real_time_sync_server_url {
-            init_and_start_real_time_sync(RealTimeSyncParams {
-                server_url: server_url.clone(),
-                api_key: self.config.api_key.clone(),
-                user_agent,
-                signer: rtsync_signer,
-                storage: Arc::clone(&storage),
-                shutdown_receiver: shutdown_sender.subscribe(),
-                event_emitter: Arc::clone(&event_emitter),
-                lnurl_server_client: lnurl_server_client.clone(),
-            })
-            .await?
-        } else {
-            storage
+        let storage = match &self.config.real_time_sync_server_url {
+            Some(server_url) if background_services_enabled => {
+                init_and_start_real_time_sync(RealTimeSyncParams {
+                    server_url: server_url.clone(),
+                    api_key: self.config.api_key.clone(),
+                    user_agent,
+                    signer: rtsync_signer,
+                    storage: Arc::clone(&storage),
+                    shutdown_receiver: shutdown_sender.subscribe(),
+                    event_emitter: Arc::clone(&event_emitter),
+                    lnurl_server_client: lnurl_server_client.clone(),
+                })
+                .await?
+            }
+            _ => storage,
         };
 
         // Create the MoonPay provider for buying Bitcoin
         let buy_bitcoin_provider = Arc::new(MoonpayProvider::new(breez_server.clone()));
 
-        // Create the FlashnetTokenConverter (spawns its own refunder background task)
+        // Create the FlashnetTokenConverter. Client runtime starts its refunder.
         let flashnet_config = FlashnetConfig::default_config(
             self.config.network.into(),
             DEFAULT_INTEGRATOR_PUBKEY
@@ -905,33 +929,31 @@ impl SdkBuilder {
                     fee_bps: DEFAULT_INTEGRATOR_FEE_BPS,
                 }),
         );
-        let token_converter: Arc<dyn TokenConverter> = Arc::new(FlashnetTokenConverter::new(
+        let flashnet_converter = Arc::new(FlashnetTokenConverter::new(
             flashnet_config,
             Arc::clone(&storage),
             Arc::clone(&spark_wallet),
             self.config.network,
-            shutdown_sender.subscribe(),
         ));
+        let token_converter: Arc<dyn TokenConverter> = flashnet_converter;
 
-        // Create sync coordinator early so StableBalance can trigger syncs after conversions
+        // Create sync coordinator for the client runtime's sync loop
         let sync_coordinator = SyncCoordinator::new();
-
-        // Create StableBalance if configured. It spawns its own background tasks
-        // and registers itself as event middleware (must be before TokenConversionMiddleware
+        // Create StableBalance if configured. Client runtime starts its worker.
+        // It registers itself as event middleware (must be before TokenConversionMiddleware
         // so it can see conversion child payment events for deferred task resolution)
         let stable_balance = if let Some(config) = &self.config.stable_balance_config {
-            Some(Arc::new(
+            let stable_balance = Arc::new(
                 StableBalance::new(
                     config.clone(),
                     Arc::clone(&token_converter),
                     Arc::clone(&spark_wallet),
                     Arc::clone(&storage),
-                    shutdown_sender.subscribe(),
                     Arc::clone(&event_emitter),
-                    sync_coordinator.clone(),
                 )
                 .await,
-            ))
+            );
+            Some(stable_balance)
         } else {
             None
         };
@@ -952,6 +974,7 @@ impl SdkBuilder {
             lnurl_server_client,
             lnurl_auth_signer,
             shutdown_sender,
+            runtime,
             spark_wallet,
             event_emitter,
             buy_bitcoin_provider,
@@ -959,7 +982,8 @@ impl SdkBuilder {
             stable_balance,
             sync_coordinator,
             partner_headers,
-        })?;
+        })
+        .await?;
         debug!("Initialized and started breez sdk.");
 
         Ok(sdk)
@@ -978,6 +1002,7 @@ fn default_storage(
 }
 
 #[cfg(test)]
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod tests {
     use super::SdkBuilder;
     use crate::{Network, default_config};
@@ -997,6 +1022,75 @@ mod tests {
                     )
                 },
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn server_mode_rejects_stable_balance_config() {
+        use crate::{SdkError, StableBalanceConfig, StableBalanceToken, default_server_config};
+
+        let mut config = default_server_config(Network::Regtest);
+        config.stable_balance_config = Some(StableBalanceConfig {
+            tokens: vec![StableBalanceToken {
+                label: "USDB".to_string(),
+                token_identifier: "btkn1test".to_string(),
+            }],
+            default_active_label: None,
+            threshold_sats: None,
+            max_slippage_bps: None,
+        });
+
+        let seed = test_seed();
+        let result = SdkBuilder::new(config, seed).build().await;
+        match result {
+            Err(SdkError::InvalidInput(message)) => {
+                assert!(message.contains("stable_balance_config"));
+            }
+            Err(err) => panic!("expected InvalidInput error, got {err:?}"),
+            Ok(_) => panic!("expected server mode with Stable Balance config to fail"),
+        }
+    }
+
+    #[tokio::test]
+    async fn server_mode_rejects_real_time_sync_server_url() {
+        use crate::{SdkError, default_server_config};
+
+        let mut config = default_server_config(Network::Regtest);
+        config.real_time_sync_server_url = Some("https://example.com".to_string());
+
+        let seed = test_seed();
+        let result = SdkBuilder::new(config, seed).build().await;
+        match result {
+            Err(SdkError::InvalidInput(message)) => {
+                assert!(message.contains("real_time_sync_server_url"));
+            }
+            Err(err) => panic!("expected InvalidInput error, got {err:?}"),
+            Ok(_) => panic!("expected server mode with real_time_sync_server_url to fail"),
+        }
+    }
+
+    #[tokio::test]
+    async fn server_mode_rejects_optimization_auto_enabled() {
+        use crate::{SdkError, default_server_config};
+
+        let mut config = default_server_config(Network::Regtest);
+        config.optimization_config.auto_enabled = true;
+
+        let seed = test_seed();
+        let result = SdkBuilder::new(config, seed).build().await;
+        match result {
+            Err(SdkError::InvalidInput(message)) => {
+                assert!(message.contains("optimization_config.auto_enabled"));
+            }
+            Err(err) => panic!("expected InvalidInput error, got {err:?}"),
+            Ok(_) => panic!("expected server mode with optimization auto_enabled to fail"),
+        }
+    }
+
+    fn test_seed() -> crate::Seed {
+        crate::Seed::Mnemonic {
+            mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            passphrase: None,
         }
     }
 }

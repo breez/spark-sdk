@@ -111,3 +111,13 @@ async def configure_spark_config():
     )
     # ANCHOR_END: spark-config
     logging.info(f"Config: {config}")
+
+async def configure_background_tasks():
+    # ANCHOR: config-background-tasks
+    # Server-mode profile: equivalent to default_server_config(network=Network.MAINNET).
+    # Recommended when you build the SDK per request in a multi-tenant server
+    # deployment. See the "Server mode" page for the full profile.
+    config = default_config(network=Network.MAINNET)
+    config.background_tasks_enabled = False
+    # ANCHOR_END: config-background-tasks
+    logging.info(f"Config: {config}")

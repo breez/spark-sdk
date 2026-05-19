@@ -1,13 +1,17 @@
 import logging
 import typing
 from breez_sdk_spark import (
+    BreezSdk,
     default_config,
+    default_server_config,
     default_postgres_storage_config,
     create_postgres_connection_pool,
     default_mysql_storage_config,
     create_mysql_connection_pool,
     Network,
     ProvisionalPayment,
+    ReceivePaymentMethod,
+    ReceivePaymentRequest,
     SdkBuilder,
     Seed,
     PaymentObserver,
@@ -15,6 +19,7 @@ from breez_sdk_spark import (
     Credentials,
     KeySetType,
     KeySetConfig,
+    UpdateUserSettingsRequest,
 )
 
 
@@ -165,3 +170,75 @@ async def init_sdk_mysql():
         logging.error(error)
         raise
 # ANCHOR_END: init-sdk-mysql
+
+
+async def init_sdk_server():
+    # ANCHOR: init-sdk-server
+    # Construct the seed using a mnemonic, entropy or passkey
+    mnemonic = "<mnemonic words>"
+    seed = Seed.MNEMONIC(mnemonic=mnemonic, passphrase=None)
+
+    # Build a server-mode config: same as default_config(network) with
+    # background_tasks_enabled = False. No periodic sync, no real-time sync
+    # client, no leaf/token optimizer, no flashnet refunder, no lightning-
+    # address recovery, no spark private-mode init.
+    config = default_server_config(network=Network.MAINNET)
+    config.api_key = "<breez api key>"
+
+    try:
+        # Typically server-mode SDKs are built per request and share
+        # infrastructure (DB pool, REST chain service, SSP/Connection Manager)
+        # across instances. Pass the shared resources via the builder.
+        builder = SdkBuilder(config=config, seed=seed)
+        await builder.with_default_storage(storage_dir="./.data")
+        sdk = await builder.build()
+        return sdk
+    except Exception as error:
+        logging.error(error)
+        raise
+    # ANCHOR_END: init-sdk-server
+
+
+async def server_mode_request_handler(sdk: BreezSdk):
+    # ANCHOR: server-mode-request-handler
+    # User-facing request handler: do not call sync_wallet here. Operations
+    # that read from local storage (get_info, list_payments, etc.) do not
+    # need a defensive sync. Call sync_wallet only from webhook handlers or
+    # reconciliation jobs that need to observe an external state change.
+    payment_method = ReceivePaymentMethod.BOLT11_INVOICE(
+        description="<invoice description>",
+        amount_sats=5_000,
+        expiry_secs=3600,
+        payment_hash=None,
+    )
+    response = await sdk.receive_payment(
+        request=ReceivePaymentRequest(payment_method=payment_method)
+    )
+
+    # Always disconnect at the end of the request lifecycle to flush
+    # outstanding storage writes.
+    await sdk.disconnect()
+    # ANCHOR_END: server-mode-request-handler
+    return response.payment_request
+
+
+async def server_mode_provisioning(sdk: BreezSdk):
+    # ANCHOR: server-mode-provisioning
+    # One-time setup when a wallet is first registered. The client-mode SDK
+    # would normally apply the private-mode preset itself on first startup;
+    # server-mode SDKs do not, so opt in once here via update_user_settings.
+    await sdk.update_user_settings(
+        request=UpdateUserSettingsRequest(spark_private_mode_enabled=True)
+    )
+
+    await sdk.disconnect()
+    # ANCHOR_END: server-mode-provisioning
+
+
+async def refund_pending_conversions(sdk: BreezSdk):
+    # ANCHOR: refund-pending-conversions
+    # The flashnet conversion refunder doesn't run in the background in server
+    # mode. Call this from your own scheduler (e.g. once per minute) to issue
+    # pending refunds for failed conversions.
+    await sdk.refund_pending_conversions()
+    # ANCHOR_END: refund-pending-conversions

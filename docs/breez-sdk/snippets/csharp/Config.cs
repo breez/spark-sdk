@@ -109,5 +109,18 @@ namespace BreezSdkSnippets
             };
             // ANCHOR_END: spark-config
         }
+
+        void ConfigureBackgroundTasks()
+        {
+            // ANCHOR: config-background-tasks
+            // Server-mode profile: equivalent to DefaultServerConfig(Network.Mainnet).
+            // Recommended when you build the SDK per request in a multi-tenant
+            // server deployment. See the "Server mode" page for the full profile.
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                backgroundTasksEnabled = false
+            };
+            // ANCHOR_END: config-background-tasks
+        }
     }
 }

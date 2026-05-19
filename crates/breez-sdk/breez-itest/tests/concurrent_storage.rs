@@ -77,5 +77,5 @@ impl ConcurrentTestFixture {
 #[test_log::test(tokio::test)]
 async fn test_concurrent_multi_instance_operations() -> Result<()> {
     let fixture = ConcurrentTestFixture::new().await?;
-    run_concurrent_multi_instance_operations(|| fixture.build_instance()).await
+    run_concurrent_multi_instance_operations(RuntimeMode::Client, || fixture.build_instance()).await
 }

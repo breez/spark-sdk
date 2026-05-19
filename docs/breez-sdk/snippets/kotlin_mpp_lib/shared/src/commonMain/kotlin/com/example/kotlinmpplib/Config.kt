@@ -97,4 +97,15 @@ class Config {
         // ANCHOR_END: spark-config
         println("Config: $config")
     }
+
+    fun configureBackgroundTasks() {
+        // ANCHOR: config-background-tasks
+        // Server-mode profile: equivalent to defaultServerConfig(Network.MAINNET).
+        // Recommended when you build the SDK per request in a multi-tenant
+        // server deployment. See the "Server mode" page for the full profile.
+        val config = defaultConfig(Network.MAINNET)
+        config.backgroundTasksEnabled = false
+        // ANCHOR_END: config-background-tasks
+        println("Config: $config")
+    }
 }

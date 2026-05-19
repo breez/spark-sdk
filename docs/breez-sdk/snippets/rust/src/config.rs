@@ -124,3 +124,15 @@ pub(crate) fn configure_spark_config() -> Result<()> {
     info!("Config: {:?}", config);
     Ok(())
 }
+
+pub(crate) fn configure_background_tasks() -> Result<()> {
+    // ANCHOR: config-background-tasks
+    // Server-mode profile: equivalent to default_server_config(Network::Mainnet).
+    // Recommended when you build the SDK per request in a multi-tenant server
+    // deployment. See the "Server mode" page for the full profile.
+    let mut config = default_config(Network::Mainnet);
+    config.background_tasks_enabled = false;
+    // ANCHOR_END: config-background-tasks
+    info!("Config: {:?}", config);
+    Ok(())
+}
