@@ -5,8 +5,7 @@ use platform_utils::tokio;
 use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
 use spark_wallet::{InvoiceDescription, Preimage};
 use std::str::FromStr;
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::timeout;
+use tokio::sync::oneshot;
 use tracing::{Instrument, error, info, warn};
 
 use crate::{
@@ -35,10 +34,7 @@ use crate::{
     },
 };
 
-use super::{
-    BreezSdk,
-    helpers::{InternalEventListener, get_deposit_address, is_payment_match},
-};
+use super::{BreezSdk, helpers::get_deposit_address};
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -837,7 +833,9 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         // Wait for the received conversion payment to complete
         let payment = self
+            .runtime
             .wait_for_payment(
+                self,
                 WaitForPaymentIdentifier::PaymentId(
                     conversion_response.received_payment_id.clone(),
                 ),
@@ -1412,66 +1410,6 @@ impl BreezSdk {
         self.storage.insert_payment(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
-    }
-
-    pub(super) async fn wait_for_payment(
-        &self,
-        identifier: WaitForPaymentIdentifier,
-        completion_timeout_secs: u32,
-    ) -> Result<Payment, SdkError> {
-        let (tx, mut rx) = mpsc::channel(20);
-        // Use internal listener to see raw events before middleware processing.
-        // This is critical because TokenConversionMiddleware suppresses conversion
-        // child events, but wait_for_payment needs to see them.
-        let id = self
-            .event_emitter
-            .add_internal_listener(Box::new(InternalEventListener::new(tx)))
-            .await;
-
-        // Run the main logic in a closure so cleanup always happens,
-        // even if an early `?` exits (e.g. get_payment_by_invoice failure).
-        let result = async {
-            // First check if we already have the completed payment in storage
-            let payment = match &identifier {
-                WaitForPaymentIdentifier::PaymentId(payment_id) => self
-                    .storage
-                    .get_payment_by_id(payment_id.clone())
-                    .await
-                    .ok(),
-                WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
-                    self.storage
-                        .get_payment_by_invoice(payment_request.clone())
-                        .await?
-                }
-            };
-            if let Some(payment) = payment
-                && payment.status == PaymentStatus::Completed
-            {
-                return Ok(payment);
-            }
-
-            timeout(Duration::from_secs(completion_timeout_secs.into()), async {
-                loop {
-                    let Some(event) = rx.recv().await else {
-                        return Err(SdkError::Generic("Event channel closed".to_string()));
-                    };
-
-                    let SdkEvent::PaymentSucceeded { payment } = event else {
-                        continue;
-                    };
-
-                    if is_payment_match(&payment, &identifier) {
-                        return Ok(payment);
-                    }
-                }
-            })
-            .await
-            .map_err(|_| SdkError::Generic("Timeout waiting for payment".to_string()))?
-        }
-        .await;
-
-        self.event_emitter.remove_internal_listener(&id).await;
-        result
     }
 
     /// Spawns the background poll that watches an outgoing Lightning send to

@@ -389,7 +389,9 @@ impl BreezSdk {
 
         // Wait for the payment to be completed
         let payment = self
+            .runtime
             .wait_for_payment(
+                self,
                 WaitForPaymentIdentifier::PaymentRequest(payment_request.clone()),
                 completion_timeout_secs,
             )

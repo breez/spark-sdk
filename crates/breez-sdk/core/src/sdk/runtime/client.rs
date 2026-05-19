@@ -5,14 +5,15 @@ use platform_utils::tokio;
 use spark_wallet::{WalletEvent, WalletTransfer};
 use tokio::{
     select,
-    sync::{broadcast, watch},
+    sync::{broadcast, mpsc, watch},
+    time::timeout,
 };
 use tracing::{Instrument, debug, error, info, trace};
 
 use crate::sync::SparkSyncService;
 use crate::utils::token::{token_transaction_to_payments, token_tx_inputs_are_ours};
 use crate::{
-    GetInfoRequest, GetInfoResponse, Payment,
+    GetInfoRequest, GetInfoResponse, Payment, PaymentStatus, WaitForPaymentIdentifier,
     error::SdkError,
     events::{EventListener, SdkEvent},
     persist::ObjectCacheRepository,
@@ -24,7 +25,10 @@ use crate::{PaymentType, StorageListPaymentsRequest, StoragePaymentDetailsFilter
 use super::{RuntimeEvent, RuntimeProfile};
 use crate::sdk::{
     BreezSdk, SyncCoordinator, SyncRequest, SyncType,
-    helpers::{BalanceWatcher, update_balances},
+    helpers::{
+        BalanceWatcher, InternalEventListener, is_payment_match, maybe_get_payment_from_storage,
+        update_balances,
+    },
 };
 
 pub(super) struct ClientRuntime;
@@ -93,6 +97,56 @@ impl RuntimeProfile for ClientRuntime {
         sdk: &BreezSdk,
     ) -> Result<(), SdkError> {
         sdk.ensure_spark_private_mode_initialized_inner().await
+    }
+
+    async fn wait_for_payment(
+        &self,
+        sdk: &BreezSdk,
+        identifier: WaitForPaymentIdentifier,
+        completion_timeout_secs: u32,
+    ) -> Result<Payment, SdkError> {
+        let (tx, mut rx) = mpsc::channel(20);
+        // Use internal listener to see raw events before middleware processing.
+        // This is critical because TokenConversionMiddleware suppresses
+        // conversion child events, but wait_for_payment needs to see them.
+        let id = sdk
+            .event_emitter
+            .add_internal_listener(Box::new(InternalEventListener::new(tx)))
+            .await;
+
+        // Run the main logic in a closure so cleanup always happens,
+        // even if an early `?` exits (e.g. get_payment_by_invoice failure).
+        let result = async {
+            // First check if we already have the completed payment in storage.
+            if let Some(payment) =
+                maybe_get_payment_from_storage(sdk.storage.as_ref(), &identifier).await?
+                && payment.status == PaymentStatus::Completed
+            {
+                return Ok(payment);
+            }
+
+            timeout(Duration::from_secs(completion_timeout_secs.into()), async {
+                loop {
+                    let Some(event) = rx.recv().await else {
+                        return Err(SdkError::Generic("Event channel closed".to_string()));
+                    };
+
+                    let SdkEvent::PaymentSucceeded { payment } = event else {
+                        continue;
+                    };
+
+                    if is_payment_match(&payment, &identifier) {
+                        return Ok(payment);
+                    }
+                }
+            })
+            .await
+            .map_err(|_| SdkError::Generic("Timeout waiting for payment".to_string()))?
+        }
+        .await;
+
+        sdk.event_emitter.remove_internal_listener(&id).await;
+        result
     }
 }
 

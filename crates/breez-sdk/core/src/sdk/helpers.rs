@@ -20,6 +20,27 @@ use crate::{
     persist::{CachedAccountInfo, ObjectCacheRepository, Storage},
 };
 
+/// Looks up the payment matching `identifier` from storage, if present.
+///
+/// Used as a fast-path check by `wait_for_payment` in both runtime
+/// profiles — if the payment is already there and complete, callers can
+/// short-circuit before subscribing to events / starting a poll loop.
+/// Returns `Ok(None)` when the row doesn't exist; surfaces real storage
+/// errors so callers can bubble them rather than mask them.
+pub(crate) async fn maybe_get_payment_from_storage(
+    storage: &dyn Storage,
+    identifier: &WaitForPaymentIdentifier,
+) -> Result<Option<Payment>, SdkError> {
+    match identifier {
+        WaitForPaymentIdentifier::PaymentId(payment_id) => {
+            Ok(storage.get_payment_by_id(payment_id.clone()).await.ok())
+        }
+        WaitForPaymentIdentifier::PaymentRequest(payment_request) => Ok(storage
+            .get_payment_by_invoice(payment_request.clone())
+            .await?),
+    }
+}
+
 pub(crate) fn is_payment_match(payment: &Payment, identifier: &WaitForPaymentIdentifier) -> bool {
     match identifier {
         WaitForPaymentIdentifier::PaymentId(payment_id) => payment.id == *payment_id,

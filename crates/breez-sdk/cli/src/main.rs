@@ -9,7 +9,7 @@ use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
     EventListener, Network, SdkBuilder, SdkContextConfig, SdkEvent, Seed, StableBalanceConfig,
     StableBalanceToken, default_config, default_mysql_storage_config,
-    default_postgres_storage_config, new_shared_sdk_context,
+    default_postgres_storage_config, default_server_config, new_shared_sdk_context,
 };
 use clap::Parser;
 use command::{Command, execute_command};
@@ -78,6 +78,14 @@ struct Cli {
     /// Relying party ID for FIDO2 provider (default: keys.breez.technology)
     #[arg(long, requires = "passkey")]
     rpid: Option<String>,
+
+    /// Run in server mode (`background_tasks_enabled=false`).
+    ///
+    /// The SDK won't subscribe to spark-wallet events or run periodic sync —
+    /// drive `sync` yourself between operations. Useful for testing server-mode
+    /// behavior end-to-end against mainnet/regtest without standing up a server.
+    #[arg(long)]
+    server_mode: bool,
 }
 
 fn expand_path(path: &str) -> PathBuf {
@@ -124,10 +132,15 @@ impl EventListener for CliEventListener {
     }
 }
 
-#[allow(clippy::too_many_lines, clippy::arithmetic_side_effects)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::arithmetic_side_effects
+)]
 async fn run_interactive_mode(
     data_dir: PathBuf,
     network: Network,
+    server_mode: bool,
     account_number: Option<u32>,
     postgres_connection_string: Option<String>,
     mysql_connection_string: Option<String>,
@@ -153,7 +166,12 @@ async fn run_interactive_mode(
 
     let breez_api_key = std::env::var_os("BREEZ_API_KEY")
         .map(|var| var.into_string().expect("Expected valid API key string"));
-    let mut config = default_config(network);
+    let mut config = if server_mode {
+        println!("Server mode enabled. Run `sync` between operations.");
+        default_server_config(network)
+    } else {
+        default_config(network)
+    };
     config.api_key.clone_from(&breez_api_key);
     config.stable_balance_config = stable_balance_config;
 
@@ -321,6 +339,7 @@ async fn main() -> Result<(), anyhow::Error> {
     Box::pin(run_interactive_mode(
         data_dir,
         network,
+        cli.server_mode,
         cli.account_number,
         cli.postgres_connection_string,
         cli.mysql_connection_string,
