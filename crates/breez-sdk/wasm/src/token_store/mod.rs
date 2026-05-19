@@ -1,3 +1,6 @@
+#[cfg(all(test, not(feature = "browser-tests")))]
+mod tests;
+
 use macros::async_trait;
 use platform_utils::time::{Instant, SystemTime};
 use serde::{Deserialize, Serialize};
