@@ -633,7 +633,8 @@ async fn build_sender_postgres_context(conn_str: &str) -> Result<Arc<SdkContext>
     Ok(new_shared_sdk_context(SdkContextConfig {
         postgres_config: Some(pg_config),
         ..SdkContextConfig::new(Network::Regtest)
-    })?)
+    })
+    .await?)
 }
 
 /// Builds an `SdkContext` backed by a MySQL pool for the sender side, sized
@@ -646,7 +647,8 @@ async fn build_sender_mysql_context(conn_str: &str) -> Result<Arc<SdkContext>> {
     Ok(new_shared_sdk_context(SdkContextConfig {
         mysql_config: Some(my_config),
         ..SdkContextConfig::new(Network::Regtest)
-    })?)
+    })
+    .await?)
 }
 
 async fn initialize_sdk_pair(

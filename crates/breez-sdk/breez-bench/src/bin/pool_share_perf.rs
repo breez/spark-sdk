@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
 
     // Build one shared SdkContext up-front (or None for the per-instance path).
     let shared_context: Option<Arc<SdkContext>> = match args.mode {
-        Mode::Shared => Some(make_context(&args.postgres, args.max_pool_size)?),
+        Mode::Shared => Some(make_context(&args.postgres, args.max_pool_size).await?),
         Mode::Separate => None,
     };
 
@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
         builder = match (&shared_context, args.mode) {
             (Some(ctx), _) => builder.with_shared_context(Arc::clone(ctx)),
             (None, Mode::Separate) => {
-                let ctx = make_context(&args.postgres, args.max_pool_size)?;
+                let ctx = make_context(&args.postgres, args.max_pool_size).await?;
                 builder.with_shared_context(ctx)
             }
             (None, Mode::Shared) => unreachable!(),
@@ -191,13 +191,14 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn make_context(conn_str: &str, max_pool_size: u32) -> Result<Arc<SdkContext>> {
+async fn make_context(conn_str: &str, max_pool_size: u32) -> Result<Arc<SdkContext>> {
     let mut cfg = default_postgres_storage_config(conn_str.to_string());
     cfg.max_pool_size = max_pool_size;
     Ok(new_shared_sdk_context(SdkContextConfig {
         postgres_config: Some(cfg),
         ..SdkContextConfig::new(Network::Regtest)
-    })?)
+    })
+    .await?)
 }
 
 struct Snapshots {

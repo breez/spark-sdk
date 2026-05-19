@@ -515,10 +515,13 @@ impl SdkBuilder {
         // wiring reads from `context` for connection managers.
         let context = match self.context {
             Some(ctx) => ctx,
-            None => new_shared_sdk_context(SdkContextConfig {
-                api_key: self.config.api_key.clone(),
-                ..SdkContextConfig::new(self.config.network)
-            })?,
+            None => {
+                new_shared_sdk_context(SdkContextConfig {
+                    api_key: self.config.api_key.clone(),
+                    ..SdkContextConfig::new(self.config.network)
+                })
+                .await?
+            }
         };
 
         // Ensure the context's parameters are the same as the config parameters.
@@ -1123,6 +1126,7 @@ mod tests {
             api_key: Some("partner-key".to_string()),
             ..SdkContextConfig::new(Network::Regtest)
         })
+        .await
         .expect("regtest context");
         let err = SdkBuilder::new(config, test_seed())
             .with_shared_context(ctx)
@@ -1150,6 +1154,7 @@ mod tests {
             api_key: Some("wrong-key".to_string()),
             ..SdkContextConfig::new(Network::Mainnet)
         })
+        .await
         .expect("mainnet context");
         let err = SdkBuilder::new(config, test_seed())
             .with_shared_context(ctx)
