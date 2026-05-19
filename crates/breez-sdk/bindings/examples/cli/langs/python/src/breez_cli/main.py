@@ -15,14 +15,16 @@ from breez_sdk_spark import (
     KeySetType,
     Network,
     SdkBuilder,
+    SdkContextConfig,
     SdkEvent,
     Seed,
     StableBalanceConfig,
     StableBalanceToken,
-    create_postgres_connection_pool,
     default_config,
+    default_mysql_storage_config,
     default_postgres_storage_config,
     init_logging,
+    new_shared_sdk_context,
 )
 
 from breez_cli.commands import COMMAND_NAMES, build_command_registry
@@ -61,6 +63,7 @@ def expand_path(path: str) -> Path:
 )
 @click.option("--account-number", type=int, default=None, help="Account number for the Spark signer")
 @click.option("--postgres-connection-string", default=None, help="PostgreSQL connection string")
+@click.option("--mysql-connection-string", default=None, help="MySQL connection string")
 @click.option("--stable-balance-token", "stable_balance_tokens", multiple=True,
               help='Stable balance tokens in "LABEL:token_identifier" format (repeatable)')
 @click.option("--stable-balance-default-active-label", default=None,
@@ -72,12 +75,16 @@ def expand_path(path: str) -> Path:
 @click.option("--store-label", is_flag=True, default=False, help="Publish the label to Nostr (requires --passkey and --label)")
 @click.option("--rpid", default=None, help="Relying party ID for FIDO2 provider (requires --passkey)")
 async def main(data_dir, network, account_number, postgres_connection_string,
+               mysql_connection_string,
                stable_balance_tokens, stable_balance_default_active_label,
                stable_balance_threshold,
                passkey_provider, label, list_labels, store_label, rpid):
     """CLI client for Breez SDK with Spark."""
     data_dir = expand_path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
+
+    if postgres_connection_string and mysql_connection_string:
+        raise click.UsageError("--postgres-connection-string and --mysql-connection-string are mutually exclusive")
 
     # Validate passkey flag combinations
     if label and not passkey_provider:
@@ -129,9 +136,19 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     builder = SdkBuilder(config=config, seed=seed)
 
     if postgres_connection_string:
-        pg_config = default_postgres_storage_config(connection_string=postgres_connection_string)
-        pool = create_postgres_connection_pool(config=pg_config)
-        await builder.with_postgres_connection_pool(pool=pool)
+        context = new_shared_sdk_context(config=SdkContextConfig(
+            network=network_enum,
+            api_key=breez_api_key,
+            postgres_config=default_postgres_storage_config(connection_string=postgres_connection_string),
+        ))
+        await builder.with_shared_context(context=context)
+    elif mysql_connection_string:
+        context = new_shared_sdk_context(config=SdkContextConfig(
+            network=network_enum,
+            api_key=breez_api_key,
+            mysql_config=default_mysql_storage_config(connection_string=mysql_connection_string),
+        ))
+        await builder.with_shared_context(context=context)
     else:
         await builder.with_default_storage(storage_dir=str(data_dir))
 

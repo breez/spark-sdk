@@ -9,7 +9,9 @@ struct CliOptions {
     var network: String = "regtest"
     var accountNumber: UInt32?
     var postgresConnectionString: String?
-    var stableBalanceTokenIdentifier: String?
+    var mysqlConnectionString: String?
+    var stableBalanceTokens: [String] = []
+    var stableBalanceDefaultActiveLabel: String?
     var stableBalanceThreshold: UInt64?
     var passkey: String?
     var label: String?
@@ -36,9 +38,15 @@ func parseCliFlags() -> CliOptions {
         case "--postgres-connection-string":
             i += 1
             if i < args.count { opts.postgresConnectionString = args[i] }
-        case "--stable-balance-token-identifier":
+        case "--mysql-connection-string":
             i += 1
-            if i < args.count { opts.stableBalanceTokenIdentifier = args[i] }
+            if i < args.count { opts.mysqlConnectionString = args[i] }
+        case "--stable-balance-token":
+            i += 1
+            if i < args.count { opts.stableBalanceTokens.append(args[i]) }
+        case "--stable-balance-default-active-label":
+            i += 1
+            if i < args.count { opts.stableBalanceDefaultActiveLabel = args[i] }
         case "--stable-balance-threshold":
             i += 1
             if i < args.count { opts.stableBalanceThreshold = UInt64(args[i]) }
@@ -204,13 +212,20 @@ let breezApiKey: String? = {
     return nil
 }()
 config.apiKey = breezApiKey
-if let tokenIdentifier = opts.stableBalanceTokenIdentifier {
+if !opts.stableBalanceTokens.isEmpty {
+    let tokens: [StableBalanceToken] = opts.stableBalanceTokens.map { s in
+        let parts = s.split(separator: ":", maxSplits: 1)
+        guard parts.count == 2 else {
+            fatalError("Invalid token format '\(s)', expected LABEL:token_identifier")
+        }
+        return StableBalanceToken(
+            label: String(parts[0]),
+            tokenIdentifier: String(parts[1])
+        )
+    }
     config.stableBalanceConfig = StableBalanceConfig(
-        tokens: [StableBalanceToken(
-            label: "USDB",
-            tokenIdentifier: tokenIdentifier
-        )],
-        defaultActiveLabel: "USDB",
+        tokens: tokens,
+        defaultActiveLabel: opts.stableBalanceDefaultActiveLabel,
         thresholdSats: opts.stableBalanceThreshold,
         maxSlippageBps: nil
     )
@@ -239,8 +254,19 @@ if let passkeyStr = opts.passkey {
 // Build SDK
 let builder = SdkBuilder(config: config, seed: seed)
 if let connectionString = opts.postgresConnectionString {
-    let pool = try createPostgresConnectionPool(config: defaultPostgresStorageConfig(connectionString: connectionString))
-    await builder.withPostgresConnectionPool(pool: pool)
+    let context = try newSharedSdkContext(config: SdkContextConfig(
+        network: network,
+        apiKey: breezApiKey,
+        postgresConfig: defaultPostgresStorageConfig(connectionString: connectionString)
+    ))
+    await builder.withSharedContext(context: context)
+} else if let connectionString = opts.mysqlConnectionString {
+    let context = try newSharedSdkContext(config: SdkContextConfig(
+        network: network,
+        apiKey: breezApiKey,
+        mysqlConfig: defaultMysqlStorageConfig(connectionString: connectionString)
+    ))
+    await builder.withSharedContext(context: context)
 } else {
     await builder.withDefaultStorage(storageDir: resolvedDir)
 }
