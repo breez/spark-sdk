@@ -546,11 +546,11 @@ class PostgresTokenStore {
         if (outputsToRemove && outputsToRemove.length > 0) {
           for (const [txHash, vout] of outputsToRemove) {
             const result = await client.query(
-              "DELETE FROM brz_token_outputs WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3 RETURNING output_id",
+              "DELETE FROM brz_token_outputs WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3 RETURNING id",
               [this.identity, txHash, vout]
             );
             if (result.rows.length > 0) {
-              const outputId = result.rows[0].output_id;
+              const outputId = result.rows[0].id;
               await client.query(
                 "INSERT INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING",
                 [this.identity, outputId]

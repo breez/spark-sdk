@@ -548,13 +548,13 @@ class MysqlTokenStore {
         if (outputsToRemove && outputsToRemove.length > 0) {
           for (const [txHash, vout] of outputsToRemove) {
             const [rows] = await conn.query(
-              "SELECT output_id FROM brz_token_outputs WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
+              "SELECT id FROM brz_token_outputs WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
               [this.identity, txHash, vout]
             );
             if (rows.length > 0) {
-              const outputId = rows[0].output_id;
+              const outputId = rows[0].id;
               await conn.query(
-                "DELETE FROM brz_token_outputs WHERE user_id = ? AND output_id = ?",
+                "DELETE FROM brz_token_outputs WHERE user_id = ? AND id = ?",
                 [this.identity, outputId]
               );
               await conn.query(
