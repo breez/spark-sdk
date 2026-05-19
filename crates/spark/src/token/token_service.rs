@@ -683,7 +683,9 @@ impl TokenService {
                 receiver_outputs: prim_receiver_outputs,
                 operator_identity_public_keys: self.get_operator_identity_public_keys()?,
                 network: u32::try_from(self.network.to_proto_network() as i32)
-                    .expect("network proto value is non-negative"),
+                    .map_err(|_| {
+                        ServiceError::Generic("network proto value is negative".to_string())
+                    })?,
                 validity_duration_seconds: self.tokens_config.transaction_validity_duration_seconds,
                 client_created_timestamp_unix_micros,
                 withdraw_bond_sats: self.tokens_config.expected_withdraw_bond_sats,
