@@ -333,81 +333,16 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         Ok(result)
     }
 
-    async fn insert_token_outputs(
+    async fn update_token_outputs(
         &self,
-        token_outputs: &TokenOutputs,
-    ) -> Result<(), TokenOutputServiceError> {
-        let mut token_outputs_state = self.token_outputs.lock().await;
-        let now = SystemTime::now();
-
-        // Remove inserted output IDs from spent_output_ids (output returned to us)
-        for output in &token_outputs.outputs {
-            if token_outputs_state
-                .spent_output_ids
-                .remove(&output.output.id)
-                .is_some()
-            {
-                trace!(
-                    "Removed output {} from spent_output_ids (receiving it back)",
-                    output.output.id
-                );
-            }
-        }
-
-        match token_outputs_state
-            .available_token_outputs
-            .get_mut(&token_outputs.metadata.identifier)
-        {
-            Some(existing_token_outputs) => {
-                for o in &token_outputs.outputs {
-                    if !existing_token_outputs.outputs.contains_key(&o.output.id) {
-                        existing_token_outputs.outputs.insert(
-                            o.output.id.clone(),
-                            StoredTokenOutput {
-                                output: o.clone(),
-                                added_at: now,
-                            },
-                        );
-                    }
-                }
-            }
-            None => {
-                let mut outputs_map = HashMap::new();
-                for o in &token_outputs.outputs {
-                    outputs_map.insert(
-                        o.output.id.clone(),
-                        StoredTokenOutput {
-                            output: o.clone(),
-                            added_at: now,
-                        },
-                    );
-                }
-                token_outputs_state.available_token_outputs.insert(
-                    token_outputs.metadata.identifier.clone(),
-                    AvailableTokenOutputs {
-                        metadata: token_outputs.metadata.clone(),
-                        outputs: outputs_map,
-                    },
-                );
-            }
-        }
-
-        trace!(
-            "Inserted {} token outputs into the local state",
-            token_outputs.outputs.len()
-        );
-        Ok(())
-    }
-
-    async fn remove_token_outputs(
-        &self,
-        prev_tx_refs: &[(String, u32)],
+        outputs_to_remove: &[(String, u32)],
+        outputs_to_add: Option<&TokenOutputs>,
     ) -> Result<(), TokenOutputServiceError> {
         let mut state = self.token_outputs.lock().await;
         let now = SystemTime::now();
 
-        for (tx_hash, vout) in prev_tx_refs {
-            // Find and remove the output matching this (prev_tx_hash, prev_tx_vout)
+        // 1. Remove spent outputs by (prev_tx_hash, prev_tx_vout) and mark as spent.
+        for (tx_hash, vout) in outputs_to_remove {
             for available in state.available_token_outputs.values_mut() {
                 let output_id = available
                     .outputs
@@ -416,17 +351,75 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                     .map(|s| s.output.output.id.clone());
                 if let Some(id) = output_id {
                     available.outputs.remove(&id);
-                    // Mark as spent to prevent re-adding during refresh
                     state.spent_output_ids.insert(id, now);
                     break;
                 }
             }
         }
 
-        trace!(
-            "Removed {} token outputs from the local state",
-            prev_tx_refs.len()
-        );
+        // 2. Insert new outputs.
+        if let Some(token_outputs) = outputs_to_add {
+            // Clear spent status for outputs being (re-)added.
+            for output in &token_outputs.outputs {
+                if state.spent_output_ids.remove(&output.output.id).is_some() {
+                    trace!(
+                        "Removed output {} from spent_output_ids (receiving it back)",
+                        output.output.id
+                    );
+                }
+            }
+
+            match state
+                .available_token_outputs
+                .get_mut(&token_outputs.metadata.identifier)
+            {
+                Some(existing) => {
+                    for o in &token_outputs.outputs {
+                        if !existing.outputs.contains_key(&o.output.id) {
+                            existing.outputs.insert(
+                                o.output.id.clone(),
+                                StoredTokenOutput {
+                                    output: o.clone(),
+                                    added_at: now,
+                                },
+                            );
+                        }
+                    }
+                }
+                None => {
+                    let mut outputs_map = HashMap::new();
+                    for o in &token_outputs.outputs {
+                        outputs_map.insert(
+                            o.output.id.clone(),
+                            StoredTokenOutput {
+                                output: o.clone(),
+                                added_at: now,
+                            },
+                        );
+                    }
+                    state.available_token_outputs.insert(
+                        token_outputs.metadata.identifier.clone(),
+                        AvailableTokenOutputs {
+                            metadata: token_outputs.metadata.clone(),
+                            outputs: outputs_map,
+                        },
+                    );
+                }
+            }
+
+            trace!(
+                "Inserted {} token outputs into the local state",
+                token_outputs.outputs.len()
+            );
+        }
+
+        if !outputs_to_remove.is_empty() {
+            trace!(
+                "Removed {} token outputs from the local state",
+                outputs_to_remove.len()
+            );
+        }
+
         Ok(())
     }
 

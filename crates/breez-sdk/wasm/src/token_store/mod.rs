@@ -426,33 +426,24 @@ impl TokenOutputStore for WasmTokenStore {
         wasm_result.try_into()
     }
 
-    async fn insert_token_outputs(
+    async fn update_token_outputs(
         &self,
-        token_outputs: &TokenOutputs,
+        outputs_to_remove: &[(String, u32)],
+        outputs_to_add: Option<&TokenOutputs>,
     ) -> Result<(), TokenOutputServiceError> {
-        let wasm_outputs: WasmTokenOutputs = token_outputs.into();
-        let js_value = serde_wasm_bindgen::to_value(&wasm_outputs)
+        let remove_js = serde_wasm_bindgen::to_value(&outputs_to_remove.to_vec())
             .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
+        let add_js = match outputs_to_add {
+            Some(to) => {
+                let wasm_outputs: WasmTokenOutputs = to.into();
+                serde_wasm_bindgen::to_value(&wasm_outputs)
+                    .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?
+            }
+            None => JsValue::NULL,
+        };
         let promise = self
             .token_store
-            .insert_token_outputs(js_value)
-            .map_err(js_error_to_token_error)?;
-        JsFuture::from(promise)
-            .await
-            .map_err(js_error_to_token_error)?;
-        Ok(())
-    }
-
-    async fn remove_token_outputs(
-        &self,
-        prev_tx_refs: &[(String, u32)],
-    ) -> Result<(), TokenOutputServiceError> {
-        let refs: Vec<(String, u32)> = prev_tx_refs.to_vec();
-        let js_value = serde_wasm_bindgen::to_value(&refs)
-            .map_err(|e| TokenOutputServiceError::Generic(e.to_string()))?;
-        let promise = self
-            .token_store
-            .remove_token_outputs(js_value)
+            .update_token_outputs(remove_js, add_js)
             .map_err(js_error_to_token_error)?;
         JsFuture::from(promise)
             .await
@@ -634,7 +625,7 @@ export interface TokenStore {
     listTokensOutputs: () => Promise<WasmTokenOutputsPerStatus[]>;
     getTokenBalances: () => Promise<WasmTokenBalance[]>;
     getTokenOutputs: (filter: WasmGetTokenOutputsFilter) => Promise<WasmTokenOutputsPerStatus>;
-    insertTokenOutputs: (tokenOutputs: WasmTokenOutputs) => Promise<void>;
+    updateTokenOutputs: (outputsToRemove: [string, number][], outputsToAdd: WasmTokenOutputs | null) => Promise<void>;
     reserveTokenOutputs: (
         tokenIdentifier: string,
         target: WasmReservationTarget,
@@ -668,16 +659,11 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = getTokenOutputs, catch)]
     pub fn get_token_outputs(this: &TokenStoreJs, filter: JsValue) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = insertTokenOutputs, catch)]
-    pub fn insert_token_outputs(
+    #[wasm_bindgen(structural, method, js_name = updateTokenOutputs, catch)]
+    pub fn update_token_outputs(
         this: &TokenStoreJs,
-        token_outputs: JsValue,
-    ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = removeTokenOutputs, catch)]
-    pub fn remove_token_outputs(
-        this: &TokenStoreJs,
-        prev_tx_refs: JsValue,
+        outputs_to_remove: JsValue,
+        outputs_to_add: JsValue,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = reserveTokenOutputs, catch)]

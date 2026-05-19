@@ -635,64 +635,22 @@ impl TokenOutputStore for PostgresTokenStore {
     }
 
     #[allow(clippy::cast_possible_wrap)]
-    async fn insert_token_outputs(
+    async fn update_token_outputs(
         &self,
-        token_outputs: &TokenOutputs,
+        outputs_to_remove: &[(String, u32)],
+        outputs_to_add: Option<&TokenOutputs>,
     ) -> Result<(), TokenOutputServiceError> {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        // Upsert metadata
-        self.upsert_metadata(&tx, &token_outputs.metadata).await?;
-
-        // Remove inserted output IDs from spent markers (output returned to us)
-        let output_ids: Vec<String> = token_outputs
-            .outputs
-            .iter()
-            .map(|o| o.output.id.clone())
-            .collect();
-        if !output_ids.is_empty() {
-            tx.execute(
-                "DELETE FROM brz_token_spent_outputs WHERE user_id = $1 AND output_id = ANY($2)",
-                &[&self.identity, &output_ids],
-            )
-            .await
-            .map_err(map_err)?;
-        }
-
-        // Insert outputs where id not already present
-        for output in &token_outputs.outputs {
-            self.insert_single_output(&tx, &token_outputs.metadata.identifier, output)
-                .await?;
-        }
-
-        tx.commit().await.map_err(map_err)?;
-
-        trace!(
-            "Inserted {} token outputs into PostgreSQL",
-            token_outputs.outputs.len()
-        );
-        Ok(())
-    }
-
-    async fn remove_token_outputs(
-        &self,
-        prev_tx_refs: &[(String, u32)],
-    ) -> Result<(), TokenOutputServiceError> {
-        if prev_tx_refs.is_empty() {
-            return Ok(());
-        }
-
-        let mut client = self.pool.get().await.map_err(map_err)?;
-        let tx = client.transaction().await.map_err(map_err)?;
-
-        for (tx_hash, vout) in prev_tx_refs {
+        // 1. Remove spent outputs and mark them as spent.
+        for (tx_hash, vout) in outputs_to_remove {
             let vout_i32 = (*vout).cast_signed();
             let row = tx
                 .query_opt(
-                    "DELETE FROM token_outputs \
+                    "DELETE FROM brz_token_outputs \
                      WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3 \
-                     RETURNING output_id",
+                     RETURNING id",
                     &[&self.identity, tx_hash, &vout_i32],
                 )
                 .await
@@ -701,7 +659,7 @@ impl TokenOutputStore for PostgresTokenStore {
             if let Some(row) = row {
                 let output_id: String = row.get(0);
                 tx.execute(
-                    "INSERT INTO token_spent_outputs (user_id, output_id, spent_at) \
+                    "INSERT INTO brz_token_spent_outputs (user_id, output_id, spent_at) \
                      VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING",
                     &[&self.identity, &output_id],
                 )
@@ -710,12 +668,32 @@ impl TokenOutputStore for PostgresTokenStore {
             }
         }
 
-        tx.commit().await.map_err(map_err)?;
+        // 2. Insert new outputs.
+        if let Some(token_outputs) = outputs_to_add {
+            self.upsert_metadata(&tx, &token_outputs.metadata).await?;
 
-        trace!(
-            "Removed {} token outputs from PostgreSQL",
-            prev_tx_refs.len()
-        );
+            // Clear spent status for outputs being (re-)added.
+            let output_ids: Vec<String> = token_outputs
+                .outputs
+                .iter()
+                .map(|o| o.output.id.clone())
+                .collect();
+            if !output_ids.is_empty() {
+                tx.execute(
+                    "DELETE FROM brz_token_spent_outputs WHERE user_id = $1 AND output_id = ANY($2)",
+                    &[&self.identity, &output_ids],
+                )
+                .await
+                .map_err(map_err)?;
+            }
+
+            for output in &token_outputs.outputs {
+                self.insert_single_output(&tx, &token_outputs.metadata.identifier, output)
+                    .await?;
+            }
+        }
+
+        tx.commit().await.map_err(map_err)?;
         Ok(())
     }
 
@@ -2037,13 +2015,15 @@ mod tests {
         );
         fx.b.finalize_reservation(&res_b_swap.id).await.unwrap();
 
-        // --- insert_token_outputs on A only inserts into A's namespace ---
+        // --- update_token_outputs on A only inserts into A's namespace ---
         // Use identifier_no=2 so the metadata identifier ("token-2") collides
         // with B's existing entry — that exercises per-tenant `brz_token_metadata`:
         // both tenants must end up with their own row, and A's outputs/balance
         // for "token-2" must differ from B's.
         let a_token2 = shared_tests::create_token_outputs(2, vec![999]);
-        fx.a.insert_token_outputs(&a_token2).await.unwrap();
+        fx.a.update_token_outputs(&[], Some(&a_token2))
+            .await
+            .unwrap();
 
         let bal_a = fx.a.get_token_balances().await.unwrap();
         let bal_a_t2 = bal_a

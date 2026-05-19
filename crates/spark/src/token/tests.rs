@@ -174,7 +174,7 @@ pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
 
     // Insert outputs for a new token
     let token2 = create_token_outputs(2, vec![500, 1000]);
-    let result = store.insert_token_outputs(&token2).await;
+    let result = store.update_token_outputs(&[], Some(&token2)).await;
     assert!(result.is_ok());
 
     // Verify there are now two tokens
@@ -183,7 +183,9 @@ pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
 
     // Insert additional outputs for token1
     let token1_additional = create_token_outputs(1, vec![400, 500]);
-    let result = store.insert_token_outputs(&token1_additional).await;
+    let result = store
+        .update_token_outputs(&[], Some(&token1_additional))
+        .await;
     assert!(result.is_ok());
 
     // Verify token1 now has 5 outputs
@@ -195,7 +197,9 @@ pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
 
     // Insert some duplicate outputs for token2 (should not duplicate)
     let token2_duplicate = create_token_outputs(2, vec![500, 750, 1000]);
-    let result = store.insert_token_outputs(&token2_duplicate).await;
+    let result = store
+        .update_token_outputs(&[], Some(&token2_duplicate))
+        .await;
     assert!(result.is_ok());
 
     // Verify token2 now has 3 unique outputs
@@ -1345,7 +1349,10 @@ pub async fn test_set_tokens_outputs_skipped_after_swap_completes_during_refresh
 
     // Insert new outputs (simulating swap result)
     let token1_new = create_token_outputs(1, vec![300]);
-    store.insert_token_outputs(&token1_new).await.unwrap();
+    store
+        .update_token_outputs(&[], Some(&token1_new))
+        .await
+        .unwrap();
 
     // Try to set with stale data - should be skipped because swap completed during refresh
     let token1_stale = create_token_outputs(1, vec![100, 200]);
@@ -1379,7 +1386,10 @@ pub async fn test_insert_outputs_preserved_by_set_tokens_outputs(store: &dyn Tok
 
     // While refresh is in progress, a new output arrives
     let token1_new = create_token_outputs(1, vec![200]);
-    store.insert_token_outputs(&token1_new).await.unwrap();
+    store
+        .update_token_outputs(&[], Some(&token1_new))
+        .await
+        .unwrap();
 
     // Refresh completes with stale data (doesn't include the 200 output)
     let token1_stale = create_token_outputs(1, vec![100]);
@@ -1487,7 +1497,10 @@ pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn To
 
     // Insert new outputs (simulating swap result)
     let token1_new = create_token_outputs(1, vec![600]);
-    store.insert_token_outputs(&token1_new).await.unwrap();
+    store
+        .update_token_outputs(&[], Some(&token1_new))
+        .await
+        .unwrap();
 
     // Verify only the new output exists
     let stored = store
@@ -1536,7 +1549,10 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
 
     // Insert the same output back (simulating receiving it back)
     let token1_back = create_token_outputs(1, vec![100]);
-    store.insert_token_outputs(&token1_back).await.unwrap();
+    store
+        .update_token_outputs(&[], Some(&token1_back))
+        .await
+        .unwrap();
 
     // Verify it's available
     let stored = store
@@ -1571,7 +1587,7 @@ pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputSto
 
     // Remove the output at (tx-hash-1, 1)
     store
-        .remove_token_outputs(&[("tx-hash-1".to_string(), 1)])
+        .update_token_outputs(&[("tx-hash-1".to_string(), 1)], None)
         .await
         .unwrap();
 
@@ -1600,7 +1616,7 @@ pub async fn test_remove_token_outputs_prevents_refresh_readd(store: &dyn TokenO
 
     // Remove the output at (tx-hash-0, 0)
     store
-        .remove_token_outputs(&[("tx-hash-0".to_string(), 0)])
+        .update_token_outputs(&[("tx-hash-0".to_string(), 0)], None)
         .await
         .unwrap();
 

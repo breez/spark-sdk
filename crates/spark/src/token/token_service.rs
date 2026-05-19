@@ -153,19 +153,17 @@ impl TokenService {
         transaction: &TokenTransaction,
         identity_public_key: &PublicKey,
     ) -> Result<(), ServiceError> {
-        // 1. Remove spent inputs so the balance drops immediately.
-        if let TokenInputs::Transfer(ref transfer_input) = transaction.inputs {
-            let spent_refs: Vec<(String, u32)> = transfer_input
-                .outputs_to_spend
-                .iter()
-                .map(|o| (o.prev_token_tx_hash.clone(), o.prev_token_tx_vout))
-                .collect();
-            if !spent_refs.is_empty() {
-                self.token_output_service
-                    .remove_token_outputs(&spent_refs)
-                    .await?;
-            }
-        }
+        // 1. Collect spent input refs.
+        let spent_refs: Vec<(String, u32)> =
+            if let TokenInputs::Transfer(ref transfer_input) = transaction.inputs {
+                transfer_input
+                    .outputs_to_spend
+                    .iter()
+                    .map(|o| (o.prev_token_tx_hash.clone(), o.prev_token_tx_vout))
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
         // 2. Collect outputs that belong to us.
         let our_outputs: Vec<TokenOutputWithPrevOut> = transaction
@@ -180,8 +178,8 @@ impl TokenService {
             })
             .collect();
 
-        // 3. Insert our new outputs (with metadata) into the local store.
-        if let Some(token_id) = our_outputs
+        // 3. Build the outputs-to-add bundle (with metadata) if we have any.
+        let outputs_to_add = if let Some(token_id) = our_outputs
             .first()
             .map(|o| o.output.token_identifier.clone())
         {
@@ -193,13 +191,18 @@ impl TokenService {
                 .ok_or_else(|| {
                     ServiceError::Generic(format!("Metadata not found for token {token_id}"))
                 })?;
-            self.token_output_service
-                .insert_token_outputs(&TokenOutputs {
-                    metadata,
-                    outputs: our_outputs,
-                })
-                .await?;
-        }
+            Some(TokenOutputs {
+                metadata,
+                outputs: our_outputs,
+            })
+        } else {
+            None
+        };
+
+        // 4. Atomically remove spent inputs and insert new outputs.
+        self.token_output_service
+            .update_token_outputs(&spent_refs, outputs_to_add.as_ref())
+            .await?;
 
         Ok(())
     }
@@ -646,10 +649,13 @@ impl TokenService {
             })
             .collect::<Vec<_>>();
         self.token_output_service
-            .insert_token_outputs(&TokenOutputs {
-                metadata: reservation.token_outputs.metadata,
-                outputs,
-            })
+            .update_token_outputs(
+                &[],
+                Some(&TokenOutputs {
+                    metadata: reservation.token_outputs.metadata,
+                    outputs,
+                }),
+            )
             .await?;
 
         Ok(token_transaction)
@@ -809,10 +815,13 @@ impl TokenService {
                 })
                 .collect::<Vec<_>>();
             self.token_output_service
-                .insert_token_outputs(&TokenOutputs {
-                    metadata: reservation.token_outputs.metadata,
-                    outputs,
-                })
+                .update_token_outputs(
+                    &[],
+                    Some(&TokenOutputs {
+                        metadata: reservation.token_outputs.metadata,
+                        outputs,
+                    }),
+                )
                 .await?;
         }
 

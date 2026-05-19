@@ -533,56 +533,49 @@ class PostgresTokenStore {
    * Insert token outputs (upsert metadata, insert outputs with ON CONFLICT DO NOTHING).
    * @param {{metadata: Object, outputs: Array}} tokenOutputs
    */
-  async insertTokenOutputs(tokenOutputs) {
-    try {
-      await this._withTransaction(async (client) => {
-        await this._upsertMetadata(client, tokenOutputs.metadata);
-
-        const outputIds = tokenOutputs.outputs.map((o) => o.output.id);
-        if (outputIds.length > 0) {
-          await client.query(
-            "DELETE FROM brz_token_spent_outputs WHERE user_id = $1 AND output_id = ANY($2)",
-            [this.identity, outputIds]
-          );
-        }
-
-        for (const output of tokenOutputs.outputs) {
-          await this._insertSingleOutput(
-            client,
-            tokenOutputs.metadata.identifier,
-            output
-          );
-        }
-      });
-    } catch (error) {
-      if (error instanceof TokenStoreError) throw error;
-      throw new TokenStoreError(
-        `Failed to insert token outputs: ${error.message}`,
-        error
-      );
-    }
-  }
-
   /**
-   * Remove outputs identified by their previous transaction coordinates
-   * and mark them as spent so that a concurrent refresh will not re-add them.
-   * @param {Array<[string, number]>} prevTxRefs - Array of [prevTxHash, prevTxVout] tuples
+   * Atomically remove spent outputs and insert new outputs.
+   * @param {Array<[string, number]>} outputsToRemove - Array of [prevTxHash, prevTxVout] tuples
+   * @param {Object|null} outputsToAdd - Token outputs to insert (with metadata)
    * @returns {Promise<void>}
    */
-  async removeTokenOutputs(prevTxRefs) {
-    if (!prevTxRefs || prevTxRefs.length === 0) return;
+  async updateTokenOutputs(outputsToRemove, outputsToAdd) {
     try {
       await this._withTransaction(async (client) => {
-        for (const [txHash, vout] of prevTxRefs) {
-          const result = await client.query(
-            "DELETE FROM token_outputs WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3 RETURNING output_id",
-            [this.identity, txHash, vout]
-          );
-          if (result.rows.length > 0) {
-            const outputId = result.rows[0].output_id;
+        // 1. Remove spent outputs and mark as spent.
+        if (outputsToRemove && outputsToRemove.length > 0) {
+          for (const [txHash, vout] of outputsToRemove) {
+            const result = await client.query(
+              "DELETE FROM brz_token_outputs WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3 RETURNING output_id",
+              [this.identity, txHash, vout]
+            );
+            if (result.rows.length > 0) {
+              const outputId = result.rows[0].output_id;
+              await client.query(
+                "INSERT INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING",
+                [this.identity, outputId]
+              );
+            }
+          }
+        }
+
+        // 2. Insert new outputs.
+        if (outputsToAdd) {
+          await this._upsertMetadata(client, outputsToAdd.metadata);
+
+          const outputIds = outputsToAdd.outputs.map((o) => o.output.id);
+          if (outputIds.length > 0) {
             await client.query(
-              "INSERT INTO token_spent_outputs (user_id, output_id, spent_at) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING",
-              [this.identity, outputId]
+              "DELETE FROM brz_token_spent_outputs WHERE user_id = $1 AND output_id = ANY($2)",
+              [this.identity, outputIds]
+            );
+          }
+
+          for (const output of outputsToAdd.outputs) {
+            await this._insertSingleOutput(
+              client,
+              outputsToAdd.metadata.identifier,
+              output
             );
           }
         }
@@ -590,7 +583,7 @@ class PostgresTokenStore {
     } catch (error) {
       if (error instanceof TokenStoreError) throw error;
       throw new TokenStoreError(
-        `Failed to remove token outputs: ${error.message}`,
+        `Failed to update token outputs: ${error.message}`,
         error
       );
     }
