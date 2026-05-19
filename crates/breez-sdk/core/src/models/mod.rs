@@ -496,7 +496,7 @@ impl FromStr for SparkHtlcStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Network {
     Mainnet,

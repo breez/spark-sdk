@@ -164,7 +164,7 @@ async fn run_interactive_mode(
             .map_err(|e| anyhow!("PRF initialization failed: {e}"))?;
         passkey::resolve_passkey_seed(
             prf,
-            breez_api_key,
+            breez_api_key.clone(),
             config.label,
             config.list_labels,
             config.store_label,
@@ -181,12 +181,14 @@ async fn run_interactive_mode(
     let mut sdk_builder = SdkBuilder::new(config, seed);
     if let Some(connection_string) = postgres_connection_string {
         let context = new_shared_sdk_context(SdkContextConfig {
+            api_key: breez_api_key.clone(),
             postgres_config: Some(default_postgres_storage_config(connection_string)),
             ..SdkContextConfig::new(network)
         })?;
         sdk_builder = sdk_builder.with_shared_context(context);
     } else if let Some(connection_string) = mysql_connection_string {
         let context = new_shared_sdk_context(SdkContextConfig {
+            api_key: breez_api_key.clone(),
             mysql_config: Some(default_mysql_storage_config(connection_string)),
             ..SdkContextConfig::new(network)
         })?;

@@ -42,6 +42,12 @@ pub struct SdkContext {
     /// All SDKs sharing the context reuse one in-memory JWT and one
     /// background refresh task.
     pub(crate) jwt_header_provider: Option<Arc<BreezJwtHeaderProvider>>,
+    /// The network the context was built for. Kept so `SdkBuilder::build()`
+    /// can cross-check against `Config.network` and refuse a mismatch.
+    pub(crate) network: Network,
+    /// The api key the context was built with. Kept so `SdkBuilder::build()`
+    /// can cross-check against `Config.api_key` and refuse a mismatch.
+    pub(crate) api_key: Option<String>,
     pub(crate) connection_manager: Arc<dyn ConnectionManager>,
     #[cfg(feature = "postgres")]
     pub(crate) postgres_pool: Option<Arc<PostgresConnectionPool>>,
@@ -133,11 +139,12 @@ pub fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext
     // only when an API key is configured. Skip the provider entirely otherwise
     // — there is no token to fetch. SDKs sharing this context will share the
     // one in-memory JWT and one background refresh task.
+    let api_key = config.api_key;
     let jwt_header_provider = if matches!(config.network, Network::Mainnet)
-        && let Some(api_key) = config.api_key
+        && let Some(ref key) = api_key
     {
         Some(BreezJwtHeaderProvider::new(
-            api_key,
+            key.clone(),
             None,
             http_client.clone(),
         ))
@@ -169,6 +176,8 @@ pub fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext
         http_client,
         breez_server,
         jwt_header_provider,
+        network: config.network,
+        api_key,
         connection_manager,
         #[cfg(feature = "postgres")]
         postgres_pool,
@@ -191,9 +200,39 @@ mod tests {
         let _so = Arc::clone(&ctx.connection_manager);
         // Default config has no api_key, so no JWT provider is constructed.
         assert!(ctx.jwt_header_provider.is_none());
+        // Network and api_key are stored verbatim for the builder cross-check.
+        assert_eq!(ctx.network, Network::Regtest);
+        assert!(ctx.api_key.is_none());
         #[cfg(feature = "postgres")]
         assert!(ctx.postgres_pool.is_none());
         #[cfg(feature = "mysql")]
         assert!(ctx.mysql_pool.is_none());
+    }
+
+    #[tokio::test]
+    async fn mainnet_with_api_key_constructs_jwt_provider_and_stores_inputs() {
+        let ctx = new_shared_sdk_context(SdkContextConfig {
+            api_key: Some("test-key".to_string()),
+            ..SdkContextConfig::new(Network::Mainnet)
+        })
+        .expect("mainnet context");
+        assert!(ctx.jwt_header_provider.is_some());
+        assert_eq!(ctx.network, Network::Mainnet);
+        assert_eq!(ctx.api_key.as_deref(), Some("test-key"));
+    }
+
+    #[tokio::test]
+    async fn regtest_with_api_key_skips_jwt_but_still_stores_inputs() {
+        let ctx = new_shared_sdk_context(SdkContextConfig {
+            api_key: Some("test-key".to_string()),
+            ..SdkContextConfig::new(Network::Regtest)
+        })
+        .expect("regtest context");
+        // Regtest never gets a JWT provider — there's no Breez endpoint to
+        // mint a token. But the inputs are still stored so the builder
+        // cross-check can detect a network mismatch.
+        assert!(ctx.jwt_header_provider.is_none());
+        assert_eq!(ctx.network, Network::Regtest);
+        assert_eq!(ctx.api_key.as_deref(), Some("test-key"));
     }
 }

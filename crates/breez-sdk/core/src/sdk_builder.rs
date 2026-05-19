@@ -521,6 +521,13 @@ impl SdkBuilder {
             })?,
         };
 
+        // Ensure the context's parameters are the same as the config parameters.
+        if context.network != self.config.network || context.api_key != self.config.api_key {
+            return Err(SdkError::Generic(
+                "SdkContext network/api_key do not match SdkConfig".to_string(),
+            ));
+        }
+
         // Resolve the DB pools from at most one source: the legacy
         // `with_postgres_connection_pool` / `with_mysql_connection_pool`
         // setters take precedence-by-exclusion over a pool carried by the
@@ -1104,9 +1111,64 @@ mod tests {
         }
     }
 
+    /// Mainnet SDK with a caller-supplied Regtest context errors at `build()`
+    /// — the context has no JWT provider so the partner JWT would be silently
+    /// disabled.
+    #[tokio::test]
+    async fn build_errors_on_network_mismatch() {
+        use crate::{SdkContextConfig, new_shared_sdk_context};
+        let mut config = default_config(Network::Mainnet);
+        config.api_key = Some("partner-key".to_string());
+        let ctx = new_shared_sdk_context(SdkContextConfig {
+            api_key: Some("partner-key".to_string()),
+            ..SdkContextConfig::new(Network::Regtest)
+        })
+        .expect("regtest context");
+        let err = SdkBuilder::new(config, test_seed())
+            .with_shared_context(ctx)
+            .with_default_storage("/tmp/breez-sdk-test-network-mismatch".to_string())
+            .build()
+            .await
+            .err()
+            .expect("expected network-mismatch error");
+        assert!(
+            err.to_string().contains("network/api_key do not match"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Mainnet SDK with a Mainnet context whose `api_key` differs from
+    /// `Config`'s errors at `build()` — the JWT provider would sign with a
+    /// different key than the integrator intended.
+    #[tokio::test]
+    #[allow(clippy::manual_assert)]
+    async fn build_errors_on_api_key_mismatch() {
+        use crate::{SdkContextConfig, new_shared_sdk_context};
+        let mut config = default_config(Network::Mainnet);
+        config.api_key = Some("intended-key".to_string());
+        let ctx = new_shared_sdk_context(SdkContextConfig {
+            api_key: Some("wrong-key".to_string()),
+            ..SdkContextConfig::new(Network::Mainnet)
+        })
+        .expect("mainnet context");
+        let err = SdkBuilder::new(config, test_seed())
+            .with_shared_context(ctx)
+            .with_default_storage("/tmp/breez-sdk-test-key-mismatch".to_string())
+            .build()
+            .await
+            .err()
+            .expect("expected api_key-mismatch error");
+        assert!(
+            err.to_string().contains("network/api_key do not match"),
+            "unexpected error: {err}"
+        );
+    }
+
     fn test_seed() -> crate::Seed {
         crate::Seed::Mnemonic {
-            mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+                       abandon abandon about"
+                .to_string(),
             passphrase: None,
         }
     }
