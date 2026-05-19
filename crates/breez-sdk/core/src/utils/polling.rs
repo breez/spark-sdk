@@ -58,13 +58,7 @@ where
             Err(e) => last_error = Some(e),
         }
 
-        let elapsed = started.elapsed();
-        if elapsed >= schedule.timeout {
-            return Err(last_error
-                .unwrap_or_else(|| SdkError::Generic("Timeout while polling".to_string())));
-        }
-
-        let remaining = schedule.timeout.saturating_sub(elapsed);
+        let remaining = schedule.timeout.saturating_sub(started.elapsed());
         let sleep_for = delay.min(remaining);
         match shutdown.as_mut() {
             Some(rx) => tokio::select! {
@@ -77,6 +71,11 @@ where
                 () = sleep(sleep_for) => {},
             },
             None => sleep(sleep_for).await,
+        }
+
+        if started.elapsed() >= schedule.timeout {
+            return Err(last_error
+                .unwrap_or_else(|| SdkError::Generic("Timeout while polling".to_string())));
         }
 
         delay = delay.saturating_mul(2).min(schedule.max_delay);
