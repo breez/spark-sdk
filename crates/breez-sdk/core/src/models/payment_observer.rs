@@ -37,6 +37,13 @@ pub enum ProvisionalPaymentDetails {
     },
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PaymentIdUpdate {
+    pub provisional_payment_id: String,
+    pub final_payment_id: String,
+}
+
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum PaymentObserverError {
@@ -67,10 +74,9 @@ pub trait PaymentObserver: Send + Sync {
         &self,
         payments: Vec<ProvisionalPayment>,
     ) -> Result<(), PaymentObserverError>;
-    async fn after_send_token(
+    async fn after_send(
         &self,
-        partial_tx_id: &str,
-        final_tx_id: &str,
+        updates: Vec<PaymentIdUpdate>,
     ) -> Result<(), PaymentObserverError>;
 }
 
@@ -168,10 +174,15 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
         &self,
         partial_tx_id: &str,
         final_tx_id: &str,
+        _token_id: &str,
+        receiver_outputs: Vec<spark_wallet::ReceiverTokenOutput>,
     ) -> Result<(), TransferObserverError> {
-        Ok(self
-            .inner
-            .after_send_token(partial_tx_id, final_tx_id)
-            .await?)
+        let updates = (0..receiver_outputs.len())
+            .map(|index| PaymentIdUpdate {
+                provisional_payment_id: format!("{partial_tx_id}:{index}"),
+                final_payment_id: format!("{final_tx_id}:{index}"),
+            })
+            .collect();
+        Ok(self.inner.after_send(updates).await?)
     }
 }

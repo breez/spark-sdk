@@ -1,7 +1,7 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
-use crate::models::{ProvisionalPayment, error::js_error_to_payment_observer_error};
+use crate::models::{PaymentIdUpdate, ProvisionalPayment, error::js_error_to_payment_observer_error};
 
 pub struct WasmPaymentObserver {
     pub payment_observer: PaymentObserver,
@@ -26,14 +26,13 @@ impl breez_sdk_spark::PaymentObserver for WasmPaymentObserver {
         Ok(())
     }
 
-    async fn after_send_token(
+    async fn after_send(
         &self,
-        partial_tx_id: &str,
-        final_tx_id: &str,
+        updates: Vec<breez_sdk_spark::PaymentIdUpdate>,
     ) -> Result<(), breez_sdk_spark::PaymentObserverError> {
         let promise = self
             .payment_observer
-            .after_send_token(partial_tx_id.to_string(), final_tx_id.to_string())
+            .after_send(updates.into_iter().map(PaymentIdUpdate::from).collect())
             .map_err(js_error_to_payment_observer_error)?;
         let future = JsFuture::from(promise);
         future.await.map_err(js_error_to_payment_observer_error)?;
@@ -44,7 +43,7 @@ impl breez_sdk_spark::PaymentObserver for WasmPaymentObserver {
 #[wasm_bindgen(typescript_custom_section)]
 const EVENT_INTERFACE: &'static str = r#"export interface PaymentObserver {
     beforeSend: (payments: ProvisionalPayment[]) => Promise<void>;
-    afterSendToken: (partialTxId: string, finalTxId: string) => Promise<void>;
+    afterSend: (updates: PaymentIdUpdate[]) => Promise<void>;
 }"#;
 
 #[wasm_bindgen]
@@ -58,10 +57,9 @@ extern "C" {
         payments: Vec<ProvisionalPayment>,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = afterSendToken, catch)]
-    pub fn after_send_token(
+    #[wasm_bindgen(structural, method, js_name = afterSend, catch)]
+    pub fn after_send(
         this: &PaymentObserver,
-        partial_tx_id: String,
-        final_tx_id: String,
+        updates: Vec<PaymentIdUpdate>,
     ) -> Result<Promise, JsValue>;
 }
