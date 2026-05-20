@@ -6,9 +6,8 @@ use std::sync::Arc;
 
 use breez_sdk_common::buy::moonpay::MoonpayProvider;
 
-#[cfg(not(target_family = "wasm"))]
 use spark_wallet::Signer;
-use spark_wallet::{InMemorySessionStore, SparkWalletConfig, TokenOutputStore, TreeStore};
+use spark_wallet::{InMemorySessionStore, SparkWalletConfig};
 use tokio::sync::watch;
 use tracing::{debug, info};
 
@@ -24,11 +23,12 @@ use crate::{
     lnurl::{DefaultLnurlServerClient, LnurlServerClient},
     models::Config,
     payment_observer::{PaymentObserver, SparkTransferObserver},
-    persist::Storage,
+    persist::backend::{
+        CustomStorage, ResolvedStores, StorageBackend, StorageConfig, StorageSetup,
+    },
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams, SyncCoordinator, runtime_from_config},
     sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context},
-    session_store::{SessionStore, SessionStoreAdapter},
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
         spark::SparkSigner,
@@ -71,22 +71,14 @@ pub struct SdkBuilder {
     config: Config,
     signer_source: SignerSource,
 
-    storage_dir: Option<String>,
-    storage: Option<Arc<dyn Storage>>,
-    #[cfg(feature = "postgres")]
-    postgres_pool: Option<Arc<crate::persist::postgres::PostgresConnectionPool>>,
-    #[cfg(feature = "mysql")]
-    mysql_pool: Option<Arc<crate::persist::mysql::MysqlConnectionPool>>,
+    storage_setup: Option<StorageSetup>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     rest_chain_service_config: Option<RestChainServiceConfig>,
     fiat_service: Option<Arc<dyn FiatService>>,
     lnurl_client: Option<Arc<dyn platform_utils::HttpClient>>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
-    tree_store: Option<Arc<dyn TreeStore>>,
-    token_output_store: Option<Arc<dyn TokenOutputStore>>,
     context: Option<Arc<SdkContext>>,
-    session_store: Option<Arc<dyn SessionStore>>,
 }
 
 impl SdkBuilder {
@@ -107,22 +99,14 @@ impl SdkBuilder {
                 use_address_index: false,
                 account_number: None,
             },
-            storage_dir: None,
-            storage: None,
-            #[cfg(feature = "postgres")]
-            postgres_pool: None,
-            #[cfg(feature = "mysql")]
-            mysql_pool: None,
+            storage_setup: None,
             chain_service: None,
             rest_chain_service_config: None,
             fiat_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
             payment_observer: None,
-            tree_store: None,
-            token_output_store: None,
             context: None,
-            session_store: None,
         }
     }
 
@@ -136,22 +120,14 @@ impl SdkBuilder {
         SdkBuilder {
             config,
             signer_source: SignerSource::External(signer),
-            storage_dir: None,
-            storage: None,
-            #[cfg(feature = "postgres")]
-            postgres_pool: None,
-            #[cfg(feature = "mysql")]
-            mysql_pool: None,
+            storage_setup: None,
             chain_service: None,
             rest_chain_service_config: None,
             fiat_service: None,
             lnurl_client: None,
             lnurl_server_client: None,
             payment_observer: None,
-            tree_store: None,
-            token_output_store: None,
             context: None,
-            session_store: None,
         }
     }
 
@@ -178,24 +154,63 @@ impl SdkBuilder {
         self
     }
 
+    #[cfg(feature = "sqlite")]
     #[must_use]
     /// Sets the root storage directory to initialize the default storage with.
     /// This initializes both storage and real-time sync storage with the
     /// default implementations.
     /// Arguments:
     /// - `storage_dir`: The data directory for storage.
-    pub fn with_default_storage(mut self, storage_dir: String) -> Self {
-        self.storage_dir = Some(storage_dir);
-        self
+    pub fn with_default_storage(self, storage_dir: String) -> Self {
+        self.with_storage_backend(crate::default_storage(storage_dir))
     }
 
     #[must_use]
     /// Sets the storage implementation to be used by the SDK.
+    ///
+    /// Accepts an `Arc<dyn Storage>`, or a [`CustomStorage`](crate::CustomStorage)
+    /// to also supply custom tree, token-output and session stores.
     /// Arguments:
     /// - `storage`: The storage implementation to be used.
-    pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
-        self.storage = Some(storage);
+    pub fn with_storage(mut self, storage: impl Into<CustomStorage>) -> Self {
+        self.storage_setup = Some(StorageSetup::Custom(storage.into()));
         self
+    }
+
+    /// Sets one of the SDK's built-in storage backends.
+    ///
+    /// Construct the [`StorageConfig`] via
+    /// [`default_storage`](crate::default_storage),
+    /// [`postgres_storage`](crate::postgres_storage) or
+    /// [`mysql_storage`](crate::mysql_storage).
+    #[must_use]
+    pub fn with_storage_backend(mut self, storage: StorageConfig) -> Self {
+        self.storage_setup = Some(StorageSetup::Config(storage));
+        self
+    }
+
+    /// **Deprecated.** Use [`with_storage_backend`](Self::with_storage_backend)
+    /// with [`postgres_storage`](crate::postgres_storage).
+    #[cfg(feature = "postgres")]
+    #[deprecated(note = "use `with_storage_backend(postgres_storage(config))`")]
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn with_postgres_backend(
+        self,
+        config: crate::persist::postgres::PostgresStorageConfig,
+    ) -> Result<Self, SdkError> {
+        Ok(self.with_storage_backend(crate::postgres_storage(config)))
+    }
+
+    /// **Deprecated.** Use [`with_storage_backend`](Self::with_storage_backend)
+    /// with [`mysql_storage`](crate::mysql_storage).
+    #[cfg(feature = "mysql")]
+    #[deprecated(note = "use `with_storage_backend(mysql_storage(config))`")]
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn with_mysql_backend(
+        self,
+        config: crate::persist::mysql::MysqlStorageConfig,
+    ) -> Result<Self, SdkError> {
+        Ok(self.with_storage_backend(crate::mysql_storage(config)))
     }
 
     /// Threads a shared [`SdkContext`] into this builder.
@@ -210,95 +225,6 @@ impl SdkBuilder {
     #[must_use]
     pub fn with_shared_context(mut self, context: Arc<SdkContext>) -> Self {
         self.context = Some(context);
-        self
-    }
-
-    /// Sets a shared `PostgreSQL` connection pool as the backend for all
-    /// stores (storage, tree store, and token store).
-    ///
-    /// Construct the pool once via
-    /// [`create_postgres_connection_pool`](crate::create_postgres_connection_pool) and pass the
-    /// same `Arc` to multiple `SdkBuilder` instances to share connections
-    /// across SDKs. Per-tenant scoping is derived from each SDK's seed.
-    ///
-    /// If you've also threaded an [`SdkContext`] (via [`with_shared_context`](Self::with_shared_context))
-    /// that already carries a Postgres pool, `build()` will error — pick one
-    /// source. Most integrators use either this method *or* a context, not both.
-    #[must_use]
-    #[cfg(feature = "postgres")]
-    pub fn with_postgres_connection_pool(
-        mut self,
-        pool: Arc<crate::persist::postgres::PostgresConnectionPool>,
-    ) -> Self {
-        self.postgres_pool = Some(pool);
-        self
-    }
-
-    /// Sets a shared `MySQL` connection pool as the backend for all stores
-    /// (storage, tree store, and token store).
-    ///
-    /// Construct the pool once via
-    /// [`create_mysql_connection_pool`](crate::create_mysql_connection_pool) and pass the same
-    /// `Arc` to multiple `SdkBuilder` instances to share connections across
-    /// SDKs. Per-tenant scoping is derived from each SDK's seed.
-    ///
-    /// If you've also threaded an [`SdkContext`] (via [`with_shared_context`](Self::with_shared_context))
-    /// that already carries a `MySQL` pool, `build()` will error — pick one
-    /// source. Most integrators use either this method *or* a context, not both.
-    #[must_use]
-    #[cfg(feature = "mysql")]
-    pub fn with_mysql_connection_pool(
-        mut self,
-        pool: Arc<crate::persist::mysql::MysqlConnectionPool>,
-    ) -> Self {
-        self.mysql_pool = Some(pool);
-        self
-    }
-
-    /// Sets `PostgreSQL` as the backend by building a fresh pool from a
-    /// config. The store instances will be created during `build()`.
-    ///
-    /// Arguments:
-    /// - `config`: The `PostgreSQL` storage configuration.
-    #[cfg(feature = "postgres")]
-    #[deprecated(
-        note = "Call `create_postgres_connection_pool(&config)` and `with_postgres_connection_pool(pool)` instead."
-    )]
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn with_postgres_backend(
-        self,
-        config: crate::persist::postgres::PostgresStorageConfig,
-    ) -> Result<Self, SdkError> {
-        let pool = crate::persist::postgres::create_postgres_connection_pool(&config)?;
-        Ok(self.with_postgres_connection_pool(pool))
-    }
-
-    /// Sets `MySQL` as the backend by building a fresh pool from a config.
-    /// The store instances will be created during `build()`.
-    ///
-    /// Arguments:
-    /// - `config`: The `MySQL` storage configuration.
-    #[cfg(feature = "mysql")]
-    #[deprecated(
-        note = "Call `create_mysql_connection_pool(&config)` and `with_mysql_connection_pool(pool)` instead."
-    )]
-    #[allow(clippy::needless_pass_by_value)]
-    pub fn with_mysql_backend(
-        self,
-        config: crate::persist::mysql::MysqlStorageConfig,
-    ) -> Result<Self, SdkError> {
-        let pool = crate::persist::mysql::create_mysql_connection_pool(&config)?;
-        Ok(self.with_mysql_connection_pool(pool))
-    }
-
-    /// WASM-only seam for the JS-side DB-backed session store.
-    ///
-    /// Cfg-gated to the WASM target so it literally doesn't exist on native
-    /// builds and can't be misused.
-    #[cfg(target_family = "wasm")]
-    #[must_use]
-    pub fn with_session_store(mut self, session_store: Arc<dyn SessionStore>) -> Self {
-        self.session_store = Some(session_store);
         self
     }
 
@@ -372,29 +298,6 @@ impl SdkBuilder {
     #[allow(unused)]
     pub fn with_payment_observer(mut self, payment_observer: Arc<dyn PaymentObserver>) -> Self {
         self.payment_observer = Some(payment_observer);
-        self
-    }
-
-    /// Sets a custom tree store implementation.
-    ///
-    /// # Arguments
-    /// - `tree_store`: The tree store implementation to use.
-    #[must_use]
-    pub fn with_tree_store(mut self, tree_store: Arc<dyn TreeStore>) -> Self {
-        self.tree_store = Some(tree_store);
-        self
-    }
-
-    /// Sets a custom token output store implementation.
-    ///
-    /// # Arguments
-    /// - `token_output_store`: The token output store implementation to use.
-    #[must_use]
-    pub fn with_token_output_store(
-        mut self,
-        token_output_store: Arc<dyn TokenOutputStore>,
-    ) -> Self {
-        self.token_output_store = Some(token_output_store);
         self
     }
 
@@ -537,38 +440,34 @@ impl SdkBuilder {
             ));
         }
 
-        // Resolve the DB pools from at most one source: the legacy
-        // `with_postgres_connection_pool` / `with_mysql_connection_pool`
-        // setters take precedence-by-exclusion over a pool carried by the
-        // context. Passing both is a configuration error.
-        #[cfg(feature = "postgres")]
-        let postgres_pool: Option<Arc<crate::persist::postgres::PostgresConnectionPool>> = match (
-            self.postgres_pool,
-            context.postgres_pool.clone(),
-        ) {
-            (Some(_), Some(_)) => {
-                return Err(SdkError::Generic(
-                        "multiple postgres pools configured: passed both via with_postgres_connection_pool and SdkContext"
+        // Resolve the single storage backend. It comes either from the
+        // builder (a `StorageConfig` or a `CustomStorage`) or from a shared
+        // `SdkContext` — exactly one must supply it. All per-database wiring
+        // lives behind `StorageBackend::create_stores`.
+        let storage_backend: Arc<dyn StorageBackend> =
+            match (self.storage_setup, context.storage_backend.clone()) {
+                (Some(setup), None) => setup.into_backend(self.config.network)?,
+                (None, Some(backend)) => backend,
+                (Some(_), Some(_)) => {
+                    return Err(SdkError::Generic(
+                        "storage is configured on both the SdkBuilder and the shared SdkContext"
                             .to_string(),
                     ));
-            }
-            (Some(p), None) | (None, Some(p)) => Some(p),
-            (None, None) => None,
-        };
-        #[cfg(feature = "mysql")]
-        let mysql_pool: Option<Arc<crate::persist::mysql::MysqlConnectionPool>> = match (
-            self.mysql_pool,
-            context.mysql_pool.clone(),
-        ) {
-            (Some(_), Some(_)) => {
-                return Err(SdkError::Generic(
-                        "multiple mysql pools configured: passed both via with_mysql_connection_pool and SdkContext"
-                            .to_string(),
-                    ));
-            }
-            (Some(p), None) | (None, Some(p)) => Some(p),
-            (None, None) => None,
-        };
+                }
+                (None, None) => {
+                    return Err(SdkError::Generic("No storage configured".to_string()));
+                }
+            };
+        let identity_public_key = spark_signer
+            .get_identity_public_key()
+            .await
+            .map_err(|e| SdkError::Generic(e.to_string()))?;
+        let ResolvedStores {
+            storage,
+            tree_store,
+            token_output_store,
+            session_store,
+        } = storage_backend.create_stores(&identity_public_key).await?;
 
         let chain_service: Arc<dyn BitcoinChainService> = if let Some(service) = self.chain_service
         {
@@ -614,131 +513,6 @@ impl SdkBuilder {
             }
         };
 
-        // Validate storage configuration
-        #[cfg(feature = "postgres")]
-        let has_postgres = postgres_pool.is_some();
-        #[cfg(not(feature = "postgres"))]
-        let has_postgres = false;
-
-        #[cfg(feature = "mysql")]
-        let has_mysql = mysql_pool.is_some();
-        #[cfg(not(feature = "mysql"))]
-        let has_mysql = false;
-
-        let storage_count = [
-            self.storage.is_some(),
-            self.storage_dir.is_some(),
-            has_postgres,
-            has_mysql,
-        ]
-        .into_iter()
-        .filter(|&v| v)
-        .count();
-        match storage_count {
-            0 => return Err(SdkError::Generic("No storage configured".to_string())),
-            2.. => {
-                return Err(SdkError::Generic(
-                    "Multiple storage configurations provided".to_string(),
-                ));
-            }
-            _ => {}
-        }
-
-        // Bundle the resolved Postgres pool with the tenant identity used to
-        // scope every read/write so storage, tree store, and token store
-        // share the same scope. The pool itself may back many SDK instances.
-        #[cfg(feature = "postgres")]
-        let postgres_backend = if let Some(ref pool) = postgres_pool {
-            let identity = spark_signer
-                .get_identity_public_key()
-                .await
-                .map_err(|e| SdkError::Generic(e.to_string()))?
-                .serialize();
-            Some((pool.inner.clone(), identity, pool.run_migration))
-        } else {
-            None
-        };
-
-        // Same for MySQL.
-        #[cfg(feature = "mysql")]
-        let mysql_backend = if let Some(ref pool) = mysql_pool {
-            let identity = spark_signer
-                .get_identity_public_key()
-                .await
-                .map_err(|e| SdkError::Generic(e.to_string()))?
-                .serialize();
-            Some((
-                pool.inner.clone(),
-                identity,
-                pool.run_migration,
-                pool.foreign_key_mode,
-            ))
-        } else {
-            None
-        };
-
-        // Initialize storage
-        let storage: Arc<dyn Storage> = if let Some(storage) = self.storage {
-            storage
-        } else if let Some(storage_dir) = self.storage_dir {
-            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-            {
-                let identity_pub_key = spark_signer
-                    .get_identity_public_key()
-                    .await
-                    .map_err(|e| SdkError::Generic(e.to_string()))?;
-                default_storage(&storage_dir, self.config.network, &identity_pub_key)?
-            }
-            #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-            {
-                let _ = storage_dir;
-                return Err(SdkError::Generic(
-                    "with_default_storage is not supported on WASM".to_string(),
-                ));
-            }
-        } else {
-            #[allow(unused_mut)]
-            let mut s: Option<Arc<dyn Storage>> = None;
-
-            #[cfg(all(
-                feature = "postgres",
-                not(all(target_family = "wasm", target_os = "unknown"))
-            ))]
-            if s.is_none()
-                && let Some((ref pool, ref identity, run_migration)) = postgres_backend
-            {
-                s = Some(Arc::new(
-                    crate::persist::postgres::PostgresStorage::new_with_pool(
-                        pool.clone(),
-                        identity,
-                        run_migration,
-                    )
-                    .await
-                    .map_err(|e| SdkError::Generic(e.to_string()))?,
-                ));
-            }
-
-            #[cfg(all(
-                feature = "mysql",
-                not(all(target_family = "wasm", target_os = "unknown"))
-            ))]
-            if s.is_none()
-                && let Some((ref pool, ref identity, run_migration, _)) = mysql_backend
-            {
-                s = Some(Arc::new(
-                    crate::persist::mysql::MysqlStorage::new_with_pool(
-                        pool.clone(),
-                        identity,
-                        run_migration,
-                    )
-                    .await
-                    .map_err(|e| SdkError::Generic(e.to_string()))?,
-                ));
-            }
-
-            s.ok_or_else(|| SdkError::Generic("No storage configured".to_string()))?
-        };
-
         let user_agent = crate::default_user_agent();
         info!("Building sdk with user agent: {}", user_agent);
 
@@ -780,107 +554,8 @@ impl SdkBuilder {
 
         let shutdown_sender = watch::channel::<()>(()).0;
 
-        // Create tree store if configured
-        #[allow(unused_mut)]
-        let mut tree_store: Option<Arc<dyn TreeStore>> = self.tree_store;
-
-        #[cfg(feature = "postgres")]
-        if tree_store.is_none()
-            && let Some((ref pool, ref identity, run_migration)) = postgres_backend
-        {
-            tree_store = Some(
-                crate::persist::postgres::create_postgres_tree_store(
-                    pool.clone(),
-                    identity,
-                    run_migration,
-                )
-                .await?,
-            );
-        }
-
-        #[cfg(feature = "mysql")]
-        if tree_store.is_none()
-            && let Some((ref pool, ref identity, run_migration, foreign_key_mode)) = mysql_backend
-        {
-            tree_store = Some(
-                crate::persist::mysql::create_mysql_tree_store(
-                    pool.clone(),
-                    identity,
-                    run_migration,
-                    foreign_key_mode,
-                )
-                .await?,
-            );
-        }
-
-        // Create token output store if configured
-        #[allow(unused_mut)]
-        let mut token_output_store: Option<Arc<dyn TokenOutputStore>> = self.token_output_store;
-
-        #[cfg(feature = "postgres")]
-        if token_output_store.is_none()
-            && let Some((ref pool, ref identity, run_migration)) = postgres_backend
-        {
-            token_output_store = Some(
-                crate::persist::postgres::create_postgres_token_store(
-                    pool.clone(),
-                    identity,
-                    run_migration,
-                )
-                .await?,
-            );
-        }
-
-        #[cfg(feature = "mysql")]
-        if token_output_store.is_none()
-            && let Some((ref pool, ref identity, run_migration, foreign_key_mode)) = mysql_backend
-        {
-            token_output_store = Some(
-                crate::persist::mysql::create_mysql_token_store(
-                    pool.clone(),
-                    identity,
-                    run_migration,
-                    foreign_key_mode,
-                )
-                .await?,
-            );
-        }
-
-        #[allow(unused_mut)]
-        let mut inner_session_store: Option<Arc<dyn spark_wallet::SessionStore>> = self
-            .session_store
-            .map(|sm| Arc::new(SessionStoreAdapter(sm)) as Arc<dyn spark_wallet::SessionStore>);
-
-        #[cfg(feature = "postgres")]
-        if inner_session_store.is_none()
-            && let Some((ref pool, ref identity, run_migration)) = postgres_backend
-        {
-            inner_session_store = Some(
-                crate::persist::postgres::create_postgres_session_store(
-                    pool.clone(),
-                    identity,
-                    run_migration,
-                )
-                .await?,
-            );
-        }
-
-        #[cfg(feature = "mysql")]
-        if inner_session_store.is_none()
-            && let Some((ref pool, ref identity, run_migration, _)) = mysql_backend
-        {
-            inner_session_store = Some(
-                crate::persist::mysql::create_mysql_session_store(
-                    pool.clone(),
-                    identity,
-                    run_migration,
-                )
-                .await?,
-            );
-        }
-
         let inner_session_store =
-            inner_session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
+            session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
         let inner_session_store: Arc<dyn spark_wallet::SessionStore> = Arc::new(
             crate::session_store::EncryptingSessionStore::new(
                 inner_session_store,
@@ -1030,19 +705,8 @@ impl SdkBuilder {
     }
 }
 
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-fn default_storage(
-    data_dir: &str,
-    network: Network,
-    identity_pub_key: &spark_wallet::PublicKey,
-) -> Result<Arc<dyn Storage>, SdkError> {
-    let db_path = crate::default_storage_path(data_dir, &network, identity_pub_key)?;
-    let storage = Arc::new(crate::SqliteStorage::new(&db_path)?);
-    Ok(storage)
-}
-
 #[cfg(test)]
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg(feature = "sqlite")]
 mod tests {
     use super::SdkBuilder;
     use crate::{Network, default_config};

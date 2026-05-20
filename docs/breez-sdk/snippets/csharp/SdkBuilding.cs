@@ -109,14 +109,13 @@ namespace BreezSdkSnippets
                 runMigration = false
             };
 
-            // Construct the connection pool. The same pool can be passed to
-            // multiple SdkBuilders to share connections across SDKs; per-tenant
-            // scoping (rows isolated by seed identity) is preserved.
-            var pool = BreezSdkSparkMethods.CreatePostgresConnectionPool(config: postgresConfig);
-
-            // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
+            // Build the SDK with the PostgreSQL storage backend (storage, tree
+            // store, and token store). Per-tenant scoping (rows isolated by
+            // seed identity) is applied automatically.
             var builder = new SdkBuilder(config: config, seed: seed);
-            await builder.WithPostgresConnectionPool(pool: pool);
+            await builder.WithStorageBackend(
+                storage: BreezSdkSparkMethods.PostgresStorage(config: postgresConfig)
+            );
             var sdk = await builder.Build();
             // ANCHOR_END: init-sdk-postgres
         }
@@ -147,14 +146,13 @@ namespace BreezSdkSnippets
                 recycleTimeoutSecs = 60ul     // Recycle idle connections after this many seconds
             };
 
-            // Construct the connection pool. The same pool can be passed to
-            // multiple SdkBuilders to share connections across SDKs; per-tenant
-            // scoping (rows isolated by seed identity) is preserved.
-            var pool = BreezSdkSparkMethods.CreateMysqlConnectionPool(config: mysqlConfig);
-
-            // Build the SDK with MySQL backend (storage, tree store, and token store)
+            // Build the SDK with the MySQL storage backend (storage, tree
+            // store, and token store). Per-tenant scoping (rows isolated by
+            // seed identity) is applied automatically.
             var builder = new SdkBuilder(config: config, seed: seed);
-            await builder.WithMysqlConnectionPool(pool: pool);
+            await builder.WithStorageBackend(
+                storage: BreezSdkSparkMethods.MysqlStorage(config: mysqlConfig)
+            );
             var sdk = await builder.Build();
             // ANCHOR_END: init-sdk-mysql
         }

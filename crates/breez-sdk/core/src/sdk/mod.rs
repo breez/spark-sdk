@@ -147,7 +147,7 @@ pub fn init_logging(
 /// # Returns
 ///
 /// Result containing either the initialized `BreezSdk` or an `SdkError`
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg(feature = "sqlite")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
     let builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed)
@@ -168,7 +168,7 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 /// # Returns
 ///
 /// Result containing either the initialized `BreezSdk` or an `SdkError`
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg(feature = "sqlite")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect_with_signer(
     request: crate::ConnectWithSignerRequest,

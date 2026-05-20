@@ -4,15 +4,22 @@ use bitcoin::secp256k1::PublicKey;
 
 use super::SessionStore;
 
-/// Internal adapter that exposes a user-supplied [`SessionStore`] to
-/// [`spark_wallet`] (which has its own identical-shape trait).
+/// Adapts an SDK-facing [`SessionStore`] to the [`spark_wallet`] session-store
+/// trait (which has its own identical-shape trait).
 ///
-/// Used only by the WASM bindings to plumb a JS-side session store
-/// (constructed from a JS storage backend) into the core wallet stack. The
-/// public Rust API no longer accepts user-supplied session stores; the
-/// canonical session store is derived from the [`SdkContext`](crate::SdkContext)'s
-/// DB pool (or defaulted to in-memory).
-pub(crate) struct SessionStoreAdapter(pub Arc<dyn SessionStore>);
+/// Used by the WASM bindings to plumb a JS-side session store into a
+/// [`CustomStorage`](crate::CustomStorage)'s
+/// `session_store` field.
+pub struct SessionStoreAdapter(pub Arc<dyn SessionStore>);
+
+impl SessionStoreAdapter {
+    /// Wraps an SDK-facing [`SessionStore`] so it can be used as a
+    /// [`spark_wallet`] session store.
+    #[must_use]
+    pub fn new(inner: Arc<dyn SessionStore>) -> Self {
+        Self(inner)
+    }
+}
 
 #[macros::async_trait]
 impl spark_wallet::SessionStore for SessionStoreAdapter {

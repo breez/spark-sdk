@@ -8,17 +8,15 @@
 //! SQL syntax differences vs. `PostgreSQL`.
 
 mod base;
-mod pool;
 mod storage;
 
 // Re-export public configuration types and functions (with UniFFI annotations).
 #[allow(unused_imports)]
 pub use base::{MysqlForeignKeyMode, MysqlStorageConfig, default_mysql_storage_config};
-pub use pool::{MysqlConnectionPool, create_mysql_connection_pool};
 
-// Re-export store factories
+// Re-export store factories and the pool builder
 pub(crate) use base::{
-    create_mysql_session_store, create_mysql_token_store, create_mysql_tree_store,
+    create_mysql_session_store, create_mysql_token_store, create_mysql_tree_store, create_pool,
 };
 
 // Re-export storage implementation

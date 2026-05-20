@@ -152,8 +152,8 @@ When a wallet is first registered, run a one-time setup pass to apply the config
 
 A server-mode deployment normally pairs the profile with shared resources across every per-request SDK. Each of the following is documented in [Customizing the SDK](customizing.md):
 
-- [PostgreSQL Connection Pool](customizing.md#with-postgres-connection-pool) — shared DB pool for storage, tree, and token stores.
-- [MySQL Connection Pool](customizing.md#with-mysql-connection-pool) — same for MySQL.
+- [PostgreSQL Backend](customizing.md#with-postgres-backend) — shared DB pool for storage, tree, and token stores.
+- [MySQL Backend](customizing.md#with-mysql-backend) — same for MySQL.
 - [Shared REST Chain Service](customizing.md#with-shared-rest-chain-service) — one pooled HTTP client instead of one per SDK.
 - [SSP Connection Manager](customizing.md#with-ssp-connection-manager) — share the SSP HTTP client across SDKs.
 - [Connection Manager](customizing.md#with-connection-manager) — share gRPC channels to the Spark operators across SDKs.

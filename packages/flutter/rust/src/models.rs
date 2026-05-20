@@ -586,11 +586,17 @@ pub enum _Network {
     Regtest,
 }
 
+#[frb(mirror(StorageConfig))]
+pub enum _StorageConfig {
+    Sqlite { storage_dir: String },
+}
+
 #[frb(mirror(SdkContextConfig))]
 pub struct _SdkContextConfig {
     pub network: Network,
     pub api_key: Option<String>,
     pub connections_per_operator: Option<u32>,
+    pub storage_config: Option<StorageConfig>,
 }
 
 #[frb(mirror(Payment))]

@@ -200,7 +200,9 @@ async fn run_interactive_mode(
     if let Some(connection_string) = postgres_connection_string {
         let context = new_shared_sdk_context(SdkContextConfig {
             api_key: breez_api_key.clone(),
-            postgres_config: Some(default_postgres_storage_config(connection_string)),
+            storage_config: Some(breez_sdk_spark::postgres_storage(
+                default_postgres_storage_config(connection_string),
+            )),
             ..SdkContextConfig::new(network)
         })
         .await?;
@@ -208,7 +210,9 @@ async fn run_interactive_mode(
     } else if let Some(connection_string) = mysql_connection_string {
         let context = new_shared_sdk_context(SdkContextConfig {
             api_key: breez_api_key.clone(),
-            mysql_config: Some(default_mysql_storage_config(connection_string)),
+            storage_config: Some(breez_sdk_spark::mysql_storage(
+                default_mysql_storage_config(connection_string),
+            )),
             ..SdkContextConfig::new(network)
         })
         .await?;

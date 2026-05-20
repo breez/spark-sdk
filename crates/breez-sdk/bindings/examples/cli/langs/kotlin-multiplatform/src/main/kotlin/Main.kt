@@ -270,14 +270,14 @@ suspend fun runInteractiveMode(
         val context = newSharedSdkContext(SdkContextConfig(
             network = network,
             apiKey = if (!apiKey.isNullOrEmpty()) apiKey else null,
-            postgresConfig = defaultPostgresStorageConfig(postgresConnectionString),
+            storageConfig = postgresStorage(defaultPostgresStorageConfig(postgresConnectionString)),
         ))
         builder.withSharedContext(context)
     } else if (mysqlConnectionString != null) {
         val context = newSharedSdkContext(SdkContextConfig(
             network = network,
             apiKey = if (!apiKey.isNullOrEmpty()) apiKey else null,
-            mysqlConfig = defaultMysqlStorageConfig(mysqlConnectionString),
+            storageConfig = mysqlStorage(defaultMysqlStorageConfig(mysqlConnectionString)),
         ))
         builder.withSharedContext(context)
     } else {
