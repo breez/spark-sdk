@@ -423,8 +423,20 @@ class PasskeyProvider {
 /// sensible defaults and wires it to a new [PasskeyClient], forwarding
 /// the Breez API key from the SDK [Config].
 ///
-/// Equivalent to constructing [PasskeyProvider] and passing all six
-/// callbacks plus `breezApiKey: sdkConfig.apiKey` to [PasskeyClient].
+/// Equivalent to:
+/// ```dart
+/// final provider = PasskeyProvider(PasskeyProviderOptions(rpId: rpId));
+/// final client = PasskeyClient(
+///   deriveSeeds: provider.deriveSeeds,
+///   isSupported: provider.isSupported,
+///   createPasskey: provider.createPasskey,
+///   getKnownCredentialIds: provider.getKnownCredentialIds,
+///   removeKnownCredentialId: provider.removeKnownCredentialId,
+///   clearKnownCredentialIds: provider.clearKnownCredentialIds,
+///   breezApiKey: sdkConfig.apiKey,
+///   config: passkeyConfig,
+/// );
+/// ```
 ///
 /// Hosts that need a custom `PrfProvider` (CLI / YubiKey / FIDO2) or
 /// non-default [PasskeyProviderOptions] should construct
@@ -433,22 +445,8 @@ PasskeyClient createPasskeyClient({
   required String rpId,
   required Config sdkConfig,
   PasskeyConfig? passkeyConfig,
-  String? rpName,
-  String? userName,
-  String? userDisplayName,
-  CredentialRegistry? credentialRegistry,
-  void Function(RegistryOperation, Object)? onRegistryError,
 }) {
-  final provider = PasskeyProvider(
-    PasskeyProviderOptions(
-      rpId: rpId,
-      rpName: rpName ?? 'Breez SDK',
-      userName: userName,
-      userDisplayName: userDisplayName,
-      credentialRegistry: credentialRegistry,
-      onRegistryError: onRegistryError,
-    ),
-  );
+  final provider = PasskeyProvider(PasskeyProviderOptions(rpId: rpId));
   return PasskeyClient(
     deriveSeeds: provider.deriveSeeds,
     isSupported: provider.isSupported,
