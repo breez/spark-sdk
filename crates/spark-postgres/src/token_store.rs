@@ -1440,9 +1440,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_token_outputs() {
+    async fn test_update_token_outputs_inserts() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
-        shared_tests::test_insert_token_outputs(&fixture.store).await;
+        shared_tests::test_update_token_outputs_inserts(&fixture.store).await;
     }
 
     #[tokio::test]
@@ -1668,15 +1668,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_remove_token_outputs_by_prev_tx_ref() {
+    async fn test_update_token_outputs_removes_by_prev_tx_ref() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
-        shared_tests::test_remove_token_outputs_by_prev_tx_ref(&fixture.store).await;
+        shared_tests::test_update_token_outputs_removes_by_prev_tx_ref(&fixture.store).await;
     }
 
     #[tokio::test]
-    async fn test_remove_token_outputs_prevents_refresh_readd() {
+    async fn test_update_token_outputs_remove_prevents_refresh_readd() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
-        shared_tests::test_remove_token_outputs_prevents_refresh_readd(&fixture.store).await;
+        shared_tests::test_update_token_outputs_remove_prevents_refresh_readd(&fixture.store).await;
     }
 
     #[tokio::test]

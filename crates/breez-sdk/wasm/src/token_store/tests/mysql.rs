@@ -48,14 +48,14 @@ async fn create_test_token_store(test_name: &str) -> WasmTokenStore {
 }
 
 #[wasm_bindgen_test]
-async fn test_remove_token_outputs_by_prev_tx_ref() {
+async fn test_update_token_outputs_removes_by_prev_tx_ref() {
     let store = create_test_token_store("pg_token_remove_outputs_prev_tx_ref").await;
-    breez_sdk_spark::token_store_tests::test_remove_token_outputs_by_prev_tx_ref(&store).await;
+    breez_sdk_spark::token_store_tests::test_update_token_outputs_removes_by_prev_tx_ref(&store).await;
 }
 
 #[wasm_bindgen_test]
-async fn test_remove_token_outputs_prevents_refresh_readd() {
+async fn test_update_token_outputs_remove_prevents_refresh_readd() {
     let store = create_test_token_store("pg_token_remove_outputs_prevents_refresh").await;
-    breez_sdk_spark::token_store_tests::test_remove_token_outputs_prevents_refresh_readd(&store)
+    breez_sdk_spark::token_store_tests::test_update_token_outputs_remove_prevents_refresh_readd(&store)
         .await;
 }

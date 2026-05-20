@@ -226,9 +226,9 @@ async fn test_set_tokens_outputs_with_update() {
 }
 
 #[async_test_all]
-async fn test_insert_token_outputs() {
+async fn test_update_token_outputs_inserts() {
     let store = InMemoryTokenOutputStore::default();
-    shared_tests::test_insert_token_outputs(&store).await;
+    shared_tests::test_update_token_outputs_inserts(&store).await;
 }
 
 #[async_test_all]
@@ -442,13 +442,13 @@ async fn test_insert_outputs_clears_spent_status() {
 }
 
 #[async_test_all]
-async fn test_remove_token_outputs_by_prev_tx_ref() {
+async fn test_update_token_outputs_removes_by_prev_tx_ref() {
     let store = InMemoryTokenOutputStore::default();
-    shared_tests::test_remove_token_outputs_by_prev_tx_ref(&store).await;
+    shared_tests::test_update_token_outputs_removes_by_prev_tx_ref(&store).await;
 }
 
 #[async_test_all]
-async fn test_remove_token_outputs_prevents_refresh_readd() {
+async fn test_update_token_outputs_remove_prevents_refresh_readd() {
     let store = InMemoryTokenOutputStore::default();
-    shared_tests::test_remove_token_outputs_prevents_refresh_readd(&store).await;
+    shared_tests::test_update_token_outputs_remove_prevents_refresh_readd(&store).await;
 }
