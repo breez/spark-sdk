@@ -627,6 +627,47 @@ export class PasskeyProvider {
 /**
  * Decode a base64 string to Uint8Array.
  */
+import type {
+  Config,
+  PasskeyClient,
+  PasskeyConfig,
+} from './generated/breez_sdk_spark';
+
+/**
+ * Convenience factory: builds the platform [PasskeyProvider] with
+ * sensible defaults and wires it to a new [PasskeyClient], forwarding
+ * the Breez API key from the SDK [Config].
+ *
+ * Equivalent to:
+ * ```ts
+ * const provider = new PasskeyProvider({ rpId });
+ * const client = new PasskeyClient(provider, sdkConfig.apiKey, passkeyConfig);
+ * ```
+ *
+ * Hosts that need a custom `PrfProvider` (CLI / YubiKey / FIDO2) or
+ * non-default [PasskeyProviderOptions] should construct
+ * [PasskeyClient] directly instead.
+ */
+export function createPasskeyClient(
+  rpId: string,
+  sdkConfig: Config,
+  passkeyConfig?: PasskeyConfig
+): PasskeyClient {
+  // Required (not imported) at runtime so consumers of this subpath
+  // that only use `PasskeyProvider` don't pay for the full SDK init
+  // (the generated module registers a Hermes installer at import time).
+  const generated =
+    require('./generated/breez_sdk_spark') as typeof import('./generated/breez_sdk_spark');
+  const provider = new PasskeyProvider({ rpId });
+  return new generated.PasskeyClient(
+    provider as unknown as ConstructorParameters<
+      typeof generated.PasskeyClient
+    >[0],
+    sdkConfig.apiKey ?? undefined,
+    passkeyConfig
+  );
+}
+
 function base64ToUint8Array(base64: string): Uint8Array {
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
