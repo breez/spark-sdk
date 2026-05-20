@@ -59,13 +59,27 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun connectWithPasskey(): BreezSdk {
         // ANCHOR: connect-with-passkey
+        // Single-CTA onboarding: silent sign-in for a returning user,
+        // fall-through to register on a fresh device. Internally pins
+        // `preferImmediatelyAvailableCredentials = true` so the silent
+        // attempt fast-fails (no UI) when no local credential exists;
+        // only `CredentialNotFound` flips to register, all other errors
+        // (cancel / timeout / configuration) propagate unchanged.
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
             rpId = "my-app.com",
         )
         val passkey = PasskeyClient(prfProvider, null, null)
 
-        val response = passkey.signIn(SignInRequest(label = "personal"))
+        val response = passkey.connectWithPasskey(
+            ConnectWithPasskeyRequest(label = "personal")
+        )
+
+        // Branch on `flow` to know which path ran.
+        when (val flow = response.flow) {
+            is ConnectFlow.SignedIn -> { /* returning user */ }
+            is ConnectFlow.Registered -> { /* new user; flow.credential.credentialId etc. */ }
+        }
 
         val config = defaultConfig(Network.MAINNET)
         val sdk = connect(ConnectRequest(config, response.wallet.seed, "./.data"))
@@ -129,24 +143,6 @@ class PasskeySnippets(private val activity: Activity) {
 
         passkey.labels().store("personal")
         // ANCHOR_END: store-label
-    }
-
-    suspend fun singleCtaOnboarding(): Wallet {
-        // ANCHOR: signin-fallback-register
-        val prfProvider = PasskeyProvider(
-            activityProvider = { activity },
-            rpId = "my-app.com",
-        )
-        val passkey = PasskeyClient(prfProvider, null, null)
-
-        return try {
-            val response = passkey.signIn(SignInRequest(label = null))
-            response.wallet
-        } catch (e: PrfProviderException.CredentialNotFound) {
-            val response = passkey.register(RegisterRequest(label = "personal"))
-            response.wallet
-        }
-        // ANCHOR_END: signin-fallback-register
     }
 
     suspend fun checkDomain() {

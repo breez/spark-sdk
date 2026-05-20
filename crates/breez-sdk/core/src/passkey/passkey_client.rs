@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use super::Passkey;
-use super::error::PasskeyError;
+use super::error::{PasskeyError, PrfProviderError};
 use super::models::{PasskeyConfig, RegisteredCredential, SetupWalletRequest, Wallet};
 use super::passkey_prf_provider::PrfProvider;
 
@@ -100,6 +100,45 @@ pub struct SignInResponse {
     /// that don't expose this signal (CLI / file-backed / hardware
     /// providers).
     pub credential_id: Option<Vec<u8>>,
+}
+
+/// Request shape for [`PasskeyClient::connect_with_passkey`].
+#[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConnectWithPasskeyRequest {
+    /// Wallet label. Defaults to the configured default label when
+    /// `None`. Used both for the silent sign-in attempt and, if it
+    /// fast-fails, for the fallback registration.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub label: Option<String>,
+
+    /// Forwarded to [`RegisterRequest::exclude_credential_ids`] on the
+    /// fallback registration path. Ignored on the sign-in path.
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub exclude_credential_ids: Vec<Vec<u8>>,
+}
+
+/// Indicates which path [`PasskeyClient::connect_with_passkey`] took.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ConnectFlow {
+    /// Silent sign-in succeeded for an existing credential.
+    /// `credential_id` mirrors [`SignInResponse::credential_id`]:
+    /// `Some` when the [`PrfProvider`] surfaces the asserted ID,
+    /// `None` otherwise.
+    SignedIn { credential_id: Option<Vec<u8>> },
+    /// No credential existed, so a new one was registered. `credential`
+    /// is the [`RegisteredCredential`] returned by the platform create
+    /// ceremony.
+    Registered { credential: RegisteredCredential },
+}
+
+/// Response from [`PasskeyClient::connect_with_passkey`].
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ConnectWithPasskeyResponse {
+    pub wallet: Wallet,
+    pub flow: ConnectFlow,
 }
 
 /// High-level orchestration over a [`PrfProvider`] and the internal
@@ -217,6 +256,65 @@ impl PasskeyClient {
         })
     }
 
+    /// Single-CTA onboarding: silent sign-in, falling through to
+    /// registration when no credential exists on the device. The
+    /// returned [`ConnectFlow`] tells the caller which path ran.
+    ///
+    /// The silent sign-in attempt pins
+    /// `prefer_immediately_available_credentials = true` regardless of
+    /// what [`SignInRequest`] would carry: the fallback contract
+    /// depends on the OS fast-failing with [`PrfProviderError::CredentialNotFound`]
+    /// when no local credential exists. Without the fast-fail, the
+    /// OS would show the cross-device picker and a user dismiss would
+    /// surface as a real `Cancel`, which is propagated unchanged
+    /// rather than triggering registration. All other errors
+    /// (`Cancel`, `Timeout`, `Configuration`, etc.) propagate
+    /// unchanged: only `CredentialNotFound` flips to the register
+    /// path.
+    ///
+    /// Mobile-only: meant for iOS 18+ / Android 9+ where
+    /// `preferImmediatelyAvailableCredentials` is honored. The web
+    /// equivalent (`mediation: 'immediate'` / `uiMode: 'immediate'`)
+    /// is not yet stable cross-browser, so this method is not
+    /// surfaced on WASM. Hosts on web should call
+    /// [`Self::sign_in`] and catch `CredentialNotFound` themselves.
+    pub async fn connect_with_passkey(
+        &self,
+        request: ConnectWithPasskeyRequest,
+    ) -> Result<ConnectWithPasskeyResponse, PasskeyError> {
+        let sign_in_result = self
+            .sign_in(SignInRequest {
+                label: request.label.clone(),
+                allow_credential_ids: Vec::new(),
+                prefer_immediately_available_credentials: Some(true),
+            })
+            .await;
+
+        match sign_in_result {
+            Ok(response) => Ok(ConnectWithPasskeyResponse {
+                wallet: response.wallet,
+                flow: ConnectFlow::SignedIn {
+                    credential_id: response.credential_id,
+                },
+            }),
+            Err(PasskeyError::Prf(PrfProviderError::CredentialNotFound(_))) => {
+                let register_response = self
+                    .register(RegisterRequest {
+                        label: request.label,
+                        exclude_credential_ids: request.exclude_credential_ids,
+                    })
+                    .await?;
+                Ok(ConnectWithPasskeyResponse {
+                    wallet: register_response.wallet,
+                    flow: ConnectFlow::Registered {
+                        credential: register_response.credential,
+                    },
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Label sub-object. List or publish labels for this passkey's
     /// identity.
     pub fn labels(&self) -> Arc<PasskeyLabels> {
@@ -314,6 +412,9 @@ mod tests {
         salts_seen: Mutex<HashMap<String, Vec<u8>>>,
         create_calls: Mutex<usize>,
         fail_create: bool,
+        /// FIFO of errors to return from `derive_seeds`. Each call pops
+        /// the front; when empty, `derive_seeds` succeeds.
+        derive_errors: Mutex<Vec<PrfProviderError>>,
     }
 
     impl MockProvider {
@@ -323,6 +424,7 @@ mod tests {
                 salts_seen: Mutex::new(HashMap::new()),
                 create_calls: Mutex::new(0),
                 fail_create: false,
+                derive_errors: Mutex::new(Vec::new()),
             }
         }
 
@@ -331,6 +433,10 @@ mod tests {
                 fail_create: true,
                 ..Self::new([0u8; 32])
             }
+        }
+
+        fn queue_derive_error(&self, err: PrfProviderError) {
+            self.derive_errors.lock().unwrap().push(err);
         }
 
         fn output_for(&self, salt: &str) -> Vec<u8> {
@@ -357,6 +463,16 @@ mod tests {
             &self,
             request: DeriveSeedsRequest,
         ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+            if let Some(err) = {
+                let mut errs = self.derive_errors.lock().unwrap();
+                if errs.is_empty() {
+                    None
+                } else {
+                    Some(errs.remove(0))
+                }
+            } {
+                return Err(err);
+            }
             Ok(request
                 .salts
                 .into_iter()
@@ -451,5 +567,64 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.wallet.label, "my-app");
+    }
+
+    #[macros::async_test_all]
+    async fn connect_with_passkey_returns_signed_in_when_sign_in_succeeds() {
+        let provider = Arc::new(MockProvider::new([1u8; 32]));
+        let client = PasskeyClient::new(provider.clone(), None, None);
+        let response = client
+            .connect_with_passkey(ConnectWithPasskeyRequest {
+                label: Some("personal".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.wallet.label, "personal");
+        assert!(matches!(response.flow, ConnectFlow::SignedIn { .. }));
+        // No registration ceremony on the silent-sign-in success path.
+        assert_eq!(*provider.create_calls.lock().unwrap(), 0);
+    }
+
+    #[macros::async_test_all]
+    async fn connect_with_passkey_falls_through_to_register_on_no_credential() {
+        let provider = Arc::new(MockProvider::new([2u8; 32]));
+        // Silent sign-in attempt fast-fails; subsequent derive (called
+        // from register's setup_wallet) succeeds.
+        provider.queue_derive_error(PrfProviderError::CredentialNotFound(
+            "no local credential".to_string(),
+        ));
+        let client = PasskeyClient::new(provider.clone(), None, None);
+        let response = client
+            .connect_with_passkey(ConnectWithPasskeyRequest {
+                label: Some("personal".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.wallet.label, "personal");
+        match response.flow {
+            ConnectFlow::Registered { credential } => {
+                assert_eq!(credential.credential_id, vec![0xab, 0xcd, 0xef]);
+            }
+            ConnectFlow::SignedIn { .. } => panic!("expected Registered flow"),
+        }
+        assert_eq!(*provider.create_calls.lock().unwrap(), 1);
+    }
+
+    #[macros::async_test_all]
+    async fn connect_with_passkey_propagates_cancel_without_registering() {
+        let provider = Arc::new(MockProvider::new([3u8; 32]));
+        provider.queue_derive_error(PrfProviderError::UserCancelled);
+        let client = PasskeyClient::new(provider.clone(), None, None);
+        let result = client
+            .connect_with_passkey(ConnectWithPasskeyRequest::default())
+            .await;
+        assert!(matches!(
+            result.unwrap_err(),
+            PasskeyError::Prf(PrfProviderError::UserCancelled)
+        ));
+        // A real cancel must NOT silently register.
+        assert_eq!(*provider.create_calls.lock().unwrap(), 0);
     }
 }

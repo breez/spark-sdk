@@ -57,8 +57,9 @@ use derivation::prf_to_mnemonic;
 pub use error::{ErrorKind, PasskeyError, PrfProviderError};
 pub use models::{PasskeyConfig, RegisteredCredential, SetupWalletRequest, Wallet, WalletSetup};
 pub use passkey_client::{
-    PasskeyAvailability, PasskeyClient, PasskeyCredentials, PasskeyLabels, RegisterRequest,
-    RegisterResponse, SignInRequest, SignInResponse,
+    ConnectFlow, ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, PasskeyAvailability,
+    PasskeyClient, PasskeyCredentials, PasskeyLabels, RegisterRequest, RegisterResponse,
+    SignInRequest, SignInResponse,
 };
 pub use passkey_prf_provider::{DeriveSeedsRequest, DomainAssociation, PrfProvider};
 

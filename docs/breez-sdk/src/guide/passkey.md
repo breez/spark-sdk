@@ -424,14 +424,20 @@ Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The 
 
 <h2 id="connecting-with-passkey">
     <a class="header" href="#connecting-with-passkey">Connecting with a passkey</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.sign_in">API docs</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.connect_with_passkey">API docs</a>
 </h2>
 
-To connect with a passkey, instantiate the built-in `PasskeyProvider`, pass it to `PasskeyClient`, call {{#name PasskeyClient.sign_in}} to derive a wallet, then pass its seed to {{#name connect}}. The label defaults to discovery mode when omitted (the SDK lists existing labels via Nostr in the same ceremony).
+The recommended onboarding flow on mobile is a single CTA backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The returned {{#name ConnectFlow}} tags which path ran so hosts can persist the new credential ID when registration occurs.
+
+Internally the silent attempt pins `preferImmediatelyAvailableCredentials = true` so the OS fast-fails (no UI, sub-300ms on iOS / Android) when no local credential exists; only {{#enum PrfProviderError::CredentialNotFound}} flips to register, all other errors (`Cancel`, `Timeout`, `Configuration`) propagate unchanged.
 
 {{#tabs passkey:connect-with-passkey}}
 
-For a brand-new user with no existing passkey, call {{#name PasskeyClient.register}} instead: it creates the credential AND derives the wallet seed in one orchestrated call. Hosts that want a single-CTA onboarding can try `sign_in` first and fall through to `register` when the SDK returns {{#enum PrfProviderError::CredentialNotFound}}; on iOS+Android with `preferImmediatelyAvailableCredentials` this fast-fails (sub-300ms, no UI) when no credential exists, so the silent probe is cheap.
+For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly. {{#name PasskeyClient.register}} alone is the right entry point for a deliberate "create a new wallet" UI (e.g. adding a new label to an existing identity). Pass `wallet.seed` to {{#name connect}} in both cases.
+
+### Web: manual catch-and-register
+
+`connect_with_passkey` is not surfaced on the WASM target: it depends on `preferImmediatelyAvailableCredentials` for a silent fast-fail, and the web equivalent (`mediation: 'immediate'` / `uiMode: 'immediate'`) is not yet stable cross-browser. On web, implement the equivalent flow manually by calling `signIn` and catching the credential-not-found error:
 
 {{#tabs passkey:signin-fallback-register}}
 

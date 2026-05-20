@@ -64,12 +64,27 @@ func checkAvailability() async throws {
 
 func connectWithPasskey() async throws -> BreezSdk {
     // ANCHOR: connect-with-passkey
+    // Single-CTA onboarding: silent sign-in for a returning user,
+    // fall-through to register on a fresh device. Internally pins
+    // `preferImmediatelyAvailableCredentials = true` so the silent
+    // attempt fast-fails (no UI) when no local credential exists;
+    // only `CredentialNotFound` flips to register, all other errors
+    // (cancel / timeout / configuration) propagate unchanged.
     let prfProvider = PasskeyProvider(rpId: "my-app.com")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 
-    let response = try await passkey.signIn(
-        request: SignInRequest(label: "personal")
+    let response = try await passkey.connectWithPasskey(
+        request: ConnectWithPasskeyRequest(label: "personal")
     )
+
+    // Branch on `flow` to know which path ran. Hosts maintaining a
+    // CredentialRegistry typically persist the new credential ID on
+    // `.registered`; `.signedIn` surfaces the asserted ID when the
+    // provider supports it.
+    switch response.flow {
+    case .signedIn: break  // returning user
+    case .registered: break  // new user
+    }
 
     let config = defaultConfig(network: .mainnet)
     let sdk = try await connect(
@@ -147,25 +162,6 @@ func storeLabel() async throws {
 
     try await passkey.labels().store(label: "personal")
     // ANCHOR_END: store-label
-}
-
-func singleCtaOnboarding() async throws -> Wallet {
-    // ANCHOR: signin-fallback-register
-    let prfProvider = PasskeyProvider(rpId: "my-app.com")
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
-
-    do {
-        let response = try await passkey.signIn(
-            request: SignInRequest(label: nil)
-        )
-        return response.wallet
-    } catch PrfProviderError.CredentialNotFound {
-        let response = try await passkey.register(
-            request: RegisterRequest(label: "personal")
-        )
-        return response.wallet
-    }
-    // ANCHOR_END: signin-fallback-register
 }
 
 func checkDomain() async throws {
