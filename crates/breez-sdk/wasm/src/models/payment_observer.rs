@@ -1,7 +1,9 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
-use crate::models::{PaymentIdUpdate, ProvisionalPayment, error::js_error_to_payment_observer_error};
+use crate::models::{
+    PaymentIdUpdate, ProvisionalPayment, error::js_error_to_payment_observer_error,
+};
 
 pub struct WasmPaymentObserver {
     pub payment_observer: PaymentObserver,

@@ -90,7 +90,9 @@ class ExamplePaymentObserver(PaymentObserver):
 
     async def after_send(self, updates: typing.List[PaymentIdUpdate]):
         for update in updates:
-            logging.debug(f"Payment id update: {update.provisional_payment_id} -> {update.final_payment_id}")
+            logging.debug(
+                f"Payment id update: {update.provisional_payment_id} -> {update.final_payment_id}"
+            )
 
 
 async def with_payment_observer(builder: SdkBuilder):

@@ -74,10 +74,7 @@ pub trait PaymentObserver: Send + Sync {
         &self,
         payments: Vec<ProvisionalPayment>,
     ) -> Result<(), PaymentObserverError>;
-    async fn after_send(
-        &self,
-        updates: Vec<PaymentIdUpdate>,
-    ) -> Result<(), PaymentObserverError>;
+    async fn after_send(&self, updates: Vec<PaymentIdUpdate>) -> Result<(), PaymentObserverError>;
 }
 
 pub(crate) struct SparkTransferObserver {

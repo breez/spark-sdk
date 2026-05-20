@@ -797,9 +797,7 @@ impl TokenService {
                                 .clone()
                                 .or(o.receiver_address.to_address_string().ok())
                                 .ok_or_else(|| {
-                                    ServiceError::Generic(
-                                        "No pay request available".to_string(),
-                                    )
+                                    ServiceError::Generic("No pay request available".to_string())
                                 })?,
                             amount: o.amount,
                         })
@@ -808,10 +806,9 @@ impl TokenService {
             })
             .transpose()?;
 
-        if let (Some(observer), Some(outputs)) = (
-            &self.transfer_observer,
-            observer_receiver_outputs.clone(),
-        ) {
+        if let (Some(observer), Some(outputs)) =
+            (&self.transfer_observer, observer_receiver_outputs.clone())
+        {
             observer
                 .before_send_token(&partial_txid, token_id, outputs)
                 .await?;
