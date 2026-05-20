@@ -1,6 +1,6 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use std::str::FromStr;
-use tracing::info;
+use tracing::{debug, info};
 
 use breez_sdk_common::buy::cashapp::CashAppProvider;
 
@@ -60,9 +60,15 @@ impl BreezSdk {
     /// Result containing either success or an `SdkError` if the background task couldn't be stopped
     pub async fn disconnect(&self) -> Result<(), SdkError> {
         info!("Disconnecting Breez SDK");
-        self.shutdown_sender
-            .send(())
-            .map_err(|_| SdkError::Generic("Failed to send shutdown signal".to_string()))?;
+        if self.shutdown_sender.send(()).is_err() {
+            // A `watch::Sender::send` error means every receiver has been
+            // dropped, i.e. no background task is listening. This is the
+            // expected steady state for a server-mode SDK
+            // (`background_tasks_enabled = false`): there is nothing to
+            // stop, so disconnecting is a successful no-op.
+            debug!("No shutdown receivers; SDK has no background tasks to stop");
+            return Ok(());
+        }
 
         self.shutdown_sender.closed().await;
         info!("Breez SDK disconnected");
