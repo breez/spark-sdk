@@ -67,9 +67,6 @@ pub trait PaymentObserver: Send + Sync {
         &self,
         payments: Vec<ProvisionalPayment>,
     ) -> Result<(), PaymentObserverError>;
-    /// Called after a token transaction is broadcast, mapping the `partial_tx_id`
-    /// used in the preceding `before_send` `payment_id` to the `final_tx_id` the
-    /// SDK persists for the same transaction.
     async fn after_send_token(
         &self,
         partial_tx_id: &str,
