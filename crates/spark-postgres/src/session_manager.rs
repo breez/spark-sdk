@@ -13,10 +13,19 @@ use spark_wallet::{Session, SessionManager, SessionManagerError};
 
 use crate::config::PostgresStorageConfig;
 use crate::error::PostgresError;
-use crate::migrations::run_migrations;
+use crate::migrations::{SchemaRenames, run_migrations};
 use crate::pool::create_pool;
 
-const SESSION_MIGRATIONS_TABLE: &str = "session_schema_migrations";
+const SESSION_MIGRATIONS_TABLE: &str = "brz_session_schema_migrations";
+
+/// Pre-prefix rename map for upgrading session-manager deployments.
+const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
+    old_migrations_table: "session_schema_migrations",
+    new_migrations_table: SESSION_MIGRATIONS_TABLE,
+    tables: &[("sessions", "brz_sessions")],
+    indexes: &[],
+    constraints: &[("brz_sessions", "sessions_pkey", "brz_sessions_pkey")],
+};
 
 /// `PostgreSQL`-backed session manager.
 ///
@@ -39,7 +48,7 @@ impl SessionManager for PostgresSessionManager {
         let service_key = service_identity_key.serialize().to_vec();
         let row = client
             .query_opt(
-                r"SELECT token, expiration FROM sessions
+                r"SELECT token, expiration FROM brz_sessions
                   WHERE user_id = $1 AND service_identity_key = $2",
                 &[&self.identity, &service_key],
             )
@@ -64,7 +73,7 @@ impl SessionManager for PostgresSessionManager {
             .map_err(|e| SessionManagerError::Generic(format!("expiration overflow: {e}")))?;
         client
             .execute(
-                r"INSERT INTO sessions (user_id, service_identity_key, token, expiration)
+                r"INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration)
                   VALUES ($1, $2, $3, $4)
                   ON CONFLICT (user_id, service_identity_key)
                   DO UPDATE SET token = EXCLUDED.token, expiration = EXCLUDED.expiration",
@@ -85,33 +94,44 @@ impl PostgresSessionManager {
         config: PostgresStorageConfig,
         identity: &[u8],
     ) -> Result<Self, PostgresError> {
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::from_pool(pool, identity, run_migration).await
     }
 
     /// Creates a new `PostgresSessionManager` from an existing connection pool.
     ///
     /// Useful when sharing a pool with other components (e.g., `PostgresStorage`).
-    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
-        Self::init(pool, identity).await
-    }
-
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, PostgresError> {
+    /// When `run_migration` is `false`, initialization trusts the existing
+    /// schema and skips session manager migrations entirely.
+    pub async fn from_pool(
+        pool: Pool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<Self, PostgresError> {
         let store = Self {
             pool,
             identity: identity.to_vec(),
         };
-        store.migrate().await?;
+        if run_migration {
+            store.migrate().await?;
+        }
         Ok(store)
     }
 
     async fn migrate(&self) -> Result<(), PostgresError> {
-        run_migrations(&self.pool, SESSION_MIGRATIONS_TABLE, &Self::migrations()).await
+        run_migrations(
+            &self.pool,
+            SESSION_MIGRATIONS_TABLE,
+            &Self::migrations(),
+            Some(&SCHEMA_RENAMES),
+        )
+        .await
     }
 
     fn migrations() -> Vec<Vec<String>> {
         vec![vec![
-            "CREATE TABLE IF NOT EXISTS sessions (
+            "CREATE TABLE IF NOT EXISTS brz_sessions (
                 user_id BYTEA NOT NULL,
                 service_identity_key BYTEA NOT NULL,
                 token TEXT NOT NULL,
@@ -142,12 +162,15 @@ pub async fn create_postgres_session_manager(
 /// Creates a `PostgresSessionManager` from an existing connection pool.
 ///
 /// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
+/// When `run_migration` is `false`, skips SDK-managed schema migrations and
+/// trusts that the `sessions` table already exists.
 pub async fn create_postgres_session_manager_from_pool(
     pool: Pool,
     identity: &[u8],
+    run_migration: bool,
 ) -> Result<Arc<dyn SessionManager>, PostgresError> {
     Ok(Arc::new(
-        PostgresSessionManager::from_pool(pool, identity).await?,
+        PostgresSessionManager::from_pool(pool, identity, run_migration).await?,
     ))
 }
 

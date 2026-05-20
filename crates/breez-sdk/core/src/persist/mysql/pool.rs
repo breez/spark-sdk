@@ -6,31 +6,34 @@ use spark_mysql::mysql_async;
 
 use crate::error::SdkError;
 
-use super::{MysqlStorageConfig, base::create_pool};
+use super::{MysqlForeignKeyMode, MysqlStorageConfig, base::create_pool};
 
 /// A shareable `MySQL` connection pool. See
 /// [`PostgresConnectionPool`](crate::PostgresConnectionPool) for sharing semantics and lifecycle.
 ///
-// TODO(post-#865): once https://github.com/breez/spark-sdk/pull/865 lands,
-// add `foreign_key_mode: MysqlForeignKeyMode` here, snapshot it from
-// `config.foreign_key_mode` in `create_mysql_connection_pool`, and forward it from the
-// SDK builder to `create_mysql_tree_store` / `create_mysql_token_store`.
+/// Snapshots the `foreign_key_mode` from the originating config so every SDK
+/// instance built on top of this pool migrates with the same FK policy.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct MysqlConnectionPool {
     pub(crate) inner: mysql_async::Pool,
+    pub(crate) run_migration: bool,
+    pub(crate) foreign_key_mode: MysqlForeignKeyMode,
 }
 
 /// Creates a shareable `MySQL` connection pool from the given configuration.
 ///
-/// Hand the returned `Arc` to one or more
-/// [`SdkBuilder::with_mysql_connection_pool`](crate::SdkBuilder::with_mysql_connection_pool)
-/// calls to share a single pool across multiple SDK instances.
+/// Used internally by [`new_shared_sdk_context`](crate::new_shared_sdk_context). Exposed
+/// for advanced use cases where a caller wants the pool itself.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn create_mysql_connection_pool(
     config: &MysqlStorageConfig,
 ) -> Result<Arc<MysqlConnectionPool>, SdkError> {
     let inner = create_pool(config).map_err(SdkError::from)?;
-    Ok(Arc::new(MysqlConnectionPool { inner }))
+    Ok(Arc::new(MysqlConnectionPool {
+        inner,
+        run_migration: config.run_migration,
+        foreign_key_mode: config.foreign_key_mode,
+    }))
 }
 
 #[cfg(test)]

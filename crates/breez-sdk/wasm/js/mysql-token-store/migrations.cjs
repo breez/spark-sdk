@@ -4,17 +4,19 @@
 
 const { TokenStoreError } = require("./errors.cjs");
 
-const TOKEN_MIGRATIONS_TABLE = "token_schema_migrations";
+const TOKEN_MIGRATIONS_TABLE = "brz_token_schema_migrations";
 const MIGRATION_LOCK_NAME = "breez_mysql_token_store_migration_lock";
 const MIGRATION_LOCK_TIMEOUT = 60;
 
 /**
  * Runs a single migration step. Plain strings are run as-is; tagged objects
- * (`{ op: 'dropPrimaryKey', table }`) are guarded against partial-apply replay
- * by checking `information_schema` first. MySQL DDL implicitly commits, so
- * if the migration crashes between two DDL statements the version row never
- * gets recorded — and on retry, an unguarded DROP PRIMARY KEY would fail
- * (`ER_CANT_DROP_FIELD_OR_KEY`) because the PK is already gone.
+ * (`{ op: 'dropPrimaryKey', table }`, `{ op: 'dropForeignKey', table, name }`)
+ * are guarded against partial-apply replay (and against the `Disabled`
+ * foreign-key mode where the FK was never created) by checking
+ * `information_schema` first. MySQL DDL implicitly commits, so if the
+ * migration crashes between two DDL statements the version row never gets
+ * recorded — and on retry, an unguarded DROP would fail because the
+ * constraint is already gone.
  */
 async function runMigrationStep(conn, step) {
   if (typeof step === "string") {
@@ -34,12 +36,45 @@ async function runMigrationStep(conn, step) {
     }
     return;
   }
+  if (step.op === "dropForeignKey") {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS c FROM information_schema.table_constraints
+       WHERE table_schema = DATABASE()
+         AND table_name = ?
+         AND constraint_type = 'FOREIGN KEY'
+         AND constraint_name = ?`,
+      [step.table, step.name]
+    );
+    if (rows[0].c > 0) {
+      await conn.query(
+        `ALTER TABLE \`${step.table}\` DROP FOREIGN KEY \`${step.name}\``
+      );
+    }
+    return;
+  }
+  if (step.op === "addForeignKey") {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS c FROM information_schema.table_constraints
+       WHERE table_schema = DATABASE()
+         AND table_name = ?
+         AND constraint_type = 'FOREIGN KEY'
+         AND constraint_name = ?`,
+      [step.table, step.name]
+    );
+    if (rows[0].c === 0) {
+      await conn.query(
+        `ALTER TABLE \`${step.table}\` ADD CONSTRAINT \`${step.name}\` ${step.definition}`
+      );
+    }
+    return;
+  }
   throw new Error(`Unknown migration step op: ${JSON.stringify(step)}`);
 }
 
 class MysqlTokenStoreMigrationManager {
-  constructor(logger = null) {
+  constructor(logger = null, foreignKeyMode = "Enforced") {
     this.logger = logger;
+    this.foreignKeyMode = foreignKeyMode;
   }
 
   /**
@@ -67,6 +102,8 @@ class MysqlTokenStoreMigrationManager {
       }
 
       try {
+        await this._applySchemaRenames(conn);
+
         await conn.query("START TRANSACTION");
 
         await conn.query(`
@@ -123,15 +160,139 @@ class MysqlTokenStoreMigrationManager {
    *   the bytes come from a typed secp256k1 pubkey (`[0-9a-f]{66}` after hex
    *   encoding) — not user-controlled input.
    */
+  /**
+   * Pre-prefix rename. Canary-gated on the legacy `token_schema_migrations`
+   * table.
+   * @param {import('mysql2/promise').PoolConnection} conn
+   */
+  async _applySchemaRenames(conn) {
+    if (!(await _mysqlTableExists(conn, "token_schema_migrations"))) {
+      return;
+    }
+
+    const tableRenames = [
+      ["token_metadata", "brz_token_metadata"],
+      ["token_reservations", "brz_token_reservations"],
+      ["token_outputs", "brz_token_outputs"],
+      ["token_spent_outputs", "brz_token_spent_outputs"],
+      ["token_swap_status", "brz_token_swap_status"],
+    ];
+    for (const [oldName, newName] of tableRenames) {
+      if (
+        (await _mysqlTableExists(conn, oldName)) &&
+        !(await _mysqlTableExists(conn, newName))
+      ) {
+        await conn.query(`RENAME TABLE \`${oldName}\` TO \`${newName}\``);
+      }
+    }
+
+    const indexRenames = [
+      [
+        "brz_token_metadata",
+        "idx_token_metadata_user_issuer_pk",
+        "brz_idx_token_metadata_user_issuer_pk",
+      ],
+      [
+        "brz_token_outputs",
+        "idx_token_outputs_user_identifier",
+        "brz_idx_token_outputs_user_identifier",
+      ],
+      [
+        "brz_token_outputs",
+        "idx_token_outputs_user_reservation",
+        "brz_idx_token_outputs_user_reservation",
+      ],
+      // Pre-multi-tenant indexes (dropped by the multi-tenant migration).
+      [
+        "brz_token_metadata",
+        "idx_token_metadata_issuer_pk",
+        "brz_idx_token_metadata_issuer_pk",
+      ],
+      [
+        "brz_token_outputs",
+        "idx_token_outputs_identifier",
+        "brz_idx_token_outputs_identifier",
+      ],
+      [
+        "brz_token_outputs",
+        "idx_token_outputs_reservation",
+        "brz_idx_token_outputs_reservation",
+      ],
+    ];
+    for (const [table, oldName, newName] of indexRenames) {
+      if (
+        (await _mysqlIndexExists(conn, table, oldName)) &&
+        !(await _mysqlIndexExists(conn, table, newName))
+      ) {
+        await conn.query(
+          `ALTER TABLE \`${table}\` RENAME INDEX \`${oldName}\` TO \`${newName}\``
+        );
+      }
+    }
+
+    const fkRenames = [
+      {
+        table: "brz_token_outputs",
+        oldName: "fk_token_outputs_metadata_user",
+        newName: "brz_fk_token_outputs_metadata_user",
+        definition:
+          "FOREIGN KEY (user_id, token_identifier) REFERENCES `brz_token_metadata`(user_id, identifier)",
+      },
+      {
+        table: "brz_token_outputs",
+        oldName: "fk_token_outputs_reservation_user",
+        newName: "brz_fk_token_outputs_reservation_user",
+        definition:
+          "FOREIGN KEY (user_id, reservation_id) REFERENCES `brz_token_reservations`(user_id, id)",
+      },
+      // Pre-multi-tenant FKs (single-column). Rename so the post-tenant
+      // migration's drop-foreign-key steps find them.
+      {
+        table: "brz_token_outputs",
+        oldName: "fk_token_outputs_metadata",
+        newName: "brz_fk_token_outputs_metadata",
+        definition:
+          "FOREIGN KEY (token_identifier) REFERENCES `brz_token_metadata`(identifier)",
+      },
+      {
+        table: "brz_token_outputs",
+        oldName: "fk_token_outputs_reservation",
+        newName: "brz_fk_token_outputs_reservation",
+        definition:
+          "FOREIGN KEY (reservation_id) REFERENCES `brz_token_reservations`(id) ON DELETE SET NULL",
+      },
+    ];
+    for (const fk of fkRenames) {
+      if (await _mysqlForeignKeyExists(conn, fk.table, fk.newName)) {
+        continue;
+      }
+      if (!(await _mysqlForeignKeyExists(conn, fk.table, fk.oldName))) {
+        continue;
+      }
+      await conn.query(
+        `ALTER TABLE \`${fk.table}\`` +
+          ` DROP FOREIGN KEY \`${fk.oldName}\`,` +
+          ` ADD CONSTRAINT \`${fk.newName}\` ${fk.definition}`
+      );
+    }
+
+    if (
+      (await _mysqlTableExists(conn, "token_schema_migrations")) &&
+      !(await _mysqlTableExists(conn, TOKEN_MIGRATIONS_TABLE))
+    ) {
+      await conn.query(
+        `RENAME TABLE \`token_schema_migrations\` TO \`${TOKEN_MIGRATIONS_TABLE}\``
+      );
+    }
+  }
+
   _getMigrations(identity) {
     const idHex = Buffer.from(identity).toString("hex");
     const idLit = `UNHEX('${idHex}')`;
+    const foreignKeyModeEnforced = this.foreignKeyMode === "Enforced";
 
-    return [
-      {
-        name: "Create token store tables",
-        sql: [
-          `CREATE TABLE IF NOT EXISTS token_metadata (
+    const initialSql = [
+          `CREATE TABLE IF NOT EXISTS brz_token_metadata (
             identifier VARCHAR(255) NOT NULL PRIMARY KEY,
             issuer_public_key VARCHAR(255) NOT NULL,
             name VARCHAR(255) NOT NULL,
@@ -141,14 +302,14 @@ class MysqlTokenStoreMigrationManager {
             is_freezable TINYINT(1) NOT NULL,
             creation_entity_public_key VARCHAR(255) NULL
           )`,
-          `CREATE INDEX idx_token_metadata_issuer_pk
-            ON token_metadata (issuer_public_key)`,
-          `CREATE TABLE IF NOT EXISTS token_reservations (
+          `CREATE INDEX brz_idx_token_metadata_issuer_pk
+            ON brz_token_metadata (issuer_public_key)`,
+          `CREATE TABLE IF NOT EXISTS brz_token_reservations (
             id VARCHAR(255) NOT NULL PRIMARY KEY,
             purpose VARCHAR(64) NOT NULL,
             created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
           )`,
-          `CREATE TABLE IF NOT EXISTS token_outputs (
+          `CREATE TABLE IF NOT EXISTS brz_token_outputs (
             id VARCHAR(255) NOT NULL PRIMARY KEY,
             token_identifier VARCHAR(255) NOT NULL,
             owner_public_key VARCHAR(255) NOT NULL,
@@ -160,33 +321,52 @@ class MysqlTokenStoreMigrationManager {
             prev_tx_hash VARCHAR(255) NOT NULL,
             prev_tx_vout INT NOT NULL,
             reservation_id VARCHAR(255) NULL,
-            added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-            CONSTRAINT fk_token_outputs_metadata FOREIGN KEY (token_identifier)
-                REFERENCES token_metadata(identifier),
-            CONSTRAINT fk_token_outputs_reservation FOREIGN KEY (reservation_id)
-                REFERENCES token_reservations(id) ON DELETE SET NULL
+            added_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
           )`,
-          `CREATE INDEX idx_token_outputs_identifier
-            ON token_outputs (token_identifier)`,
-          `CREATE INDEX idx_token_outputs_reservation
-            ON token_outputs (reservation_id)`,
-          `CREATE TABLE IF NOT EXISTS token_spent_outputs (
+          `CREATE INDEX brz_idx_token_outputs_identifier
+            ON brz_token_outputs (token_identifier)`,
+          `CREATE INDEX brz_idx_token_outputs_reservation
+            ON brz_token_outputs (reservation_id)`,
+          `CREATE TABLE IF NOT EXISTS brz_token_spent_outputs (
             output_id VARCHAR(255) NOT NULL PRIMARY KEY,
             spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
           )`,
-          `CREATE TABLE IF NOT EXISTS token_swap_status (
+          `CREATE TABLE IF NOT EXISTS brz_token_swap_status (
             id INT NOT NULL PRIMARY KEY DEFAULT 1,
             last_completed_at DATETIME(6) NULL,
             CHECK (id = 1)
           )`,
-          `INSERT INTO token_swap_status (id) VALUES (1)
+    ];
+    if (foreignKeyModeEnforced) {
+      initialSql.push(
+        {
+          op: "addForeignKey",
+          table: "brz_token_outputs",
+          name: "brz_fk_token_outputs_metadata",
+          definition: `FOREIGN KEY (token_identifier) REFERENCES brz_token_metadata(identifier)`,
+        },
+        {
+          op: "addForeignKey",
+          table: "brz_token_outputs",
+          name: "brz_fk_token_outputs_reservation",
+          definition: `FOREIGN KEY (reservation_id) REFERENCES brz_token_reservations(id) ON DELETE SET NULL`,
+        }
+      );
+    }
+
+    return [
+      {
+        name: "Create token store tables",
+        sql: [
+          ...initialSql,
+          `INSERT INTO brz_token_swap_status (id) VALUES (1)
             ON DUPLICATE KEY UPDATE id = id`,
         ],
       },
       {
         // Mirrors Rust migration 2 in spark-mysql/src/token_store.rs and the
         // postgres equivalent. Adds user_id to every token-store table
-        // (including token_metadata — per-tenant to avoid 0-balance leakage
+        // (including brz_token_metadata — per-tenant to avoid 0-balance leakage
         // for tokens a tenant never owned), backfills with the connecting
         // tenant, and rewrites primary keys / FKs / indexes to lead with
         // user_id. Composite FKs use NO ACTION because column-list SET NULL
@@ -194,62 +374,111 @@ class MysqlTokenStoreMigrationManager {
         name: "Multi-tenant scoping: add user_id and rewrite primary keys / FKs",
         sql: [
           // Drop dependent FKs FIRST so we can rewrite the parent PKs.
-          `ALTER TABLE token_outputs DROP FOREIGN KEY fk_token_outputs_metadata`,
-          `ALTER TABLE token_outputs DROP FOREIGN KEY fk_token_outputs_reservation`,
+          // Guarded so that databases created with `Disabled` foreign-key mode
+          // (where the FKs were never created) skip the DROP rather than
+          // erroring.
+          {
+            op: "dropForeignKey",
+            table: "brz_token_outputs",
+            name: "brz_fk_token_outputs_metadata",
+          },
+          {
+            op: "dropForeignKey",
+            table: "brz_token_outputs",
+            name: "brz_fk_token_outputs_reservation",
+          },
 
-          // token_metadata: per-tenant scoping (privacy — see header).
-          `ALTER TABLE token_metadata ADD COLUMN user_id VARBINARY(33) NULL`,
-          `UPDATE token_metadata SET user_id = ${idLit} WHERE user_id IS NULL`,
-          `ALTER TABLE token_metadata MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
-          `ALTER TABLE token_metadata DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, identifier)`,
-          `DROP INDEX idx_token_metadata_issuer_pk ON token_metadata`,
-          `CREATE INDEX idx_token_metadata_user_issuer_pk
-             ON token_metadata (user_id, issuer_public_key)`,
+          // brz_token_metadata: per-tenant scoping (privacy — see header).
+          `ALTER TABLE brz_token_metadata ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE brz_token_metadata SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE brz_token_metadata MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE brz_token_metadata DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, identifier)`,
+          `DROP INDEX brz_idx_token_metadata_issuer_pk ON brz_token_metadata`,
+          `CREATE INDEX brz_idx_token_metadata_user_issuer_pk
+             ON brz_token_metadata (user_id, issuer_public_key)`,
 
-          // token_reservations: scope by user_id.
-          `ALTER TABLE token_reservations ADD COLUMN user_id VARBINARY(33) NULL`,
-          `UPDATE token_reservations SET user_id = ${idLit} WHERE user_id IS NULL`,
-          `ALTER TABLE token_reservations MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
-          `ALTER TABLE token_reservations DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
+          // brz_token_reservations: scope by user_id.
+          `ALTER TABLE brz_token_reservations ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE brz_token_reservations SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE brz_token_reservations MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE brz_token_reservations DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
 
-          // token_outputs: scope by user_id, rekey, re-add composite FKs.
-          `ALTER TABLE token_outputs ADD COLUMN user_id VARBINARY(33) NULL`,
-          `UPDATE token_outputs SET user_id = ${idLit} WHERE user_id IS NULL`,
-          `ALTER TABLE token_outputs MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
-          `ALTER TABLE token_outputs DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
-          `ALTER TABLE token_outputs
-             ADD CONSTRAINT fk_token_outputs_metadata_user
-             FOREIGN KEY (user_id, token_identifier)
-             REFERENCES token_metadata(user_id, identifier)`,
-          `ALTER TABLE token_outputs
-             ADD CONSTRAINT fk_token_outputs_reservation_user
-             FOREIGN KEY (user_id, reservation_id)
-             REFERENCES token_reservations(user_id, id)`,
-          `DROP INDEX idx_token_outputs_identifier ON token_outputs`,
-          `DROP INDEX idx_token_outputs_reservation ON token_outputs`,
-          `CREATE INDEX idx_token_outputs_user_identifier
-             ON token_outputs (user_id, token_identifier)`,
-          `CREATE INDEX idx_token_outputs_user_reservation
-             ON token_outputs (user_id, reservation_id)`,
+          // brz_token_outputs: scope by user_id, rekey, optionally re-add composite FKs.
+          `ALTER TABLE brz_token_outputs ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE brz_token_outputs SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE brz_token_outputs MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE brz_token_outputs DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)`,
+          ...(foreignKeyModeEnforced
+            ? [
+                {
+                  op: "addForeignKey",
+                  table: "brz_token_outputs",
+                  name: "brz_fk_token_outputs_metadata_user",
+                  definition: `FOREIGN KEY (user_id, token_identifier) REFERENCES brz_token_metadata(user_id, identifier)`,
+                },
+                {
+                  op: "addForeignKey",
+                  table: "brz_token_outputs",
+                  name: "brz_fk_token_outputs_reservation_user",
+                  definition: `FOREIGN KEY (user_id, reservation_id) REFERENCES brz_token_reservations(user_id, id)`,
+                },
+              ]
+            : []),
+          `DROP INDEX brz_idx_token_outputs_identifier ON brz_token_outputs`,
+          `DROP INDEX brz_idx_token_outputs_reservation ON brz_token_outputs`,
+          `CREATE INDEX brz_idx_token_outputs_user_identifier
+             ON brz_token_outputs (user_id, token_identifier)`,
+          `CREATE INDEX brz_idx_token_outputs_user_reservation
+             ON brz_token_outputs (user_id, reservation_id)`,
 
-          // token_spent_outputs: scope by user_id.
-          `ALTER TABLE token_spent_outputs ADD COLUMN user_id VARBINARY(33) NULL`,
-          `UPDATE token_spent_outputs SET user_id = ${idLit} WHERE user_id IS NULL`,
-          `ALTER TABLE token_spent_outputs MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
-          `ALTER TABLE token_spent_outputs DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, output_id)`,
+          // brz_token_spent_outputs: scope by user_id.
+          `ALTER TABLE brz_token_spent_outputs ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE brz_token_spent_outputs SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE brz_token_spent_outputs MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE brz_token_spent_outputs DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, output_id)`,
 
-          // token_swap_status was a singleton (PK id=1, CHECK id=1). Drop the
+          // brz_token_swap_status was a singleton (PK id=1, CHECK id=1). Drop the
           // PK and the id column, then re-key by user_id.
-          { op: "dropPrimaryKey", table: "token_swap_status" },
-          `ALTER TABLE token_swap_status DROP COLUMN id`,
-          `ALTER TABLE token_swap_status ADD COLUMN user_id VARBINARY(33) NULL`,
-          `UPDATE token_swap_status SET user_id = ${idLit} WHERE user_id IS NULL`,
-          `ALTER TABLE token_swap_status MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
-          `ALTER TABLE token_swap_status ADD PRIMARY KEY (user_id)`,
+          { op: "dropPrimaryKey", table: "brz_token_swap_status" },
+          `ALTER TABLE brz_token_swap_status DROP COLUMN id`,
+          `ALTER TABLE brz_token_swap_status ADD COLUMN user_id VARBINARY(33) NULL`,
+          `UPDATE brz_token_swap_status SET user_id = ${idLit} WHERE user_id IS NULL`,
+          `ALTER TABLE brz_token_swap_status MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
+          `ALTER TABLE brz_token_swap_status ADD PRIMARY KEY (user_id)`,
         ],
       },
     ];
   }
+}
+
+async function _mysqlTableExists(conn, tableName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS c FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND table_name = ?`,
+    [tableName]
+  );
+  return Number(rows[0].c) > 0;
+}
+
+async function _mysqlIndexExists(conn, tableName, indexName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS c FROM information_schema.statistics
+     WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`,
+    [tableName, indexName]
+  );
+  return Number(rows[0].c) > 0;
+}
+
+async function _mysqlForeignKeyExists(conn, tableName, constraintName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS c FROM information_schema.table_constraints
+     WHERE table_schema = DATABASE()
+       AND table_name = ?
+       AND constraint_type = 'FOREIGN KEY'
+       AND constraint_name = ?`,
+    [tableName, constraintName]
+  );
+  return Number(rows[0].c) > 0;
 }
 
 module.exports = { MysqlTokenStoreMigrationManager };

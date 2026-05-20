@@ -1,5 +1,4 @@
 mod chain_service;
-mod connection_manager;
 mod error;
 mod event;
 mod issuer;
@@ -9,6 +8,7 @@ mod passkey;
 mod persist;
 mod sdk;
 mod sdk_builder;
+mod sdk_context;
 mod signer;
 mod token_store;
 mod tree_store;

@@ -44,7 +44,15 @@ func ConfigurePrivateEnabledDefault() {
 func ConfigureOptimizationConfiguration() {
 	// ANCHOR: optimization-configuration
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
-	config.OptimizationConfig = breez_sdk_spark.OptimizationConfig{AutoEnabled: true, Multiplicity: 1}
+	config.LeafOptimizationConfig = breez_sdk_spark.LeafOptimizationConfig{
+		AutoEnabled:  true,
+		Multiplicity: 1,
+	}
+	config.TokenOptimizationConfig = breez_sdk_spark.TokenOptimizationConfig{
+		AutoEnabled:         true,
+		TargetOutputCount:   5,
+		MinOutputsThreshold: 50,
+	}
 	// ANCHOR_END: optimization-configuration
 	log.Printf("Config: %+v", config)
 }
@@ -105,5 +113,16 @@ func ConfigureSparkConfig() {
 	}
 	config.SparkConfig = &sparkConfig
 	// ANCHOR_END: spark-config
+	log.Printf("Config: %+v", config)
+}
+
+func ConfigureBackgroundTasks() {
+	// ANCHOR: config-background-tasks
+	// Server-mode profile: equivalent to DefaultServerConfig(NetworkMainnet).
+	// Recommended when you build the SDK per request in a multi-tenant server
+	// deployment. See the "Server mode" page for the full profile.
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	config.BackgroundTasksEnabled = false
+	// ANCHOR_END: config-background-tasks
 	log.Printf("Config: %+v", config)
 }

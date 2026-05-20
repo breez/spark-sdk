@@ -8,14 +8,15 @@ use rstest::*;
 use tempfile::Builder;
 use tracing::info;
 
-/// Two SDK instances share a single SspConnectionManager and successfully exchange
-/// a Spark transfer. The shared HTTP client is exercised on the SSP-backed sync
-/// path (transfer history queries, token metadata) on both sides while each SDK
+/// Two SDK instances share a single `SdkContext` (and therefore the same
+/// shared HTTP client used for SSP traffic) and successfully exchange a Spark
+/// transfer. The shared HTTP client is exercised on the SSP-backed sync path
+/// (transfer history queries, token metadata) on both sides while each SDK
 /// keeps its own session/auth state.
 #[rstest]
 #[test_log::test(tokio::test)]
 async fn test_shared_ssp_connection_manager_spark_transfer() -> Result<()> {
-    let ssp_connection_manager = new_ssp_connection_manager(None);
+    let context = new_shared_sdk_context(SdkContextConfig::new(Network::Regtest)).await?;
 
     let alice_dir = Builder::new()
         .prefix("breez-sdk-shared-ssp-cm-alice")
@@ -29,17 +30,17 @@ async fn test_shared_ssp_connection_manager_spark_transfer() -> Result<()> {
     let mut bob_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bob_seed);
 
-    let mut alice = build_sdk_with_shared_ssp_connection_manager(
+    let mut alice = build_sdk_with_shared_context(
         alice_dir.path().to_string_lossy().to_string(),
         alice_seed,
-        ssp_connection_manager.clone(),
+        Arc::clone(&context),
         Some(alice_dir),
     )
     .await?;
-    let mut bob = build_sdk_with_shared_ssp_connection_manager(
+    let mut bob = build_sdk_with_shared_context(
         bob_dir.path().to_string_lossy().to_string(),
         bob_seed,
-        ssp_connection_manager.clone(),
+        Arc::clone(&context),
         Some(bob_dir),
     )
     .await?;
@@ -123,8 +124,8 @@ async fn test_shared_ssp_connection_manager_spark_transfer() -> Result<()> {
     );
 
     info!(
-        "Shared SspConnectionManager strong count: {}",
-        Arc::strong_count(&ssp_connection_manager)
+        "Shared SdkContext strong count: {}",
+        Arc::strong_count(&context)
     );
     alice.sdk.disconnect().await?;
     bob.sdk.disconnect().await?;

@@ -17,12 +17,6 @@ pub struct BalancedConnectionManager {
 
 impl BalancedConnectionManager {
     pub fn new(connections_per_operator: u32) -> Self {
-        if rustls::crypto::ring::default_provider()
-            .install_default()
-            .is_err()
-        {
-            tracing::debug!("Failed to install rustls crypto provider, ignoring error");
-        }
         Self {
             connections_map: RwLock::new(HashMap::new()),
             connections_per_operator: connections_per_operator.max(1),

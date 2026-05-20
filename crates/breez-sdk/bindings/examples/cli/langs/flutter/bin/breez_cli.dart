@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:breez_cli/cli.dart';
 import 'package:breez_cli/passkey.dart';
+import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<void> main(List<String> arguments) async {
   final parser =
@@ -14,7 +15,12 @@ Future<void> main(List<String> arguments) async {
           'postgres-connection-string',
           help: 'PostgreSQL connection string (uses SQLite by default)',
         )
-        ..addOption('stable-balance-token-identifier', help: 'Stable balance token identifier')
+        ..addOption('mysql-connection-string', help: 'MySQL connection string (uses SQLite by default)')
+        ..addMultiOption(
+          'stable-balance-token',
+          help: 'Stable balance token in TICKER:token_identifier format (repeatable)',
+        )
+        ..addOption('stable-balance-default-active-label', help: 'Default active label for stable balance')
         ..addOption('stable-balance-threshold', help: 'Stable balance threshold in sats')
         ..addOption(
           'passkey',
@@ -58,7 +64,28 @@ Future<void> main(List<String> arguments) async {
   final accountNumberStr = results.option('account-number');
   final accountNumber = accountNumberStr != null ? int.parse(accountNumberStr) : null;
   final postgresConnectionString = results.option('postgres-connection-string');
-  final stableBalanceTokenIdentifier = results.option('stable-balance-token-identifier');
+  final mysqlConnectionString = results.option('mysql-connection-string');
+
+  if (postgresConnectionString != null && mysqlConnectionString != null) {
+    stderr.writeln(
+      'Error: --postgres-connection-string and --mysql-connection-string are mutually exclusive',
+    );
+    exit(1);
+  }
+
+  final stableBalanceTokenStrings = results.multiOption('stable-balance-token');
+  final stableBalanceTokens = <StableBalanceToken>[];
+  for (final s in stableBalanceTokenStrings) {
+    final colonIdx = s.indexOf(':');
+    if (colonIdx < 0) {
+      stderr.writeln("Invalid token format '$s', expected LABEL:token_identifier");
+      exit(1);
+    }
+    final label = s.substring(0, colonIdx);
+    final tokenIdentifier = s.substring(colonIdx + 1);
+    stableBalanceTokens.add(StableBalanceToken(label: label, tokenIdentifier: tokenIdentifier));
+  }
+  final stableBalanceDefaultActiveLabel = results.option('stable-balance-default-active-label');
   final stableBalanceThresholdStr = results.option('stable-balance-threshold');
   final stableBalanceThreshold =
       stableBalanceThresholdStr != null ? BigInt.parse(stableBalanceThresholdStr) : null;
@@ -103,7 +130,9 @@ Future<void> main(List<String> arguments) async {
     network: network,
     accountNumber: accountNumber,
     postgresConnectionString: postgresConnectionString,
-    stableBalanceTokenIdentifier: stableBalanceTokenIdentifier,
+    mysqlConnectionString: mysqlConnectionString,
+    stableBalanceTokens: stableBalanceTokens,
+    stableBalanceDefaultActiveLabel: stableBalanceDefaultActiveLabel,
     stableBalanceThreshold: stableBalanceThreshold,
     passkeyConfig: passkeyConfig,
   );

@@ -496,7 +496,7 @@ impl FromStr for SparkHtlcStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Network {
     Mainnet,
@@ -585,8 +585,15 @@ pub struct Config {
 
     /// Whether the Spark private mode is enabled by default.
     ///
-    /// If set to true, the Spark private mode will be enabled on the first initialization of the SDK.
-    /// If set to false, no changes will be made to the Spark private mode.
+    /// If set to true, the Spark private mode will be enabled on the first
+    /// initialization of the SDK. If set to false, no changes will be made
+    /// to the Spark private mode.
+    ///
+    /// This default is only auto-applied when `background_tasks_enabled` is
+    /// `true`. When `background_tasks_enabled` is `false`, the SDK does not
+    /// touch the Spark private mode on startup; call `update_user_settings`
+    /// with `spark_private_mode_enabled` set as needed on a one-time setup
+    /// pass.
     pub private_enabled_default: bool,
 
     /// Configuration for leaf optimization.
@@ -594,7 +601,15 @@ pub struct Config {
     /// Leaf optimization controls the denominations of leaves that are held in the wallet.
     /// Fewer, bigger leaves allow for more funds to be exited unilaterally.
     /// More leaves allow payments to be made without needing a swap, reducing payment latency.
-    pub optimization_config: OptimizationConfig,
+    pub leaf_optimization_config: LeafOptimizationConfig,
+
+    /// Configuration for token-output optimization.
+    ///
+    /// Token-output optimization controls automatic consolidation of a token's
+    /// available outputs. Keeping the output set small reduces transaction size,
+    /// while keeping enough distinct outputs preserves concurrency for parallel
+    /// sends.
+    pub token_optimization_config: TokenOptimizationConfig,
 
     /// Configuration for automatic conversion of Bitcoin to stable tokens.
     ///
@@ -613,11 +628,38 @@ pub struct Config {
     /// threshold, and token settings. Use this to connect to alternative Spark
     /// deployments (e.g. dev/staging environments).
     pub spark_config: Option<SparkConfig>,
+
+    /// Master switch for per-instance background services.
+    ///
+    /// When `true` (default), the SDK runs its standard background work:
+    /// periodic sync, lightning-address recovery, private-mode initialization,
+    /// the leaf and token-output optimizers, the Spark server-event
+    /// subscription, and the real-time sync client (when
+    /// `real_time_sync_server_url` is set).
+    ///
+    /// When `false`, **no background service is started**, regardless of any
+    /// other setting on this config. This is intended for multi-tenant server
+    /// deployments where the host application orchestrates sync and claims
+    /// explicitly and receives events via webhooks. Use
+    /// `default_server_config` to get this preset.
+    ///
+    /// Explicit operations (`sync_wallet`, `claim_deposit`,
+    /// `list_unclaimed_deposits`, `refund_deposit`,
+    /// `refund_pending_conversions`, leaf/token optimization, etc.) work
+    /// regardless of this flag.
+    ///
+    /// When `false`, the SDK rejects builds where fields whose backing
+    /// service is gated off are still in their active shape:
+    /// `stable_balance_config` must be `None`, `real_time_sync_server_url`
+    /// must be `None`, and `optimization_config.auto_enabled` must be `false`.
+    /// `default_server_config` already sets these compatible values.
+    pub background_tasks_enabled: bool,
 }
 
+/// Configuration for leaf optimization.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct OptimizationConfig {
+pub struct LeafOptimizationConfig {
     /// Whether automatic leaf optimization is enabled.
     ///
     /// If set to true, the SDK will automatically optimize the leaf set when it changes.
@@ -637,6 +679,42 @@ pub struct OptimizationConfig {
     ///
     /// Default value is 1.
     pub multiplicity: u8,
+}
+
+/// Configuration for token-output optimization.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TokenOptimizationConfig {
+    /// Whether automatic token-output consolidation is enabled.
+    ///
+    /// If set to true, the SDK will periodically consolidate a token's outputs
+    /// once their count exceeds [`Self::min_outputs_threshold`]. Otherwise, no
+    /// automatic consolidation is performed.
+    ///
+    /// Default value is true.
+    pub auto_enabled: bool,
+    /// Number of token outputs to produce when token-output auto-consolidation
+    /// fires.
+    ///
+    /// Instead of collapsing a token's outputs into a single output (which
+    /// serializes subsequent payments), the SDK splits the consolidated balance
+    /// across this many outputs of roughly equal value. Higher values preserve
+    /// concurrency for parallel sends at the cost of a slightly larger output
+    /// set.
+    ///
+    /// Must be >= 1 and strictly less than [`Self::min_outputs_threshold`].
+    ///
+    /// Default value is 5.
+    pub target_output_count: u32,
+    /// Output count that triggers per-token auto-consolidation.
+    ///
+    /// Auto-consolidation triggers for a token when its available output count
+    /// strictly exceeds this threshold.
+    ///
+    /// Must be greater than 1.
+    ///
+    /// Default value is 50.
+    pub min_outputs_threshold: u32,
 }
 
 /// A stable token that can be used for automatic balance conversion.
@@ -814,6 +892,23 @@ impl Config {
                     "default_active_label '{default_label}' not found in tokens list"
                 )));
             }
+        }
+
+        let token_opt = &self.token_optimization_config;
+        if token_opt.min_outputs_threshold <= 1 {
+            return Err(SdkError::InvalidInput(
+                "token optimization minimum outputs threshold must be greater than 1".to_string(),
+            ));
+        }
+        if token_opt.target_output_count < 1 {
+            return Err(SdkError::InvalidInput(
+                "token optimization target output count must be at least 1".to_string(),
+            ));
+        }
+        if token_opt.target_output_count >= token_opt.min_outputs_threshold {
+            return Err(SdkError::InvalidInput(
+                "token optimization target output count must be less than the minimum outputs threshold".to_string(),
+            ));
         }
 
         Ok(())
@@ -1010,6 +1105,12 @@ pub struct Credentials {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetInfoRequest {
+    /// When `Some(true)`, and `background_tasks_enabled` is `true`, the call
+    /// waits for the initial Full sync to complete before returning.
+    ///
+    /// When `background_tasks_enabled` is `false`, setting this to `Some(true)`
+    /// is rejected with an invalid-input error. There is no background sync to
+    /// wait on; call `sync_wallet` explicitly first if you need fresh state.
     pub ensure_synced: Option<bool>,
 }
 

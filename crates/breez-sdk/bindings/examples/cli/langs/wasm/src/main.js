@@ -10,9 +10,10 @@ const { parse: parseShell } = require('shell-quote')
 
 const {
   SdkBuilder,
-  createPostgresConnectionPool,
   defaultConfig,
+  defaultMysqlStorageConfig,
   defaultPostgresStorageConfig,
+  newSharedSdkContext,
   initLogging,
   getSparkStatus
 } = require('@breeztech/breez-sdk-spark/nodejs')
@@ -32,7 +33,9 @@ function parseCliArgs() {
     network: 'regtest',
     accountNumber: undefined,
     postgresConnectionString: undefined,
-    stableBalanceTokenIdentifier: undefined,
+    mysqlConnectionString: undefined,
+    stableBalanceTokens: [],
+    stableBalanceDefaultActiveLabel: undefined,
     stableBalanceThreshold: undefined,
     passkey: undefined,
     label: undefined,
@@ -56,8 +59,14 @@ function parseCliArgs() {
       case '--postgres-connection-string':
         opts.postgresConnectionString = args[++i]
         break
-      case '--stable-balance-token-identifier':
-        opts.stableBalanceTokenIdentifier = args[++i]
+      case '--mysql-connection-string':
+        opts.mysqlConnectionString = args[++i]
+        break
+      case '--stable-balance-token':
+        opts.stableBalanceTokens.push(args[++i])
+        break
+      case '--stable-balance-default-active-label':
+        opts.stableBalanceDefaultActiveLabel = args[++i]
         break
       case '--stable-balance-threshold':
         opts.stableBalanceThreshold = parseInt(args[++i], 10)
@@ -86,7 +95,9 @@ function parseCliArgs() {
         console.log('  --network <network>                          Network to use: regtest or mainnet (default: regtest)')
         console.log('  --account-number <number>                    Account number for the Spark signer')
         console.log('  --postgres-connection-string <string>        PostgreSQL connection string')
-        console.log('  --stable-balance-token-identifier <string>   Stable balance token identifier')
+        console.log('  --mysql-connection-string <string>           MySQL connection string')
+        console.log('  --stable-balance-token <LABEL:id>            Stable balance token in LABEL:token_identifier format (repeatable)')
+        console.log('  --stable-balance-default-active-label <label> Default active label for stable balance')
         console.log('  --stable-balance-threshold <number>          Stable balance threshold in sats')
         console.log('  --passkey <provider>                         Use passkey with PRF provider (file, yubikey, or fido2)')
         console.log('  --label <name>                               Label for seed derivation (requires --passkey)')
@@ -129,6 +140,11 @@ function parseCliArgs() {
 
   if (opts.listLabels && (opts.label || opts.storeLabel)) {
     console.error('--list-labels conflicts with --label and --store-label')
+    process.exit(1)
+  }
+
+  if (opts.postgresConnectionString && opts.mysqlConnectionString) {
+    console.error('--postgres-connection-string and --mysql-connection-string are mutually exclusive')
     process.exit(1)
   }
 
@@ -213,12 +229,22 @@ async function main() {
   }
 
   // Stable balance config
-  if (opts.stableBalanceTokenIdentifier) {
+  if (opts.stableBalanceTokens.length > 0) {
+    const tokens = opts.stableBalanceTokens.map((s) => {
+      const colonIdx = s.indexOf(':')
+      if (colonIdx === -1) {
+        throw new Error(`Invalid token format '${s}', expected LABEL:token_identifier`)
+      }
+      return {
+        label: s.slice(0, colonIdx),
+        tokenIdentifier: s.slice(colonIdx + 1)
+      }
+    })
     config.stableBalanceConfig = {
-      tokenIdentifier: opts.stableBalanceTokenIdentifier,
+      tokens,
+      defaultActiveLabel: opts.stableBalanceDefaultActiveLabel,
       thresholdSats: opts.stableBalanceThreshold,
-      maxSlippageBps: undefined,
-      reservedSats: undefined
+      maxSlippageBps: undefined
     }
   }
 
@@ -243,10 +269,19 @@ async function main() {
   let sdkBuilder = SdkBuilder.new(config, seed)
 
   if (opts.postgresConnectionString) {
-    const pool = createPostgresConnectionPool(
-      defaultPostgresStorageConfig(opts.postgresConnectionString)
-    )
-    sdkBuilder = sdkBuilder.withPostgresConnectionPool(pool)
+    const context = await newSharedSdkContext({
+      network,
+      apiKey: breezApiKey,
+      postgresConfig: defaultPostgresStorageConfig(opts.postgresConnectionString)
+    })
+    sdkBuilder = sdkBuilder.withSharedContext(context)
+  } else if (opts.mysqlConnectionString) {
+    const context = await newSharedSdkContext({
+      network,
+      apiKey: breezApiKey,
+      mysqlConfig: defaultMysqlStorageConfig(opts.mysqlConnectionString)
+    })
+    sdkBuilder = sdkBuilder.withSharedContext(context)
   } else {
     sdkBuilder = await sdkBuilder.withDefaultStorage(dataDir)
   }

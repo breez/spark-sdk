@@ -440,3 +440,15 @@ async fn test_insert_outputs_clears_spent_status() {
     let store = InMemoryTokenOutputStore::default();
     shared_tests::test_insert_outputs_clears_spent_status(&store).await;
 }
+
+#[async_test_all]
+async fn test_remove_token_outputs_by_prev_tx_ref() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_remove_token_outputs_by_prev_tx_ref(&store).await;
+}
+
+#[async_test_all]
+async fn test_remove_token_outputs_prevents_refresh_readd() {
+    let store = InMemoryTokenOutputStore::default();
+    shared_tests::test_remove_token_outputs_prevents_refresh_readd(&store).await;
+}

@@ -1,9 +1,11 @@
 use bitcoin::hashes::sha256;
-use platform_utils::time::Duration;
+use bitcoin::secp256k1::PublicKey;
+use platform_utils::time::{Duration, SystemTime};
+use platform_utils::tokio;
 use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
+use spark_wallet::{InvoiceDescription, Preimage};
 use std::str::FromStr;
-use tokio::select;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 use tracing::{Instrument, error, info, warn};
 
@@ -32,13 +34,9 @@ use crate::{
         token::map_and_persist_token_transaction,
     },
 };
-use bitcoin::secp256k1::PublicKey;
-use platform_utils::time::SystemTime;
-use platform_utils::tokio;
-use spark_wallet::{InvoiceDescription, Preimage};
 
 use super::{
-    BreezSdk, SyncType,
+    BreezSdk,
     helpers::{InternalEventListener, get_deposit_address, is_payment_match},
 };
 
@@ -49,7 +47,7 @@ impl BreezSdk {
         &self,
         request: ReceivePaymentRequest,
     ) -> Result<ReceivePaymentResponse, SdkError> {
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
         match request.payment_method {
             ReceivePaymentMethod::SparkAddress => Ok(ReceivePaymentResponse {
                 fee: 0,
@@ -413,7 +411,7 @@ impl BreezSdk {
         &self,
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
         Box::pin(self.maybe_convert_token_send_payment(request, false, None)).await
     }
 
@@ -423,6 +421,22 @@ impl BreezSdk {
     ) -> Result<FetchConversionLimitsResponse, SdkError> {
         self.token_converter
             .fetch_limits(&request)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Runs one pass of the pending-conversion refunder.
+    ///
+    /// Iterates over payments whose conversions failed and have a refund
+    /// pending, then attempts to refund each one. This is the same logic the
+    /// SDK runs internally on a periodic schedule when
+    /// `background_tasks_enabled` is `true`. When background tasks are
+    /// disabled the periodic refunder does not run, and this method is the
+    /// explicit entry point for driving the pass; when background tasks are
+    /// enabled, it can be called to force an immediate refund pass.
+    pub async fn refund_pending_conversions(&self) -> Result<(), SdkError> {
+        self.token_converter
+            .refund_pending()
             .await
             .map_err(Into::into)
     }
@@ -568,16 +582,14 @@ impl BreezSdk {
         } else {
             Box::pin(self.send_payment_internal(&request, amount_override)).await
         };
-        // Emit payment status event and trigger wallet state sync
-        if let Ok(response) = &res {
-            if !suppress_payment_event {
-                // Emit the payment with metadata already included
-                self.event_emitter
-                    .emit(&SdkEvent::from_payment(response.payment.clone()))
-                    .await;
-            }
-            self.sync_coordinator
-                .trigger_sync_no_wait(SyncType::WalletState, true)
+        // Emit payment status event. Client runtime listens to payment events
+        // and schedules a wallet-state refresh when background sync is active.
+        if let Ok(response) = &res
+            && !suppress_payment_event
+        {
+            // Emit the payment with metadata already included
+            self.event_emitter
+                .emit(&SdkEvent::from_payment(response.payment.clone()))
                 .await;
         }
         res
@@ -823,16 +835,6 @@ impl BreezSdk {
         caller_amount_override: Option<u64>,
         suppress_payment_event: &mut bool,
     ) -> Result<SendPaymentResponse, SdkError> {
-        // Trigger a wallet state sync if converting from Bitcoin to token
-        if matches!(
-            conversion_options.conversion_type,
-            ConversionType::FromBitcoin
-        ) {
-            self.sync_coordinator
-                .trigger_sync_no_wait(SyncType::WalletState, true)
-                .await;
-        }
-
         // Wait for the received conversion payment to complete
         let payment = self
             .wait_for_payment(
@@ -1288,6 +1290,7 @@ impl BreezSdk {
             ),
         )
         .await?;
+        let completion_timeout_secs = completion_timeout_secs.unwrap_or(0);
         let payment = match payment_response.lightning_payment {
             Some(lightning_payment) => {
                 let ssp_id = lightning_payment.id.clone();
@@ -1306,28 +1309,34 @@ impl BreezSdk {
                     payment_response.transfer.id.to_string(),
                     htlc_details,
                 )?;
-                self.poll_lightning_send_payment(&payment, ssp_id);
-                payment
+                let completion_rx = self.poll_lightning_send_payment(&payment, ssp_id);
+                if completion_timeout_secs == 0 {
+                    payment
+                } else {
+                    // Wait up to the caller's timeout for the background
+                    // poll to signal completion. The poll keeps running in
+                    // either branch — it still emits `PaymentSucceeded`
+                    // when terminal — so dropping the receiver on timeout
+                    // is harmless. We fall back to the pre-confirmation
+                    // payment if the wait times out or the channel closes
+                    // (e.g. missing HTLC details).
+                    tokio::time::timeout(
+                        Duration::from_secs(completion_timeout_secs.into()),
+                        completion_rx,
+                    )
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or(payment)
+                }
             }
+            // Spark-routed Lightning sends complete synchronously inside
+            // `pay_lightning_invoice` — there is no SSP-side state to poll,
+            // so `completion_timeout_secs` is ignored for this branch and
+            // the payment is returned with whatever status the transfer
+            // already has.
             None => payment_response.transfer.try_into()?,
         };
-
-        let completion_timeout_secs = completion_timeout_secs.unwrap_or(0);
-
-        if completion_timeout_secs == 0 {
-            // Insert the payment into storage to make it immediately available for listing
-            self.storage.insert_payment(payment.clone()).await?;
-
-            return Ok(SendPaymentResponse { payment });
-        }
-
-        let payment = self
-            .wait_for_payment(
-                WaitForPaymentIdentifier::PaymentId(payment.id.clone()),
-                completion_timeout_secs,
-            )
-            .await
-            .unwrap_or(payment);
 
         // Insert the payment into storage to make it immediately available for listing
         self.storage.insert_payment(payment.clone()).await?;
@@ -1465,10 +1474,18 @@ impl BreezSdk {
         result
     }
 
-    // Pools the lightning send payment until it is in completed state.
-    fn poll_lightning_send_payment(&self, payment: &Payment, ssp_id: String) {
+    /// Spawns the background poll that watches an outgoing Lightning send to
+    /// completion. Returns a receiver that resolves to the terminal `Payment`
+    /// when the SSP reports a non-`Pending` status, so callers can `await`
+    /// completion synchronously with their own timeout.
+    fn poll_lightning_send_payment(
+        &self,
+        payment: &Payment,
+        ssp_id: String,
+    ) -> oneshot::Receiver<Payment> {
         const MAX_POLL_ATTEMPTS: u32 = 20;
         let payment_id = payment.id.clone();
+        let (tx, rx) = oneshot::channel();
         info!("Polling lightning send payment {}", payment_id);
 
         let Some(htlc_details) = payment.details.as_ref().and_then(|d| match d {
@@ -1478,11 +1495,10 @@ impl BreezSdk {
             error!(
                 "Missing HTLC details for lightning send payment {payment_id}, skipping polling"
             );
-            return;
+            return rx;
         };
         let spark_wallet = self.spark_wallet.clone();
         let storage = self.storage.clone();
-        let sync_coordinator = self.sync_coordinator.clone();
         let event_emitter = self.event_emitter.clone();
         let payment = payment.clone();
         let payment_id = payment_id.clone();
@@ -1490,45 +1506,52 @@ impl BreezSdk {
         let span = tracing::Span::current();
 
         tokio::spawn(async move {
-            for i in 0..MAX_POLL_ATTEMPTS {
-                info!(
-                    "Polling lightning send payment {} attempt {}",
-                    payment_id, i
-                );
-                select! {
-                    _ = shutdown.changed() => {
-                        info!("Shutdown signal received");
-                        return;
-                    },
-                    p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
-                        if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
-                            info!("Polling payment status = {} {:?}", payment.status, p.status);
-                            if payment.status != PaymentStatus::Pending {
-                                info!("Polling payment completed status = {}", payment.status);
-                                // Update storage before emitting event so that
-                                // get_payment returns the correct status immediately.
-                                if let Err(e) = storage.insert_payment(payment.clone()).await {
-                                    error!("Failed to update payment in storage: {e:?}");
+            // Drive the poll loop until we either reach a terminal status,
+            // hit the attempt cap, or get a shutdown signal.
+            let terminal_payment: Option<Payment> = 'poll: {
+                for i in 0..MAX_POLL_ATTEMPTS {
+                    info!(
+                        "Polling lightning send payment {} attempt {}",
+                        payment_id, i
+                    );
+                    tokio::select! {
+                        _ = shutdown.changed() => {
+                            info!("Shutdown signal received");
+                            break 'poll None;
+                        },
+                        p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
+                            if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
+                                info!("Polling payment status = {} {:?}", payment.status, p.status);
+                                if payment.status != PaymentStatus::Pending {
+                                    info!("Polling payment completed status = {}", payment.status);
+                                    break 'poll Some(payment);
                                 }
-                                // Fetch the payment to include already stored metadata
-                                get_payment_and_emit_event(&storage, &event_emitter, payment.clone()).await;
-                                sync_coordinator
-                                    .trigger_sync_no_wait(SyncType::WalletState, true)
-                                    .await;
-                                return;
                             }
-                        }
 
-                        let sleep_time = if i < 5 {
-                            Duration::from_secs(1)
-                        } else {
-                            Duration::from_secs(i.into())
-                        };
-                        tokio::time::sleep(sleep_time).await;
+                            let sleep_time = if i < 5 {
+                                Duration::from_secs(1)
+                            } else {
+                                Duration::from_secs(i.into())
+                            };
+                            tokio::time::sleep(sleep_time).await;
+                        }
                     }
                 }
+                None
+            };
+
+            let Some(payment) = terminal_payment else {
+                return;
+            };
+
+            let _ = tx.send(payment.clone());
+            if let Err(e) = storage.insert_payment(payment.clone()).await {
+                error!("Failed to update payment in storage: {e:?}");
             }
+            get_payment_and_emit_event(&storage, &event_emitter, payment).await;
         }.instrument(span));
+
+        rx
     }
 
     #[expect(clippy::too_many_arguments)]

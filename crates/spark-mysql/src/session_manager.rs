@@ -13,10 +13,21 @@ use spark_wallet::{Session, SessionManager, SessionManagerError};
 
 use crate::config::MysqlStorageConfig;
 use crate::error::MysqlError;
-use crate::migrations::{Migration, run_migrations};
+use crate::migrations::{Migration, SchemaRenames, run_migrations};
 use crate::pool::create_pool;
 
-const SESSION_MIGRATIONS_TABLE: &str = "session_schema_migrations";
+const SESSION_MIGRATIONS_TABLE: &str = "brz_session_schema_migrations";
+
+/// Pre-prefix rename map for upgrading session-manager deployments.
+/// `MySQL` PKs are always named `PRIMARY` (table-scoped), so only the table
+/// and migrations tracker need renaming.
+const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
+    old_migrations_table: "session_schema_migrations",
+    new_migrations_table: SESSION_MIGRATIONS_TABLE,
+    tables: &[("sessions", "brz_sessions")],
+    indexes: &[],
+    foreign_keys: &[],
+};
 
 /// `MySQL`-backed session manager.
 ///
@@ -39,7 +50,7 @@ impl SessionManager for MysqlSessionManager {
         let service_key = service_identity_key.serialize().to_vec();
         let row: Option<Row> = conn
             .exec_first(
-                "SELECT token, expiration FROM sessions \
+                "SELECT token, expiration FROM brz_sessions \
                  WHERE user_id = ? AND service_identity_key = ?",
                 (self.identity.clone(), service_key),
             )
@@ -69,7 +80,7 @@ impl SessionManager for MysqlSessionManager {
         let expiration = i64::try_from(session.expiration)
             .map_err(|e| SessionManagerError::Generic(format!("expiration overflow: {e}")))?;
         conn.exec_drop(
-            "INSERT INTO sessions (user_id, service_identity_key, token, expiration) \
+            "INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration) \
              VALUES (?, ?, ?, ?) \
              ON DUPLICATE KEY UPDATE token = VALUES(token), expiration = VALUES(expiration)",
             (
@@ -91,31 +102,44 @@ impl MysqlSessionManager {
         config: MysqlStorageConfig,
         identity: &[u8],
     ) -> Result<Self, MysqlError> {
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::init(pool, identity).await
+        Self::from_pool(pool, identity, run_migration).await
     }
 
-    /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
-    pub async fn from_pool(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
-        Self::init(pool, identity).await
-    }
-
-    async fn init(pool: Pool, identity: &[u8]) -> Result<Self, MysqlError> {
+    /// Creates a new `MysqlSessionManager` from an existing connection pool.
+    ///
+    /// `identity` is the 33-byte secp256k1 pubkey of the tenant. When
+    /// `run_migration` is `false`, initialization trusts the existing schema
+    /// and skips session manager migrations entirely.
+    pub async fn from_pool(
+        pool: Pool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<Self, MysqlError> {
         let store = Self {
             pool,
             identity: identity.to_vec(),
         };
-        store.migrate().await?;
+        if run_migration {
+            store.migrate().await?;
+        }
         Ok(store)
     }
 
     async fn migrate(&self) -> Result<(), MysqlError> {
-        run_migrations(&self.pool, SESSION_MIGRATIONS_TABLE, &Self::migrations()).await
+        run_migrations(
+            &self.pool,
+            SESSION_MIGRATIONS_TABLE,
+            &Self::migrations(),
+            Some(&SCHEMA_RENAMES),
+        )
+        .await
     }
 
     fn migrations() -> Vec<Vec<Migration>> {
         vec![vec![Migration::sql(
-            "CREATE TABLE IF NOT EXISTS sessions (
+            "CREATE TABLE IF NOT EXISTS brz_sessions (
                 user_id VARBINARY(33) NOT NULL,
                 service_identity_key VARBINARY(33) NOT NULL,
                 token TEXT NOT NULL,
@@ -145,12 +169,15 @@ pub async fn create_mysql_session_manager(
 /// Creates a `MysqlSessionManager` from an existing connection pool.
 ///
 /// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
+/// When `run_migration` is `false`, skips SDK-managed schema migrations and
+/// trusts that the `sessions` table already exists.
 pub async fn create_mysql_session_manager_from_pool(
     pool: Pool,
     identity: &[u8],
+    run_migration: bool,
 ) -> Result<Arc<dyn SessionManager>, MysqlError> {
     Ok(Arc::new(
-        MysqlSessionManager::from_pool(pool, identity).await?,
+        MysqlSessionManager::from_pool(pool, identity, run_migration).await?,
     ))
 }
 

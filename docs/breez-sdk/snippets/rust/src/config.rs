@@ -40,9 +40,14 @@ pub(crate) fn configure_private_enabled_default() -> Result<()> {
 pub(crate) fn configure_optimization_configuration() -> Result<()> {
     // ANCHOR: optimization-configuration
     let mut config = default_config(Network::Mainnet);
-    config.optimization_config = OptimizationConfig {
+    config.leaf_optimization_config = LeafOptimizationConfig {
         auto_enabled: true,
         multiplicity: 1,
+    };
+    config.token_optimization_config = TokenOptimizationConfig {
+        auto_enabled: true,
+        target_output_count: 5,
+        min_outputs_threshold: 50,
     };
     // ANCHOR_END: optimization-configuration
     info!("Config: {:?}", config);
@@ -120,6 +125,18 @@ pub(crate) fn configure_spark_config() -> Result<()> {
         expected_withdraw_relative_block_locktime: 1_000,
     });
     // ANCHOR_END: spark-config
+    info!("Config: {:?}", config);
+    Ok(())
+}
+
+pub(crate) fn configure_background_tasks() -> Result<()> {
+    // ANCHOR: config-background-tasks
+    // Server-mode profile: equivalent to default_server_config(Network::Mainnet).
+    // Recommended when you build the SDK per request in a multi-tenant server
+    // deployment. See the "Server mode" page for the full profile.
+    let mut config = default_config(Network::Mainnet);
+    config.background_tasks_enabled = false;
+    // ANCHOR_END: config-background-tasks
     info!("Config: {:?}", config);
     Ok(())
 }

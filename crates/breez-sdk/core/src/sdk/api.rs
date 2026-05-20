@@ -1,6 +1,6 @@
 use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
 use std::str::FromStr;
-use tracing::info;
+use tracing::{debug, info};
 
 use breez_sdk_common::buy::cashapp::CashAppProvider;
 
@@ -60,9 +60,15 @@ impl BreezSdk {
     /// Result containing either success or an `SdkError` if the background task couldn't be stopped
     pub async fn disconnect(&self) -> Result<(), SdkError> {
         info!("Disconnecting Breez SDK");
-        self.shutdown_sender
-            .send(())
-            .map_err(|_| SdkError::Generic("Failed to send shutdown signal".to_string()))?;
+        if self.shutdown_sender.send(()).is_err() {
+            // A `watch::Sender::send` error means every receiver has been
+            // dropped, i.e. no background task is listening. This is the
+            // expected steady state for a server-mode SDK
+            // (`background_tasks_enabled = false`): there is nothing to
+            // stop, so disconnecting is a successful no-op.
+            debug!("No shutdown receivers; SDK has no background tasks to stop");
+            return Ok(());
+        }
 
         self.shutdown_sender.closed().await;
         info!("Breez SDK disconnected");
@@ -76,25 +82,7 @@ impl BreezSdk {
     /// Returns the balance of the wallet in satoshis
     #[allow(unused_variables)]
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
-        if request.ensure_synced.unwrap_or_default() {
-            self.initial_synced_watcher
-                .clone()
-                .changed()
-                .await
-                .map_err(|_| {
-                    SdkError::Generic("Failed to receive initial synced signal".to_string())
-                })?;
-        }
-        let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        let account_info = object_repository
-            .fetch_account_info()
-            .await?
-            .unwrap_or_default();
-        Ok(GetInfoResponse {
-            identity_pubkey: self.spark_wallet.get_identity_public_key().to_string(),
-            balance_sats: account_info.balance_sats,
-            token_balances: account_info.token_balances,
-        })
+        self.runtime.get_info(self, request).await
     }
 
     /// List fiat currencies for which there is a known exchange rate,
@@ -205,7 +193,7 @@ impl BreezSdk {
     /// Some settings are fetched from the Spark network so network requests are performed.
     pub async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
         // Ensure spark private mode is initialized to avoid race conditions with the initialization task.
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
 
         let spark_user_settings = self.spark_wallet.query_wallet_settings().await?;
 

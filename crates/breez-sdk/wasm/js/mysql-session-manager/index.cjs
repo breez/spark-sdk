@@ -33,7 +33,7 @@ class MysqlSessionManager {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity || identity.length !== 33) {
       throw new SessionManagerError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -42,12 +42,15 @@ class MysqlSessionManager {
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.logger = logger;
+    this.runMigration = runMigration;
   }
 
   async initialize() {
     try {
-      const migrationManager = new MysqlSessionManagerMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool);
+      if (this.runMigration) {
+        const migrationManager = new MysqlSessionManagerMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool);
+      }
       return this;
     } catch (error) {
       throw new SessionManagerError(
@@ -72,7 +75,7 @@ class MysqlSessionManager {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
       const [rows] = await this.pool.execute(
-        `SELECT token, expiration FROM sessions
+        `SELECT token, expiration FROM brz_sessions
          WHERE user_id = ? AND service_identity_key = ?`,
         [this.identity, serviceKey]
       );
@@ -100,7 +103,7 @@ class MysqlSessionManager {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
       await this.pool.execute(
-        `INSERT INTO sessions (user_id, service_identity_key, token, expiration)
+        `INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration)
          VALUES (?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE token = VALUES(token), expiration = VALUES(expiration)`,
         [this.identity, serviceKey, session.token, session.expiration]
@@ -125,13 +128,28 @@ function _decodePubkey(hex) {
 
 async function createMysqlSessionManager(poolConfig, identity, logger = null) {
   const pool = mysql.createPool(poolConfig);
-  const manager = new MysqlSessionManager(pool, identity, logger);
+  const manager = new MysqlSessionManager(
+    pool,
+    identity,
+    logger,
+    poolConfig.runMigration !== false
+  );
   await manager.initialize();
   return manager;
 }
 
-async function createMysqlSessionManagerWithPool(pool, identity, logger = null) {
-  const manager = new MysqlSessionManager(pool, identity, logger);
+async function createMysqlSessionManagerWithPool(
+  pool,
+  identity,
+  logger = null,
+  runMigration = true
+) {
+  const manager = new MysqlSessionManager(
+    pool,
+    identity,
+    logger,
+    runMigration
+  );
   await manager.initialize();
   return manager;
 }

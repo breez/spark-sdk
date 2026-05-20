@@ -1,7 +1,7 @@
 /**
  * Database Migration Manager for Breez SDK PostgreSQL Token Store
  *
- * Uses a token_schema_migrations table + pg_advisory_xact_lock to safely run
+ * Uses a brz_token_schema_migrations table + pg_advisory_xact_lock to safely run
  * migrations from concurrent processes.
  */
 
@@ -39,9 +39,11 @@ class TokenStoreMigrationManager {
       // Transaction-level advisory lock — automatically released on COMMIT/ROLLBACK
       await client.query(`SELECT pg_advisory_xact_lock(${MIGRATION_LOCK_ID})`);
 
+      await this._applySchemaRenames(client);
+
       // Create the migrations tracking table if needed
       await client.query(`
-        CREATE TABLE IF NOT EXISTS token_schema_migrations (
+        CREATE TABLE IF NOT EXISTS brz_token_schema_migrations (
           version INTEGER PRIMARY KEY,
           applied_at TIMESTAMPTZ DEFAULT NOW()
         )
@@ -49,7 +51,7 @@ class TokenStoreMigrationManager {
 
       // Get current version
       const versionResult = await client.query(
-        "SELECT COALESCE(MAX(version), 0) AS version FROM token_schema_migrations"
+        "SELECT COALESCE(MAX(version), 0) AS version FROM brz_token_schema_migrations"
       );
       const currentVersion = versionResult.rows[0].version;
 
@@ -76,7 +78,7 @@ class TokenStoreMigrationManager {
         }
 
         await client.query(
-          "INSERT INTO token_schema_migrations (version) VALUES ($1)",
+          "INSERT INTO brz_token_schema_migrations (version) VALUES ($1)",
           [version]
         );
       }
@@ -92,6 +94,96 @@ class TokenStoreMigrationManager {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Pre-prefix rename. Canary-gated on the legacy `token_schema_migrations`
+   * table.
+   * @param {import('pg').PoolClient} client
+   */
+  async _applySchemaRenames(client) {
+    const canary = await client.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.tables
+         WHERE table_schema = current_schema()
+           AND table_name = 'token_schema_migrations'
+       ) AS exists`
+    );
+    if (!canary.rows[0].exists) {
+      return;
+    }
+
+    const tableRenames = [
+      ["token_metadata", "brz_token_metadata"],
+      ["token_reservations", "brz_token_reservations"],
+      ["token_outputs", "brz_token_outputs"],
+      ["token_spent_outputs", "brz_token_spent_outputs"],
+      ["token_swap_status", "brz_token_swap_status"],
+    ];
+    for (const [oldName, newName] of tableRenames) {
+      await client.query(`ALTER TABLE IF EXISTS ${oldName} RENAME TO ${newName}`);
+    }
+
+    const indexRenames = [
+      ["idx_token_metadata_user_issuer_pk", "brz_idx_token_metadata_user_issuer_pk"],
+      ["idx_token_outputs_user_identifier", "brz_idx_token_outputs_user_identifier"],
+      ["idx_token_outputs_user_reservation", "brz_idx_token_outputs_user_reservation"],
+      // Pre-multi-tenant indexes (dropped by the multi-tenant migration).
+      ["idx_token_metadata_issuer_pk", "brz_idx_token_metadata_issuer_pk"],
+      ["idx_token_outputs_identifier", "brz_idx_token_outputs_identifier"],
+      ["idx_token_outputs_reservation", "brz_idx_token_outputs_reservation"],
+    ];
+    for (const [oldName, newName] of indexRenames) {
+      await client.query(`ALTER INDEX IF EXISTS ${oldName} RENAME TO ${newName}`);
+    }
+
+    const constraintRenames = [
+      ["brz_token_metadata", "token_metadata_pkey", "brz_token_metadata_pkey"],
+      ["brz_token_reservations", "token_reservations_pkey", "brz_token_reservations_pkey"],
+      ["brz_token_outputs", "token_outputs_pkey", "brz_token_outputs_pkey"],
+      [
+        "brz_token_outputs",
+        "token_outputs_user_id_token_identifier_fkey",
+        "brz_token_outputs_user_id_token_identifier_fkey",
+      ],
+      [
+        "brz_token_outputs",
+        "token_outputs_user_id_reservation_id_fkey",
+        "brz_token_outputs_user_id_reservation_id_fkey",
+      ],
+      // Pre-multi-tenant FKs (single-column). Rename so the post-tenant
+      // migration's `DROP CONSTRAINT IF EXISTS brz_*_fkey` finds them.
+      [
+        "brz_token_outputs",
+        "token_outputs_token_identifier_fkey",
+        "brz_token_outputs_token_identifier_fkey",
+      ],
+      [
+        "brz_token_outputs",
+        "token_outputs_reservation_id_fkey",
+        "brz_token_outputs_reservation_id_fkey",
+      ],
+      ["brz_token_spent_outputs", "token_spent_outputs_pkey", "brz_token_spent_outputs_pkey"],
+      ["brz_token_swap_status", "token_swap_status_pkey", "brz_token_swap_status_pkey"],
+    ];
+    for (const [table, oldName, newName] of constraintRenames) {
+      await client.query(
+        `DO $$ BEGIN
+           IF EXISTS (
+             SELECT 1 FROM information_schema.table_constraints
+             WHERE table_schema = current_schema()
+               AND table_name = '${table}'
+               AND constraint_name = '${oldName}'
+           ) THEN
+             ALTER TABLE ${table} RENAME CONSTRAINT ${oldName} TO ${newName};
+           END IF;
+         END $$`
+      );
+    }
+
+    await client.query(
+      `ALTER TABLE IF EXISTS token_schema_migrations RENAME TO brz_token_schema_migrations`
+    );
   }
 
   _log(level, message) {
@@ -118,7 +210,7 @@ class TokenStoreMigrationManager {
       {
         name: "Create token store tables with race condition protection",
         sql: [
-          `CREATE TABLE IF NOT EXISTS token_metadata (
+          `CREATE TABLE IF NOT EXISTS brz_token_metadata (
             identifier TEXT PRIMARY KEY,
             issuer_public_key TEXT NOT NULL,
             name TEXT NOT NULL,
@@ -129,18 +221,18 @@ class TokenStoreMigrationManager {
             creation_entity_public_key TEXT
           )`,
 
-          `CREATE INDEX IF NOT EXISTS idx_token_metadata_issuer_pk
-            ON token_metadata (issuer_public_key)`,
+          `CREATE INDEX IF NOT EXISTS brz_idx_token_metadata_issuer_pk
+            ON brz_token_metadata (issuer_public_key)`,
 
-          `CREATE TABLE IF NOT EXISTS token_reservations (
+          `CREATE TABLE IF NOT EXISTS brz_token_reservations (
             id TEXT PRIMARY KEY,
             purpose TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )`,
 
-          `CREATE TABLE IF NOT EXISTS token_outputs (
+          `CREATE TABLE IF NOT EXISTS brz_token_outputs (
             id TEXT PRIMARY KEY,
-            token_identifier TEXT NOT NULL REFERENCES token_metadata(identifier),
+            token_identifier TEXT NOT NULL REFERENCES brz_token_metadata(identifier),
             owner_public_key TEXT NOT NULL,
             revocation_commitment TEXT NOT NULL,
             withdraw_bond_sats BIGINT NOT NULL,
@@ -149,32 +241,32 @@ class TokenStoreMigrationManager {
             token_amount TEXT NOT NULL,
             prev_tx_hash TEXT NOT NULL,
             prev_tx_vout INTEGER NOT NULL,
-            reservation_id TEXT REFERENCES token_reservations(id) ON DELETE SET NULL,
+            reservation_id TEXT REFERENCES brz_token_reservations(id) ON DELETE SET NULL,
             added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )`,
 
-          `CREATE INDEX IF NOT EXISTS idx_token_outputs_identifier
-            ON token_outputs (token_identifier)`,
+          `CREATE INDEX IF NOT EXISTS brz_idx_token_outputs_identifier
+            ON brz_token_outputs (token_identifier)`,
 
-          `CREATE INDEX IF NOT EXISTS idx_token_outputs_reservation
-            ON token_outputs (reservation_id) WHERE reservation_id IS NOT NULL`,
+          `CREATE INDEX IF NOT EXISTS brz_idx_token_outputs_reservation
+            ON brz_token_outputs (reservation_id) WHERE reservation_id IS NOT NULL`,
 
-          `CREATE TABLE IF NOT EXISTS token_spent_outputs (
+          `CREATE TABLE IF NOT EXISTS brz_token_spent_outputs (
             output_id TEXT PRIMARY KEY,
             spent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
           )`,
 
-          `CREATE TABLE IF NOT EXISTS token_swap_status (
+          `CREATE TABLE IF NOT EXISTS brz_token_swap_status (
             id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
             last_completed_at TIMESTAMPTZ
           )`,
 
-          `INSERT INTO token_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING`,
+          `INSERT INTO brz_token_swap_status (id) VALUES (1) ON CONFLICT DO NOTHING`,
         ],
       },
       {
         // Mirrors Rust migration 2 in spark-postgres/src/token_store.rs.
-        // Adds user_id to every token-store table (including token_metadata —
+        // Adds user_id to every token-store table (including brz_token_metadata —
         // per-tenant to avoid 0-balance leakage for tokens a tenant never
         // owned), backfills with the connecting tenant, and rewrites primary
         // keys / FKs / indexes to lead with user_id. Composite FKs use NO
@@ -185,62 +277,62 @@ class TokenStoreMigrationManager {
           // Drop dependent FKs FIRST so we can rebuild parent PKs they
           // reference. Inline `REFERENCES` clauses get auto-named
           // `<table>_<column>_fkey`.
-          `ALTER TABLE token_outputs
-             DROP CONSTRAINT IF EXISTS token_outputs_reservation_id_fkey`,
-          `ALTER TABLE token_outputs
-             DROP CONSTRAINT IF EXISTS token_outputs_token_identifier_fkey`,
+          `ALTER TABLE brz_token_outputs
+             DROP CONSTRAINT IF EXISTS brz_token_outputs_reservation_id_fkey`,
+          `ALTER TABLE brz_token_outputs
+             DROP CONSTRAINT IF EXISTS brz_token_outputs_token_identifier_fkey`,
 
-          // token_metadata: per-tenant scoping (privacy — see header).
-          `ALTER TABLE token_metadata ADD COLUMN user_id BYTEA`,
-          `UPDATE token_metadata SET user_id = ${idLit}`,
-          `ALTER TABLE token_metadata
+          // brz_token_metadata: per-tenant scoping (privacy — see header).
+          `ALTER TABLE brz_token_metadata ADD COLUMN user_id BYTEA`,
+          `UPDATE brz_token_metadata SET user_id = ${idLit}`,
+          `ALTER TABLE brz_token_metadata
              ALTER COLUMN user_id SET NOT NULL,
-             DROP CONSTRAINT IF EXISTS token_metadata_pkey,
+             DROP CONSTRAINT IF EXISTS brz_token_metadata_pkey,
              ADD PRIMARY KEY (user_id, identifier)`,
-          `DROP INDEX IF EXISTS idx_token_metadata_issuer_pk`,
-          `CREATE INDEX idx_token_metadata_user_issuer_pk
-             ON token_metadata (user_id, issuer_public_key)`,
+          `DROP INDEX IF EXISTS brz_idx_token_metadata_issuer_pk`,
+          `CREATE INDEX brz_idx_token_metadata_user_issuer_pk
+             ON brz_token_metadata (user_id, issuer_public_key)`,
 
-          // token_reservations: scope by user_id.
-          `ALTER TABLE token_reservations ADD COLUMN user_id BYTEA`,
-          `UPDATE token_reservations SET user_id = ${idLit}`,
-          `ALTER TABLE token_reservations
+          // brz_token_reservations: scope by user_id.
+          `ALTER TABLE brz_token_reservations ADD COLUMN user_id BYTEA`,
+          `UPDATE brz_token_reservations SET user_id = ${idLit}`,
+          `ALTER TABLE brz_token_reservations
              ALTER COLUMN user_id SET NOT NULL,
-             DROP CONSTRAINT IF EXISTS token_reservations_pkey,
+             DROP CONSTRAINT IF EXISTS brz_token_reservations_pkey,
              ADD PRIMARY KEY (user_id, id)`,
 
-          // token_outputs: scope by user_id, rekey, re-add composite FKs.
-          `ALTER TABLE token_outputs ADD COLUMN user_id BYTEA`,
-          `UPDATE token_outputs SET user_id = ${idLit}`,
-          `ALTER TABLE token_outputs
+          // brz_token_outputs: scope by user_id, rekey, re-add composite FKs.
+          `ALTER TABLE brz_token_outputs ADD COLUMN user_id BYTEA`,
+          `UPDATE brz_token_outputs SET user_id = ${idLit}`,
+          `ALTER TABLE brz_token_outputs
              ALTER COLUMN user_id SET NOT NULL,
-             DROP CONSTRAINT IF EXISTS token_outputs_pkey,
+             DROP CONSTRAINT IF EXISTS brz_token_outputs_pkey,
              ADD PRIMARY KEY (user_id, id),
              ADD FOREIGN KEY (user_id, token_identifier)
-                REFERENCES token_metadata(user_id, identifier),
+                REFERENCES brz_token_metadata(user_id, identifier),
              ADD FOREIGN KEY (user_id, reservation_id)
-                REFERENCES token_reservations(user_id, id)`,
-          `DROP INDEX IF EXISTS idx_token_outputs_identifier`,
-          `DROP INDEX IF EXISTS idx_token_outputs_reservation`,
-          `CREATE INDEX idx_token_outputs_user_identifier
-             ON token_outputs (user_id, token_identifier)`,
-          `CREATE INDEX idx_token_outputs_user_reservation
-             ON token_outputs (user_id, reservation_id)
+                REFERENCES brz_token_reservations(user_id, id)`,
+          `DROP INDEX IF EXISTS brz_idx_token_outputs_identifier`,
+          `DROP INDEX IF EXISTS brz_idx_token_outputs_reservation`,
+          `CREATE INDEX brz_idx_token_outputs_user_identifier
+             ON brz_token_outputs (user_id, token_identifier)`,
+          `CREATE INDEX brz_idx_token_outputs_user_reservation
+             ON brz_token_outputs (user_id, reservation_id)
              WHERE reservation_id IS NOT NULL`,
 
-          // token_spent_outputs: scope by user_id.
-          `ALTER TABLE token_spent_outputs ADD COLUMN user_id BYTEA`,
-          `UPDATE token_spent_outputs SET user_id = ${idLit}`,
-          `ALTER TABLE token_spent_outputs
+          // brz_token_spent_outputs: scope by user_id.
+          `ALTER TABLE brz_token_spent_outputs ADD COLUMN user_id BYTEA`,
+          `UPDATE brz_token_spent_outputs SET user_id = ${idLit}`,
+          `ALTER TABLE brz_token_spent_outputs
              ALTER COLUMN user_id SET NOT NULL,
-             DROP CONSTRAINT IF EXISTS token_spent_outputs_pkey,
+             DROP CONSTRAINT IF EXISTS brz_token_spent_outputs_pkey,
              ADD PRIMARY KEY (user_id, output_id)`,
 
-          // token_swap_status: drop the singleton id, rekey by user_id.
-          `ALTER TABLE token_swap_status DROP COLUMN id CASCADE`,
-          `ALTER TABLE token_swap_status ADD COLUMN user_id BYTEA`,
-          `UPDATE token_swap_status SET user_id = ${idLit}`,
-          `ALTER TABLE token_swap_status
+          // brz_token_swap_status: drop the singleton id, rekey by user_id.
+          `ALTER TABLE brz_token_swap_status DROP COLUMN id CASCADE`,
+          `ALTER TABLE brz_token_swap_status ADD COLUMN user_id BYTEA`,
+          `UPDATE brz_token_swap_status SET user_id = ${idLit}`,
+          `ALTER TABLE brz_token_swap_status
              ALTER COLUMN user_id SET NOT NULL,
              ADD PRIMARY KEY (user_id)`,
         ],

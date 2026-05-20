@@ -151,9 +151,14 @@ pub async fn subscribe_server_events(
                     trace!("Received heartbeat event");
                     continue;
                 }
-                Event::TokenTransaction(_) => {
-                    trace!("Received token transaction event");
-                    continue;
+                Event::TokenTransaction(token_transaction_event) => {
+                    let hash = hex::encode(&token_transaction_event.token_transaction_hash);
+                    debug!("Received token transaction event with hash {hash}");
+                    trace!(
+                        "Received token transaction event: {:?}",
+                        token_transaction_event
+                    );
+                    SparkEvent::TokenTransaction { hash }
                 }
             };
 

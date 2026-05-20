@@ -64,7 +64,7 @@ class PostgresTokenStore {
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity || identity.length !== 33) {
       throw new TokenStoreError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
@@ -74,6 +74,7 @@ class PostgresTokenStore {
     this.identity = Buffer.from(identity);
     this.lockKey = _identityLockKey(TOKEN_STORE_LOCK_PREFIX, identity);
     this.logger = logger;
+    this.runMigration = runMigration;
   }
 
   /**
@@ -81,8 +82,10 @@ class PostgresTokenStore {
    */
   async initialize() {
     try {
-      const migrationManager = new TokenStoreMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool, this.identity);
+      if (this.runMigration) {
+        const migrationManager = new TokenStoreMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool, this.identity);
+      }
       return this;
     } catch (error) {
       throw new TokenStoreError(
@@ -176,12 +179,12 @@ class PostgresTokenStore {
         const swapCheckResult = await client.query(
           `SELECT
             EXISTS(
-              SELECT 1 FROM token_reservations
+              SELECT 1 FROM brz_token_reservations
               WHERE user_id = $1 AND purpose = 'Swap'
             ) AS has_active_swap,
             COALESCE(
               (SELECT last_completed_at >= $2
-               FROM token_swap_status WHERE user_id = $1),
+               FROM brz_token_swap_status WHERE user_id = $1),
               FALSE
             ) AS swap_completed`,
           [this.identity, refreshTimestamp]
@@ -194,20 +197,20 @@ class PostgresTokenStore {
         // Clean up old spent markers
         const cleanupCutoff = new Date(refreshTimestamp.getTime() - SPENT_MARKER_CLEANUP_THRESHOLD_MS);
         await client.query(
-          "DELETE FROM token_spent_outputs WHERE user_id = $1 AND spent_at < $2",
+          "DELETE FROM brz_token_spent_outputs WHERE user_id = $1 AND spent_at < $2",
           [this.identity, cleanupCutoff]
         );
 
         // Get recent spent output IDs (spent_at >= refresh_timestamp)
         const spentResult = await client.query(
-          "SELECT output_id FROM token_spent_outputs WHERE user_id = $1 AND spent_at >= $2",
+          "SELECT output_id FROM brz_token_spent_outputs WHERE user_id = $1 AND spent_at >= $2",
           [this.identity, refreshTimestamp]
         );
         const spentIds = new Set(spentResult.rows.map((r) => r.output_id));
 
         // Delete non-reserved outputs added BEFORE the refresh started
         await client.query(
-          "DELETE FROM token_outputs WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
+          "DELETE FROM brz_token_outputs WHERE user_id = $1 AND reservation_id IS NULL AND added_at < $2",
           [this.identity, refreshTimestamp]
         );
 
@@ -222,8 +225,8 @@ class PostgresTokenStore {
         // Reconcile reservations: find reserved outputs that no longer exist
         const reservedRows = await client.query(
           `SELECT r.id, o.id AS output_id
-           FROM token_reservations r
-           JOIN token_outputs o
+           FROM brz_token_reservations r
+           JOIN brz_token_outputs o
              ON o.reservation_id = r.id AND o.user_id = r.user_id
            WHERE r.user_id = $1`,
           [this.identity]
@@ -257,11 +260,11 @@ class PostgresTokenStore {
         // Delete outputs whose reservations are being removed entirely
         if (reservationsToDelete.length > 0) {
           await client.query(
-            "DELETE FROM token_outputs WHERE user_id = $1 AND reservation_id = ANY($2)",
+            "DELETE FROM brz_token_outputs WHERE user_id = $1 AND reservation_id = ANY($2)",
             [this.identity, reservationsToDelete]
           );
           await client.query(
-            "DELETE FROM token_reservations WHERE user_id = $1 AND id = ANY($2)",
+            "DELETE FROM brz_token_reservations WHERE user_id = $1 AND id = ANY($2)",
             [this.identity, reservationsToDelete]
           );
         }
@@ -269,14 +272,14 @@ class PostgresTokenStore {
         // Delete individual reserved outputs that no longer exist
         if (outputsToRemoveFromReservation.length > 0) {
           await client.query(
-            "DELETE FROM token_outputs WHERE user_id = $1 AND id = ANY($2)",
+            "DELETE FROM brz_token_outputs WHERE user_id = $1 AND id = ANY($2)",
             [this.identity, outputsToRemoveFromReservation]
           );
 
           // Check if any reservations are now empty
           const emptyReservations = await client.query(
-            `SELECT r.id FROM token_reservations r
-             LEFT JOIN token_outputs o
+            `SELECT r.id FROM brz_token_reservations r
+             LEFT JOIN brz_token_outputs o
                ON o.reservation_id = r.id AND o.user_id = r.user_id
              WHERE r.user_id = $1 AND o.id IS NULL`,
             [this.identity]
@@ -284,7 +287,7 @@ class PostgresTokenStore {
           const emptyIds = emptyReservations.rows.map((r) => r.id);
           if (emptyIds.length > 0) {
             await client.query(
-              "DELETE FROM token_reservations WHERE user_id = $1 AND id = ANY($2)",
+              "DELETE FROM brz_token_reservations WHERE user_id = $1 AND id = ANY($2)",
               [this.identity, emptyIds]
             );
           }
@@ -292,7 +295,7 @@ class PostgresTokenStore {
 
         // Collect IDs of currently reserved outputs (that survived reconciliation)
         const reservedOutputIdsResult = await client.query(
-          "SELECT id FROM token_outputs WHERE user_id = $1 AND reservation_id IS NOT NULL",
+          "SELECT id FROM brz_token_outputs WHERE user_id = $1 AND reservation_id IS NOT NULL",
           [this.identity]
         );
         const reservedOutputIds = new Set(
@@ -301,11 +304,11 @@ class PostgresTokenStore {
 
         // Delete orphan metadata (per-tenant)
         await client.query(
-          `DELETE FROM token_metadata
+          `DELETE FROM brz_token_metadata
            WHERE user_id = $1
              AND identifier NOT IN (
                SELECT DISTINCT token_identifier
-               FROM token_outputs WHERE user_id = $1
+               FROM brz_token_outputs WHERE user_id = $1
              )`,
           [this.identity]
         );
@@ -359,10 +362,10 @@ class PostgresTokenStore {
                    ELSE 0
                  END
                ), 0)::text AS balance
-        FROM token_metadata m
-        JOIN token_outputs o
+        FROM brz_token_metadata m
+        JOIN brz_token_outputs o
           ON o.token_identifier = m.identifier AND o.user_id = m.user_id
-        LEFT JOIN token_reservations r
+        LEFT JOIN brz_token_reservations r
           ON o.reservation_id = r.id AND o.user_id = r.user_id
         WHERE m.user_id = $1
         GROUP BY m.identifier, m.issuer_public_key, m.name, m.ticker,
@@ -401,10 +404,10 @@ class PostgresTokenStore {
                 o.token_public_key, o.token_amount, o.token_identifier,
                 o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
                 r.purpose
-         FROM token_metadata m
-         LEFT JOIN token_outputs o
+         FROM brz_token_metadata m
+         LEFT JOIN brz_token_outputs o
            ON o.token_identifier = m.identifier AND o.user_id = m.user_id
-         LEFT JOIN token_reservations r
+         LEFT JOIN brz_token_reservations r
            ON o.reservation_id = r.id AND o.user_id = r.user_id
          WHERE m.user_id = $1
          ORDER BY m.identifier, o.token_amount::NUMERIC ASC`,
@@ -478,10 +481,10 @@ class PostgresTokenStore {
                 o.token_public_key, o.token_amount, o.token_identifier,
                 o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
                 r.purpose
-         FROM token_metadata m
-         LEFT JOIN token_outputs o
+         FROM brz_token_metadata m
+         LEFT JOIN brz_token_outputs o
            ON o.token_identifier = m.identifier AND o.user_id = m.user_id
-         LEFT JOIN token_reservations r
+         LEFT JOIN brz_token_reservations r
            ON o.reservation_id = r.id AND o.user_id = r.user_id
          WHERE m.user_id = $2 AND ${whereClause}
          ORDER BY o.token_amount::NUMERIC ASC`,
@@ -530,31 +533,57 @@ class PostgresTokenStore {
    * Insert token outputs (upsert metadata, insert outputs with ON CONFLICT DO NOTHING).
    * @param {{metadata: Object, outputs: Array}} tokenOutputs
    */
-  async insertTokenOutputs(tokenOutputs) {
+  /**
+   * Atomically remove spent outputs and insert new outputs.
+   * @param {Array<[string, number]>} outputsToRemove - Array of [prevTxHash, prevTxVout] tuples
+   * @param {Object|null} outputsToAdd - Token outputs to insert (with metadata)
+   * @returns {Promise<void>}
+   */
+  async updateTokenOutputs(outputsToRemove, outputsToAdd) {
     try {
       await this._withTransaction(async (client) => {
-        await this._upsertMetadata(client, tokenOutputs.metadata);
-
-        const outputIds = tokenOutputs.outputs.map((o) => o.output.id);
-        if (outputIds.length > 0) {
-          await client.query(
-            "DELETE FROM token_spent_outputs WHERE user_id = $1 AND output_id = ANY($2)",
-            [this.identity, outputIds]
-          );
+        // 1. Remove spent outputs and mark as spent.
+        if (outputsToRemove && outputsToRemove.length > 0) {
+          for (const [txHash, vout] of outputsToRemove) {
+            const result = await client.query(
+              "DELETE FROM brz_token_outputs WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3 RETURNING id",
+              [this.identity, txHash, vout]
+            );
+            if (result.rows.length > 0) {
+              const outputId = result.rows[0].id;
+              await client.query(
+                "INSERT INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING",
+                [this.identity, outputId]
+              );
+            }
+          }
         }
 
-        for (const output of tokenOutputs.outputs) {
-          await this._insertSingleOutput(
-            client,
-            tokenOutputs.metadata.identifier,
-            output
-          );
+        // 2. Insert new outputs.
+        if (outputsToAdd) {
+          await this._upsertMetadata(client, outputsToAdd.metadata);
+
+          const outputIds = outputsToAdd.outputs.map((o) => o.output.id);
+          if (outputIds.length > 0) {
+            await client.query(
+              "DELETE FROM brz_token_spent_outputs WHERE user_id = $1 AND output_id = ANY($2)",
+              [this.identity, outputIds]
+            );
+          }
+
+          for (const output of outputsToAdd.outputs) {
+            await this._insertSingleOutput(
+              client,
+              outputsToAdd.metadata.identifier,
+              output
+            );
+          }
         }
       });
     } catch (error) {
       if (error instanceof TokenStoreError) throw error;
       throw new TokenStoreError(
-        `Failed to insert token outputs: ${error.message}`,
+        `Failed to update token outputs: ${error.message}`,
         error
       );
     }
@@ -592,7 +621,7 @@ class PostgresTokenStore {
 
         // Get metadata
         const metadataResult = await client.query(
-          "SELECT * FROM token_metadata WHERE user_id = $1 AND identifier = $2",
+          "SELECT * FROM brz_token_metadata WHERE user_id = $1 AND identifier = $2",
           [this.identity, tokenIdentifier]
         );
 
@@ -610,7 +639,7 @@ class PostgresTokenStore {
                   o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                   o.token_public_key, o.token_amount, o.token_identifier,
                   o.prev_tx_hash, o.prev_tx_vout
-           FROM token_outputs o
+           FROM brz_token_outputs o
            WHERE o.user_id = $1
              AND o.token_identifier = $2
              AND o.reservation_id IS NULL`,
@@ -700,7 +729,7 @@ class PostgresTokenStore {
         const reservationId = this._generateId();
 
         await client.query(
-          "INSERT INTO token_reservations (user_id, id, purpose) VALUES ($1, $2, $3)",
+          "INSERT INTO brz_token_reservations (user_id, id, purpose) VALUES ($1, $2, $3)",
           [this.identity, reservationId, purpose]
         );
 
@@ -708,7 +737,7 @@ class PostgresTokenStore {
         const selectedIds = selectedOutputs.map((o) => o.output.id);
         if (selectedIds.length > 0) {
           await client.query(
-            "UPDATE token_outputs SET reservation_id = $1 WHERE user_id = $3 AND id = ANY($2)",
+            "UPDATE brz_token_outputs SET reservation_id = $1 WHERE user_id = $3 AND id = ANY($2)",
             [reservationId, selectedIds, this.identity]
           );
         }
@@ -741,13 +770,13 @@ class PostgresTokenStore {
         // ACTION (column-list SET NULL is PG15+ and a whole-row SET NULL would
         // null user_id, which is NOT NULL).
         await client.query(
-          "UPDATE token_outputs SET reservation_id = NULL WHERE user_id = $1 AND reservation_id = $2",
+          "UPDATE brz_token_outputs SET reservation_id = NULL WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, id]
         );
 
         // Delete the reservation
         await client.query(
-          "DELETE FROM token_reservations WHERE user_id = $1 AND id = $2",
+          "DELETE FROM brz_token_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, id]
         );
       });
@@ -768,12 +797,12 @@ class PostgresTokenStore {
     try {
       // _withWriteTransaction acquires the advisory lock so this serializes
       // against `setTokensOutputs`. Without it, a concurrent setTokensOutputs
-      // could read token_spent_outputs before our marker commits and re-insert
+      // could read brz_token_spent_outputs before our marker commits and re-insert
       // the just-spent output as Available.
       await this._withWriteTransaction(async (client) => {
         // Get reservation purpose
         const reservationResult = await client.query(
-          "SELECT purpose FROM token_reservations WHERE user_id = $1 AND id = $2",
+          "SELECT purpose FROM brz_token_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, id]
         );
         if (reservationResult.rows.length === 0) {
@@ -783,14 +812,14 @@ class PostgresTokenStore {
 
         // Get reserved output IDs and mark them as spent
         const reservedOutputsResult = await client.query(
-          "SELECT id FROM token_outputs WHERE user_id = $1 AND reservation_id = $2",
+          "SELECT id FROM brz_token_outputs WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, id]
         );
         const reservedOutputIds = reservedOutputsResult.rows.map((r) => r.id);
 
         if (reservedOutputIds.length > 0) {
           await client.query(
-            `INSERT INTO token_spent_outputs (user_id, output_id)
+            `INSERT INTO brz_token_spent_outputs (user_id, output_id)
              SELECT $2, output_id FROM UNNEST($1::text[]) AS t(output_id)
              ON CONFLICT DO NOTHING`,
             [reservedOutputIds, this.identity]
@@ -799,13 +828,13 @@ class PostgresTokenStore {
 
         // Delete reserved outputs
         await client.query(
-          "DELETE FROM token_outputs WHERE user_id = $1 AND reservation_id = $2",
+          "DELETE FROM brz_token_outputs WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, id]
         );
 
         // Delete the reservation
         await client.query(
-          "DELETE FROM token_reservations WHERE user_id = $1 AND id = $2",
+          "DELETE FROM brz_token_reservations WHERE user_id = $1 AND id = $2",
           [this.identity, id]
         );
 
@@ -813,7 +842,7 @@ class PostgresTokenStore {
         // tenant that joined after migration 2 (and thus has no row) gets one.
         if (isSwap) {
           await client.query(
-            `INSERT INTO token_swap_status (user_id, last_completed_at)
+            `INSERT INTO brz_token_swap_status (user_id, last_completed_at)
              VALUES ($1, NOW())
              ON CONFLICT (user_id) DO UPDATE
                SET last_completed_at = EXCLUDED.last_completed_at`,
@@ -823,11 +852,11 @@ class PostgresTokenStore {
 
         // Clean up orphaned metadata (per-tenant)
         await client.query(
-          `DELETE FROM token_metadata
+          `DELETE FROM brz_token_metadata
            WHERE user_id = $1
              AND identifier NOT IN (
                SELECT DISTINCT token_identifier
-               FROM token_outputs WHERE user_id = $1
+               FROM brz_token_outputs WHERE user_id = $1
              )`,
           [this.identity]
         );
@@ -882,17 +911,17 @@ class PostgresTokenStore {
    */
   async _cleanupStaleReservations(client) {
     await client.query(
-      `UPDATE token_outputs SET reservation_id = NULL
+      `UPDATE brz_token_outputs SET reservation_id = NULL
        WHERE user_id = $2
          AND reservation_id IN (
-           SELECT id FROM token_reservations
+           SELECT id FROM brz_token_reservations
            WHERE user_id = $2
              AND created_at < NOW() - make_interval(secs => $1)
          )`,
       [RESERVATION_TIMEOUT_SECS, this.identity]
     );
     await client.query(
-      `DELETE FROM token_reservations
+      `DELETE FROM brz_token_reservations
        WHERE user_id = $2
          AND created_at < NOW() - make_interval(secs => $1)`,
       [RESERVATION_TIMEOUT_SECS, this.identity]
@@ -904,7 +933,7 @@ class PostgresTokenStore {
    */
   async _upsertMetadata(client, metadata) {
     await client.query(
-      `INSERT INTO token_metadata
+      `INSERT INTO brz_token_metadata
         (user_id, identifier, issuer_public_key, name, ticker, decimals, max_supply,
          is_freezable, creation_entity_public_key)
        VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8)
@@ -935,7 +964,7 @@ class PostgresTokenStore {
    */
   async _insertSingleOutput(client, tokenIdentifier, output) {
     await client.query(
-      `INSERT INTO token_outputs
+      `INSERT INTO brz_token_outputs
         (user_id, id, token_identifier, owner_public_key, revocation_commitment,
          withdraw_bond_sats, withdraw_relative_block_locktime,
          token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
@@ -1015,7 +1044,12 @@ async function createPostgresTokenStore(config, identity, logger = null) {
     connectionTimeoutMillis: config.createTimeoutSecs * 1000,
     idleTimeoutMillis: config.recycleTimeoutSecs * 1000,
   });
-  return createPostgresTokenStoreWithPool(pool, identity, logger);
+  return createPostgresTokenStoreWithPool(
+    pool,
+    identity,
+    logger,
+    config.runMigration !== false
+  );
 }
 
 /**
@@ -1026,8 +1060,18 @@ async function createPostgresTokenStore(config, identity, logger = null) {
  * @param {object} [logger] - Optional logger
  * @returns {Promise<PostgresTokenStore>}
  */
-async function createPostgresTokenStoreWithPool(pool, identity, logger = null) {
-  const store = new PostgresTokenStore(pool, identity, logger);
+async function createPostgresTokenStoreWithPool(
+  pool,
+  identity,
+  logger = null,
+  runMigration = true
+) {
+  const store = new PostgresTokenStore(
+    pool,
+    identity,
+    logger,
+    runMigration
+  );
   await store.initialize();
   return store;
 }

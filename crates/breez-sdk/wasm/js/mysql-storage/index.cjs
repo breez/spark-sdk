@@ -75,12 +75,12 @@ const SELECT_PAYMENT_SQL = `
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.parent_payment_id
-      FROM payments p
-      LEFT JOIN payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
-      LEFT JOIN payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
-      LEFT JOIN payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
-      LEFT JOIN payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
-      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id`;
+      FROM brz_payments p
+      LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
+      LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
+      LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
+      LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
+      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id`;
 
 /**
  * mysql2 may return JSON columns as either parsed objects or raw strings
@@ -107,20 +107,23 @@ class MysqlStorage {
    *   so that multiple instances with distinct identities can share one DB.
    * @param {object} [logger]
    */
-  constructor(pool, identity, logger = null) {
+  constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity) {
       throw new StorageError("MysqlStorage requires a tenant identity");
     }
     this.pool = pool;
     this.identity = Buffer.from(identity);
     this.logger = logger;
+    this.runMigration = runMigration;
   }
 
   /** Initialize the database (run migrations). */
   async initialize() {
     try {
-      const migrationManager = new MysqlMigrationManager(this.logger);
-      await migrationManager.migrate(this.pool, this.identity);
+      if (this.runMigration) {
+        const migrationManager = new MysqlMigrationManager(this.logger);
+        await migrationManager.migrate(this.pool, this.identity);
+      }
       return this;
     } catch (error) {
       throw new StorageError(
@@ -165,7 +168,7 @@ class MysqlStorage {
   async getCachedItem(key) {
     try {
       const [rows] = await this.pool.query(
-        "SELECT value FROM settings WHERE user_id = ? AND `key` = ?",
+        "SELECT value FROM brz_settings WHERE user_id = ? AND `key` = ?",
         [this.identity, key]
       );
       return rows.length > 0 ? rows[0].value : null;
@@ -180,7 +183,7 @@ class MysqlStorage {
   async setCachedItem(key, value) {
     try {
       await this.pool.query(
-        "INSERT INTO settings (user_id, `key`, value) VALUES (?, ?, ?) " +
+        "INSERT INTO brz_settings (user_id, `key`, value) VALUES (?, ?, ?) " +
           "ON DUPLICATE KEY UPDATE value = VALUES(value)",
         [this.identity, key, value]
       );
@@ -195,7 +198,7 @@ class MysqlStorage {
   async deleteCachedItem(key) {
     try {
       await this.pool.query(
-        "DELETE FROM settings WHERE user_id = ? AND `key` = ?",
+        "DELETE FROM brz_settings WHERE user_id = ? AND `key` = ?",
         [this.identity, key]
       );
     } catch (error) {
@@ -371,7 +374,7 @@ class MysqlStorage {
         const spark = payment.details?.type === "spark" ? 1 : null;
 
         await conn.query(
-          `INSERT INTO payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+          `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              payment_type=VALUES(payment_type),
@@ -404,7 +407,7 @@ class MysqlStorage {
             payment.details.htlcDetails != null)
         ) {
           await conn.query(
-            `INSERT INTO payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
+            `INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
              VALUES (?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                invoice_details=COALESCE(VALUES(invoice_details), invoice_details),
@@ -424,7 +427,7 @@ class MysqlStorage {
 
         if (payment.details?.type === "lightning") {
           await conn.query(
-            `INSERT INTO payment_details_lightning
+            `INSERT INTO brz_payment_details_lightning
               (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON DUPLICATE KEY UPDATE
@@ -451,7 +454,7 @@ class MysqlStorage {
 
         if (payment.details?.type === "token") {
           await conn.query(
-            `INSERT INTO payment_details_token
+            `INSERT INTO brz_payment_details_token
               (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
               VALUES (?, ?, ?, ?, ?, ?)
               ON DUPLICATE KEY UPDATE
@@ -539,7 +542,7 @@ class MysqlStorage {
 
       // Early exit if no related payments exist for this tenant. mysql2 returns EXISTS as 0/1.
       const [hasRelatedRows] = await this.pool.query(
-        "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE user_id = ? AND parent_payment_id IS NOT NULL LIMIT 1) AS has_related",
+        "SELECT EXISTS(SELECT 1 FROM brz_payment_metadata WHERE user_id = ? AND parent_payment_id IS NOT NULL LIMIT 1) AS has_related",
         [this.identity]
       );
       if (!hasRelatedRows[0].has_related) {
@@ -573,7 +576,7 @@ class MysqlStorage {
   async insertPaymentMetadata(paymentId, metadata) {
     try {
       await this.pool.query(
-        `INSERT INTO payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+        `INSERT INTO brz_payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            parent_payment_id = COALESCE(VALUES(parent_payment_id), parent_payment_id),
@@ -612,7 +615,7 @@ class MysqlStorage {
   async addDeposit(txid, vout, amountSats, isMature) {
     try {
       await this.pool.query(
-        `INSERT INTO unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
+        `INSERT INTO brz_unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
          VALUES (?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE is_mature = VALUES(is_mature), amount_sats = VALUES(amount_sats)`,
         [this.identity, txid, vout, amountSats, isMature ? 1 : 0]
@@ -628,7 +631,7 @@ class MysqlStorage {
   async deleteDeposit(txid, vout) {
     try {
       await this.pool.query(
-        "DELETE FROM unclaimed_deposits WHERE user_id = ? AND txid = ? AND vout = ?",
+        "DELETE FROM brz_unclaimed_deposits WHERE user_id = ? AND txid = ? AND vout = ?",
         [this.identity, txid, vout]
       );
     } catch (error) {
@@ -642,7 +645,7 @@ class MysqlStorage {
   async listDeposits() {
     try {
       const [rows] = await this.pool.query(
-        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits WHERE user_id = ?",
+        "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM brz_unclaimed_deposits WHERE user_id = ?",
         [this.identity]
       );
 
@@ -668,14 +671,14 @@ class MysqlStorage {
     try {
       if (payload.type === "claimError") {
         await this.pool.query(
-          `UPDATE unclaimed_deposits
+          `UPDATE brz_unclaimed_deposits
            SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL
            WHERE user_id = ? AND txid = ? AND vout = ?`,
           [JSON.stringify(payload.error), this.identity, txid, vout]
         );
       } else if (payload.type === "refund") {
         await this.pool.query(
-          `UPDATE unclaimed_deposits
+          `UPDATE brz_unclaimed_deposits
            SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL
            WHERE user_id = ? AND txid = ? AND vout = ?`,
           [payload.refundTx, payload.refundTxid, this.identity, txid, vout]
@@ -697,7 +700,7 @@ class MysqlStorage {
       await this._withTransaction(async (conn) => {
         for (const item of metadata) {
           await conn.query(
-            `INSERT INTO lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+            `INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
              VALUES (?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                nostr_zap_request = VALUES(nostr_zap_request),
@@ -825,7 +828,7 @@ class MysqlStorage {
 
       const [rows] = await this.pool.query(
         `SELECT id, name, payment_identifier, created_at, updated_at
-         FROM contacts
+         FROM brz_contacts
          WHERE user_id = ?
          ORDER BY name ASC
          LIMIT ? OFFSET ?`,
@@ -851,7 +854,7 @@ class MysqlStorage {
     try {
       const [rows] = await this.pool.query(
         `SELECT id, name, payment_identifier, created_at, updated_at
-         FROM contacts
+         FROM brz_contacts
          WHERE user_id = ? AND id = ?`,
         [this.identity, id]
       );
@@ -876,7 +879,7 @@ class MysqlStorage {
   async insertContact(contact) {
     try {
       await this.pool.query(
-        `INSERT INTO contacts (user_id, id, name, payment_identifier, created_at, updated_at)
+        `INSERT INTO brz_contacts (user_id, id, name, payment_identifier, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            name = VALUES(name),
@@ -902,7 +905,7 @@ class MysqlStorage {
   async deleteContact(id) {
     try {
       await this.pool.query(
-        "DELETE FROM contacts WHERE user_id = ? AND id = ?",
+        "DELETE FROM brz_contacts WHERE user_id = ? AND id = ?",
         [this.identity, id]
       );
     } catch (error) {
@@ -920,13 +923,13 @@ class MysqlStorage {
       return await this._withTransaction(async (conn) => {
         // The local queue revision is per-tenant — two tenants don't share a queue.
         const [revisionRows] = await conn.query(
-          "SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM sync_outgoing WHERE user_id = ?",
+          "SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM brz_sync_outgoing WHERE user_id = ?",
           [this.identity]
         );
         const revision = BigInt(revisionRows[0].revision);
 
         await conn.query(
-          `INSERT INTO sync_outgoing (
+          `INSERT INTO brz_sync_outgoing (
             user_id,
             record_type,
             data_id,
@@ -961,12 +964,12 @@ class MysqlStorage {
     try {
       await this._withTransaction(async (conn) => {
         const [deleteResult] = await conn.query(
-          "DELETE FROM sync_outgoing WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?",
+          "DELETE FROM brz_sync_outgoing WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?",
           [this.identity, record.id.type, record.id.dataId, localRevision.toString()]
         );
 
         if (deleteResult.affectedRows === 0) {
-          const msg = `complete_outgoing_sync: DELETE from sync_outgoing matched 0 rows (type=${record.id.type}, data_id=${record.id.dataId}, revision=${localRevision})`;
+          const msg = `complete_outgoing_sync: DELETE from brz_sync_outgoing matched 0 rows (type=${record.id.type}, data_id=${record.id.dataId}, revision=${localRevision})`;
           if (this.logger && typeof this.logger.log === "function") {
             this.logger.log({ line: msg, level: "warn" });
           } else {
@@ -976,7 +979,7 @@ class MysqlStorage {
         }
 
         await conn.query(
-          `INSERT INTO sync_state (
+          `INSERT INTO brz_sync_state (
             user_id,
             record_type,
             data_id,
@@ -1003,7 +1006,7 @@ class MysqlStorage {
 
         // Upsert this tenant's revision row; fresh tenants without a row get one.
         await conn.query(
-          `INSERT INTO sync_revision (user_id, revision) VALUES (?, ?)
+          `INSERT INTO brz_sync_revision (user_id, revision) VALUES (?, ?)
            ON DUPLICATE KEY UPDATE revision = GREATEST(revision, VALUES(revision))`,
           [this.identity, record.revision.toString()]
         );
@@ -1031,8 +1034,8 @@ class MysqlStorage {
           e.commit_time AS existing_commit_time,
           e.data AS existing_data,
           e.revision AS existing_revision
-        FROM sync_outgoing o
-        LEFT JOIN sync_state e ON
+        FROM brz_sync_outgoing o
+        LEFT JOIN brz_sync_state e ON
           o.record_type = e.record_type AND
           o.data_id = e.data_id AND
           o.user_id = e.user_id
@@ -1074,7 +1077,7 @@ class MysqlStorage {
     try {
       // A tenant that hasn't synced anything yet may have no row; treat as 0.
       const [rows] = await this.pool.query(
-        "SELECT revision FROM sync_revision WHERE user_id = ?",
+        "SELECT revision FROM brz_sync_revision WHERE user_id = ?",
         [this.identity]
       );
       return rows.length > 0 ? BigInt(rows[0].revision) : BigInt(0);
@@ -1095,7 +1098,7 @@ class MysqlStorage {
       await this._withTransaction(async (conn) => {
         for (const record of records) {
           await conn.query(
-            `INSERT INTO sync_incoming (
+            `INSERT INTO brz_sync_incoming (
               user_id,
               record_type,
               data_id,
@@ -1132,7 +1135,7 @@ class MysqlStorage {
   async syncDeleteIncomingRecord(record) {
     try {
       await this.pool.query(
-        `DELETE FROM sync_incoming
+        `DELETE FROM brz_sync_incoming
          WHERE user_id = ?
          AND record_type = ?
          AND data_id = ?
@@ -1159,8 +1162,8 @@ class MysqlStorage {
                 e.commit_time AS existing_commit_time,
                 e.data AS existing_data,
                 e.revision AS existing_revision
-         FROM sync_incoming i
-         LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
+         FROM brz_sync_incoming i
+         LEFT JOIN brz_sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
          WHERE i.user_id = ?
          ORDER BY i.revision ASC
          LIMIT ?`,
@@ -1209,8 +1212,8 @@ class MysqlStorage {
           e.commit_time AS existing_commit_time,
           e.data AS existing_data,
           e.revision AS existing_revision
-        FROM sync_outgoing o
-        LEFT JOIN sync_state e ON
+        FROM brz_sync_outgoing o
+        LEFT JOIN brz_sync_state e ON
           o.record_type = e.record_type AND
           o.data_id = e.data_id AND
           o.user_id = e.user_id
@@ -1256,7 +1259,7 @@ class MysqlStorage {
     try {
       await this._withTransaction(async (conn) => {
         await conn.query(
-          `INSERT INTO sync_state (
+          `INSERT INTO brz_sync_state (
             user_id,
             record_type,
             data_id,
@@ -1282,7 +1285,7 @@ class MysqlStorage {
         );
 
         await conn.query(
-          `INSERT INTO sync_revision (user_id, revision) VALUES (?, ?)
+          `INSERT INTO brz_sync_revision (user_id, revision) VALUES (?, ?)
            ON DUPLICATE KEY UPDATE revision = GREATEST(revision, VALUES(revision))`,
           [this.identity, record.revision.toString()]
         );
@@ -1314,6 +1317,7 @@ function defaultMysqlStorageConfig(connectionString) {
     maxPoolSize: 10,
     createTimeoutSecs: 0,
     recycleTimeoutSecs: 10,
+    runMigration: true,
   };
 }
 
@@ -1338,8 +1342,18 @@ function createMysqlPool(config) {
  * @param {Buffer|Uint8Array} identity - 33-byte tenant identity (secp256k1 pubkey)
  * @param {object} [logger]
  */
-async function createMysqlStorageWithPool(pool, identity, logger = null) {
-  const storage = new MysqlStorage(pool, identity, logger);
+async function createMysqlStorageWithPool(
+  pool,
+  identity,
+  logger = null,
+  runMigration = true
+) {
+  const storage = new MysqlStorage(
+    pool,
+    identity,
+    logger,
+    runMigration
+  );
   await storage.initialize();
   return storage;
 }
@@ -1354,7 +1368,12 @@ async function createMysqlStorageWithPool(pool, identity, logger = null) {
  */
 async function createMysqlStorage(config, identity, logger = null) {
   const pool = createMysqlPool(config);
-  return createMysqlStorageWithPool(pool, identity, logger);
+  return createMysqlStorageWithPool(
+    pool,
+    identity,
+    logger,
+    config.runMigration !== false
+  );
 }
 
 module.exports = {

@@ -2,13 +2,14 @@ import logging
 from breez_sdk_spark import (
     default_config,
     Network,
+    LeafOptimizationConfig,
     MaxFee,
-    OptimizationConfig,
     SparkConfig,
     SparkSigningOperator,
     SparkSspConfig,
     StableBalanceConfig,
     StableBalanceToken,
+    TokenOptimizationConfig,
 )
 
 
@@ -44,7 +45,12 @@ async def configure_private_enabled_default():
 async def configure_optimization_configuration():
     # ANCHOR: optimization-configuration
     config = default_config(network=Network.MAINNET)
-    config.optimization_config = OptimizationConfig(auto_enabled=True, multiplicity=1)
+    config.leaf_optimization_config = LeafOptimizationConfig(
+        auto_enabled=True, multiplicity=1
+    )
+    config.token_optimization_config = TokenOptimizationConfig(
+        auto_enabled=True, target_output_count=5, min_outputs_threshold=50
+    )
     # ANCHOR_END: optimization-configuration
     logging.info(f"Config: {config}")
 
@@ -108,4 +114,14 @@ async def configure_spark_config():
         expected_withdraw_relative_block_locktime=1_000,
     )
     # ANCHOR_END: spark-config
+    logging.info(f"Config: {config}")
+
+async def configure_background_tasks():
+    # ANCHOR: config-background-tasks
+    # Server-mode profile: equivalent to default_server_config(network=Network.MAINNET).
+    # Recommended when you build the SDK per request in a multi-tenant server
+    # deployment. See the "Server mode" page for the full profile.
+    config = default_config(network=Network.MAINNET)
+    config.background_tasks_enabled = False
+    # ANCHOR_END: config-background-tasks
     logging.info(f"Config: {config}")

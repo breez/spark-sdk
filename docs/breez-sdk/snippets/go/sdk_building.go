@@ -102,6 +102,8 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	postgresConfig.MaxPoolSize = 8 // Max connections in pool
 	waitTimeoutSecs := uint64(30)
 	postgresConfig.WaitTimeoutSecs = &waitTimeoutSecs // Timeout waiting for connection
+	// If your service owns SDK-compatible schema migrations:
+	postgresConfig.RunMigration = false
 
 	// Construct the connection pool. The same pool can be passed to multiple
 	// SdkBuilders to share connections across SDKs; per-tenant scoping (rows
@@ -167,4 +169,89 @@ func InitSdkMysql() (*breez_sdk_spark.BreezSdk, error) {
 	// ANCHOR_END: init-sdk-mysql
 
 	return sdk, nil
+}
+
+func InitSdkServer() (*breez_sdk_spark.BreezSdk, error) {
+	// ANCHOR: init-sdk-server
+	// Construct the seed using a mnemonic, entropy or passkey
+	mnemonic := "<mnemonic words>"
+	var seed breez_sdk_spark.Seed = breez_sdk_spark.SeedMnemonic{
+		Mnemonic:   mnemonic,
+		Passphrase: nil,
+	}
+
+	// Build a server-mode config: same as DefaultConfig(network) with
+	// BackgroundTasksEnabled = false. No periodic sync, no real-time sync
+	// client, no leaf/token optimizer, no flashnet refunder, no lightning-
+	// address recovery, no spark private-mode init.
+	apiKey := "<breez api key>"
+	config := breez_sdk_spark.DefaultServerConfig(breez_sdk_spark.NetworkMainnet)
+	config.ApiKey = &apiKey
+
+	// Typically server-mode SDKs are built per request and share infrastructure
+	// (DB pool, REST chain service, SSP/Connection Manager) across instances.
+	// Pass the shared resources via the builder.
+	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+	builder.WithDefaultStorage("./.data")
+	sdk, err := builder.Build()
+	if err != nil {
+		return nil, err
+	}
+	// ANCHOR_END: init-sdk-server
+
+	return sdk, nil
+}
+
+func ServerModeRequestHandler(sdk *breez_sdk_spark.BreezSdk) (string, error) {
+	// ANCHOR: server-mode-request-handler
+	// User-facing request handler: do not call SyncWallet here. Operations
+	// that read from local storage (GetInfo, ListPayments, etc.) do not need
+	// a defensive sync. Call SyncWallet only from webhook handlers or
+	// reconciliation jobs that need to observe an external state change.
+	amountSats := uint64(5_000)
+	expirySecs := uint32(3600)
+	response, err := sdk.ReceivePayment(breez_sdk_spark.ReceivePaymentRequest{
+		PaymentMethod: breez_sdk_spark.ReceivePaymentMethodBolt11Invoice{
+			Description: "<invoice description>",
+			AmountSats:  &amountSats,
+			ExpirySecs:  &expirySecs,
+			PaymentHash: nil,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	// Always disconnect at the end of the request lifecycle to flush
+	// outstanding storage writes.
+	if err := sdk.Disconnect(); err != nil {
+		return "", err
+	}
+	// ANCHOR_END: server-mode-request-handler
+	return response.PaymentRequest, nil
+}
+
+func ServerModeProvisioning(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: server-mode-provisioning
+	// One-time setup when a wallet is first registered. The client-mode SDK
+	// would normally apply the private-mode preset itself on first startup;
+	// server-mode SDKs do not, so opt in once here via UpdateUserSettings.
+	sparkPrivateModeEnabled := true
+	if err := sdk.UpdateUserSettings(breez_sdk_spark.UpdateUserSettingsRequest{
+		SparkPrivateModeEnabled: &sparkPrivateModeEnabled,
+	}); err != nil {
+		return err
+	}
+
+	return sdk.Disconnect()
+	// ANCHOR_END: server-mode-provisioning
+}
+
+func RefundPendingConversions(sdk *breez_sdk_spark.BreezSdk) error {
+	// ANCHOR: refund-pending-conversions
+	// The flashnet conversion refunder doesn't run in the background in server
+	// mode. Call this from your own scheduler (e.g. once per minute) to issue
+	// pending refunds for failed conversions.
+	return sdk.RefundPendingConversions()
+	// ANCHOR_END: refund-pending-conversions
 }

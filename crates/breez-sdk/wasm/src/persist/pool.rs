@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::logger::Logger;
 use crate::models::session_manager::SessionManager;
-use crate::sdk_builder::{MysqlStorageConfig, PostgresStorageConfig};
+use crate::sdk_builder::{MysqlForeignKeyMode, MysqlStorageConfig, PostgresStorageConfig};
 use crate::token_store::TokenStoreJs;
 use crate::tree_store::TreeStoreJs;
 
@@ -23,6 +23,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
+        run_migration: bool,
     ) -> Result<crate::persist::Storage, JsValue>;
 
     #[wasm_bindgen(js_name = "createPostgresTreeStoreWithPool", catch)]
@@ -30,6 +31,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
+        run_migration: bool,
     ) -> Result<TreeStoreJs, JsValue>;
 
     #[wasm_bindgen(js_name = "createPostgresTokenStoreWithPool", catch)]
@@ -37,6 +39,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
+        run_migration: bool,
     ) -> Result<TokenStoreJs, JsValue>;
 
     #[wasm_bindgen(js_name = "createPostgresSessionManagerWithPool", catch)]
@@ -44,6 +47,7 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
+        run_migration: bool,
     ) -> Result<SessionManager, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlPool", catch)]
@@ -54,20 +58,25 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
+        run_migration: bool,
     ) -> Result<crate::persist::Storage, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlTreeStoreWithPool", catch)]
     pub async fn create_mysql_tree_store_with_pool(
         pool: &JsPool,
         identity: &[u8],
+        foreign_key_mode: MysqlForeignKeyMode,
         logger: Option<&Logger>,
+        run_migration: bool,
     ) -> Result<TreeStoreJs, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlTokenStoreWithPool", catch)]
     pub async fn create_mysql_token_store_with_pool(
         pool: &JsPool,
         identity: &[u8],
+        foreign_key_mode: MysqlForeignKeyMode,
         logger: Option<&Logger>,
+        run_migration: bool,
     ) -> Result<TokenStoreJs, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlSessionManagerWithPool", catch)]
@@ -75,5 +84,6 @@ extern "C" {
         pool: &JsPool,
         identity: &[u8],
         logger: Option<&Logger>,
+        run_migration: bool,
     ) -> Result<SessionManager, JsValue>;
 }

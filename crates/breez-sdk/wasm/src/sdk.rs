@@ -60,6 +60,11 @@ pub fn default_config(network: Network) -> Config {
     breez_sdk_spark::default_config(network.into()).into()
 }
 
+#[wasm_bindgen(js_name = "defaultServerConfig")]
+pub fn default_server_config(network: Network) -> Config {
+    breez_sdk_spark::default_server_config(network.into()).into()
+}
+
 /// Creates a default external signer from a mnemonic phrase.
 ///
 /// This creates a signer that can be used with `connectWithSigner` or `SdkBuilder.newWithSigner`.
@@ -340,6 +345,11 @@ impl BreezSdk {
             .fetch_conversion_limits(request.into())
             .await?
             .into())
+    }
+
+    #[wasm_bindgen(js_name = "refundPendingConversions")]
+    pub async fn refund_pending_conversions(&self) -> WasmResult<()> {
+        Ok(self.sdk.refund_pending_conversions().await?)
     }
 
     #[wasm_bindgen(js_name = "buyBitcoin")]

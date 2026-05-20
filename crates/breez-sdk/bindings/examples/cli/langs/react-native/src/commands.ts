@@ -42,6 +42,7 @@ import { formatValue } from './serialization'
 import { dispatchIssuerCommand } from './issuer'
 import { dispatchContactsCommand } from './contacts'
 import { dispatchWebhooksCommand } from './webhooks'
+import { dispatchStableBalanceCommand } from './stable_balance'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -173,6 +174,7 @@ export const COMMAND_NAMES = [
   'issuer',
   'contacts',
   'webhooks',
+  'stable-balance',
 ]
 
 // ---------------------------------------------------------------------------
@@ -213,6 +215,7 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'issuer', description: 'Token issuer commands (use "issuer help" for details)', run: handleIssuer },
     { name: 'contacts', description: 'Contacts commands (use "contacts help" for details)', run: handleContacts },
     { name: 'webhooks', description: 'Webhook commands (use "webhooks help" for details)', run: handleWebhooks },
+    { name: 'stable-balance', description: 'Stable balance commands (use "stable-balance help" for details)', run: handleStableBalance },
   ]
 
   for (const cmd of commands) {
@@ -649,7 +652,7 @@ async function handleLnurlPay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerI
   const flagArgs = args
 
   if (positional.length < 1) {
-    return 'Usage: lnurl-pay <lnurl_or_address> [-a <amount_sats>] [-c <comment>] [-v <true/false>] [-i <idempotency_key>] [--from-token <token_id>] [-s <max_slippage_bps>] [--fees-included]'
+    return 'Usage: lnurl-pay <lnurl_or_address> [-a <amount>] [-c <comment>] [-v <true/false>] [-i <idempotency_key>] [-t <token_identifier>] [--from-token <token_id>] [-s <max_slippage_bps>] [--fees-included]'
   }
 
   const lnurl = positional[0]
@@ -657,6 +660,7 @@ async function handleLnurlPay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerI
   const validateStr = parseFlag(flagArgs, '--validate', '-v')
   const validateSuccessUrl = validateStr !== undefined ? validateStr === 'true' : undefined
   const idempotencyKey = parseFlag(flagArgs, '--idempotency-key', '-i')
+  const tokenIdentifier = parseFlag(flagArgs, '--token-identifier', '-t')
   const convertFromTokenIdentifier = parseFlag(flagArgs, '--from-token')
   const maxSlippageBps = parseNumericFlag(flagArgs, '--convert-max-slippage-bps', '-s')
   const feesIncluded = hasFlag(flagArgs, '--fees-included')
@@ -691,21 +695,23 @@ async function handleLnurlPay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerI
 
   // In the Rust CLI, this prompts for amount interactively.
   // Since we cannot prompt interactively in a single command, require amount as a flag.
-  const amountSatsStr = parseFlag(flagArgs, '--amount', '-a')
-  if (!amountSatsStr) {
+  const amountStr = parseFlag(flagArgs, '--amount', '-a')
+  if (!amountStr) {
     lines.push(formatValue(payRequest))
     lines.push('')
-    lines.push('Please provide amount with -a flag: lnurl-pay <lnurl> -a <amount_sats>')
+    const unitHint = tokenIdentifier ? ' (in token base units)' : ''
+    lines.push(`Please provide amount with -a flag${unitHint}: lnurl-pay <lnurl> -a <amount>`)
     return lines.join('\n')
   }
 
-  const amountSats = BigInt(amountSatsStr)
+  const amount = BigInt(amountStr)
 
   const prepareResponse = await sdk.prepareLnurlPay({
-    amountSats,
+    amount,
     payRequest: payRequest as any,
     comment,
     validateSuccessActionUrl: validateSuccessUrl,
+    tokenIdentifier,
     conversionOptions,
     feePolicy,
   })
@@ -1095,4 +1101,10 @@ async function handleContacts(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerI
 
 async function handleWebhooks(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   return dispatchWebhooksCommand(args, sdk)
+}
+
+// --- stable-balance (delegation) ---
+
+async function handleStableBalance(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  return dispatchStableBalanceCommand(args, sdk)
 }

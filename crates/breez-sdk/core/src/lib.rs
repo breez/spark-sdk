@@ -2,20 +2,20 @@
 pub mod bindings;
 mod chain;
 mod common;
-mod connection_manager;
 mod error;
 mod events;
 mod issuer;
+mod jwt_header_provider;
 mod lnurl;
 mod logger;
 mod models;
-mod partner_header_provider;
 #[cfg(feature = "passkey")]
 pub mod passkey;
 mod persist;
 mod realtime_sync;
 mod sdk;
 mod sdk_builder;
+mod sdk_context;
 mod session_manager;
 pub mod signer;
 mod stable_balance;
@@ -30,9 +30,6 @@ pub use chain::{
 };
 pub use common::rest::{RestClient, RestResponse};
 pub use common::{fiat::*, models::*, sync_storage};
-pub use connection_manager::{
-    ConnectionManager, SspConnectionManager, new_connection_manager, new_ssp_connection_manager,
-};
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
 pub use issuer::*;
@@ -41,8 +38,11 @@ pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, StorageListPaymentsRequest,
     StoragePaymentDetailsFilter, UpdateDepositPayload, path::default_storage_path,
 };
-pub use sdk::{BreezSdk, default_config, get_spark_status, init_logging, parse_input};
+pub use sdk::{
+    BreezSdk, default_config, default_server_config, get_spark_status, init_logging, parse_input,
+};
 pub use sdk_builder::SdkBuilder;
+pub use sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context};
 pub use session_manager::{Session, SessionManager, SessionManagerError};
 pub use spark_wallet::{
     CombinedHeaderProvider, HeaderProvider, HeaderProviderError, KeySet, PublicKey,
@@ -62,7 +62,7 @@ pub use persist::postgres::{
     not(all(target_family = "wasm", target_os = "unknown"))
 ))]
 pub use persist::mysql::{
-    MysqlConnectionPool, MysqlStorageConfig, create_mysql_connection_pool,
+    MysqlConnectionPool, MysqlForeignKeyMode, MysqlStorageConfig, create_mysql_connection_pool,
     default_mysql_storage_config,
 };
 
@@ -79,6 +79,9 @@ pub use persist::tests as storage_tests;
 
 #[cfg(feature = "test-utils")]
 pub use spark_wallet::tree_store_tests;
+
+#[cfg(feature = "test-utils")]
+pub use spark_wallet::token_store_tests;
 
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();

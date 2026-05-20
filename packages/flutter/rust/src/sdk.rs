@@ -24,6 +24,11 @@ pub fn default_config(network: Network) -> Config {
 }
 
 #[frb(sync)]
+pub fn default_server_config(network: Network) -> Config {
+    breez_sdk_spark::default_server_config(network)
+}
+
+#[frb(sync)]
 pub fn init_logging(
     log_dir: Option<String>,
     app_logger: StreamSink<LogEntry>,
@@ -272,6 +277,10 @@ impl BreezSdk {
 
     pub async fn list_webhooks(&self) -> Result<Vec<Webhook>, SdkError> {
         self.inner.list_webhooks().await
+    }
+
+    pub async fn refund_pending_conversions(&self) -> Result<(), SdkError> {
+        self.inner.refund_pending_conversions().await
     }
 
     pub async fn add_contact(&self, request: AddContactRequest) -> Result<Contact, SdkError> {

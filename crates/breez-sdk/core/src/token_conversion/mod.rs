@@ -9,6 +9,7 @@ pub(crate) use middleware::TokenConversionMiddleware;
 pub use models::*;
 
 use spark_wallet::TransferId;
+use tokio::sync::broadcast;
 
 /// Trait for conversion implementations.
 ///
@@ -62,4 +63,18 @@ pub(crate) trait TokenConverter: Send + Sync {
         &self,
         request: &FetchConversionLimitsRequest,
     ) -> Result<FetchConversionLimitsResponse, ConversionError>;
+
+    /// Process any conversions whose pending refunds need to be issued.
+    ///
+    /// Iterates over payments marked as needing a refund and attempts to
+    /// refund each one. Surfaced through `BreezSdk::refund_pending_conversions`
+    /// so partners can drive this explicitly — required in server mode (where
+    /// no periodic refunder runs) and available in client mode as a way to
+    /// force an immediate refund pass instead of waiting for the next tick.
+    async fn refund_pending(&self) -> Result<(), ConversionError>;
+
+    /// Optional signal that wakes the client-mode periodic refunder.
+    fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<()>> {
+        None
+    }
 }

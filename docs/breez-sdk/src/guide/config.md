@@ -29,6 +29,29 @@ The synchronization process is used to detect some payment status updates that a
 
 A shorter synchronization interval provides more responsive detection of payment updates but increases resource usage and may trigger API rate limits. The default interval balances responsiveness with resource efficiency for most use cases.
 
+## Background tasks enabled
+
+Master switch for all per-instance background tasks. Defaults to `true`, which is the right choice for mobile and single-instance deployments — the SDK runs its periodic sync, real-time sync client, lightning-address recovery, spark private-mode init, leaf and token-output optimizers, the spark-wallet background processor, and the flashnet conversion refunder.
+
+Set to `false` for multi-tenant server deployments where the SDK is built per request and the host orchestrates sync, claiming, and event delivery (typically via webhooks) explicitly. No background work is started; explicit operations such as {{#name sync_wallet}}, {{#name claim_deposit}}, {{#name list_unclaimed_deposits}}, {{#name refund_deposit}}, and {{#name refund_pending_conversions}} continue to work and are the intended entry points in this mode.
+
+The recommended way to opt into server mode is via {{#name default_server_config}}, which returns the same `Config` as {{#name default_config}} with this flag flipped off. See [Server mode](./server_mode.md) for the full profile, lifecycle pattern, and shared-infrastructure wiring. Configuring this field directly is supported if you build your `Config` another way:
+
+{{#tabs config:config-background-tasks}}
+
+<div class="warning">
+<h4>Developer note</h4>
+
+When this flag is `false`, related per-field options whose backing service is gated off must be in their inactive shape:
+
+- [{{#name real_time_sync_server_url}}](#real-time-sync-server-url) must be `None`.
+- [{{#name leaf_optimization_config.auto_enabled}}](#optimization-configuration) must be `false`.
+- [{{#name token_optimization_config.auto_enabled}}](#optimization-configuration) must be `false`.
+
+The SDK rejects builds that leave any of them in their active shape with an invalid-input error. {{#name default_server_config}} sets these compatible values automatically.
+
+</div>
+
 ## LNURL Domain
 
 The LNURL domain to be used for receiving LNURL and Lightning address payments. By default, the [Breez LNURL server](https://github.com/breez/spark-sdk/tree/main/crates/breez-sdk/lnurl) instance will be used. You may configure a different domain, or set no domain to disable receiving payments using LNURL. For more information, see [Receiving payments using LNURL-Pay](./receive_lnurl_pay.md).
@@ -63,14 +86,26 @@ This configuration option is only relevant when the SDK is initialized for the f
 
 ## Optimization configuration
 
-The SDK can automatically optimize the Spark leaf set to maximize unilateral exit efficiency or increase payment speed. Fewer, larger leaves allow more funds to be exited unilaterally, while having more leaves enables payments without requiring swaps, improving payment speed.
+The SDK can automatically optimize both the Spark leaf set and a token's
+output set. Leaf optimization and token-output optimization are configured
+independently.
 
-This configuration controls optimization through the following options:
+### Leaf optimization
 
-- **Automatic optimization enabled**: whether optimization runs automatically when a payment is sent or received. Enabled by default.
+Leaf optimization maximizes unilateral exit efficiency or increases payment speed. Fewer, larger leaves allow more funds to be exited unilaterally, while having more leaves enables payments without requiring swaps, improving payment speed.
+
+- **Automatic optimization enabled**: whether leaf optimization runs automatically when a payment is sent or received. Enabled by default.
 - **Multiplicity**: the desired multiplicity for the leaf set. Default value is 1. Setting it to 0 fully optimizes for unilateral exit efficiency. Setting it to a value greater than 0 also optimizes for payment speed, with higher values prioritizing payment speed more aggressively at the cost of higher unilateral exit fees. Values above 5 are intended for high-throughput server environments that require maximum TPS and are not recommended for end-user wallets.
 
-See [Custom leaf optimization](./optimize.md) for more information and recommendations on how to configure optimization.
+See [Custom leaf optimization](./optimize.md) for more information and recommendations on how to configure leaf optimization.
+
+### Token-output optimization
+
+Token-output optimization automatically consolidates a token's available outputs to keep the output set small while preserving enough distinct outputs for concurrent sends.
+
+- **Automatic optimization enabled**: whether token-output consolidation runs automatically. Enabled by default.
+- **Target output count**: the number of token outputs to produce when consolidation fires. Instead of collapsing a token's outputs into a single output (which would serialize subsequent sends), the SDK splits the consolidated balance across this many outputs of roughly equal value. Higher values preserve concurrency for parallel sends at the cost of a slightly larger output set. Must be at least 1 and strictly less than the minimum outputs threshold. Default value is 5.
+- **Minimum outputs threshold**: the output count that triggers per-token auto-consolidation. Consolidation runs for a token once its available output count exceeds this value. Must be greater than 1. Default value is 50.
 
 {{#tabs config:optimization-configuration}}
 

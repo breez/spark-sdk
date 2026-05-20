@@ -17,10 +17,12 @@ extension ConfigCopyWith on Config {
     bool? useDefaultExternalInputParsers,
     String? realTimeSyncServerUrl,
     bool? privateEnabledDefault,
-    OptimizationConfig? optimizationConfig,
+    LeafOptimizationConfig? leafOptimizationConfig,
+    TokenOptimizationConfig? tokenOptimizationConfig,
     StableBalanceConfig? stableBalanceConfig,
     int? maxConcurrentClaims,
     SparkConfig? sparkConfig,
+    bool? backgroundTasksEnabled,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
@@ -33,10 +35,12 @@ extension ConfigCopyWith on Config {
       useDefaultExternalInputParsers: useDefaultExternalInputParsers ?? this.useDefaultExternalInputParsers,
       realTimeSyncServerUrl: realTimeSyncServerUrl ?? this.realTimeSyncServerUrl,
       privateEnabledDefault: privateEnabledDefault ?? this.privateEnabledDefault,
-      optimizationConfig: optimizationConfig ?? this.optimizationConfig,
+      leafOptimizationConfig: leafOptimizationConfig ?? this.leafOptimizationConfig,
+      tokenOptimizationConfig: tokenOptimizationConfig ?? this.tokenOptimizationConfig,
       stableBalanceConfig: stableBalanceConfig ?? this.stableBalanceConfig,
       maxConcurrentClaims: maxConcurrentClaims ?? this.maxConcurrentClaims,
       sparkConfig: sparkConfig ?? this.sparkConfig,
+      backgroundTasksEnabled: backgroundTasksEnabled ?? this.backgroundTasksEnabled,
     );
   }
 }

@@ -51,5 +51,5 @@ impl MysqlConcurrentTestFixture {
 #[test_log::test(tokio::test)]
 async fn test_mysql_concurrent_multi_instance_operations() -> Result<()> {
     let fixture = MysqlConcurrentTestFixture::new().await?;
-    run_concurrent_multi_instance_operations(|| fixture.build_instance()).await
+    run_concurrent_multi_instance_operations(RuntimeMode::Client, || fixture.build_instance()).await
 }

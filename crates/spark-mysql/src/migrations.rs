@@ -29,6 +29,8 @@
 //! Migration::CreateIndex { name: "idx_tree_leaves_slim", table: "tree_leaves",
 //!     columns: "(status, is_missing_from_operators, reservation_id, value)" }
 //! Migration::DropColumn { table: "lnurl_receive_metadata", column: "preimage" }
+//! Migration::AddForeignKey { name: "fk_tree_leaves_reservation", table: "tree_leaves",
+//!     definition: "FOREIGN KEY (reservation_id) REFERENCES tree_reservations(id) ON DELETE SET NULL" }
 //! ```
 //!
 //! The runner emits guarded SQL for each variant: a pre-flight check against
@@ -107,6 +109,18 @@ pub enum Migration {
         table: &'static str,
     },
 
+    /// Adds a foreign-key constraint on `table` named `name`, guarded by an
+    /// `information_schema.table_constraints` lookup so re-running an already
+    /// applied migration is a no-op. `MySQL` doesn't support
+    /// `ADD CONSTRAINT … IF NOT EXISTS`, so this variant emulates it.
+    AddForeignKey {
+        name: &'static str,
+        table: &'static str,
+        /// Body after `ADD CONSTRAINT <name>`, e.g.
+        /// `"FOREIGN KEY (col) REFERENCES other(col) ON DELETE SET NULL"`.
+        definition: &'static str,
+    },
+
     /// Drops a foreign-key constraint on `table` named `name`, guarded by an
     /// `information_schema.table_constraints` lookup so re-running an already
     /// applied migration is a no-op. Needed when rewriting parent PKs to lead
@@ -131,23 +145,150 @@ impl Migration {
     }
 }
 
+/// `MySQL` FK rename. `MySQL` has no `RENAME CONSTRAINT` for foreign keys, so
+/// [`run_migrations`] drops the old FK and re-adds it under `new_name`
+/// using `definition`. `table` is the new (post-rename) table name.
+pub struct FkRename<'a> {
+    pub table: &'a str,
+    pub old_name: &'a str,
+    pub new_name: &'a str,
+    /// Body after `ADD CONSTRAINT <new_name>`, e.g.
+    /// `"FOREIGN KEY (col) REFERENCES other(col) ON DELETE SET NULL"`.
+    pub definition: &'a str,
+}
+
+/// One-shot pre-prefix rename map for [`run_migrations`]. Lists every
+/// owned table / index / FK to move, plus the migrations tracker itself.
+/// `old_migrations_table` is the canary — if missing, the rename is
+/// skipped (DB is fresh or already upgraded).
+///
+/// `MySQL` PKs are always named `PRIMARY` (table-scoped), so PKs travel
+/// with their tables automatically.
+pub struct SchemaRenames<'a> {
+    /// Old name of the per-store schema migrations table; used as the
+    /// canary check.
+    pub old_migrations_table: &'a str,
+    /// New name of the per-store schema migrations table. Must match the
+    /// `migrations_table` argument to [`run_migrations`].
+    pub new_migrations_table: &'a str,
+    /// `(old_table, new_table)` pairs.
+    pub tables: &'a [(&'a str, &'a str)],
+    /// `(parent_table_new_name, old_index, new_index)` triples — `MySQL`
+    /// indexes are renamed via `ALTER TABLE <table> RENAME INDEX <old> TO <new>`.
+    pub indexes: &'a [(&'a str, &'a str, &'a str)],
+    /// Foreign keys to drop-and-recreate under the new name.
+    pub foreign_keys: &'a [FkRename<'a>],
+}
+
+/// Applies a one-shot schema rename on the caller's connection. Returns
+/// early if the canary `renames.old_migrations_table` is absent.
+///
+/// `MySQL` DDL auto-commits, so renames aren't transactional — the migrations
+/// tracking table is renamed **last** so a crash mid-sequence leaves the
+/// canary pointing at the old name. Each step is `information_schema`-guarded
+/// so the replay is idempotent.
+async fn apply_renames(
+    conn: &mut mysql_async::Conn,
+    renames: &SchemaRenames<'_>,
+) -> Result<(), MysqlError> {
+    // Canary: if the old migrations table doesn't exist, nothing to do.
+    if !table_exists(conn, renames.old_migrations_table).await? {
+        return Ok(());
+    }
+
+    // Each step is information_schema-guarded for replay safety after a
+    // crash mid-sequence (DDL auto-commits in `MySQL`).
+    for (old, new) in renames.tables {
+        if !table_exists(conn, old).await? || table_exists(conn, new).await? {
+            continue;
+        }
+        let sql = format!("RENAME TABLE `{old}` TO `{new}`");
+        conn.query_drop(&sql).await.map_err(|e| {
+            MysqlError::Database(format!("Failed to rename table {old} -> {new}: {e}"))
+        })?;
+    }
+
+    for (table, old, new) in renames.indexes {
+        if !index_exists(conn, table, old).await? || index_exists(conn, table, new).await? {
+            continue;
+        }
+        let sql = format!("ALTER TABLE `{table}` RENAME INDEX `{old}` TO `{new}`");
+        conn.query_drop(&sql).await.map_err(|e| {
+            MysqlError::Database(format!(
+                "Failed to rename index {old} -> {new} on {table}: {e}"
+            ))
+        })?;
+    }
+
+    for fk in renames.foreign_keys {
+        if foreign_key_exists(conn, fk.table, fk.new_name).await? {
+            continue;
+        }
+        if !foreign_key_exists(conn, fk.table, fk.old_name).await? {
+            continue;
+        }
+        let alter_sql = format!(
+            "ALTER TABLE `{}` DROP FOREIGN KEY `{}`, ADD CONSTRAINT `{}` {}",
+            fk.table, fk.old_name, fk.new_name, fk.definition
+        );
+        conn.query_drop(&alter_sql).await.map_err(|e| {
+            MysqlError::Database(format!(
+                "Failed to rename FK {} -> {} on {}: {e}",
+                fk.old_name, fk.new_name, fk.table
+            ))
+        })?;
+    }
+
+    // Rename the migrations tracking table last; it doubles as the canary
+    // that the rename completed.
+    if table_exists(conn, renames.old_migrations_table).await?
+        && !table_exists(conn, renames.new_migrations_table).await?
+    {
+        let sql = format!(
+            "RENAME TABLE `{}` TO `{}`",
+            renames.old_migrations_table, renames.new_migrations_table
+        );
+        conn.query_drop(&sql).await.map_err(map_db_error)?;
+    }
+
+    Ok(())
+}
+
+async fn table_exists(conn: &mut mysql_async::Conn, table: &str) -> Result<bool, MysqlError> {
+    let count: Option<i64> = conn
+        .exec_first(
+            "SELECT COUNT(*) FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = ?",
+            (table,),
+        )
+        .await
+        .map_err(map_db_error)?;
+    Ok(count.unwrap_or(0) > 0)
+}
+
 /// Runs database migrations with version tracking and concurrency control.
 ///
 /// This function:
 /// - Acquires a named lock (derived from the migrations table name) to prevent concurrent migrations
-/// - Creates a migrations tracking table if it doesn't exist
+/// - Optionally applies a one-shot schema rename first (see [`SchemaRenames`])
+/// - Creates the migrations tracking table if it doesn't exist
 /// - Applies only new migrations (based on version number)
 /// - Releases the lock before returning
+///
+/// Rename + migrations share one `GET_LOCK` on the session connection.
 ///
 /// # Arguments
 /// * `pool` - The connection pool to use
 /// * `migrations_table` - Name of the table to track migration versions (e.g., `schema_migrations`)
 /// * `migrations` - List of migrations, where each migration is a list of [`Migration`] steps
+/// * `renames` - When `Some`, applied before migrations; canary-gated so
+///   fresh / already-upgraded DBs pay only one probe.
 #[allow(clippy::arithmetic_side_effects)]
 pub async fn run_migrations(
     pool: &Pool,
     migrations_table: &str,
     migrations: &[Vec<Migration>],
+    renames: Option<&SchemaRenames<'_>>,
 ) -> Result<(), MysqlError> {
     let mut conn = pool
         .get_conn()
@@ -157,8 +298,8 @@ pub async fn run_migrations(
     let lock_name = format!("migration_lock_{migrations_table}");
 
     // Acquire GET_LOCK on the session connection. Returns 1 if granted, 0 on
-    // timeout, NULL on error. We hold this for the full migration sequence and
-    // release it explicitly below.
+    // timeout, NULL on error. We hold this for the full migration sequence
+    // (including the optional schema rename) and release it explicitly below.
     let acquired: Option<i64> = conn
         .exec_first(
             "SELECT GET_LOCK(?, ?)",
@@ -174,7 +315,7 @@ pub async fn run_migrations(
         )));
     }
 
-    let result = run_migrations_inner(&mut conn, migrations_table, migrations).await;
+    let result = run_migrations_inner(&mut conn, migrations_table, migrations, renames).await;
 
     // Always release the lock, even on failure. Ignore release errors so we
     // don't mask the underlying migration error.
@@ -188,10 +329,15 @@ async fn run_migrations_inner(
     conn: &mut mysql_async::Conn,
     migrations_table: &str,
     migrations: &[Vec<Migration>],
+    renames: Option<&SchemaRenames<'_>>,
 ) -> Result<(), MysqlError> {
+    if let Some(renames) = renames {
+        apply_renames(conn, renames).await?;
+    }
+
     // Begin transaction. Migration table creation lives inside the transaction
     // for parity with the postgres impl, but note that DDL implicitly commits
-    // in MySQL — this transaction only protects DML statements between DDL
+    // in `MySQL` — this transaction only protects DML statements between DDL
     // boundaries. Idempotency is ensured by the structured `Migration`
     // variants, not by transactional rollback.
     conn.query_drop("START TRANSACTION")
@@ -302,6 +448,22 @@ async fn run_step(
             conn.query_drop(&sql).await.map_err(|e| {
                 MysqlError::Database(format!(
                     "Migration {version} DROP INDEX {name} on {table} failed: {e}"
+                ))
+            })
+        }
+
+        Migration::AddForeignKey {
+            name,
+            table,
+            definition,
+        } => {
+            if foreign_key_exists(conn, table, name).await? {
+                return Ok(());
+            }
+            let sql = format!("ALTER TABLE `{table}` ADD CONSTRAINT `{name}` {definition}");
+            conn.query_drop(&sql).await.map_err(|e| {
+                MysqlError::Database(format!(
+                    "Migration {version} ADD CONSTRAINT {name} on {table} failed: {e}"
                 ))
             })
         }
@@ -427,7 +589,7 @@ mod tests {
         let container: ContainerAsync<Mysql> = Mysql::default()
             .start()
             .await
-            .expect("Failed to start MySQL container");
+            .expect("Failed to start `MySQL` container");
         let host_port = container
             .get_host_port_ipv4(3306)
             .await
@@ -477,13 +639,266 @@ mod tests {
             ],
         ];
 
-        run_migrations(&pool, "test_schema_migrations", &migrations)
+        run_migrations(&pool, "test_schema_migrations", &migrations, None)
             .await
             .expect("re-run should be idempotent");
 
         // And re-running again must also succeed (no version-row regression).
-        run_migrations(&pool, "test_schema_migrations", &migrations)
+        run_migrations(&pool, "test_schema_migrations", &migrations, None)
             .await
             .expect("second re-run should be a no-op");
+    }
+
+    /// End-to-end rename: tables, indexes, FK (drop+recreate), and
+    /// migrations tracker all move from legacy to `brz_*` with seed data
+    /// preserved.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn test_bootstrap_rename_upgrades_legacy_schema() {
+        let container: ContainerAsync<Mysql> = Mysql::default()
+            .start()
+            .await
+            .expect("Failed to start `MySQL` container");
+        let host_port = container
+            .get_host_port_ipv4(3306)
+            .await
+            .expect("Failed to get host port");
+        let pool = create_pool(&MysqlStorageConfig::with_defaults(format!(
+            "mysql://root@127.0.0.1:{host_port}/test"
+        )))
+        .expect("Failed to create pool");
+
+        // Pre-populate as a pre-prefix deployment would: legacy parent +
+        // child with an explicit FK, an index on the child, and a
+        // migrations tracker carrying a version row. Seed a data row that
+        // must survive the rename.
+        let mut conn = pool.get_conn().await.expect("get_conn");
+        conn.query_drop(
+            "CREATE TABLE widget_parents (
+                id VARCHAR(64) NOT NULL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL
+            )",
+        )
+        .await
+        .expect("create parent");
+        conn.query_drop(
+            "CREATE TABLE widgets (
+                id VARCHAR(64) NOT NULL PRIMARY KEY,
+                parent_id VARCHAR(64) NOT NULL,
+                CONSTRAINT fk_widgets_parent FOREIGN KEY (parent_id)
+                    REFERENCES widget_parents(id)
+            )",
+        )
+        .await
+        .expect("create child");
+        conn.query_drop("CREATE INDEX idx_widgets_parent ON widgets(parent_id)")
+            .await
+            .expect("create index");
+        conn.query_drop("INSERT INTO widget_parents (id, name) VALUES ('p1', 'alpha')")
+            .await
+            .expect("seed parent");
+        conn.query_drop("INSERT INTO widgets (id, parent_id) VALUES ('w1', 'p1')")
+            .await
+            .expect("seed child");
+        conn.query_drop(
+            "CREATE TABLE legacy_widget_migrations (
+                version INT PRIMARY KEY,
+                applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            )",
+        )
+        .await
+        .expect("create legacy migrations");
+        conn.query_drop("INSERT INTO legacy_widget_migrations (version) VALUES (1)")
+            .await
+            .expect("seed version row");
+        drop(conn);
+
+        let renames = SchemaRenames {
+            old_migrations_table: "legacy_widget_migrations",
+            new_migrations_table: "brz_widget_migrations",
+            tables: &[
+                ("widget_parents", "brz_widget_parents"),
+                ("widgets", "brz_widgets"),
+            ],
+            indexes: &[(
+                "brz_widgets",
+                "idx_widgets_parent",
+                "brz_idx_widgets_parent",
+            )],
+            foreign_keys: &[FkRename {
+                table: "brz_widgets",
+                old_name: "fk_widgets_parent",
+                new_name: "brz_fk_widgets_parent",
+                definition: "FOREIGN KEY (parent_id) REFERENCES `brz_widget_parents`(id)",
+            }],
+        };
+
+        // run_migrations with an empty migration list — we're only exercising
+        // the rename block.
+        run_migrations(&pool, "brz_widget_migrations", &[], Some(&renames))
+            .await
+            .expect("rename should succeed");
+
+        let mut conn = pool.get_conn().await.expect("get_conn");
+
+        let new_table_count: Option<i64> = conn
+            .exec_first(
+                "SELECT COUNT(*) FROM information_schema.tables
+                 WHERE table_schema = DATABASE() AND table_name = 'brz_widgets'",
+                (),
+            )
+            .await
+            .expect("probe brz_widgets");
+        assert_eq!(new_table_count, Some(1), "brz_widgets must exist");
+
+        let old_table_count: Option<i64> = conn
+            .exec_first(
+                "SELECT COUNT(*) FROM information_schema.tables
+                 WHERE table_schema = DATABASE() AND table_name = 'widgets'",
+                (),
+            )
+            .await
+            .expect("probe widgets");
+        assert_eq!(old_table_count, Some(0), "legacy widgets must be gone");
+
+        let row: Option<(String, String)> = conn
+            .exec_first("SELECT id, parent_id FROM brz_widgets WHERE id = 'w1'", ())
+            .await
+            .expect("seed row preserved");
+        assert_eq!(
+            row,
+            Some(("w1".to_string(), "p1".to_string())),
+            "seed data must survive the rename"
+        );
+
+        let new_index_count: Option<i64> = conn
+            .exec_first(
+                "SELECT COUNT(*) FROM information_schema.statistics
+                 WHERE table_schema = DATABASE()
+                   AND table_name = 'brz_widgets'
+                   AND index_name = 'brz_idx_widgets_parent'",
+                (),
+            )
+            .await
+            .expect("probe brz index");
+        assert_eq!(new_index_count, Some(1), "index must be renamed");
+
+        let new_fk_count: Option<i64> = conn
+            .exec_first(
+                "SELECT COUNT(*) FROM information_schema.table_constraints
+                 WHERE table_schema = DATABASE()
+                   AND table_name = 'brz_widgets'
+                   AND constraint_type = 'FOREIGN KEY'
+                   AND constraint_name = 'brz_fk_widgets_parent'",
+                (),
+            )
+            .await
+            .expect("probe brz fk");
+        assert_eq!(new_fk_count, Some(1), "FK must be renamed");
+
+        // The renamed FK must still functionally enforce referential
+        // integrity — inserting a row whose parent_id has no matching
+        // parent row should fail. Catches the case where the rename
+        // produced a constraint by name but lost its referent (e.g. wrong
+        // column or wrong parent in the combined ALTER).
+        let violation = conn
+            .query_drop(
+                "INSERT INTO brz_widgets (id, parent_id) VALUES ('w_orphan', 'missing_parent')",
+            )
+            .await;
+        assert!(
+            violation.is_err(),
+            "renamed FK must still reject orphan parent_id"
+        );
+
+        let version: Option<i32> = conn
+            .exec_first("SELECT MAX(version) FROM brz_widget_migrations", ())
+            .await
+            .expect("probe canary table");
+        assert_eq!(version, Some(1), "version row must survive");
+
+        drop(conn);
+
+        // Re-running must be a no-op (canary is gone now, returns early).
+        run_migrations(&pool, "brz_widget_migrations", &[], Some(&renames))
+            .await
+            .expect("re-run should be idempotent");
+    }
+
+    /// Rename must skip listed objects that don't exist (partial pre-prefix
+    /// schema, e.g. a customer at an older migration version).
+    #[tokio::test]
+    async fn test_bootstrap_rename_tolerates_missing_objects() {
+        let container: ContainerAsync<Mysql> = Mysql::default()
+            .start()
+            .await
+            .expect("Failed to start MySQL container");
+        let host_port = container
+            .get_host_port_ipv4(3306)
+            .await
+            .expect("Failed to get host port");
+        let pool = create_pool(&MysqlStorageConfig::with_defaults(format!(
+            "mysql://root@127.0.0.1:{host_port}/test"
+        )))
+        .expect("Failed to create pool");
+
+        // Pre-populate the canary + a bare table — no index, no FK. The
+        // rename map below lists objects that don't exist.
+        let mut conn = pool.get_conn().await.expect("get_conn");
+        conn.query_drop(
+            "CREATE TABLE widgets (
+                id VARCHAR(64) NOT NULL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL
+            )",
+        )
+        .await
+        .expect("create table");
+        conn.query_drop("INSERT INTO widgets (id, name) VALUES ('w1', 'alpha')")
+            .await
+            .expect("seed row");
+        conn.query_drop(
+            "CREATE TABLE legacy_widget_migrations (
+                version INT PRIMARY KEY,
+                applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            )",
+        )
+        .await
+        .expect("create canary");
+        conn.query_drop("INSERT INTO legacy_widget_migrations (version) VALUES (1)")
+            .await
+            .expect("seed version row");
+        drop(conn);
+
+        let renames = SchemaRenames {
+            old_migrations_table: "legacy_widget_migrations",
+            new_migrations_table: "brz_widget_migrations",
+            tables: &[("widgets", "brz_widgets")],
+            indexes: &[(
+                "brz_widgets",
+                "idx_widgets_missing",
+                "brz_idx_widgets_missing",
+            )],
+            foreign_keys: &[FkRename {
+                table: "brz_widgets",
+                old_name: "fk_widgets_missing",
+                new_name: "brz_fk_widgets_missing",
+                definition: "FOREIGN KEY (id) REFERENCES brz_widgets(id)",
+            }],
+        };
+
+        run_migrations(&pool, "brz_widget_migrations", &[], Some(&renames))
+            .await
+            .expect("rename must skip missing objects without erroring");
+
+        let mut conn = pool.get_conn().await.expect("get_conn");
+        let row: Option<(String, String)> = conn
+            .exec_first("SELECT id, name FROM brz_widgets WHERE id = 'w1'", ())
+            .await
+            .expect("probe brz_widgets");
+        assert_eq!(
+            row,
+            Some(("w1".to_string(), "alpha".to_string())),
+            "table + data preserved despite missing index/FK"
+        );
     }
 }

@@ -9,7 +9,9 @@ string dataDir = "./.data";
 string network = "regtest";
 uint? accountNumber = null;
 string? postgresConnectionString = null;
-string? stableBalanceTokenIdentifier = null;
+string? mysqlConnectionString = null;
+var stableBalanceTokens = new List<string>();
+string? stableBalanceDefaultActiveLabel = null;
 ulong? stableBalanceThreshold = null;
 string? passkeyProviderStr = null;
 string? label = null;
@@ -34,8 +36,14 @@ for (int i = 0; i < args.Length; i++)
         case "--postgres-connection-string":
             if (i + 1 < args.Length) postgresConnectionString = args[++i];
             break;
-        case "--stable-balance-token-identifier":
-            if (i + 1 < args.Length) stableBalanceTokenIdentifier = args[++i];
+        case "--mysql-connection-string":
+            if (i + 1 < args.Length) mysqlConnectionString = args[++i];
+            break;
+        case "--stable-balance-token":
+            if (i + 1 < args.Length) stableBalanceTokens.Add(args[++i]);
+            break;
+        case "--stable-balance-default-active-label":
+            if (i + 1 < args.Length) stableBalanceDefaultActiveLabel = args[++i];
             break;
         case "--stable-balance-threshold":
             if (i + 1 < args.Length) stableBalanceThreshold = ulong.Parse(args[++i]);
@@ -65,6 +73,12 @@ for (int i = 0; i < args.Length; i++)
 // ---------------------------------------------------------------------------
 // Validate passkey flag combinations
 // ---------------------------------------------------------------------------
+
+if (postgresConnectionString != null && mysqlConnectionString != null)
+{
+    Console.Error.WriteLine("Error: --mysql-connection-string conflicts with --postgres-connection-string");
+    return;
+}
 
 if (listLabels && passkeyProviderStr == null)
 {
@@ -125,16 +139,21 @@ Network networkEnum = network.ToLower() switch
 // ---------------------------------------------------------------------------
 
 StableBalanceConfig? stableBalanceConfig = null;
-if (stableBalanceTokenIdentifier != null)
+if (stableBalanceTokens.Count > 0)
 {
+    var tokens = stableBalanceTokens.Select(s =>
+    {
+        var parts = s.Split(':', 2);
+        if (parts.Length != 2)
+        {
+            throw new ArgumentException($"Invalid token format '{s}', expected LABEL:token_identifier");
+        }
+        return new StableBalanceToken(label: parts[0], tokenIdentifier: parts[1]);
+    }).ToArray();
+
     stableBalanceConfig = new StableBalanceConfig(
-        tokens: new StableBalanceToken[] {
-            new StableBalanceToken(
-                label: "USDB",
-                tokenIdentifier: stableBalanceTokenIdentifier
-            )
-        },
-        defaultActiveLabel: "USDB",
+        tokens: tokens,
+        defaultActiveLabel: stableBalanceDefaultActiveLabel,
         thresholdSats: stableBalanceThreshold,
         maxSlippageBps: null
     );
@@ -166,6 +185,7 @@ await RunInteractiveMode(
     networkEnum,
     accountNumber,
     postgresConnectionString,
+    mysqlConnectionString,
     stableBalanceConfig,
     passkeyConfig
 );
@@ -197,7 +217,9 @@ static void PrintUsage()
     Console.WriteLine("  --network <NETWORK>                         Network: regtest or mainnet (default: regtest)");
     Console.WriteLine("  --account-number <N>                        Account number for the Spark signer");
     Console.WriteLine("  --postgres-connection-string <CONN>         PostgreSQL connection string (SQLite by default)");
-    Console.WriteLine("  --stable-balance-token-identifier <TOKEN>   Stable balance token identifier");
+    Console.WriteLine("  --mysql-connection-string <CONN>            MySQL connection string (SQLite by default)");
+    Console.WriteLine("  --stable-balance-token <LABEL:TOKEN_ID>    Stable balance token (repeatable)");
+    Console.WriteLine("  --stable-balance-default-active-label <L>  Default active label for stable balance");
     Console.WriteLine("  --stable-balance-threshold <SATS>           Stable balance threshold in sats");
     Console.WriteLine("  --passkey <PROVIDER>                        Use passkey with file, yubikey, or fido2 provider");
     Console.WriteLine("  --label <NAME>                              Label for seed derivation (requires --passkey)");
@@ -212,6 +234,7 @@ static async Task RunInteractiveMode(
     Network network,
     uint? accountNumber,
     string? postgresConnectionString,
+    string? mysqlConnectionString,
     StableBalanceConfig? stableBalanceConfig,
     PasskeyConfig? passkeyConfig)
 {
@@ -266,9 +289,25 @@ static async Task RunInteractiveMode(
     var builder = new SdkBuilder(config: config, seed: seed);
     if (postgresConnectionString != null)
     {
-        var pgConfig = BreezSdkSparkMethods.DefaultPostgresStorageConfig(postgresConnectionString);
-        var pool = BreezSdkSparkMethods.CreatePostgresConnectionPool(config: pgConfig);
-        await builder.WithPostgresConnectionPool(pool: pool);
+        var context = await BreezSdkSparkMethods.NewSharedSdkContext(config: new SdkContextConfig(
+            network: network,
+            apiKey: apiKey,
+            connectionsPerOperator: null,
+            postgresConfig: BreezSdkSparkMethods.DefaultPostgresStorageConfig(postgresConnectionString),
+            mysqlConfig: null
+        ));
+        await builder.WithSharedContext(context: context);
+    }
+    else if (mysqlConnectionString != null)
+    {
+        var context = await BreezSdkSparkMethods.NewSharedSdkContext(config: new SdkContextConfig(
+            network: network,
+            apiKey: apiKey,
+            connectionsPerOperator: null,
+            postgresConfig: null,
+            mysqlConfig: BreezSdkSparkMethods.DefaultMysqlStorageConfig(mysqlConnectionString)
+        ));
+        await builder.WithSharedContext(context: context);
     }
     else
     {
@@ -302,6 +341,7 @@ static async Task RunInteractiveMode(
     allCommands.AddRange(IssuerCommandNames.All);
     allCommands.AddRange(ContactCommandNames.All);
     allCommands.AddRange(WebhookCommandNames.All);
+    allCommands.AddRange(StableBalanceCommandNames.All);
     allCommands.Add("exit");
     allCommands.Add("quit");
     allCommands.Add("help");
@@ -395,6 +435,10 @@ static async Task RunInteractiveMode(
             else if (cmdName == "webhooks")
             {
                 await WebhookCommands.DispatchCommand(cmdArgs, sdk, Readline);
+            }
+            else if (cmdName == "stable-balance")
+            {
+                await StableBalanceCommands.DispatchCommand(cmdArgs, sdk, Readline);
             }
             else if (registry.TryGetValue(cmdName, out var cmd))
             {

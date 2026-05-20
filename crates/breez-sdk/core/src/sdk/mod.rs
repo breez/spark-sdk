@@ -6,9 +6,11 @@ mod init;
 mod lightning_address;
 mod lnurl;
 mod payments;
+mod runtime;
 mod sync;
 mod sync_coordinator;
 
+pub(crate) use runtime::{RuntimeEvent, SdkRuntime, runtime_from_config};
 pub(crate) use sync_coordinator::SyncCoordinator;
 
 use bitflags::bitflags;
@@ -19,12 +21,11 @@ use spark_wallet::SparkWallet;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell, oneshot, watch};
 
-use crate::partner_header_provider::BreezPartnerHeaderProvider;
 use crate::{
-    BitcoinChainService, ExternalInputParser, InputType, Logger, Network, OptimizationConfig,
-    error::SdkError, events::EventEmitter, lnurl::LnurlServerClient, logger, models::Config,
-    persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter, stable_balance::StableBalance,
-    token_conversion::TokenConverter,
+    BitcoinChainService, ExternalInputParser, InputType, LeafOptimizationConfig, Logger, Network,
+    TokenOptimizationConfig, error::SdkError, events::EventEmitter, lnurl::LnurlServerClient,
+    logger, models::Config, persist::Storage, signer::lnurl_auth::LnurlAuthSignerAdapter,
+    stable_balance::StableBalance, token_conversion::TokenConverter,
 };
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -86,6 +87,7 @@ pub struct BreezSdk {
     pub(crate) lnurl_auth_signer: Arc<LnurlAuthSignerAdapter>,
     pub(crate) event_emitter: Arc<EventEmitter>,
     pub(crate) shutdown_sender: watch::Sender<()>,
+    pub(crate) runtime: SdkRuntime,
     /// Coordinator for coalescing duplicate sync requests
     pub(crate) sync_coordinator: SyncCoordinator,
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
@@ -94,7 +96,6 @@ pub struct BreezSdk {
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
-    pub(crate) partner_headers: Arc<BreezPartnerHeaderProvider>,
 }
 
 pub(crate) struct BreezSdkParams {
@@ -106,13 +107,13 @@ pub(crate) struct BreezSdkParams {
     pub lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     pub lnurl_auth_signer: Arc<LnurlAuthSignerAdapter>,
     pub shutdown_sender: watch::Sender<()>,
+    pub runtime: SdkRuntime,
     pub spark_wallet: Arc<SparkWallet>,
     pub event_emitter: Arc<EventEmitter>,
     pub buy_bitcoin_provider: Arc<MoonpayProvider>,
     pub token_converter: Arc<dyn TokenConverter>,
     pub stable_balance: Option<Arc<StableBalance>>,
     pub sync_coordinator: SyncCoordinator,
-    pub partner_headers: Arc<BreezPartnerHeaderProvider>,
 }
 
 pub async fn parse_input(
@@ -194,14 +195,63 @@ pub fn default_config(network: Network) -> Config {
         use_default_external_input_parsers: true,
         real_time_sync_server_url: Some(BREEZ_SYNC_SERVICE_URL.to_string()),
         private_enabled_default: true,
-        optimization_config: OptimizationConfig {
+        leaf_optimization_config: LeafOptimizationConfig {
             auto_enabled: true,
             multiplicity: 1,
+        },
+        token_optimization_config: TokenOptimizationConfig {
+            auto_enabled: true,
+            target_output_count: 5,
+            min_outputs_threshold: 50,
         },
         stable_balance_config: None,
         max_concurrent_claims: 4,
         spark_config: Some(default_spark_config(network)),
+        background_tasks_enabled: true,
     }
+}
+
+/// Builds a [`Config`] suitable for multi-tenant server-mode deployments.
+///
+/// This preset returns the same configuration as [`default_config`] with
+/// [`background_tasks_enabled`](Config::background_tasks_enabled) set to
+/// `false`. In server mode, the SDK is treated as a library: the host
+/// orchestrates sync, claiming, and event delivery (typically via webhooks)
+/// explicitly, so an ephemeral SDK instance stays cheap and predictable.
+///
+/// Config fields whose background services are gated off are reset to their
+/// inactive shape: `real_time_sync_server_url` is set to `None`, and both
+/// `leaf_optimization_config.auto_enabled` and
+/// `token_optimization_config.auto_enabled` are set to `false`. The SDK
+/// rejects builds where `background_tasks_enabled` is `false` and any of
+/// those fields is left in its active shape, so flip the flag via this
+/// helper rather than by hand.
+///
+/// Explicit operations (`sync_wallet`, `claim_deposit`,
+/// `list_unclaimed_deposits`, `refund_deposit`,
+/// `refund_pending_conversions`, etc.) continue to work and are the intended
+/// entry points in this mode.
+///
+/// Stable Balance is not supported in this mode because its conversion worker
+/// is a background service.
+///
+/// One-time setup that the SDK normally applies automatically — notably
+/// `private_enabled_default` — is NOT applied in this mode. Drive setup
+/// explicitly via `update_user_settings` (and any other relevant APIs) so
+/// ephemeral per-request SDK instances incur no implicit setup overhead.
+///
+/// `get_info` reads balance directly from the spark wallet in this mode
+/// rather than from the background-maintained storage cache, so balance
+/// reflects the latest local sync and `ensure_synced=true` is rejected with
+/// an invalid-input error
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn default_server_config(network: Network) -> Config {
+    let mut config = default_config(network);
+    config.background_tasks_enabled = false;
+    config.real_time_sync_server_url = None;
+    config.leaf_optimization_config.auto_enabled = false;
+    config.token_optimization_config.auto_enabled = false;
+    config
 }
 
 /// Builds the default [`SparkConfig`](crate::models::SparkConfig) for the given network.
@@ -350,4 +400,26 @@ pub async fn get_spark_status() -> Result<crate::SparkStatus, SdkError> {
         status,
         last_updated,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_server_config_disables_background_tasks() {
+        for network in [Network::Mainnet, Network::Regtest] {
+            let cfg = default_server_config(network);
+            assert!(!cfg.background_tasks_enabled);
+            assert!(cfg.real_time_sync_server_url.is_none());
+            assert!(!cfg.leaf_optimization_config.auto_enabled);
+            assert!(!cfg.token_optimization_config.auto_enabled);
+        }
+    }
+
+    #[test]
+    fn default_config_enables_background_tasks() {
+        assert!(default_config(Network::Mainnet).background_tasks_enabled);
+        assert!(default_config(Network::Regtest).background_tasks_enabled);
+    }
 }

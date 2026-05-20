@@ -29,10 +29,135 @@ use crate::{
 
 #[cfg(test)]
 use super::base::{PostgresStorageConfig, create_pool};
-use super::base::{map_db_error, map_pool_error, run_migrations};
+use super::base::{SchemaRenames, map_db_error, map_pool_error, run_migrations};
 
 /// Name of the schema migrations table for `PostgresStorage`.
-const MIGRATIONS_TABLE: &str = "schema_migrations";
+const MIGRATIONS_TABLE: &str = "brz_schema_migrations";
+
+/// Pre-prefix rename map for upgrading core persist deployments.
+const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
+    old_migrations_table: "schema_migrations",
+    new_migrations_table: MIGRATIONS_TABLE,
+    tables: &[
+        ("payments", "brz_payments"),
+        ("settings", "brz_settings"),
+        ("unclaimed_deposits", "brz_unclaimed_deposits"),
+        ("payment_metadata", "brz_payment_metadata"),
+        ("payment_details_lightning", "brz_payment_details_lightning"),
+        ("payment_details_token", "brz_payment_details_token"),
+        ("payment_details_spark", "brz_payment_details_spark"),
+        ("lnurl_receive_metadata", "brz_lnurl_receive_metadata"),
+        ("sync_revision", "brz_sync_revision"),
+        ("sync_outgoing", "brz_sync_outgoing"),
+        ("sync_state", "brz_sync_state"),
+        ("sync_incoming", "brz_sync_incoming"),
+        ("contacts", "brz_contacts"),
+    ],
+    indexes: &[
+        // Post-multi-tenant indexes (current state on version >= 16 DBs).
+        (
+            "idx_payments_user_timestamp",
+            "brz_idx_payments_user_timestamp",
+        ),
+        (
+            "idx_payments_user_payment_type",
+            "brz_idx_payments_user_payment_type",
+        ),
+        ("idx_payments_user_status", "brz_idx_payments_user_status"),
+        (
+            "idx_payment_metadata_user_parent",
+            "brz_idx_payment_metadata_user_parent",
+        ),
+        (
+            "idx_payment_details_lightning_user_invoice",
+            "brz_idx_payment_details_lightning_user_invoice",
+        ),
+        (
+            "idx_payment_details_lightning_user_payment_hash",
+            "brz_idx_payment_details_lightning_user_payment_hash",
+        ),
+        (
+            "idx_sync_outgoing_user_record_type_data_id",
+            "brz_idx_sync_outgoing_user_record_type_data_id",
+        ),
+        (
+            "idx_sync_incoming_user_revision",
+            "brz_idx_sync_incoming_user_revision",
+        ),
+        // Pre-multi-tenant indexes (still present on version < 16 DBs).
+        // The multi-tenant migration drops these via `DROP INDEX IF EXISTS
+        // brz_idx_*`, so the rename moves them under the prefix first.
+        ("idx_payments_timestamp", "brz_idx_payments_timestamp"),
+        ("idx_payments_payment_type", "brz_idx_payments_payment_type"),
+        ("idx_payments_status", "brz_idx_payments_status"),
+        (
+            "idx_payment_metadata_parent",
+            "brz_idx_payment_metadata_parent",
+        ),
+        (
+            "idx_payment_details_lightning_invoice",
+            "brz_idx_payment_details_lightning_invoice",
+        ),
+        (
+            "idx_payment_details_lightning_payment_hash",
+            "brz_idx_payment_details_lightning_payment_hash",
+        ),
+        (
+            "idx_sync_outgoing_data_id_record_type",
+            "brz_idx_sync_outgoing_data_id_record_type",
+        ),
+        (
+            "idx_sync_incoming_revision",
+            "brz_idx_sync_incoming_revision",
+        ),
+    ],
+    constraints: &[
+        ("brz_payments", "payments_pkey", "brz_payments_pkey"),
+        ("brz_settings", "settings_pkey", "brz_settings_pkey"),
+        (
+            "brz_unclaimed_deposits",
+            "unclaimed_deposits_pkey",
+            "brz_unclaimed_deposits_pkey",
+        ),
+        (
+            "brz_payment_metadata",
+            "payment_metadata_pkey",
+            "brz_payment_metadata_pkey",
+        ),
+        (
+            "brz_payment_details_lightning",
+            "payment_details_lightning_pkey",
+            "brz_payment_details_lightning_pkey",
+        ),
+        (
+            "brz_payment_details_token",
+            "payment_details_token_pkey",
+            "brz_payment_details_token_pkey",
+        ),
+        (
+            "brz_payment_details_spark",
+            "payment_details_spark_pkey",
+            "brz_payment_details_spark_pkey",
+        ),
+        (
+            "brz_lnurl_receive_metadata",
+            "lnurl_receive_metadata_pkey",
+            "brz_lnurl_receive_metadata_pkey",
+        ),
+        (
+            "brz_sync_revision",
+            "sync_revision_pkey",
+            "brz_sync_revision_pkey",
+        ),
+        ("brz_sync_state", "sync_state_pkey", "brz_sync_state_pkey"),
+        (
+            "brz_sync_incoming",
+            "sync_incoming_pkey",
+            "brz_sync_incoming_pkey",
+        ),
+        ("brz_contacts", "contacts_pkey", "brz_contacts_pkey"),
+    ],
+};
 
 /// PostgreSQL-based storage implementation using connection pooling.
 ///
@@ -73,20 +198,29 @@ impl PostgresStorage {
     /// A new `PostgresStorage` instance or an error
     #[cfg(test)]
     pub async fn new(config: PostgresStorageConfig, identity: &[u8]) -> Result<Self, StorageError> {
+        let run_migration = config.run_migration;
         let pool = create_pool(&config)?;
-        Self::new_with_pool(pool, identity).await
+        Self::new_with_pool(pool, identity, run_migration).await
     }
 
     /// Creates a new `PostgresStorage` using an existing connection pool.
     ///
     /// This allows sharing a single pool across multiple store implementations.
-    /// Each `PostgresStorage` is scoped to a single tenant `identity`.
-    pub async fn new_with_pool(pool: Pool, identity: &[u8]) -> Result<Self, StorageError> {
+    /// Each `PostgresStorage` is scoped to a single tenant `identity`. When
+    /// `run_migration` is `false`, initialization trusts the existing schema
+    /// and skips SDK storage migrations entirely.
+    pub async fn new_with_pool(
+        pool: Pool,
+        identity: &[u8],
+        run_migration: bool,
+    ) -> Result<Self, StorageError> {
         let storage = Self {
             pool,
             identity: identity.to_vec(),
         };
-        storage.migrate().await?;
+        if run_migration {
+            storage.migrate().await?;
+        }
         Ok(storage)
     }
 
@@ -95,6 +229,7 @@ impl PostgresStorage {
             &self.pool,
             MIGRATIONS_TABLE,
             &Self::migrations(&self.identity),
+            Some(&SCHEMA_RENAMES),
         )
         .await
     }
@@ -104,7 +239,7 @@ impl PostgresStorage {
         vec![
             // Migration 1: Core tables
             vec![
-                "CREATE TABLE IF NOT EXISTS payments (
+                "CREATE TABLE IF NOT EXISTS brz_payments (
                     id TEXT PRIMARY KEY,
                     payment_type TEXT NOT NULL,
                     status TEXT NOT NULL,
@@ -116,11 +251,11 @@ impl PostgresStorage {
                     deposit_tx_id TEXT,
                     spark BOOLEAN
                 )".to_string(),
-                "CREATE TABLE IF NOT EXISTS settings (
+                "CREATE TABLE IF NOT EXISTS brz_settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 )".to_string(),
-                "CREATE TABLE IF NOT EXISTS unclaimed_deposits (
+                "CREATE TABLE IF NOT EXISTS brz_unclaimed_deposits (
                     txid TEXT NOT NULL,
                     vout INTEGER NOT NULL,
                     amount_sats BIGINT,
@@ -129,7 +264,7 @@ impl PostgresStorage {
                     refund_tx_id TEXT,
                     PRIMARY KEY (txid, vout)
                 )".to_string(),
-                "CREATE TABLE IF NOT EXISTS payment_metadata (
+                "CREATE TABLE IF NOT EXISTS brz_payment_metadata (
                     payment_id TEXT PRIMARY KEY,
                     parent_payment_id TEXT,
                     lnurl_pay_info JSONB,
@@ -137,7 +272,7 @@ impl PostgresStorage {
                     lnurl_description TEXT,
                     conversion_info JSONB
                 )".to_string(),
-                "CREATE TABLE IF NOT EXISTS payment_details_lightning (
+                "CREATE TABLE IF NOT EXISTS brz_payment_details_lightning (
                     payment_id TEXT PRIMARY KEY,
                     invoice TEXT NOT NULL,
                     payment_hash TEXT NOT NULL,
@@ -145,18 +280,18 @@ impl PostgresStorage {
                     description TEXT,
                     preimage TEXT
                 )".to_string(),
-                "CREATE TABLE IF NOT EXISTS payment_details_token (
+                "CREATE TABLE IF NOT EXISTS brz_payment_details_token (
                     payment_id TEXT PRIMARY KEY,
                     metadata JSONB NOT NULL,
                     tx_hash TEXT NOT NULL,
                     invoice_details JSONB
                 )".to_string(),
-                "CREATE TABLE IF NOT EXISTS payment_details_spark (
+                "CREATE TABLE IF NOT EXISTS brz_payment_details_spark (
                     payment_id TEXT PRIMARY KEY,
                     invoice_details JSONB,
                     htlc_details JSONB
                 )".to_string(),
-                "CREATE TABLE IF NOT EXISTS lnurl_receive_metadata (
+                "CREATE TABLE IF NOT EXISTS brz_lnurl_receive_metadata (
                     payment_hash TEXT PRIMARY KEY,
                     nostr_zap_request TEXT,
                     nostr_zap_receipt TEXT,
@@ -165,16 +300,16 @@ impl PostgresStorage {
             ],
             // Migration 2: Sync tables
             vec![
-                // sync_revision: tracks the last committed revision (from server-acknowledged
+                // brz_sync_revision: tracks the last committed revision (from server-acknowledged
                 // or server-received records). Does NOT include pending outgoing queue ids.
-                // sync_outgoing.revision stores a local queue id for ordering/de-duplication only.
-                "CREATE TABLE IF NOT EXISTS sync_revision (
+                // brz_sync_outgoing.revision stores a local queue id for ordering/de-duplication only.
+                "CREATE TABLE IF NOT EXISTS brz_sync_revision (
                     id INTEGER PRIMARY KEY DEFAULT 1,
                     revision BIGINT NOT NULL DEFAULT 0,
                     CHECK (id = 1)
                 )".to_string(),
-                "INSERT INTO sync_revision (id, revision) VALUES (1, 0) ON CONFLICT (id) DO NOTHING".to_string(),
-                "CREATE TABLE IF NOT EXISTS sync_outgoing (
+                "INSERT INTO brz_sync_revision (id, revision) VALUES (1, 0) ON CONFLICT (id) DO NOTHING".to_string(),
+                "CREATE TABLE IF NOT EXISTS brz_sync_outgoing (
                     record_type TEXT NOT NULL,
                     data_id TEXT NOT NULL,
                     schema_version TEXT NOT NULL,
@@ -182,8 +317,8 @@ impl PostgresStorage {
                     updated_fields_json JSONB NOT NULL,
                     revision BIGINT NOT NULL
                 )".to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_sync_outgoing_data_id_record_type ON sync_outgoing(record_type, data_id)".to_string(),
-                "CREATE TABLE IF NOT EXISTS sync_state (
+                "CREATE INDEX IF NOT EXISTS brz_idx_sync_outgoing_data_id_record_type ON brz_sync_outgoing(record_type, data_id)".to_string(),
+                "CREATE TABLE IF NOT EXISTS brz_sync_state (
                     record_type TEXT NOT NULL,
                     data_id TEXT NOT NULL,
                     schema_version TEXT NOT NULL,
@@ -192,7 +327,7 @@ impl PostgresStorage {
                     revision BIGINT NOT NULL,
                     PRIMARY KEY(record_type, data_id)
                 )".to_string(),
-                "CREATE TABLE IF NOT EXISTS sync_incoming (
+                "CREATE TABLE IF NOT EXISTS brz_sync_incoming (
                     record_type TEXT NOT NULL,
                     data_id TEXT NOT NULL,
                     schema_version TEXT NOT NULL,
@@ -201,79 +336,79 @@ impl PostgresStorage {
                     revision BIGINT NOT NULL,
                     PRIMARY KEY(record_type, data_id, revision)
                 )".to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_sync_incoming_revision ON sync_incoming(revision)".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_sync_incoming_revision ON brz_sync_incoming(revision)".to_string(),
             ],
             // Migration 3: Indexes
             vec![
-                "CREATE INDEX IF NOT EXISTS idx_payments_timestamp ON payments(timestamp)".to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_payments_payment_type ON payments(payment_type)".to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)".to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_payment_details_lightning_invoice ON payment_details_lightning(invoice)".to_string(),
-                "CREATE INDEX IF NOT EXISTS idx_payment_metadata_parent ON payment_metadata(parent_payment_id)".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_payments_timestamp ON brz_payments(timestamp)".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_payments_payment_type ON brz_payments(payment_type)".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_payments_status ON brz_payments(status)".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_payment_details_lightning_invoice ON brz_payment_details_lightning(invoice)".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_payment_metadata_parent ON brz_payment_metadata(parent_payment_id)".to_string(),
             ],
             // Migration 4: Add tx_type to token payments
             vec![
-                "ALTER TABLE payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT 'transfer'".to_string(),
+                "ALTER TABLE brz_payment_details_token ADD COLUMN tx_type TEXT NOT NULL DEFAULT 'transfer'".to_string(),
             ],
             // Migration 5: Clear sync tables to force re-sync
             vec![
-                "DELETE FROM sync_outgoing".to_string(),
-                "DELETE FROM sync_incoming".to_string(),
-                "DELETE FROM sync_state".to_string(),
-                "UPDATE sync_revision SET revision = 0".to_string(),
-                "DELETE FROM settings WHERE key = 'sync_initial_complete'".to_string(),
+                "DELETE FROM brz_sync_outgoing".to_string(),
+                "DELETE FROM brz_sync_incoming".to_string(),
+                "DELETE FROM brz_sync_state".to_string(),
+                "UPDATE brz_sync_revision SET revision = 0".to_string(),
+                "DELETE FROM brz_settings WHERE key = 'sync_initial_complete'".to_string(),
             ],
             // Migration 6: Add htlc_status and htlc_expiry_time to lightning payments
             vec![
-                "ALTER TABLE payment_details_lightning ADD COLUMN htlc_status TEXT NOT NULL DEFAULT 'WaitingForPreimage'".to_string(),
-                "ALTER TABLE payment_details_lightning ADD COLUMN htlc_expiry_time BIGINT NOT NULL DEFAULT 0".to_string(),
+                "ALTER TABLE brz_payment_details_lightning ADD COLUMN htlc_status TEXT NOT NULL DEFAULT 'WaitingForPreimage'".to_string(),
+                "ALTER TABLE brz_payment_details_lightning ADD COLUMN htlc_expiry_time BIGINT NOT NULL DEFAULT 0".to_string(),
             ],
             // Migration 7: Backfill htlc_status for existing Lightning payments
             vec![
-                "UPDATE payment_details_lightning
+                "UPDATE brz_payment_details_lightning
                  SET htlc_status = CASE
-                         WHEN (SELECT status FROM payments WHERE id = payment_id) = 'completed' THEN 'PreimageShared'
-                         WHEN (SELECT status FROM payments WHERE id = payment_id) = 'pending' THEN 'WaitingForPreimage'
+                         WHEN (SELECT status FROM brz_payments WHERE id = payment_id) = 'completed' THEN 'PreimageShared'
+                         WHEN (SELECT status FROM brz_payments WHERE id = payment_id) = 'pending' THEN 'WaitingForPreimage'
                          ELSE 'Returned'
                      END".to_string(),
-                "UPDATE settings
+                "UPDATE brz_settings
                  SET value = jsonb_set(value::jsonb, '{offset}', '0')::text
                  WHERE key = 'sync_offset' AND value IS NOT NULL".to_string(),
             ],
             // Migration 8: Add preimage column for LUD-21 and NIP-57 support
             vec![
-                "ALTER TABLE lnurl_receive_metadata ADD COLUMN IF NOT EXISTS preimage TEXT".to_string(),
+                "ALTER TABLE brz_lnurl_receive_metadata ADD COLUMN IF NOT EXISTS preimage TEXT".to_string(),
                 // Clear the lnurl_metadata_updated_after setting to force re-sync
                 // This ensures clients get the new preimage field from the server
-                "DELETE FROM settings WHERE key = 'lnurl_metadata_updated_after'".to_string(),
+                "DELETE FROM brz_settings WHERE key = 'lnurl_metadata_updated_after'".to_string(),
             ],
             // Migration 9: Clear cached lightning address - schema changed from string to LnurlInfo struct
             vec![
-                "DELETE FROM settings WHERE key = 'lightning_address'".to_string(),
+                "DELETE FROM brz_settings WHERE key = 'lightning_address'".to_string(),
             ],
-            // Migration 10: Add index on payment_hash for JOIN with lnurl_receive_metadata
+            // Migration 10: Add index on payment_hash for JOIN with brz_lnurl_receive_metadata
             vec![
-                "CREATE INDEX IF NOT EXISTS idx_payment_details_lightning_payment_hash ON payment_details_lightning(payment_hash)".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_payment_details_lightning_payment_hash ON brz_payment_details_lightning(payment_hash)".to_string(),
             ],
             // Migration 11: Contacts table
-            vec!["CREATE TABLE IF NOT EXISTS contacts (
+            vec!["CREATE TABLE IF NOT EXISTS brz_contacts (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     payment_identifier TEXT NOT NULL,
                     created_at BIGINT NOT NULL,
                     updated_at BIGINT NOT NULL
                 )".to_string()],
-            // Migration 12: Drop preimage column from lnurl_receive_metadata - no longer needed
+            // Migration 12: Drop preimage column from brz_lnurl_receive_metadata - no longer needed
             // since the server handles preimage tracking via webhooks.
-            vec!["ALTER TABLE lnurl_receive_metadata DROP COLUMN IF EXISTS preimage".to_string()],
+            vec!["ALTER TABLE brz_lnurl_receive_metadata DROP COLUMN IF EXISTS preimage".to_string()],
             // Migration 13: Clear cached lightning address - format changed to CachedLightningAddress wrapper
-            vec!["DELETE FROM settings WHERE key = 'lightning_address'".to_string()],
-            // Migration 14: Add is_mature to unclaimed_deposits
+            vec!["DELETE FROM brz_settings WHERE key = 'lightning_address'".to_string()],
+            // Migration 14: Add is_mature to brz_unclaimed_deposits
             vec![
-                "ALTER TABLE unclaimed_deposits ADD COLUMN is_mature BOOLEAN NOT NULL DEFAULT TRUE".to_string(),
+                "ALTER TABLE brz_unclaimed_deposits ADD COLUMN is_mature BOOLEAN NOT NULL DEFAULT TRUE".to_string(),
             ],
-            // Migration 15: Add conversion_status to payment_metadata
-            vec!["ALTER TABLE payment_metadata ADD COLUMN IF NOT EXISTS conversion_status TEXT".to_string()],
+            // Migration 15: Add conversion_status to brz_payment_metadata
+            vec!["ALTER TABLE brz_payment_metadata ADD COLUMN IF NOT EXISTS conversion_status TEXT".to_string()],
             // Migration 16: Multi-tenant scoping. Adds a `user_id BYTEA` column to every
             // per-user table, backfills it to the current tenant's identity (so existing
             // single-tenant deployments remain readable), sets NOT NULL, and rewrites
@@ -310,82 +445,85 @@ fn multi_tenant_migration(identity: &[u8]) -> Vec<String> {
 
     let mut stmts = Vec::new();
 
-    stmts.extend(scope_table("payments", "id"));
-    // Per-user index rewrite for payments
-    stmts.push("DROP INDEX IF EXISTS idx_payments_timestamp".to_string());
-    stmts.push("DROP INDEX IF EXISTS idx_payments_payment_type".to_string());
-    stmts.push("DROP INDEX IF EXISTS idx_payments_status".to_string());
+    stmts.extend(scope_table("brz_payments", "id"));
+    // Per-user index rewrite for brz_payments
+    stmts.push("DROP INDEX IF EXISTS brz_idx_payments_timestamp".to_string());
+    stmts.push("DROP INDEX IF EXISTS brz_idx_payments_payment_type".to_string());
+    stmts.push("DROP INDEX IF EXISTS brz_idx_payments_status".to_string());
     stmts.push(
-        "CREATE INDEX idx_payments_user_timestamp ON payments(user_id, timestamp)".to_string(),
-    );
-    stmts.push(
-        "CREATE INDEX idx_payments_user_payment_type ON payments(user_id, payment_type)"
-            .to_string(),
-    );
-    stmts.push("CREATE INDEX idx_payments_user_status ON payments(user_id, status)".to_string());
-
-    stmts.extend(scope_table("payment_metadata", "payment_id"));
-    stmts.push("DROP INDEX IF EXISTS idx_payment_metadata_parent".to_string());
-    stmts.push(
-        "CREATE INDEX idx_payment_metadata_user_parent \
-         ON payment_metadata(user_id, parent_payment_id)"
-            .to_string(),
-    );
-
-    stmts.extend(scope_table("payment_details_lightning", "payment_id"));
-    stmts.push("DROP INDEX IF EXISTS idx_payment_details_lightning_invoice".to_string());
-    stmts.push("DROP INDEX IF EXISTS idx_payment_details_lightning_payment_hash".to_string());
-    stmts.push(
-        "CREATE INDEX idx_payment_details_lightning_user_invoice \
-         ON payment_details_lightning(user_id, invoice)"
+        "CREATE INDEX brz_idx_payments_user_timestamp ON brz_payments(user_id, timestamp)"
             .to_string(),
     );
     stmts.push(
-        "CREATE INDEX idx_payment_details_lightning_user_payment_hash \
-         ON payment_details_lightning(user_id, payment_hash)"
+        "CREATE INDEX brz_idx_payments_user_payment_type ON brz_payments(user_id, payment_type)"
+            .to_string(),
+    );
+    stmts.push(
+        "CREATE INDEX brz_idx_payments_user_status ON brz_payments(user_id, status)".to_string(),
+    );
+
+    stmts.extend(scope_table("brz_payment_metadata", "payment_id"));
+    stmts.push("DROP INDEX IF EXISTS brz_idx_payment_metadata_parent".to_string());
+    stmts.push(
+        "CREATE INDEX brz_idx_payment_metadata_user_parent \
+         ON brz_payment_metadata(user_id, parent_payment_id)"
             .to_string(),
     );
 
-    stmts.extend(scope_table("payment_details_token", "payment_id"));
-    stmts.extend(scope_table("payment_details_spark", "payment_id"));
-    stmts.extend(scope_table("lnurl_receive_metadata", "payment_hash"));
-    stmts.extend(scope_table("unclaimed_deposits", "txid, vout"));
-    stmts.extend(scope_table("contacts", "id"));
-    stmts.extend(scope_table("settings", "key"));
+    stmts.extend(scope_table("brz_payment_details_lightning", "payment_id"));
+    stmts.push("DROP INDEX IF EXISTS brz_idx_payment_details_lightning_invoice".to_string());
+    stmts.push("DROP INDEX IF EXISTS brz_idx_payment_details_lightning_payment_hash".to_string());
+    stmts.push(
+        "CREATE INDEX brz_idx_payment_details_lightning_user_invoice \
+         ON brz_payment_details_lightning(user_id, invoice)"
+            .to_string(),
+    );
+    stmts.push(
+        "CREATE INDEX brz_idx_payment_details_lightning_user_payment_hash \
+         ON brz_payment_details_lightning(user_id, payment_hash)"
+            .to_string(),
+    );
 
-    // sync_revision was a single-row table (PK id=1, CHECK id=1). Drop the id column
+    stmts.extend(scope_table("brz_payment_details_token", "payment_id"));
+    stmts.extend(scope_table("brz_payment_details_spark", "payment_id"));
+    stmts.extend(scope_table("brz_lnurl_receive_metadata", "payment_hash"));
+    stmts.extend(scope_table("brz_unclaimed_deposits", "txid, vout"));
+    stmts.extend(scope_table("brz_contacts", "id"));
+    stmts.extend(scope_table("brz_settings", "key"));
+
+    // brz_sync_revision was a single-row table (PK id=1, CHECK id=1). Drop the id column
     // (CASCADE clears the PK and the CHECK), then re-key by user_id so every tenant
     // has its own revision counter.
-    stmts.push("ALTER TABLE sync_revision DROP COLUMN id CASCADE".to_string());
-    stmts.push("ALTER TABLE sync_revision ADD COLUMN user_id BYTEA".to_string());
-    stmts.push(format!("UPDATE sync_revision SET user_id = {id_lit}"));
+    stmts.push("ALTER TABLE brz_sync_revision DROP COLUMN id CASCADE".to_string());
+    stmts.push("ALTER TABLE brz_sync_revision ADD COLUMN user_id BYTEA".to_string());
+    stmts.push(format!("UPDATE brz_sync_revision SET user_id = {id_lit}"));
     stmts.push(
-        "ALTER TABLE sync_revision \
+        "ALTER TABLE brz_sync_revision \
          ALTER COLUMN user_id SET NOT NULL, \
          ADD PRIMARY KEY (user_id)"
             .to_string(),
     );
 
-    // sync_outgoing has no PK, only an index — just add user_id and rewrite the index.
-    stmts.push("ALTER TABLE sync_outgoing ADD COLUMN user_id BYTEA".to_string());
-    stmts.push(format!("UPDATE sync_outgoing SET user_id = {id_lit}"));
-    stmts.push("ALTER TABLE sync_outgoing ALTER COLUMN user_id SET NOT NULL".to_string());
-    stmts.push("DROP INDEX IF EXISTS idx_sync_outgoing_data_id_record_type".to_string());
+    // brz_sync_outgoing has no PK, only an index — just add user_id and rewrite the index.
+    stmts.push("ALTER TABLE brz_sync_outgoing ADD COLUMN user_id BYTEA".to_string());
+    stmts.push(format!("UPDATE brz_sync_outgoing SET user_id = {id_lit}"));
+    stmts.push("ALTER TABLE brz_sync_outgoing ALTER COLUMN user_id SET NOT NULL".to_string());
+    stmts.push("DROP INDEX IF EXISTS brz_idx_sync_outgoing_data_id_record_type".to_string());
     stmts.push(
-        "CREATE INDEX idx_sync_outgoing_user_record_type_data_id \
-         ON sync_outgoing(user_id, record_type, data_id)"
+        "CREATE INDEX brz_idx_sync_outgoing_user_record_type_data_id \
+         ON brz_sync_outgoing(user_id, record_type, data_id)"
             .to_string(),
     );
 
-    stmts.extend(scope_table("sync_state", "record_type, data_id"));
+    stmts.extend(scope_table("brz_sync_state", "record_type, data_id"));
 
     stmts.extend(scope_table(
-        "sync_incoming",
+        "brz_sync_incoming",
         "record_type, data_id, revision",
     ));
-    stmts.push("DROP INDEX IF EXISTS idx_sync_incoming_revision".to_string());
+    stmts.push("DROP INDEX IF EXISTS brz_idx_sync_incoming_revision".to_string());
     stmts.push(
-        "CREATE INDEX idx_sync_incoming_user_revision ON sync_incoming(user_id, revision)"
+        "CREATE INDEX brz_idx_sync_incoming_user_revision ON brz_sync_incoming(user_id, revision)"
             .to_string(),
     );
 
@@ -648,7 +786,7 @@ impl Storage for PostgresStorage {
 
         // Insert or update main payment record (including detail columns atomically)
         tx.execute(
-            "INSERT INTO payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                  ON CONFLICT(user_id, id) DO UPDATE SET
                     payment_type = EXCLUDED.payment_type,
@@ -686,11 +824,11 @@ impl Storage for PostgresStorage {
                     let invoice_json = to_json_opt(invoice_details.as_ref())?;
                     let htlc_json = to_json_opt(htlc_details.as_ref())?;
                     tx.execute(
-                        "INSERT INTO payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
+                        "INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
                              VALUES ($1, $2, $3, $4)
                              ON CONFLICT(user_id, payment_id) DO UPDATE SET
-                                invoice_details = COALESCE(EXCLUDED.invoice_details, payment_details_spark.invoice_details),
-                                htlc_details = COALESCE(EXCLUDED.htlc_details, payment_details_spark.htlc_details)",
+                                invoice_details = COALESCE(EXCLUDED.invoice_details, brz_payment_details_spark.invoice_details),
+                                htlc_details = COALESCE(EXCLUDED.htlc_details, brz_payment_details_spark.htlc_details)",
                         &[&self.identity, &payment.id, &invoice_json, &htlc_json],
                     )
                     .await?;
@@ -707,13 +845,13 @@ impl Storage for PostgresStorage {
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 let invoice_json = to_json_opt(invoice_details.as_ref())?;
                 tx.execute(
-                    "INSERT INTO payment_details_token (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
+                    "INSERT INTO brz_payment_details_token (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
                          VALUES ($1, $2, $3, $4, $5, $6)
                          ON CONFLICT(user_id, payment_id) DO UPDATE SET
                             metadata = EXCLUDED.metadata,
                             tx_hash = EXCLUDED.tx_hash,
                             tx_type = EXCLUDED.tx_type,
-                            invoice_details = COALESCE(EXCLUDED.invoice_details, payment_details_token.invoice_details)",
+                            invoice_details = COALESCE(EXCLUDED.invoice_details, brz_payment_details_token.invoice_details)",
                     &[&self.identity, &payment.id, &metadata_json, &tx_hash, &tx_type.to_string(), &invoice_json],
                 )
                 .await?;
@@ -730,16 +868,16 @@ impl Storage for PostgresStorage {
                 let htlc_status = htlc_details.status.to_string();
                 let htlc_expiry_time = i64::try_from(htlc_details.expiry_time)?;
                 tx.execute(
-                    "INSERT INTO payment_details_lightning (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+                    "INSERT INTO brz_payment_details_lightning (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
                          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                          ON CONFLICT(user_id, payment_id) DO UPDATE SET
                             invoice = EXCLUDED.invoice,
                             payment_hash = EXCLUDED.payment_hash,
                             destination_pubkey = EXCLUDED.destination_pubkey,
                             description = EXCLUDED.description,
-                            preimage = COALESCE(EXCLUDED.preimage, payment_details_lightning.preimage),
-                            htlc_status = COALESCE(EXCLUDED.htlc_status, payment_details_lightning.htlc_status),
-                            htlc_expiry_time = COALESCE(EXCLUDED.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)",
+                            preimage = COALESCE(EXCLUDED.preimage, brz_payment_details_lightning.preimage),
+                            htlc_status = COALESCE(EXCLUDED.htlc_status, brz_payment_details_lightning.htlc_status),
+                            htlc_expiry_time = COALESCE(EXCLUDED.htlc_expiry_time, brz_payment_details_lightning.htlc_expiry_time)",
                     &[&self.identity, &payment.id, &invoice, payment_hash, &destination_pubkey, &description, preimage, &htlc_status, &htlc_expiry_time],
                 )
                 .await?;
@@ -770,15 +908,15 @@ impl Storage for PostgresStorage {
 
         client
             .execute(
-                "INSERT INTO payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+                "INSERT INTO brz_payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                  ON CONFLICT(user_id, payment_id) DO UPDATE SET
-                    parent_payment_id = COALESCE(EXCLUDED.parent_payment_id, payment_metadata.parent_payment_id),
-                    lnurl_pay_info = COALESCE(EXCLUDED.lnurl_pay_info, payment_metadata.lnurl_pay_info),
-                    lnurl_withdraw_info = COALESCE(EXCLUDED.lnurl_withdraw_info, payment_metadata.lnurl_withdraw_info),
-                    lnurl_description = COALESCE(EXCLUDED.lnurl_description, payment_metadata.lnurl_description),
-                    conversion_info = COALESCE(EXCLUDED.conversion_info, payment_metadata.conversion_info),
-                    conversion_status = COALESCE(EXCLUDED.conversion_status, payment_metadata.conversion_status)",
+                    parent_payment_id = COALESCE(EXCLUDED.parent_payment_id, brz_payment_metadata.parent_payment_id),
+                    lnurl_pay_info = COALESCE(EXCLUDED.lnurl_pay_info, brz_payment_metadata.lnurl_pay_info),
+                    lnurl_withdraw_info = COALESCE(EXCLUDED.lnurl_withdraw_info, brz_payment_metadata.lnurl_withdraw_info),
+                    lnurl_description = COALESCE(EXCLUDED.lnurl_description, brz_payment_metadata.lnurl_description),
+                    conversion_info = COALESCE(EXCLUDED.conversion_info, brz_payment_metadata.conversion_info),
+                    conversion_status = COALESCE(EXCLUDED.conversion_status, brz_payment_metadata.conversion_status)",
                 &[
                     &self.identity,
                     &payment_id,
@@ -800,7 +938,7 @@ impl Storage for PostgresStorage {
 
         client
             .execute(
-                "INSERT INTO settings (user_id, key, value) VALUES ($1, $2, $3)
+                "INSERT INTO brz_settings (user_id, key, value) VALUES ($1, $2, $3)
                  ON CONFLICT(user_id, key) DO UPDATE SET value = EXCLUDED.value",
                 &[&self.identity, &key, &value],
             )
@@ -814,7 +952,7 @@ impl Storage for PostgresStorage {
 
         let row = client
             .query_opt(
-                "SELECT value FROM settings WHERE user_id = $1 AND key = $2",
+                "SELECT value FROM brz_settings WHERE user_id = $1 AND key = $2",
                 &[&self.identity, &key],
             )
             .await?;
@@ -827,7 +965,7 @@ impl Storage for PostgresStorage {
 
         client
             .execute(
-                "DELETE FROM settings WHERE user_id = $1 AND key = $2",
+                "DELETE FROM brz_settings WHERE user_id = $1 AND key = $2",
                 &[&self.identity, &key],
             )
             .await?;
@@ -875,7 +1013,7 @@ impl Storage for PostgresStorage {
         // Early exit if no related payments exist for this tenant
         let has_related: bool = client
             .query_one(
-                "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE user_id = $1 AND parent_payment_id IS NOT NULL LIMIT 1)",
+                "SELECT EXISTS(SELECT 1 FROM brz_payment_metadata WHERE user_id = $1 AND parent_payment_id IS NOT NULL LIMIT 1)",
                 &[&self.identity],
             )
             .await
@@ -927,7 +1065,7 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         client
             .execute(
-                "INSERT INTO unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
+                "INSERT INTO brz_unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
                  VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT(user_id, txid, vout) DO UPDATE SET is_mature = EXCLUDED.is_mature, amount_sats = EXCLUDED.amount_sats",
                 &[
@@ -946,7 +1084,7 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         client
             .execute(
-                "DELETE FROM unclaimed_deposits WHERE user_id = $1 AND txid = $2 AND vout = $3",
+                "DELETE FROM brz_unclaimed_deposits WHERE user_id = $1 AND txid = $2 AND vout = $3",
                 &[&self.identity, &txid, &i32::try_from(vout)?],
             )
             .await?;
@@ -957,7 +1095,7 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let rows = client
             .query(
-                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits WHERE user_id = $1",
+                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM brz_unclaimed_deposits WHERE user_id = $1",
                 &[&self.identity],
             )
             .await?;
@@ -997,7 +1135,7 @@ impl Storage for PostgresStorage {
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 client
                     .execute(
-                        "UPDATE unclaimed_deposits SET claim_error = $1, refund_tx = NULL, refund_tx_id = NULL WHERE user_id = $2 AND txid = $3 AND vout = $4",
+                        "UPDATE brz_unclaimed_deposits SET claim_error = $1, refund_tx = NULL, refund_tx_id = NULL WHERE user_id = $2 AND txid = $3 AND vout = $4",
                         &[&error_json, &self.identity, &txid, &i32::try_from(vout)?],
                     )
                     .await?;
@@ -1008,7 +1146,7 @@ impl Storage for PostgresStorage {
             } => {
                 client
                     .execute(
-                        "UPDATE unclaimed_deposits SET refund_tx = $1, refund_tx_id = $2, claim_error = NULL WHERE user_id = $3 AND txid = $4 AND vout = $5",
+                        "UPDATE brz_unclaimed_deposits SET refund_tx = $1, refund_tx_id = $2, claim_error = NULL WHERE user_id = $3 AND txid = $4 AND vout = $5",
                         &[&refund_tx, &refund_txid, &self.identity, &txid, &i32::try_from(vout)?],
                     )
                     .await?;
@@ -1025,7 +1163,7 @@ impl Storage for PostgresStorage {
         for m in metadata {
             client
                 .execute(
-                    "INSERT INTO lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+                    "INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
                      VALUES ($1, $2, $3, $4, $5)
                      ON CONFLICT(user_id, payment_hash) DO UPDATE SET
                         nostr_zap_request = EXCLUDED.nostr_zap_request,
@@ -1049,7 +1187,7 @@ impl Storage for PostgresStorage {
         let rows = client
             .query(
                 "SELECT id, name, payment_identifier, created_at, updated_at
-                 FROM contacts WHERE user_id = $1 ORDER BY name ASC LIMIT $2 OFFSET $3",
+                 FROM brz_contacts WHERE user_id = $1 ORDER BY name ASC LIMIT $2 OFFSET $3",
                 &[&self.identity, &limit, &offset],
             )
             .await?;
@@ -1072,7 +1210,7 @@ impl Storage for PostgresStorage {
         let row = client
             .query_opt(
                 "SELECT id, name, payment_identifier, created_at, updated_at
-                 FROM contacts WHERE user_id = $1 AND id = $2",
+                 FROM brz_contacts WHERE user_id = $1 AND id = $2",
                 &[&self.identity, &id],
             )
             .await?
@@ -1090,7 +1228,7 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let result = client
             .execute(
-                "INSERT INTO contacts (user_id, id, name, payment_identifier, created_at, updated_at)
+                "INSERT INTO brz_contacts (user_id, id, name, payment_identifier, created_at, updated_at)
                  VALUES ($1, $2, $3, $4, $5, $6)
                  ON CONFLICT (user_id, id) DO UPDATE SET
                    name = EXCLUDED.name,
@@ -1117,7 +1255,7 @@ impl Storage for PostgresStorage {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         client
             .execute(
-                "DELETE FROM contacts WHERE user_id = $1 AND id = $2",
+                "DELETE FROM brz_contacts WHERE user_id = $1 AND id = $2",
                 &[&self.identity, &id],
             )
             .await?;
@@ -1139,7 +1277,7 @@ impl Storage for PostgresStorage {
         // Scoped per-tenant so two tenants don't share a queue.
         let local_revision: i64 = tx
             .query_one(
-                "SELECT COALESCE(MAX(revision), 0) + 1 FROM sync_outgoing WHERE user_id = $1",
+                "SELECT COALESCE(MAX(revision), 0) + 1 FROM brz_sync_outgoing WHERE user_id = $1",
                 &[&self.identity],
             )
             .await
@@ -1151,7 +1289,7 @@ impl Storage for PostgresStorage {
         let commit_time = chrono::Utc::now().timestamp();
 
         tx.execute(
-            "INSERT INTO sync_outgoing (user_id, record_type, data_id, schema_version, commit_time, updated_fields_json, revision)
+            "INSERT INTO brz_sync_outgoing (user_id, record_type, data_id, schema_version, commit_time, updated_fields_json, revision)
                  VALUES ($1, $2, $3, $4, $5, $6, $7)",
             &[
                 &self.identity,
@@ -1188,7 +1326,7 @@ impl Storage for PostgresStorage {
 
         let rows_deleted = tx
             .execute(
-                "DELETE FROM sync_outgoing WHERE user_id = $1 AND record_type = $2 AND data_id = $3 AND revision = $4",
+                "DELETE FROM brz_sync_outgoing WHERE user_id = $1 AND record_type = $2 AND data_id = $3 AND revision = $4",
                 &[
                     &self.identity,
                     &record.id.r#type,
@@ -1201,7 +1339,7 @@ impl Storage for PostgresStorage {
 
         if rows_deleted == 0 {
             warn!(
-                "complete_outgoing_sync: DELETE from sync_outgoing matched 0 rows \
+                "complete_outgoing_sync: DELETE from brz_sync_outgoing matched 0 rows \
                  (type={}, data_id={}, revision={})",
                 record.id.r#type, record.id.data_id, local_revision
             );
@@ -1212,7 +1350,7 @@ impl Storage for PostgresStorage {
         let commit_time = chrono::Utc::now().timestamp();
 
         tx.execute(
-            "INSERT INTO sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
+            "INSERT INTO brz_sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
                  VALUES ($1, $2, $3, $4, $5, $6, $7)
                  ON CONFLICT(user_id, record_type, data_id) DO UPDATE SET
                     schema_version = EXCLUDED.schema_version,
@@ -1235,8 +1373,8 @@ impl Storage for PostgresStorage {
         // Upsert this tenant's revision row. The migration creates a row at backfill, but
         // a fresh tenant joining a shared DB after migration won't have one yet.
         tx.execute(
-            "INSERT INTO sync_revision (user_id, revision) VALUES ($1, $2) \
-             ON CONFLICT (user_id) DO UPDATE SET revision = GREATEST(sync_revision.revision, EXCLUDED.revision)",
+            "INSERT INTO brz_sync_revision (user_id, revision) VALUES ($1, $2) \
+             ON CONFLICT (user_id) DO UPDATE SET revision = GREATEST(brz_sync_revision.revision, EXCLUDED.revision)",
             &[&self.identity, &i64::try_from(record.revision)?],
         )
         .await
@@ -1259,8 +1397,8 @@ impl Storage for PostgresStorage {
             .query(
                 "SELECT o.record_type, o.data_id, o.schema_version, o.commit_time, o.updated_fields_json, o.revision,
                         e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
-                 FROM sync_outgoing o
-                 LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id AND o.user_id = e.user_id
+                 FROM brz_sync_outgoing o
+                 LEFT JOIN brz_sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id AND o.user_id = e.user_id
                  WHERE o.user_id = $1
                  ORDER BY o.revision ASC
                  LIMIT $2",
@@ -1301,7 +1439,7 @@ impl Storage for PostgresStorage {
         // A tenant that hasn't synced anything yet may not have a row. Treat missing as 0.
         let revision: i64 = client
             .query_opt(
-                "SELECT revision FROM sync_revision WHERE user_id = $1",
+                "SELECT revision FROM brz_sync_revision WHERE user_id = $1",
                 &[&self.identity],
             )
             .await
@@ -1324,7 +1462,7 @@ impl Storage for PostgresStorage {
                 .map_err(|e| StorageError::Serialization(e.to_string()))?;
             client
                 .execute(
-                    "INSERT INTO sync_incoming (user_id, record_type, data_id, schema_version, commit_time, data, revision)
+                    "INSERT INTO brz_sync_incoming (user_id, record_type, data_id, schema_version, commit_time, data, revision)
                      VALUES ($1, $2, $3, $4, $5, $6, $7)
                      ON CONFLICT(user_id, record_type, data_id, revision) DO UPDATE SET
                         schema_version = EXCLUDED.schema_version,
@@ -1352,7 +1490,7 @@ impl Storage for PostgresStorage {
 
         client
             .execute(
-                "DELETE FROM sync_incoming WHERE user_id = $1 AND record_type = $2 AND data_id = $3 AND revision = $4",
+                "DELETE FROM brz_sync_incoming WHERE user_id = $1 AND record_type = $2 AND data_id = $3 AND revision = $4",
                 &[
                     &self.identity,
                     &record.id.r#type,
@@ -1373,8 +1511,8 @@ impl Storage for PostgresStorage {
             .query(
                 "SELECT i.record_type, i.data_id, i.schema_version, i.data, i.revision,
                         e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
-                 FROM sync_incoming i
-                 LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
+                 FROM brz_sync_incoming i
+                 LEFT JOIN brz_sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
                  WHERE i.user_id = $1
                  ORDER BY i.revision ASC
                  LIMIT $2",
@@ -1420,8 +1558,8 @@ impl Storage for PostgresStorage {
             .query_opt(
                 "SELECT o.record_type, o.data_id, o.schema_version, o.commit_time, o.updated_fields_json, o.revision,
                         e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
-                 FROM sync_outgoing o
-                 LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id AND o.user_id = e.user_id
+                 FROM brz_sync_outgoing o
+                 LEFT JOIN brz_sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id AND o.user_id = e.user_id
                  WHERE o.user_id = $1
                  ORDER BY o.revision DESC
                  LIMIT 1",
@@ -1468,7 +1606,7 @@ impl Storage for PostgresStorage {
         let commit_time = chrono::Utc::now().timestamp();
 
         tx.execute(
-            "INSERT INTO sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
+            "INSERT INTO brz_sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
                  VALUES ($1, $2, $3, $4, $5, $6, $7)
                  ON CONFLICT(user_id, record_type, data_id) DO UPDATE SET
                     schema_version = EXCLUDED.schema_version,
@@ -1490,8 +1628,8 @@ impl Storage for PostgresStorage {
 
         // Upsert this tenant's revision row.
         tx.execute(
-            "INSERT INTO sync_revision (user_id, revision) VALUES ($1, $2) \
-             ON CONFLICT (user_id) DO UPDATE SET revision = GREATEST(sync_revision.revision, EXCLUDED.revision)",
+            "INSERT INTO brz_sync_revision (user_id, revision) VALUES ($1, $2) \
+             ON CONFLICT (user_id) DO UPDATE SET revision = GREATEST(brz_sync_revision.revision, EXCLUDED.revision)",
             &[&self.identity, &i64::try_from(record.revision)?],
         )
         .await
@@ -1540,12 +1678,12 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
            pm.parent_payment_id
-      FROM payments p
-      LEFT JOIN payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
-      LEFT JOIN payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
-      LEFT JOIN payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
-      LEFT JOIN payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
-      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id";
+      FROM brz_payments p
+      LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
+      LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
+      LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
+      LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
+      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id";
 
 #[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row) -> Result<Payment, StorageError> {
@@ -1907,10 +2045,10 @@ mod tests {
             let config = PostgresStorageConfig::with_defaults(connection_string);
             let pool = create_pool(&config).expect("Failed to create pool");
 
-            let a = PostgresStorage::new_with_pool(pool.clone(), &TEST_IDENTITY_A)
+            let a = PostgresStorage::new_with_pool(pool.clone(), &TEST_IDENTITY_A, true)
                 .await
                 .expect("Failed to create tenant A");
-            let b = PostgresStorage::new_with_pool(pool, &TEST_IDENTITY_B)
+            let b = PostgresStorage::new_with_pool(pool, &TEST_IDENTITY_B, true)
                 .await
                 .expect("Failed to create tenant B");
 
@@ -1920,8 +2058,8 @@ mod tests {
 
     /// End-to-end isolation: every Storage method must keep tenants A and B
     /// from observing each other's data. The test exercises each per-user
-    /// table — `payments`, `payment_metadata`, `lnurl_receive_metadata`,
-    /// `contacts`, `unclaimed_deposits`, `settings`, and the sync mirror
+    /// table — `brz_payments`, `brz_payment_metadata`, `brz_lnurl_receive_metadata`,
+    /// `brz_contacts`, `brz_unclaimed_deposits`, `brz_settings`, and the sync mirror
     /// tables — and asserts that writes by A are invisible to B (and vice
     /// versa). It is the regression net for "forgot the WHERE clause" bugs
     /// in any future query.
@@ -2137,7 +2275,7 @@ mod tests {
             panic!("expected lnurl metadata to be visible to each tenant");
         }
 
-        // --- sync state (sync_outgoing, sync_state, sync_revision) ---
+        // --- sync state (brz_sync_outgoing, brz_sync_state, brz_sync_revision) ---
         let rec_id = RecordId::new("contact".to_string(), "rec_shared".to_string());
         let updated_a: HashMap<String, String> = HashMap::new();
         fx.a.add_outgoing_change(UnversionedRecordChange {
@@ -2254,10 +2392,10 @@ mod tests {
                 }
             });
 
-            // Create the schema_migrations table
+            // Create the brz_schema_migrations table
             client
                 .execute(
-                    "CREATE TABLE IF NOT EXISTS schema_migrations (
+                    "CREATE TABLE IF NOT EXISTS brz_schema_migrations (
                         version INTEGER PRIMARY KEY,
                         applied_at TIMESTAMPTZ DEFAULT NOW()
                     )",
@@ -2275,7 +2413,7 @@ mod tests {
                 }
                 client
                     .execute(
-                        "INSERT INTO schema_migrations (version) VALUES ($1)",
+                        "INSERT INTO brz_schema_migrations (version) VALUES ($1)",
                         &[&version],
                     )
                     .await
@@ -2286,7 +2424,7 @@ mod tests {
             // Completed payment
             client
                 .execute(
-                    "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method)
+                    "INSERT INTO brz_payments (id, payment_type, status, amount, fees, timestamp, method)
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
                     &[
                         &"ln-completed",
@@ -2302,7 +2440,7 @@ mod tests {
                 .unwrap();
             client
                 .execute(
-                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, preimage)
+                    "INSERT INTO brz_payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, preimage)
                      VALUES ($1, $2, $3, $4, $5)",
                     &[
                         &"ln-completed",
@@ -2318,7 +2456,7 @@ mod tests {
             // Pending payment
             client
                 .execute(
-                    "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method)
+                    "INSERT INTO brz_payments (id, payment_type, status, amount, fees, timestamp, method)
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
                     &[
                         &"ln-pending",
@@ -2334,7 +2472,7 @@ mod tests {
                 .unwrap();
             client
                 .execute(
-                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey)
+                    "INSERT INTO brz_payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey)
                      VALUES ($1, $2, $3, $4)",
                     &[
                         &"ln-pending",
@@ -2349,7 +2487,7 @@ mod tests {
             // Failed payment
             client
                 .execute(
-                    "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method)
+                    "INSERT INTO brz_payments (id, payment_type, status, amount, fees, timestamp, method)
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
                     &[
                         &"ln-failed",
@@ -2365,7 +2503,7 @@ mod tests {
                 .unwrap();
             client
                 .execute(
-                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey)
+                    "INSERT INTO brz_payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey)
                      VALUES ($1, $2, $3, $4)",
                     &[
                         &"ln-failed",
@@ -2480,5 +2618,563 @@ mod tests {
         assert!(result.is_ok(), "Expected valid PEM to parse successfully");
         let store = result.unwrap();
         assert_eq!(store.len(), 1, "Expected exactly one certificate in store");
+    }
+
+    /// Validates the real `SCHEMA_RENAMES` constant against a hand-rolled
+    /// snapshot of the pre-`brz_*` post-multi-tenant schema (i.e. a customer
+    /// upgrading from the version of the SDK immediately prior to this PR).
+    /// Seeds a payment, runs the SDK's `migrate()` (which fires the rename),
+    /// then verifies the renamed schema is functional via the storage trait.
+    ///
+    /// A typo in `SCHEMA_RENAMES` — wrong table, index, or constraint name —
+    /// would fail here either at the rename step or when storage queries
+    /// hit a missing identifier.
+    #[tokio::test]
+    async fn test_rename_against_real_legacy_schema() {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start PostgreSQL container");
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get host port");
+        let connection_string = format!(
+            "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+        );
+
+        // Seed the legacy (pre-prefix) post-multi-tenant schema directly.
+        // Captures the state of a customer at the migration version
+        // immediately prior to this PR — `schema_migrations` at version 16,
+        // every table user_id-scoped, post-tenant indexes in place.
+        let pool = create_pool(&PostgresStorageConfig::with_defaults(
+            connection_string.clone(),
+        ))
+        .expect("create pool");
+        let id_lit = format!("'\\x{}'::bytea", hex::encode(TEST_IDENTITY_A));
+        {
+            let client = pool.get().await.expect("get_conn");
+            for stmt in legacy_schema_sql() {
+                client
+                    .batch_execute(&stmt)
+                    .await
+                    .unwrap_or_else(|e| panic!("legacy schema setup failed at\n{stmt}\n=> {e}"));
+            }
+            // Seed: a payment + a setting. Both must survive the rename
+            // and be readable via the storage trait after.
+            client
+                .execute(
+                    &format!(
+                        "INSERT INTO payments
+                         (user_id, id, payment_type, status, amount, fees, timestamp, method)
+                         VALUES ({id_lit}, 'p1', 'receive', 'completed', '1000', '0', 100, 'lightning')"
+                    ),
+                    &[],
+                )
+                .await
+                .expect("seed payment");
+            client
+                .execute(
+                    &format!(
+                        "INSERT INTO settings (user_id, key, value)
+                         VALUES ({id_lit}, 'seed_key', 'seed_value')"
+                    ),
+                    &[],
+                )
+                .await
+                .expect("seed setting");
+        }
+
+        // Build storage with run_migration=true — fires the rename block,
+        // then run_migrations sees schema_migrations at version 16 (now
+        // renamed to brz_schema_migrations) and skips all version-tracked
+        // steps. Net effect: schema is renamed, no migrations re-run.
+        let storage = PostgresStorage::new(
+            PostgresStorageConfig::with_defaults(connection_string),
+            &TEST_IDENTITY_A,
+        )
+        .await
+        .expect("migrate against legacy schema");
+
+        // Legacy tracker is gone; new one carries the same version row.
+        let client = pool.get().await.expect("get_conn");
+        let legacy_gone: bool = client
+            .query_one(
+                "SELECT NOT EXISTS (SELECT 1 FROM information_schema.tables
+                                    WHERE table_schema = current_schema()
+                                      AND table_name = 'schema_migrations')",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(legacy_gone, "legacy schema_migrations must be renamed");
+
+        let version: i32 = client
+            .query_one("SELECT MAX(version) FROM brz_schema_migrations", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(version, 16, "migration version must be preserved");
+
+        // Seed payment row is preserved on the renamed table — proves the
+        // table + PK constraint rename worked and the columns line up.
+        let payment_row_count: i64 = client
+            .query_one("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(payment_row_count, 1, "seed payment must survive rename");
+
+        // Settings round-trip via the trait — proves brz_settings is wired.
+        let setting = storage
+            .get_cached_item("seed_key".to_string())
+            .await
+            .expect("get_cached_item");
+        assert_eq!(setting.as_deref(), Some("seed_value"));
+
+        // Write through the trait — proves the post-rename schema accepts
+        // new writes via every index/constraint the SDK uses.
+        storage
+            .set_cached_item(
+                "post_rename_key".to_string(),
+                "post_rename_value".to_string(),
+            )
+            .await
+            .expect("set_cached_item");
+        let written = storage
+            .get_cached_item("post_rename_key".to_string())
+            .await
+            .expect("get_cached_item");
+        assert_eq!(written.as_deref(), Some("post_rename_value"));
+    }
+
+    /// Hand-rolled snapshot of the pre-PR schema in its terminal
+    /// (post-multi-tenant, version-16) state. Maintained alongside
+    /// `SCHEMA_RENAMES` — when adding a new table, index, or constraint
+    /// to the SDK schema, mirror the addition here so this test continues
+    /// to validate that the rename map covers it.
+    #[allow(clippy::too_many_lines)]
+    fn legacy_schema_sql() -> Vec<String> {
+        vec![
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMPTZ DEFAULT NOW()
+            )"
+            .to_string(),
+            "INSERT INTO schema_migrations (version)
+             SELECT generate_series(1, 16)"
+                .to_string(),
+            "CREATE TABLE payments (
+                user_id BYTEA NOT NULL,
+                id TEXT NOT NULL,
+                payment_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                fees TEXT NOT NULL,
+                timestamp BIGINT NOT NULL,
+                method TEXT,
+                withdraw_tx_id TEXT,
+                deposit_tx_id TEXT,
+                spark BOOLEAN,
+                PRIMARY KEY (user_id, id)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_payments_user_timestamp ON payments(user_id, timestamp)".to_string(),
+            "CREATE INDEX idx_payments_user_payment_type ON payments(user_id, payment_type)"
+                .to_string(),
+            "CREATE INDEX idx_payments_user_status ON payments(user_id, status)".to_string(),
+            "CREATE TABLE settings (
+                user_id BYTEA NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (user_id, key)
+            )"
+            .to_string(),
+            "CREATE TABLE unclaimed_deposits (
+                user_id BYTEA NOT NULL,
+                txid TEXT NOT NULL,
+                vout INTEGER NOT NULL,
+                amount_sats BIGINT,
+                claim_error JSONB,
+                refund_tx TEXT,
+                refund_tx_id TEXT,
+                is_mature BOOLEAN NOT NULL DEFAULT TRUE,
+                PRIMARY KEY (user_id, txid, vout)
+            )"
+            .to_string(),
+            "CREATE TABLE payment_metadata (
+                user_id BYTEA NOT NULL,
+                payment_id TEXT NOT NULL,
+                parent_payment_id TEXT,
+                lnurl_pay_info JSONB,
+                lnurl_withdraw_info JSONB,
+                lnurl_description TEXT,
+                conversion_info JSONB,
+                conversion_status TEXT,
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_payment_metadata_user_parent
+             ON payment_metadata(user_id, parent_payment_id)"
+                .to_string(),
+            "CREATE TABLE payment_details_lightning (
+                user_id BYTEA NOT NULL,
+                payment_id TEXT NOT NULL,
+                invoice TEXT NOT NULL,
+                payment_hash TEXT NOT NULL,
+                destination_pubkey TEXT NOT NULL,
+                description TEXT,
+                htlc_status TEXT NOT NULL DEFAULT 'WaitingForPreimage',
+                htlc_expiry_time BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_payment_details_lightning_user_invoice
+             ON payment_details_lightning(user_id, invoice)"
+                .to_string(),
+            "CREATE INDEX idx_payment_details_lightning_user_payment_hash
+             ON payment_details_lightning(user_id, payment_hash)"
+                .to_string(),
+            "CREATE TABLE payment_details_token (
+                user_id BYTEA NOT NULL,
+                payment_id TEXT NOT NULL,
+                metadata JSONB NOT NULL,
+                tx_hash TEXT NOT NULL,
+                invoice_details JSONB,
+                tx_type TEXT NOT NULL DEFAULT 'transfer',
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_spark (
+                user_id BYTEA NOT NULL,
+                payment_id TEXT NOT NULL,
+                invoice_details JSONB,
+                htlc_details JSONB,
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE TABLE lnurl_receive_metadata (
+                user_id BYTEA NOT NULL,
+                payment_hash TEXT NOT NULL,
+                nostr_zap_request TEXT,
+                nostr_zap_receipt TEXT,
+                sender_comment TEXT,
+                PRIMARY KEY (user_id, payment_hash)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_revision (
+                user_id BYTEA NOT NULL,
+                revision BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_outgoing (
+                user_id BYTEA NOT NULL,
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                updated_fields_json JSONB NOT NULL,
+                revision BIGINT NOT NULL
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_outgoing_user_record_type_data_id
+             ON sync_outgoing(user_id, record_type, data_id)"
+                .to_string(),
+            "CREATE TABLE sync_state (
+                user_id BYTEA NOT NULL,
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSONB NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY (user_id, record_type, data_id)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_incoming (
+                user_id BYTEA NOT NULL,
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSONB NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY (user_id, record_type, data_id, revision)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_incoming_user_revision
+             ON sync_incoming(user_id, revision)"
+                .to_string(),
+            "CREATE TABLE contacts (
+                user_id BYTEA NOT NULL,
+                id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                payment_identifier TEXT NOT NULL,
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL,
+                PRIMARY KEY (user_id, id)
+            )"
+            .to_string(),
+        ]
+    }
+
+    /// End-to-end rename against a **pre-multi-tenant** legacy schema
+    /// (version=15): unprefixed tables without `user_id`, pre-tenant
+    /// indexes only. After `migrate()`, the rename moves pre-tenant indexes
+    /// under `brz_*`, then migration 16 (multi-tenant) drops them and
+    /// creates `brz_*_user_*` variants. No unprefixed `idx_*` should
+    /// survive on any brz_ table.
+    #[tokio::test]
+    async fn test_rename_against_pre_tenant_legacy_schema() {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start PostgreSQL container");
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get host port");
+        let connection_string = format!(
+            "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+        );
+
+        let pool = create_pool(&PostgresStorageConfig::with_defaults(
+            connection_string.clone(),
+        ))
+        .expect("create pool");
+        {
+            let client = pool.get().await.expect("get_conn");
+            for stmt in pre_tenant_legacy_schema_sql() {
+                client.batch_execute(&stmt).await.unwrap_or_else(|e| {
+                    panic!("pre-tenant legacy schema setup failed at\n{stmt}\n=> {e}")
+                });
+            }
+            // Seed data must survive the rename + the multi-tenant
+            // migration's user_id backfill.
+            client
+                .execute(
+                    "INSERT INTO payments
+                     (id, payment_type, status, amount, fees, timestamp, method)
+                     VALUES ('p1', 'receive', 'completed', '1000', '0', 100, 'lightning')",
+                    &[],
+                )
+                .await
+                .expect("seed payment");
+            client
+                .execute(
+                    "INSERT INTO settings (key, value) VALUES ('seed_key', 'seed_value')",
+                    &[],
+                )
+                .await
+                .expect("seed setting");
+        }
+
+        // Build storage with run_migration=true — fires rename then runs
+        // migration 16 (the only one left after seed at version=15).
+        let storage = PostgresStorage::new(
+            PostgresStorageConfig::with_defaults(connection_string),
+            &TEST_IDENTITY_A,
+        )
+        .await
+        .expect("migrate against pre-tenant schema");
+
+        let client = pool.get().await.expect("get_conn");
+
+        // The bug check: no unprefixed `idx_*` index should remain on any
+        // brz_ table after the rename + multi-tenant migration.
+        let orphan_rows = client
+            .query(
+                "SELECT indexname, tablename FROM pg_indexes
+                 WHERE schemaname = current_schema()
+                   AND tablename LIKE 'brz_%'
+                   AND indexname LIKE 'idx_%'",
+                &[],
+            )
+            .await
+            .expect("scan orphan indexes");
+        let orphans: Vec<(String, String)> = orphan_rows
+            .iter()
+            .map(|r| (r.get::<_, String>(0), r.get::<_, String>(1)))
+            .collect();
+        assert!(
+            orphans.is_empty(),
+            "found orphan unprefixed indexes after upgrade: {orphans:?}"
+        );
+
+        // Migration version advanced from 15 to 16.
+        let version: i32 = client
+            .query_one("SELECT MAX(version) FROM brz_schema_migrations", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(version, 16, "migration must advance to 16");
+
+        // Seed data preserved (multi-tenant backfilled user_id to current tenant).
+        let payment_count: i64 = client
+            .query_one("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", &[])
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(payment_count, 1, "seed payment must survive upgrade");
+
+        let setting = storage
+            .get_cached_item("seed_key".to_string())
+            .await
+            .expect("get_cached_item");
+        assert_eq!(setting.as_deref(), Some("seed_value"));
+    }
+
+    /// Pre-multi-tenant schema snapshot (version=15): unprefixed tables
+    /// without `user_id`, pre-tenant indexes, no post-tenant indexes.
+    /// Captures the SDK schema state just before migration 16.
+    #[allow(clippy::too_many_lines)]
+    fn pre_tenant_legacy_schema_sql() -> Vec<String> {
+        vec![
+            "CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMPTZ DEFAULT NOW()
+            )"
+            .to_string(),
+            "INSERT INTO schema_migrations (version)
+             SELECT generate_series(1, 15)"
+                .to_string(),
+            // Core tables (migration 1) — no user_id, simple PKs.
+            "CREATE TABLE payments (
+                id TEXT PRIMARY KEY,
+                payment_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                fees TEXT NOT NULL,
+                timestamp BIGINT NOT NULL,
+                method TEXT,
+                withdraw_tx_id TEXT,
+                deposit_tx_id TEXT,
+                spark BOOLEAN
+            )"
+            .to_string(),
+            "CREATE TABLE settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )"
+            .to_string(),
+            "CREATE TABLE unclaimed_deposits (
+                txid TEXT NOT NULL,
+                vout INTEGER NOT NULL,
+                amount_sats BIGINT,
+                claim_error JSONB,
+                refund_tx TEXT,
+                refund_tx_id TEXT,
+                is_mature BOOLEAN NOT NULL DEFAULT TRUE,
+                PRIMARY KEY (txid, vout)
+            )"
+            .to_string(),
+            "CREATE TABLE payment_metadata (
+                payment_id TEXT PRIMARY KEY,
+                parent_payment_id TEXT,
+                lnurl_pay_info JSONB,
+                lnurl_withdraw_info JSONB,
+                lnurl_description TEXT,
+                conversion_info JSONB,
+                conversion_status TEXT
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_lightning (
+                payment_id TEXT PRIMARY KEY,
+                invoice TEXT NOT NULL,
+                payment_hash TEXT NOT NULL,
+                destination_pubkey TEXT NOT NULL,
+                description TEXT,
+                htlc_status TEXT NOT NULL DEFAULT 'WaitingForPreimage',
+                htlc_expiry_time BIGINT NOT NULL DEFAULT 0
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_token (
+                payment_id TEXT PRIMARY KEY,
+                metadata JSONB NOT NULL,
+                tx_hash TEXT NOT NULL,
+                invoice_details JSONB,
+                tx_type TEXT NOT NULL DEFAULT 'transfer'
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_spark (
+                payment_id TEXT PRIMARY KEY,
+                invoice_details JSONB,
+                htlc_details JSONB
+            )"
+            .to_string(),
+            "CREATE TABLE lnurl_receive_metadata (
+                payment_hash TEXT PRIMARY KEY,
+                nostr_zap_request TEXT,
+                nostr_zap_receipt TEXT,
+                sender_comment TEXT
+            )"
+            .to_string(),
+            // Sync tables (migration 2) — including pre-tenant indexes.
+            "CREATE TABLE sync_revision (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                revision BIGINT NOT NULL DEFAULT 0,
+                CHECK (id = 1)
+            )"
+            .to_string(),
+            "INSERT INTO sync_revision (id, revision) VALUES (1, 0)".to_string(),
+            "CREATE TABLE sync_outgoing (
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                updated_fields_json JSONB NOT NULL,
+                revision BIGINT NOT NULL
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_outgoing_data_id_record_type
+             ON sync_outgoing(record_type, data_id)"
+                .to_string(),
+            "CREATE TABLE sync_state (
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSONB NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY(record_type, data_id)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_incoming (
+                record_type TEXT NOT NULL,
+                data_id TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSONB NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY(record_type, data_id, revision)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision)".to_string(),
+            // Pre-tenant indexes on payments etc. (migration 3).
+            "CREATE INDEX idx_payments_timestamp ON payments(timestamp)".to_string(),
+            "CREATE INDEX idx_payments_payment_type ON payments(payment_type)".to_string(),
+            "CREATE INDEX idx_payments_status ON payments(status)".to_string(),
+            "CREATE INDEX idx_payment_details_lightning_invoice
+             ON payment_details_lightning(invoice)"
+                .to_string(),
+            "CREATE INDEX idx_payment_metadata_parent
+             ON payment_metadata(parent_payment_id)"
+                .to_string(),
+            // Migration 10 index on payment_hash.
+            "CREATE INDEX idx_payment_details_lightning_payment_hash
+             ON payment_details_lightning(payment_hash)"
+                .to_string(),
+            // Migration 11 contacts table.
+            "CREATE TABLE contacts (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                payment_identifier TEXT NOT NULL,
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL
+            )"
+            .to_string(),
+        ]
     }
 }

@@ -44,7 +44,15 @@ namespace BreezSdkSnippets
             // ANCHOR: optimization-configuration
             var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
             {
-                optimizationConfig = new OptimizationConfig(autoEnabled: true, multiplicity: 1)
+                leafOptimizationConfig = new LeafOptimizationConfig(
+                    autoEnabled: true,
+                    multiplicity: 1
+                ),
+                tokenOptimizationConfig = new TokenOptimizationConfig(
+                    autoEnabled: true,
+                    targetOutputCount: 5,
+                    minOutputsThreshold: 50
+                )
             };
             // ANCHOR_END: optimization-configuration
         }
@@ -108,6 +116,19 @@ namespace BreezSdkSnippets
                 )
             };
             // ANCHOR_END: spark-config
+        }
+
+        void ConfigureBackgroundTasks()
+        {
+            // ANCHOR: config-background-tasks
+            // Server-mode profile: equivalent to DefaultServerConfig(Network.Mainnet).
+            // Recommended when you build the SDK per request in a multi-tenant
+            // server deployment. See the "Server mode" page for the full profile.
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                backgroundTasksEnabled = false
+            };
+            // ANCHOR_END: config-background-tasks
         }
     }
 }

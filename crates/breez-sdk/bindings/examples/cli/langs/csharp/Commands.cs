@@ -243,6 +243,7 @@ public static class Commands
         Console.WriteLine($"  {"issuer <subcommand>",-40} Token issuer commands (use 'issuer help' for details)");
         Console.WriteLine($"  {"contacts <subcommand>",-40} Contact commands (use 'contacts help' for details)");
         Console.WriteLine($"  {"webhooks <subcommand>",-40} Webhook commands (use 'webhooks help' for details)");
+        Console.WriteLine($"  {"stable-balance <subcommand>",-40} Stable balance commands (use 'stable-balance help' for details)");
         Console.WriteLine($"  {"exit / quit",-40} Exit the CLI");
         Console.WriteLine($"  {"help",-40} Show this help message");
         Console.WriteLine();
@@ -275,7 +276,7 @@ public static class Commands
     private static readonly HashSet<string> BooleanFlags = new()
     {
         "--fees-included", "--from-bitcoin", "--hodl", "-f", "--freezable",
-        "--from-bitcoin"
+        "--new-address"
     };
 
     private static string[] GetPositionalArgs(string[] args)
@@ -636,6 +637,7 @@ public static class Commands
         var comment = GetFlag(args, "-c", "--comment");
         var validateStr = GetFlag(args, "-v", "--validate");
         var idempotencyKey = GetFlag(args, "-i", "--idempotency-key");
+        var tokenIdentifier = GetFlag(args, "-t", "--token-identifier");
         var fromTokenId = GetFlag(args, "--from-token");
         var maxSlippageStr = GetFlag(args, "-s", "--convert-max-slippage-bps");
         var feesIncluded = HasFlag(args, "--fees-included");
@@ -680,7 +682,9 @@ public static class Commands
 
         var minSendable = (payRequest.minSendable + 999) / 1000; // div_ceil(1000)
         var maxSendable = payRequest.maxSendable / 1000;
-        var prompt = $"Amount to pay (min {minSendable} sat, max {maxSendable} sat): ";
+        var prompt = tokenIdentifier == null
+            ? $"Amount to pay (min {minSendable} sat, max {maxSendable} sat): "
+            : $"Amount to pay (min {minSendable} sat, max {maxSendable} sat) in token base units: ";
         var amountLine = readline(prompt);
         if (amountLine == null) return;
         var amountSats = ulong.Parse(amountLine.Trim());
@@ -692,7 +696,7 @@ public static class Commands
             payRequest: payRequest,
             comment: comment,
             validateSuccessActionUrl: validateSuccessUrl,
-            tokenIdentifier: null,
+            tokenIdentifier: tokenIdentifier,
             conversionOptions: conversionOptions,
             feePolicy: feePolicy
         ));

@@ -12,12 +12,6 @@ pub struct _BitcoinAddressDetails {
     pub source: PaymentRequestSource,
 }
 
-#[frb(mirror(Session))]
-pub struct _Session {
-    pub token: String,
-    pub expiration: u64,
-}
-
 #[frb(mirror(BitcoinNetwork))]
 pub enum _BitcoinNetwork {
     Bitcoin,
@@ -39,7 +33,8 @@ pub struct _Config {
     pub use_default_external_input_parsers: bool,
     pub real_time_sync_server_url: Option<String>,
     pub private_enabled_default: bool,
-    pub optimization_config: OptimizationConfig,
+    pub leaf_optimization_config: LeafOptimizationConfig,
+    pub token_optimization_config: TokenOptimizationConfig,
     pub stable_balance_config: Option<StableBalanceConfig>,
     /// Maximum number of concurrent transfer claims.
     ///
@@ -48,6 +43,7 @@ pub struct _Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
+    pub background_tasks_enabled: bool,
 }
 
 #[frb(mirror(SparkConfig))]
@@ -75,10 +71,17 @@ pub struct _SparkSspConfig {
     pub schema_endpoint: Option<String>,
 }
 
-#[frb(mirror(OptimizationConfig))]
-pub struct _OptimizationConfig {
+#[frb(mirror(LeafOptimizationConfig))]
+pub struct _LeafOptimizationConfig {
     pub auto_enabled: bool,
     pub multiplicity: u8,
+}
+
+#[frb(mirror(TokenOptimizationConfig))]
+pub struct _TokenOptimizationConfig {
+    pub auto_enabled: bool,
+    pub target_output_count: u32,
+    pub min_outputs_threshold: u32,
 }
 
 #[frb(mirror(StableBalanceToken))]
@@ -581,6 +584,13 @@ pub struct _UrlSuccessActionData {
 pub enum _Network {
     Mainnet,
     Regtest,
+}
+
+#[frb(mirror(SdkContextConfig))]
+pub struct _SdkContextConfig {
+    pub network: Network,
+    pub api_key: Option<String>,
+    pub connections_per_operator: Option<u32>,
 }
 
 #[frb(mirror(Payment))]

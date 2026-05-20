@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use breez_sdk_itest::*;
@@ -1301,5 +1301,83 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
         expected_fee1 - expected_fee2
     );
     info!("=== Test test_09_bolt11_send_all_with_fee_overpayment PASSED ===");
+    Ok(())
+}
+
+/// Test 10: Bolt11 send resolves to `Completed` via the synchronous
+/// completion signal from `poll_lightning_send_payment`, not via the
+/// `Pending` timeout fallback.
+#[rstest]
+#[test_log::test(tokio::test)]
+async fn test_10_lightning_completion_timeout_resolves_to_completed(
+    #[future] alice_sdk: Result<SdkInstance>,
+    #[future] bob_sdk: Result<SdkInstance>,
+) -> Result<()> {
+    info!("=== Starting test_10_lightning_completion_timeout_resolves_to_completed ===");
+
+    let mut alice = alice_sdk.await?;
+    let mut bob = bob_sdk.await?;
+    ensure_funded(&mut alice, 60_000).await?;
+
+    let invoice_amount_sats = 10_000u64;
+    let completion_timeout_secs = 30u32;
+
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "Completion-timeout regression".to_string(),
+                amount_sats: Some(invoice_amount_sats),
+                expiry_secs: None,
+                payment_hash: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_invoice,
+            amount: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    let start = Instant::now();
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: Some(SendPaymentOptions::Bolt11Invoice {
+                prefer_spark: false,
+                completion_timeout_secs: Some(completion_timeout_secs),
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+    let elapsed = start.elapsed();
+    info!(
+        "send_payment returned in {:?} with status {:?}",
+        elapsed, send_resp.payment.status
+    );
+
+    assert_eq!(
+        send_resp.payment.status,
+        PaymentStatus::Completed,
+        "send_payment should resolve to Completed, not the Pending timeout fallback",
+    );
+    assert!(
+        elapsed < Duration::from_secs(u64::from(completion_timeout_secs).saturating_sub(1)),
+        "send_payment blocked until timeout ({elapsed:?}); the wait isn't being woken by the completion signal",
+    );
+
+    // Confirm the receiver side completed normally.
+    let _received =
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+
+    info!("=== Test test_10_lightning_completion_timeout_resolves_to_completed PASSED ===");
     Ok(())
 }

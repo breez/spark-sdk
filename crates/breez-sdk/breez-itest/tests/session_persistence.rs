@@ -75,7 +75,7 @@ impl SessionPersistenceFixture {
 
         let rows = client
             .query(
-                "SELECT service_identity_key, token, expiration FROM sessions \
+                "SELECT service_identity_key, token, expiration FROM brz_sessions \
                  WHERE user_id = $1 \
                  ORDER BY service_identity_key",
                 &[&self.identity],
@@ -107,7 +107,10 @@ impl SessionPersistenceFixture {
             }
         });
         client
-            .execute("DELETE FROM sessions WHERE user_id = $1", &[&self.identity])
+            .execute(
+                "DELETE FROM brz_sessions WHERE user_id = $1",
+                &[&self.identity],
+            )
             .await?;
         Ok(())
     }

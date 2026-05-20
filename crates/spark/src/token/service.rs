@@ -124,11 +124,14 @@ impl TokenOutputService for SynchronousTokenOutputService {
         Ok(self.state.get_token_outputs(filter).await?.metadata)
     }
 
-    async fn insert_token_outputs(
+    async fn update_token_outputs(
         &self,
-        token_outputs: &TokenOutputs,
+        outputs_to_remove: &[(String, u32)],
+        outputs_to_add: Option<&TokenOutputs>,
     ) -> Result<(), TokenOutputServiceError> {
-        self.state.insert_token_outputs(token_outputs).await
+        self.state
+            .update_token_outputs(outputs_to_remove, outputs_to_add)
+            .await
     }
 
     async fn reserve_token_outputs(

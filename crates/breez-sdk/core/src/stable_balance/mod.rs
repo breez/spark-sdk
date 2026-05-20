@@ -58,7 +58,7 @@
 //! │    │  • BTC → Token conversion (amount = payment amount)     │      │
 //! │    │  • On failure → Defer (wait for other instance or       │      │
 //! │    │    timeout after 120s)                                  │      │
-//! │    │  • On success → mark Completed, trigger sync            │      │
+//! │    │  • On success → mark Completed, emit completion event   │      │
 //! │    └─────────────────────────────────────────────────────────┘      │
 //! │                                                                     │
 //! │    ┌─────────────────────────────────────────────────────────┐      │
@@ -68,7 +68,7 @@
 //! │    │  • Check for token dust (would balance be below         │      │
 //! │    │    ToBitcoin min limit?)                                │      │
 //! │    │  • BTC → Token conversion (amount = full BTC balance)   │      │
-//! │    │  • On success → trigger sync                            │      │
+//! │    │  • On success → emit completion event                   │      │
 //! │    └─────────────────────────────────────────────────────────┘      │
 //! │                                                                     │
 //! │    ┌─────────────────────────────────────────────────────────┐      │
@@ -76,7 +76,7 @@
 //! │    │  • Get token balance, check min conversion limit        │      │
 //! │    │  • Acquire exclusive auto_conversion lock               │      │
 //! │    │  • Token → BTC conversion (amount = full token balance) │      │
-//! │    │  • On success → trigger sync                            │      │
+//! │    │  • On success → emit completion event                   │      │
 //! │    └─────────────────────────────────────────────────────────┘      │
 //! │                                                                     │
 //! └─────────────────────────────────────────────────────────────────────┘
@@ -137,7 +137,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use platform_utils::tokio;
 use spark_wallet::{SparkWallet, TransferId};
-use tokio::sync::{Mutex, Notify, RwLock, watch};
+use tokio::sync::{Mutex, Notify, RwLock};
 use tracing::{debug, info, warn};
 
 use self::queue::ConversionQueue;
@@ -148,10 +148,10 @@ use crate::models::{
     ConversionDetails, ConversionStatus, Payment, PaymentMethod, PaymentType, StableBalanceToken,
 };
 use crate::persist::{ObjectCacheRepository, PaymentMetadata, Storage};
+use crate::sdk::RuntimeEvent;
 use crate::{
     SdkError,
     models::StableBalanceConfig,
-    sdk::SyncCoordinator,
     token_conversion::{
         ConversionError, ConversionOptions, ConversionType, FetchConversionLimitsRequest,
         TokenConverter,
@@ -226,8 +226,8 @@ pub(crate) struct StableBalance {
     /// Notify to signal first sync completion (startup gate for the conversion worker).
     pub(super) synced_notify: Arc<Notify>,
 
-    /// Sync coordinator for triggering wallet syncs after conversions complete.
-    pub(super) sync_coordinator: SyncCoordinator,
+    /// Event emitter used to publish conversion outcomes to the active runtime.
+    pub(super) event_emitter: Arc<EventEmitter>,
 
     /// Number of in-flight send-with-conversion payments.
     /// Auto-convert is suppressed while this is > 0.
@@ -240,7 +240,7 @@ pub(crate) struct StableBalance {
 }
 
 impl StableBalance {
-    /// Creates a new `StableBalance` instance and spawns background tasks.
+    /// Creates a new `StableBalance` instance.
     ///
     /// Resolves the initial active token from the local cache and config,
     /// and registers itself as an event listener on the provided emitter.
@@ -249,9 +249,7 @@ impl StableBalance {
         token_converter: Arc<dyn TokenConverter>,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
-        shutdown_receiver: watch::Receiver<()>,
         event_emitter: Arc<EventEmitter>,
-        sync_coordinator: SyncCoordinator,
     ) -> Self {
         let initial_active_token = Self::resolve_initial_token(&config, &storage).await;
 
@@ -273,10 +271,10 @@ impl StableBalance {
             token_converter,
             spark_wallet,
             storage,
+            event_emitter: Arc::clone(&event_emitter),
             effective_values: Arc::new(ExpiringCell::new()),
             queue,
             synced_notify,
-            sync_coordinator,
             payment_counter: Arc::new(AtomicUsize::new(0)),
             payment_lock: Arc::new(Mutex::new(())),
         };
@@ -285,9 +283,6 @@ impl StableBalance {
         event_emitter
             .add_middleware(Box::new(stable_balance.clone()))
             .await;
-
-        // Spawn the unified conversion worker
-        stable_balance.spawn_conversion_worker(shutdown_receiver);
 
         stable_balance
     }
@@ -577,11 +572,10 @@ impl StableBalance {
         true
     }
 
-    /// Triggers a full wallet sync so conversion payments and balance are updated.
-    pub(super) async fn trigger_sync(&self) {
-        use crate::sdk::SyncType;
-        self.sync_coordinator
-            .trigger_sync_no_wait(SyncType::Full, true)
+    /// Emits the fact that a conversion changed balances and payments.
+    pub(super) async fn emit_conversion_completed(&self) {
+        self.event_emitter
+            .emit_runtime_event(RuntimeEvent::StableBalanceConversionCompleted)
             .await;
     }
 }

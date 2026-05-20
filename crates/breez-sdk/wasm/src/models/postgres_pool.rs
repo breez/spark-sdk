@@ -19,11 +19,16 @@ use crate::sdk_builder::PostgresStorageConfig;
 #[wasm_bindgen]
 pub struct PostgresConnectionPool {
     pub(crate) inner: Rc<JsPool>,
+    pub(crate) run_migration: bool,
 }
 
 impl PostgresConnectionPool {
     pub(crate) fn cloned_inner(&self) -> Rc<JsPool> {
         Rc::clone(&self.inner)
+    }
+
+    pub(crate) fn run_migration(&self) -> bool {
+        self.run_migration
     }
 }
 
@@ -32,7 +37,9 @@ impl PostgresConnectionPool {
 pub fn create_postgres_connection_pool(
     config: PostgresStorageConfig,
 ) -> WasmResult<PostgresConnectionPool> {
+    let run_migration = config.run_migration;
     Ok(PostgresConnectionPool {
         inner: Rc::new(create_postgres_pool(config)?),
+        run_migration,
     })
 }

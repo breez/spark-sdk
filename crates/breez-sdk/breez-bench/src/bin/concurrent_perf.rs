@@ -14,14 +14,12 @@ use breez_sdk_itest::{
     drop_mysql_database, drop_postgres_database,
 };
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, MysqlConnectionPool, Network, PostgresConnectionPool,
-    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent,
-    SendPaymentRequest, SyncWalletRequest, create_mysql_connection_pool,
-    create_postgres_connection_pool, default_config, default_mysql_storage_config,
-    default_postgres_storage_config,
+    BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
+    ReceivePaymentRequest, SdkContext, SdkContextConfig, SdkEvent, SendPaymentRequest,
+    SyncWalletRequest, default_mysql_storage_config, default_postgres_storage_config,
+    default_server_config, new_shared_sdk_context,
 };
 
-use breez_bench::events::{wait_for_claimed_event, wait_for_synced_event};
 use breez_bench::stats::DurationStats;
 
 #[derive(Parser, Debug)]
@@ -98,6 +96,7 @@ struct PaymentResult {
 
 struct BenchSdkInstance {
     sdk: BreezSdk,
+    #[allow(dead_code)]
     events: mpsc::Receiver<SdkEvent>,
     #[allow(dead_code)]
     temp_dir: Option<TempDir>,
@@ -197,7 +196,7 @@ async fn main() -> Result<()> {
     );
 
     info!("Initializing sender and receiver SDKs...");
-    let (mut sender, mut receiver, sender_seed, sender_backend) = initialize_sdk_pair(
+    let (mut sender, receiver, sender_seed, sender_backend) = initialize_sdk_pair(
         args.no_auto_optimize,
         args.pre_optimize,
         args.sender_postgres.clone(),
@@ -206,11 +205,6 @@ async fn main() -> Result<()> {
         args.receiver_mysql.clone(),
     )
     .await?;
-
-    info!("Waiting for sender sync...");
-    wait_for_synced_event(&mut sender.events, 120).await?;
-    info!("Waiting for receiver sync...");
-    wait_for_synced_event(&mut receiver.events, 120).await?;
 
     info!(
         "Funding sender with {} sats (need {} sats min)...",
@@ -255,10 +249,6 @@ async fn main() -> Result<()> {
             )
             .await?;
             sender_instances.push(extra);
-        }
-        for (i, inst) in sender_instances.iter_mut().enumerate() {
-            info!("Waiting for sender instance {} initial sync", i);
-            wait_for_synced_event(&mut inst.events, 120).await?;
         }
     }
 
@@ -614,43 +604,51 @@ fn print_summary(
 #[derive(Clone)]
 enum SenderBackend {
     None,
-    Postgres(Arc<PostgresConnectionPool>),
-    Mysql(Arc<MysqlConnectionPool>),
+    Postgres(Arc<SdkContext>),
+    Mysql(Arc<SdkContext>),
 }
 
 impl SenderBackend {
     fn postgres_tree(&self) -> Option<PostgresTreeStore> {
         match self {
-            SenderBackend::Postgres(p) => Some(PostgresTreeStore::SharedPool(p.clone())),
+            SenderBackend::Postgres(ctx) => Some(PostgresTreeStore::SharedContext(ctx.clone())),
             _ => None,
         }
     }
 
     fn mysql_tree(&self) -> Option<MysqlTreeStore> {
         match self {
-            SenderBackend::Mysql(p) => Some(MysqlTreeStore::SharedPool(p.clone())),
+            SenderBackend::Mysql(ctx) => Some(MysqlTreeStore::SharedContext(ctx.clone())),
             _ => None,
         }
     }
 }
 
-/// Builds (and ensures-exists) a Postgres pool for the sender side, sized
-/// for use across multiple SDK instances.
-async fn build_sender_postgres_pool(conn_str: &str) -> Result<Arc<PostgresConnectionPool>> {
+/// Builds an `SdkContext` backed by a Postgres pool for the sender side,
+/// sized for use across multiple SDK instances.
+async fn build_sender_postgres_context(conn_str: &str) -> Result<Arc<SdkContext>> {
     breez_sdk_itest::ensure_postgres_database_exists(conn_str).await?;
     let mut pg_config = default_postgres_storage_config(conn_str.to_string());
     pg_config.max_pool_size = 30;
-    Ok(create_postgres_connection_pool(&pg_config)?)
+    Ok(new_shared_sdk_context(SdkContextConfig {
+        postgres_config: Some(pg_config),
+        ..SdkContextConfig::new(Network::Regtest)
+    })
+    .await?)
 }
 
-/// Builds (and ensures-exists) a MySQL pool for the sender side, sized for
-/// use across multiple SDK instances.
-async fn build_sender_mysql_pool(conn_str: &str) -> Result<Arc<MysqlConnectionPool>> {
+/// Builds an `SdkContext` backed by a MySQL pool for the sender side, sized
+/// for use across multiple SDK instances.
+async fn build_sender_mysql_context(conn_str: &str) -> Result<Arc<SdkContext>> {
     let (admin_url, db_name) = breez_sdk_itest::split_mysql_url(conn_str)?;
     breez_sdk_itest::ensure_mysql_database_exists(&admin_url, &db_name).await?;
     let mut my_config = default_mysql_storage_config(conn_str.to_string());
     my_config.max_pool_size = 30;
-    Ok(create_mysql_connection_pool(&my_config)?)
+    Ok(new_shared_sdk_context(SdkContextConfig {
+        mysql_config: Some(my_config),
+        ..SdkContextConfig::new(Network::Regtest)
+    })
+    .await?)
 }
 
 async fn initialize_sdk_pair(
@@ -661,11 +659,11 @@ async fn initialize_sdk_pair(
     sender_mysql: Option<String>,
     receiver_mysql: Option<String>,
 ) -> Result<(BenchSdkInstance, BenchSdkInstance, [u8; 32], SenderBackend)> {
-    // Build the sender backend once. All sender SDKs will share this pool.
+    // Build the sender SdkContext once. All sender SDKs will share it.
     let sender_backend = if let Some(ref conn_str) = sender_postgres {
-        SenderBackend::Postgres(build_sender_postgres_pool(conn_str).await?)
+        SenderBackend::Postgres(build_sender_postgres_context(conn_str).await?)
     } else if let Some(ref conn_str) = sender_mysql {
-        SenderBackend::Mysql(build_sender_mysql_pool(conn_str).await?)
+        SenderBackend::Mysql(build_sender_mysql_context(conn_str).await?)
     } else {
         SenderBackend::None
     };
@@ -677,12 +675,12 @@ async fn initialize_sdk_pair(
     let mut sender_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut sender_seed);
 
-    let mut sender_config = default_config(Network::Regtest);
+    let mut sender_config = default_server_config(Network::Regtest);
     if no_auto_optimize || pre_optimize.is_some() {
-        sender_config.optimization_config.auto_enabled = false;
+        sender_config.leaf_optimization_config.auto_enabled = false;
     }
     if let Some(multiplicity) = pre_optimize {
-        sender_config.optimization_config.multiplicity = multiplicity;
+        sender_config.leaf_optimization_config.multiplicity = multiplicity;
     }
     let itest_sender = build_sdk_with_tree_store_config(
         sender_path,
@@ -702,8 +700,7 @@ async fn initialize_sdk_pair(
     let mut receiver_seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut receiver_seed);
 
-    let mut receiver_config = default_config(Network::Regtest);
-    receiver_config.optimization_config.auto_enabled = false;
+    let receiver_config = default_server_config(Network::Regtest);
     let itest_receiver = build_sdk_with_tree_store_config(
         receiver_path,
         receiver_seed,
@@ -743,12 +740,12 @@ async fn build_extra_sender(
         .tempdir()?;
     let path = dir.path().to_string_lossy().to_string();
 
-    let mut config = default_config(Network::Regtest);
+    let mut config = default_server_config(Network::Regtest);
     if no_auto_optimize || pre_optimize.is_some() {
-        config.optimization_config.auto_enabled = false;
+        config.leaf_optimization_config.auto_enabled = false;
     }
     if let Some(multiplicity) = pre_optimize {
-        config.optimization_config.multiplicity = multiplicity;
+        config.leaf_optimization_config.multiplicity = multiplicity;
     }
     let itest = build_sdk_with_tree_store_config(
         path,
@@ -846,15 +843,29 @@ async fn fund_via_faucet(
         let txid = faucet.fund_address(&deposit_address, chunk).await?;
         info!("Faucet chunk #{} txid: {}", chunk_idx, txid);
 
-        wait_for_claimed_event(&mut sdk_instance.events, 240).await?;
-
-        sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
-        let after = sdk_instance
-            .sdk
-            .get_info(GetInfoRequest {
-                ensure_synced: Some(false),
-            })
-            .await?;
+        let claim_start = Instant::now();
+        let claim_timeout = Duration::from_secs(240);
+        let balance_before = info.balance_sats;
+        let after = loop {
+            sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+            let snap = sdk_instance
+                .sdk
+                .get_info(GetInfoRequest {
+                    ensure_synced: Some(false),
+                })
+                .await?;
+            if snap.balance_sats > balance_before {
+                break snap;
+            }
+            if claim_start.elapsed() >= claim_timeout {
+                bail!(
+                    "Timeout waiting for chunk #{} to land (balance still {} sats)",
+                    chunk_idx,
+                    snap.balance_sats
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        };
         info!(
             "Balance after chunk #{}: {} sats",
             chunk_idx, after.balance_sats
@@ -896,14 +907,29 @@ async fn fund_via_faucet(
             let extra = needed.clamp(FAUCET_MIN_PER_CALL, FAUCET_MAX_PER_CALL);
             let txid = faucet.fund_address(&deposit_address, extra).await?;
             info!("Top-up faucet txid: {}", txid);
-            wait_for_claimed_event(&mut sdk_instance.events, 240).await?;
-            sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
-            let after = sdk_instance
-                .sdk
-                .get_info(GetInfoRequest {
-                    ensure_synced: Some(false),
-                })
-                .await?;
+
+            let claim_start = Instant::now();
+            let claim_timeout = Duration::from_secs(240);
+            let balance_before = info.balance_sats;
+            let after = loop {
+                sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+                let snap = sdk_instance
+                    .sdk
+                    .get_info(GetInfoRequest {
+                        ensure_synced: Some(false),
+                    })
+                    .await?;
+                if snap.balance_sats > balance_before {
+                    break snap;
+                }
+                if claim_start.elapsed() >= claim_timeout {
+                    bail!(
+                        "Timeout waiting for top-up to land (balance still {} sats)",
+                        snap.balance_sats
+                    );
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            };
             if after.balance_sats >= min_required {
                 info!("Funded after top-up: {} sats", after.balance_sats);
                 return Ok(());

@@ -1,6 +1,8 @@
 # Customizing the SDK
 
-Using the SDK Builder gives you more control over the initialization and modular components used when the SDK is running. Below you can find examples of initializing the SDK using the SDK Builder and implementing modular components:
+Using the SDK Builder gives you more control over the initialization and modular components used when the SDK is running. Below you can find examples of initializing the SDK using the SDK Builder and implementing modular components.
+
+The shared-pool, shared-chain-service, and shared-connection-manager components on this page are designed for multi-tenant server deployments — they're most useful in combination with the [Server mode](server_mode.md) SDK profile.
 
 - [Storage](#with-storage) to manage stored data
 - [PostgreSQL Connection Pool](#with-postgres-connection-pool) as an alternative storage backend
@@ -11,8 +13,7 @@ Using the SDK Builder gives you more control over the initialization and modular
 - [Fiat Service](#with-fiat-service) to provide Fiat currencies and exchange rates
 - Change the [Key Set](#with-key-set) to alter the derivation path used
 - [Payment Observer](#with-payment-observer) to be notified before payments occur
-- [SSP Connection Manager](#with-ssp-connection-manager) to share the SSP HTTP client across SDK instances
-- [Connection Manager](#with-connection-manager) to share gRPC connections across SDK instances
+- [Shared SDK Context](#with-shared-context) to share connection pools and HTTP/gRPC clients across SDK instances
 
 {{#tabs sdk_building:init-sdk-advanced}}
 
@@ -31,6 +32,8 @@ When using the SDK Builder, you either have to provide a Storage implementation 
 </h2>
 
 The SDK includes a PostgreSQL backend as an alternative to file-based storage. Construct a connection pool once with {{#name create_postgres_connection_pool}} and pass it to the builder via {{#name with_postgres_connection_pool}} — this configures PostgreSQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. The same pool can be shared across multiple `SdkBuilder` instances; per-tenant scoping (rows isolated by seed identity) is preserved.
+
+If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config before creating the pool. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
 
 **Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
@@ -51,6 +54,8 @@ The PostgreSQL tree store can use the same or a separate PostgreSQL database as 
 </h2>
 
 The SDK includes a MySQL backend (MySQL 8.0+) as an alternative to file-based storage. Construct a connection pool once with {{#name create_mysql_connection_pool}} and pass it to the builder via {{#name with_mysql_connection_pool}} — this configures MySQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. The same pool can be shared across multiple `SdkBuilder` instances; per-tenant scoping (rows isolated by seed identity) is preserved.
+
+If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config before creating the pool. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
 
 **Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
@@ -132,46 +137,30 @@ By implementing the Payment Observer interface you can be notified before a paym
 
 {{#tabs sdk_building:with-payment-observer}}
 
-<h2 id="with-ssp-connection-manager">
-    <a class="header" href="#with-ssp-connection-manager">With SSP Connection Manager</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_ssp_connection_manager">API docs</a>
+<h2 id="with-context">
+    <a class="header" href="#with-shared-context">With Shared SDK Context</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkContext.html">API docs</a>
 </h2>
 
-An SSP Connection Manager owns the HTTP client used for SSP GraphQL traffic. By default each SDK instance builds its own. Server processes hosting many wallets at once can share a single SSP Connection Manager between every SDK, so they reuse the same pooled HTTP client (and its HTTP/2 connection pool) instead of each opening a fresh one.
+An SDK Context bundles every process-shareable resource: the HTTP client (used for SSP GraphQL, chain service and LNURL), the gRPC channels to the Spark operators, the gRPC client to the Breez backend, and — optionally — a PostgreSQL or MySQL connection pool. By default each SDK builds its own. Server processes hosting many wallets at once can construct one SDK Context and pass it to every {{#name SdkBuilder}} so they reuse the same pooled clients instead of each opening fresh ones.
 
-Construct one via {{#name new_ssp_connection_manager}} and pass it to each {{#name SdkBuilder}} via {{#name with_ssp_connection_manager}}. Connections close when the last reference to the SSP Connection Manager is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
+Construct one via {{#name new_shared_sdk_context}} and pass it to each {{#name SdkBuilder}} via {{#name with_shared_context}}. Connections close when the last reference to the SDK Context is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
 
-<div class="warning">
-<h4>Developer note</h4>
+The {{#name connections_per_operator}} setting on {{#name SdkContextConfig}} controls how many gRPC connections the context opens to each Spark operator:
 
-The user agent of the first SDK to construct the SSP Connection Manager is reused for all subsequent instances.
-
-</div>
-
-<h2 id="with-connection-manager">
-    <a class="header" href="#with-connection-manager">With Connection Manager</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_connection_manager">API docs</a>
-</h2>
-
-A Connection Manager owns the gRPC channels to the Spark operators. By default each SDK instance builds its own. Server processes hosting many wallets at once can share a single Connection Manager between every SDK, so they reuse the same channels instead of each opening a fresh set.
-
-Construct one via {{#name new_connection_manager}} and pass it to each {{#name SdkBuilder}} via {{#name with_connection_manager}}. Connections close when the last reference to the Connection Manager is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
-
-The `connections_per_operator` argument controls how many connections the manager opens to each operator:
-
-- `None` — one connection per operator, multiplexed across every SDK sharing this manager. The right choice for almost every deployment.
+- `None` — one connection per operator, multiplexed across every SDK sharing this context. The right choice for almost every deployment.
 - `Some(n)` — opens `n` connections per operator and balances requests across them. Worth setting only if the single shared connection has become a bottleneck — for example, latency that climbs with throughput, or operators deployed behind an L7 load balancer where you want client-side fan-out across backend instances.
 
 <div class="warning">
 <h4>Developer note</h4>
 
-All SDK instances sharing a Connection Manager must be configured for the same network and operator pool. The cache is keyed by operator address, so the TLS settings and user agent of the first SDK to connect to a given operator are reused for everyone afterwards.
+All SDK instances sharing an SDK Context must be configured for the same network and operator pool. The user agent of the first SDK to construct the context is reused for all subsequent instances.
 
 </div>
 
 ### Browser
 
-The Connection Manager is not exposed in the browser. Browsers maintain a single HTTP/2 connection per origin and multiplex everything over it; the SDK cannot create or share more.
+The SDK Context's gRPC channel pooling is not effective in the browser. Browsers maintain a single HTTP/2 connection per origin and multiplex everything over it; the SDK cannot create or share more.
 
 ### Node.js
 

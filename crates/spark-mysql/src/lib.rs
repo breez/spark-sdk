@@ -20,7 +20,7 @@ mod session_manager;
 mod token_store;
 mod tree_store;
 
-pub use config::{MysqlStorageConfig, default_mysql_storage_config};
+pub use config::{MysqlForeignKeyMode, MysqlStorageConfig, default_mysql_storage_config};
 pub use error::MysqlError;
 pub use session_manager::{
     MysqlSessionManager, create_mysql_session_manager, create_mysql_session_manager_from_pool,
@@ -30,7 +30,7 @@ pub use token_store::{
 };
 pub use tree_store::{MysqlTreeStore, create_mysql_tree_store, create_mysql_tree_store_from_pool};
 
-pub use migrations::{Migration, run_migrations};
+pub use migrations::{FkRename, Migration, SchemaRenames, run_migrations};
 pub use pool::{create_pool, map_db_error, tx_opts};
 
 pub use mysql_async;

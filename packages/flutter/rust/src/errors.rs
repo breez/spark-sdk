@@ -1,7 +1,5 @@
 pub use breez_sdk_spark::passkey::{PasskeyPrfError, PasskeyError};
-pub use breez_sdk_spark::{
-    DepositClaimError, Fee, SdkError, SessionManagerError, StorageError,
-};
+pub use breez_sdk_spark::{DepositClaimError, Fee, SdkError, StorageError};
 use flutter_rust_bridge::frb;
 
 #[frb(mirror(DepositClaimError))]
@@ -53,12 +51,6 @@ pub enum _StorageError {
     Implementation(String),
     InitializationError(String),
     Serialization(String),
-}
-
-#[frb(mirror(SessionManagerError))]
-pub enum _SessionManagerError {
-    NotFound,
-    Generic(String),
 }
 
 #[frb(mirror(PasskeyPrfError))]

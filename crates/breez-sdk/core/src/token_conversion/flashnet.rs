@@ -6,14 +6,9 @@ use flashnet::{
     FlashnetClient, FlashnetConfig, FlashnetError, GetMinAmountsRequest, ListPoolsRequest,
     PoolSortOrder, SimulateSwapRequest,
 };
-use platform_utils::time::Duration;
-use platform_utils::tokio;
 use spark_wallet::{SparkWallet, TransferId};
-use tokio::{
-    select,
-    sync::{broadcast, watch},
-};
-use tracing::{Instrument, debug, error, info, warn};
+use tokio::sync::broadcast;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     AmountAdjustmentReason, Network, Payment, PaymentDetails, PaymentMetadata, Storage,
@@ -44,19 +39,16 @@ pub(crate) struct FlashnetTokenConverter {
 impl FlashnetTokenConverter {
     /// Creates a new `FlashnetTokenConverter` instance.
     ///
-    /// Spawns a background task to periodically process failed conversion refunds.
-    ///
     /// # Arguments
     /// * `storage` - Storage for payment lookups and metadata updates
     /// * `spark_wallet` - Spark wallet for transfer/transaction lookups
     /// * `network` - The network configuration
-    /// * `shutdown_receiver` - Watch receiver to signal shutdown of the refunder task
     pub fn new(
         flashnet_config: FlashnetConfig,
         storage: Arc<dyn Storage>,
         spark_wallet: Arc<SparkWallet>,
         network: Network,
-        shutdown_receiver: watch::Receiver<()>,
+        http_client: Arc<dyn platform_utils::HttpClient>,
     ) -> Self {
         let integrator_fee_bps = flashnet_config
             .integrator_config
@@ -67,60 +59,19 @@ impl FlashnetTokenConverter {
             flashnet_config,
             spark_wallet.clone(),
             Arc::new(CacheStore::default()),
+            http_client,
         ));
 
         let (refund_trigger, _) = broadcast::channel(10);
 
-        let converter = Self {
+        Self {
             flashnet_client,
             storage,
             spark_wallet,
             network,
-            refund_trigger: refund_trigger.clone(),
+            refund_trigger,
             integrator_fee_bps,
-        };
-
-        // Spawn the background refunder task
-        converter.spawn_refunder(shutdown_receiver, &refund_trigger);
-
-        converter
-    }
-
-    /// Spawns a background task that periodically checks for failed conversions
-    /// and initiates refunds. Triggered on startup, by the refund trigger, and every 150 seconds.
-    fn spawn_refunder(
-        &self,
-        mut shutdown_receiver: watch::Receiver<()>,
-        refund_trigger: &broadcast::Sender<()>,
-    ) {
-        let storage = Arc::clone(&self.storage);
-        let flashnet_client = Arc::clone(&self.flashnet_client);
-        let mut trigger_receiver = refund_trigger.subscribe();
-        let span = tracing::Span::current();
-
-        tokio::spawn(
-            async move {
-                loop {
-                    if let Err(e) =
-                        Self::refund_failed_conversions(&storage, &flashnet_client).await
-                    {
-                        error!("Failed to refund failed conversions: {e:?}");
-                    }
-
-                    select! {
-                        _ = shutdown_receiver.changed() => {
-                            info!("Conversion refunder shutdown signal received");
-                            return;
-                        }
-                        _ = trigger_receiver.recv() => {
-                            debug!("Conversion refunder triggered");
-                        }
-                        () = tokio::time::sleep(Duration::from_secs(150)) => {}
-                    }
-                }
-            }
-            .instrument(span),
-        );
+        }
     }
 
     /// Process all failed conversions needing refunds.
@@ -851,5 +802,13 @@ impl TokenConverter for FlashnetTokenConverter {
             min_from_amount: min_amounts.asset_in_min,
             min_to_amount: min_amounts.asset_out_min,
         })
+    }
+
+    async fn refund_pending(&self) -> Result<(), ConversionError> {
+        Self::refund_failed_conversions(&self.storage, &self.flashnet_client).await
+    }
+
+    fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<()>> {
+        Some(self.refund_trigger.subscribe())
     }
 }

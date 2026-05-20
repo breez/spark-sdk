@@ -7,9 +7,9 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
-    EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig, StableBalanceToken,
-    create_mysql_connection_pool, create_postgres_connection_pool, default_config,
-    default_mysql_storage_config, default_postgres_storage_config,
+    EventListener, Network, SdkBuilder, SdkContextConfig, SdkEvent, Seed, StableBalanceConfig,
+    StableBalanceToken, default_config, default_mysql_storage_config,
+    default_postgres_storage_config, new_shared_sdk_context,
 };
 use clap::Parser;
 use command::{Command, execute_command};
@@ -164,7 +164,7 @@ async fn run_interactive_mode(
             .map_err(|e| anyhow!("PRF initialization failed: {e}"))?;
         passkey::resolve_passkey_seed(
             prf,
-            breez_api_key,
+            breez_api_key.clone(),
             config.label,
             config.list_labels,
             config.store_label,
@@ -180,12 +180,21 @@ async fn run_interactive_mode(
 
     let mut sdk_builder = SdkBuilder::new(config, seed);
     if let Some(connection_string) = postgres_connection_string {
-        let pool =
-            create_postgres_connection_pool(&default_postgres_storage_config(connection_string))?;
-        sdk_builder = sdk_builder.with_postgres_connection_pool(pool);
+        let context = new_shared_sdk_context(SdkContextConfig {
+            api_key: breez_api_key.clone(),
+            postgres_config: Some(default_postgres_storage_config(connection_string)),
+            ..SdkContextConfig::new(network)
+        })
+        .await?;
+        sdk_builder = sdk_builder.with_shared_context(context);
     } else if let Some(connection_string) = mysql_connection_string {
-        let pool = create_mysql_connection_pool(&default_mysql_storage_config(connection_string))?;
-        sdk_builder = sdk_builder.with_mysql_connection_pool(pool);
+        let context = new_shared_sdk_context(SdkContextConfig {
+            api_key: breez_api_key.clone(),
+            mysql_config: Some(default_mysql_storage_config(connection_string)),
+            ..SdkContextConfig::new(network)
+        })
+        .await?;
+        sdk_builder = sdk_builder.with_shared_context(context);
     } else {
         sdk_builder = sdk_builder.with_default_storage(data_dir.to_string_lossy().to_string());
     }

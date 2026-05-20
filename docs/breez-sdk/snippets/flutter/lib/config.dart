@@ -39,8 +39,10 @@ Future<void> configurePrivateEnabledDefault() async {
 Future<void> configureOptimizationConfiguration() async {
   // ANCHOR: optimization-configuration
   var config = defaultConfig(network: Network.mainnet).copyWith(
-      optimizationConfig:
-          OptimizationConfig(autoEnabled: true, multiplicity: 1));
+      leafOptimizationConfig:
+          LeafOptimizationConfig(autoEnabled: true, multiplicity: 1),
+      tokenOptimizationConfig: TokenOptimizationConfig(
+          autoEnabled: true, targetOutputCount: 5, minOutputsThreshold: 50));
   // ANCHOR_END: optimization-configuration
   print(config);
 }
@@ -99,5 +101,16 @@ Future<void> configureSparkConfig() async {
           expectedWithdrawBondSats: BigInt.from(10000),
           expectedWithdrawRelativeBlockLocktime: BigInt.from(1000)));
   // ANCHOR_END: spark-config
+  print(config);
+}
+
+void configureBackgroundTasks() {
+  // ANCHOR: config-background-tasks
+  // Server-mode profile: equivalent to defaultServerConfig(network: Network.mainnet).
+  // Recommended when you build the SDK per request in a multi-tenant server
+  // deployment. See the "Server mode" page for the full profile.
+  final config = defaultConfig(network: Network.mainnet)
+      .copyWith(backgroundTasksEnabled: false);
+  // ANCHOR_END: config-background-tasks
   print(config);
 }

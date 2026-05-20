@@ -1655,6 +1655,9 @@ impl SparkWallet {
                 self.config
                     .token_outputs_optimization_options
                     .min_outputs_threshold,
+                self.config
+                    .token_outputs_optimization_options
+                    .target_output_count,
             )
             .await?;
         Ok(())
@@ -2153,6 +2156,9 @@ impl BackgroundProcessor {
                         SparkEvent::Deposit(deposit) => self.process_deposit_event(*deposit).await,
                         SparkEvent::Connected => self.process_connected_event().await,
                         SparkEvent::Disconnected => self.process_disconnected_event().await,
+                        SparkEvent::TokenTransaction { hash } => {
+                            self.process_token_transaction_event(hash).await
+                        }
                     };
                     debug!("Processed event: {event}");
 
@@ -2180,6 +2186,26 @@ impl BackgroundProcessor {
         self.event_manager
             .notify_listeners(WalletEvent::DepositConfirmed(id));
         self.maybe_start_optimization().await;
+        Ok(())
+    }
+
+    async fn process_token_transaction_event(&self, hash: String) -> Result<(), SparkWalletError> {
+        let transaction = self
+            .token_service
+            .query_token_transactions_by_hashes(vec![hash.clone()])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                SparkWalletError::Generic(format!("Token transaction {hash} not found"))
+            })?;
+
+        self.token_service
+            .update_token_outputs_for_transaction(&transaction, &self.identity_public_key)
+            .await?;
+
+        self.event_manager
+            .notify_listeners(WalletEvent::TokenTransaction(transaction));
         Ok(())
     }
 
@@ -2324,6 +2350,7 @@ impl BackgroundProcessor {
                     None,
                     self.token_outputs_optimization_options
                         .min_outputs_threshold,
+                    self.token_outputs_optimization_options.target_output_count,
                 )
                 .await
             {

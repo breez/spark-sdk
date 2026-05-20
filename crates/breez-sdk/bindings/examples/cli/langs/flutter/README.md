@@ -47,7 +47,9 @@ make run-mainnet
     --network                           Network to use: regtest, mainnet (default: regtest)
     --account-number                    Account number for the Spark signer
     --postgres-connection-string        PostgreSQL connection string (not yet supported, uses SQLite)
-    --stable-balance-token-identifier   Stable balance token identifier
+    --mysql-connection-string           MySQL connection string (not yet supported, uses SQLite)
+    --stable-balance-token              Stable balance token in TICKER:token_identifier format (repeatable)
+    --stable-balance-default-active-label  Default active label for stable balance
     --stable-balance-threshold          Stable balance threshold in sats
     --passkey                           Use passkey with PRF provider (file, yubikey, or fido2)
     --label                             Label for seed derivation (requires --passkey)
@@ -91,6 +93,7 @@ Once the CLI is running, type `help` to see all available commands:
 - `issuer <subcommand>` — Token issuer commands
 - `contacts <subcommand>` — Contacts commands (add, update, delete, list)
 - `webhooks <subcommand>` — Webhook commands (register, unregister, list)
+- `stable-balance <subcommand>` — Stable balance commands (get, set, unset)
 
 ## Passkey
 

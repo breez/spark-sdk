@@ -34,7 +34,8 @@ func configurePrivateEnabledDefault() async throws {
 func configureOptimizationConfiguration() async throws {
     // ANCHOR: optimization-configuration
     var config = defaultConfig(network: Network.mainnet)
-    config.optimizationConfig = OptimizationConfig(autoEnabled: true, multiplicity: 1)
+    config.leafOptimizationConfig = LeafOptimizationConfig(autoEnabled: true, multiplicity: 1)
+    config.tokenOptimizationConfig = TokenOptimizationConfig(autoEnabled: true, targetOutputCount: 5, minOutputsThreshold: 50)
     // ANCHOR_END: optimization-configuration
     print("Config: \(config)")
 }
@@ -52,5 +53,16 @@ func configureStableBalance() async throws {
         defaultActiveLabel: "USDB"
     )
     // ANCHOR_END: stable-balance-config
+    print("Config: \(config)")
+}
+
+func configureBackgroundTasks() {
+    // ANCHOR: config-background-tasks
+    // Server-mode profile: equivalent to defaultServerConfig(network: .mainnet).
+    // Recommended when you build the SDK per request in a multi-tenant server
+    // deployment. See the "Server mode" page for the full profile.
+    var config = defaultConfig(network: Network.mainnet)
+    config.backgroundTasksEnabled = false
+    // ANCHOR_END: config-background-tasks
     print("Config: \(config)")
 }

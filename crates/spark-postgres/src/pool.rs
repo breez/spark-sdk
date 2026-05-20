@@ -189,14 +189,20 @@ pub fn make_tls_config_verifying(
         root_store
     };
 
+    let provider = Arc::new(default_provider());
+    let builder = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| {
+            PostgresError::Initialization(format!("Failed to configure rustls protocols: {e}"))
+        })?;
     let config = if verify_hostname {
         // verify-full: use the standard WebPKI verifier which checks hostname
-        ClientConfig::builder()
+        builder
             .with_root_certificates(root_store)
             .with_no_client_auth()
     } else {
         // verify-ca: use our custom verifier that only checks the certificate chain
-        ClientConfig::builder()
+        builder
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(CaOnlyVerifier::new(root_store)))
             .with_no_client_auth()
@@ -208,11 +214,17 @@ pub fn make_tls_config_verifying(
 /// Creates a rustls `ClientConfig` that accepts any server certificate.
 /// This is appropriate for `sslmode=require` which ensures encrypted connections
 /// but does not verify the server's identity.
-fn make_tls_config() -> ClientConfig {
-    ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(NoVerifier))
-        .with_no_client_auth()
+fn make_tls_config() -> Result<ClientConfig, PostgresError> {
+    Ok(
+        ClientConfig::builder_with_provider(Arc::new(default_provider()))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| {
+                PostgresError::Initialization(format!("Failed to configure rustls protocols: {e}"))
+            })?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerifier))
+            .with_no_client_auth(),
+    )
 }
 
 /// Internal representation of SSL modes, including verify-ca and verify-full
@@ -295,7 +307,7 @@ pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError
                 .map_err(|e| PostgresError::Initialization(e.to_string()))
         }
         SslModeExt::Prefer | SslModeExt::Require => {
-            let tls_config = make_tls_config();
+            let tls_config = make_tls_config()?;
             let tls = MakeRustlsConnect::new(tls_config);
             let manager = deadpool_postgres::Manager::new(pg_config, tls);
             Pool::builder(manager)

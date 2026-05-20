@@ -35,7 +35,9 @@ dotnet run --project BreezCli.csproj -- [OPTIONS]
 | `--network` | `regtest` | Network to use (`regtest` or `mainnet`) |
 | `--account-number` | - | Account number for the Spark signer |
 | `--postgres-connection-string` | - | PostgreSQL connection string (uses SQLite by default) |
-| `--stable-balance-token-identifier` | - | Stable balance token identifier |
+| `--mysql-connection-string` | - | MySQL connection string (uses SQLite by default) |
+| `--stable-balance-token` | - | Stable balance token in `LABEL:token_identifier` format (repeatable) |
+| `--stable-balance-default-active-label` | - | Default active label for stable balance |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
 | `--passkey` | - | Use passkey with PRF provider (`file`, `yubikey`, or `fido2`) |
 | `--label` | - | Label for seed derivation (requires `--passkey`) |
@@ -88,6 +90,8 @@ Once inside the REPL, type `help` for all commands:
 **Contacts**: `contacts <subcommand>`
 
 **Webhooks**: `webhooks <subcommand>`
+
+**Stable Balance**: `stable-balance <subcommand>`
 
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 

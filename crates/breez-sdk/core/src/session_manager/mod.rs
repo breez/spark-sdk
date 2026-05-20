@@ -1,10 +1,11 @@
 //! User-facing [`SessionManager`] surface for the Breez SDK.
 //!
 //! UniFFI-generated bindings can only export traits defined inside the crate
-//! they're generated from, so we re-declare the trait + supporting types here
-//! and bridge to [`spark_wallet`] via an internal adapter when the SDK is
-//! built. Integrators implement *this* trait — typically backed by a shared
-//! database — to let multiple SDK pods share authentication state.
+//! they're generated from, so we re-declare the trait + supporting types
+//! here. The DB-backed implementations (`PostgresSessionManager`,
+//! `MysqlSessionManager`) implement `spark_wallet::SessionManager` directly
+//! and are picked up by `SdkBuilder::build()` when a corresponding pool is
+//! configured on the `SdkContext`.
 //!
 //! Internal layering applied automatically by `SdkBuilder::build()`:
 //!
@@ -18,8 +19,7 @@
 //! EncryptingSessionManager ← ECIES on Session::token
 //!     │ ciphertext (base64)
 //!     ▼
-//! SessionManagerAdapter | PostgresSessionManager | MysqlSessionManager
-//! | InMemorySessionManager
+//! PostgresSessionManager | MysqlSessionManager | InMemorySessionManager
 //! ```
 
 mod adapter;

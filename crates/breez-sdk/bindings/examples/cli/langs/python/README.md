@@ -48,7 +48,9 @@ make clean            Remove venv and build artifacts
 | `--network` | `regtest` | Network to use (`regtest` or `mainnet`) |
 | `--account-number` | - | Account number for the Spark signer |
 | `--postgres-connection-string` | - | PostgreSQL connection string (uses SQLite by default) |
-| `--stable-balance-token-identifier` | - | Stable balance token identifier |
+| `--mysql-connection-string` | - | MySQL connection string (mutually exclusive with `--postgres-connection-string`) |
+| `--stable-balance-token` | - | Stable balance tokens in `LABEL:token_identifier` format (repeatable) |
+| `--stable-balance-default-active-label` | - | Default active label for stable balance (must match a token label) |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
 | `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
 | `--label` | `Default` | Requires `--passkey`. The label to use |
@@ -75,6 +77,8 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 **Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
+
+**Stable balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
 **Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list`
 

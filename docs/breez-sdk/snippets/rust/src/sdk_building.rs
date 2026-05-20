@@ -103,6 +103,8 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     // Optionally pool settings can be adjusted. Some examples:
     postgres_config.max_pool_size = 8; // Max connections in pool
     postgres_config.wait_timeout_secs = Some(30); // Timeout waiting for connection
+    // If your service owns SDK-compatible schema migrations:
+    postgres_config.run_migration = false;
 
     // Construct the connection pool. The same `Arc<PostgresConnectionPool>`
     // can be passed to multiple SdkBuilders to share connections across SDKs;
@@ -157,4 +159,83 @@ pub(crate) async fn init_sdk_mysql() -> Result<BreezSdk> {
     // ANCHOR_END: init-sdk-mysql
 
     Ok(sdk)
+}
+
+pub(crate) async fn init_sdk_server() -> Result<BreezSdk> {
+    // ANCHOR: init-sdk-server
+    // Construct the seed using a mnemonic, entropy or passkey
+    let mnemonic = "<mnemonic words>".to_string();
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase: None,
+    };
+
+    // Build a server-mode config: same as default_config(network) with
+    // background_tasks_enabled = false. No periodic sync, no real-time sync
+    // client, no leaf/token optimizer, no flashnet refunder, no lightning-
+    // address recovery, no spark private-mode init.
+    let mut config = default_server_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Typically server-mode SDKs are built per request and share infrastructure
+    // (DB pool, REST chain service, SSP/Connection Manager) across instances.
+    // Pass the shared resources via the builder; see the "Customizing the SDK"
+    // page for each component.
+    let sdk = SdkBuilder::new(config, seed)
+        .with_default_storage("./.data".to_string())
+        .build()
+        .await?;
+    // ANCHOR_END: init-sdk-server
+
+    Ok(sdk)
+}
+
+pub(crate) async fn server_mode_request_handler(sdk: &BreezSdk) -> Result<String> {
+    // ANCHOR: server-mode-request-handler
+    // User-facing request handler: do not call sync_wallet here. Operations
+    // that read from local storage (get_info, list_payments, etc.) do not
+    // need a defensive sync. Call sync_wallet only from webhook handlers or
+    // reconciliation jobs that need to observe an external state change.
+    let response = sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "<invoice description>".to_string(),
+                amount_sats: Some(5_000),
+                expiry_secs: Some(3600),
+                payment_hash: None,
+            },
+        })
+        .await?;
+
+    // Always disconnect at the end of the request lifecycle to flush
+    // outstanding storage writes. See [Disconnecting](initializing.md).
+    sdk.disconnect().await?;
+    // ANCHOR_END: server-mode-request-handler
+    Ok(response.payment_request)
+}
+
+pub(crate) async fn server_mode_provisioning(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: server-mode-provisioning
+    // One-time setup when a wallet is first registered. The client-mode SDK
+    // would normally apply the private-mode preset itself on first startup;
+    // server-mode SDKs do not, so opt in once here via update_user_settings.
+    sdk.update_user_settings(UpdateUserSettingsRequest {
+        spark_private_mode_enabled: Some(true),
+        stable_balance_active_label: None,
+    })
+    .await?;
+
+    sdk.disconnect().await?;
+    // ANCHOR_END: server-mode-provisioning
+    Ok(())
+}
+
+pub(crate) async fn refund_pending_conversions(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: refund-pending-conversions
+    // The flashnet conversion refunder doesn't run in the background in server
+    // mode. Call this from your own scheduler (e.g. once per minute) to issue
+    // pending refunds for failed conversions.
+    sdk.refund_pending_conversions().await?;
+    // ANCHOR_END: refund-pending-conversions
+    Ok(())
 }

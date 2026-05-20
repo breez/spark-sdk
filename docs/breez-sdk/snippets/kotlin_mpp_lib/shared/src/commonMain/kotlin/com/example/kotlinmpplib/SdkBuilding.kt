@@ -93,6 +93,8 @@ class SdkBuilding {
         // Optionally pool settings can be adjusted. Some examples:
         postgresConfig.maxPoolSize = 8u // Max connections in pool
         postgresConfig.waitTimeoutSecs = 30u // Timeout waiting for connection
+        // If your service owns SDK-compatible schema migrations:
+        postgresConfig.runMigration = false
 
         // Construct the connection pool. The same pool can be passed to
         // multiple SdkBuilders to share connections across SDKs; per-tenant
@@ -142,5 +144,77 @@ class SdkBuilding {
             // handle error
         }
         // ANCHOR_END: init-sdk-mysql
+    }
+
+    suspend fun initSdkServer() {
+        // ANCHOR: init-sdk-server
+        // Construct the seed using a mnemonic, entropy or passkey
+        val mnemonic = "<mnemonic words>"
+        val seed = Seed.Mnemonic(mnemonic, null)
+
+        // Build a server-mode config: same as defaultConfig(network) with
+        // backgroundTasksEnabled = false. No periodic sync, no real-time sync
+        // client, no leaf/token optimizer, no flashnet refunder, no lightning-
+        // address recovery, no spark private-mode init.
+        val config = defaultServerConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        try {
+            // Typically server-mode SDKs are built per request and share
+            // infrastructure (DB pool, REST chain service, SSP/Connection
+            // Manager) across instances. Pass the shared resources via the
+            // builder.
+            val builder = SdkBuilder(config, seed)
+            builder.withDefaultStorage("./.data")
+            val sdk = builder.build()
+        } catch (e: Exception) {
+            // handle error
+        }
+        // ANCHOR_END: init-sdk-server
+    }
+
+    suspend fun serverModeRequestHandler(sdk: BreezSdk) {
+        // ANCHOR: server-mode-request-handler
+        // User-facing request handler: do not call syncWallet here.
+        // Operations that read from local storage (getInfo, listPayments,
+        // etc.) do not need a defensive sync. Call syncWallet only from
+        // webhook handlers or reconciliation jobs that need to observe an
+        // external state change.
+        val response = sdk.receivePayment(
+            ReceivePaymentRequest(
+                ReceivePaymentMethod.Bolt11Invoice(
+                    "<invoice description>",
+                    5_000.toULong(),
+                    3600.toUInt(),
+                    null,
+                )
+            )
+        )
+
+        // Always disconnect at the end of the request lifecycle to flush
+        // outstanding storage writes.
+        sdk.disconnect()
+        // ANCHOR_END: server-mode-request-handler
+    }
+
+    suspend fun serverModeProvisioning(sdk: BreezSdk) {
+        // ANCHOR: server-mode-provisioning
+        // One-time setup when a wallet is first registered. The client-mode
+        // SDK would normally apply the private-mode preset itself on first
+        // startup; server-mode SDKs do not, so opt in once here via
+        // updateUserSettings.
+        sdk.updateUserSettings(UpdateUserSettingsRequest(sparkPrivateModeEnabled = true))
+
+        sdk.disconnect()
+        // ANCHOR_END: server-mode-provisioning
+    }
+
+    suspend fun refundPendingConversions(sdk: BreezSdk) {
+        // ANCHOR: refund-pending-conversions
+        // The flashnet conversion refunder doesn't run in the background in
+        // server mode. Call this from your own scheduler (e.g. once per
+        // minute) to issue pending refunds for failed conversions.
+        sdk.refundPendingConversions()
+        // ANCHOR_END: refund-pending-conversions
     }
 }

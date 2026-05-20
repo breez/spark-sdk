@@ -38,6 +38,24 @@ const PAYMENTS_PER_DIRECTION: usize = 5;
 /// Bidirectional batches in the token stress loop.
 const NUM_BATCHES: usize = 3;
 
+/// Which SDK profile the scenario should run under.
+///
+/// `Client` is the historical default — the SDK runs its periodic-sync loop,
+/// spark-wallet `BackgroundProcessor`, and event-driven payment refresh; the
+/// scenario can therefore rely on assertions like `get_info(ensure_synced=true)`
+/// reading a fresh balance without an explicit sync.
+///
+/// `Server` mirrors `default_server_config`: no background tasks, no event-
+/// driven balance updates, `get_info` reads straight from the local tree-store
+/// cache. The scenario adapts to that contract by driving sync explicitly at
+/// every cross-instance read site and by funding via polling instead of the
+/// `ClaimedDeposits` event channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeMode {
+    Client,
+    Server,
+}
+
 /// Comprehensive multi-instance concurrent operations test (BTC).
 ///
 /// Validates that three SDK instances sharing the same backend correctly handle:
@@ -49,18 +67,33 @@ const NUM_BATCHES: usize = 3;
 /// `build_instance` is invoked four times (3 main wallet instances + an
 /// optional warm path); each call must yield a fresh SDK bound to the same
 /// shared backend with the same seed.
+///
+/// `mode` controls how the scenario adapts to the runtime profile. In
+/// `Client` mode it relies on background sync to propagate state across
+/// instances; in `Server` mode it drives every cross-instance reconciliation
+/// with explicit `sync_wallet` calls (server runtime ignores
+/// `ensure_synced=true` and has no event-driven refresh).
 #[allow(clippy::too_many_lines)]
-pub async fn run_concurrent_multi_instance_operations<F, Fut>(build_instance: F) -> Result<()>
+pub async fn run_concurrent_multi_instance_operations<F, Fut>(
+    mode: RuntimeMode,
+    build_instance: F,
+) -> Result<()>
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<SdkInstance>>,
 {
-    info!("Creating first SDK instance and funding...");
+    info!("Creating first SDK instance and funding... (mode={mode:?})");
     let mut instance_0 = build_instance().await?;
 
     // Fund the main wallet via faucet (need ~2500 sats: 1000 + 100×5 stress).
+    // In server mode the `ClaimedDeposits` event isn't emitted automatically
+    // (no background processor), so we have to poll the wallet ourselves
+    // through repeated `sync_wallet` + `get_info` calls.
     info!("Funding main wallet via faucet...");
-    ensure_funded(&mut instance_0, 4_000).await?;
+    match mode {
+        RuntimeMode::Client => ensure_funded(&mut instance_0, 4_000).await?,
+        RuntimeMode::Server => ensure_funded_via_polling(&mut instance_0, 4_000).await?,
+    }
 
     // Now create instances 1 and 2 (after funding to avoid claim race).
     info!("Creating additional SDK instances with shared seed...");
@@ -253,16 +286,27 @@ where
     )
     .await?;
 
+    // `wait_for_balance` only synced instance_0. In client mode the periodic
+    // sync loop / event-driven `TransferClaimed` refresh would have updated
+    // instances 1 and 2's tree caches by now; in server mode nothing does, so
+    // we drive an explicit 3-way sync at the cross-instance read boundary.
+    if matches!(mode, RuntimeMode::Server) {
+        let (sync_1, sync_2) = tokio::join!(
+            instance_1.sdk.sync_wallet(SyncWalletRequest {}),
+            instance_2.sdk.sync_wallet(SyncWalletRequest {})
+        );
+        sync_1?;
+        sync_2?;
+    }
+
+    let ensure_synced = match mode {
+        RuntimeMode::Client => Some(true),
+        RuntimeMode::Server => Some(false),
+    };
     let (info_0, info_1, info_2) = tokio::join!(
-        instance_0.sdk.get_info(GetInfoRequest {
-            ensure_synced: Some(true)
-        }),
-        instance_1.sdk.get_info(GetInfoRequest {
-            ensure_synced: Some(true)
-        }),
-        instance_2.sdk.get_info(GetInfoRequest {
-            ensure_synced: Some(true)
-        })
+        instance_0.sdk.get_info(GetInfoRequest { ensure_synced }),
+        instance_1.sdk.get_info(GetInfoRequest { ensure_synced }),
+        instance_2.sdk.get_info(GetInfoRequest { ensure_synced })
     );
 
     let balance_0 = info_0?.balance_sats;
@@ -426,6 +470,13 @@ where
         final_payments_0.payments.len(),
         current_balance
     );
+
+    let [instance_0, instance_1, instance_2] = instances;
+    instance_0.sdk.disconnect().await?;
+    instance_1.sdk.disconnect().await?;
+    instance_2.sdk.disconnect().await?;
+    counterparty.sdk.disconnect().await?;
+
     Ok(())
 }
 
