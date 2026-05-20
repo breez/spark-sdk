@@ -73,10 +73,8 @@ func (ExamplePaymentObserver) BeforeSend(payments []breez_sdk_spark.ProvisionalP
 	return nil
 }
 
-func (ExamplePaymentObserver) AfterSend(updates []breez_sdk_spark.PaymentIdUpdate) error {
-	for _, update := range updates {
-		log.Printf("Payment id update: %v -> %v", update.ProvisionalPaymentId, update.FinalPaymentId)
-	}
+func (ExamplePaymentObserver) AfterSendToken(partialTxId, finalTxId string) error {
+	log.Printf("Token tx broadcast: %v -> %v", partialTxId, finalTxId)
 	return nil
 }
 

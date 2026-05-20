@@ -8,7 +8,6 @@ import {
   ChainApiType,
   KeySetType,
   type KeySetConfig,
-  type PaymentIdUpdate,
   type ProvisionalPayment,
   type Credentials,
   ReceivePaymentMethod
@@ -69,10 +68,8 @@ class ExamplePaymentObserver {
     }
   }
 
-  afterSend = async (updates: PaymentIdUpdate[]) => {
-    for (const update of updates) {
-      console.log(`Payment id update: ${update.provisionalPaymentId} -> ${update.finalPaymentId}`)
-    }
+  afterSendToken = async (partialTxId: string, finalTxId: string) => {
+    console.log(`Token tx broadcast: ${partialTxId} -> ${finalTxId}`)
   }
 }
 

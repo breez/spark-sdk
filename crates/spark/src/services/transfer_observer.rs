@@ -3,7 +3,6 @@ use thiserror::Error;
 
 use crate::services::TransferId;
 
-#[derive(Clone)]
 pub struct ReceiverTokenOutput {
     pub pay_request: String,
     pub amount: u128,
@@ -41,8 +40,6 @@ pub trait TransferObserver: Send + Sync {
         &self,
         _partial_tx_id: &str,
         _final_tx_id: &str,
-        _token_id: &str,
-        _receiver_outputs: Vec<ReceiverTokenOutput>,
     ) -> Result<(), TransferObserverError> {
         Ok(())
     }

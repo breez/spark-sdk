@@ -75,16 +75,12 @@ impl PaymentObserver for ExamplePaymentObserver {
         Ok(())
     }
 
-    async fn after_send(
+    async fn after_send_token(
         &self,
-        updates: Vec<PaymentIdUpdate>,
+        partial_tx_id: String,
+        final_tx_id: String,
     ) -> Result<(), PaymentObserverError> {
-        for update in updates {
-            info!(
-                "Payment id update: {} -> {}",
-                update.provisional_payment_id, update.final_payment_id
-            );
-        }
+        info!("Token tx broadcast: {partial_tx_id} -> {final_tx_id}");
         Ok(())
     }
 }

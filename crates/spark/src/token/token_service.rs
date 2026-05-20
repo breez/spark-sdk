@@ -784,33 +784,29 @@ impl TokenService {
 
         let partial_txid = hex::encode(&result.partial_token_transaction_hash);
 
-        let observer_receiver_outputs = self
-            .transfer_observer
-            .is_some()
-            .then(|| {
-                receiver_outputs
-                    .iter()
-                    .map(|o| {
-                        Ok(ReceiverTokenOutput {
-                            pay_request: o
-                                .spark_invoice
-                                .clone()
-                                .or(o.receiver_address.to_address_string().ok())
-                                .ok_or_else(|| {
-                                    ServiceError::Generic("No pay request available".to_string())
-                                })?,
-                            amount: o.amount,
-                        })
-                    })
-                    .collect::<Result<Vec<ReceiverTokenOutput>, ServiceError>>()
-            })
-            .transpose()?;
-
-        if let (Some(observer), Some(outputs)) =
-            (&self.transfer_observer, observer_receiver_outputs.clone())
-        {
+        if let Some(observer) = &self.transfer_observer {
             observer
-                .before_send_token(&partial_txid, token_id, outputs)
+                .before_send_token(
+                    &partial_txid,
+                    token_id,
+                    receiver_outputs
+                        .iter()
+                        .map(|o| {
+                            Ok(ReceiverTokenOutput {
+                                pay_request: o
+                                    .spark_invoice
+                                    .clone()
+                                    .or(o.receiver_address.to_address_string().ok())
+                                    .ok_or_else(|| {
+                                        ServiceError::Generic(
+                                            "No pay request available".to_string(),
+                                        )
+                                    })?,
+                                amount: o.amount,
+                            })
+                        })
+                        .collect::<Result<Vec<ReceiverTokenOutput>, ServiceError>>()?,
+                )
                 .await?;
         }
 
@@ -856,12 +852,8 @@ impl TokenService {
         })?;
         let txid = hex::encode(&final_tx_hash);
 
-        if let (Some(observer), Some(outputs)) =
-            (&self.transfer_observer, observer_receiver_outputs)
-        {
-            observer
-                .after_send_token(&partial_txid, &txid, token_id, outputs)
-                .await?;
+        if let Some(observer) = &self.transfer_observer {
+            observer.after_send_token(&partial_txid, &txid).await?;
         }
 
         let is_finalized = match commit_status {

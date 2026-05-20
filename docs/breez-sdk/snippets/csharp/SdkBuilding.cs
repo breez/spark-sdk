@@ -73,12 +73,9 @@ namespace BreezSdkSnippets
                 }
             }
 
-            public async Task AfterSend(PaymentIdUpdate[] updates)
+            public async Task AfterSendToken(string partialTxId, string finalTxId)
             {
-                foreach (var update in updates)
-                {
-                    Console.WriteLine($"Payment id update: {update.provisionalPaymentId} -> {update.finalPaymentId}");
-                }
+                Console.WriteLine($"Token tx broadcast: {partialTxId} -> {finalTxId}");
             }
         }
 
