@@ -54,8 +54,8 @@ async fn test_remove_token_outputs_by_prev_tx_ref() {
 }
 
 #[wasm_bindgen_test]
-async fn test_remove_token_outputs_prevents_refresh_readd() {
+async fn test_remove_token_outputs_prevents_refresh_re_add() {
     let store = create_test_token_store("pg_token_remove_outputs_prevents_refresh").await;
-    breez_sdk_spark::token_store_tests::test_remove_token_outputs_prevents_refresh_readd(&store)
+    breez_sdk_spark::token_store_tests::test_remove_token_outputs_prevents_refresh_re_add(&store)
         .await;
 }

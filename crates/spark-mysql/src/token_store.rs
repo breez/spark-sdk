@@ -526,7 +526,7 @@ impl TokenOutputStore for MysqlTokenStore {
                 .map_err(map_err)?;
                 tx.exec_drop(
                     "INSERT IGNORE INTO brz_token_spent_outputs (user_id, output_id, spent_at) \
-                     VALUES (?, ?, NOW())",
+                     VALUES (?, ?, UTC_TIMESTAMP(6))",
                     (self.identity.as_slice(), output_id.as_str()),
                 )
                 .await
@@ -639,10 +639,13 @@ impl TokenOutputStore for MysqlTokenStore {
 
     async fn now(&self) -> Result<SystemTime, TokenOutputServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        let row: Option<NaiveDateTime> =
-            conn.query_first("SELECT NOW(6)").await.map_err(map_err)?;
-        let now =
-            row.ok_or_else(|| TokenOutputServiceError::Generic("NOW() returned no row".into()))?;
+        let row: Option<NaiveDateTime> = conn
+            .query_first("SELECT UTC_TIMESTAMP(6)")
+            .await
+            .map_err(map_err)?;
+        let now = row.ok_or_else(|| {
+            TokenOutputServiceError::Generic("UTC_TIMESTAMP() returned no row".into())
+        })?;
         let dt = DateTime::<Utc>::from_naive_utc_and_offset(now, Utc);
         Ok(dt.into())
     }
@@ -693,6 +696,7 @@ impl MysqlTokenStore {
         .await
     }
 
+    #[allow(clippy::too_many_lines)]
     fn migrations(identity: &[u8], foreign_key_mode: MysqlForeignKeyMode) -> Vec<Vec<Migration>> {
         let mut initial = vec![
             Migration::sql(
@@ -781,6 +785,26 @@ impl MysqlTokenStore {
             initial,
             // Migration 2: Multi-tenant scoping.
             token_store_multi_tenant_migration(identity, foreign_key_mode),
+            // Migration 3: Pin DATETIME defaults to UTC. Server-side INSERTs
+            // already pass `UTC_TIMESTAMP(6)` explicitly; this migration makes
+            // the column default match so any future callsite that omits the
+            // column also gets a UTC value rather than a session-TZ-dependent
+            // one. Mirrored in
+            // crates/breez-sdk/wasm/js/mysql-token-store/migrations.cjs.
+            vec![
+                Migration::sql(
+                    "ALTER TABLE brz_token_outputs MODIFY COLUMN added_at \
+                     DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+                ),
+                Migration::sql(
+                    "ALTER TABLE brz_token_reservations MODIFY COLUMN created_at \
+                     DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+                ),
+                Migration::sql(
+                    "ALTER TABLE brz_token_spent_outputs MODIFY COLUMN spent_at \
+                     DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+                ),
+            ],
         ]
     }
 
@@ -1117,7 +1141,7 @@ impl MysqlTokenStore {
         };
 
         tx.exec_drop(
-            "INSERT INTO brz_token_reservations (user_id, id, purpose) VALUES (?, ?, ?)",
+            "INSERT INTO brz_token_reservations (user_id, id, purpose, created_at) VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
             (self.identity.clone(), &reservation_id, purpose_str),
         )
         .await
@@ -1211,15 +1235,16 @@ impl MysqlTokenStore {
             .map_err(map_err)?;
 
         if !reserved_output_ids.is_empty() {
-            let mut sql =
-                String::from("INSERT INTO brz_token_spent_outputs (user_id, output_id) VALUES ");
+            let mut sql = String::from(
+                "INSERT INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES ",
+            );
             let mut params: Vec<Value> =
                 Vec::with_capacity(reserved_output_ids.len().saturating_mul(2));
             for (i, oid) in reserved_output_ids.iter().enumerate() {
                 if i > 0 {
                     sql.push_str(", ");
                 }
-                sql.push_str("(?, ?)");
+                sql.push_str("(?, ?, UTC_TIMESTAMP(6))");
                 params.push(Value::from(self.identity.clone()));
                 params.push(Value::from(oid.clone()));
             }
@@ -1249,7 +1274,7 @@ impl MysqlTokenStore {
         // lazily.
         if is_swap {
             tx.exec_drop(
-                "INSERT INTO brz_token_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
+                "INSERT INTO brz_token_swap_status (user_id, last_completed_at) VALUES (?, UTC_TIMESTAMP(6))
                  ON DUPLICATE KEY UPDATE last_completed_at = VALUES(last_completed_at)",
                 (self.identity.clone(),),
             )
@@ -1287,7 +1312,7 @@ impl MysqlTokenStore {
                 (user_id, id, token_identifier, owner_public_key, revocation_commitment,
                  withdraw_bond_sats, withdraw_relative_block_locktime,
                  token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6))
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))
               ON DUPLICATE KEY UPDATE id = id",
             (
                 self.identity.clone(),
@@ -1358,7 +1383,7 @@ impl MysqlTokenStore {
                     SELECT id FROM (
                         SELECT id FROM brz_token_reservations
                         WHERE user_id = ?
-                          AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)
+                          AND created_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)
                     ) AS stale
                 )",
             (
@@ -1373,7 +1398,7 @@ impl MysqlTokenStore {
         let mut result = tx
             .exec_iter(
                 "DELETE FROM brz_token_reservations
-                 WHERE user_id = ? AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)",
+                 WHERE user_id = ? AND created_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)",
                 (self.identity.clone(), RESERVATION_TIMEOUT_SECS),
             )
             .await
@@ -1793,9 +1818,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_remove_token_outputs_prevents_refresh_readd() {
+    async fn test_remove_token_outputs_prevents_refresh_re_add() {
         let fixture = MysqlTokenStoreTestFixture::new().await;
-        shared_tests::test_remove_token_outputs_prevents_refresh_readd(&fixture.store).await;
+        shared_tests::test_remove_token_outputs_prevents_refresh_re_add(&fixture.store).await;
     }
 
     #[tokio::test]
@@ -2082,7 +2107,7 @@ mod tests {
         // Backdate the swap reservation past the 5-minute timeout.
         let mut conn = fixture.store.pool.get_conn().await.unwrap();
         conn.exec_drop(
-            "UPDATE brz_token_reservations SET created_at = DATE_SUB(NOW(6), INTERVAL 10 MINUTE) WHERE id = ?",
+            "UPDATE brz_token_reservations SET created_at = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 10 MINUTE) WHERE id = ?",
             (&reservation.id,),
         )
         .await

@@ -517,9 +517,12 @@ impl TreeStore for MysqlTreeStore {
 
     async fn now(&self) -> Result<SystemTime, TreeServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        let row: Option<NaiveDateTime> =
-            conn.query_first("SELECT NOW(6)").await.map_err(map_err)?;
-        let now = row.ok_or_else(|| TreeServiceError::Generic("NOW() returned no row".into()))?;
+        let row: Option<NaiveDateTime> = conn
+            .query_first("SELECT UTC_TIMESTAMP(6)")
+            .await
+            .map_err(map_err)?;
+        let now =
+            row.ok_or_else(|| TreeServiceError::Generic("UTC_TIMESTAMP() returned no row".into()))?;
         let dt = DateTime::<Utc>::from_naive_utc_and_offset(now, Utc);
         Ok(dt.into())
     }
@@ -603,6 +606,7 @@ impl MysqlTreeStore {
         .await
     }
 
+    #[allow(clippy::too_many_lines)]
     fn migrations(identity: &[u8], foreign_key_mode: MysqlForeignKeyMode) -> Vec<Vec<Migration>> {
         // Migration 1: Initial tree tables.
         //
@@ -708,6 +712,30 @@ impl MysqlTreeStore {
             // user_id. The `brz_tree_swap_status` singleton is restructured the
             // same way as `sync_revision` in the SDK-core storage.
             tree_store_multi_tenant_migration(identity, foreign_key_mode),
+            // Migration 5: Pin DATETIME defaults to UTC. Server-side INSERTs
+            // already pass `UTC_TIMESTAMP(6)` explicitly; this migration makes
+            // the column default match so any future callsite that omits the
+            // column also gets a UTC value rather than a session-TZ-dependent
+            // one. Mirrored in
+            // crates/breez-sdk/wasm/js/mysql-tree-store/migrations.cjs.
+            vec![
+                Migration::sql(
+                    "ALTER TABLE brz_tree_reservations MODIFY COLUMN created_at \
+                     DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+                ),
+                Migration::sql(
+                    "ALTER TABLE brz_tree_leaves MODIFY COLUMN created_at \
+                     DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+                ),
+                Migration::sql(
+                    "ALTER TABLE brz_tree_leaves MODIFY COLUMN added_at \
+                     DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+                ),
+                Migration::sql(
+                    "ALTER TABLE brz_tree_spent_leaves MODIFY COLUMN spent_at \
+                     DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+                ),
+            ],
         ]
     }
 
@@ -980,7 +1008,7 @@ impl MysqlTreeStore {
         // no row) gets one created lazily.
         if is_swap && new_leaves.is_some() {
             tx.exec_drop(
-                "INSERT INTO brz_tree_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
+                "INSERT INTO brz_tree_swap_status (user_id, last_completed_at) VALUES (?, UTC_TIMESTAMP(6))
                  ON DUPLICATE KEY UPDATE last_completed_at = VALUES(last_completed_at)",
                 (self.identity.clone(),),
             )
@@ -1323,7 +1351,7 @@ impl MysqlTreeStore {
             return Ok(());
         }
 
-        // Build VALUES (?, ?, ?, ?, ?, ?, NOW(6)), … with user_id as the first column.
+        // Build VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6)), … with user_id as the first column.
         let mut sql = String::from(
             "INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, value, added_at) VALUES ",
         );
@@ -1332,7 +1360,7 @@ impl MysqlTreeStore {
             if i > 0 {
                 sql.push_str(", ");
             }
-            sql.push_str("(?, ?, ?, ?, ?, ?, NOW(6))");
+            sql.push_str("(?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))");
             #[allow(clippy::cast_possible_wrap)]
             let value_i64 = leaf.value as i64;
             params.push(Value::from(self.identity.clone()));
@@ -1348,7 +1376,7 @@ impl MysqlTreeStore {
                 is_missing_from_operators = VALUES(is_missing_from_operators),
                 data = VALUES(data),
                 value = VALUES(value),
-                added_at = NOW(6)",
+                added_at = UTC_TIMESTAMP(6)",
         );
 
         tx.exec_drop(&sql, Params::Positional(params))
@@ -1397,13 +1425,14 @@ impl MysqlTreeStore {
             return Ok(());
         }
 
-        let mut sql = String::from("INSERT INTO brz_tree_spent_leaves (user_id, leaf_id) VALUES ");
+        let mut sql =
+            String::from("INSERT INTO brz_tree_spent_leaves (user_id, leaf_id, spent_at) VALUES ");
         let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len().saturating_mul(2));
         for (i, id) in leaf_ids.iter().enumerate() {
             if i > 0 {
                 sql.push_str(", ");
             }
-            sql.push_str("(?, ?)");
+            sql.push_str("(?, ?, UTC_TIMESTAMP(6))");
             params.push(Value::from(self.identity.clone()));
             params.push(Value::from(id.clone()));
         }
@@ -1470,7 +1499,7 @@ impl MysqlTreeStore {
                     SELECT id FROM (
                         SELECT id FROM brz_tree_reservations
                         WHERE user_id = ?
-                          AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)
+                          AND created_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)
                     ) AS stale
                 )",
             (
@@ -1485,7 +1514,7 @@ impl MysqlTreeStore {
         let mut result = tx
             .exec_iter(
                 "DELETE FROM brz_tree_reservations
-                 WHERE user_id = ? AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)",
+                 WHERE user_id = ? AND created_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)",
                 (self.identity.clone(), RESERVATION_TIMEOUT_SECS),
             )
             .await
@@ -1539,7 +1568,7 @@ impl MysqlTreeStore {
         let pending_i64 = pending_change as i64;
 
         tx.exec_drop(
-            "INSERT INTO brz_tree_reservations (user_id, id, purpose, pending_change_amount) VALUES (?, ?, ?, ?)",
+            "INSERT INTO brz_tree_reservations (user_id, id, purpose, pending_change_amount, created_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(6))",
             (self.identity.clone(), reservation_id, purpose.to_string(), pending_i64),
         )
         .await
@@ -2114,7 +2143,7 @@ mod tests {
         // Backdate the reservation past the timeout.
         let mut conn = fixture.store.pool.get_conn().await.unwrap();
         conn.exec_drop(
-            "UPDATE brz_tree_reservations SET created_at = DATE_SUB(NOW(6), INTERVAL 10 MINUTE) WHERE id = ?",
+            "UPDATE brz_tree_reservations SET created_at = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 10 MINUTE) WHERE id = ?",
             (&reservation.id,),
         )
         .await
@@ -2356,7 +2385,7 @@ mod tests {
         // Backdate the swap reservation past the 5-minute timeout.
         let mut conn = fixture.store.pool.get_conn().await.unwrap();
         conn.exec_drop(
-            "UPDATE brz_tree_reservations SET created_at = DATE_SUB(NOW(6), INTERVAL 10 MINUTE) WHERE id = ?",
+            "UPDATE brz_tree_reservations SET created_at = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 10 MINUTE) WHERE id = ?",
             (&reservation.id,),
         )
         .await

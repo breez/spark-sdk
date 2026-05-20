@@ -447,6 +447,18 @@ class MysqlTokenStoreMigrationManager {
           `ALTER TABLE brz_token_swap_status ADD PRIMARY KEY (user_id)`,
         ],
       },
+      {
+        // Pin DATETIME defaults to UTC. Server-side INSERTs already pass
+        // `UTC_TIMESTAMP(6)` explicitly; this migration makes the column
+        // default match, so any future callsite that omits the column also
+        // gets a UTC value rather than a session-TZ-dependent one.
+        name: "Pin DATETIME defaults to UTC",
+        sql: [
+          `ALTER TABLE brz_token_outputs       MODIFY COLUMN added_at  DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_token_reservations  MODIFY COLUMN created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_token_spent_outputs MODIFY COLUMN spent_at  DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+        ],
+      },
     ];
   }
 }

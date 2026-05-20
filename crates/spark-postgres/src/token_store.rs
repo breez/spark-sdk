@@ -1674,9 +1674,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_remove_token_outputs_prevents_refresh_readd() {
+    async fn test_remove_token_outputs_prevents_refresh_re_add() {
         let fixture = PostgresTokenStoreTestFixture::new().await;
-        shared_tests::test_remove_token_outputs_prevents_refresh_readd(&fixture.store).await;
+        shared_tests::test_remove_token_outputs_prevents_refresh_re_add(&fixture.store).await;
     }
 
     #[tokio::test]
