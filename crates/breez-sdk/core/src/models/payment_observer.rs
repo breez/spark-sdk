@@ -118,7 +118,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
 
     async fn before_send_token(
         &self,
-        tx_id: &str,
+        partial_tx_id: &str,
         token_id: &str,
         receiver_outputs: Vec<spark_wallet::ReceiverTokenOutput>,
     ) -> Result<(), TransferObserverError> {
@@ -129,7 +129,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
                     .into_iter()
                     .enumerate()
                     .map(|(index, output)| ProvisionalPayment {
-                        payment_id: format!("{tx_id}:{index}"),
+                        payment_id: format!("{partial_tx_id}:{index}"),
                         amount: output.amount,
                         details: ProvisionalPaymentDetails::Token {
                             token_id: token_id.to_string(),
