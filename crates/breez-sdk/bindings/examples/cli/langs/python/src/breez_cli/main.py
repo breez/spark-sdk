@@ -136,14 +136,14 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     builder = SdkBuilder(config=config, seed=seed)
 
     if postgres_connection_string:
-        context = new_shared_sdk_context(config=SdkContextConfig(
+        context = await new_shared_sdk_context(config=SdkContextConfig(
             network=network_enum,
             api_key=breez_api_key,
             postgres_config=default_postgres_storage_config(connection_string=postgres_connection_string),
         ))
         await builder.with_shared_context(context=context)
     elif mysql_connection_string:
-        context = new_shared_sdk_context(config=SdkContextConfig(
+        context = await new_shared_sdk_context(config=SdkContextConfig(
             network=network_enum,
             api_key=breez_api_key,
             mysql_config=default_mysql_storage_config(connection_string=mysql_connection_string),

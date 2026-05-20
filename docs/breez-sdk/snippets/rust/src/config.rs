@@ -40,10 +40,14 @@ pub(crate) fn configure_private_enabled_default() -> Result<()> {
 pub(crate) fn configure_optimization_configuration() -> Result<()> {
     // ANCHOR: optimization-configuration
     let mut config = default_config(Network::Mainnet);
-    config.optimization_config = OptimizationConfig {
+    config.leaf_optimization_config = LeafOptimizationConfig {
         auto_enabled: true,
         multiplicity: 1,
-        token_target_output_count: 5,
+    };
+    config.token_optimization_config = TokenOptimizationConfig {
+        auto_enabled: true,
+        target_output_count: 5,
+        min_outputs_threshold: 50,
     };
     // ANCHOR_END: optimization-configuration
     info!("Config: {:?}", config);

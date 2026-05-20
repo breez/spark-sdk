@@ -254,14 +254,14 @@ if let passkeyStr = opts.passkey {
 // Build SDK
 let builder = SdkBuilder(config: config, seed: seed)
 if let connectionString = opts.postgresConnectionString {
-    let context = try newSharedSdkContext(config: SdkContextConfig(
+    let context = try await newSharedSdkContext(config: SdkContextConfig(
         network: network,
         apiKey: breezApiKey,
         postgresConfig: defaultPostgresStorageConfig(connectionString: connectionString)
     ))
     await builder.withSharedContext(context: context)
 } else if let connectionString = opts.mysqlConnectionString {
-    let context = try newSharedSdkContext(config: SdkContextConfig(
+    let context = try await newSharedSdkContext(config: SdkContextConfig(
         network: network,
         apiKey: breezApiKey,
         mysqlConfig: defaultMysqlStorageConfig(connectionString: connectionString)
