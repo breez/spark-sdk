@@ -369,35 +369,33 @@ extension PrfProviderError {
 
 // MARK: - PasskeyClient convenience
 
+/// Convenience factory: builds the platform `PasskeyProvider` with
+/// sensible defaults and wires it to a new `PasskeyClient`, forwarding
+/// the Breez API key from the SDK `Config`.
+///
+/// Equivalent to:
+/// ```swift
+/// let provider = PasskeyProvider(rpId: rpId)
+/// let client = PasskeyClient(
+///     prfProvider: provider,
+///     breezApiKey: sdkConfig.apiKey,
+///     config: passkeyConfig
+/// )
+/// ```
+///
+/// Hosts that need a custom `PrfProvider` (CLI / YubiKey / FIDO2) or
+/// non-default platform options should use the regular initializer
+/// instead.
 @available(iOS 18.0, macOS 15.0, *)
-extension PasskeyClient {
-    /// Convenience factory: builds the platform `PasskeyProvider`
-    /// with sensible defaults and wires it to a new `PasskeyClient`,
-    /// forwarding the Breez API key from the SDK `Config`.
-    ///
-    /// Equivalent to:
-    /// ```swift
-    /// let provider = PasskeyProvider(rpId: rpId)
-    /// let client = PasskeyClient(
-    ///     prfProvider: provider,
-    ///     breezApiKey: sdkConfig.apiKey,
-    ///     config: passkeyConfig
-    /// )
-    /// ```
-    ///
-    /// Hosts that need a custom `PrfProvider` (CLI / YubiKey / FIDO2)
-    /// or non-default platform options should use the regular
-    /// initializer instead.
-    public static func create(
-        rpId: String,
-        sdkConfig: Config,
-        passkeyConfig: PasskeyConfig? = nil
-    ) -> PasskeyClient {
-        let provider = PasskeyProvider(rpId: rpId)
-        return PasskeyClient(
-            prfProvider: provider,
-            breezApiKey: sdkConfig.apiKey,
-            config: passkeyConfig
-        )
-    }
+public func createPasskeyClient(
+    rpId: String,
+    sdkConfig: Config,
+    passkeyConfig: PasskeyConfig? = nil
+) -> PasskeyClient {
+    let provider = PasskeyProvider(rpId: rpId)
+    return PasskeyClient(
+        prfProvider: provider,
+        breezApiKey: sdkConfig.apiKey,
+        config: passkeyConfig
+    )
 }
