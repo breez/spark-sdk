@@ -15,11 +15,20 @@ help: ## Show available targets
 setup: ## Build and publish KMP bindings to mavenLocal (one-time per branch)
 	cd $(KMP_CLI_DIR) && $(MAKE) setup
 
+# Server-side `max_connections` for the bench container. The mysql:8.0 default
+# is 151, which the bench saturates as concurrency rises (`HY000: Too many
+# connections` once same-userId requests no longer serialize). The mysql:8.0
+# entrypoint forwards trailing args to mysqld, so we pass `--max-connections`
+# on container start. The bench's client-side pool (`MYSQL_MAX_POOL`,
+# sweep.sh env) must stay under this so the server is never the limiter.
+MYSQL_SERVER_MAX_CONNECTIONS ?= 500
+
 mysql-up: ## Start the bench MySQL container + create the bench DB (idempotent)
 	@if ! docker ps --format '{{.Names}}' | grep -q '^bench-mysql$$'; then \
-	  echo "Starting bench-mysql container…"; \
+	  echo "Starting bench-mysql container (max_connections=$(MYSQL_SERVER_MAX_CONNECTIONS))…"; \
 	  docker run --rm -d --name bench-mysql -p 3306:3306 \
-	    -e MYSQL_ROOT_PASSWORD=password mysql:8.0 >/dev/null; \
+	    -e MYSQL_ROOT_PASSWORD=password mysql:8.0 \
+	    --max-connections=$(MYSQL_SERVER_MAX_CONNECTIONS) >/dev/null; \
 	fi
 	@echo "Waiting for MySQL to accept connections…"
 	@until docker exec bench-mysql mysqladmin ping -uroot -ppassword --silent 2>/dev/null; do sleep 1; done

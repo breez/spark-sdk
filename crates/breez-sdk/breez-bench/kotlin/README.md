@@ -62,6 +62,7 @@ All knobs are env vars. Defaults give the fast pass.
 | `MASTER_SECRET` | `breez-bench` | Wallet seed namespace; standardized so wallets persist between runs |
 | `MYSQL_URL` | `mysql://root:password@127.0.0.1:3306/breez_bench` | Bench DB |
 | `CONNS_PER_OPERATOR` | unset → `null` | gRPC connections per operator in the shared context. `null` = one multiplexed connection (prod default); set a positive int to fan out and check whether that single connection caps top-of-sweep throughput |
+| `MYSQL_MAX_POOL` | unset → SDK default (`num_cpus*4`) | Max connections in the shared MySQL pool. Set a positive int to probe whether the default pool caps top-of-sweep throughput; compare against `mysql_conns` in `metrics.jsonl`. **Must stay below the server's `max_connections`** (set on container start by `make mysql-up`; see `MYSQL_SERVER_MAX_CONNECTIONS` in the Makefile) — otherwise the server rejects new connections with `HY000: Too many connections` |
 | `LOG_FILTER` | unset → off | Rust SDK tracing in the per-step server (tracing `EnvFilter`). e.g. `warn,spark_wallet=info,spark::operator::rpc=debug` logs every operator gRPC method call + rate-limit retries to `out/<id>/rps-N/.trace-logs/sdk.log`. Off by default (no overhead) |
 | `SWEEP_ID` | fresh ISO-8601 timestamp | Set explicitly to share a directory across phases |
 

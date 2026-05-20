@@ -82,8 +82,18 @@ fun deriveSeedBytes(masterSecret: String, userId: String): ByteArray {
  * `backgroundTasksEnabled = false`, no per-request sync loop / optimizer /
  * RT-sync websocket. `ensureSynced=true` is rejected in this mode; the
  * bench syncs explicitly via [syncedInfo] in the funding paths only.
+ *
+ * `maxConcurrentClaims` is raised from the SDK default of 4 to 32. The
+ * closed loop lands an unclaimed sender→treasurer transfer backlog that the
+ * first explicit `syncWallet()` must bulk-claim; each claim is ~3 serial
+ * FROST phases × 3 operators, so it is concurrency-bound. The `claim_perf`
+ * curve put the knee at 32 (~3.4× faster than 4, vs only +13% more at 64
+ * for ~2× the in-flight operator RPCs — and the operators rate-limit per
+ * method). 32 is the safe-but-fast point for draining the treasurer.
  */
-fun benchConfig(): breez_sdk_spark.Config = defaultServerConfig(Network.REGTEST)
+fun benchConfig(): breez_sdk_spark.Config = defaultServerConfig(Network.REGTEST).apply {
+    maxConcurrentClaims = 32u
+}
 
 // --- shared SDK transports ------------------------------------------------
 
@@ -102,6 +112,14 @@ class SharedHandlers private constructor(
         suspend fun create(mysqlUrl: String): SharedHandlers {
             val mysqlConfig = defaultMysqlStorageConfig(mysqlUrl).also {
                 it.recycleTimeoutSecs = 300UL
+                // MYSQL_MAX_POOL: max connections in the shared pool. Unset
+                // → SDK default (num_cpus * 4, from deadpool); set → probe
+                // whether the default pool caps throughput at the top of a
+                // sweep. mysql_conns in metrics.jsonl shows actual usage.
+                System.getenv("MYSQL_MAX_POOL")?.let { v ->
+                    it.maxPoolSize = v.toUIntOrNull()?.takeIf { n -> n > 0u }
+                        ?: error("MYSQL_MAX_POOL must be a positive integer; got '$v'")
+                }
             }
             // CONNS_PER_OPERATOR: gRPC connections per operator, shared
             // across every SDK. Unset → null (one multiplexed connection,
