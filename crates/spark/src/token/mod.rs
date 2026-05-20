@@ -195,9 +195,15 @@ pub trait TokenOutputStore: Send + Sync {
         filter: GetTokenOutputsFilter<'_>,
     ) -> Result<TokenOutputsPerStatus, TokenOutputServiceError>;
 
-    async fn insert_token_outputs(
+    /// Atomically removes spent outputs (identified by their previous
+    /// transaction coordinates) and inserts new outputs into the store.
+    ///
+    /// Removed outputs are marked as spent so that a concurrent refresh will
+    /// not re-add them.
+    async fn update_token_outputs(
         &self,
-        token_outputs: &TokenOutputs,
+        outputs_to_remove: &[(String, u32)],
+        outputs_to_add: Option<&TokenOutputs>,
     ) -> Result<(), TokenOutputServiceError>;
 
     async fn reserve_token_outputs(
@@ -244,9 +250,15 @@ pub trait TokenOutputService: Send + Sync {
         filter: GetTokenOutputsFilter<'_>,
     ) -> Result<TokenMetadata, TokenOutputServiceError>;
 
-    async fn insert_token_outputs(
+    /// Atomically removes spent outputs (identified by their previous
+    /// transaction coordinates) and inserts new outputs into the store.
+    ///
+    /// Removed outputs are marked as spent so that a concurrent refresh will
+    /// not re-add them.
+    async fn update_token_outputs(
         &self,
-        token_outputs: &TokenOutputs,
+        outputs_to_remove: &[(String, u32)],
+        outputs_to_add: Option<&TokenOutputs>,
     ) -> Result<(), TokenOutputServiceError>;
 
     async fn reserve_token_outputs(

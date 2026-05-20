@@ -535,32 +535,62 @@ class MysqlTokenStore {
     }
   }
 
-  async insertTokenOutputs(tokenOutputs) {
+  /**
+   * Atomically remove spent outputs and insert new outputs.
+   * @param {Array<[string, number]>} outputsToRemove - Array of [prevTxHash, prevTxVout] tuples
+   * @param {Object|null} outputsToAdd - Token outputs to insert (with metadata)
+   * @returns {Promise<void>}
+   */
+  async updateTokenOutputs(outputsToRemove, outputsToAdd) {
     try {
       await this._withTransaction(async (conn) => {
-        await this._upsertMetadata(conn, tokenOutputs.metadata);
-
-        const outputIds = tokenOutputs.outputs.map((o) => o.output.id);
-        if (outputIds.length > 0) {
-          const placeholders = buildPlaceholders(outputIds.length);
-          await conn.query(
-            `DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND output_id IN (${placeholders})`,
-            [this.identity, ...outputIds]
-          );
+        // 1. Remove spent outputs and mark as spent.
+        if (outputsToRemove && outputsToRemove.length > 0) {
+          for (const [txHash, vout] of outputsToRemove) {
+            const [rows] = await conn.query(
+              "SELECT id FROM brz_token_outputs WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
+              [this.identity, txHash, vout]
+            );
+            if (rows.length > 0) {
+              const outputId = rows[0].id;
+              await conn.query(
+                "DELETE FROM brz_token_outputs WHERE user_id = ? AND id = ?",
+                [this.identity, outputId]
+              );
+              await conn.query(
+                "INSERT IGNORE INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES (?, ?, NOW())",
+                [this.identity, outputId]
+              );
+            }
+          }
         }
 
-        for (const output of tokenOutputs.outputs) {
-          await this._insertSingleOutput(
-            conn,
-            tokenOutputs.metadata.identifier,
-            output
-          );
+        // 2. Insert new outputs.
+        if (outputsToAdd) {
+          await this._upsertMetadata(conn, outputsToAdd.metadata);
+
+          const outputIds = outputsToAdd.outputs.map((o) => o.output.id);
+          if (outputIds.length > 0) {
+            const placeholders = buildPlaceholders(outputIds.length);
+            await conn.query(
+              `DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND output_id IN (${placeholders})`,
+              [this.identity, ...outputIds]
+            );
+          }
+
+          for (const output of outputsToAdd.outputs) {
+            await this._insertSingleOutput(
+              conn,
+              outputsToAdd.metadata.identifier,
+              output
+            );
+          }
         }
       });
     } catch (error) {
       if (error instanceof TokenStoreError) throw error;
       throw new TokenStoreError(
-        `Failed to insert token outputs: ${error.message}`,
+        `Failed to update token outputs: ${error.message}`,
         error
       );
     }

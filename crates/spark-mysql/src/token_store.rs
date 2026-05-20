@@ -493,45 +493,78 @@ impl TokenOutputStore for MysqlTokenStore {
     }
 
     #[allow(clippy::cast_possible_wrap)]
-    async fn insert_token_outputs(
+    async fn update_token_outputs(
         &self,
-        token_outputs: &TokenOutputs,
+        outputs_to_remove: &[(String, u32)],
+        outputs_to_add: Option<&TokenOutputs>,
     ) -> Result<(), TokenOutputServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
         let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
 
-        self.upsert_metadata(&mut tx, &token_outputs.metadata)
-            .await?;
-
-        let output_ids: Vec<String> = token_outputs
-            .outputs
-            .iter()
-            .map(|o| o.output.id.clone())
-            .collect();
-        if !output_ids.is_empty() {
-            let placeholders = build_placeholders(output_ids.len());
-            let sql = format!(
-                "DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND output_id IN ({placeholders})"
-            );
-            let mut params: Vec<Value> = Vec::with_capacity(output_ids.len().saturating_add(1));
-            params.push(Value::from(self.identity.clone()));
-            params.extend(output_ids.iter().cloned().map(Value::from));
-            tx.exec_drop(&sql, Params::Positional(params))
+        // 1. Remove spent outputs and mark them as spent.
+        for (tx_hash, vout) in outputs_to_remove {
+            let row: Option<Row> = tx
+                .exec_first(
+                    "SELECT id FROM brz_token_outputs \
+                     WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
+                    (
+                        self.identity.as_slice(),
+                        tx_hash.as_str(),
+                        (*vout).cast_signed(),
+                    ),
+                )
                 .await
                 .map_err(map_err)?;
+
+            if let Some(row) = row {
+                let output_id: String = row.get(0).unwrap_or_default();
+                tx.exec_drop(
+                    "DELETE FROM brz_token_outputs WHERE user_id = ? AND id = ?",
+                    (self.identity.as_slice(), output_id.as_str()),
+                )
+                .await
+                .map_err(map_err)?;
+                tx.exec_drop(
+                    "INSERT IGNORE INTO brz_token_spent_outputs (user_id, output_id, spent_at) \
+                     VALUES (?, ?, NOW())",
+                    (self.identity.as_slice(), output_id.as_str()),
+                )
+                .await
+                .map_err(map_err)?;
+            }
         }
 
-        for output in &token_outputs.outputs {
-            self.insert_single_output(&mut tx, &token_outputs.metadata.identifier, output)
+        // 2. Insert new outputs.
+        if let Some(token_outputs) = outputs_to_add {
+            self.upsert_metadata(&mut tx, &token_outputs.metadata)
                 .await?;
+
+            // Clear spent status for outputs being (re-)added.
+            let output_ids: Vec<String> = token_outputs
+                .outputs
+                .iter()
+                .map(|o| o.output.id.clone())
+                .collect();
+            if !output_ids.is_empty() {
+                let placeholders = build_placeholders(output_ids.len());
+                let sql = format!(
+                    "DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND output_id IN ({placeholders})"
+                );
+                let mut params: Vec<Value> = Vec::with_capacity(output_ids.len().saturating_add(1));
+                params.push(Value::from(self.identity.clone()));
+                params.extend(output_ids.iter().cloned().map(Value::from));
+                tx.exec_drop(&sql, Params::Positional(params))
+                    .await
+                    .map_err(map_err)?;
+            }
+
+            for output in &token_outputs.outputs {
+                self.insert_single_output(&mut tx, &token_outputs.metadata.identifier, output)
+                    .await?;
+            }
         }
 
         tx.commit().await.map_err(map_err)?;
-
-        trace!(
-            "Inserted {} token outputs into MySQL",
-            token_outputs.outputs.len()
-        );
         Ok(())
     }
 
@@ -1754,6 +1787,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_remove_token_outputs_by_prev_tx_ref() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_remove_token_outputs_by_prev_tx_ref(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_remove_token_outputs_prevents_refresh_readd() {
+        let fixture = MysqlTokenStoreTestFixture::new().await;
+        shared_tests::test_remove_token_outputs_prevents_refresh_readd(&fixture.store).await;
+    }
+
+    #[tokio::test]
     async fn test_insert_outputs_preserved_by_set_tokens_outputs() {
         let fixture = MysqlTokenStoreTestFixture::new().await;
         shared_tests::test_insert_outputs_preserved_by_set_tokens_outputs(&fixture.store).await;
@@ -2267,12 +2312,14 @@ mod tests {
         );
         fx.b.finalize_reservation(&res_b_swap.id).await.unwrap();
 
-        // insert_token_outputs on A only inserts into A's namespace. Use
+        // update_token_outputs on A only inserts into A's namespace. Use
         // identifier_no=2 so the metadata identifier ("token-2") collides
         // with B's existing entry — both tenants must end up with their own
         // row.
         let a_token2 = shared_tests::create_token_outputs(2, vec![999]);
-        fx.a.insert_token_outputs(&a_token2).await.unwrap();
+        fx.a.update_token_outputs(&[], Some(&a_token2))
+            .await
+            .unwrap();
 
         let bal_a = fx.a.get_token_balances().await.unwrap();
         let bal_a_t2 = bal_a

@@ -9,6 +9,8 @@ use tokio::{
 };
 use tracing::{Instrument, debug, error, info, trace};
 
+use crate::sync::SparkSyncService;
+use crate::utils::token::{token_transaction_to_payments, token_tx_inputs_are_ours};
 use crate::{
     GetInfoRequest, GetInfoResponse, Payment,
     error::SdkError,
@@ -17,6 +19,7 @@ use crate::{
     token_conversion::TokenConverter,
     utils::{payments::get_payment_and_emit_event, run_with_shutdown},
 };
+use crate::{PaymentType, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
 
 use super::{RuntimeEvent, RuntimeProfile};
 use crate::sdk::{
@@ -306,11 +309,122 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
             }
             payment_emitted
         }
+        WalletEvent::TokenTransaction(transaction) => {
+            info!("Token transaction event: {}", transaction.hash);
+            process_token_transaction_event(sdk, transaction)
+                .await
+                .unwrap_or_else(|e| {
+                    error!("Failed to process token transaction event: {e:?}");
+                    false
+                })
+        }
         WalletEvent::Optimization(event) => {
             info!("Optimization event: {:?}", event);
             false
         }
     }
+}
+
+async fn process_token_transaction_event(
+    sdk: &BreezSdk,
+    transaction: spark_wallet::TokenTransaction,
+) -> Result<bool, SdkError> {
+    let tx_inputs_are_ours = token_tx_inputs_are_ours_cached_or_query(sdk, &transaction).await?;
+    let object_repository = ObjectCacheRepository::new(sdk.storage.clone());
+    let payments = token_transaction_to_payments(
+        &sdk.spark_wallet,
+        &object_repository,
+        &transaction,
+        tx_inputs_are_ours,
+    )
+    .await?;
+
+    if payments.is_empty() {
+        return Ok(false);
+    }
+
+    // Update balances before emitting events so listeners can immediately
+    // query the new balance.
+    if let Err(e) = update_balances(sdk.spark_wallet.clone(), sdk.storage.clone()).await {
+        error!("Failed to update balances before token transaction event: {e:?}");
+    }
+
+    let sync_service = SparkSyncService::new(
+        sdk.spark_wallet.clone(),
+        sdk.storage.clone(),
+        sdk.event_emitter.clone(),
+    );
+    let mut payment_emitted = false;
+    for payment in payments {
+        let existing_status = sdk
+            .storage
+            .get_payment_by_id(payment.id.clone())
+            .await
+            .ok()
+            .map(|p| p.status);
+        let status_changed = existing_status.is_none_or(|s| s != payment.status);
+
+        if let Err(e) = sync_service.apply_payment_metadata(&payment).await {
+            error!("Failed to apply payment metadata for token payment: {e:?}");
+        }
+
+        if let Err(e) = sdk.storage.insert_payment(payment.clone()).await {
+            error!("Failed to insert token payment: {e:?}");
+            continue;
+        }
+
+        if status_changed {
+            get_payment_and_emit_event(&sdk.storage, &sdk.event_emitter, payment).await;
+            payment_emitted = true;
+        }
+    }
+
+    Ok(payment_emitted)
+}
+
+/// Wraps `token_tx_inputs_are_ours` with a local-cache fast path: if any
+/// payment for this tx hash already exists in storage, its `payment_type`
+/// answers the question and we skip the parent-tx fetch.
+async fn token_tx_inputs_are_ours_cached_or_query(
+    sdk: &BreezSdk,
+    transaction: &spark_wallet::TokenTransaction,
+) -> Result<bool, SdkError> {
+    let existing = sdk
+        .storage
+        .list_payments(StorageListPaymentsRequest {
+            payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Token {
+                tx_hash: Some(transaction.hash.clone()),
+                conversion_refund_needed: None,
+                tx_type: None,
+            }]),
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await?;
+    if let Some(payment) = existing.first() {
+        return Ok(payment.payment_type == PaymentType::Send);
+    }
+
+    let parent_transaction = match &transaction.inputs {
+        spark_wallet::TokenInputs::Transfer(token_transfer_input) => {
+            let first_input = token_transfer_input
+                .outputs_to_spend
+                .first()
+                .ok_or_else(|| SdkError::Generic("No input in token transfer input".to_string()))?;
+            sdk.spark_wallet
+                .get_token_transactions_by_hashes(vec![first_input.prev_token_tx_hash.clone()])
+                .await?
+                .into_iter()
+                .next()
+        }
+        spark_wallet::TokenInputs::Mint(_) | spark_wallet::TokenInputs::Create(_) => None,
+    };
+
+    token_tx_inputs_are_ours(
+        transaction,
+        parent_transaction.as_ref(),
+        sdk.spark_wallet.get_identity_public_key(),
+    )
 }
 
 async fn cleanup_claimed_deposit(sdk: &BreezSdk, tx_id: &str, vout: u32) {

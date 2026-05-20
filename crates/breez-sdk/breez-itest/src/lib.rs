@@ -15,7 +15,9 @@ pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};
 pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
+pub use rand;
 pub use session_manager_scenarios::{SessionRow, run_session_persistence_across_restart};
+pub use tempfile;
 
 use anyhow::Result;
 use breez_sdk_spark::{BreezSdk, Config, SdkEvent};
