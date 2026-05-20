@@ -36,6 +36,16 @@ pub trait TransferObserver: Send + Sync {
         token_id: &str,
         receiver_outputs: Vec<ReceiverTokenOutput>,
     ) -> Result<(), TransferObserverError>;
+    /// Called after the SOs accept a broadcast token transaction, providing the final
+    /// txid alongside the partial txid that was passed to `before_send_token`. Lets
+    /// observers correlate their pre-send record with the post-broadcast identity.
+    async fn after_send_token(
+        &self,
+        _partial_tx_id: &str,
+        _final_tx_id: &str,
+    ) -> Result<(), TransferObserverError> {
+        Ok(())
+    }
     async fn before_send_transfer(
         &self,
         transfer_id: &TransferId,
