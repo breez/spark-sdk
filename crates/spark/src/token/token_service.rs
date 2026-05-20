@@ -655,7 +655,7 @@ impl TokenService {
                 &[],
                 Some(&TokenOutputs {
                     metadata: reservation.token_outputs.metadata,
-                    outputs,
+                    outputs: our_outputs,
                 }),
             )
             .await?;
