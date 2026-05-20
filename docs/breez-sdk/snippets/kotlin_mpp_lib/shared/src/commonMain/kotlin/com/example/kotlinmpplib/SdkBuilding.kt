@@ -68,6 +68,10 @@ class SdkBuilding {
                 // Log.v("PaymentObserver", "About to send payment: ${payment.paymentId} of amount ${payment.amount}")
             }
         }
+
+        override suspend fun afterSendToken(partialTxId: String, finalTxId: String) {
+            // Log.v("PaymentObserver", "Token tx broadcast: $partialTxId -> $finalTxId")
+        }
     }
 
     suspend fun withPaymentObserver(builder: SdkBuilder) {

@@ -73,6 +73,11 @@ func (ExamplePaymentObserver) BeforeSend(payments []breez_sdk_spark.ProvisionalP
 	return nil
 }
 
+func (ExamplePaymentObserver) AfterSendToken(partialTxId, finalTxId string) error {
+	log.Printf("Token tx broadcast: %v -> %v", partialTxId, finalTxId)
+	return nil
+}
+
 func WithPaymentObserver(builder *breez_sdk_spark.SdkBuilder) {
 	observer := ExamplePaymentObserver{}
 	builder.WithPaymentObserver(observer)

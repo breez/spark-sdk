@@ -72,6 +72,11 @@ namespace BreezSdkSnippets
                     Console.WriteLine($"About to send payment {payment.paymentId} of amount {payment.amount}");
                 }
             }
+
+            public async Task AfterSendToken(string partialTxId, string finalTxId)
+            {
+                Console.WriteLine($"Token tx broadcast: {partialTxId} -> {finalTxId}");
+            }
         }
 
         async Task WithPaymentObserver(SdkBuilder builder)

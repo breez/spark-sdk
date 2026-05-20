@@ -74,6 +74,15 @@ impl PaymentObserver for ExamplePaymentObserver {
         }
         Ok(())
     }
+
+    async fn after_send_token(
+        &self,
+        partial_tx_id: &str,
+        final_tx_id: &str,
+    ) -> Result<(), PaymentObserverError> {
+        info!("Token tx broadcast: {partial_tx_id} -> {final_tx_id}");
+        Ok(())
+    }
 }
 
 pub(crate) fn with_payment_observer(builder: SdkBuilder) -> SdkBuilder {

@@ -64,6 +64,10 @@ class ExamplePaymentObserver: PaymentObserver {
             print("About to send payment: \(payment.paymentId) of amount \(payment.amount)")
         }
     }
+
+    func afterSendToken(partialTxId: String, finalTxId: String) async {
+        print("Token tx broadcast: \(partialTxId) -> \(finalTxId)")
+    }
 }
 
 func withPaymentObserver(builder: SdkBuilder) async {

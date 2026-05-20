@@ -25,11 +25,26 @@ impl breez_sdk_spark::PaymentObserver for WasmPaymentObserver {
         future.await.map_err(js_error_to_payment_observer_error)?;
         Ok(())
     }
+
+    async fn after_send_token(
+        &self,
+        partial_tx_id: &str,
+        final_tx_id: &str,
+    ) -> Result<(), breez_sdk_spark::PaymentObserverError> {
+        let promise = self
+            .payment_observer
+            .after_send_token(partial_tx_id.to_string(), final_tx_id.to_string())
+            .map_err(js_error_to_payment_observer_error)?;
+        let future = JsFuture::from(promise);
+        future.await.map_err(js_error_to_payment_observer_error)?;
+        Ok(())
+    }
 }
 
 #[wasm_bindgen(typescript_custom_section)]
 const EVENT_INTERFACE: &'static str = r#"export interface PaymentObserver {
     beforeSend: (payments: ProvisionalPayment[]) => Promise<void>;
+    afterSendToken: (partialTxId: string, finalTxId: string) => Promise<void>;
 }"#;
 
 #[wasm_bindgen]
@@ -41,5 +56,12 @@ extern "C" {
     pub fn before_send(
         this: &PaymentObserver,
         payments: Vec<ProvisionalPayment>,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = afterSendToken, catch)]
+    pub fn after_send_token(
+        this: &PaymentObserver,
+        partial_tx_id: String,
+        final_tx_id: String,
     ) -> Result<Promise, JsValue>;
 }

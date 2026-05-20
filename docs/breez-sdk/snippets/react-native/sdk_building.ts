@@ -67,6 +67,10 @@ class ExamplePaymentObserver {
       console.log(`About to send payment: ${payment.paymentId} of amount ${payment.amount}`)
     }
   }
+
+  afterSendToken = async (partialTxId: string, finalTxId: string) => {
+    console.log(`Token tx broadcast: ${partialTxId} -> ${finalTxId}`)
+  }
 }
 
 const exampleWithPaymentObserver = async (builder: SdkBuilder) => {

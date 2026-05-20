@@ -87,6 +87,9 @@ class ExamplePaymentObserver(PaymentObserver):
         for payment in payments:
             logging.debug(f"About to send payment {payment.payment_id} of amount {payment.amount}")
 
+    async def after_send_token(self, partial_tx_id: str, final_tx_id: str):
+        logging.debug(f"Token tx broadcast: {partial_tx_id} -> {final_tx_id}")
+
 
 async def with_payment_observer(builder: SdkBuilder):
     payment_observer = ExamplePaymentObserver()
