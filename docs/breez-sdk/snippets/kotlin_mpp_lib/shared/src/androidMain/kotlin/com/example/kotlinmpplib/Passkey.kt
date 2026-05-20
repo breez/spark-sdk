@@ -43,6 +43,7 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
             rpId = "my-app.com",
+            rpName = "My App",
         )
         val passkey = PasskeyClient(prfProvider, null, null)
 
@@ -68,6 +69,7 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
             rpId = "my-app.com",
+            rpName = "My App",
         )
         val passkey = PasskeyClient(prfProvider, null, null)
 
@@ -94,6 +96,7 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
             rpId = "my-app.com",
+            rpName = "My App",
         )
         val passkey = PasskeyClient(prfProvider, null, null)
 
@@ -116,6 +119,7 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
             rpId = "my-app.com",
+            rpName = "My App",
         )
         val config = PasskeyConfig(
             // Optional: override the default wallet label used when
@@ -140,6 +144,7 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
             rpId = "my-app.com",
+            rpName = "My App",
         )
         val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
 
@@ -152,6 +157,7 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
             rpId = "my-app.com",
+            rpName = "My App",
         )
         val result = prfProvider.checkDomainAssociation()
 
@@ -170,6 +176,7 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
             rpId = "my-app.com",
+            rpName = "My App",
         )
         val passkey = PasskeyClient(prfProvider, null, null)
 
@@ -193,6 +200,7 @@ class PasskeySnippets(private val activity: Activity) {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
             rpId = "my-app.com",
+            rpName = "My App",
         )
         val passkey = PasskeyClient(prfProvider, null, null)
 

@@ -44,7 +44,7 @@ func checkAvailability() async throws {
     // ANCHOR: check-availability
     // `rpId` is required. Pass your app's domain, or
     // `PasskeyProvider.BREEZ_RP_ID` if your app is Breez-registered.
-    let prfProvider = PasskeyProvider(rpId: "my-app.com")
+    let prfProvider = PasskeyProvider(rpId: "my-app.com", rpName: "My App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 
     // checkAvailability collapses isSupported + checkDomainAssociation
@@ -70,7 +70,7 @@ func connectWithPasskey() async throws -> BreezSdk {
     // attempt fast-fails (no UI) when no local credential exists;
     // only `CredentialNotFound` flips to register, all other errors
     // (cancel / timeout / configuration) propagate unchanged.
-    let prfProvider = PasskeyProvider(rpId: "my-app.com")
+    let prfProvider = PasskeyProvider(rpId: "my-app.com", rpName: "My App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 
     let response = try await passkey.connectWithPasskey(
@@ -102,7 +102,7 @@ func registerNewPasskey() async throws -> BreezSdk {
     // the credential AND derives the wallet seed in one orchestrated
     // call. On iOS+Android this is 2 OS prompts total (1 create + 1
     // dual-salt assert) thanks to the SDK's bulk-PRF path.
-    let prfProvider = PasskeyProvider(rpId: "my-app.com")
+    let prfProvider = PasskeyProvider(rpId: "my-app.com", rpName: "My App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 
     let response = try await passkey.register(
@@ -127,7 +127,7 @@ func registerNewPasskey() async throws -> BreezSdk {
 
 func listLabels() async throws -> [String] {
     // ANCHOR: list-labels
-    let prfProvider = PasskeyProvider(rpId: "my-app.com")
+    let prfProvider = PasskeyProvider(rpId: "my-app.com", rpName: "My App")
     let config = PasskeyConfig(
         // Optional: override the default wallet label used when
         // register / signIn receive `label = nil`. Falls back to the
@@ -152,7 +152,7 @@ func listLabels() async throws -> [String] {
 
 func storeLabel() async throws {
     // ANCHOR: store-label
-    let prfProvider = PasskeyProvider(rpId: "my-app.com")
+    let prfProvider = PasskeyProvider(rpId: "my-app.com", rpName: "My App")
     let passkey = PasskeyClient(
         prfProvider: prfProvider,
         breezApiKey: "<breez api key>",
@@ -165,7 +165,7 @@ func storeLabel() async throws {
 
 func checkDomain() async throws {
     // ANCHOR: domain-association
-    let prfProvider = PasskeyProvider(rpId: "my-app.com")
+    let prfProvider = PasskeyProvider(rpId: "my-app.com", rpName: "My App")
     let result = try await prfProvider.checkDomainAssociation()
 
     switch result {
@@ -182,7 +182,7 @@ func checkDomain() async throws {
 
 func recoverFromAlreadyExists() async throws -> Wallet {
     // ANCHOR: recover-already-exists
-    let prfProvider = PasskeyProvider(rpId: "my-app.com")
+    let prfProvider = PasskeyProvider(rpId: "my-app.com", rpName: "My App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 
     do {
@@ -206,7 +206,7 @@ func recoverFromAlreadyExists() async throws -> Wallet {
 
 func handleTimeout() async throws -> SignInResponse {
     // ANCHOR: handle-timeout
-    let prfProvider = PasskeyProvider(rpId: "my-app.com")
+    let prfProvider = PasskeyProvider(rpId: "my-app.com", rpName: "My App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 
     do {

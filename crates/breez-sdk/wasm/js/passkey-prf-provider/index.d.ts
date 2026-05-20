@@ -147,11 +147,13 @@ export interface PasskeyProviderOptions {
     rpId: string;
 
     /**
-     * RP display name shown during credential registration. Only used when
-     * creating new passkeys; changing it does not affect existing credentials.
-     * @default 'Breez SDK'
+     * Display name shown to the user in the OS passkey picker and
+     * credential-management UIs (iCloud Keychain, Google Password
+     * Manager, 1Password, etc.) when choosing a credential. Only used
+     * at credential registration; changing it does not affect existing
+     * credentials.
      */
-    rpName?: string;
+    rpName: string;
 
     /**
      * User name stored with the credential, shown as a secondary label in some

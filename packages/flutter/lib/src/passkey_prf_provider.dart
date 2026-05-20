@@ -100,10 +100,11 @@ class PasskeyProviderOptions {
   /// `keys.breez.technology` RP (only valid for Breez-registered apps).
   final String rpId;
 
-  /// RP display name shown during credential registration. Only used when
-  /// creating new passkeys.
-  ///
-  /// Defaults to `'Breez SDK'`.
+  /// Display name shown to the user in the OS passkey picker and
+  /// credential-management UIs (iCloud Keychain, Google Password
+  /// Manager, 1Password, etc.) when choosing a credential. Only used
+  /// at credential registration; changing it does not affect existing
+  /// credentials.
   final String rpName;
 
   /// User name stored with the credential, shown as a secondary label in
@@ -130,7 +131,7 @@ class PasskeyProviderOptions {
 
   const PasskeyProviderOptions({
     required this.rpId,
-    this.rpName = 'Breez SDK',
+    required this.rpName,
     this.userName,
     this.userDisplayName,
     this.credentialRegistry,
@@ -425,7 +426,7 @@ class PasskeyProvider {
 ///
 /// Equivalent to:
 /// ```dart
-/// final provider = PasskeyProvider(PasskeyProviderOptions(rpId: rpId));
+/// final provider = PasskeyProvider(PasskeyProviderOptions(rpId: rpId, rpName: rpName));
 /// final client = PasskeyClient(
 ///   deriveSeeds: provider.deriveSeeds,
 ///   isSupported: provider.isSupported,
@@ -443,10 +444,11 @@ class PasskeyProvider {
 /// [PasskeyClient] directly with the appropriate callbacks instead.
 PasskeyClient createPasskeyClient({
   required String rpId,
+  required String rpName,
   required Config sdkConfig,
   PasskeyConfig? passkeyConfig,
 }) {
-  final provider = PasskeyProvider(PasskeyProviderOptions(rpId: rpId));
+  final provider = PasskeyProvider(PasskeyProviderOptions(rpId: rpId, rpName: rpName));
   return PasskeyClient(
     deriveSeeds: provider.deriveSeeds,
     isSupported: provider.isSupported,
