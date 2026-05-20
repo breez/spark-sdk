@@ -289,7 +289,7 @@ static async Task RunInteractiveMode(
     var builder = new SdkBuilder(config: config, seed: seed);
     if (postgresConnectionString != null)
     {
-        var context = BreezSdkSparkMethods.NewSharedSdkContext(config: new SdkContextConfig(
+        var context = await BreezSdkSparkMethods.NewSharedSdkContext(config: new SdkContextConfig(
             network: network,
             apiKey: apiKey,
             connectionsPerOperator: null,
@@ -300,7 +300,7 @@ static async Task RunInteractiveMode(
     }
     else if (mysqlConnectionString != null)
     {
-        var context = BreezSdkSparkMethods.NewSharedSdkContext(config: new SdkContextConfig(
+        var context = await BreezSdkSparkMethods.NewSharedSdkContext(config: new SdkContextConfig(
             network: network,
             apiKey: apiKey,
             connectionsPerOperator: null,

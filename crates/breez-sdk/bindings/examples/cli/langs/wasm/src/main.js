@@ -269,14 +269,14 @@ async function main() {
   let sdkBuilder = SdkBuilder.new(config, seed)
 
   if (opts.postgresConnectionString) {
-    const context = newSharedSdkContext({
+    const context = await newSharedSdkContext({
       network,
       apiKey: breezApiKey,
       postgresConfig: defaultPostgresStorageConfig(opts.postgresConnectionString)
     })
     sdkBuilder = sdkBuilder.withSharedContext(context)
   } else if (opts.mysqlConnectionString) {
-    const context = newSharedSdkContext({
+    const context = await newSharedSdkContext({
       network,
       apiKey: breezApiKey,
       mysqlConfig: defaultMysqlStorageConfig(opts.mysqlConnectionString)
