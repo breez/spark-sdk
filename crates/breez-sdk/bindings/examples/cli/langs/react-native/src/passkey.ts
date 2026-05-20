@@ -12,8 +12,9 @@
  */
 
 import {
-  Seed,
+  Passkey,
   type Seed as SeedType,
+  type NostrRelayConfig,
 } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 import { generateRandomBytes, hmacSha256 } from './crypto_utils'
@@ -239,32 +240,47 @@ export async function buildPrfProvider(
 /**
  * Resolve a wallet seed using the given PRF provider.
  *
- * Note: Full passkey functionality (Nostr label listing/storing) is not
- * yet supported in the React Native SDK. This stub derives a seed from the
- * PRF provider and returns it as a Seed.Entropy variant.
+ * Uses the SDK's Passkey class for proper seed derivation with Nostr label
+ * management, matching the Rust CLI's resolve_passkey_seed function.
  *
  * @param provider - The PRF provider to use
- * @param _breezApiKey - Optional Breez API key (unused - Nostr not yet supported)
+ * @param breezApiKey - Optional Breez API key (for Nostr relay access)
  * @param label - Optional label for seed derivation
- * @param _listLabels - Whether to list labels (not yet supported)
- * @param _storeLabel - Whether to publish the label (not yet supported)
+ * @param listLabels - Whether to list labels from Nostr
+ * @param storeLabel - Whether to publish the label to Nostr
  * @returns Object with { seed, labels? } - seed is the derived Seed,
  *          labels is populated when listLabels is true
  */
 export async function resolvePasskeySeed(
   provider: { derivePrfSeed: (salt: string) => Promise<ArrayBuffer>; isPrfAvailable: () => Promise<boolean> },
-  _breezApiKey: string | undefined,
+  breezApiKey: string | undefined,
   label: string | undefined,
-  _listLabels: boolean,
-  _storeLabel: boolean,
+  listLabels: boolean,
+  storeLabel: boolean,
 ): Promise<{ seed: SeedType; labels?: string[] }> {
-  // Derive seed bytes from the PRF provider
-  const seedBytes = await provider.derivePrfSeed(label ?? 'Default')
+  const relayConfig: NostrRelayConfig = {
+    breezApiKey,
+    timeoutSecs: undefined,
+  }
+  const passkey = new Passkey(provider, relayConfig)
 
-  // Note: Passkey label listing/storing via Nostr is not yet supported
-  // in React Native. Only basic seed derivation is available.
+  if (storeLabel && label) {
+    await passkey.storeLabel(label)
+  }
 
-  // Use Entropy variant since we have raw bytes
-  const seed = new Seed.Entropy(seedBytes)
-  return { seed }
+  let labels: string[] | undefined
+  let selectedLabel = label
+  if (listLabels) {
+    const fetchedLabels = (await passkey.listLabels()) as string[]
+    if (fetchedLabels.length === 0) {
+      throw new Error('No labels found on Nostr for this identity')
+    }
+    // In the Rust CLI this prompts the user to select; pick the first label
+    // since the React Native CLI cannot prompt interactively during init.
+    selectedLabel = fetchedLabels[0]
+    labels = fetchedLabels
+  }
+
+  const wallet = await passkey.getWallet(selectedLabel)
+  return { seed: wallet.seed, labels }
 }

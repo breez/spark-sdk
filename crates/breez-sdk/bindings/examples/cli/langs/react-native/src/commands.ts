@@ -923,6 +923,9 @@ async function handleBuyBitcoin(sdk: BreezSdkInterface, _tokenIssuer: TokenIssue
     case 'cashapp':
     case 'cash_app':
     case 'cash-app':
+      if (amountSat === undefined) {
+        return 'Error: --amount-sat is required when --provider is cashapp'
+      }
       request = new BuyBitcoinRequest.CashApp({
         amountSats: amountSat,
       })

@@ -62,6 +62,9 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const StableBalanceActiveLabel: any;
   export type StableBalanceActiveLabel = any;
 
+  export const Passkey: any;
+  export type Passkey = any;
+
   // --- values only ---
   export const defaultConfig: any;
   export const SdkEvent_Tags: any;
@@ -76,4 +79,5 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export type BreezSdkInterface = any;
   export type TokenIssuerInterface = any;
   export type SdkEvent = any;
+  export type NostrRelayConfig = any;
 }
