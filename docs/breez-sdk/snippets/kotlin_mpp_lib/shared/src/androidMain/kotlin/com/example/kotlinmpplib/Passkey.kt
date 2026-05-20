@@ -75,10 +75,12 @@ class PasskeySnippets(private val activity: Activity) {
             ConnectWithPasskeyRequest(label = "personal")
         )
 
-        // Branch on `flow` to know which path ran.
-        when (val flow = response.flow) {
-            is ConnectFlow.SignedIn -> { /* returning user */ }
-            is ConnectFlow.Registered -> { /* new user; flow.credential.credentialId etc. */ }
+        // `registeredCredential` doubles as the path discriminator:
+        // non-null when a new credential was just registered (persist
+        // credentialId for future excludeCredentialIds); null when
+        // silent sign-in succeeded for an existing credential.
+        response.registeredCredential?.let { credential ->
+            val persistedId = credential.credentialId
         }
 
         val config = defaultConfig(Network.MAINNET)

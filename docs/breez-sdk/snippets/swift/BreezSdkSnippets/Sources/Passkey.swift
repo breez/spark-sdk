@@ -77,13 +77,12 @@ func connectWithPasskey() async throws -> BreezSdk {
         request: ConnectWithPasskeyRequest(label: "personal")
     )
 
-    // Branch on `flow` to know which path ran. Hosts maintaining a
-    // CredentialRegistry typically persist the new credential ID on
-    // `.registered`; `.signedIn` surfaces the asserted ID when the
-    // provider supports it.
-    switch response.flow {
-    case .signedIn: break  // returning user
-    case .registered: break  // new user
+    // `registeredCredential` doubles as the path discriminator: non-nil
+    // when a new credential was just registered (persist credentialId
+    // for future excludeCredentialIds); nil when silent sign-in
+    // succeeded for an existing credential.
+    if let credential = response.registeredCredential {
+        let _ = credential.credentialId
     }
 
     let config = defaultConfig(network: .mainnet)

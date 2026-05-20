@@ -427,7 +427,7 @@ Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The 
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.connect_with_passkey">API docs</a>
 </h2>
 
-The recommended onboarding flow on mobile is a single CTA backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The returned {{#name ConnectFlow}} tags which path ran so hosts can persist the new credential ID when registration occurs.
+The recommended onboarding flow on mobile is a single CTA backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's `registered_credential` field doubles as the path discriminator: `Some` (with the new credential metadata) on the register path, `None` on the sign-in path.
 
 Internally the silent attempt pins `preferImmediatelyAvailableCredentials = true` so the OS fast-fails (no UI, sub-300ms on iOS / Android) when no local credential exists; only {{#enum PrfProviderError::CredentialNotFound}} flips to register, all other errors (`Cancel`, `Timeout`, `Configuration`) propagate unchanged.
 

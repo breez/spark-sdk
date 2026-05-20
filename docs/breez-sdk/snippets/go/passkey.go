@@ -90,12 +90,12 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 		return nil, err
 	}
 
-	// Branch on Flow to know which path ran.
-	switch response.Flow.(type) {
-	case breez_sdk_spark.ConnectFlowSignedIn:
-		// returning user
-	case breez_sdk_spark.ConnectFlowRegistered:
-		// new user; the variant carries the new RegisteredCredential
+	// RegisteredCredential doubles as the path discriminator: non-nil
+	// when a new credential was just registered (persist CredentialId
+	// for future ExcludeCredentialIds); nil when silent sign-in
+	// succeeded for an existing credential.
+	if response.RegisteredCredential != nil {
+		_ = response.RegisteredCredential.CredentialId
 	}
 
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)

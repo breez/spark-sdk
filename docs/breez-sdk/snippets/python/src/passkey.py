@@ -1,6 +1,5 @@
 # pylint: disable=duplicate-code
 from breez_sdk_spark import (
-    ConnectFlow,
     ConnectRequest,
     ConnectWithPasskeyRequest,
     DomainAssociation,
@@ -87,11 +86,12 @@ async def connect_with_passkey():
         ConnectWithPasskeyRequest(label="personal", exclude_credential_ids=[])
     )
 
-    # Branch on `flow` to know which path ran.
-    if isinstance(response.flow, ConnectFlow.SIGNED_IN):
-        pass  # returning user; response.flow.credential_id may be set
-    elif isinstance(response.flow, ConnectFlow.REGISTERED):
-        pass  # new user; response.flow.credential carries the new ID + metadata
+    # `registered_credential` doubles as the path discriminator:
+    # not None when a new credential was just registered (persist
+    # credential_id for future exclude_credential_ids); None when
+    # silent sign-in succeeded for an existing credential.
+    if response.registered_credential is not None:
+        _persist = response.registered_credential.credential_id
 
     config = default_config(network=Network.MAINNET)
     sdk = await connect(
