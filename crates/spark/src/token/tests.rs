@@ -164,7 +164,7 @@ pub async fn test_set_tokens_outputs_with_update(store: &dyn TokenOutputStore) {
     assert_eq!(stored_outputs.len(), 1);
 }
 
-pub async fn test_update_token_outputs_inserts(store: &dyn TokenOutputStore) {
+pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
 
     let result = store
@@ -1577,7 +1577,7 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
     assert_eq!(stored.available.len(), 2);
 }
 
-pub async fn test_update_token_outputs_removes_by_prev_tx_ref(store: &dyn TokenOutputStore) {
+pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputStore) {
     // Insert outputs: token-1 has outputs at (tx-hash-0, 0), (tx-hash-1, 1), (tx-hash-2, 2)
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
     store
@@ -1606,7 +1606,7 @@ pub async fn test_update_token_outputs_removes_by_prev_tx_ref(store: &dyn TokenO
     assert_eq!(amounts, vec![100, 300]);
 }
 
-pub async fn test_update_token_outputs_remove_prevents_refresh_readd(store: &dyn TokenOutputStore) {
+pub async fn test_remove_token_outputs_prevents_refresh_readd(store: &dyn TokenOutputStore) {
     // Insert outputs
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
