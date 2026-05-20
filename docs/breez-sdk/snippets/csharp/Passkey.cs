@@ -77,15 +77,13 @@ namespace BreezSdkSnippets
                 new ConnectWithPasskeyRequest(label: "personal", excludeCredentialIds: new List<byte[]>())
             );
 
-            // Branch on `flow` to know which path ran.
-            switch (response.flow)
+            // registeredCredential doubles as the path discriminator:
+            // non-null when a new credential was just registered (persist
+            // credentialId for future excludeCredentialIds); null when
+            // silent sign-in succeeded for an existing credential.
+            if (response.registeredCredential is not null)
             {
-                case ConnectFlow.SignedIn signedIn:
-                    // returning user; signedIn.credentialId may be set
-                    break;
-                case ConnectFlow.Registered registered:
-                    // new user; registered.credential carries the new ID + metadata
-                    break;
+                var persistedId = response.registeredCredential.credentialId;
             }
 
             var config = BreezSdkSparkMethods.DefaultConfig(network: Network.Mainnet);

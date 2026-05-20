@@ -118,27 +118,22 @@ pub struct ConnectWithPasskeyRequest {
     pub exclude_credential_ids: Vec<Vec<u8>>,
 }
 
-/// Indicates which path [`PasskeyClient::connect_with_passkey`] took.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum ConnectFlow {
-    /// Silent sign-in succeeded for an existing credential.
-    /// `credential_id` mirrors [`SignInResponse::credential_id`]:
-    /// `Some` when the [`PrfProvider`] surfaces the asserted ID,
-    /// `None` otherwise.
-    SignedIn { credential_id: Option<Vec<u8>> },
-    /// No credential existed, so a new one was registered. `credential`
-    /// is the [`RegisteredCredential`] returned by the platform create
-    /// ceremony.
-    Registered { credential: RegisteredCredential },
-}
-
 /// Response from [`PasskeyClient::connect_with_passkey`].
+///
+/// `registered_credential` doubles as the path discriminator:
+/// - `Some(credential)`: a new credential was registered (silent
+///   sign-in fast-failed with `CredentialNotFound`). Persist
+///   `credential.credential_id` in your `excludeCredentialIds` set.
+/// - `None`: silent sign-in succeeded for an existing credential.
+///   Hosts that need the asserted credential ID per sign-in (e.g.
+///   to mark "recently used" in a `CredentialRegistry`) should use
+///   [`PasskeyClient::sign_in`] directly; the unified call doesn't
+///   surface it.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectWithPasskeyResponse {
     pub wallet: Wallet,
-    pub flow: ConnectFlow,
+    pub registered_credential: Option<RegisteredCredential>,
 }
 
 /// High-level orchestration over a [`PrfProvider`] and the internal
@@ -293,9 +288,7 @@ impl PasskeyClient {
         match sign_in_result {
             Ok(response) => Ok(ConnectWithPasskeyResponse {
                 wallet: response.wallet,
-                flow: ConnectFlow::SignedIn {
-                    credential_id: response.credential_id,
-                },
+                registered_credential: None,
             }),
             Err(PasskeyError::Prf(PrfProviderError::CredentialNotFound(_))) => {
                 let register_response = self
@@ -306,9 +299,7 @@ impl PasskeyClient {
                     .await?;
                 Ok(ConnectWithPasskeyResponse {
                     wallet: register_response.wallet,
-                    flow: ConnectFlow::Registered {
-                        credential: register_response.credential,
-                    },
+                    registered_credential: Some(register_response.credential),
                 })
             }
             Err(e) => Err(e),
@@ -570,7 +561,7 @@ mod tests {
     }
 
     #[macros::async_test_all]
-    async fn connect_with_passkey_returns_signed_in_when_sign_in_succeeds() {
+    async fn connect_with_passkey_returns_none_credential_when_sign_in_succeeds() {
         let provider = Arc::new(MockProvider::new([1u8; 32]));
         let client = PasskeyClient::new(provider.clone(), None, None);
         let response = client
@@ -581,7 +572,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.wallet.label, "personal");
-        assert!(matches!(response.flow, ConnectFlow::SignedIn { .. }));
+        // Sign-in path: no new credential to surface.
+        assert!(response.registered_credential.is_none());
         // No registration ceremony on the silent-sign-in success path.
         assert_eq!(*provider.create_calls.lock().unwrap(), 0);
     }
@@ -603,12 +595,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.wallet.label, "personal");
-        match response.flow {
-            ConnectFlow::Registered { credential } => {
-                assert_eq!(credential.credential_id, vec![0xab, 0xcd, 0xef]);
-            }
-            ConnectFlow::SignedIn { .. } => panic!("expected Registered flow"),
-        }
+        let credential = response
+            .registered_credential
+            .expect("registered path must surface the new credential");
+        assert_eq!(credential.credential_id, vec![0xab, 0xcd, 0xef]);
         assert_eq!(*provider.create_calls.lock().unwrap(), 1);
     }
 

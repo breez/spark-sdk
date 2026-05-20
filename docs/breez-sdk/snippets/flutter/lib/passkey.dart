@@ -83,10 +83,13 @@ Future<BreezSdk> connectWithPasskey() async {
     request: ConnectWithPasskeyRequest(label: 'personal', excludeCredentialIds: const []),
   );
 
-  // Branch on `flow` to know which path ran.
-  switch (response.flow) {
-    case ConnectFlow_SignedIn(): // returning user
-    case ConnectFlow_Registered(): // new user; credential available on the variant
+  // `registeredCredential` doubles as the path discriminator: non-null
+  // when a new credential was just registered (persist credentialId
+  // for future excludeCredentialIds); null when silent sign-in
+  // succeeded for an existing credential.
+  final credential = response.registeredCredential;
+  if (credential != null) {
+    final _ = credential.credentialId;
   }
 
   final config = defaultConfig(network: Network.mainnet);

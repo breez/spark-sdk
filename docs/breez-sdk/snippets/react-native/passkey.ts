@@ -86,14 +86,12 @@ const connectWithPasskey = async () => {
     excludeCredentialIds: [],
   })
 
-  // Branch on `flow.type` to know which path ran.
-  switch (response.flow.type) {
-    case 'signedIn':
-      // returning user; response.flow.credentialId may be set
-      break
-    case 'registered':
-      // new user; response.flow.credential carries the new ID + metadata
-      break
+  // `registeredCredential` doubles as the path discriminator: defined
+  // when a new credential was just registered (persist credentialId
+  // for future excludeCredentialIds); undefined when silent sign-in
+  // succeeded for an existing credential.
+  if (response.registeredCredential) {
+    const _persist = response.registeredCredential.credentialId
   }
 
   const config = defaultConfig(Network.Mainnet)

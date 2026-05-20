@@ -1,6 +1,6 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
-    ConnectFlow, ConnectWithPasskeyRequest, DeriveSeedsRequest, DomainAssociation, ErrorKind,
+    ConnectWithPasskeyRequest, DeriveSeedsRequest, DomainAssociation, ErrorKind,
     PasskeyAvailability, PasskeyClient, PasskeyConfig, PrfProvider, PrfProviderError,
     RegisterRequest, RegisteredCredential, SignInRequest, SignInResponse, Wallet,
 };
@@ -104,13 +104,12 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
         })
         .await?;
 
-    // Branch on `flow` to know which path ran. Hosts maintaining a
-    // `CredentialRegistry` typically persist the new credential ID
-    // on `Registered`; the `SignedIn` variant surfaces the asserted
-    // ID when the provider supports it.
-    match &response.flow {
-        ConnectFlow::SignedIn { credential_id: _ } => { /* returning user */ }
-        ConnectFlow::Registered { credential: _ } => { /* new user */ }
+    // `registered_credential` doubles as the path discriminator:
+    // `Some` means a new credential was just registered (persist
+    // `credential_id` for future `exclude_credential_ids`); `None`
+    // means silent sign-in succeeded for an existing credential.
+    if let Some(credential) = &response.registered_credential {
+        let _persist = credential.credential_id.clone();
     }
 
     let config = default_config(Network::Mainnet);
