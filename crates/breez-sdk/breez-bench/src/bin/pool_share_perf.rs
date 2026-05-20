@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
         config.api_key = None;
         config.real_time_sync_server_url = None;
         config.lnurl_domain = None;
-        config.optimization_config.auto_enabled = false;
+        config.leaf_optimization_config.auto_enabled = false;
 
         let mut builder = SdkBuilder::new(config, Seed::Entropy(seed.to_vec()));
         builder = match (&shared_context, args.mode) {

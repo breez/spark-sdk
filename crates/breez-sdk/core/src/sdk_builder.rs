@@ -471,9 +471,15 @@ impl SdkBuilder {
                         .to_string(),
                 ));
             }
-            if self.config.optimization_config.auto_enabled {
+            if self.config.leaf_optimization_config.auto_enabled {
                 return Err(SdkError::InvalidInput(
-                    "optimization_config.auto_enabled must be false when background_tasks_enabled is false"
+                    "leaf_optimization_config.auto_enabled must be false when background_tasks_enabled is false"
+                        .to_string(),
+                ));
+            }
+            if self.config.token_optimization_config.auto_enabled {
+                return Err(SdkError::InvalidInput(
+                    "token_optimization_config.auto_enabled must be false when background_tasks_enabled is false"
                         .to_string(),
                 ));
             }
@@ -758,12 +764,18 @@ impl SdkBuilder {
         spark_wallet_config.service_provider_config.user_agent = Some(user_agent.clone());
         let background_services_enabled = runtime.starts_background_services();
         spark_wallet_config.leaf_auto_optimize_enabled =
-            background_services_enabled && self.config.optimization_config.auto_enabled;
+            background_services_enabled && self.config.leaf_optimization_config.auto_enabled;
         spark_wallet_config.leaf_optimization_options.multiplicity =
-            self.config.optimization_config.multiplicity;
-        spark_wallet_config
-            .token_outputs_optimization_options
-            .target_output_count = self.config.optimization_config.token_target_output_count;
+            self.config.leaf_optimization_config.multiplicity;
+
+        let token_opt = &self.config.token_optimization_config;
+        let token_options = &mut spark_wallet_config.token_outputs_optimization_options;
+        token_options.target_output_count = token_opt.target_output_count;
+        token_options.min_outputs_threshold = token_opt.min_outputs_threshold;
+        // Only override when disabled; enabled keeps the network default interval.
+        if !token_opt.auto_enabled || !background_services_enabled {
+            token_options.auto_optimize_interval = None;
+        }
         spark_wallet_config.max_concurrent_claims = self.config.max_concurrent_claims;
 
         let shutdown_sender = watch::channel::<()>(()).0;
@@ -1097,17 +1109,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn server_mode_rejects_optimization_auto_enabled() {
+    async fn server_mode_rejects_leaf_optimization_auto_enabled() {
         use crate::{SdkError, default_server_config};
 
         let mut config = default_server_config(Network::Regtest);
-        config.optimization_config.auto_enabled = true;
+        config.leaf_optimization_config.auto_enabled = true;
 
         let seed = test_seed();
         let result = SdkBuilder::new(config, seed).build().await;
         match result {
             Err(SdkError::InvalidInput(message)) => {
-                assert!(message.contains("optimization_config.auto_enabled"));
+                assert!(message.contains("leaf_optimization_config.auto_enabled"));
+            }
+            Err(err) => panic!("expected InvalidInput error, got {err:?}"),
+            Ok(_) => panic!("expected server mode with optimization auto_enabled to fail"),
+        }
+    }
+
+    #[tokio::test]
+    async fn server_mode_rejects_token_optimization_auto_enabled() {
+        use crate::{SdkError, default_server_config};
+
+        let mut config = default_server_config(Network::Regtest);
+        config.token_optimization_config.auto_enabled = true;
+
+        let seed = test_seed();
+        let result = SdkBuilder::new(config, seed).build().await;
+        match result {
+            Err(SdkError::InvalidInput(message)) => {
+                assert!(message.contains("token_optimization_config.auto_enabled"));
             }
             Err(err) => panic!("expected InvalidInput error, got {err:?}"),
             Ok(_) => panic!("expected server mode with optimization auto_enabled to fail"),
