@@ -98,7 +98,8 @@ The server exposes three:
 Each request does a fresh `connect → op → disconnect` using
 `defaultServerConfig` (server mode). All shared resources — MySQL pool,
 HTTP client (SSP, LNURL, JWT, chain), operator gRPC, Breez-backend gRPC —
-are bundled into one `SdkContext` threaded into every build. Same-`userId`
-requests serialize on a per-user mutex; different user-ids run in
-parallel. No request handler syncs; syncs are explicit and confined to
+are bundled into one `SdkContext` threaded into every build. All
+requests run fully in parallel — there is no per-user serialization
+(safe: operator-enforced single-spend + coordinator reconciliation, see
+`DESIGN.md`). No request handler syncs; syncs are explicit and confined to
 the `fund` / `seed-senders` / `trace-sync` steps (see `DESIGN.md`).

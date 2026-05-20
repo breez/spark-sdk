@@ -40,14 +40,11 @@ import io.ktor.server.routing.routing
 
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.ConcurrentHashMap
 
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -159,34 +156,37 @@ suspend fun BreezSdk.syncedInfo(): breez_sdk_spark.GetInfoResponse {
 
 /**
  * Builds a fresh SDK per call (sharing transports via [handlers]) and tears
- * it down after `op`. Same-`userId` calls serialize through a per-userId
- * mutex so concurrent requests never race two SDK instances against the
- * same MySQL identity rows.
- *
- * The mutex map grows unboundedly with distinct user-ids — fine for the
- * bounded bench lifetime.
+ * it down after `op`. Concurrent requests for the same `userId` run in
+ * parallel — there is no per-user serialization.
  */
 class BenchSdkProvider(
     private val masterSecret: String,
     private val handlers: SharedHandlers,
 ) {
     private val config = benchConfig()
-    private val mutexes = ConcurrentHashMap<String, Mutex>()
 
-    suspend fun <T> withUser(userId: String, op: suspend (BreezSdk) -> T): T {
-        val mutex = mutexes.computeIfAbsent(userId) { Mutex() }
-        return mutex.withLock {
-            val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
-            val sdk = buildSdk(config, seed, handlers)
+    suspend fun <T> withUser(
+        userId: String,
+        timings: RequestTimings? = null,
+        op: suspend (BreezSdk) -> T,
+    ): T {
+        val seed: Seed = Seed.Entropy(deriveSeedBytes(masterSecret, userId))
+        val tBuildNs = System.nanoTime()
+        val sdk = buildSdk(config, seed, handlers)
+        timings?.buildMs = (System.nanoTime() - tBuildNs) / 1_000_000
+        return try {
+            val tOpNs = System.nanoTime()
+            val r = op(sdk)
+            timings?.opMs = (System.nanoTime() - tOpNs) / 1_000_000
+            r
+        } finally {
+            val tDiscNs = System.nanoTime()
             try {
-                op(sdk)
-            } finally {
-                try {
-                    sdk.disconnect()
-                } catch (e: Exception) {
-                    System.err.println("[server] disconnect warn (user=$userId): ${e.message}")
-                }
+                sdk.disconnect()
+            } catch (e: Exception) {
+                System.err.println("[server] disconnect warn (user=$userId): ${e.message}")
             }
+            timings?.disconnectMs = (System.nanoTime() - tDiscNs) / 1_000_000
         }
     }
 }
@@ -216,7 +216,28 @@ data class ServerRequestLogEntry(
     @SerialName("user_id") val userId: String,
     @SerialName("duration_ms") val durationMs: Long,
     val error: String? = null,
+    // Sub-timings (ms) for bottleneck localization. Null when not recorded
+    // (e.g. an error before the phase ran). `durationMs` = the whole handler;
+    // these split it into per-phase costs.
+    @SerialName("build_ms") val buildMs: Long? = null,
+    @SerialName("op_ms") val opMs: Long? = null,
+    @SerialName("prepare_ms") val prepareMs: Long? = null,
+    @SerialName("send_ms") val sendMs: Long? = null,
+    @SerialName("disconnect_ms") val disconnectMs: Long? = null,
 )
+
+/**
+ * Mutable per-request timing collector, threaded handler → [BenchSdkProvider.withUser]
+ * → op so each phase records into one place. Plain `var`s (not serialized);
+ * copied into [ServerRequestLogEntry] at the end of the request.
+ */
+class RequestTimings {
+    var buildMs: Long? = null
+    var opMs: Long? = null
+    var prepareMs: Long? = null
+    var sendMs: Long? = null
+    var disconnectMs: Long? = null
+}
 
 // --- reserved user-ids (funding pipeline) ---------------------------------
 
@@ -635,8 +656,8 @@ fun runServer(opts: Map<String, String>) {
         routing {
             get("/users/{userId}/info") {
                 val userId = call.parameters["userId"]!!
-                handleAndLog(call, "info", userId, requestsWriter) {
-                    provider.withUser(userId) { sdk ->
+                handleAndLog(call, "info", userId, requestsWriter) { t ->
+                    provider.withUser(userId, t) { sdk ->
                         // Pure local read, no sync — the server-mode read path.
                         val info = sdk.getInfo(GetInfoRequest(ensureSynced = false))
                         InfoResponse(balanceSats = info.balanceSats.toLong())
@@ -647,15 +668,19 @@ fun runServer(opts: Map<String, String>) {
             post("/users/{userId}/send") {
                 val userId = call.parameters["userId"]!!
                 val body = call.receive<SendBody>()
-                handleAndLog(call, "send", userId, requestsWriter) {
-                    provider.withUser(userId) { sdk ->
+                handleAndLog(call, "send", userId, requestsWriter) { t ->
+                    provider.withUser(userId, t) { sdk ->
+                        val tPrepNs = System.nanoTime()
                         val prepared = sdk.prepareSendPayment(
                             PrepareSendPaymentRequest(
                                 paymentRequest = body.destination,
                                 amount = BigInteger.fromLong(body.amountSats),
                             )
                         )
+                        t.prepareMs = (System.nanoTime() - tPrepNs) / 1_000_000
+                        val tSendNs = System.nanoTime()
                         val sendResp = sdk.sendPayment(SendPaymentRequest(prepareResponse = prepared))
+                        t.sendMs = (System.nanoTime() - tSendNs) / 1_000_000
                         SendResult(
                             paymentId = sendResp.payment.id,
                             feeSats = feeOf(prepared.paymentMethod),
@@ -666,8 +691,8 @@ fun runServer(opts: Map<String, String>) {
 
             post("/users/{userId}/receive") {
                 val userId = call.parameters["userId"]!!
-                handleAndLog(call, "receive", userId, requestsWriter) {
-                    provider.withUser(userId) { sdk ->
+                handleAndLog(call, "receive", userId, requestsWriter) { t ->
+                    provider.withUser(userId, t) { sdk ->
                         val resp = sdk.receivePayment(
                             ReceivePaymentRequest(paymentMethod = ReceivePaymentMethod.SparkAddress)
                         )
@@ -707,13 +732,14 @@ private suspend inline fun <reified T : Any> handleAndLog(
     op: String,
     userId: String,
     requestsWriter: JsonlWriter<ServerRequestLogEntry>,
-    crossinline block: suspend () -> T,
+    crossinline block: suspend (RequestTimings) -> T,
 ) {
     val tsMs = System.currentTimeMillis()
     val tStartNs = System.nanoTime()
+    val timings = RequestTimings()
     var errStr: String? = null
     try {
-        call.respond(block())
+        call.respond(block(timings))
     } catch (e: Throwable) {
         errStr = "${e::class.simpleName}: ${e.message ?: ""}"
         System.err.println("[server] handler error (op=$op user=$userId): ${e.message}")
@@ -729,6 +755,11 @@ private suspend inline fun <reified T : Any> handleAndLog(
                 userId = userId,
                 durationMs = (System.nanoTime() - tStartNs) / 1_000_000,
                 error = errStr,
+                buildMs = timings.buildMs,
+                opMs = timings.opMs,
+                prepareMs = timings.prepareMs,
+                sendMs = timings.sendMs,
+                disconnectMs = timings.disconnectMs,
             )
         )
     }

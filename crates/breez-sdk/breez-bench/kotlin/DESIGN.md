@@ -40,15 +40,17 @@ friction in Kotlin/JVM.
 Each request runs the same flow:
 
 ```
-1. Acquire per-userId lock
-2. Derive seed: HMAC-SHA512(MASTER_SECRET, userId) → 64 bytes
-3. SdkBuilder(defaultServerConfig(REGTEST), Seed.Entropy(…))
+1. Derive seed: HMAC-SHA512(MASTER_SECRET, userId) → 64 bytes
+2. SdkBuilder(defaultServerConfig(REGTEST), Seed.Entropy(…))
      .withSharedContext(SHARED_CONTEXT)   // DB pool + SSP/LNURL/JWT/chain HTTP + operator gRPC + Breez gRPC
      .build()                             // chain service unset → built over the context HTTP client
-4. sdk.<op>(…)
-5. sdk.disconnect()
-6. Release lock; respond
+3. sdk.<op>(…)
+4. sdk.disconnect()
+5. Respond
 ```
+
+All requests run fully in parallel, including concurrent ones for the
+same `userId` (no per-user lock — see [No per-userId lock](#no-per-userid-lock-it-was-an-artifact-removed)).
 
 The bench builds with **`defaultServerConfig`** (server mode). That sets
 `backgroundTasksEnabled = false`: no per-request periodic sync loop, Spark
@@ -82,18 +84,39 @@ out: at the top of a sweep a single connection can itself cap
 throughput, so this is a knob for isolating connection saturation from
 SDK/operator capacity.
 
-## Per-userId lock (multi-tenancy safety)
+## No per-userId lock (it was an artifact, removed)
 
-Two concurrent requests for the same `userId` would build two SDK
-instances with the same seed, racing reads/writes against the same
-multi-tenant MySQL identity rows. The bench serializes per user with
-a `ConcurrentHashMap<String, Mutex>`; different user-ids run in
-parallel, same user-id calls serialize.
+An earlier version serialized same-`userId` requests through a
+`ConcurrentHashMap<String, Mutex>`, on the assumption that two
+concurrent SDK instances with the same seed would race the shared
+MySQL identity rows. **That serialization is gone — it was never a
+correctness requirement and it dominated/distorted the measurement.**
 
-Implication for skewed user distributions (zipf): hot user-ids
-serialize, so *delivered* RPS at the server is lower than offered
-RPS. The headline reads as capacity under realistic skew, not raw
-parallel throughput.
+Why concurrent same-wallet instances are safe without it:
+
+- **Funds:** a Spark leaf only moves via 2-of-3 operator FROST
+  co-signing, and the operators enforce single-spend. A losing
+  concurrent op gets `AlreadyExists` / a transfer row-lock error —
+  never a double spend. The protocol, not a local mutex, is the
+  guarantee.
+- **SDK:** the claim path is explicitly written for this race
+  (`spark/src/services/transfer.rs` `claim_transfer`: retry +
+  `finalized_leaves_if_already_claimed`, "callers do not need to
+  distinguish this case"); leaf selection is a coordinator-verified
+  reservation.
+- **Storage:** the MySQL tree store writes transactionally with
+  idempotent upserts and every fresh build's `refresh_leaves`
+  reconciles local state to the coordinator, so concurrent writers
+  self-heal rather than corrupt.
+
+With the lock, ~84% of `/send` latency was threads queued on the
+per-sender mutex (measured: 11.8 s of 14 s p50 at 50 rps over 100
+senders) — an artifact of routing all sends through a small reserved
+set, not real per-pod cost. Without it, concurrent same-sender sends
+instead contend on that wallet's leaves at the operators: with enough
+leaves they parallelize; with few they fail/retry on contention. That
+is a *workload* property (how many distinct sender identities, how
+many leaves each holds), now visible instead of hidden behind a lock.
 
 ## Endpoints — semantics worth pinning
 
@@ -112,8 +135,9 @@ parallel throughput.
 - `/send` latency includes both `prepareSendPayment` and `sendPayment`,
   one number, matching a real handler. No pre-sync: the sender only sends
   (never receives) mid-run, and `transfer` self-refreshes leaves from
-  operators on contention, so its persisted post-send state suffices for
-  the next serialized request.
+  operators on contention — so concurrent same-sender requests (now
+  unserialized) reconcile against the operators rather than needing a
+  pre-sync, at the cost of contention when a sender has few leaves.
 - `/receive` is **address generation only** — `receivePayment` returns
   a Spark address; nothing actually arrives during the measurement
   window. The number is the cost of producing a deposit destination,
