@@ -97,6 +97,8 @@ Leaf optimization maximizes unilateral exit efficiency or increases payment spee
 - **Automatic optimization enabled**: whether leaf optimization runs automatically when a payment is sent or received. Enabled by default.
 - **Multiplicity**: the desired multiplicity for the leaf set. Default value is 1. Setting it to 0 fully optimizes for unilateral exit efficiency. Setting it to a value greater than 0 also optimizes for payment speed, with higher values prioritizing payment speed more aggressively at the cost of higher unilateral exit fees. Values above 5 are intended for high-throughput server environments that require maximum TPS and are not recommended for end-user wallets.
 
+See [Custom leaf optimization](./optimize.md) for more information and recommendations on how to configure leaf optimization.
+
 ### Token-output optimization
 
 Token-output optimization automatically consolidates a token's available outputs to keep the output set small while preserving enough distinct outputs for concurrent sends.
@@ -104,8 +106,6 @@ Token-output optimization automatically consolidates a token's available outputs
 - **Automatic optimization enabled**: whether token-output consolidation runs automatically. Enabled by default.
 - **Target output count**: the number of token outputs to produce when consolidation fires. Instead of collapsing a token's outputs into a single output (which would serialize subsequent sends), the SDK splits the consolidated balance across this many outputs of roughly equal value. Higher values preserve concurrency for parallel sends at the cost of a slightly larger output set. Must be at least 1 and strictly less than the minimum outputs threshold. Default value is 5.
 - **Minimum outputs threshold**: the output count that triggers per-token auto-consolidation. Consolidation runs for a token once its available output count exceeds this value. Must be greater than 1. Default value is 50.
-
-See [Custom leaf optimization](./optimize.md) for more information and recommendations on how to configure optimization.
 
 {{#tabs config:optimization-configuration}}
 
