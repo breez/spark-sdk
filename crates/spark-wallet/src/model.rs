@@ -26,7 +26,7 @@ use spark::{
 use crate::SparkWalletError;
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum WalletEvent {
     DepositConfirmed(TreeNodeId),
     StreamConnected,
@@ -34,6 +34,7 @@ pub enum WalletEvent {
     Synced,
     TransferClaimed(WalletTransfer),
     TransferClaimStarting(WalletTransfer),
+    TokenTransaction(TokenTransaction),
     /// Optimization lifecycle event.
     Optimization(OptimizationEvent),
 }
@@ -46,6 +47,9 @@ impl Display for WalletEvent {
             }
             WalletEvent::TransferClaimStarting(transfer) => {
                 write!(f, "TransferClaimStarting({})", transfer.id)
+            }
+            WalletEvent::TokenTransaction(transaction) => {
+                write!(f, "TokenTransaction({})", transaction.hash)
             }
             WalletEvent::Optimization(event) => {
                 write!(f, "Optimization({:?})", event)

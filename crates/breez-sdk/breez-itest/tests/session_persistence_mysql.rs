@@ -65,7 +65,7 @@ impl MysqlSessionPersistenceFixture {
         let mut conn = pool.get_conn().await?;
         let rows: Vec<(Vec<u8>, String, i64)> = conn
             .exec(
-                "SELECT service_identity_key, token, expiration FROM sessions \
+                "SELECT service_identity_key, token, expiration FROM brz_sessions \
                  WHERE user_id = ? \
                  ORDER BY service_identity_key",
                 (self.identity.clone(),),
@@ -89,7 +89,7 @@ impl MysqlSessionPersistenceFixture {
         let pool = mysql_async::Pool::from_url(self.connection_string.as_str())?;
         let mut conn = pool.get_conn().await?;
         conn.exec_drop(
-            "DELETE FROM sessions WHERE user_id = ?",
+            "DELETE FROM brz_sessions WHERE user_id = ?",
             (self.identity.clone(),),
         )
         .await?;

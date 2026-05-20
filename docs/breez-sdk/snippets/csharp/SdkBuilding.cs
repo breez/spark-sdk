@@ -158,5 +158,80 @@ namespace BreezSdkSnippets
             var sdk = await builder.Build();
             // ANCHOR_END: init-sdk-mysql
         }
+
+        async Task InitSdkServer()
+        {
+            // ANCHOR: init-sdk-server
+            // Construct the seed using a mnemonic, entropy or passkey
+            var mnemonic = "<mnemonic words>";
+            var seed = new Seed.Mnemonic(mnemonic: mnemonic, passphrase: null);
+
+            // Build a server-mode config: same as DefaultConfig(network) with
+            // backgroundTasksEnabled = false. No periodic sync, no real-time
+            // sync client, no leaf/token optimizer, no flashnet refunder, no
+            // lightning-address recovery, no spark private-mode init.
+            var config = BreezSdkSparkMethods.DefaultServerConfig(Network.Mainnet) with
+            {
+                apiKey = "<breez api key>"
+            };
+
+            // Typically server-mode SDKs are built per request and share
+            // infrastructure (DB pool, REST chain service, SSP/Connection
+            // Manager) across instances. Pass the shared resources via the
+            // builder.
+            var builder = new SdkBuilder(config: config, seed: seed);
+            await builder.WithDefaultStorage(storageDir: "./.data");
+            var sdk = await builder.Build();
+            // ANCHOR_END: init-sdk-server
+        }
+
+        async Task ServerModeRequestHandler(BreezSdk sdk)
+        {
+            // ANCHOR: server-mode-request-handler
+            // User-facing request handler: do not call SyncWallet here.
+            // Operations that read from local storage (GetInfo, ListPayments,
+            // etc.) do not need a defensive sync. Call SyncWallet only from
+            // webhook handlers or reconciliation jobs that need to observe
+            // an external state change.
+            var paymentMethod = new ReceivePaymentMethod.Bolt11Invoice(
+                description: "<invoice description>",
+                amountSats: 5_000UL,
+                expirySecs: 3600U,
+                paymentHash: null
+            );
+            var response = await sdk.ReceivePayment(
+                request: new ReceivePaymentRequest(paymentMethod: paymentMethod)
+            );
+
+            // Always disconnect at the end of the request lifecycle to flush
+            // outstanding storage writes.
+            await sdk.Disconnect();
+            // ANCHOR_END: server-mode-request-handler
+        }
+
+        async Task ServerModeProvisioning(BreezSdk sdk)
+        {
+            // ANCHOR: server-mode-provisioning
+            // One-time setup when a wallet is first registered. The
+            // client-mode SDK would normally apply the private-mode preset
+            // itself on first startup; server-mode SDKs do not, so opt in
+            // once here via UpdateUserSettings.
+            await sdk.UpdateUserSettings(
+                request: new UpdateUserSettingsRequest(sparkPrivateModeEnabled: true)
+            );
+
+            await sdk.Disconnect();
+            // ANCHOR_END: server-mode-provisioning
+        }
+
+        async Task RefundPendingConversions(BreezSdk sdk)
+        {
+            // ANCHOR: refund-pending-conversions
+            // The flashnet conversion refunder doesn't run in the background in
+            // server mode. Call this from your own scheduler (e.g. once per
+            // minute) to issue pending refunds for failed conversions.
+            await sdk.RefundPendingConversions();
+            // ANCHOR_END: refund-pending-conversions
+        }
     }
 }

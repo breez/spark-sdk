@@ -30,3 +30,12 @@ The recommended pattern is:
 {{#name ensure_synced}} = **true** blocks until the SDK's **initial** sync after {{#name connect}} completes. This is useful for short-lived scripts that connect, read the balance once, and disconnect. It is **not** a "force a fresh sync now" call. In long-running applications, prefer {{#name ensure_synced}} = **false** combined with the {{#enum SdkEvent::Synced}} event listener pattern above.
 
 </div>
+
+<h2 id="server-mode">
+    <a class="header" href="#server-mode">Server mode</a>
+</h2>
+
+When the SDK is built with [Server mode](server_mode.md), {{#name get_info}} reads the balance live from the spark wallet's local tree store rather than from the background-maintained cache. As a result:
+
+- {{#name ensure_synced}} = **true** is rejected with an invalid-input error. The SDK has no initial-sync watcher to await; call {{#name sync_wallet}} explicitly if you need to refresh state first.
+- The returned balance reflects whatever is currently in the local tree store. If you need the freshest possible balance after an external state change (an incoming Spark transfer claimed elsewhere, an on-chain deposit confirmed, etc.), call {{#name sync_wallet}} first.

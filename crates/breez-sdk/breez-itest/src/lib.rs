@@ -8,14 +8,16 @@ pub mod session_manager_scenarios;
 use std::sync::Arc;
 
 pub use concurrent_scenarios::{
-    run_concurrent_multi_instance_operations, run_concurrent_token_operations,
+    RuntimeMode, run_concurrent_multi_instance_operations, run_concurrent_token_operations,
 };
 pub use faucet::RegtestFaucet;
 pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};
 pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
+pub use rand;
 pub use session_manager_scenarios::{SessionRow, run_session_persistence_across_restart};
+pub use tempfile;
 
 use anyhow::Result;
 use breez_sdk_spark::{BreezSdk, Config, SdkEvent};

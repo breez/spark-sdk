@@ -12,12 +12,6 @@ pub struct _BitcoinAddressDetails {
     pub source: PaymentRequestSource,
 }
 
-#[frb(mirror(Session))]
-pub struct _Session {
-    pub token: String,
-    pub expiration: u64,
-}
-
 #[frb(mirror(BitcoinNetwork))]
 pub enum _BitcoinNetwork {
     Bitcoin,
@@ -48,6 +42,7 @@ pub struct _Config {
     /// payment volume to improve throughput.
     pub max_concurrent_claims: u32,
     pub spark_config: Option<SparkConfig>,
+    pub background_tasks_enabled: bool,
 }
 
 #[frb(mirror(SparkConfig))]
@@ -582,6 +577,13 @@ pub struct _UrlSuccessActionData {
 pub enum _Network {
     Mainnet,
     Regtest,
+}
+
+#[frb(mirror(SdkContextConfig))]
+pub struct _SdkContextConfig {
+    pub network: Network,
+    pub api_key: Option<String>,
+    pub connections_per_operator: Option<u32>,
 }
 
 #[frb(mirror(Payment))]

@@ -10,11 +10,10 @@ const { parse: parseShell } = require('shell-quote')
 
 const {
   SdkBuilder,
-  createMysqlConnectionPool,
-  createPostgresConnectionPool,
   defaultConfig,
   defaultMysqlStorageConfig,
   defaultPostgresStorageConfig,
+  newSharedSdkContext,
   initLogging,
   getSparkStatus
 } = require('@breeztech/breez-sdk-spark/nodejs')
@@ -270,15 +269,19 @@ async function main() {
   let sdkBuilder = SdkBuilder.new(config, seed)
 
   if (opts.postgresConnectionString) {
-    const pool = createPostgresConnectionPool(
-      defaultPostgresStorageConfig(opts.postgresConnectionString)
-    )
-    sdkBuilder = sdkBuilder.withPostgresConnectionPool(pool)
+    const context = newSharedSdkContext({
+      network,
+      apiKey: breezApiKey,
+      postgresConfig: defaultPostgresStorageConfig(opts.postgresConnectionString)
+    })
+    sdkBuilder = sdkBuilder.withSharedContext(context)
   } else if (opts.mysqlConnectionString) {
-    const pool = createMysqlConnectionPool(
-      defaultMysqlStorageConfig(opts.mysqlConnectionString)
-    )
-    sdkBuilder = sdkBuilder.withMysqlConnectionPool(pool)
+    const context = newSharedSdkContext({
+      network,
+      apiKey: breezApiKey,
+      mysqlConfig: defaultMysqlStorageConfig(opts.mysqlConnectionString)
+    })
+    sdkBuilder = sdkBuilder.withSharedContext(context)
   } else {
     sdkBuilder = await sdkBuilder.withDefaultStorage(dataDir)
   }

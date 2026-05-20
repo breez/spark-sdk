@@ -7,11 +7,9 @@ use crate::{
         Config, Credentials, Seed,
         chain_service::{BitcoinChainService, ChainApiType, WasmBitcoinChainService},
         fiat_service::{FiatService, WasmFiatService},
-        mysql_pool::MysqlConnectionPool,
         payment_observer::{PaymentObserver, WasmPaymentObserver},
-        postgres_pool::PostgresConnectionPool,
         rest_client::{RestClient, WasmRestClient},
-        session_manager::{SessionManager, WasmSessionManager},
+        session_manager::WasmSessionManager,
     },
     persist::{
         Storage, WasmStorage,
@@ -24,6 +22,7 @@ use crate::{
         },
     },
     sdk::BreezSdk,
+    sdk_context::WasmSdkContext,
     token_store::WasmTokenStore,
     tree_store::WasmTreeStore,
 };
@@ -146,13 +145,16 @@ pub struct SdkBuilder {
     seed: breez_sdk_spark::Seed,
     default_storage_dir: Option<String>,
     storage: Option<Storage>,
-    postgres_pool: Option<(Rc<JsPool>, bool)>,
-    mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
-    /// Tracks whether the integrator supplied a session manager via
-    /// [`with_session_manager`]. When `true`, the postgres / mysql pool
-    /// branches in `build()` skip auto-creating one so they don't override
-    /// the user's choice.
-    user_session_manager: bool,
+    /// JS Postgres pool supplied via `withPostgresConnectionPool` /
+    /// `withPostgresBackend`.
+    explicit_postgres_pool: Option<(Rc<JsPool>, bool)>,
+    /// JS Postgres pool supplied via `withSharedContext(ctx_with_pool)`.
+    context_postgres_pool: Option<(Rc<JsPool>, bool)>,
+    /// JS MySQL pool supplied via `withMysqlConnectionPool` /
+    /// `withMysqlBackend`.
+    explicit_mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
+    /// JS MySQL pool supplied via `withSharedContext(ctx_with_pool)`.
+    context_mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
     key_set_type: breez_sdk_spark::KeySetType,
     use_address_index: bool,
     account_number: Option<u32>,
@@ -171,9 +173,10 @@ impl SdkBuilder {
             builder: breez_sdk_spark::SdkBuilder::new(config, seed),
             default_storage_dir: None,
             storage: None,
-            postgres_pool: None,
-            mysql_pool: None,
-            user_session_manager: false,
+            explicit_postgres_pool: None,
+            context_postgres_pool: None,
+            explicit_mysql_pool: None,
+            context_mysql_pool: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
             account_number: None,
@@ -195,9 +198,10 @@ impl SdkBuilder {
             builder: breez_sdk_spark::SdkBuilder::new_with_signer(config_core, signer_adapter),
             default_storage_dir: None,
             storage: None,
-            postgres_pool: None,
-            mysql_pool: None,
-            user_session_manager: false,
+            explicit_postgres_pool: None,
+            context_postgres_pool: None,
+            explicit_mysql_pool: None,
+            context_mysql_pool: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
             account_number: None,
@@ -216,21 +220,42 @@ impl SdkBuilder {
         self
     }
 
-    /// Sets a shared `PostgreSQL` connection pool as the backend for all
-    /// stores. Construct via `createPostgresConnectionPool` and pass the same handle
-    /// to multiple `SdkBuilder`s to share connections across SDKs.
+    /// Threads a shared [`WasmSdkContext`] into the builder.
+    ///
+    /// Construct the context once via `newSharedSdkContext` and pass the same
+    /// handle to every `SdkBuilder` whose SDKs should share its resources
+    /// (operator gRPC channels, SSP HTTP client, database pool).
+    #[wasm_bindgen(js_name = "withSharedContext")]
+    pub fn with_shared_context(mut self, context: &WasmSdkContext) -> Self {
+        self.builder = self.builder.with_shared_context(context.inner.clone());
+        self.context_postgres_pool = context.postgres_pool.clone();
+        self.context_mysql_pool = context.mysql_pool.clone();
+        self
+    }
+
+    /// Sets a shared Postgres connection pool as the backend for all stores.
+    ///
+    /// If the same builder also receives a `WasmSdkContext` carrying a
+    /// Postgres pool, `build()` returns an error — pick one source.
     #[wasm_bindgen(js_name = "withPostgresConnectionPool")]
-    pub fn with_postgres_connection_pool(mut self, pool: &PostgresConnectionPool) -> Self {
-        self.postgres_pool = Some((pool.cloned_inner(), pool.run_migration()));
+    pub fn with_postgres_connection_pool(
+        mut self,
+        pool: &crate::models::postgres_pool::PostgresConnectionPool,
+    ) -> Self {
+        self.explicit_postgres_pool = Some((pool.cloned_inner(), pool.run_migration()));
         self
     }
 
     /// Sets a shared `MySQL` connection pool as the backend for all stores.
-    /// Construct via `createMysqlConnectionPool` and pass the same handle to multiple
-    /// `SdkBuilder`s to share connections across SDKs.
+    ///
+    /// If the same builder also receives a `WasmSdkContext` carrying a MySQL
+    /// pool, `build()` returns an error — pick one source.
     #[wasm_bindgen(js_name = "withMysqlConnectionPool")]
-    pub fn with_mysql_connection_pool(mut self, pool: &MysqlConnectionPool) -> Self {
-        self.mysql_pool = Some((
+    pub fn with_mysql_connection_pool(
+        mut self,
+        pool: &crate::models::mysql_pool::MysqlConnectionPool,
+    ) -> Self {
+        self.explicit_mysql_pool = Some((
             pool.cloned_inner(),
             pool.run_migration(),
             pool.foreign_key_mode(),
@@ -238,22 +263,24 @@ impl SdkBuilder {
         self
     }
 
-    /// **Deprecated.** Call `withPostgresConnectionPool(config)` and `withPostgresConnectionPool(pool)` instead.
+    /// **Deprecated.** Call `createPostgresConnectionPool(config)` and
+    /// `withPostgresConnectionPool(pool)` instead.
     #[wasm_bindgen(js_name = "withPostgresBackend")]
     pub fn with_postgres_backend(mut self, config: PostgresStorageConfig) -> WasmResult<Self> {
         let run_migration = config.run_migration;
         let pool = create_postgres_pool(config)?;
-        self.postgres_pool = Some((Rc::new(pool), run_migration));
+        self.explicit_postgres_pool = Some((Rc::new(pool), run_migration));
         Ok(self)
     }
 
-    /// **Deprecated.** Call `withMysqlConnectionPool(config)` and `withMysqlConnectionPool(pool)` instead.
+    /// **Deprecated.** Call `createMysqlConnectionPool(config)` and
+    /// `withMysqlConnectionPool(pool)` instead.
     #[wasm_bindgen(js_name = "withMysqlBackend")]
     pub fn with_mysql_backend(mut self, config: MysqlStorageConfig) -> WasmResult<Self> {
         let run_migration = config.run_migration;
         let foreign_key_mode = config.foreign_key_mode;
         let pool = create_mysql_pool(config)?;
-        self.mysql_pool = Some((Rc::new(pool), run_migration, foreign_key_mode));
+        self.explicit_mysql_pool = Some((Rc::new(pool), run_migration, foreign_key_mode));
         Ok(self)
     }
 
@@ -320,41 +347,39 @@ impl SdkBuilder {
         self
     }
 
-    /// Reuses a shared SSP connection across SDK instances. Pass the same
-    /// manager to every `SdkBuilder` whose SSP traffic should share an
-    /// underlying HTTP client.
-    #[wasm_bindgen(js_name = "withSspConnectionManager")]
-    pub fn with_ssp_connection_manager(
-        mut self,
-        manager: &crate::connection_manager::SspConnectionManager,
-    ) -> Self {
-        self.builder = self
-            .builder
-            .with_ssp_connection_manager(manager.inner.clone());
-        self
-    }
-
-    /// Sets a custom session manager used to persist authentication sessions.
-    ///
-    /// Provide a shared, persistent implementation (e.g. backed by `PostgreSQL`
-    /// or Redis) to let multiple SDK instances share authentication state and
-    /// bootstrap quickly. If not set, an in-memory session manager is used.
-    #[wasm_bindgen(js_name = "withSessionManager")]
-    pub fn with_session_manager(mut self, session_manager: SessionManager) -> Self {
-        self.builder = self
-            .builder
-            .with_session_manager(Arc::new(WasmSessionManager { session_manager }));
-        self.user_session_manager = true;
-        self
-    }
-
     #[wasm_bindgen(js_name = "build")]
     pub async fn build(mut self) -> WasmResult<BreezSdk> {
+        // Resolve the Postgres pool from at most one source. Same for MySQL.
+        let postgres_pool: Option<(Rc<JsPool>, bool)> = match (
+            self.explicit_postgres_pool,
+            self.context_postgres_pool,
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(WasmError::new(
+                    "multiple postgres pools configured: passed both via withPostgresConnectionPool and SdkContext",
+                ));
+            }
+            (Some(p), None) | (None, Some(p)) => Some(p),
+            (None, None) => None,
+        };
+        let mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)> = match (
+            self.explicit_mysql_pool,
+            self.context_mysql_pool,
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(WasmError::new(
+                    "multiple mysql pools configured: passed both via withMysqlConnectionPool and SdkContext",
+                ));
+            }
+            (Some(p), None) | (None, Some(p)) => Some(p),
+            (None, None) => None,
+        };
+
         match (
             self.default_storage_dir,
             self.storage,
-            &self.postgres_pool,
-            &self.mysql_pool,
+            &postgres_pool,
+            &mysql_pool,
         ) {
             (Some(storage_dir), None, None, None) => {
                 // Create key set to get identity_pub_key for WASM-compatible storage
@@ -427,19 +452,17 @@ impl SdkBuilder {
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
 
-                if !self.user_session_manager {
-                    let session_manager_js = create_postgres_session_manager_with_pool(
-                        pool,
-                        &identity_bytes,
-                        logger_ref,
-                        *run_migration,
-                    )
-                    .await?;
-                    let session_manager = Arc::new(WasmSessionManager {
-                        session_manager: session_manager_js,
-                    });
-                    self.builder = self.builder.with_session_manager(session_manager);
-                }
+                let session_manager_js = create_postgres_session_manager_with_pool(
+                    pool,
+                    &identity_bytes,
+                    logger_ref,
+                    *run_migration,
+                )
+                .await?;
+                let session_manager = Arc::new(WasmSessionManager {
+                    session_manager: session_manager_js,
+                });
+                self.builder = self.builder.with_session_manager(session_manager);
             }
             (None, None, None, Some((pool_rc, run_migration, foreign_key_mode))) => {
                 let pool: &JsPool = pool_rc;
@@ -493,19 +516,17 @@ impl SdkBuilder {
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
 
-                if !self.user_session_manager {
-                    let session_manager_js = create_mysql_session_manager_with_pool(
-                        pool,
-                        &identity_bytes,
-                        logger_ref,
-                        run_migration,
-                    )
-                    .await?;
-                    let session_manager = Arc::new(WasmSessionManager {
-                        session_manager: session_manager_js,
-                    });
-                    self.builder = self.builder.with_session_manager(session_manager);
-                }
+                let session_manager_js = create_mysql_session_manager_with_pool(
+                    pool,
+                    &identity_bytes,
+                    logger_ref,
+                    run_migration,
+                )
+                .await?;
+                let session_manager = Arc::new(WasmSessionManager {
+                    session_manager: session_manager_js,
+                });
+                self.builder = self.builder.with_session_manager(session_manager);
             }
             _ => {
                 return Err(WasmError::new(

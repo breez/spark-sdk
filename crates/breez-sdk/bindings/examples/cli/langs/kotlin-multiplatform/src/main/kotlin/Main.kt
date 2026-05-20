@@ -61,6 +61,7 @@ fun main(args: Array<String>) {
     var network = "regtest"
     var accountNumber: String? = null
     var postgresConnectionString: String? = null
+    var mysqlConnectionString: String? = null
     var stableBalanceTokenIdentifier: String? = null
     var stableBalanceThreshold: ULong? = null
     var passkeyProviderStr: String? = null
@@ -88,6 +89,10 @@ fun main(args: Array<String>) {
             "--postgres-connection-string" -> {
                 i++
                 if (i < args.size) postgresConnectionString = args[i]
+            }
+            "--mysql-connection-string" -> {
+                i++
+                if (i < args.size) mysqlConnectionString = args[i]
             }
             "--stable-balance-token-identifier" -> {
                 i++
@@ -123,6 +128,7 @@ fun main(args: Array<String>) {
                 println("  --network <NETWORK>                          Network to use: regtest, mainnet (default: regtest)")
                 println("  --account-number <NUM>                       Account number for the Spark signer")
                 println("  --postgres-connection-string <CONN>          PostgreSQL connection string (uses SQLite by default)")
+                println("  --mysql-connection-string <CONN>             MySQL connection string (mutually exclusive with --postgres-connection-string)")
                 println("  --stable-balance-token-identifier <ID>       Stable balance token identifier")
                 println("  --stable-balance-threshold <SATS>            Stable balance threshold in sats")
                 println("  --passkey <PROVIDER>                         Use passkey with PRF provider (file, yubikey, or fido2)")
@@ -154,6 +160,10 @@ fun main(args: Array<String>) {
     }
     if (listLabels && (label != null || storeLabel)) {
         System.err.println("Error: --list-labels conflicts with --label and --store-label")
+        return
+    }
+    if (postgresConnectionString != null && mysqlConnectionString != null) {
+        System.err.println("Error: --postgres-connection-string and --mysql-connection-string are mutually exclusive")
         return
     }
 
@@ -205,6 +215,7 @@ fun main(args: Array<String>) {
             networkEnum,
             accountNumber,
             postgresConnectionString,
+            mysqlConnectionString,
             stableBalanceConfig,
             passkeyConfig,
         )
@@ -216,6 +227,7 @@ suspend fun runInteractiveMode(
     network: Network,
     accountNumber: String?,
     postgresConnectionString: String?,
+    mysqlConnectionString: String?,
     stableBalanceConfig: StableBalanceConfig?,
     passkeyConfig: PasskeyConfig?,
 ) {
@@ -255,9 +267,19 @@ suspend fun runInteractiveMode(
     // Build SDK
     val builder = SdkBuilder(config, seed)
     if (postgresConnectionString != null) {
-        val pgConfig = defaultPostgresStorageConfig(postgresConnectionString)
-        val pool = createPostgresConnectionPool(pgConfig)
-        builder.withPostgresConnectionPool(pool)
+        val context = newSharedSdkContext(SdkContextConfig(
+            network = network,
+            apiKey = if (!apiKey.isNullOrEmpty()) apiKey else null,
+            postgresConfig = defaultPostgresStorageConfig(postgresConnectionString),
+        ))
+        builder.withSharedContext(context)
+    } else if (mysqlConnectionString != null) {
+        val context = newSharedSdkContext(SdkContextConfig(
+            network = network,
+            apiKey = if (!apiKey.isNullOrEmpty()) apiKey else null,
+            mysqlConfig = defaultMysqlStorageConfig(mysqlConnectionString),
+        ))
+        builder.withSharedContext(context)
     } else {
         builder.withDefaultStorage(dataDir)
     }

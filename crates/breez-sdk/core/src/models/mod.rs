@@ -496,7 +496,7 @@ impl FromStr for SparkHtlcStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum Network {
     Mainnet,
@@ -585,8 +585,15 @@ pub struct Config {
 
     /// Whether the Spark private mode is enabled by default.
     ///
-    /// If set to true, the Spark private mode will be enabled on the first initialization of the SDK.
-    /// If set to false, no changes will be made to the Spark private mode.
+    /// If set to true, the Spark private mode will be enabled on the first
+    /// initialization of the SDK. If set to false, no changes will be made
+    /// to the Spark private mode.
+    ///
+    /// This default is only auto-applied when `background_tasks_enabled` is
+    /// `true`. When `background_tasks_enabled` is `false`, the SDK does not
+    /// touch the Spark private mode on startup; call `update_user_settings`
+    /// with `spark_private_mode_enabled` set as needed on a one-time setup
+    /// pass.
     pub private_enabled_default: bool,
 
     /// Configuration for leaf optimization.
@@ -613,6 +620,32 @@ pub struct Config {
     /// threshold, and token settings. Use this to connect to alternative Spark
     /// deployments (e.g. dev/staging environments).
     pub spark_config: Option<SparkConfig>,
+
+    /// Master switch for per-instance background services.
+    ///
+    /// When `true` (default), the SDK runs its standard background work:
+    /// periodic sync, lightning-address recovery, private-mode initialization,
+    /// the leaf and token-output optimizers, the Spark server-event
+    /// subscription, and the real-time sync client (when
+    /// `real_time_sync_server_url` is set).
+    ///
+    /// When `false`, **no background service is started**, regardless of any
+    /// other setting on this config. This is intended for multi-tenant server
+    /// deployments where the host application orchestrates sync and claims
+    /// explicitly and receives events via webhooks. Use
+    /// `default_server_config` to get this preset.
+    ///
+    /// Explicit operations (`sync_wallet`, `claim_deposit`,
+    /// `list_unclaimed_deposits`, `refund_deposit`,
+    /// `refund_pending_conversions`, leaf/token optimization, etc.) work
+    /// regardless of this flag.
+    ///
+    /// When `false`, the SDK rejects builds where fields whose backing
+    /// service is gated off are still in their active shape:
+    /// `stable_balance_config` must be `None`, `real_time_sync_server_url`
+    /// must be `None`, and `optimization_config.auto_enabled` must be `false`.
+    /// `default_server_config` already sets these compatible values.
+    pub background_tasks_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1025,6 +1058,12 @@ pub struct Credentials {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct GetInfoRequest {
+    /// When `Some(true)`, and `background_tasks_enabled` is `true`, the call
+    /// waits for the initial Full sync to complete before returning.
+    ///
+    /// When `background_tasks_enabled` is `false`, setting this to `Some(true)`
+    /// is rejected with an invalid-input error. There is no background sync to
+    /// wait on; call `sync_wallet` explicitly first if you need fresh state.
     pub ensure_synced: Option<bool>,
 }
 

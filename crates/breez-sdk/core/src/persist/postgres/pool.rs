@@ -10,15 +10,16 @@ use super::{PostgresStorageConfig, base::create_pool};
 
 /// A shareable Postgres connection pool.
 ///
-/// Construct via [`create_postgres_connection_pool`] and pass the same `Arc` to multiple
-/// [`SdkBuilder`](crate::SdkBuilder)s via
-/// [`SdkBuilder::with_postgres_connection_pool`](crate::SdkBuilder::with_postgres_connection_pool).
-/// All SDKs sharing a pool target the same database; per-tenant isolation is
-/// derived from each SDK's seed (the identity public key scopes every row).
+/// Typically owned by an [`SdkContext`](crate::SdkContext): supply a
+/// `PostgresStorageConfig` to [`new_shared_sdk_context`](crate::new_shared_sdk_context) and
+/// the context builds the pool internally. All SDKs sharing the same context
+/// target the same database; per-tenant isolation is derived from each SDK's
+/// seed (the identity public key scopes every row).
 ///
-/// The pool's lifecycle is owned by the integrator: it stays alive as long
-/// as any `Arc<PostgresConnectionPool>` is held. [`BreezSdk::disconnect`](crate::BreezSdk::disconnect)
-/// does **not** close the pool.
+/// The pool's lifecycle follows its containing `SdkContext`: connections
+/// close when the last `Arc<SdkContext>` is dropped.
+/// [`BreezSdk::disconnect`](crate::BreezSdk::disconnect) does **not** close
+/// the pool.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct PostgresConnectionPool {
     pub(crate) inner: deadpool_postgres::Pool,
@@ -27,9 +28,8 @@ pub struct PostgresConnectionPool {
 
 /// Creates a shareable Postgres connection pool from the given configuration.
 ///
-/// Hand the returned `Arc` to one or more
-/// [`SdkBuilder::with_postgres_connection_pool`](crate::SdkBuilder::with_postgres_connection_pool)
-/// calls to share a single pool across multiple SDK instances.
+/// Used internally by [`new_shared_sdk_context`](crate::new_shared_sdk_context). Exposed
+/// for advanced use cases where a caller wants the pool itself.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn create_postgres_connection_pool(
     config: &PostgresStorageConfig,

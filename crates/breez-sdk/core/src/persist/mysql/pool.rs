@@ -22,9 +22,8 @@ pub struct MysqlConnectionPool {
 
 /// Creates a shareable `MySQL` connection pool from the given configuration.
 ///
-/// Hand the returned `Arc` to one or more
-/// [`SdkBuilder::with_mysql_connection_pool`](crate::SdkBuilder::with_mysql_connection_pool)
-/// calls to share a single pool across multiple SDK instances.
+/// Used internally by [`new_shared_sdk_context`](crate::new_shared_sdk_context). Exposed
+/// for advanced use cases where a caller wants the pool itself.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn create_mysql_connection_pool(
     config: &MysqlStorageConfig,

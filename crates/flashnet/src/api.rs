@@ -36,7 +36,7 @@ pub struct FlashnetClient {
     pub(crate) config: FlashnetConfig,
     pub(crate) cache_store: Arc<CacheStore>,
     pub(crate) spark_wallet: Arc<SparkWallet>,
-    pub(crate) http_client: platform_utils::DefaultHttpClient,
+    pub(crate) http_client: Arc<dyn platform_utils::HttpClient>,
     /// Mutex to serialize authentication attempts and prevent race conditions
     pub(crate) auth_mutex: Mutex<()>,
 }
@@ -46,12 +46,13 @@ impl FlashnetClient {
         config: FlashnetConfig,
         spark_wallet: Arc<SparkWallet>,
         cache_store: Arc<CacheStore>,
+        http_client: Arc<dyn platform_utils::HttpClient>,
     ) -> Self {
         Self {
             config,
             cache_store,
             spark_wallet,
-            http_client: platform_utils::DefaultHttpClient::default(),
+            http_client,
             auth_mutex: Mutex::new(()),
         }
     }

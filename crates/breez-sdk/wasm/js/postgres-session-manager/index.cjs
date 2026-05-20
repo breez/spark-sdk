@@ -7,7 +7,7 @@
  * `setSession(serviceIdentityKey, session)` upserts a session.
  *
  * Tenant identity is bound at construction so multiple tenants can share
- * a single Postgres database without leaking sessions across tenants.
+ * a single Postgres database without leaking brz_sessions across tenants.
  */
 
 let pg;
@@ -84,7 +84,7 @@ class PostgresSessionManager {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
       const { rows } = await this.pool.query(
-        `SELECT token, expiration FROM sessions
+        `SELECT token, expiration FROM brz_sessions
          WHERE user_id = $1 AND service_identity_key = $2`,
         [this.identity, serviceKey]
       );
@@ -113,7 +113,7 @@ class PostgresSessionManager {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
       await this.pool.query(
-        `INSERT INTO sessions (user_id, service_identity_key, token, expiration)
+        `INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (user_id, service_identity_key)
          DO UPDATE SET token = EXCLUDED.token, expiration = EXCLUDED.expiration`,

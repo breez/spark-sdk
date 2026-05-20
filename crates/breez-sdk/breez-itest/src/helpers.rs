@@ -128,7 +128,7 @@ pub async fn resolve_backend_choice() -> Result<BackendChoice> {
 }
 
 /// Attaches a previously-resolved [`BackendChoice`] to the builder.
-fn apply_backend_choice(
+async fn apply_backend_choice(
     builder: SdkBuilder,
     storage_dir: String,
     choice: &BackendChoice,
@@ -137,13 +137,21 @@ fn apply_backend_choice(
         BackendChoice::Sqlite => Ok(builder.with_default_storage(storage_dir)),
         BackendChoice::Postgres(conn_str) => {
             let pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str.clone());
-            let pool = breez_sdk_spark::create_postgres_connection_pool(&pg_config)?;
-            Ok(builder.with_postgres_connection_pool(pool))
+            let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
+                postgres_config: Some(pg_config),
+                ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
+            })
+            .await?;
+            Ok(builder.with_shared_context(ctx))
         }
         BackendChoice::Mysql(conn_str) => {
             let my_config = breez_sdk_spark::default_mysql_storage_config(conn_str.clone());
-            let pool = breez_sdk_spark::create_mysql_connection_pool(&my_config)?;
-            Ok(builder.with_mysql_connection_pool(pool))
+            let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
+                mysql_config: Some(my_config),
+                ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
+            })
+            .await?;
+            Ok(builder.with_shared_context(ctx))
         }
     }
 }
@@ -154,7 +162,7 @@ fn apply_backend_choice(
 /// configuration is applied; if both env vars are set, postgres wins.
 async fn apply_storage(builder: SdkBuilder, storage_dir: String) -> Result<SdkBuilder> {
     let choice = resolve_backend_choice().await?;
-    apply_backend_choice(builder, storage_dir, &choice)
+    apply_backend_choice(builder, storage_dir, &choice).await
 }
 
 /// Event listener that forwards events to a channel
@@ -230,11 +238,15 @@ pub async fn build_sdk(storage_dir: String, seed_bytes: [u8; 32]) -> Result<SdkI
     build_sdk_with_dir(storage_dir, seed_bytes, None).await
 }
 
-/// Build and initialize a BreezSDK instance attached to a shared SSP connection manager.
-pub async fn build_sdk_with_shared_ssp_connection_manager(
+/// Build and initialize a BreezSDK instance attached to a shared SdkContext.
+///
+/// The supplied `Arc<SdkContext>` bundles both the shared HTTP client (SSP /
+/// chain / LNURL / JWT) and the operator gRPC channels, so a single shared
+/// handle covers every cross-instance sharing scenario.
+pub async fn build_sdk_with_shared_context(
     storage_dir: String,
     seed_bytes: [u8; 32],
-    ssp_connection_manager: Arc<SspConnectionManager>,
+    context: Arc<SdkContext>,
     temp_dir: Option<TempDir>,
 ) -> Result<SdkInstance> {
     let mut config = default_config(Network::Regtest);
@@ -245,47 +257,9 @@ pub async fn build_sdk_with_shared_ssp_connection_manager(
     config.real_time_sync_server_url = None;
 
     let seed = Seed::Entropy(seed_bytes.to_vec());
-    let builder = SdkBuilder::new(config, seed).with_ssp_connection_manager(ssp_connection_manager);
-    let builder = apply_storage(builder, storage_dir).await?;
-    let sdk = builder.build().await?;
-
-    let (tx, rx) = mpsc::channel(100);
-    let event_listener = Box::new(ChannelEventListener { tx });
-    let _listener_id = sdk.add_event_listener(event_listener).await;
-
-    let _ = sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(true),
-        })
-        .await?;
-
-    Ok(SdkInstance {
-        sdk,
-        events: rx,
-        span: tracing::Span::current(),
-        temp_dir,
-        data_sync_fixture: None,
-        lnurl_fixture: None,
-    })
-}
-
-/// Build and initialize a BreezSDK instance attached to a shared connection manager.
-pub async fn build_sdk_with_shared_connection_manager(
-    storage_dir: String,
-    seed_bytes: [u8; 32],
-    connection_manager: Arc<ConnectionManager>,
-    temp_dir: Option<TempDir>,
-) -> Result<SdkInstance> {
-    let mut config = default_config(Network::Regtest);
-    config.api_key = None;
-    config.lnurl_domain = None;
-    config.prefer_spark_over_lightning = true;
-    config.sync_interval_secs = 5;
-    config.real_time_sync_server_url = None;
-
-    let seed = Seed::Entropy(seed_bytes.to_vec());
-    let builder = SdkBuilder::new(config, seed).with_connection_manager(connection_manager);
-    let builder = apply_storage(builder, storage_dir).await?;
+    let builder = SdkBuilder::new(config, seed)
+        .with_shared_context(context)
+        .with_default_storage(storage_dir);
     let sdk = builder.build().await?;
 
     let (tx, rx) = mpsc::channel(100);
@@ -350,10 +324,9 @@ pub async fn build_sdk_with_custom_config_and_backend(
         // In regtest we don't need an API key; drop it if present to avoid network calls
         config.api_key = None;
     }
-    // Speed up tests and prefer spark routing
     config.prefer_spark_over_lightning = true;
-    config.sync_interval_secs = 5;
     if apply_sensible_test_defaults {
+        config.sync_interval_secs = 5;
         config.real_time_sync_server_url = None;
         config.lnurl_domain = None;
     }
@@ -362,7 +335,7 @@ pub async fn build_sdk_with_custom_config_and_backend(
 
     let builder = SdkBuilder::new(config, seed);
     let builder = match backend {
-        Some(choice) => apply_backend_choice(builder, storage_dir, &choice)?,
+        Some(choice) => apply_backend_choice(builder, storage_dir, &choice).await?,
         None => apply_storage(builder, storage_dir).await?,
     };
     let sdk = builder.build().await?;
@@ -642,18 +615,19 @@ pub fn split_mysql_url(conn_str: &str) -> Result<(String, String)> {
 /// PostgreSQL tree store input for `build_sdk_with_tree_store_config`.
 ///
 /// `ConnectionString` lazily ensures the database exists and builds a fresh
-/// pool for that one SDK. `SharedPool` reuses a pre-built pool across SDK
-/// instances (multi-tenant scoping isolates rows by seed identity).
+/// `SdkContext` for that one SDK. `SharedContext` reuses a pre-built
+/// [`SdkContext`] across SDK instances (multi-tenant scoping isolates rows
+/// by seed identity).
 pub enum PostgresTreeStore {
     ConnectionString(String),
-    SharedPool(std::sync::Arc<breez_sdk_spark::PostgresConnectionPool>),
+    SharedContext(std::sync::Arc<SdkContext>),
 }
 
 /// MySQL tree store input for `build_sdk_with_tree_store_config`. See
 /// [`PostgresTreeStore`] for semantics.
 pub enum MysqlTreeStore {
     ConnectionString(String),
-    SharedPool(std::sync::Arc<breez_sdk_spark::MysqlConnectionPool>),
+    SharedContext(std::sync::Arc<SdkContext>),
 }
 
 /// Build and initialize a BreezSDK instance with optional PostgreSQL/MySQL
@@ -709,22 +683,30 @@ pub async fn build_sdk_with_tree_store_config(
             ensure_postgres_database_exists(&conn_str).await?;
             let mut pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
             pg_config.max_pool_size = 30;
-            let pool = breez_sdk_spark::create_postgres_connection_pool(&pg_config)?;
-            builder = builder.with_postgres_connection_pool(pool);
+            let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
+                postgres_config: Some(pg_config),
+                ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
+            })
+            .await?;
+            builder = builder.with_shared_context(ctx);
         }
-        (Some(PostgresTreeStore::SharedPool(pool)), None) => {
-            builder = builder.with_postgres_connection_pool(pool);
+        (Some(PostgresTreeStore::SharedContext(ctx)), None) => {
+            builder = builder.with_shared_context(ctx);
         }
         (None, Some(MysqlTreeStore::ConnectionString(conn_str))) => {
             let (admin_url, db_name) = split_mysql_url(&conn_str)?;
             ensure_mysql_database_exists(&admin_url, &db_name).await?;
             let mut my_config = breez_sdk_spark::default_mysql_storage_config(conn_str);
             my_config.max_pool_size = 30;
-            let pool = breez_sdk_spark::create_mysql_connection_pool(&my_config)?;
-            builder = builder.with_mysql_connection_pool(pool);
+            let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
+                mysql_config: Some(my_config),
+                ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
+            })
+            .await?;
+            builder = builder.with_shared_context(ctx);
         }
-        (None, Some(MysqlTreeStore::SharedPool(pool))) => {
-            builder = builder.with_mysql_connection_pool(pool);
+        (None, Some(MysqlTreeStore::SharedContext(ctx))) => {
+            builder = builder.with_shared_context(ctx);
         }
         (None, None) => {
             builder = apply_storage(builder, storage_dir).await?;
@@ -741,11 +723,10 @@ pub async fn build_sdk_with_tree_store_config(
     let event_listener = Box::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
-    // Ensure initial sync completes
-    let _ = sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(true),
-        })
+    // Force an initial full sync. Works in both modes (auto sync on or off)
+    // because `sync_wallet` drives the coordinator directly rather than
+    // waiting on the auto-sync initial-synced watcher.
+    sdk.sync_wallet(breez_sdk_spark::SyncWalletRequest {})
         .await?;
 
     Ok(SdkInstance {
@@ -1097,6 +1078,42 @@ async fn ensure_funded_inner(sdk_instance: &mut SdkInstance, min_balance: u64) -
         let needed = min_balance - info.balance_sats;
         info!("Funding wallet via faucet: need {} sats", needed);
         receive_and_fund(sdk_instance, needed.clamp(10000, 50000), true).await?;
+    }
+    Ok(())
+}
+
+/// Server-mode variant of [`ensure_funded`].
+///
+/// Identical contract, but routes through `receive_and_fund(.., must_be_claimer=false)`
+/// so the wait loop never depends on a `ClaimedDeposits` SDK event. Server-mode
+/// SDKs don't run the spark-wallet `BackgroundProcessor`, so the event would
+/// never fire on its own; `wait_for_balance` (which polls `sync_wallet` +
+/// `get_info`) is the only mechanism that works in both modes.
+pub async fn ensure_funded_via_polling(
+    sdk_instance: &mut SdkInstance,
+    min_balance: u64,
+) -> Result<()> {
+    let span = sdk_instance.span.clone();
+    return ensure_funded_via_polling_inner(sdk_instance, min_balance)
+        .instrument(span)
+        .await;
+}
+
+async fn ensure_funded_via_polling_inner(
+    sdk_instance: &mut SdkInstance,
+    min_balance: u64,
+) -> Result<()> {
+    sdk_instance.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let info = sdk_instance
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+    if info.balance_sats < min_balance {
+        let needed = min_balance - info.balance_sats;
+        info!("Funding wallet via faucet (polling): need {} sats", needed);
+        receive_and_fund(sdk_instance, needed.clamp(10000, 50000), false).await?;
     }
     Ok(())
 }
@@ -1635,10 +1652,14 @@ pub async fn build_sdk_with_postgres(
 
     let postgres_config =
         breez_sdk_spark::default_postgres_storage_config(connection_string.to_string());
-    let pool = breez_sdk_spark::create_postgres_connection_pool(&postgres_config)?;
+    let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
+        postgres_config: Some(postgres_config),
+        ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
+    })
+    .await?;
 
     let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
-        .with_postgres_connection_pool(pool)
+        .with_shared_context(ctx)
         .build()
         .await?;
 
@@ -1690,10 +1711,14 @@ pub async fn build_sdk_with_mysql(
     let mut mysql_config =
         breez_sdk_spark::default_mysql_storage_config(connection_string.to_string());
     mysql_config.max_pool_size = 30;
-    let pool = breez_sdk_spark::create_mysql_connection_pool(&mysql_config)?;
+    let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
+        mysql_config: Some(mysql_config),
+        ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
+    })
+    .await?;
 
     let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
-        .with_mysql_connection_pool(pool)
+        .with_shared_context(ctx)
         .build()
         .await?;
 
@@ -1706,6 +1731,96 @@ pub async fn build_sdk_with_mysql(
             ensure_synced: Some(true),
         })
         .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        span: tracing::Span::current(),
+        temp_dir: None,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}
+
+/// Server-mode variant of [`build_sdk_with_postgres`].
+///
+/// Same wiring (shared PG pool, shared seed, regtest, no LNURL/RT-sync), but
+/// the config comes from `default_server_config` so the SDK runs with
+/// `background_tasks_enabled=false`: no periodic-sync loop, no spark-wallet
+/// `BackgroundProcessor`, no event-driven payment refresh. Callers must drive
+/// every reconciliation via `sync_wallet` (or use polling helpers like
+/// [`ensure_funded_via_polling`] / [`wait_for_balance`]).
+pub async fn build_sdk_with_postgres_server_mode(
+    connection_string: &str,
+    seed_bytes: [u8; 32],
+) -> Result<SdkInstance> {
+    let mut config = breez_sdk_spark::default_server_config(breez_sdk_spark::Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.real_time_sync_server_url = None;
+    config.optimization_config.auto_enabled = false;
+
+    let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
+
+    let postgres_config =
+        breez_sdk_spark::default_postgres_storage_config(connection_string.to_string());
+    let pool = breez_sdk_spark::create_postgres_connection_pool(&postgres_config)?;
+
+    let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
+        .with_postgres_connection_pool(pool)
+        .build()
+        .await?;
+
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    // `ensure_synced=true` is rejected when `background_tasks_enabled` is
+    // false; issue an explicit sync_wallet so the initial tree-store hydrate
+    // completes before returning.
+    sdk.sync_wallet(SyncWalletRequest {}).await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        span: tracing::Span::current(),
+        temp_dir: None,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}
+
+/// Server-mode variant of [`build_sdk_with_mysql`]. See
+/// [`build_sdk_with_postgres_server_mode`] for the rationale.
+pub async fn build_sdk_with_mysql_server_mode(
+    connection_string: &str,
+    seed_bytes: [u8; 32],
+) -> Result<SdkInstance> {
+    let mut config = breez_sdk_spark::default_server_config(breez_sdk_spark::Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.real_time_sync_server_url = None;
+    config.optimization_config.auto_enabled = false;
+
+    let seed = breez_sdk_spark::Seed::Entropy(seed_bytes.to_vec());
+
+    let mut mysql_config =
+        breez_sdk_spark::default_mysql_storage_config(connection_string.to_string());
+    mysql_config.max_pool_size = 30;
+    let pool = breez_sdk_spark::create_mysql_connection_pool(&mysql_config)?;
+
+    let sdk = breez_sdk_spark::SdkBuilder::new(config, seed)
+        .with_mysql_connection_pool(pool)
+        .build()
+        .await?;
+
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    sdk.sync_wallet(SyncWalletRequest {}).await?;
 
     Ok(SdkInstance {
         sdk,

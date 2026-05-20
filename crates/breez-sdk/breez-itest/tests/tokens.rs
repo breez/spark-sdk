@@ -939,3 +939,269 @@ async fn test_06_supply_limits(#[future] alice_sdk: Result<SdkInstance>) -> Resu
     info!("=== Test test_06_supply_limits PASSED ===");
     Ok(())
 }
+
+/// Test 7: Token payments arrive via SO event stream without manual sync
+#[test_log::test(tokio::test)]
+async fn test_07_token_payment_realtime_event() -> Result<()> {
+    info!("=== Starting test_07_token_payment_realtime_event ===");
+
+    // Build SDKs with sync effectively disabled so any balance/event update
+    // we observe must come from the SO real-time notification, not a background sync.
+    let mut cfg = default_config(Network::Regtest);
+    cfg.sync_interval_secs = u32::MAX;
+    cfg.real_time_sync_server_url = None;
+
+    let alice_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-rt")
+        .tempdir()?;
+    let mut alice_seed = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut alice_seed);
+    let mut alice = build_sdk_with_custom_config(
+        alice_dir.path().to_string_lossy().to_string(),
+        alice_seed,
+        cfg.clone(),
+        Some(alice_dir),
+        false,
+    )
+    .await?;
+
+    let bob_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-bob-rt")
+        .tempdir()?;
+    let mut bob_seed = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut bob_seed);
+    let mut bob = build_sdk_with_custom_config(
+        bob_dir.path().to_string_lossy().to_string(),
+        bob_seed,
+        cfg,
+        Some(bob_dir),
+        false,
+    )
+    .await?;
+
+    // Create and mint test token
+    let token_metadata = create_mint_test_token(&alice).await?;
+    info!(
+        "Created token: {} ({})",
+        token_metadata.name, token_metadata.identifier
+    );
+
+    // Drain any events that arrived during setup so the channel is clean
+    // before the transfer we actually want to observe.
+    clear_event_receiver(&mut alice.events).await;
+    clear_event_receiver(&mut bob.events).await;
+
+    // Bob exposes a Spark address
+    let bob_spark_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    info!("Bob's Spark address: {}", bob_spark_address);
+
+    // Alice sends 15 token units to Bob
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark_address.clone(),
+            amount: Some(15),
+            token_identifier: Some(token_metadata.identifier.clone()),
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    let send_resp = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+
+    info!(
+        "Alice sent payment (id: {}), waiting for events without sync ...",
+        send_resp.payment.id
+    );
+
+    // Wait for Bob to receive a PaymentSucceeded(Token) event.
+    // This must arrive via the SO's TokenTransaction notification, not from
+    // sync_wallet, so we deliberately do NOT call sync here.
+    let bob_payment = wait_for_payment_succeeded_event_with_method(
+        &mut bob.events,
+        PaymentType::Receive,
+        PaymentMethod::Token,
+        30,
+    )
+    .await?;
+
+    info!(
+        "Bob received PaymentSucceeded event: amount={}, status={:?}",
+        bob_payment.amount, bob_payment.status
+    );
+
+    assert_eq!(bob_payment.amount, 15, "Bob should have received 15 tokens");
+    assert_eq!(
+        bob_payment.status,
+        PaymentStatus::Completed,
+        "Bob's payment should be completed"
+    );
+    assert_eq!(
+        bob_payment.payment_type,
+        PaymentType::Receive,
+        "Bob's payment type should be Receive"
+    );
+    assert!(
+        matches!(
+            bob_payment.details,
+            Some(PaymentDetails::Token { ref metadata, .. }) if *metadata == token_metadata
+        ),
+        "Bob's payment should carry the correct token metadata"
+    );
+
+    // Balances should be updated as part of event processing - no sync needed.
+    let bob_balance = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_metadata.identifier)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    assert_eq!(
+        bob_balance, 15,
+        "Bob's token balance should be 15 immediately after the event"
+    );
+
+    // Also confirm Alice's send event arrived the same way
+    let alice_payment = wait_for_payment_succeeded_event_with_method(
+        &mut alice.events,
+        PaymentType::Send,
+        PaymentMethod::Token,
+        30,
+    )
+    .await?;
+
+    info!(
+        "Alice received PaymentSucceeded(Send/Token) event: amount={}",
+        alice_payment.amount
+    );
+
+    assert_eq!(
+        alice_payment.amount, 15,
+        "Alice's send event should show 15 tokens"
+    );
+
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_metadata.identifier)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    assert_eq!(
+        alice_balance,
+        1_000_000 - 15,
+        "Alice's balance should be 999,985 without a manual sync"
+    );
+
+    // --- Second transfer: Bob sends 5 tokens back to Alice ---
+    // This exercises the case where Bob's newly received outputs become
+    // inputs in a new transaction, verifying that both spent-input removal
+    // and new-output insertion work correctly across multiple hops.
+    info!("Bob sending 5 tokens back to Alice ...");
+
+    clear_event_receiver(&mut alice.events).await;
+    clear_event_receiver(&mut bob.events).await;
+
+    let alice_spark_address = alice
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    let prepare2 = bob
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: alice_spark_address.clone(),
+            amount: Some(5),
+            token_identifier: Some(token_metadata.identifier.clone()),
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    bob.sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare2,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+
+    // Wait for Alice to receive the payment event
+    let alice_recv = wait_for_payment_succeeded_event_with_method(
+        &mut alice.events,
+        PaymentType::Receive,
+        PaymentMethod::Token,
+        30,
+    )
+    .await?;
+    assert_eq!(alice_recv.amount, 5, "Alice should receive 5 tokens back");
+
+    // Wait for Bob's send event
+    let bob_send = wait_for_payment_succeeded_event_with_method(
+        &mut bob.events,
+        PaymentType::Send,
+        PaymentMethod::Token,
+        30,
+    )
+    .await?;
+    assert_eq!(bob_send.amount, 5, "Bob's send event should show 5 tokens");
+
+    // Verify balances account for both inputs (spent) and outputs (received/change)
+    let alice_balance_2 = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_metadata.identifier)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    assert_eq!(
+        alice_balance_2,
+        1_000_000 - 15 + 5,
+        "Alice's balance should be 999,990 (original - 15 sent + 5 received)"
+    );
+
+    let bob_balance_2 = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_metadata.identifier)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    assert_eq!(
+        bob_balance_2,
+        15 - 5,
+        "Bob's balance should be 10 (15 received - 5 sent)"
+    );
+
+    info!("=== Test test_07_token_payment_realtime_event PASSED ===");
+    Ok(())
+}

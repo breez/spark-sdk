@@ -144,6 +144,72 @@ impl TokenService {
         }
     }
 
+    /// Updates the local token output store to reflect a completed token
+    /// transaction: removes spent inputs and inserts any new outputs that
+    /// belong to `identity_public_key`.
+    ///
+    /// This is the single entry-point for reconciling the local output pool
+    /// after receiving a token-transaction event (including transactions
+    /// initiated on another device).
+    pub async fn update_token_outputs_for_transaction(
+        &self,
+        transaction: &TokenTransaction,
+        identity_public_key: &PublicKey,
+    ) -> Result<(), ServiceError> {
+        // 1. Collect spent input refs.
+        let spent_refs: Vec<(String, u32)> =
+            if let TokenInputs::Transfer(ref transfer_input) = transaction.inputs {
+                transfer_input
+                    .outputs_to_spend
+                    .iter()
+                    .map(|o| (o.prev_token_tx_hash.clone(), o.prev_token_tx_vout))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+        // 2. Collect outputs that belong to us.
+        let our_outputs: Vec<TokenOutputWithPrevOut> = transaction
+            .outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.owner_public_key == *identity_public_key)
+            .map(|(vout, output)| TokenOutputWithPrevOut {
+                output: output.clone(),
+                prev_tx_hash: transaction.hash.clone(),
+                prev_tx_vout: vout as u32,
+            })
+            .collect();
+
+        // 3. Build the outputs-to-add bundle (with metadata) if we have any.
+        let outputs_to_add = if let Some(token_id) = our_outputs
+            .first()
+            .map(|o| o.output.token_identifier.clone())
+        {
+            let metadata = self
+                .get_tokens_metadata(&[token_id.as_str()], &[])
+                .await?
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    ServiceError::Generic(format!("Metadata not found for token {token_id}"))
+                })?;
+            Some(TokenOutputs {
+                metadata,
+                outputs: our_outputs,
+            })
+        } else {
+            None
+        };
+
+        // 4. Atomically remove spent inputs and insert new outputs.
+        self.token_output_service
+            .update_token_outputs(&spent_refs, outputs_to_add.as_ref())
+            .await?;
+
+        Ok(())
+    }
+
     /// Refreshes token outputs from the operator.
     pub async fn refresh_tokens_outputs(&self) -> Result<(), ServiceError> {
         self.token_output_service.refresh_tokens_outputs().await?;
@@ -585,10 +651,13 @@ impl TokenService {
             })
             .collect::<Vec<_>>();
         self.token_output_service
-            .insert_token_outputs(&TokenOutputs {
-                metadata: reservation.token_outputs.metadata,
-                outputs: our_outputs,
-            })
+            .update_token_outputs(
+                &[],
+                Some(&TokenOutputs {
+                    metadata: reservation.token_outputs.metadata,
+                    outputs,
+                }),
+            )
             .await?;
 
         Ok(token_transaction)
@@ -975,10 +1044,13 @@ impl TokenService {
                 })
                 .collect::<Vec<_>>();
             self.token_output_service
-                .insert_token_outputs(&TokenOutputs {
-                    metadata: reservation.token_outputs.metadata,
-                    outputs,
-                })
+                .update_token_outputs(
+                    &[],
+                    Some(&TokenOutputs {
+                        metadata: reservation.token_outputs.metadata,
+                        outputs,
+                    }),
+                )
                 .await?;
         }
 

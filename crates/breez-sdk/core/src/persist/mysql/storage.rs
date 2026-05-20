@@ -26,11 +26,117 @@ use crate::{
     },
 };
 
-use super::base::{Migration, map_db_error, run_migrations};
+use super::base::{Migration, SchemaRenames, map_db_error, run_migrations};
 #[cfg(test)]
 use super::base::{MysqlStorageConfig, create_pool};
 
-const MIGRATIONS_TABLE: &str = "schema_migrations";
+const MIGRATIONS_TABLE: &str = "brz_schema_migrations";
+
+/// Pre-prefix rename map for upgrading core persist deployments.
+const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
+    old_migrations_table: "schema_migrations",
+    new_migrations_table: MIGRATIONS_TABLE,
+    tables: &[
+        ("payments", "brz_payments"),
+        ("settings", "brz_settings"),
+        ("unclaimed_deposits", "brz_unclaimed_deposits"),
+        ("payment_metadata", "brz_payment_metadata"),
+        ("payment_details_lightning", "brz_payment_details_lightning"),
+        ("payment_details_token", "brz_payment_details_token"),
+        ("payment_details_spark", "brz_payment_details_spark"),
+        ("lnurl_receive_metadata", "brz_lnurl_receive_metadata"),
+        ("sync_revision", "brz_sync_revision"),
+        ("sync_outgoing", "brz_sync_outgoing"),
+        ("sync_state", "brz_sync_state"),
+        ("sync_incoming", "brz_sync_incoming"),
+        ("contacts", "brz_contacts"),
+    ],
+    indexes: &[
+        (
+            "brz_payments",
+            "idx_payments_user_timestamp",
+            "brz_idx_payments_user_timestamp",
+        ),
+        (
+            "brz_payments",
+            "idx_payments_user_payment_type",
+            "brz_idx_payments_user_payment_type",
+        ),
+        (
+            "brz_payments",
+            "idx_payments_user_status",
+            "brz_idx_payments_user_status",
+        ),
+        (
+            "brz_payment_metadata",
+            "idx_payment_metadata_user_parent",
+            "brz_idx_payment_metadata_user_parent",
+        ),
+        (
+            "brz_payment_details_lightning",
+            "idx_payment_details_lightning_user_invoice",
+            "brz_idx_payment_details_lightning_user_invoice",
+        ),
+        (
+            "brz_payment_details_lightning",
+            "idx_payment_details_lightning_user_payment_hash",
+            "brz_idx_payment_details_lightning_user_payment_hash",
+        ),
+        (
+            "brz_sync_outgoing",
+            "idx_sync_outgoing_user_record_type_data_id",
+            "brz_idx_sync_outgoing_user_record_type_data_id",
+        ),
+        (
+            "brz_sync_incoming",
+            "idx_sync_incoming_user_revision",
+            "brz_idx_sync_incoming_user_revision",
+        ),
+        // Pre-multi-tenant indexes (still present on version < 16 DBs).
+        // The multi-tenant migration drops these via the post-rename names.
+        (
+            "brz_payments",
+            "idx_payments_timestamp",
+            "brz_idx_payments_timestamp",
+        ),
+        (
+            "brz_payments",
+            "idx_payments_payment_type",
+            "brz_idx_payments_payment_type",
+        ),
+        (
+            "brz_payments",
+            "idx_payments_status",
+            "brz_idx_payments_status",
+        ),
+        (
+            "brz_payment_metadata",
+            "idx_payment_metadata_parent",
+            "brz_idx_payment_metadata_parent",
+        ),
+        (
+            "brz_payment_details_lightning",
+            "idx_payment_details_lightning_invoice",
+            "brz_idx_payment_details_lightning_invoice",
+        ),
+        (
+            "brz_payment_details_lightning",
+            "idx_payment_details_lightning_payment_hash",
+            "brz_idx_payment_details_lightning_payment_hash",
+        ),
+        (
+            "brz_sync_outgoing",
+            "idx_sync_outgoing_data_id_record_type",
+            "brz_idx_sync_outgoing_data_id_record_type",
+        ),
+        (
+            "brz_sync_incoming",
+            "idx_sync_incoming_revision",
+            "brz_idx_sync_incoming_revision",
+        ),
+    ],
+    foreign_keys: &[],
+};
 
 /// `MySQL`-based storage implementation using `mysql_async`'s connection pool.
 ///
@@ -78,6 +184,7 @@ impl MysqlStorage {
             &self.pool,
             MIGRATIONS_TABLE,
             &Self::migrations(&self.identity),
+            Some(&SCHEMA_RENAMES),
         )
         .await
     }
@@ -88,7 +195,7 @@ impl MysqlStorage {
             // Migration 1: Core tables
             vec![
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS payments (
+                    "CREATE TABLE IF NOT EXISTS brz_payments (
                         id VARCHAR(255) NOT NULL PRIMARY KEY,
                         payment_type VARCHAR(64) NOT NULL,
                         status VARCHAR(64) NOT NULL,
@@ -102,13 +209,13 @@ impl MysqlStorage {
                     )",
                 ),
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS settings (
+                    "CREATE TABLE IF NOT EXISTS brz_settings (
                         `key` VARCHAR(255) NOT NULL PRIMARY KEY,
                         value LONGTEXT NOT NULL
                     )",
                 ),
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS unclaimed_deposits (
+                    "CREATE TABLE IF NOT EXISTS brz_unclaimed_deposits (
                         txid VARCHAR(255) NOT NULL,
                         vout INT NOT NULL,
                         amount_sats BIGINT NULL,
@@ -119,7 +226,7 @@ impl MysqlStorage {
                     )",
                 ),
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS payment_metadata (
+                    "CREATE TABLE IF NOT EXISTS brz_payment_metadata (
                         payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
                         parent_payment_id VARCHAR(255) NULL,
                         lnurl_pay_info JSON NULL,
@@ -129,7 +236,7 @@ impl MysqlStorage {
                     )",
                 ),
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS payment_details_lightning (
+                    "CREATE TABLE IF NOT EXISTS brz_payment_details_lightning (
                         payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
                         invoice LONGTEXT NOT NULL,
                         payment_hash VARCHAR(255) NOT NULL,
@@ -139,7 +246,7 @@ impl MysqlStorage {
                     )",
                 ),
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS payment_details_token (
+                    "CREATE TABLE IF NOT EXISTS brz_payment_details_token (
                         payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
                         metadata JSON NOT NULL,
                         tx_hash VARCHAR(255) NOT NULL,
@@ -147,14 +254,14 @@ impl MysqlStorage {
                     )",
                 ),
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS payment_details_spark (
+                    "CREATE TABLE IF NOT EXISTS brz_payment_details_spark (
                         payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
                         invoice_details JSON NULL,
                         htlc_details JSON NULL
                     )",
                 ),
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS lnurl_receive_metadata (
+                    "CREATE TABLE IF NOT EXISTS brz_lnurl_receive_metadata (
                         payment_hash VARCHAR(255) NOT NULL PRIMARY KEY,
                         nostr_zap_request LONGTEXT NULL,
                         nostr_zap_receipt LONGTEXT NULL,
@@ -165,18 +272,18 @@ impl MysqlStorage {
             // Migration 2: Sync tables
             vec![
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS sync_revision (
+                    "CREATE TABLE IF NOT EXISTS brz_sync_revision (
                         id INT NOT NULL PRIMARY KEY DEFAULT 1,
                         revision BIGINT NOT NULL DEFAULT 0,
                         CHECK (id = 1)
                     )",
                 ),
                 Migration::sql(
-                    "INSERT INTO sync_revision (id, revision) VALUES (1, 0)
+                    "INSERT INTO brz_sync_revision (id, revision) VALUES (1, 0)
                      ON DUPLICATE KEY UPDATE id = id",
                 ),
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS sync_outgoing (
+                    "CREATE TABLE IF NOT EXISTS brz_sync_outgoing (
                         record_type VARCHAR(255) NOT NULL,
                         data_id VARCHAR(255) NOT NULL,
                         schema_version VARCHAR(64) NOT NULL,
@@ -186,12 +293,12 @@ impl MysqlStorage {
                     )",
                 ),
                 Migration::CreateIndex {
-                    name: "idx_sync_outgoing_data_id_record_type",
-                    table: "sync_outgoing",
+                    name: "brz_idx_sync_outgoing_data_id_record_type",
+                    table: "brz_sync_outgoing",
                     columns: "(record_type, data_id)",
                 },
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS sync_state (
+                    "CREATE TABLE IF NOT EXISTS brz_sync_state (
                         record_type VARCHAR(255) NOT NULL,
                         data_id VARCHAR(255) NOT NULL,
                         schema_version VARCHAR(64) NOT NULL,
@@ -202,7 +309,7 @@ impl MysqlStorage {
                     )",
                 ),
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS sync_incoming (
+                    "CREATE TABLE IF NOT EXISTS brz_sync_incoming (
                         record_type VARCHAR(255) NOT NULL,
                         data_id VARCHAR(255) NOT NULL,
                         schema_version VARCHAR(64) NOT NULL,
@@ -213,62 +320,62 @@ impl MysqlStorage {
                     )",
                 ),
                 Migration::CreateIndex {
-                    name: "idx_sync_incoming_revision",
-                    table: "sync_incoming",
+                    name: "brz_idx_sync_incoming_revision",
+                    table: "brz_sync_incoming",
                     columns: "(revision)",
                 },
             ],
             // Migration 3: Indexes
             vec![
                 Migration::CreateIndex {
-                    name: "idx_payments_timestamp",
-                    table: "payments",
+                    name: "brz_idx_payments_timestamp",
+                    table: "brz_payments",
                     columns: "(timestamp)",
                 },
                 Migration::CreateIndex {
-                    name: "idx_payments_payment_type",
-                    table: "payments",
+                    name: "brz_idx_payments_payment_type",
+                    table: "brz_payments",
                     columns: "(payment_type)",
                 },
                 Migration::CreateIndex {
-                    name: "idx_payments_status",
-                    table: "payments",
+                    name: "brz_idx_payments_status",
+                    table: "brz_payments",
                     columns: "(status)",
                 },
                 Migration::CreateIndex {
-                    name: "idx_payment_details_lightning_invoice",
-                    table: "payment_details_lightning",
+                    name: "brz_idx_payment_details_lightning_invoice",
+                    table: "brz_payment_details_lightning",
                     columns: "(invoice(255))",
                 },
                 Migration::CreateIndex {
-                    name: "idx_payment_metadata_parent",
-                    table: "payment_metadata",
+                    name: "brz_idx_payment_metadata_parent",
+                    table: "brz_payment_metadata",
                     columns: "(parent_payment_id)",
                 },
             ],
             // Migration 4: Add tx_type to token payments
             vec![Migration::AddColumn {
-                table: "payment_details_token",
+                table: "brz_payment_details_token",
                 column: "tx_type",
                 definition: "VARCHAR(64) NOT NULL DEFAULT 'transfer'",
             }],
             // Migration 5: Clear sync tables to force re-sync
             vec![
-                Migration::sql("DELETE FROM sync_outgoing"),
-                Migration::sql("DELETE FROM sync_incoming"),
-                Migration::sql("DELETE FROM sync_state"),
-                Migration::sql("UPDATE sync_revision SET revision = 0"),
-                Migration::sql("DELETE FROM settings WHERE `key` = 'sync_initial_complete'"),
+                Migration::sql("DELETE FROM brz_sync_outgoing"),
+                Migration::sql("DELETE FROM brz_sync_incoming"),
+                Migration::sql("DELETE FROM brz_sync_state"),
+                Migration::sql("UPDATE brz_sync_revision SET revision = 0"),
+                Migration::sql("DELETE FROM brz_settings WHERE `key` = 'sync_initial_complete'"),
             ],
             // Migration 6: Add htlc_status and htlc_expiry_time to lightning payments
             vec![
                 Migration::AddColumn {
-                    table: "payment_details_lightning",
+                    table: "brz_payment_details_lightning",
                     column: "htlc_status",
                     definition: "VARCHAR(64) NOT NULL DEFAULT 'WaitingForPreimage'",
                 },
                 Migration::AddColumn {
-                    table: "payment_details_lightning",
+                    table: "brz_payment_details_lightning",
                     column: "htlc_expiry_time",
                     definition: "BIGINT NOT NULL DEFAULT 0",
                 },
@@ -276,41 +383,41 @@ impl MysqlStorage {
             // Migration 7: Backfill htlc_status for existing Lightning payments
             vec![
                 Migration::sql(
-                    "UPDATE payment_details_lightning
+                    "UPDATE brz_payment_details_lightning
                      SET htlc_status = CASE
-                             WHEN (SELECT status FROM payments WHERE id = payment_id) = 'completed' THEN 'PreimageShared'
-                             WHEN (SELECT status FROM payments WHERE id = payment_id) = 'pending' THEN 'WaitingForPreimage'
+                             WHEN (SELECT status FROM brz_payments WHERE id = payment_id) = 'completed' THEN 'PreimageShared'
+                             WHEN (SELECT status FROM brz_payments WHERE id = payment_id) = 'pending' THEN 'WaitingForPreimage'
                              ELSE 'Returned'
                          END",
                 ),
                 Migration::sql(
-                    "UPDATE settings
+                    "UPDATE brz_settings
                      SET value = JSON_SET(value, '$.offset', 0)
                      WHERE `key` = 'sync_offset' AND value IS NOT NULL",
                 ),
             ],
-            // Migration 8: lnurl_receive_metadata preimage column (added then later dropped)
+            // Migration 8: brz_lnurl_receive_metadata preimage column (added then later dropped)
             vec![
                 Migration::AddColumn {
-                    table: "lnurl_receive_metadata",
+                    table: "brz_lnurl_receive_metadata",
                     column: "preimage",
                     definition: "VARCHAR(255) NULL",
                 },
-                Migration::sql("DELETE FROM settings WHERE `key` = 'lnurl_metadata_updated_after'"),
+                Migration::sql("DELETE FROM brz_settings WHERE `key` = 'lnurl_metadata_updated_after'"),
             ],
             // Migration 9: Clear cached lightning address (schema changed)
             vec![Migration::sql(
-                "DELETE FROM settings WHERE `key` = 'lightning_address'",
+                "DELETE FROM brz_settings WHERE `key` = 'lightning_address'",
             )],
-            // Migration 10: Index on payment_hash for JOIN with lnurl_receive_metadata
+            // Migration 10: Index on payment_hash for JOIN with brz_lnurl_receive_metadata
             vec![Migration::CreateIndex {
-                name: "idx_payment_details_lightning_payment_hash",
-                table: "payment_details_lightning",
+                name: "brz_idx_payment_details_lightning_payment_hash",
+                table: "brz_payment_details_lightning",
                 columns: "(payment_hash)",
             }],
             // Migration 11: Contacts table
             vec![Migration::sql(
-                "CREATE TABLE IF NOT EXISTS contacts (
+                "CREATE TABLE IF NOT EXISTS brz_contacts (
                         id VARCHAR(255) NOT NULL PRIMARY KEY,
                         name VARCHAR(255) NOT NULL,
                         payment_identifier VARCHAR(255) NOT NULL,
@@ -318,24 +425,24 @@ impl MysqlStorage {
                         updated_at BIGINT NOT NULL
                     )",
             )],
-            // Migration 12: Drop preimage column from lnurl_receive_metadata
+            // Migration 12: Drop preimage column from brz_lnurl_receive_metadata
             vec![Migration::DropColumn {
-                table: "lnurl_receive_metadata",
+                table: "brz_lnurl_receive_metadata",
                 column: "preimage",
             }],
             // Migration 13: Clear cached lightning address again (format changed)
             vec![Migration::sql(
-                "DELETE FROM settings WHERE `key` = 'lightning_address'",
+                "DELETE FROM brz_settings WHERE `key` = 'lightning_address'",
             )],
-            // Migration 14: Add is_mature to unclaimed_deposits
+            // Migration 14: Add is_mature to brz_unclaimed_deposits
             vec![Migration::AddColumn {
-                table: "unclaimed_deposits",
+                table: "brz_unclaimed_deposits",
                 column: "is_mature",
                 definition: "TINYINT(1) NOT NULL DEFAULT 1",
             }],
-            // Migration 15: Add conversion_status to payment_metadata
+            // Migration 15: Add conversion_status to brz_payment_metadata
             vec![Migration::AddColumn {
-                table: "payment_metadata",
+                table: "brz_payment_metadata",
                 column: "conversion_status",
                 definition: "VARCHAR(64) NULL",
             }],
@@ -387,135 +494,135 @@ fn multi_tenant_migration(identity: &[u8]) -> Vec<Migration> {
         )));
     };
 
-    scope_table("payments", "id", &mut stmts);
+    scope_table("brz_payments", "id", &mut stmts);
     stmts.push(Migration::DropIndex {
-        name: "idx_payments_timestamp",
-        table: "payments",
+        name: "brz_idx_payments_timestamp",
+        table: "brz_payments",
     });
     stmts.push(Migration::DropIndex {
-        name: "idx_payments_payment_type",
-        table: "payments",
+        name: "brz_idx_payments_payment_type",
+        table: "brz_payments",
     });
     stmts.push(Migration::DropIndex {
-        name: "idx_payments_status",
-        table: "payments",
+        name: "brz_idx_payments_status",
+        table: "brz_payments",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_payments_user_timestamp",
-        table: "payments",
+        name: "brz_idx_payments_user_timestamp",
+        table: "brz_payments",
         columns: "(user_id, timestamp)",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_payments_user_payment_type",
-        table: "payments",
+        name: "brz_idx_payments_user_payment_type",
+        table: "brz_payments",
         columns: "(user_id, payment_type)",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_payments_user_status",
-        table: "payments",
+        name: "brz_idx_payments_user_status",
+        table: "brz_payments",
         columns: "(user_id, status)",
     });
 
-    scope_table("payment_metadata", "payment_id", &mut stmts);
+    scope_table("brz_payment_metadata", "payment_id", &mut stmts);
     stmts.push(Migration::DropIndex {
-        name: "idx_payment_metadata_parent",
-        table: "payment_metadata",
+        name: "brz_idx_payment_metadata_parent",
+        table: "brz_payment_metadata",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_payment_metadata_user_parent",
-        table: "payment_metadata",
+        name: "brz_idx_payment_metadata_user_parent",
+        table: "brz_payment_metadata",
         columns: "(user_id, parent_payment_id)",
     });
 
-    scope_table("payment_details_lightning", "payment_id", &mut stmts);
+    scope_table("brz_payment_details_lightning", "payment_id", &mut stmts);
     stmts.push(Migration::DropIndex {
-        name: "idx_payment_details_lightning_invoice",
-        table: "payment_details_lightning",
+        name: "brz_idx_payment_details_lightning_invoice",
+        table: "brz_payment_details_lightning",
     });
     stmts.push(Migration::DropIndex {
-        name: "idx_payment_details_lightning_payment_hash",
-        table: "payment_details_lightning",
+        name: "brz_idx_payment_details_lightning_payment_hash",
+        table: "brz_payment_details_lightning",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_payment_details_lightning_user_invoice",
-        table: "payment_details_lightning",
+        name: "brz_idx_payment_details_lightning_user_invoice",
+        table: "brz_payment_details_lightning",
         columns: "(user_id, invoice(255))",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_payment_details_lightning_user_payment_hash",
-        table: "payment_details_lightning",
+        name: "brz_idx_payment_details_lightning_user_payment_hash",
+        table: "brz_payment_details_lightning",
         columns: "(user_id, payment_hash)",
     });
 
-    scope_table("payment_details_token", "payment_id", &mut stmts);
-    scope_table("payment_details_spark", "payment_id", &mut stmts);
-    scope_table("lnurl_receive_metadata", "payment_hash", &mut stmts);
-    scope_table("unclaimed_deposits", "txid, vout", &mut stmts);
-    scope_table("contacts", "id", &mut stmts);
-    scope_table("settings", "`key`", &mut stmts);
+    scope_table("brz_payment_details_token", "payment_id", &mut stmts);
+    scope_table("brz_payment_details_spark", "payment_id", &mut stmts);
+    scope_table("brz_lnurl_receive_metadata", "payment_hash", &mut stmts);
+    scope_table("brz_unclaimed_deposits", "txid, vout", &mut stmts);
+    scope_table("brz_contacts", "id", &mut stmts);
+    scope_table("brz_settings", "`key`", &mut stmts);
 
-    // sync_revision was a single-row table (PK id=1, CHECK id=1). Drop the
+    // brz_sync_revision was a single-row table (PK id=1, CHECK id=1). Drop the
     // PK and the id column, then re-key by user_id. (`MySQL` 8 auto-drops
     // the dependent CHECK constraint when its sole referenced column goes.)
     stmts.push(Migration::DropPrimaryKey {
-        table: "sync_revision",
+        table: "brz_sync_revision",
     });
     stmts.push(Migration::DropColumn {
-        table: "sync_revision",
+        table: "brz_sync_revision",
         column: "id",
     });
     stmts.push(Migration::AddColumn {
-        table: "sync_revision",
+        table: "brz_sync_revision",
         column: "user_id",
         definition: "VARBINARY(33) NULL",
     });
     stmts.push(Migration::Sql(format!(
-        "UPDATE sync_revision SET user_id = {id_lit} WHERE user_id IS NULL"
+        "UPDATE brz_sync_revision SET user_id = {id_lit} WHERE user_id IS NULL"
     )));
     stmts.push(Migration::sql(
-        "ALTER TABLE sync_revision MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
+        "ALTER TABLE brz_sync_revision MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
     ));
     stmts.push(Migration::sql(
-        "ALTER TABLE sync_revision ADD PRIMARY KEY (user_id)",
+        "ALTER TABLE brz_sync_revision ADD PRIMARY KEY (user_id)",
     ));
 
-    // sync_outgoing has no PK, only an index — just add user_id and rewrite
+    // brz_sync_outgoing has no PK, only an index — just add user_id and rewrite
     // the index.
     stmts.push(Migration::AddColumn {
-        table: "sync_outgoing",
+        table: "brz_sync_outgoing",
         column: "user_id",
         definition: "VARBINARY(33) NULL",
     });
     stmts.push(Migration::Sql(format!(
-        "UPDATE sync_outgoing SET user_id = {id_lit} WHERE user_id IS NULL"
+        "UPDATE brz_sync_outgoing SET user_id = {id_lit} WHERE user_id IS NULL"
     )));
     stmts.push(Migration::sql(
-        "ALTER TABLE sync_outgoing MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
+        "ALTER TABLE brz_sync_outgoing MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
     ));
     stmts.push(Migration::DropIndex {
-        name: "idx_sync_outgoing_data_id_record_type",
-        table: "sync_outgoing",
+        name: "brz_idx_sync_outgoing_data_id_record_type",
+        table: "brz_sync_outgoing",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_sync_outgoing_user_record_type_data_id",
-        table: "sync_outgoing",
+        name: "brz_idx_sync_outgoing_user_record_type_data_id",
+        table: "brz_sync_outgoing",
         columns: "(user_id, record_type, data_id)",
     });
 
-    scope_table("sync_state", "record_type, data_id", &mut stmts);
+    scope_table("brz_sync_state", "record_type, data_id", &mut stmts);
 
     scope_table(
-        "sync_incoming",
+        "brz_sync_incoming",
         "record_type, data_id, revision",
         &mut stmts,
     );
     stmts.push(Migration::DropIndex {
-        name: "idx_sync_incoming_revision",
-        table: "sync_incoming",
+        name: "brz_idx_sync_incoming_revision",
+        table: "brz_sync_incoming",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_sync_incoming_user_revision",
-        table: "sync_incoming",
+        name: "brz_idx_sync_incoming_user_revision",
+        table: "brz_sync_incoming",
         columns: "(user_id, revision)",
     });
 
@@ -731,7 +838,7 @@ impl Storage for MysqlStorage {
             };
 
         tx.exec_drop(
-            "INSERT INTO payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     payment_type = VALUES(payment_type),
@@ -770,7 +877,7 @@ impl Storage for MysqlStorage {
                     let invoice_json = to_json_string_opt(invoice_details.as_ref())?;
                     let htlc_json = to_json_string_opt(htlc_details.as_ref())?;
                     tx.exec_drop(
-                        "INSERT INTO payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
+                        "INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
                              VALUES (?, ?, ?, ?)
                              ON DUPLICATE KEY UPDATE
                                 invoice_details = COALESCE(VALUES(invoice_details), invoice_details),
@@ -792,7 +899,7 @@ impl Storage for MysqlStorage {
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 let invoice_json = to_json_string_opt(invoice_details.as_ref())?;
                 tx.exec_drop(
-                    "INSERT INTO payment_details_token (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
+                    "INSERT INTO brz_payment_details_token (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
                          VALUES (?, ?, ?, ?, ?, ?)
                          ON DUPLICATE KEY UPDATE
                             metadata = VALUES(metadata),
@@ -823,7 +930,7 @@ impl Storage for MysqlStorage {
                 let htlc_status = htlc_details.status.to_string();
                 let htlc_expiry_time = i64::try_from(htlc_details.expiry_time)?;
                 tx.exec_drop(
-                    "INSERT INTO payment_details_lightning (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+                    "INSERT INTO brz_payment_details_lightning (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                          ON DUPLICATE KEY UPDATE
                             invoice = VALUES(invoice),
@@ -871,7 +978,7 @@ impl Storage for MysqlStorage {
             .map(std::string::ToString::to_string);
 
         conn.exec_drop(
-            "INSERT INTO payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
+            "INSERT INTO brz_payment_metadata (user_id, payment_id, parent_payment_id, lnurl_pay_info, lnurl_withdraw_info, lnurl_description, conversion_info, conversion_status)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                 parent_payment_id = COALESCE(VALUES(parent_payment_id), parent_payment_id),
@@ -901,7 +1008,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
 
         conn.exec_drop(
-            "INSERT INTO settings (user_id, `key`, value) VALUES (?, ?, ?)
+            "INSERT INTO brz_settings (user_id, `key`, value) VALUES (?, ?, ?)
              ON DUPLICATE KEY UPDATE value = VALUES(value)",
             (self.identity.clone(), key, value),
         )
@@ -916,7 +1023,7 @@ impl Storage for MysqlStorage {
 
         let row: Option<String> = conn
             .exec_first(
-                "SELECT value FROM settings WHERE user_id = ? AND `key` = ?",
+                "SELECT value FROM brz_settings WHERE user_id = ? AND `key` = ?",
                 (self.identity.clone(), key),
             )
             .await
@@ -929,7 +1036,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
 
         conn.exec_drop(
-            "DELETE FROM settings WHERE user_id = ? AND `key` = ?",
+            "DELETE FROM brz_settings WHERE user_id = ? AND `key` = ?",
             (self.identity.clone(), key),
         )
         .await
@@ -979,7 +1086,7 @@ impl Storage for MysqlStorage {
 
         let has_related: bool = conn
             .exec_first::<i64, _, _>(
-                "SELECT EXISTS(SELECT 1 FROM payment_metadata WHERE user_id = ? AND parent_payment_id IS NOT NULL LIMIT 1)",
+                "SELECT EXISTS(SELECT 1 FROM brz_payment_metadata WHERE user_id = ? AND parent_payment_id IS NOT NULL LIMIT 1)",
                 (self.identity.clone(),),
             )
             .await
@@ -1024,7 +1131,7 @@ impl Storage for MysqlStorage {
     ) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         conn.exec_drop(
-            "INSERT INTO unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
+            "INSERT INTO brz_unclaimed_deposits (user_id, txid, vout, amount_sats, is_mature)
              VALUES (?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE is_mature = VALUES(is_mature), amount_sats = VALUES(amount_sats)",
             (
@@ -1043,7 +1150,7 @@ impl Storage for MysqlStorage {
     async fn delete_deposit(&self, txid: String, vout: u32) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         conn.exec_drop(
-            "DELETE FROM unclaimed_deposits WHERE user_id = ? AND txid = ? AND vout = ?",
+            "DELETE FROM brz_unclaimed_deposits WHERE user_id = ? AND txid = ? AND vout = ?",
             (self.identity.clone(), txid, i32::try_from(vout)?),
         )
         .await
@@ -1055,7 +1162,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         let rows: Vec<Row> = conn
             .exec(
-                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM unclaimed_deposits WHERE user_id = ?",
+                "SELECT txid, vout, amount_sats, is_mature, claim_error, refund_tx, refund_tx_id FROM brz_unclaimed_deposits WHERE user_id = ?",
                 (self.identity.clone(),),
             )
             .await
@@ -1099,7 +1206,7 @@ impl Storage for MysqlStorage {
                 let error_json = serde_json::to_string(&error)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?;
                 conn.exec_drop(
-                    "UPDATE unclaimed_deposits SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL WHERE user_id = ? AND txid = ? AND vout = ?",
+                    "UPDATE brz_unclaimed_deposits SET claim_error = ?, refund_tx = NULL, refund_tx_id = NULL WHERE user_id = ? AND txid = ? AND vout = ?",
                     (error_json, self.identity.clone(), txid, i32::try_from(vout)?),
                 )
                 .await
@@ -1110,7 +1217,7 @@ impl Storage for MysqlStorage {
                 refund_tx,
             } => {
                 conn.exec_drop(
-                    "UPDATE unclaimed_deposits SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL WHERE user_id = ? AND txid = ? AND vout = ?",
+                    "UPDATE brz_unclaimed_deposits SET refund_tx = ?, refund_tx_id = ?, claim_error = NULL WHERE user_id = ? AND txid = ? AND vout = ?",
                     (refund_tx, refund_txid, self.identity.clone(), txid, i32::try_from(vout)?),
                 )
                 .await
@@ -1127,7 +1234,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         for m in metadata {
             conn.exec_drop(
-                "INSERT INTO lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
+                "INSERT INTO brz_lnurl_receive_metadata (user_id, payment_hash, nostr_zap_request, nostr_zap_receipt, sender_comment)
                  VALUES (?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     nostr_zap_request = VALUES(nostr_zap_request),
@@ -1152,7 +1259,7 @@ impl Storage for MysqlStorage {
         let rows: Vec<(String, String, String, i64, i64)> = conn
             .exec(
                 "SELECT id, name, payment_identifier, created_at, updated_at
-                 FROM contacts WHERE user_id = ? ORDER BY name ASC LIMIT ? OFFSET ?",
+                 FROM brz_contacts WHERE user_id = ? ORDER BY name ASC LIMIT ? OFFSET ?",
                 (self.identity.clone(), limit, offset),
             )
             .await
@@ -1176,7 +1283,7 @@ impl Storage for MysqlStorage {
         let row: Option<(String, String, String, i64, i64)> = conn
             .exec_first(
                 "SELECT id, name, payment_identifier, created_at, updated_at
-                 FROM contacts WHERE user_id = ? AND id = ?",
+                 FROM brz_contacts WHERE user_id = ? AND id = ?",
                 (self.identity.clone(), id),
             )
             .await
@@ -1195,7 +1302,7 @@ impl Storage for MysqlStorage {
     async fn insert_contact(&self, contact: Contact) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         conn.exec_drop(
-            "INSERT INTO contacts (user_id, id, name, payment_identifier, created_at, updated_at)
+            "INSERT INTO brz_contacts (user_id, id, name, payment_identifier, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                name = VALUES(name),
@@ -1218,7 +1325,7 @@ impl Storage for MysqlStorage {
     async fn delete_contact(&self, id: String) -> Result<(), StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
         conn.exec_drop(
-            "DELETE FROM contacts WHERE user_id = ? AND id = ?",
+            "DELETE FROM brz_contacts WHERE user_id = ? AND id = ?",
             (self.identity.clone(), id),
         )
         .await
@@ -1240,7 +1347,7 @@ impl Storage for MysqlStorage {
         // The local queue revision is per-tenant — two tenants don't share a queue.
         let local_revision: i64 = tx
             .exec_first(
-                "SELECT COALESCE(MAX(revision), 0) + 1 FROM sync_outgoing WHERE user_id = ?",
+                "SELECT COALESCE(MAX(revision), 0) + 1 FROM brz_sync_outgoing WHERE user_id = ?",
                 (self.identity.clone(),),
             )
             .await
@@ -1252,7 +1359,7 @@ impl Storage for MysqlStorage {
         let commit_time = chrono::Utc::now().timestamp();
 
         tx.exec_drop(
-            "INSERT INTO sync_outgoing (user_id, record_type, data_id, schema_version, commit_time, updated_fields_json, revision)
+            "INSERT INTO brz_sync_outgoing (user_id, record_type, data_id, schema_version, commit_time, updated_fields_json, revision)
                  VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 self.identity.clone(),
@@ -1285,7 +1392,7 @@ impl Storage for MysqlStorage {
 
         let mut result = tx
             .exec_iter(
-                "DELETE FROM sync_outgoing WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?",
+                "DELETE FROM brz_sync_outgoing WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?",
                 (
                     self.identity.clone(),
                     record.id.r#type.clone(),
@@ -1300,7 +1407,7 @@ impl Storage for MysqlStorage {
 
         if rows_deleted == 0 {
             warn!(
-                "complete_outgoing_sync: DELETE from sync_outgoing matched 0 rows \
+                "complete_outgoing_sync: DELETE from brz_sync_outgoing matched 0 rows \
                  (type={}, data_id={}, revision={})",
                 record.id.r#type, record.id.data_id, local_revision
             );
@@ -1311,7 +1418,7 @@ impl Storage for MysqlStorage {
         let commit_time = chrono::Utc::now().timestamp();
 
         tx.exec_drop(
-            "INSERT INTO sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
+            "INSERT INTO brz_sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
                  VALUES (?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     schema_version = VALUES(schema_version),
@@ -1335,7 +1442,7 @@ impl Storage for MysqlStorage {
         // backfill, but a fresh tenant joining a shared DB after the migration
         // won't have one yet.
         tx.exec_drop(
-            "INSERT INTO sync_revision (user_id, revision) VALUES (?, ?)
+            "INSERT INTO brz_sync_revision (user_id, revision) VALUES (?, ?)
              ON DUPLICATE KEY UPDATE revision = GREATEST(revision, VALUES(revision))",
             (self.identity.clone(), i64::try_from(record.revision)?),
         )
@@ -1357,8 +1464,8 @@ impl Storage for MysqlStorage {
             .exec(
                 "SELECT o.record_type, o.data_id, o.schema_version, o.commit_time, o.updated_fields_json, o.revision,
                         e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
-                 FROM sync_outgoing o
-                 LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id AND o.user_id = e.user_id
+                 FROM brz_sync_outgoing o
+                 LEFT JOIN brz_sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id AND o.user_id = e.user_id
                  WHERE o.user_id = ?
                  ORDER BY o.revision ASC
                  LIMIT ?",
@@ -1401,7 +1508,7 @@ impl Storage for MysqlStorage {
         // A tenant that hasn't synced anything yet may have no row; treat as 0.
         let revision: i64 = conn
             .exec_first(
-                "SELECT revision FROM sync_revision WHERE user_id = ?",
+                "SELECT revision FROM brz_sync_revision WHERE user_id = ?",
                 (self.identity.clone(),),
             )
             .await
@@ -1423,7 +1530,7 @@ impl Storage for MysqlStorage {
             let data_json = serde_json::to_string(&record.data)
                 .map_err(|e| StorageError::Serialization(e.to_string()))?;
             conn.exec_drop(
-                "INSERT INTO sync_incoming (user_id, record_type, data_id, schema_version, commit_time, data, revision)
+                "INSERT INTO brz_sync_incoming (user_id, record_type, data_id, schema_version, commit_time, data, revision)
                  VALUES (?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     schema_version = VALUES(schema_version),
@@ -1450,7 +1557,7 @@ impl Storage for MysqlStorage {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
 
         conn.exec_drop(
-            "DELETE FROM sync_incoming WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?",
+            "DELETE FROM brz_sync_incoming WHERE user_id = ? AND record_type = ? AND data_id = ? AND revision = ?",
             (
                 self.identity.clone(),
                 record.id.r#type,
@@ -1471,8 +1578,8 @@ impl Storage for MysqlStorage {
             .exec(
                 "SELECT i.record_type, i.data_id, i.schema_version, i.data, i.revision,
                         e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
-                 FROM sync_incoming i
-                 LEFT JOIN sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
+                 FROM brz_sync_incoming i
+                 LEFT JOIN brz_sync_state e ON i.record_type = e.record_type AND i.data_id = e.data_id AND i.user_id = e.user_id
                  WHERE i.user_id = ?
                  ORDER BY i.revision ASC
                  LIMIT ?",
@@ -1519,8 +1626,8 @@ impl Storage for MysqlStorage {
             .exec_first(
                 "SELECT o.record_type, o.data_id, o.schema_version, o.commit_time, o.updated_fields_json, o.revision,
                         e.schema_version AS existing_schema_version, e.commit_time AS existing_commit_time, e.data AS existing_data, e.revision AS existing_revision
-                 FROM sync_outgoing o
-                 LEFT JOIN sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id AND o.user_id = e.user_id
+                 FROM brz_sync_outgoing o
+                 LEFT JOIN brz_sync_state e ON o.record_type = e.record_type AND o.data_id = e.data_id AND o.user_id = e.user_id
                  WHERE o.user_id = ?
                  ORDER BY o.revision DESC
                  LIMIT 1",
@@ -1569,7 +1676,7 @@ impl Storage for MysqlStorage {
         let commit_time = chrono::Utc::now().timestamp();
 
         tx.exec_drop(
-            "INSERT INTO sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
+            "INSERT INTO brz_sync_state (user_id, record_type, data_id, schema_version, commit_time, data, revision)
                  VALUES (?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     schema_version = VALUES(schema_version),
@@ -1590,7 +1697,7 @@ impl Storage for MysqlStorage {
         .map_err(map_db_error)?;
 
         tx.exec_drop(
-            "INSERT INTO sync_revision (user_id, revision) VALUES (?, ?)
+            "INSERT INTO brz_sync_revision (user_id, revision) VALUES (?, ?)
              ON DUPLICATE KEY UPDATE revision = GREATEST(revision, VALUES(revision))",
             (self.identity.clone(), i64::try_from(record.revision)?),
         )
@@ -1638,12 +1745,12 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
            pm.parent_payment_id
-      FROM payments p
-      LEFT JOIN payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
-      LEFT JOIN payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
-      LEFT JOIN payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
-      LEFT JOIN payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
-      LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id";
+      FROM brz_payments p
+      LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
+      LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
+      LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
+      LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
+      LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id";
 
 #[allow(clippy::too_many_lines)]
 fn map_payment(row: &Row) -> Result<Payment, StorageError> {
@@ -2053,8 +2160,8 @@ mod tests {
 
     /// End-to-end isolation: every Storage method must keep tenants A and B
     /// from observing each other's data. The test exercises each per-user
-    /// table — `payments`, `payment_metadata`, `lnurl_receive_metadata`,
-    /// `contacts`, `unclaimed_deposits`, `settings`, and the sync mirror
+    /// table — `brz_payments`, `brz_payment_metadata`, `brz_lnurl_receive_metadata`,
+    /// `brz_contacts`, `brz_unclaimed_deposits`, `brz_settings`, and the sync mirror
     /// tables — and asserts that writes by A are invisible to B (and vice
     /// versa). It is the regression net for "forgot the WHERE clause" bugs
     /// in any future query.
@@ -2263,7 +2370,7 @@ mod tests {
             panic!("expected lnurl metadata to be visible to each tenant");
         }
 
-        // --- sync state (sync_outgoing, sync_state, sync_revision) ---
+        // --- sync state (brz_sync_outgoing, brz_sync_state, brz_sync_revision) ---
         let rec_id = RecordId::new("contact".to_string(), "rec_shared".to_string());
         let updated_a: HashMap<String, String> = HashMap::new();
         fx.a.add_outgoing_change(UnversionedRecordChange {
@@ -2326,5 +2433,508 @@ mod tests {
                 .unwrap();
         assert_eq!(list_b_final.len(), 1);
         assert_eq!(list_b_final[0].id, "pmt_shared_id");
+    }
+
+    /// `MySQL` counterpart of the Postgres `test_rename_against_real_legacy_schema`.
+    /// Validates the real `SCHEMA_RENAMES` constant against a hand-rolled
+    /// snapshot of the pre-`brz_*` post-multi-tenant schema. A typo in the
+    /// rename map (table, index, or FK name) would fail here.
+    #[tokio::test]
+    async fn test_rename_against_real_legacy_schema() {
+        let container = Mysql::default()
+            .start()
+            .await
+            .expect("Failed to start MySQL container");
+        let host_port = container
+            .get_host_port_ipv4(3306)
+            .await
+            .expect("Failed to get host port");
+        let connection_string = format!("mysql://root@127.0.0.1:{host_port}/test");
+
+        let pool = create_pool(&MysqlStorageConfig::with_defaults(
+            connection_string.clone(),
+        ))
+        .expect("create pool");
+        let id_lit = format!("UNHEX('{}')", hex::encode(TEST_IDENTITY_A));
+        {
+            let mut conn = pool.get_conn().await.expect("get_conn");
+            for stmt in legacy_schema_sql() {
+                conn.query_drop(&stmt)
+                    .await
+                    .unwrap_or_else(|e| panic!("legacy schema setup failed at\n{stmt}\n=> {e}"));
+            }
+            conn.query_drop(format!(
+                "INSERT INTO payments
+                 (user_id, id, payment_type, status, amount, fees, timestamp, method)
+                 VALUES ({id_lit}, 'p1', 'receive', 'completed', '1000', '0', 100, 'lightning')"
+            ))
+            .await
+            .expect("seed payment");
+            conn.query_drop(format!(
+                "INSERT INTO settings (user_id, `key`, value)
+                 VALUES ({id_lit}, 'seed_key', 'seed_value')"
+            ))
+            .await
+            .expect("seed setting");
+        }
+
+        let storage = MysqlStorage::new(
+            MysqlStorageConfig::with_defaults(connection_string),
+            &TEST_IDENTITY_A,
+        )
+        .await
+        .expect("migrate against legacy schema");
+
+        let mut conn = pool.get_conn().await.expect("get_conn");
+
+        let legacy_count: Option<i64> = conn
+            .exec_first(
+                "SELECT COUNT(*) FROM information_schema.tables
+                 WHERE table_schema = DATABASE() AND table_name = 'schema_migrations'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            legacy_count,
+            Some(0),
+            "legacy schema_migrations must be renamed"
+        );
+
+        let version: Option<i32> = conn
+            .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
+            .await
+            .unwrap();
+        assert_eq!(version, Some(16), "migration version must be preserved");
+
+        let payment_count: Option<i64> = conn
+            .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
+            .await
+            .unwrap();
+        assert_eq!(payment_count, Some(1), "seed payment must survive rename");
+
+        let setting = storage
+            .get_cached_item("seed_key".to_string())
+            .await
+            .expect("get_cached_item");
+        assert_eq!(setting.as_deref(), Some("seed_value"));
+
+        storage
+            .set_cached_item(
+                "post_rename_key".to_string(),
+                "post_rename_value".to_string(),
+            )
+            .await
+            .expect("set_cached_item");
+        let written = storage
+            .get_cached_item("post_rename_key".to_string())
+            .await
+            .expect("get_cached_item");
+        assert_eq!(written.as_deref(), Some("post_rename_value"));
+    }
+
+    /// Hand-rolled snapshot of the pre-PR `MySQL` schema in its terminal
+    /// (post-multi-tenant, version-16) state. Mirror additions here when
+    /// extending the SDK schema, so this test continues to validate that
+    /// `SCHEMA_RENAMES` covers every new identifier.
+    #[allow(clippy::too_many_lines)]
+    fn legacy_schema_sql() -> Vec<String> {
+        vec![
+            "CREATE TABLE schema_migrations (
+                version INT PRIMARY KEY,
+                applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            )"
+            .to_string(),
+            (1..=16)
+                .map(|v| format!("INSERT INTO schema_migrations (version) VALUES ({v})"))
+                .collect::<Vec<_>>()
+                .join(";"),
+            "CREATE TABLE payments (
+                user_id VARBINARY(33) NOT NULL,
+                id VARCHAR(255) NOT NULL,
+                payment_type VARCHAR(64) NOT NULL,
+                status VARCHAR(64) NOT NULL,
+                amount VARCHAR(64) NOT NULL,
+                fees VARCHAR(64) NOT NULL,
+                timestamp BIGINT NOT NULL,
+                method VARCHAR(64) NULL,
+                withdraw_tx_id VARCHAR(255) NULL,
+                deposit_tx_id VARCHAR(255) NULL,
+                spark TINYINT(1) NULL,
+                PRIMARY KEY (user_id, id)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_payments_user_timestamp ON payments(user_id, timestamp)".to_string(),
+            "CREATE INDEX idx_payments_user_payment_type ON payments(user_id, payment_type)"
+                .to_string(),
+            "CREATE INDEX idx_payments_user_status ON payments(user_id, status)".to_string(),
+            "CREATE TABLE settings (
+                user_id VARBINARY(33) NOT NULL,
+                `key` VARCHAR(255) NOT NULL,
+                value LONGTEXT NOT NULL,
+                PRIMARY KEY (user_id, `key`)
+            )"
+            .to_string(),
+            "CREATE TABLE unclaimed_deposits (
+                user_id VARBINARY(33) NOT NULL,
+                txid VARCHAR(255) NOT NULL,
+                vout INT NOT NULL,
+                amount_sats BIGINT NULL,
+                claim_error JSON NULL,
+                refund_tx LONGTEXT NULL,
+                refund_tx_id VARCHAR(255) NULL,
+                is_mature TINYINT(1) NOT NULL DEFAULT 1,
+                PRIMARY KEY (user_id, txid, vout)
+            )"
+            .to_string(),
+            "CREATE TABLE payment_metadata (
+                user_id VARBINARY(33) NOT NULL,
+                payment_id VARCHAR(255) NOT NULL,
+                parent_payment_id VARCHAR(255) NULL,
+                lnurl_pay_info JSON NULL,
+                lnurl_withdraw_info JSON NULL,
+                lnurl_description LONGTEXT NULL,
+                conversion_info JSON NULL,
+                conversion_status VARCHAR(64) NULL,
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_payment_metadata_user_parent
+             ON payment_metadata(user_id, parent_payment_id)"
+                .to_string(),
+            "CREATE TABLE payment_details_lightning (
+                user_id VARBINARY(33) NOT NULL,
+                payment_id VARCHAR(255) NOT NULL,
+                invoice LONGTEXT NOT NULL,
+                payment_hash VARCHAR(255) NOT NULL,
+                destination_pubkey VARCHAR(255) NOT NULL,
+                description LONGTEXT NULL,
+                htlc_status VARCHAR(64) NOT NULL DEFAULT 'WaitingForPreimage',
+                htlc_expiry_time BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_payment_details_lightning_user_invoice
+             ON payment_details_lightning(user_id, invoice(255))"
+                .to_string(),
+            "CREATE INDEX idx_payment_details_lightning_user_payment_hash
+             ON payment_details_lightning(user_id, payment_hash)"
+                .to_string(),
+            "CREATE TABLE payment_details_token (
+                user_id VARBINARY(33) NOT NULL,
+                payment_id VARCHAR(255) NOT NULL,
+                metadata JSON NOT NULL,
+                tx_hash VARCHAR(255) NOT NULL,
+                invoice_details JSON NULL,
+                tx_type VARCHAR(64) NOT NULL DEFAULT 'transfer',
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_spark (
+                user_id VARBINARY(33) NOT NULL,
+                payment_id VARCHAR(255) NOT NULL,
+                invoice_details JSON NULL,
+                htlc_details JSON NULL,
+                PRIMARY KEY (user_id, payment_id)
+            )"
+            .to_string(),
+            "CREATE TABLE lnurl_receive_metadata (
+                user_id VARBINARY(33) NOT NULL,
+                payment_hash VARCHAR(255) NOT NULL,
+                nostr_zap_request LONGTEXT NULL,
+                nostr_zap_receipt LONGTEXT NULL,
+                sender_comment LONGTEXT NULL,
+                PRIMARY KEY (user_id, payment_hash)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_revision (
+                user_id VARBINARY(33) NOT NULL,
+                revision BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_outgoing (
+                user_id VARBINARY(33) NOT NULL,
+                record_type VARCHAR(255) NOT NULL,
+                data_id VARCHAR(255) NOT NULL,
+                schema_version VARCHAR(64) NOT NULL,
+                commit_time BIGINT NOT NULL,
+                updated_fields_json JSON NOT NULL,
+                revision BIGINT NOT NULL
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_outgoing_user_record_type_data_id
+             ON sync_outgoing(user_id, record_type, data_id)"
+                .to_string(),
+            "CREATE TABLE sync_state (
+                user_id VARBINARY(33) NOT NULL,
+                record_type VARCHAR(255) NOT NULL,
+                data_id VARCHAR(255) NOT NULL,
+                schema_version VARCHAR(64) NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSON NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY (user_id, record_type, data_id)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_incoming (
+                user_id VARBINARY(33) NOT NULL,
+                record_type VARCHAR(255) NOT NULL,
+                data_id VARCHAR(255) NOT NULL,
+                schema_version VARCHAR(64) NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSON NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY (user_id, record_type, data_id, revision)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_incoming_user_revision
+             ON sync_incoming(user_id, revision)"
+                .to_string(),
+            "CREATE TABLE contacts (
+                user_id VARBINARY(33) NOT NULL,
+                id VARCHAR(255) NOT NULL,
+                name VARCHAR(255) NOT NULL,
+                payment_identifier VARCHAR(255) NOT NULL,
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL,
+                PRIMARY KEY (user_id, id)
+            )"
+            .to_string(),
+        ]
+    }
+
+    /// `MySQL` counterpart of the Postgres
+    /// `test_rename_against_pre_tenant_legacy_schema`. Validates that the
+    /// rename + multi-tenant migration leaves no orphan unprefixed indexes
+    /// on any brz_ table.
+    #[tokio::test]
+    async fn test_rename_against_pre_tenant_legacy_schema() {
+        let container = Mysql::default()
+            .start()
+            .await
+            .expect("Failed to start MySQL container");
+        let host_port = container
+            .get_host_port_ipv4(3306)
+            .await
+            .expect("Failed to get host port");
+        let connection_string = format!("mysql://root@127.0.0.1:{host_port}/test");
+
+        let pool = create_pool(&MysqlStorageConfig::with_defaults(
+            connection_string.clone(),
+        ))
+        .expect("create pool");
+        {
+            let mut conn = pool.get_conn().await.expect("get_conn");
+            for stmt in pre_tenant_legacy_schema_sql() {
+                conn.query_drop(&stmt).await.unwrap_or_else(|e| {
+                    panic!("pre-tenant legacy schema setup failed at\n{stmt}\n=> {e}")
+                });
+            }
+            conn.query_drop(
+                "INSERT INTO payments
+                 (id, payment_type, status, amount, fees, timestamp, method)
+                 VALUES ('p1', 'receive', 'completed', '1000', '0', 100, 'lightning')",
+            )
+            .await
+            .expect("seed payment");
+            conn.query_drop(
+                "INSERT INTO settings (`key`, value) VALUES ('seed_key', 'seed_value')",
+            )
+            .await
+            .expect("seed setting");
+        }
+
+        let storage = MysqlStorage::new(
+            MysqlStorageConfig::with_defaults(connection_string),
+            &TEST_IDENTITY_A,
+        )
+        .await
+        .expect("migrate against pre-tenant schema");
+
+        let mut conn = pool.get_conn().await.expect("get_conn");
+
+        // The bug check: no unprefixed `idx_*` index on any brz_ table.
+        // `information_schema.statistics` lists one row per (table, index,
+        // column) — DISTINCT collapses to unique (table, index) pairs.
+        let orphan_rows: Vec<(String, String)> = conn
+            .exec(
+                "SELECT DISTINCT table_name, index_name
+                 FROM information_schema.statistics
+                 WHERE table_schema = DATABASE()
+                   AND table_name LIKE 'brz\\_%'
+                   AND index_name LIKE 'idx\\_%'",
+                (),
+            )
+            .await
+            .expect("scan orphan indexes");
+        assert!(
+            orphan_rows.is_empty(),
+            "found orphan unprefixed indexes after upgrade: {orphan_rows:?}"
+        );
+
+        let version: Option<i32> = conn
+            .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
+            .await
+            .unwrap();
+        assert_eq!(version, Some(16), "migration must advance to 16");
+
+        let payment_count: Option<i64> = conn
+            .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
+            .await
+            .unwrap();
+        assert_eq!(payment_count, Some(1), "seed payment must survive upgrade");
+
+        let setting = storage
+            .get_cached_item("seed_key".to_string())
+            .await
+            .expect("get_cached_item");
+        assert_eq!(setting.as_deref(), Some("seed_value"));
+    }
+
+    /// Pre-multi-tenant `MySQL` schema snapshot (version=15).
+    #[allow(clippy::too_many_lines)]
+    fn pre_tenant_legacy_schema_sql() -> Vec<String> {
+        vec![
+            "CREATE TABLE schema_migrations (
+                version INT PRIMARY KEY,
+                applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            )"
+            .to_string(),
+            (1..=15)
+                .map(|v| format!("INSERT INTO schema_migrations (version) VALUES ({v})"))
+                .collect::<Vec<_>>()
+                .join(";"),
+            "CREATE TABLE payments (
+                id VARCHAR(255) NOT NULL PRIMARY KEY,
+                payment_type VARCHAR(64) NOT NULL,
+                status VARCHAR(64) NOT NULL,
+                amount VARCHAR(64) NOT NULL,
+                fees VARCHAR(64) NOT NULL,
+                timestamp BIGINT NOT NULL,
+                method VARCHAR(64) NULL,
+                withdraw_tx_id VARCHAR(255) NULL,
+                deposit_tx_id VARCHAR(255) NULL,
+                spark TINYINT(1) NULL
+            )"
+            .to_string(),
+            "CREATE TABLE settings (
+                `key` VARCHAR(255) NOT NULL PRIMARY KEY,
+                value LONGTEXT NOT NULL
+            )"
+            .to_string(),
+            "CREATE TABLE unclaimed_deposits (
+                txid VARCHAR(255) NOT NULL,
+                vout INT NOT NULL,
+                amount_sats BIGINT NULL,
+                claim_error JSON NULL,
+                refund_tx LONGTEXT NULL,
+                refund_tx_id VARCHAR(255) NULL,
+                is_mature TINYINT(1) NOT NULL DEFAULT 1,
+                PRIMARY KEY (txid, vout)
+            )"
+            .to_string(),
+            "CREATE TABLE payment_metadata (
+                payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                parent_payment_id VARCHAR(255) NULL,
+                lnurl_pay_info JSON NULL,
+                lnurl_withdraw_info JSON NULL,
+                lnurl_description LONGTEXT NULL,
+                conversion_info JSON NULL,
+                conversion_status VARCHAR(64) NULL
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_lightning (
+                payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                invoice LONGTEXT NOT NULL,
+                payment_hash VARCHAR(255) NOT NULL,
+                destination_pubkey VARCHAR(255) NOT NULL,
+                description LONGTEXT NULL,
+                htlc_status VARCHAR(64) NOT NULL DEFAULT 'WaitingForPreimage',
+                htlc_expiry_time BIGINT NOT NULL DEFAULT 0
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_token (
+                payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                metadata JSON NOT NULL,
+                tx_hash VARCHAR(255) NOT NULL,
+                invoice_details JSON NULL,
+                tx_type VARCHAR(64) NOT NULL DEFAULT 'transfer'
+            )"
+            .to_string(),
+            "CREATE TABLE payment_details_spark (
+                payment_id VARCHAR(255) NOT NULL PRIMARY KEY,
+                invoice_details JSON NULL,
+                htlc_details JSON NULL
+            )"
+            .to_string(),
+            "CREATE TABLE lnurl_receive_metadata (
+                payment_hash VARCHAR(255) NOT NULL PRIMARY KEY,
+                nostr_zap_request LONGTEXT NULL,
+                nostr_zap_receipt LONGTEXT NULL,
+                sender_comment LONGTEXT NULL
+            )"
+            .to_string(),
+            "CREATE TABLE sync_revision (
+                id INT NOT NULL PRIMARY KEY DEFAULT 1,
+                revision BIGINT NOT NULL DEFAULT 0,
+                CHECK (id = 1)
+            )"
+            .to_string(),
+            "INSERT INTO sync_revision (id, revision) VALUES (1, 0)".to_string(),
+            "CREATE TABLE sync_outgoing (
+                record_type VARCHAR(255) NOT NULL,
+                data_id VARCHAR(255) NOT NULL,
+                schema_version VARCHAR(64) NOT NULL,
+                commit_time BIGINT NOT NULL,
+                updated_fields_json JSON NOT NULL,
+                revision BIGINT NOT NULL
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_outgoing_data_id_record_type
+             ON sync_outgoing(record_type, data_id)"
+                .to_string(),
+            "CREATE TABLE sync_state (
+                record_type VARCHAR(255) NOT NULL,
+                data_id VARCHAR(255) NOT NULL,
+                schema_version VARCHAR(64) NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSON NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY(record_type, data_id)
+            )"
+            .to_string(),
+            "CREATE TABLE sync_incoming (
+                record_type VARCHAR(255) NOT NULL,
+                data_id VARCHAR(255) NOT NULL,
+                schema_version VARCHAR(64) NOT NULL,
+                commit_time BIGINT NOT NULL,
+                data JSON NOT NULL,
+                revision BIGINT NOT NULL,
+                PRIMARY KEY(record_type, data_id, revision)
+            )"
+            .to_string(),
+            "CREATE INDEX idx_sync_incoming_revision ON sync_incoming(revision)".to_string(),
+            "CREATE INDEX idx_payments_timestamp ON payments(timestamp)".to_string(),
+            "CREATE INDEX idx_payments_payment_type ON payments(payment_type)".to_string(),
+            "CREATE INDEX idx_payments_status ON payments(status)".to_string(),
+            "CREATE INDEX idx_payment_details_lightning_invoice
+             ON payment_details_lightning(invoice(255))"
+                .to_string(),
+            "CREATE INDEX idx_payment_metadata_parent
+             ON payment_metadata(parent_payment_id)"
+                .to_string(),
+            "CREATE INDEX idx_payment_details_lightning_payment_hash
+             ON payment_details_lightning(payment_hash)"
+                .to_string(),
+            "CREATE TABLE contacts (
+                id VARCHAR(255) NOT NULL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                payment_identifier VARCHAR(255) NOT NULL,
+                created_at BIGINT NOT NULL,
+                updated_at BIGINT NOT NULL
+            )"
+            .to_string(),
+        ]
     }
 }

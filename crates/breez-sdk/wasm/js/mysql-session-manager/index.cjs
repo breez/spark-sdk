@@ -75,7 +75,7 @@ class MysqlSessionManager {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
       const [rows] = await this.pool.execute(
-        `SELECT token, expiration FROM sessions
+        `SELECT token, expiration FROM brz_sessions
          WHERE user_id = ? AND service_identity_key = ?`,
         [this.identity, serviceKey]
       );
@@ -103,7 +103,7 @@ class MysqlSessionManager {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
       await this.pool.execute(
-        `INSERT INTO sessions (user_id, service_identity_key, token, expiration)
+        `INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration)
          VALUES (?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE token = VALUES(token), expiration = VALUES(expiration)`,
         [this.identity, serviceKey, session.token, session.expiration]

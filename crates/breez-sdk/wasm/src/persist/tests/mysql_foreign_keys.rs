@@ -85,10 +85,10 @@ async fn test_tree_store_disabled_foreign_key_mode() {
     let count = count_fks(
         &conn_string,
         &[
-            "tree_leaves",
-            "tree_reservations",
-            "tree_spent_leaves",
-            "tree_swap_status",
+            "brz_tree_leaves",
+            "brz_tree_reservations",
+            "brz_tree_spent_leaves",
+            "brz_tree_swap_status",
         ],
     )
     .await;
@@ -106,11 +106,11 @@ async fn test_token_store_disabled_foreign_key_mode() {
     let count = count_fks(
         &conn_string,
         &[
-            "token_metadata",
-            "token_outputs",
-            "token_reservations",
-            "token_spent_outputs",
-            "token_swap_status",
+            "brz_token_metadata",
+            "brz_token_outputs",
+            "brz_token_reservations",
+            "brz_token_spent_outputs",
+            "brz_token_swap_status",
         ],
     )
     .await;
@@ -119,7 +119,7 @@ async fn test_token_store_disabled_foreign_key_mode() {
 
 /// `Enforced` mode runs both initial-FK adds and the multi-tenant rewrites:
 /// the originals are dropped in migration 2 and replaced by the composite
-/// `*_user` variants — final FK count is 1 on tree_leaves, 2 on token_outputs.
+/// `*_user` variants — final FK count is 1 on brz_tree_leaves, 2 on brz_token_outputs.
 #[wasm_bindgen_test]
 async fn test_tree_store_enforced_foreign_key_mode() {
     let conn_string = fresh_test_db("my_tree_fk_enforced").await;
@@ -131,10 +131,10 @@ async fn test_tree_store_enforced_foreign_key_mode() {
     let count = count_fks(
         &conn_string,
         &[
-            "tree_leaves",
-            "tree_reservations",
-            "tree_spent_leaves",
-            "tree_swap_status",
+            "brz_tree_leaves",
+            "brz_tree_reservations",
+            "brz_tree_spent_leaves",
+            "brz_tree_swap_status",
         ],
     )
     .await;
@@ -152,11 +152,11 @@ async fn test_token_store_enforced_foreign_key_mode() {
     let count = count_fks(
         &conn_string,
         &[
-            "token_metadata",
-            "token_outputs",
-            "token_reservations",
-            "token_spent_outputs",
-            "token_swap_status",
+            "brz_token_metadata",
+            "brz_token_outputs",
+            "brz_token_reservations",
+            "brz_token_spent_outputs",
+            "brz_token_swap_status",
         ],
     )
     .await;

@@ -1,9 +1,10 @@
 //! Backend-agnostic scenarios for the persistent `SessionManager`.
 //!
 //! Verifies that two SDK pods backed by the same database — wired up via
-//! `with_postgres_backend` / `with_mysql_backend` — share authentication
-//! state across restarts: a fresh instance reuses the cached SSP/SO
-//! sessions instead of re-running the challenge-response handshake.
+//! a shared [`SdkContext`](breez_sdk_spark::SdkContext) constructed with a
+//! postgres / mysql config — share authentication state across restarts: a
+//! fresh instance reuses the cached SSP/SO sessions instead of re-running
+//! the challenge-response handshake.
 //!
 //! Each scenario takes a `build_instance` closure that produces a fresh
 //! `SdkInstance` bound to the shared backend, and a pair of helpers that

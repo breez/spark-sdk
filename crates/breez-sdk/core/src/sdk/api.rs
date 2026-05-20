@@ -76,25 +76,7 @@ impl BreezSdk {
     /// Returns the balance of the wallet in satoshis
     #[allow(unused_variables)]
     pub async fn get_info(&self, request: GetInfoRequest) -> Result<GetInfoResponse, SdkError> {
-        if request.ensure_synced.unwrap_or_default() {
-            self.initial_synced_watcher
-                .clone()
-                .changed()
-                .await
-                .map_err(|_| {
-                    SdkError::Generic("Failed to receive initial synced signal".to_string())
-                })?;
-        }
-        let object_repository = ObjectCacheRepository::new(self.storage.clone());
-        let account_info = object_repository
-            .fetch_account_info()
-            .await?
-            .unwrap_or_default();
-        Ok(GetInfoResponse {
-            identity_pubkey: self.spark_wallet.get_identity_public_key().to_string(),
-            balance_sats: account_info.balance_sats,
-            token_balances: account_info.token_balances,
-        })
+        self.runtime.get_info(self, request).await
     }
 
     /// List fiat currencies for which there is a known exchange rate,
@@ -205,7 +187,7 @@ impl BreezSdk {
     /// Some settings are fetched from the Spark network so network requests are performed.
     pub async fn get_user_settings(&self) -> Result<UserSettings, SdkError> {
         // Ensure spark private mode is initialized to avoid race conditions with the initialization task.
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
 
         let spark_user_settings = self.spark_wallet.query_wallet_settings().await?;
 

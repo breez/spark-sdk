@@ -56,6 +56,7 @@ make clean            Remove build artifacts
 | `--network` | `regtest` | Network to use (`regtest` or `mainnet`) |
 | `--account-number` | | Account number for the Spark signer |
 | `--postgres-connection-string` | | PostgreSQL connection string (uses SQLite by default) |
+| `--mysql-connection-string` | | MySQL connection string (mutually exclusive with `--postgres-connection-string`) |
 | `--stable-balance-token-identifier` | | Stable balance token identifier |
 | `--stable-balance-threshold` | | Stable balance threshold in sats |
 | `--passkey` | | Use passkey with PRF provider (`file`, `yubikey`, or `fido2`) |

@@ -37,11 +37,84 @@ use uuid::Uuid;
 use crate::advisory_lock::identity_lock_name;
 use crate::config::{MysqlForeignKeyMode, MysqlStorageConfig};
 use crate::error::MysqlError;
-use crate::migrations::{Migration, run_migrations};
+use crate::migrations::{FkRename, Migration, SchemaRenames, run_migrations};
 use crate::pool::{create_pool, tx_opts};
 
 /// Name of the schema migrations table for `MysqlTreeStore`.
-const TREE_MIGRATIONS_TABLE: &str = "tree_schema_migrations";
+const TREE_MIGRATIONS_TABLE: &str = "brz_tree_schema_migrations";
+
+/// Pre-prefix rename map for upgrading tree-store deployments.
+const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
+    old_migrations_table: "tree_schema_migrations",
+    new_migrations_table: TREE_MIGRATIONS_TABLE,
+    tables: &[
+        ("tree_reservations", "brz_tree_reservations"),
+        ("tree_leaves", "brz_tree_leaves"),
+        ("tree_spent_leaves", "brz_tree_spent_leaves"),
+        ("tree_swap_status", "brz_tree_swap_status"),
+    ],
+    indexes: &[
+        (
+            "brz_tree_leaves",
+            "idx_tree_leaves_user_available",
+            "brz_idx_tree_leaves_user_available",
+        ),
+        (
+            "brz_tree_leaves",
+            "idx_tree_leaves_user_reservation",
+            "brz_idx_tree_leaves_user_reservation",
+        ),
+        (
+            "brz_tree_leaves",
+            "idx_tree_leaves_user_added_at",
+            "brz_idx_tree_leaves_user_added_at",
+        ),
+        (
+            "brz_tree_leaves",
+            "idx_tree_leaves_user_slim",
+            "brz_idx_tree_leaves_user_slim",
+        ),
+        // Pre-multi-tenant indexes (dropped by the multi-tenant migration).
+        (
+            "brz_tree_leaves",
+            "idx_tree_leaves_available",
+            "brz_idx_tree_leaves_available",
+        ),
+        (
+            "brz_tree_leaves",
+            "idx_tree_leaves_reservation",
+            "brz_idx_tree_leaves_reservation",
+        ),
+        (
+            "brz_tree_leaves",
+            "idx_tree_leaves_added_at",
+            "brz_idx_tree_leaves_added_at",
+        ),
+        (
+            "brz_tree_leaves",
+            "idx_tree_leaves_slim",
+            "brz_idx_tree_leaves_slim",
+        ),
+    ],
+    foreign_keys: &[
+        FkRename {
+            table: "brz_tree_leaves",
+            old_name: "fk_tree_leaves_reservation_user",
+            new_name: "brz_fk_tree_leaves_reservation_user",
+            definition: "FOREIGN KEY (user_id, reservation_id) \
+                         REFERENCES brz_tree_reservations(user_id, id)",
+        },
+        // Pre-multi-tenant FK (single-column). Rename so the post-tenant
+        // migration's `DropForeignKey { name: "brz_fk_..." }` finds it.
+        FkRename {
+            table: "brz_tree_leaves",
+            old_name: "fk_tree_leaves_reservation",
+            new_name: "brz_fk_tree_leaves_reservation",
+            definition: "FOREIGN KEY (reservation_id) \
+                         REFERENCES brz_tree_reservations(id) ON DELETE SET NULL",
+        },
+    ],
+};
 
 /// Domain prefix mixed into the per-tenant `GET_LOCK` name so the tree store's
 /// locks never collide with the token store's, even when two tenants share a
@@ -115,34 +188,34 @@ fn tree_store_multi_tenant_migration(
 
     let mut stmts: Vec<Migration> = Vec::new();
 
-    // Drop the existing FK from tree_leaves(reservation_id) -> tree_reservations(id)
+    // Drop the existing FK from brz_tree_leaves(reservation_id) -> brz_tree_reservations(id)
     // FIRST, before we touch the parent's PK that it depends on. The `MySQL`
     // FK was named via a CONSTRAINT clause on creation as
-    // `fk_tree_leaves_reservation`.
+    // `brz_fk_tree_leaves_reservation`.
     stmts.push(Migration::DropForeignKey {
-        name: "fk_tree_leaves_reservation",
-        table: "tree_leaves",
+        name: "brz_fk_tree_leaves_reservation",
+        table: "brz_tree_leaves",
     });
 
-    // tree_reservations: scope by user_id. Add the column nullable, backfill,
+    // brz_tree_reservations: scope by user_id. Add the column nullable, backfill,
     // make NOT NULL, and rewrite the PK to lead with user_id.
     stmts.push(Migration::AddColumn {
-        table: "tree_reservations",
+        table: "brz_tree_reservations",
         column: "user_id",
         definition: "VARBINARY(33) NULL",
     });
     stmts.push(Migration::Sql(format!(
-        "UPDATE tree_reservations SET user_id = {id_lit} WHERE user_id IS NULL"
+        "UPDATE brz_tree_reservations SET user_id = {id_lit} WHERE user_id IS NULL"
     )));
     stmts.push(Migration::sql(
-        "ALTER TABLE tree_reservations MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
+        "ALTER TABLE brz_tree_reservations MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
     ));
     stmts.push(Migration::sql(
-        "ALTER TABLE tree_reservations DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)",
+        "ALTER TABLE brz_tree_reservations DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)",
     ));
 
-    // tree_leaves: same pattern, plus re-add the composite FK to the new
-    // tree_reservations PK when foreign keys are enabled. The composite FK
+    // brz_tree_leaves: same pattern, plus re-add the composite FK to the new
+    // brz_tree_reservations PK when foreign keys are enabled. The composite FK
     // uses the default ON DELETE NO ACTION instead of the previous `ON DELETE
     // SET NULL`: a whole-row SET NULL would null `user_id` (NOT NULL) and
     // `MySQL` doesn't support column-list SET NULL. Callers
@@ -150,103 +223,103 @@ fn tree_store_multi_tenant_migration(
     // `finalize_reservation`) explicitly clear `reservation_id` before
     // deleting the parent reservation row.
     stmts.push(Migration::AddColumn {
-        table: "tree_leaves",
+        table: "brz_tree_leaves",
         column: "user_id",
         definition: "VARBINARY(33) NULL",
     });
     stmts.push(Migration::Sql(format!(
-        "UPDATE tree_leaves SET user_id = {id_lit} WHERE user_id IS NULL"
+        "UPDATE brz_tree_leaves SET user_id = {id_lit} WHERE user_id IS NULL"
     )));
     stmts.push(Migration::sql(
-        "ALTER TABLE tree_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
+        "ALTER TABLE brz_tree_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
     ));
     stmts.push(Migration::sql(
-        "ALTER TABLE tree_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)",
+        "ALTER TABLE brz_tree_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, id)",
     ));
     if foreign_key_mode.creates_constraints() {
         stmts.push(Migration::AddForeignKey {
-            name: "fk_tree_leaves_reservation_user",
-            table: "tree_leaves",
+            name: "brz_fk_tree_leaves_reservation_user",
+            table: "brz_tree_leaves",
             definition: "FOREIGN KEY (user_id, reservation_id) \
-                         REFERENCES tree_reservations(user_id, id)",
+                         REFERENCES brz_tree_reservations(user_id, id)",
         });
     }
     stmts.push(Migration::DropIndex {
-        name: "idx_tree_leaves_available",
-        table: "tree_leaves",
+        name: "brz_idx_tree_leaves_available",
+        table: "brz_tree_leaves",
     });
     stmts.push(Migration::DropIndex {
-        name: "idx_tree_leaves_reservation",
-        table: "tree_leaves",
+        name: "brz_idx_tree_leaves_reservation",
+        table: "brz_tree_leaves",
     });
     stmts.push(Migration::DropIndex {
-        name: "idx_tree_leaves_added_at",
-        table: "tree_leaves",
+        name: "brz_idx_tree_leaves_added_at",
+        table: "brz_tree_leaves",
     });
     stmts.push(Migration::DropIndex {
-        name: "idx_tree_leaves_slim",
-        table: "tree_leaves",
+        name: "brz_idx_tree_leaves_slim",
+        table: "brz_tree_leaves",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_tree_leaves_user_available",
-        table: "tree_leaves",
+        name: "brz_idx_tree_leaves_user_available",
+        table: "brz_tree_leaves",
         columns: "(user_id, status, is_missing_from_operators)",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_tree_leaves_user_reservation",
-        table: "tree_leaves",
+        name: "brz_idx_tree_leaves_user_reservation",
+        table: "brz_tree_leaves",
         columns: "(user_id, reservation_id)",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_tree_leaves_user_added_at",
-        table: "tree_leaves",
+        name: "brz_idx_tree_leaves_user_added_at",
+        table: "brz_tree_leaves",
         columns: "(user_id, added_at)",
     });
     stmts.push(Migration::CreateIndex {
-        name: "idx_tree_leaves_user_slim",
-        table: "tree_leaves",
+        name: "brz_idx_tree_leaves_user_slim",
+        table: "brz_tree_leaves",
         columns: "(user_id, status, is_missing_from_operators, reservation_id, value)",
     });
 
-    // tree_spent_leaves: scope by user_id.
+    // brz_tree_spent_leaves: scope by user_id.
     stmts.push(Migration::AddColumn {
-        table: "tree_spent_leaves",
+        table: "brz_tree_spent_leaves",
         column: "user_id",
         definition: "VARBINARY(33) NULL",
     });
     stmts.push(Migration::Sql(format!(
-        "UPDATE tree_spent_leaves SET user_id = {id_lit} WHERE user_id IS NULL"
+        "UPDATE brz_tree_spent_leaves SET user_id = {id_lit} WHERE user_id IS NULL"
     )));
     stmts.push(Migration::sql(
-        "ALTER TABLE tree_spent_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
+        "ALTER TABLE brz_tree_spent_leaves MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
     ));
     stmts.push(Migration::sql(
-        "ALTER TABLE tree_spent_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, leaf_id)",
+        "ALTER TABLE brz_tree_spent_leaves DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, leaf_id)",
     ));
 
-    // tree_swap_status was a singleton (PK id=1, CHECK id=1). Drop the PK and
+    // brz_tree_swap_status was a singleton (PK id=1, CHECK id=1). Drop the PK and
     // the id column, then re-key by user_id so each tenant has its own
     // swap-status row.
     stmts.push(Migration::DropPrimaryKey {
-        table: "tree_swap_status",
+        table: "brz_tree_swap_status",
     });
     stmts.push(Migration::DropColumn {
-        table: "tree_swap_status",
+        table: "brz_tree_swap_status",
         column: "id",
     });
     stmts.push(Migration::AddColumn {
-        table: "tree_swap_status",
+        table: "brz_tree_swap_status",
         column: "user_id",
         definition: "VARBINARY(33) NULL",
     });
     stmts.push(Migration::Sql(format!(
-        "UPDATE tree_swap_status SET user_id = {id_lit} WHERE user_id IS NULL"
+        "UPDATE brz_tree_swap_status SET user_id = {id_lit} WHERE user_id IS NULL"
     )));
     stmts.push(Migration::sql(
-        "ALTER TABLE tree_swap_status MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
+        "ALTER TABLE brz_tree_swap_status MODIFY COLUMN user_id VARBINARY(33) NOT NULL",
     ));
     stmts.push(Migration::sql(
-        "ALTER TABLE tree_swap_status ADD PRIMARY KEY (user_id)",
+        "ALTER TABLE brz_tree_swap_status ADD PRIMARY KEY (user_id)",
     ));
 
     stmts
@@ -284,8 +357,8 @@ impl TreeStore for MysqlTreeStore {
         let row: Option<i64> = conn
             .exec_first(
                 r"SELECT COALESCE(SUM(l.value), 0) AS balance
-                  FROM tree_leaves l
-                  LEFT JOIN tree_reservations r
+                  FROM brz_tree_leaves l
+                  LEFT JOIN brz_tree_reservations r
                     ON l.reservation_id = r.id AND l.user_id = r.user_id
                   WHERE l.user_id = ?
                     AND (
@@ -306,8 +379,8 @@ impl TreeStore for MysqlTreeStore {
             .exec(
                 r"SELECT l.id, l.status, l.is_missing_from_operators, l.data,
                          l.reservation_id, r.purpose
-                  FROM tree_leaves l
-                  LEFT JOIN tree_reservations r
+                  FROM brz_tree_leaves l
+                  LEFT JOIN brz_tree_reservations r
                     ON l.reservation_id = r.id AND l.user_id = r.user_id
                   WHERE l.user_id = ?",
                 (self.identity.clone(),),
@@ -394,7 +467,7 @@ impl TreeStore for MysqlTreeStore {
         id: &LeavesReservationId,
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError> {
-        // Serialize against `set_leaves` so its `tree_spent_leaves` snapshot
+        // Serialize against `set_leaves` so its `brz_tree_spent_leaves` snapshot
         // and the upsert that consumes it cannot interleave with this
         // transaction's spent-marker write — otherwise the snapshot would miss
         // our marker and the upsert would write the just-spent leaf back as
@@ -525,6 +598,7 @@ impl MysqlTreeStore {
             &self.pool,
             TREE_MIGRATIONS_TABLE,
             &Self::migrations(&self.identity, self.foreign_key_mode),
+            Some(&SCHEMA_RENAMES),
         )
         .await
     }
@@ -537,7 +611,7 @@ impl MysqlTreeStore {
         // This FK is omitted when foreign keys are disabled.
         let mut initial = vec![
             Migration::sql(
-                "CREATE TABLE IF NOT EXISTS tree_reservations (
+                "CREATE TABLE IF NOT EXISTS brz_tree_reservations (
                     id VARCHAR(255) NOT NULL PRIMARY KEY,
                     purpose VARCHAR(64) NOT NULL,
                     pending_change_amount BIGINT NOT NULL DEFAULT 0,
@@ -545,7 +619,7 @@ impl MysqlTreeStore {
                 )",
             ),
             Migration::sql(
-                "CREATE TABLE IF NOT EXISTS tree_leaves (
+                "CREATE TABLE IF NOT EXISTS brz_tree_leaves (
                     id VARCHAR(255) NOT NULL PRIMARY KEY,
                     status VARCHAR(64) NOT NULL,
                     is_missing_from_operators TINYINT(1) NOT NULL DEFAULT 0,
@@ -556,33 +630,33 @@ impl MysqlTreeStore {
                 )",
             ),
             Migration::sql(
-                "CREATE TABLE IF NOT EXISTS tree_spent_leaves (
+                "CREATE TABLE IF NOT EXISTS brz_tree_spent_leaves (
                     leaf_id VARCHAR(255) NOT NULL PRIMARY KEY,
                     spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                 )",
             ),
             Migration::CreateIndex {
-                name: "idx_tree_leaves_available",
-                table: "tree_leaves",
+                name: "brz_idx_tree_leaves_available",
+                table: "brz_tree_leaves",
                 columns: "(status, is_missing_from_operators)",
             },
             Migration::CreateIndex {
-                name: "idx_tree_leaves_reservation",
-                table: "tree_leaves",
+                name: "brz_idx_tree_leaves_reservation",
+                table: "brz_tree_leaves",
                 columns: "(reservation_id)",
             },
             Migration::CreateIndex {
-                name: "idx_tree_leaves_added_at",
-                table: "tree_leaves",
+                name: "brz_idx_tree_leaves_added_at",
+                table: "brz_tree_leaves",
                 columns: "(added_at)",
             },
         ];
         if foreign_key_mode.creates_constraints() {
             initial.push(Migration::AddForeignKey {
-                name: "fk_tree_leaves_reservation",
-                table: "tree_leaves",
+                name: "brz_fk_tree_leaves_reservation",
+                table: "brz_tree_leaves",
                 definition: "FOREIGN KEY (reservation_id) \
-                             REFERENCES tree_reservations(id) ON DELETE SET NULL",
+                             REFERENCES brz_tree_reservations(id) ON DELETE SET NULL",
             });
         }
 
@@ -591,14 +665,14 @@ impl MysqlTreeStore {
             // Migration 2: Swap status tracking.
             vec![
                 Migration::sql(
-                    "CREATE TABLE IF NOT EXISTS tree_swap_status (
+                    "CREATE TABLE IF NOT EXISTS brz_tree_swap_status (
                         id INT NOT NULL PRIMARY KEY DEFAULT 1,
                         last_completed_at DATETIME(6) NULL,
                         CHECK (id = 1)
                     )",
                 ),
                 Migration::sql(
-                    "INSERT INTO tree_swap_status (id) VALUES (1)
+                    "INSERT INTO brz_tree_swap_status (id) VALUES (1)
                      ON DUPLICATE KEY UPDATE id = id",
                 ),
             ],
@@ -610,7 +684,7 @@ impl MysqlTreeStore {
             // the slim selection in `try_reserve_leaves` is index-only.
             vec![
                 Migration::AddColumn {
-                    table: "tree_leaves",
+                    table: "brz_tree_leaves",
                     column: "value",
                     definition: "BIGINT NOT NULL DEFAULT 0",
                 },
@@ -618,20 +692,20 @@ impl MysqlTreeStore {
                 // no-op because by then `value` is already populated and the
                 // `WHERE value = 0` predicate filters everything out.
                 Migration::sql(
-                    "UPDATE tree_leaves
+                    "UPDATE brz_tree_leaves
                         SET value = CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.value')) AS UNSIGNED)
                         WHERE value = 0",
                 ),
                 Migration::CreateIndex {
-                    name: "idx_tree_leaves_slim",
-                    table: "tree_leaves",
+                    name: "brz_idx_tree_leaves_slim",
+                    table: "brz_tree_leaves",
                     columns: "(status, is_missing_from_operators, reservation_id, value)",
                 },
             ],
             // Migration 4: Multi-tenant scoping. Adds user_id to every tree-
             // store table, backfills with the connecting tenant's identity, and
             // rewrites primary keys / optional FKs / indexes to lead with
-            // user_id. The `tree_swap_status` singleton is restructured the
+            // user_id. The `brz_tree_swap_status` singleton is restructured the
             // same way as `sync_revision` in the SDK-core storage.
             tree_store_multi_tenant_migration(identity, foreign_key_mode),
         ]
@@ -714,9 +788,9 @@ impl MysqlTreeStore {
         let row: Option<(i64, i64)> = tx
             .exec_first(
                 r"SELECT
-                    (SELECT EXISTS(SELECT 1 FROM tree_reservations WHERE user_id = ? AND purpose = 'Swap')) AS has_active_swap,
+                    (SELECT EXISTS(SELECT 1 FROM brz_tree_reservations WHERE user_id = ? AND purpose = 'Swap')) AS has_active_swap,
                     COALESCE(
-                        (SELECT (last_completed_at >= ?) FROM tree_swap_status WHERE user_id = ?),
+                        (SELECT (last_completed_at >= ?) FROM brz_tree_swap_status WHERE user_id = ?),
                         0
                     ) AS swap_completed_during_refresh",
                 (
@@ -745,7 +819,7 @@ impl MysqlTreeStore {
 
         let spent_rows: Vec<String> = tx
             .exec(
-                "SELECT leaf_id FROM tree_spent_leaves WHERE user_id = ? AND spent_at >= ?",
+                "SELECT leaf_id FROM brz_tree_spent_leaves WHERE user_id = ? AND spent_at >= ?",
                 (self.identity.clone(), refresh_timestamp.naive_utc()),
             )
             .await
@@ -763,7 +837,7 @@ impl MysqlTreeStore {
         // `cleanup_stale_reservations` (which clears `reservation_id`
         // explicitly because the composite FK uses NO ACTION).
         tx.exec_drop(
-            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
+            "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
             (self.identity.clone(), refresh_timestamp.naive_utc()),
         )
         .await
@@ -788,7 +862,7 @@ impl MysqlTreeStore {
 
         let exists: Option<String> = tx
             .exec_first(
-                "SELECT id FROM tree_reservations WHERE user_id = ? AND id = ?",
+                "SELECT id FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
                 (self.identity.clone(), id),
             )
             .await
@@ -800,7 +874,7 @@ impl MysqlTreeStore {
 
         let prior_leaf_ids: Vec<String> = tx
             .exec(
-                "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+                "SELECT id FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
                 (self.identity.clone(), id),
             )
             .await
@@ -816,14 +890,14 @@ impl MysqlTreeStore {
         );
 
         tx.exec_drop(
-            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
             (self.identity.clone(), id),
         )
         .await
         .map_err(map_err)?;
 
         tx.exec_drop(
-            "DELETE FROM tree_reservations WHERE user_id = ? AND id = ?",
+            "DELETE FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
             (self.identity.clone(), id),
         )
         .await
@@ -846,7 +920,7 @@ impl MysqlTreeStore {
 
         let purpose: Option<String> = tx
             .exec_first(
-                "SELECT purpose FROM tree_reservations WHERE user_id = ? AND id = ?",
+                "SELECT purpose FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
                 (self.identity.clone(), id),
             )
             .await
@@ -856,7 +930,7 @@ impl MysqlTreeStore {
             let is_swap = purpose == "Swap";
             let leaf_ids: Vec<String> = tx
                 .exec(
-                    "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+                    "SELECT id FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
                     (self.identity.clone(), id),
                 )
                 .await
@@ -877,14 +951,14 @@ impl MysqlTreeStore {
             .await?;
 
         tx.exec_drop(
-            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
             (self.identity.clone(), id),
         )
         .await
         .map_err(map_err)?;
 
         tx.exec_drop(
-            "DELETE FROM tree_reservations WHERE user_id = ? AND id = ?",
+            "DELETE FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
             (self.identity.clone(), id),
         )
         .await
@@ -906,7 +980,7 @@ impl MysqlTreeStore {
         // no row) gets one created lazily.
         if is_swap && new_leaves.is_some() {
             tx.exec_drop(
-                "INSERT INTO tree_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
+                "INSERT INTO brz_tree_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
                  ON DUPLICATE KEY UPDATE last_completed_at = VALUES(last_completed_at)",
                 (self.identity.clone(),),
             )
@@ -938,7 +1012,7 @@ impl MysqlTreeStore {
         let total_row: Option<i64> = tx
             .exec_first(
                 r"SELECT COALESCE(SUM(value), 0) AS total
-                  FROM tree_leaves
+                  FROM brz_tree_leaves
                   WHERE user_id = ?
                     AND status = 'Available'
                     AND is_missing_from_operators = 0
@@ -954,7 +1028,7 @@ impl MysqlTreeStore {
         let slim_rows: Vec<(String, i64)> = tx
             .exec(
                 r"SELECT id, value
-                  FROM tree_leaves
+                  FROM brz_tree_leaves
                   WHERE user_id = ?
                     AND status = 'Available'
                     AND is_missing_from_operators = 0
@@ -963,7 +1037,7 @@ impl MysqlTreeStore {
                       value <= ?
                       OR id = (
                         SELECT id FROM (
-                          SELECT id FROM tree_leaves
+                          SELECT id FROM brz_tree_leaves
                           WHERE user_id = ?
                             AND status = 'Available'
                             AND is_missing_from_operators = 0
@@ -1112,7 +1186,7 @@ impl MysqlTreeStore {
         }
         let placeholders = build_placeholders(ids.len());
         let sql = format!(
-            "SELECT id, data FROM tree_leaves WHERE user_id = ? AND id IN ({placeholders})"
+            "SELECT id, data FROM brz_tree_leaves WHERE user_id = ? AND id IN ({placeholders})"
         );
         let mut params: Vec<Value> = Vec::with_capacity(ids.len().saturating_add(1));
         params.push(Value::from(self.identity.clone()));
@@ -1148,7 +1222,7 @@ impl MysqlTreeStore {
 
         let exists: Option<String> = tx
             .exec_first(
-                "SELECT id FROM tree_reservations WHERE user_id = ? AND id = ?",
+                "SELECT id FROM brz_tree_reservations WHERE user_id = ? AND id = ?",
                 (self.identity.clone(), reservation_id),
             )
             .await
@@ -1162,7 +1236,7 @@ impl MysqlTreeStore {
 
         let old_reserved_leaf_ids: Vec<String> = tx
             .exec(
-                "SELECT id FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+                "SELECT id FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
                 (self.identity.clone(), reservation_id),
             )
             .await
@@ -1171,7 +1245,7 @@ impl MysqlTreeStore {
         self.batch_insert_spent_leaves(&mut tx, &old_reserved_leaf_ids)
             .await?;
         tx.exec_drop(
-            "DELETE FROM tree_leaves WHERE user_id = ? AND reservation_id = ?",
+            "DELETE FROM brz_tree_leaves WHERE user_id = ? AND reservation_id = ?",
             (self.identity.clone(), reservation_id),
         )
         .await
@@ -1187,7 +1261,7 @@ impl MysqlTreeStore {
             .await?;
 
         tx.exec_drop(
-            "UPDATE tree_reservations SET pending_change_amount = 0 WHERE user_id = ? AND id = ?",
+            "UPDATE brz_tree_reservations SET pending_change_amount = 0 WHERE user_id = ? AND id = ?",
             (self.identity.clone(), reservation_id),
         )
         .await
@@ -1207,7 +1281,7 @@ impl MysqlTreeStore {
     ) -> Result<u64, TreeServiceError> {
         let row: Option<i64> = tx
             .exec_first(
-                "SELECT COALESCE(SUM(pending_change_amount), 0) FROM tree_reservations WHERE user_id = ?",
+                "SELECT COALESCE(SUM(pending_change_amount), 0) FROM brz_tree_reservations WHERE user_id = ?",
                 (self.identity.clone(),),
             )
             .await
@@ -1216,7 +1290,7 @@ impl MysqlTreeStore {
         Ok(u64::try_from(row.unwrap_or(0)).unwrap_or(0))
     }
 
-    /// Batch upserts leaves into `tree_leaves` table.
+    /// Batch upserts leaves into `brz_tree_leaves` table.
     /// Optionally skips leaves whose IDs are in the `skip_ids` set.
     /// Uses `ON DUPLICATE KEY UPDATE` to replace existing leaves.
     #[allow(clippy::arithmetic_side_effects)] // `len * 4` for params capacity, bounded by leaves slice
@@ -1251,7 +1325,7 @@ impl MysqlTreeStore {
 
         // Build VALUES (?, ?, ?, ?, ?, ?, NOW(6)), … with user_id as the first column.
         let mut sql = String::from(
-            "INSERT INTO tree_leaves (user_id, id, status, is_missing_from_operators, data, value, added_at) VALUES ",
+            "INSERT INTO brz_tree_leaves (user_id, id, status, is_missing_from_operators, data, value, added_at) VALUES ",
         );
         let mut params: Vec<Value> = Vec::with_capacity(filtered.len() * 6);
         for (i, leaf) in filtered.iter().enumerate() {
@@ -1297,7 +1371,7 @@ impl MysqlTreeStore {
 
         let placeholders = build_placeholders(leaf_ids.len());
         let sql = format!(
-            "UPDATE tree_leaves SET reservation_id = ? WHERE user_id = ? AND id IN ({placeholders})"
+            "UPDATE brz_tree_leaves SET reservation_id = ? WHERE user_id = ? AND id IN ({placeholders})"
         );
 
         let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len() + 2);
@@ -1323,7 +1397,7 @@ impl MysqlTreeStore {
             return Ok(());
         }
 
-        let mut sql = String::from("INSERT INTO tree_spent_leaves (user_id, leaf_id) VALUES ");
+        let mut sql = String::from("INSERT INTO brz_tree_spent_leaves (user_id, leaf_id) VALUES ");
         let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len().saturating_mul(2));
         for (i, id) in leaf_ids.iter().enumerate() {
             if i > 0 {
@@ -1356,7 +1430,7 @@ impl MysqlTreeStore {
 
         let placeholders = build_placeholders(leaf_ids.len());
         let sql = format!(
-            "DELETE FROM tree_spent_leaves WHERE user_id = ? AND leaf_id IN ({placeholders})"
+            "DELETE FROM brz_tree_spent_leaves WHERE user_id = ? AND leaf_id IN ({placeholders})"
         );
 
         let mut params: Vec<Value> = Vec::with_capacity(leaf_ids.len().saturating_add(1));
@@ -1390,11 +1464,11 @@ impl MysqlTreeStore {
     ) -> Result<u64, TreeServiceError> {
         // Release dependent leaves before dropping the parent rows.
         tx.exec_drop(
-            r"UPDATE tree_leaves SET reservation_id = NULL
+            r"UPDATE brz_tree_leaves SET reservation_id = NULL
               WHERE user_id = ?
                 AND reservation_id IN (
                     SELECT id FROM (
-                        SELECT id FROM tree_reservations
+                        SELECT id FROM brz_tree_reservations
                         WHERE user_id = ?
                           AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)
                     ) AS stale
@@ -1410,7 +1484,7 @@ impl MysqlTreeStore {
 
         let mut result = tx
             .exec_iter(
-                "DELETE FROM tree_reservations
+                "DELETE FROM brz_tree_reservations
                  WHERE user_id = ? AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)",
                 (self.identity.clone(), RESERVATION_TIMEOUT_SECS),
             )
@@ -1438,7 +1512,7 @@ impl MysqlTreeStore {
 
         let mut result = tx
             .exec_iter(
-                "DELETE FROM tree_spent_leaves WHERE user_id = ? AND spent_at < ?",
+                "DELETE FROM brz_tree_spent_leaves WHERE user_id = ? AND spent_at < ?",
                 (self.identity.clone(), cleanup_cutoff.naive_utc()),
             )
             .await
@@ -1465,7 +1539,7 @@ impl MysqlTreeStore {
         let pending_i64 = pending_change as i64;
 
         tx.exec_drop(
-            "INSERT INTO tree_reservations (user_id, id, purpose, pending_change_amount) VALUES (?, ?, ?, ?)",
+            "INSERT INTO brz_tree_reservations (user_id, id, purpose, pending_change_amount) VALUES (?, ?, ?, ?)",
             (self.identity.clone(), reservation_id, purpose.to_string(), pending_i64),
         )
         .await
@@ -1562,11 +1636,11 @@ mod tests {
 
         assert!(has_add_foreign_key(
             &migrations,
-            "fk_tree_leaves_reservation"
+            "brz_fk_tree_leaves_reservation"
         ));
         assert!(has_add_foreign_key(
             &migrations,
-            "fk_tree_leaves_reservation_user"
+            "brz_fk_tree_leaves_reservation_user"
         ));
     }
 
@@ -1578,8 +1652,8 @@ mod tests {
         assert!(migrations.iter().flatten().any(|migration| matches!(
             migration,
             Migration::DropForeignKey {
-                name: "fk_tree_leaves_reservation",
-                table: "tree_leaves"
+                name: "brz_fk_tree_leaves_reservation",
+                table: "brz_tree_leaves"
             }
         )));
     }
@@ -1652,9 +1726,9 @@ mod tests {
         assert_eq!(count_tree_store_foreign_keys(&fixture).await, 0);
     }
 
-    /// `Enforced` mode runs the initial FK add (`fk_tree_leaves_reservation`)
+    /// `Enforced` mode runs the initial FK add (`brz_fk_tree_leaves_reservation`)
     /// and the multi-tenant rewrite: the original is dropped in migration 4
-    /// and replaced by the composite `fk_tree_leaves_reservation_user`, so
+    /// and replaced by the composite `brz_fk_tree_leaves_reservation_user`, so
     /// final FK count is 1.
     #[tokio::test]
     async fn test_new_with_enforced_foreign_key_mode() {
@@ -1679,10 +1753,10 @@ mod tests {
                  WHERE constraint_schema = DATABASE()
                    AND constraint_type = 'FOREIGN KEY'
                    AND table_name IN (
-                       'tree_leaves',
-                       'tree_reservations',
-                       'tree_spent_leaves',
-                       'tree_swap_status'
+                       'brz_tree_leaves',
+                       'brz_tree_reservations',
+                       'brz_tree_spent_leaves',
+                       'brz_tree_swap_status'
                    )",
             )
             .await
@@ -2013,7 +2087,7 @@ mod tests {
         shared_tests::test_update_reservation_preserves_purpose(&fixture.store).await;
     }
 
-    // ==================== MySQL-Specific Tests ====================
+    // ==================== `MySQL`-Specific Tests ====================
 
     #[tokio::test]
     async fn test_stale_reservation_cleanup() {
@@ -2040,7 +2114,7 @@ mod tests {
         // Backdate the reservation past the timeout.
         let mut conn = fixture.store.pool.get_conn().await.unwrap();
         conn.exec_drop(
-            "UPDATE tree_reservations SET created_at = DATE_SUB(NOW(6), INTERVAL 10 MINUTE) WHERE id = ?",
+            "UPDATE brz_tree_reservations SET created_at = DATE_SUB(NOW(6), INTERVAL 10 MINUTE) WHERE id = ?",
             (&reservation.id,),
         )
         .await
@@ -2282,7 +2356,7 @@ mod tests {
         // Backdate the swap reservation past the 5-minute timeout.
         let mut conn = fixture.store.pool.get_conn().await.unwrap();
         conn.exec_drop(
-            "UPDATE tree_reservations SET created_at = DATE_SUB(NOW(6), INTERVAL 10 MINUTE) WHERE id = ?",
+            "UPDATE brz_tree_reservations SET created_at = DATE_SUB(NOW(6), INTERVAL 10 MINUTE) WHERE id = ?",
             (&reservation.id,),
         )
         .await

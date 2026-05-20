@@ -8,10 +8,11 @@ use tracing::{error, trace};
 use crate::{
     ClaimDepositRequest, ClaimDepositResponse, ListUnclaimedDepositsRequest,
     ListUnclaimedDepositsResponse, RefundDepositRequest, RefundDepositResponse, error::SdkError,
-    models::Payment, persist::UpdateDepositPayload, utils::utxo_fetcher::CachedUtxoFetcher,
+    models::Payment, persist::UpdateDepositPayload, sdk::RuntimeEvent,
+    utils::utxo_fetcher::CachedUtxoFetcher,
 };
 
-use super::{BreezSdk, SyncType};
+use super::BreezSdk;
 
 // Retry parameters for looking up the transfer created by a static deposit
 // claim while it propagates across Spark operators.
@@ -25,7 +26,7 @@ impl BreezSdk {
         &self,
         request: ClaimDepositRequest,
     ) -> Result<ClaimDepositResponse, SdkError> {
-        self.ensure_spark_private_mode_initialized().await?;
+        self.maybe_ensure_spark_private_mode_initialized().await?;
         let detailed_utxo =
             CachedUtxoFetcher::new(self.chain_service.clone(), self.storage.clone())
                 .fetch_detailed_utxo(&request.txid, request.vout)
@@ -44,8 +45,10 @@ impl BreezSdk {
                 self.storage
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
-                self.sync_coordinator
-                    .trigger_sync_no_wait(SyncType::WalletState, true)
+                self.event_emitter
+                    .emit_runtime_event(RuntimeEvent::DepositClaimed {
+                        payment: Box::new(payment.clone()),
+                    })
                     .await;
                 Ok(ClaimDepositResponse { payment })
             }

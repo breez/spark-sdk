@@ -48,6 +48,7 @@ make clean            Remove venv and build artifacts
 | `--network` | `regtest` | Network to use (`regtest` or `mainnet`) |
 | `--account-number` | - | Account number for the Spark signer |
 | `--postgres-connection-string` | - | PostgreSQL connection string (uses SQLite by default) |
+| `--mysql-connection-string` | - | MySQL connection string (mutually exclusive with `--postgres-connection-string`) |
 | `--stable-balance-token` | - | Stable balance tokens in `LABEL:token_identifier` format (repeatable) |
 | `--stable-balance-default-active-label` | - | Default active label for stable balance (must match a token label) |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |

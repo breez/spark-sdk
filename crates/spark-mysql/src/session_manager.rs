@@ -13,10 +13,21 @@ use spark_wallet::{Session, SessionManager, SessionManagerError};
 
 use crate::config::MysqlStorageConfig;
 use crate::error::MysqlError;
-use crate::migrations::{Migration, run_migrations};
+use crate::migrations::{Migration, SchemaRenames, run_migrations};
 use crate::pool::create_pool;
 
-const SESSION_MIGRATIONS_TABLE: &str = "session_schema_migrations";
+const SESSION_MIGRATIONS_TABLE: &str = "brz_session_schema_migrations";
+
+/// Pre-prefix rename map for upgrading session-manager deployments.
+/// `MySQL` PKs are always named `PRIMARY` (table-scoped), so only the table
+/// and migrations tracker need renaming.
+const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
+    old_migrations_table: "session_schema_migrations",
+    new_migrations_table: SESSION_MIGRATIONS_TABLE,
+    tables: &[("sessions", "brz_sessions")],
+    indexes: &[],
+    foreign_keys: &[],
+};
 
 /// `MySQL`-backed session manager.
 ///
@@ -39,7 +50,7 @@ impl SessionManager for MysqlSessionManager {
         let service_key = service_identity_key.serialize().to_vec();
         let row: Option<Row> = conn
             .exec_first(
-                "SELECT token, expiration FROM sessions \
+                "SELECT token, expiration FROM brz_sessions \
                  WHERE user_id = ? AND service_identity_key = ?",
                 (self.identity.clone(), service_key),
             )
@@ -69,7 +80,7 @@ impl SessionManager for MysqlSessionManager {
         let expiration = i64::try_from(session.expiration)
             .map_err(|e| SessionManagerError::Generic(format!("expiration overflow: {e}")))?;
         conn.exec_drop(
-            "INSERT INTO sessions (user_id, service_identity_key, token, expiration) \
+            "INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration) \
              VALUES (?, ?, ?, ?) \
              ON DUPLICATE KEY UPDATE token = VALUES(token), expiration = VALUES(expiration)",
             (
@@ -117,12 +128,18 @@ impl MysqlSessionManager {
     }
 
     async fn migrate(&self) -> Result<(), MysqlError> {
-        run_migrations(&self.pool, SESSION_MIGRATIONS_TABLE, &Self::migrations()).await
+        run_migrations(
+            &self.pool,
+            SESSION_MIGRATIONS_TABLE,
+            &Self::migrations(),
+            Some(&SCHEMA_RENAMES),
+        )
+        .await
     }
 
     fn migrations() -> Vec<Vec<Migration>> {
         vec![vec![Migration::sql(
-            "CREATE TABLE IF NOT EXISTS sessions (
+            "CREATE TABLE IF NOT EXISTS brz_sessions (
                 user_id VARBINARY(33) NOT NULL,
                 service_identity_key VARBINARY(33) NOT NULL,
                 token TEXT NOT NULL,

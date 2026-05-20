@@ -10,7 +10,7 @@ use crate::{
     models::{ChallengeRequest, ChallengeResponse, VerifyRequest, VerifyResponse},
 };
 
-use platform_utils::{ContentType, HttpClient, add_content_type_header};
+use platform_utils::{ContentType, add_content_type_header};
 
 const ACCESS_TOKEN_CACHE_KEY: &str = "access_token";
 const HOUR_MS: u32 = 60 * 60 * 1000;
