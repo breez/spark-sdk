@@ -142,7 +142,7 @@ By implementing the Payment Observer interface you can be notified before a paym
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkContext.html">API docs</a>
 </h2>
 
-An SDK Context bundles every process-shareable resource: the HTTP client (used for SSP GraphQL, chain service, LNURL, and JWT refresh), the gRPC channels to the Spark operators, the gRPC client to the Breez backend, and — optionally — a PostgreSQL or MySQL connection pool. By default each SDK builds its own. Server processes hosting many wallets at once can construct one SDK Context and pass it to every {{#name SdkBuilder}} so they reuse the same pooled clients instead of each opening fresh ones.
+An SDK Context bundles every process-shareable resource: the HTTP client (used for SSP GraphQL, chain service and LNURL), the gRPC channels to the Spark operators, the gRPC client to the Breez backend, and — optionally — a PostgreSQL or MySQL connection pool. By default each SDK builds its own. Server processes hosting many wallets at once can construct one SDK Context and pass it to every {{#name SdkBuilder}} so they reuse the same pooled clients instead of each opening fresh ones.
 
 Construct one via {{#name new_shared_sdk_context}} and pass it to each {{#name SdkBuilder}} via {{#name with_shared_context}}. Connections close when the last reference to the SDK Context is dropped; calling {{#name disconnect}} on an SDK instance does not affect them.
 
