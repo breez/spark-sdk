@@ -42,7 +42,13 @@ The recommended way to opt into server mode is via {{#name default_server_config
 <div class="warning">
 <h4>Developer note</h4>
 
-When this flag is `false`, related per-field options whose backing service is gated off must be in their inactive shape — [{{#name real_time_sync_server_url}}](#real-time-sync-server-url) must be `None` and [{{#name optimization_config.auto_enabled}}](#optimization-configuration) must be `false`. The SDK rejects builds that leave them in their active shape with an invalid-input error. {{#name default_server_config}} sets these compatible values automatically.
+When this flag is `false`, related per-field options whose backing service is gated off must be in their inactive shape:
+
+- [{{#name real_time_sync_server_url}}](#real-time-sync-server-url) must be `None`.
+- [{{#name leaf_optimization_config.auto_enabled}}](#optimization-configuration) must be `false`.
+- [{{#name token_optimization_config.auto_enabled}}](#optimization-configuration) must be `false`.
+
+The SDK rejects builds that leave any of them in their active shape with an invalid-input error. {{#name default_server_config}} sets these compatible values automatically.
 
 </div>
 

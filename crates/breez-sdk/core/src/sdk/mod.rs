@@ -220,9 +220,12 @@ pub fn default_config(network: Network) -> Config {
 /// explicitly, so an ephemeral SDK instance stays cheap and predictable.
 ///
 /// Config fields whose background services are gated off are reset to their
-/// inactive shape. The SDK rejects builds where
-/// `background_tasks_enabled` is `false` and any of those fields is left in
-/// its active shape, so flip the flag via this helper rather than by hand.
+/// inactive shape: `real_time_sync_server_url` is set to `None`, and both
+/// `leaf_optimization_config.auto_enabled` and
+/// `token_optimization_config.auto_enabled` are set to `false`. The SDK
+/// rejects builds where `background_tasks_enabled` is `false` and any of
+/// those fields is left in its active shape, so flip the flag via this
+/// helper rather than by hand.
 ///
 /// Explicit operations (`sync_wallet`, `claim_deposit`,
 /// `list_unclaimed_deposits`, `refund_deposit`,
