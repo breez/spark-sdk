@@ -84,9 +84,11 @@ public class PasskeyProvider: PrfProvider {
     ///     `keys.breez.technology` RP (only valid for Breez-registered apps).
     ///     Changing this after users have registered passkeys will make
     ///     their existing credentials undiscoverable.
-    ///   - rpName: Display name for the RP (default: "Breez SDK").
-    ///     Shown to the user during credential registration. Only used when
-    ///     creating new passkeys; changing it does not affect existing credentials.
+    ///   - rpName: **Required.** Display name shown to the user in the OS
+    ///     passkey picker and credential-management UIs (iCloud Keychain,
+    ///     Google Password Manager, 1Password, etc.) when choosing a
+    ///     credential. Only used at credential registration; changing it
+    ///     does not affect existing credentials.
     ///   - userName: User name stored with the credential. Defaults to
     ///     rpName. Only used during registration.
     ///   - userDisplayName: User display name shown in the passkey
@@ -103,7 +105,7 @@ public class PasskeyProvider: PrfProvider {
     ///     unit tests or unusual presentation setups.
     public init(
         rpId: String,
-        rpName: String = "Breez SDK",
+        rpName: String,
         userName: String? = nil,
         userDisplayName: String? = nil,
         credentialRegistry: CredentialRegistry? = nil,
@@ -375,7 +377,7 @@ extension PrfProviderError {
 ///
 /// Equivalent to:
 /// ```swift
-/// let provider = PasskeyProvider(rpId: rpId)
+/// let provider = PasskeyProvider(rpId: rpId, rpName: rpName)
 /// let client = PasskeyClient(
 ///     prfProvider: provider,
 ///     breezApiKey: sdkConfig.apiKey,
@@ -389,10 +391,11 @@ extension PrfProviderError {
 @available(iOS 18.0, macOS 15.0, *)
 public func createPasskeyClient(
     rpId: String,
+    rpName: String,
     sdkConfig: Config,
     passkeyConfig: PasskeyConfig? = nil
 ) -> PasskeyClient {
-    let provider = PasskeyProvider(rpId: rpId)
+    let provider = PasskeyProvider(rpId: rpId, rpName: rpName)
     return PasskeyClient(
         prfProvider: provider,
         breezApiKey: sdkConfig.apiKey,

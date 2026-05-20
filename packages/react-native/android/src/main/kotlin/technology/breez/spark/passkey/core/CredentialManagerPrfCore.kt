@@ -226,9 +226,6 @@ public object CredentialManagerPrfCore {
     /** Default Relying Party ID for cross-platform credential sharing. */
     public const val DEFAULT_RP_ID: String = "keys.breez.technology"
 
-    /** Default Relying Party display name shown during passkey registration. */
-    public const val DEFAULT_RP_NAME: String = "Breez SDK"
-
     /** Lazily initialised; first-use entropy gathering can dominate the cold path. */
     private val secureRandom: SecureRandom by lazy { SecureRandom() }
 

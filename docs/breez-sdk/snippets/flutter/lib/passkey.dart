@@ -36,7 +36,7 @@ Future<void> checkAvailability() async {
   // ANCHOR: check-availability
   // `rpId` is required. Pass your app's domain, or
   // `PasskeyProvider.breezRpId` if your app is Breez-registered.
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com', rpName: 'My App'));
   final passkey = PasskeyClient(
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
@@ -69,7 +69,7 @@ Future<BreezSdk> connectWithPasskey() async {
   // attempt fast-fails (no UI) when no local credential exists; only
   // `CredentialNotFound` flips to register, all other errors (cancel
   // / timeout / configuration) propagate unchanged.
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com', rpName: 'My App'));
   final passkey = PasskeyClient(
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
@@ -106,7 +106,7 @@ Future<BreezSdk> registerNewPasskey() async {
   // the credential AND derives the wallet seed in one orchestrated
   // call. On iOS+Android this is 2 OS prompts total (1 create + 1
   // dual-salt assert) thanks to the SDK's bulk-PRF path.
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com', rpName: 'My App'));
   final passkey = PasskeyClient(
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
@@ -136,7 +136,7 @@ Future<BreezSdk> registerNewPasskey() async {
 
 Future<List<String>> listLabels() async {
   // ANCHOR: list-labels
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com', rpName: 'My App'));
   final config = PasskeyConfig(
     // Optional: override the default wallet label used when register /
     // signIn receive `label = null`. Falls back to the SDK's internal
@@ -170,7 +170,7 @@ Future<List<String>> listLabels() async {
 
 Future<void> storeLabel() async {
   // ANCHOR: store-label
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com', rpName: 'My App'));
   final passkey = PasskeyClient(
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
@@ -192,7 +192,7 @@ Future<void> checkDomain() async {
   // ANCHOR: domain-association
   // Verify Apple AASA / Android Asset Links before the first WebAuthn
   // ceremony. Diagnostic only: never blocks.
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com', rpName: 'My App'));
   final result = await prfProvider.checkDomainAssociation();
 
   if (result is DomainAssociationAssociated) {
@@ -213,7 +213,7 @@ Future<Wallet?> recoverFromAlreadyExists() async {
   // Route the user to the sign-in path: the OS picker will surface
   // the existing credential and the SDK's identity cache will warm
   // up on the assertion.
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com', rpName: 'My App'));
   final passkey = PasskeyClient(
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,
@@ -250,7 +250,7 @@ Future<SignInResponse> handleTimeout() async {
   // surface a re-prompt UI without treating it as the user opting
   // out. The SDK fires PasskeyPrfException with code 'userTimedOut'
   // when assertion or register elapsed time crosses 55_000 ms.
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com', rpName: 'My App'));
   final passkey = PasskeyClient(
     deriveSeeds: prfProvider.deriveSeeds,
     isSupported: prfProvider.isSupported,

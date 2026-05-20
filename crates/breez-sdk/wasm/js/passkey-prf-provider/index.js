@@ -27,7 +27,6 @@
  * managed Relying Party (only valid for Breez-registered apps).
  */
 const BREEZ_RP_ID = 'keys.breez.technology';
-const DEFAULT_RP_NAME = 'Breez SDK';
 
 /**
  * Wall-clock threshold (ms) used to discriminate a NotAllowedError
@@ -236,9 +235,11 @@ export class PasskeyProvider {
      *   Must match the domain hosting your passkeys. Pass
      *   `PasskeyProvider.BREEZ_RP_ID` to opt into the Breez-managed
      *   shared RP (only valid for Breez-registered apps).
-     * @param {string} [options.rpName='Breez SDK'] - RP display name shown during
-     *   credential registration. Only used when creating new passkeys; changing it
-     *   does not affect existing credentials.
+     * @param {string} options.rpName - **Required.** Display name shown to
+     *   the user in the OS passkey picker and credential-management UIs
+     *   (iCloud Keychain, Google Password Manager, 1Password, etc.) when
+     *   choosing a credential. Only used at credential registration;
+     *   changing it does not affect existing credentials.
      * @param {string} [options.userName] - User name stored with the credential,
      *   shown as a secondary label in some passkey managers. Defaults to rpName.
      *   Only used during registration; changing it does not affect existing credentials.
@@ -272,8 +273,14 @@ export class PasskeyProvider {
                 + 'or PasskeyProvider.BREEZ_RP_ID if you registered with Breez.'
             );
         }
+        if (typeof options.rpName !== 'string' || options.rpName.length === 0) {
+            throw new Error(
+                'PasskeyProvider: rpName is required. Pass your app name; it is '
+                + 'shown to the user in the OS passkey picker.'
+            );
+        }
         this.rpId = options.rpId;
-        this.rpName = options.rpName || DEFAULT_RP_NAME;
+        this.rpName = options.rpName;
         this.userName = options.userName || this.rpName;
         this.userDisplayName = options.userDisplayName || this.userName;
         this.authenticatorAttachment = options.authenticatorAttachment;

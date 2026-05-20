@@ -107,11 +107,13 @@ export interface PasskeyProviderOptions {
   rpId: string;
 
   /**
-   * RP display name shown during credential registration. Only used when
-   * creating new passkeys; changing it does not affect existing credentials.
-   * @default 'Breez SDK'
+   * Display name shown to the user in the OS passkey picker and
+   * credential-management UIs (iCloud Keychain, Google Password
+   * Manager, 1Password, etc.) when choosing a credential. Only used
+   * at credential registration; changing it does not affect existing
+   * credentials.
    */
-  rpName?: string;
+  rpName: string;
 
   /**
    * User name stored with the credential, shown as a secondary label in some
@@ -305,8 +307,14 @@ export class PasskeyProvider {
           'or PasskeyProvider.BREEZ_RP_ID if you registered with Breez.'
       );
     }
+    if (!options.rpName || options.rpName.length === 0) {
+      throw new Error(
+        'PasskeyProvider: rpName is required. Pass your app name; it is ' +
+          'shown to the user in the OS passkey picker.'
+      );
+    }
     this.rpId = options.rpId;
-    this.rpName = options.rpName ?? 'Breez SDK';
+    this.rpName = options.rpName;
     this.userName = options.userName ?? this.rpName;
     this.userDisplayName = options.userDisplayName ?? this.userName;
     this.credentialRegistry = options.credentialRegistry;
@@ -640,7 +648,7 @@ import type {
  *
  * Equivalent to:
  * ```ts
- * const provider = new PasskeyProvider({ rpId });
+ * const provider = new PasskeyProvider({ rpId, rpName });
  * const client = new PasskeyClient(provider, sdkConfig.apiKey, passkeyConfig);
  * ```
  *
@@ -650,6 +658,7 @@ import type {
  */
 export function createPasskeyClient(
   rpId: string,
+  rpName: string,
   sdkConfig: Config,
   passkeyConfig?: PasskeyConfig
 ): PasskeyClient {
@@ -658,7 +667,7 @@ export function createPasskeyClient(
   // (the generated module registers a Hermes installer at import time).
   const generated =
     require('./generated/breez_sdk_spark') as typeof import('./generated/breez_sdk_spark');
-  const provider = new PasskeyProvider({ rpId });
+  const provider = new PasskeyProvider({ rpId, rpName });
   return new generated.PasskeyClient(
     provider as unknown as ConstructorParameters<
       typeof generated.PasskeyClient

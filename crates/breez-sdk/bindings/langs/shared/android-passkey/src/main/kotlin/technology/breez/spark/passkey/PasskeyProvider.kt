@@ -37,8 +37,11 @@ import technology.breez.spark.passkey.core.RegistryOperation
  *   changes.
  * @param rpId Relying Party ID. Must match the domain configured for
  *   cross-platform credential sharing.
- * @param rpName Display name for the RP, shown during credential
- *   registration.
+ * @param rpName Display name shown to the user in the OS passkey
+ *   picker and credential-management UIs (iCloud Keychain, Google
+ *   Password Manager, 1Password, etc.) when choosing a credential.
+ *   Only used at credential registration; changing it does not affect
+ *   existing credentials.
  * @param userName User name stored with the credential. Defaults to [rpName].
  * @param userDisplayName User display name shown in the passkey picker.
  *   Defaults to [userName] (or [rpName] if [userName] is null).
@@ -52,7 +55,7 @@ import technology.breez.spark.passkey.core.RegistryOperation
 public class PasskeyProvider(
     private val activityProvider: () -> Activity,
     private val rpId: String,
-    private val rpName: String = CredentialManagerPrfCore.DEFAULT_RP_NAME,
+    private val rpName: String,
     userName: String? = null,
     userDisplayName: String? = null,
     private val credentialRegistry: CredentialRegistry? = null,
@@ -269,7 +272,7 @@ public class PasskeyProvider(
  *
  * Equivalent to:
  * ```kotlin
- * val provider = PasskeyProvider(activityProvider = activityProvider, rpId = rpId)
+ * val provider = PasskeyProvider(activityProvider = activityProvider, rpId = rpId, rpName = rpName)
  * val client = PasskeyClient(provider, sdkConfig.apiKey, passkeyConfig)
  * ```
  *
@@ -280,9 +283,10 @@ public class PasskeyProvider(
 public fun createPasskeyClient(
     activityProvider: () -> Activity,
     rpId: String,
+    rpName: String,
     sdkConfig: Config,
     passkeyConfig: PasskeyConfig? = null,
 ): PasskeyClient {
-    val provider = PasskeyProvider(activityProvider = activityProvider, rpId = rpId)
+    val provider = PasskeyProvider(activityProvider = activityProvider, rpId = rpId, rpName = rpName)
     return PasskeyClient(provider, sdkConfig.apiKey, passkeyConfig)
 }

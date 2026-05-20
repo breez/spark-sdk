@@ -139,7 +139,7 @@ Built-in providers are not available for C#, Go, and Python.
 | Option | Default | Description |
 |--------|---------|-------------|
 | {{#name rp_id}} | **required** | Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` (= `keys.breez.technology`) if your app is Breez-registered. Changing this means existing passkeys produce a different seed; see [migration considerations](https://github.com/breez/passkey-login/blob/main/SDK%20implementation.md#passkey-migration-considerations). |
-| {{#name rp_name}} | `Breez SDK` | RP display name (registration only, does not affect existing credentials) |
+| {{#name rp_name}} | **required** | Display name shown to the user in the OS passkey picker and credential-management UIs (iCloud Keychain, Google Password Manager, 1Password, etc.) when choosing a credential. Only used at credential registration; changing it does not affect existing credentials. |
 | {{#name user_name}} | {{#name rp_name}} | User name stored with the credential (registration only). On iOS this is the only field surfaced in the iCloud Keychain / passkey picker: the platform's `ASAuthorizationPlatformPublicKeyCredentialProvider` API has no `displayName` slot. Pass the per-credential friendly label here if you want users to see it. |
 | {{#name user_display_name}} | {{#name user_name}} | Primary label shown in passkey picker on platforms that surface a separate display name (Android via WebAuthn JSON `user.displayName`, web via WebAuthn L3). iOS ignores. |
 | {{#name credential_registry}} | none | Opt-in app-side store of known credential IDs. When supplied, the SDK auto-merges stored IDs into `allowCredentialIds` / `excludeCredentialIds` and writes new IDs back after success. See [Implementing CredentialRegistry](#credentialregistry) below. |
@@ -246,7 +246,11 @@ public struct KeychainCredentialRegistry: CredentialRegistry {
 Pass to the provider:
 
 ```swift
-let provider = PasskeyProvider(credentialRegistry: KeychainCredentialRegistry())
+let provider = PasskeyProvider(
+    rpId: "my-app.com",
+    rpName: "My App",
+    credentialRegistry: KeychainCredentialRegistry()
+)
 ```
 
 ### Android Block Store + SharedPreferences fallback
@@ -344,6 +348,8 @@ Pass to the provider:
 ```kotlin
 val provider = PasskeyProvider(
     activityProvider = { activity },
+    rpId = "my-app.com",
+    rpName = "My App",
     credentialRegistry = BlockStoreCredentialRegistry(activity.applicationContext),
 )
 ```
@@ -399,6 +405,8 @@ Pass to the provider:
 
 ```typescript
 const provider = new PasskeyProvider({
+    rpId: 'my-app.com',
+    rpName: 'My App',
     credentialRegistry: new LocalStorageCredentialRegistry(),
 });
 ```
