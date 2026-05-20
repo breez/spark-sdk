@@ -72,12 +72,29 @@ const checkAvailability = async () => {
 
 const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
+  // Single-CTA onboarding: silent sign-in for a returning user,
+  // fall-through to register on a fresh device. Internally pins
+  // `preferImmediatelyAvailableCredentials = true` so the silent
+  // attempt fast-fails (no UI) when no local credential exists; only
+  // `CredentialNotFound` flips to register, all other errors (cancel
+  // / timeout / configuration) propagate unchanged.
   const prfProvider = new PasskeyProvider({ rpId: 'my-app.com' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
-  // signIn derives the wallet seed for an existing credential. With
-  // bulk PRF on iOS+Android this is one OS prompt for master + label.
-  const response = await passkey.signIn({ label: 'personal' })
+  const response = await passkey.connectWithPasskey({
+    label: 'personal',
+    excludeCredentialIds: [],
+  })
+
+  // Branch on `flow.type` to know which path ran.
+  switch (response.flow.type) {
+    case 'signedIn':
+      // returning user; response.flow.credentialId may be set
+      break
+    case 'registered':
+      // new user; response.flow.credential carries the new ID + metadata
+      break
+  }
 
   const config = defaultConfig(Network.Mainnet)
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })
@@ -145,30 +162,6 @@ const storeLabel = async () => {
   // ANCHOR_END: store-label
 }
 
-const singleCtaOnboarding = async () => {
-  // ANCHOR: signin-fallback-register
-  // Single-CTA onboarding: try silent signIn first, fall through to
-  // register on CredentialNotFound. The OS shows ONE prompt for a
-  // returning user (silent assertion succeeds), TWO for a new user
-  // (silent assertion fast-fails, then create + dual-salt assert).
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
-
-  try {
-    // Discovery mode (label undefined): derives master + configured
-    // default label in a single ceremony. The fresh-device user
-    // fast-fails in <300ms with no UI shown.
-    const response = await passkey.signIn({ label: undefined })
-    return response.wallet
-  } catch (error) {
-    if (!isCredentialNotFound(error)) throw error
-
-    // No credential. Onboard a new user.
-    const response = await passkey.register({ label: 'personal' })
-    return response.wallet
-  }
-  // ANCHOR_END: signin-fallback-register
-}
 
 const isCredentialNotFound = (error: unknown): boolean => {
   // The SDK emits 'CredentialNotFound' both for genuine no-cred cases

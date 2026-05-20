@@ -1344,3 +1344,21 @@ pub struct _SignInResponse {
     pub labels: Vec<String>,
     pub credential_id: Option<Vec<u8>>,
 }
+
+#[frb(mirror(ConnectWithPasskeyRequest))]
+pub struct _ConnectWithPasskeyRequest {
+    pub label: Option<String>,
+    pub exclude_credential_ids: Vec<Vec<u8>>,
+}
+
+#[frb(mirror(ConnectFlow))]
+pub enum _ConnectFlow {
+    SignedIn { credential_id: Option<Vec<u8>> },
+    Registered { credential: RegisteredCredential },
+}
+
+#[frb(mirror(ConnectWithPasskeyResponse))]
+pub struct _ConnectWithPasskeyResponse {
+    pub wallet: Wallet,
+    pub flow: ConnectFlow,
+}

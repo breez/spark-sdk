@@ -64,10 +64,29 @@ namespace BreezSdkSnippets
         async Task<BreezSdk> ConnectWithPasskey()
         {
             // ANCHOR: connect-with-passkey
+            // Single-CTA onboarding: silent sign-in for a returning user,
+            // fall-through to register on a fresh device. Internally pins
+            // `preferImmediatelyAvailableCredentials = true` so the silent
+            // attempt fast-fails (no UI) when no local credential exists;
+            // only `CredentialNotFound` flips to register, all other errors
+            // (cancel / timeout / configuration) propagate unchanged.
             var prfProvider = new CustomPrfProvider();
             var passkey = new PasskeyClient(prfProvider, null, null);
 
-            var response = await passkey.SignIn(new SignInRequest(label: "personal"));
+            var response = await passkey.ConnectWithPasskey(
+                new ConnectWithPasskeyRequest(label: "personal", excludeCredentialIds: new List<byte[]>())
+            );
+
+            // Branch on `flow` to know which path ran.
+            switch (response.flow)
+            {
+                case ConnectFlow.SignedIn signedIn:
+                    // returning user; signedIn.credentialId may be set
+                    break;
+                case ConnectFlow.Registered registered:
+                    // new user; registered.credential carries the new ID + metadata
+                    break;
+            }
 
             var config = BreezSdkSparkMethods.DefaultConfig(network: Network.Mainnet);
             var sdk = await BreezSdkSparkMethods.Connect(new ConnectRequest(
@@ -136,24 +155,6 @@ namespace BreezSdkSnippets
             // ANCHOR_END: store-label
         }
 
-        async Task<Wallet> SingleCtaOnboarding()
-        {
-            // ANCHOR: signin-fallback-register
-            var prfProvider = new CustomPrfProvider();
-            var passkey = new PasskeyClient(prfProvider, null, null);
-
-            try
-            {
-                var response = await passkey.SignIn(new SignInRequest(label: null));
-                return response.wallet;
-            }
-            catch (PrfProviderException.CredentialNotFound)
-            {
-                var response = await passkey.Register(new RegisterRequest(label: "personal"));
-                return response.wallet;
-            }
-            // ANCHOR_END: signin-fallback-register
-        }
 
         async Task CheckDomain()
         {

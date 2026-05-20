@@ -2,9 +2,9 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    DeriveSeedsRequest, PasskeyAvailability, PasskeyConfig, PasskeyError, PrfProvider,
-    PrfProviderError, RegisterRequest, RegisterResponse, RegisteredCredential, SignInRequest,
-    SignInResponse,
+    ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, DeriveSeedsRequest, PasskeyAvailability,
+    PasskeyConfig, PasskeyError, PrfProvider, PrfProviderError, RegisterRequest, RegisterResponse,
+    RegisteredCredential, SignInRequest, SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -191,6 +191,16 @@ impl PasskeyClient {
     /// with discovery when `label` is `None`.
     pub async fn sign_in(&self, request: SignInRequest) -> Result<SignInResponse, PasskeyError> {
         self.inner.sign_in(request).await
+    }
+
+    /// Single-CTA onboarding: silent sign-in, fall through to register
+    /// on `CredentialNotFound`. Mobile-only (iOS 18+ / Android 9+);
+    /// see the core SDK docs for the cross-browser limitation.
+    pub async fn connect_with_passkey(
+        &self,
+        request: ConnectWithPasskeyRequest,
+    ) -> Result<ConnectWithPasskeyResponse, PasskeyError> {
+        self.inner.connect_with_passkey(request).await
     }
 
     /// Label sub-object: list / publish labels for this passkey's identity.

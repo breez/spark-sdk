@@ -1,6 +1,8 @@
 # pylint: disable=duplicate-code
 from breez_sdk_spark import (
+    ConnectFlow,
     ConnectRequest,
+    ConnectWithPasskeyRequest,
     DomainAssociation,
     Network,
     PasskeyAvailability,
@@ -72,13 +74,24 @@ async def check_availability():
 
 async def connect_with_passkey():
     # ANCHOR: connect-with-passkey
+    # Single-CTA onboarding: silent sign-in for a returning user,
+    # fall-through to register on a fresh device. Internally pins
+    # `prefer_immediately_available_credentials = True` so the silent
+    # attempt fast-fails (no UI) when no local credential exists; only
+    # `CredentialNotFound` flips to register, all other errors (cancel
+    # / timeout / configuration) propagate unchanged.
     prf_provider = CustomPrfProvider()
     passkey = PasskeyClient(prf_provider, None, None)
 
-    # sign_in derives the wallet seed for an existing credential. With
-    # bulk PRF on iOS+Android this is a single OS prompt that derives
-    # master + label seeds in one ceremony.
-    response = await passkey.sign_in(SignInRequest(label="personal"))
+    response = await passkey.connect_with_passkey(
+        ConnectWithPasskeyRequest(label="personal", exclude_credential_ids=[])
+    )
+
+    # Branch on `flow` to know which path ran.
+    if isinstance(response.flow, ConnectFlow.SIGNED_IN):
+        pass  # returning user; response.flow.credential_id may be set
+    elif isinstance(response.flow, ConnectFlow.REGISTERED):
+        pass  # new user; response.flow.credential carries the new ID + metadata
 
     config = default_config(network=Network.MAINNET)
     sdk = await connect(
@@ -149,24 +162,6 @@ async def store_label():
     # ANCHOR_END: store-label
 
 
-async def single_cta_onboarding():
-    # ANCHOR: signin-fallback-register
-    # Single-CTA onboarding: try silent sign_in first, fall through to
-    # register on CredentialNotFound. The OS shows ONE prompt for a
-    # returning user (silent assertion succeeds), TWO for a new user
-    # (silent assertion fast-fails, then create + dual-salt assert).
-    prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None, None)
-
-    try:
-        # Discovery mode (label=None): derives master + configured
-        # default label in a single ceremony.
-        response = await passkey.sign_in(SignInRequest(label=None))
-        return response.wallet
-    except PrfProviderError.CredentialNotFound:
-        response = await passkey.register(RegisterRequest(label="personal"))
-        return response.wallet
-    # ANCHOR_END: signin-fallback-register
 
 
 async def check_domain():

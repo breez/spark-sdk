@@ -63,6 +63,12 @@ Future<void> checkAvailability() async {
 
 Future<BreezSdk> connectWithPasskey() async {
   // ANCHOR: connect-with-passkey
+  // Single-CTA onboarding: silent sign-in for a returning user,
+  // fall-through to register on a fresh device. Internally pins
+  // `preferImmediatelyAvailableCredentials = true` so the silent
+  // attempt fast-fails (no UI) when no local credential exists; only
+  // `CredentialNotFound` flips to register, all other errors (cancel
+  // / timeout / configuration) propagate unchanged.
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com'));
   final passkey = PasskeyClient(
     deriveSeeds: prfProvider.deriveSeeds,
@@ -73,12 +79,15 @@ Future<BreezSdk> connectWithPasskey() async {
     clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
   );
 
-  // signIn derives the wallet seed for an existing credential. With
-  // bulk PRF on iOS+Android this is a single OS prompt that derives
-  // master + label seeds in one ceremony.
-  final response = await passkey.signIn(
-    request: SignInRequest(label: 'personal'),
+  final response = await passkey.connectWithPasskey(
+    request: ConnectWithPasskeyRequest(label: 'personal', excludeCredentialIds: const []),
   );
+
+  // Branch on `flow` to know which path ran.
+  switch (response.flow) {
+    case ConnectFlow_SignedIn(): // returning user
+    case ConnectFlow_Registered(): // new user; credential available on the variant
+  }
 
   final config = defaultConfig(network: Network.mainnet);
   final sdk = await connect(
@@ -174,40 +183,6 @@ Future<void> storeLabel() async {
   // labels().store() uses the cached identity for free (1 OS prompt total).
   await passkey.labels().store(label: "personal");
   // ANCHOR_END: store-label
-}
-
-Future<Wallet> singleCtaOnboarding() async {
-  // ANCHOR: signin-fallback-register
-  // Single-CTA onboarding: try silent signIn first, fall through to
-  // register on noCredential. The OS shows ONE prompt for a returning
-  // user (silent assertion succeeds), TWO for a new user (silent
-  // assertion fast-fails, then create + dual-salt assert).
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com'));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-  );
-
-  try {
-    // Discovery mode (label=null): derives master + configured default
-    // label in a single ceremony. The fresh-device user fast-fails in
-    // <300ms with no UI shown.
-    final response = await passkey.signIn(
-      request: SignInRequest(label: null),
-    );
-    return response.wallet;
-  } on PasskeyPrfException catch (e) {
-    if (e.code != 'noCredential') rethrow;
-    final response = await passkey.register(
-      request: RegisterRequest(label: 'personal'),
-    );
-    return response.wallet;
-  }
-  // ANCHOR_END: signin-fallback-register
 }
 
 Future<void> checkDomain() async {

@@ -73,16 +73,29 @@ func CheckAvailability() {
 
 func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	// ANCHOR: connect-with-passkey
+	// Single-CTA onboarding: silent sign-in for a returning user,
+	// fall-through to register on a fresh device. Internally pins
+	// `PreferImmediatelyAvailableCredentials = true` so the silent
+	// attempt fast-fails (no UI) when no local credential exists; only
+	// `CredentialNotFound` flips to register, all other errors (cancel
+	// / timeout / configuration) propagate unchanged.
 	prfProvider := &CustomPrfProvider{}
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
-	// SignIn derives the wallet seed for an existing credential. With
-	// bulk PRF on iOS+Android this is a single OS prompt that derives
-	// master + label seeds in one ceremony.
 	label := "personal"
-	response, err := passkey.SignIn(breez_sdk_spark.SignInRequest{Label: &label})
+	response, err := passkey.ConnectWithPasskey(breez_sdk_spark.ConnectWithPasskeyRequest{
+		Label: &label,
+	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Branch on Flow to know which path ran.
+	switch response.Flow.(type) {
+	case breez_sdk_spark.ConnectFlowSignedIn:
+		// returning user
+	case breez_sdk_spark.ConnectFlowRegistered:
+		// new user; the variant carries the new RegisteredCredential
 	}
 
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
@@ -177,35 +190,6 @@ func StoreLabel() error {
 	}
 	// ANCHOR_END: store-label
 	return nil
-}
-
-func SingleCtaOnboarding() (*breez_sdk_spark.Wallet, error) {
-	// ANCHOR: signin-fallback-register
-	// Single-CTA onboarding: try silent SignIn first, fall through to
-	// Register on CredentialNotFound. The OS shows ONE prompt for a
-	// returning user (silent assertion succeeds), TWO for a new user
-	// (silent assertion fast-fails, then create + dual-salt assert).
-	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
-
-	// Discovery mode (Label=nil): derives master + configured default
-	// label in a single ceremony.
-	response, err := passkey.SignIn(breez_sdk_spark.SignInRequest{Label: nil})
-	if err == nil {
-		return &response.Wallet, nil
-	}
-
-	if !errors.Is(err, breez_sdk_spark.ErrPrfProviderErrorCredentialNotFound) {
-		return nil, err
-	}
-
-	label := "personal"
-	registerResponse, err := passkey.Register(breez_sdk_spark.RegisterRequest{Label: &label})
-	if err != nil {
-		return nil, err
-	}
-	return &registerResponse.Wallet, nil
-	// ANCHOR_END: signin-fallback-register
 }
 
 func CheckDomain() error {

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
-    DeriveSeedsRequest, DomainAssociation, ErrorKind, PasskeyAvailability, PasskeyClient,
-    PasskeyConfig, PasskeyError, PrfProvider, PrfProviderError, RegisterRequest,
-    RegisteredCredential, SignInRequest, SignInResponse, Wallet,
+    ConnectFlow, ConnectWithPasskeyRequest, DeriveSeedsRequest, DomainAssociation, ErrorKind,
+    PasskeyAvailability, PasskeyClient, PasskeyConfig, PrfProvider, PrfProviderError,
+    RegisterRequest, RegisteredCredential, SignInRequest, SignInResponse, Wallet,
 };
 use breez_sdk_spark::{ConnectRequest, Network, connect, default_config};
 use std::sync::Arc;
@@ -81,20 +81,37 @@ async fn check_availability() -> Result<()> {
     Ok(())
 }
 
-async fn connect_with_passkey() -> Result<breez_sdk_spark::BreezSdk> {
+async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
     // ANCHOR: connect-with-passkey
+    // Single-CTA onboarding: silent sign-in for a returning user,
+    // fall-through to register on a fresh device. The SDK pins the
+    // silent attempt to `prefer_immediately_available_credentials =
+    // true` so the OS fast-fails (no UI) when no credential exists,
+    // making the fallback path correct. Only `CredentialNotFound`
+    // flips to register; cancel / timeout / configuration errors
+    // propagate unchanged.
+    //
+    // Mobile-only (iOS 18+ / Android 9+). On web, call `sign_in` and
+    // catch `CredentialNotFound` manually pending cross-browser
+    // `immediateGet` stabilization.
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
-    // sign_in derives the wallet seed for an existing credential. With
-    // bulk PRF on iOS+Android this is a single OS prompt that derives
-    // master + label seeds in one ceremony.
     let response = passkey
-        .sign_in(SignInRequest {
+        .connect_with_passkey(ConnectWithPasskeyRequest {
             label: Some("personal".to_string()),
-            ..Default::default()
+            exclude_credential_ids: vec![],
         })
         .await?;
+
+    // Branch on `flow` to know which path ran. Hosts maintaining a
+    // `CredentialRegistry` typically persist the new credential ID
+    // on `Registered`; the `SignedIn` variant surfaces the asserted
+    // ID when the provider supports it.
+    match &response.flow {
+        ConnectFlow::SignedIn { credential_id: _ } => { /* returning user */ }
+        ConnectFlow::Registered { credential: _ } => { /* new user */ }
+    }
 
     let config = default_config(Network::Mainnet);
     let sdk = connect(ConnectRequest {
@@ -181,45 +198,6 @@ async fn store_label() -> Result<()> {
     passkey.labels().store("personal".to_string()).await?;
     // ANCHOR_END: store-label
     Ok(())
-}
-
-async fn single_cta_onboarding() -> Result<Wallet> {
-    // ANCHOR: signin-fallback-register
-    // Single-CTA onboarding: try silent sign_in first, fall through to
-    // register on CredentialNotFound. The OS shows ONE prompt for a
-    // returning user (silent assertion succeeds), TWO for a new user
-    // (silent assertion fast-fails, then create + dual-salt assert).
-    let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, None, None);
-
-    // Discovery mode (label = None): derives master + DEFAULT label
-    // in a single ceremony. The fresh-device user fast-fails in <300ms
-    // with no UI shown.
-    match passkey
-        .sign_in(SignInRequest {
-            label: None,
-            ..Default::default()
-        })
-        .await
-    {
-        Ok(response) => Ok(response.wallet),
-        // Branch on `error.kind()`: the canonical 7-value enum. The
-        // SDK collapses iOS's sub-300ms fast-fail (reported as
-        // UserCancelled by the OS) into `NoCredential` so the host
-        // sees the right outcome without timing the call.
-        Err(e) if e.kind() == ErrorKind::NoCredential => {
-            // No credential. Onboard a new user.
-            let response = passkey
-                .register(RegisterRequest {
-                    label: Some("personal".to_string()),
-                    exclude_credential_ids: vec![],
-                })
-                .await?;
-            Ok(response.wallet)
-        }
-        Err(e) => Err(e.into()),
-    }
-    // ANCHOR_END: signin-fallback-register
 }
 
 async fn check_domain() -> Result<()> {
