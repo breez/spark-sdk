@@ -1194,6 +1194,12 @@ pub enum ProvisionalPaymentDetails {
     },
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::PaymentIdUpdate)]
+pub struct PaymentIdUpdate {
+    pub partial_tx_id: String,
+    pub final_tx_id: String,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SignMessageRequest)]
 pub struct SignMessageRequest {
     pub message: String,

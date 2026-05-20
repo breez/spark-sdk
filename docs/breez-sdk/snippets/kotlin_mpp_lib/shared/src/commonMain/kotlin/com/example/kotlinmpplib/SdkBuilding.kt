@@ -69,8 +69,10 @@ class SdkBuilding {
             }
         }
 
-        override suspend fun afterSendToken(partialTxId: String, finalTxId: String) {
-            // Log.v("PaymentObserver", "Token tx broadcast: $partialTxId -> $finalTxId")
+        override suspend fun afterSend(updates: List<PaymentIdUpdate>) {
+            for (update in updates) {
+                // Log.v("PaymentObserver", "Token tx broadcast: ${update.partialTxId} -> ${update.finalTxId}")
+            }
         }
     }
 
