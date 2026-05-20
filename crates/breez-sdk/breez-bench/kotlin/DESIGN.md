@@ -228,11 +228,22 @@ each on-chain deposit to be claimed before requesting the next.
 
 ## Output layout
 
-Everything is written to `out/<sweep-id>/` (gitignored):
+Everything for one sweep is written to `out/<sweep-id>/` (gitignored).
+
+**Sweep-id rule** (enforced loosely by `sweep.sh`):
+
+```
+<sweep-id> = <UTC-ISO-8601-timestamp>[-<kebab-slug>]
+e.g.  2026-05-20T11-45-00Z
+      2026-05-20T11-45-00Z-mysql-recycle      (LABEL=mysql-recycle make run)
+```
+
+Why the prefix is mandatory: past sessions invented per-run names (`phase6-fastpass-104652`, `rps25-10m-1778265970`, `loadgen-validate`, …) and `out/` became unsortable. The timestamp is the schelling point — sessions can't collide, runs sort chronologically, and a one-line `LABEL` still gives the run a human name. `sweep.sh` warns on non-conforming `SWEEP_ID` so drift is visible, but doesn't refuse — resuming an old non-conforming dir still works.
 
 ```
 out/<sweep-id>/
   manifest.json            sweep config + host info + funding budget
+  driver.log               live [sweep]/[fund]/[seed]/[loadgen] output (tee'd by `make run`)
   RESULTS.md               headline tables (read this)
   summary.json             full structured per-step breakdown
   fund.log seed.log        pre-sweep step output (skipped if no-op)
@@ -244,6 +255,8 @@ out/<sweep-id>/
     latency.jsonl          client-side per-request timings + dropped flag
   rps-100/  ...
 ```
+
+`driver.log` is owned by the `make run` recipe (not `sweep.sh`) — it tees the combined sweep + aggregate output into the sweep dir so progress is visible on the terminal AND persisted, without the caller having to redirect to a sibling `*.driver.log`. Previously these landed next to the sweep dir, which is why `out/` filled up with paired `<name>/ <name>.driver.log` entries.
 
 The committed artifact is the harness itself; outputs are point-in-
 time and live wherever the numbers are shared.

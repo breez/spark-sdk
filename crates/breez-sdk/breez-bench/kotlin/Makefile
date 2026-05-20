@@ -1,3 +1,7 @@
+# Recipes use bash so `PIPESTATUS` (used by the `run` target to capture
+# the exit code of sweep + aggregate through `tee`) is available.
+SHELL := /bin/bash
+
 GRADLE := ./gradlew
 KMP_CLI_DIR := ../../bindings/examples/cli/langs/kotlin-multiplatform
 
@@ -64,14 +68,26 @@ aggregate: ## Aggregate a sweep into summary.json + RESULTS.md (SWEEP_ID require
 trace-sync: build ## Trace an explicit syncWallet() on a wallet with full Rust tracing (USER_ID defaults to __treasurer__; LOG_FILTER=debug)
 	$(GRADLE) run --console=plain --args="--mode=trace-sync --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --user-id=$${USER_ID:-__treasurer__} --log-filter=$${LOG_FILTER:-debug}"
 
-run: build ## Sweep + aggregate in one shot. Auto-funds treasurer + senders. Default fast pass (~7 min).
-	@SWEEP_ID=$${SWEEP_ID:-$$(date +%Y-%m-%dT%H-%M-%S)}; \
+# Output naming convention (see README "Output naming"):
+#   out/<sweep-id>/   where  <sweep-id> = <UTC-ISO-8601>[-<label>]
+# e.g.  out/2026-05-20T11-45-00Z/
+#       out/2026-05-20T11-45-00Z-mysql-recycle/   (LABEL=mysql-recycle)
+# All sweep artifacts — including the live driver log — live inside
+# this dir. Do NOT redirect `make run` to a sibling .log file; the
+# recipe tees its own combined stdout/stderr into driver.log for you.
+run: build ## Sweep + aggregate. Live output tee'd into out/<sweep-id>/driver.log. Use LABEL=<slug> for a labeled run.
+	@SWEEP_ID=$${SWEEP_ID:-$$(date -u +%Y-%m-%dT%H-%M-%SZ)$${LABEL:+-$$LABEL}}; \
 	  export SWEEP_ID; \
 	  : "$${SWEEP_RPS:=50,100,250}"; export SWEEP_RPS; \
 	  : "$${DURATION:=2m}"; export DURATION; \
-	  ./scripts/sweep.sh && \
-	  python3 scripts/aggregate.py --sweep-dir out/$$SWEEP_ID && \
-	  echo && echo "Done. See out/$$SWEEP_ID/RESULTS.md"
+	  mkdir -p out/$$SWEEP_ID; \
+	  driver_log=out/$$SWEEP_ID/driver.log; \
+	  echo "[run] sweep-id=$$SWEEP_ID  driver-log=$$driver_log"; \
+	  { ./scripts/sweep.sh && \
+	    python3 scripts/aggregate.py --sweep-dir out/$$SWEEP_ID ; } 2>&1 | tee "$$driver_log"; \
+	  rc=$${PIPESTATUS[0]}; \
+	  if [ $$rc -eq 0 ]; then echo && echo "Done. See out/$$SWEEP_ID/RESULTS.md"; else echo "Failed (rc=$$rc). See $$driver_log"; fi; \
+	  exit $$rc
 
 clean: ## Remove build artifacts
 	$(GRADLE) clean

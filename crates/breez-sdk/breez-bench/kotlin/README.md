@@ -25,14 +25,38 @@ All three steps are idempotent. Subsequent sessions just need
 `make run` since the closed-loop funding flow keeps the bench wallets
 populated.
 
-## Output
+## Output naming — read before kicking off a sweep
+
+**One sweep → one directory `out/<sweep-id>/`.** Naming rule (enforced by `sweep.sh`, warn-on-deviate):
+
+```
+out/<sweep-id>/    where  <sweep-id> = <UTC-ISO-8601-timestamp>[-<label>]
+```
+
+Examples:
+
+```
+out/2026-05-20T11-45-00Z/                       # default: just the timestamp
+out/2026-05-20T11-45-00Z-mysql-recycle/         # LABEL=mysql-recycle make run
+out/2026-05-20T11-45-00Z-phase6-fastpass/       # LABEL=phase6-fastpass make run
+```
+
+Rules:
+
+- **Always** start with the UTC timestamp prefix so `ls out/` sorts chronologically and entries from different sessions don't collide.
+- Tag a run with `LABEL=<kebab-slug>` (`[a-z0-9][a-z0-9-]*`). Don't bake the label into a custom `SWEEP_ID` — let the Makefile compose it from `LABEL`.
+- **No bare files at the top level of `out/`.** Everything a run produces — including the live driver log — lives inside the sweep dir. Don't `make run > out/foo.log 2>&1`; the recipe already tees its combined stdout/stderr into `out/<sweep-id>/driver.log` for you (so progress is visible on the terminal AND persisted).
+- Set `SWEEP_ID=…` directly only to resume / share an existing dir across phases. `sweep.sh` warns if `SWEEP_ID` doesn't match the convention but still runs.
+
+**Inside the sweep dir:**
 
 ```
 out/<sweep-id>/
-  manifest.json            sweep config + host info
+  manifest.json            sweep config + host info + funding budget
+  driver.log               live [sweep]/[fund]/[seed]/[loadgen] output (tee'd by `make run`)
   RESULTS.md               headline tables (read this)
   summary.json             full structured per-step breakdown
-  fund.log seed.log        pre-sweep steps (skipped if no-op)
+  fund.log seed.log        pre-sweep step output (skipped if no-op)
   rps-50/
     server.log             server stdout/stderr
     loadgen.log            loadgen stdout/stderr
@@ -42,8 +66,7 @@ out/<sweep-id>/
   rps-100/  ...
 ```
 
-`out/` is gitignored. Headline numbers live wherever they're shared
-(Slack, partner doc, etc.), not in git.
+`out/` is gitignored. Headline numbers live wherever they're shared (Slack, partner doc, etc.), not in git.
 
 ## Tweaking the sweep
 
@@ -64,7 +87,8 @@ All knobs are env vars. Defaults give the fast pass.
 | `CONNS_PER_OPERATOR` | unset → `null` | gRPC connections per operator in the shared context. `null` = one multiplexed connection (prod default); set a positive int to fan out and check whether that single connection caps top-of-sweep throughput |
 | `MYSQL_MAX_POOL` | unset → SDK default (`num_cpus*4`) | Max connections in the shared MySQL pool. Set a positive int to probe whether the default pool caps top-of-sweep throughput; compare against `mysql_conns` in `metrics.jsonl`. **Must stay below the server's `max_connections`** (set on container start by `make mysql-up`; see `MYSQL_SERVER_MAX_CONNECTIONS` in the Makefile) — otherwise the server rejects new connections with `HY000: Too many connections` |
 | `LOG_FILTER` | unset → off | Rust SDK tracing in the per-step server (tracing `EnvFilter`). e.g. `warn,spark_wallet=info,spark::operator::rpc=debug` logs every operator gRPC method call + rate-limit retries to `out/<id>/rps-N/.trace-logs/sdk.log`. Off by default (no overhead) |
-| `SWEEP_ID` | fresh ISO-8601 timestamp | Set explicitly to share a directory across phases |
+| `LABEL` | unset | Optional kebab-case slug appended to the auto-generated `SWEEP_ID`. Use this rather than a custom `SWEEP_ID` so runs stay sortable. See "Output naming". |
+| `SWEEP_ID` | fresh UTC ISO-8601 timestamp (`+ -LABEL` if set) | Override only to resume/share a dir. Should match `<YYYY-MM-DDTHH-MM-SSZ>[-<kebab-slug>]`; `sweep.sh` warns on deviations. |
 
 Headline-grade run: `SWEEP_RPS=50,100,250,500,1000 DURATION=5m make run`
 (~30 min wall time).

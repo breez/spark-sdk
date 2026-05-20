@@ -37,7 +37,19 @@ SENDERS="${SENDERS:-50}"
 DIST="${DIST:-uniform}"
 PAYMENT_SATS="${PAYMENT_SATS:-1}"
 PORT="${PORT:-8080}"
-SWEEP_ID="${SWEEP_ID:-$(date +%Y-%m-%dT%H-%M-%S)}"
+# Output naming convention: <UTC-ISO-8601>[-<kebab-slug>]. Default is a
+# fresh UTC timestamp; LABEL=<slug> appends a human-readable suffix so
+# you can find the run later without remembering the timestamp. Set
+# SWEEP_ID directly to override completely (e.g. resume / share a dir
+# across phases). Enforced loosely below — non-conforming IDs warn but
+# still run. See README "Output naming" for the canonical rule.
+SWEEP_ID="${SWEEP_ID:-$(date -u +%Y-%m-%dT%H-%M-%SZ)${LABEL:+-${LABEL}}}"
+SWEEP_ID_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z?(-[a-z0-9][a-z0-9-]*)?$'
+if ! [[ "$SWEEP_ID" =~ $SWEEP_ID_RE ]]; then
+    echo "[sweep] WARNING: SWEEP_ID='$SWEEP_ID' does not match the convention"
+    echo "[sweep]          <YYYY-MM-DDTHH-MM-SSZ>[-<kebab-slug>] (see README 'Output naming')."
+    echo "[sweep]          Continuing, but prefer LABEL=<slug> over a custom SWEEP_ID so out/ stays sortable."
+fi
 INTER_STEP_SLEEP_SECS="${INTER_STEP_SLEEP_SECS:-5}"
 # Optional Rust-side SDK tracing in the per-step server. Unset = off (no
 # overhead). A tracing EnvFilter string enables it; logs land in
