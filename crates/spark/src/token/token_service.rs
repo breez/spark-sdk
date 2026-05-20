@@ -852,6 +852,10 @@ impl TokenService {
         })?;
         let txid = hex::encode(&final_tx_hash);
 
+        if let Some(observer) = &self.transfer_observer {
+            observer.after_send_token(&partial_txid, &txid).await?;
+        }
+
         let is_finalized = match commit_status {
             CommitStatus::CommitFinalized => true,
             CommitStatus::CommitProcessing => {
