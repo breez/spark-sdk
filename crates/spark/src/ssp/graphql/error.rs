@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{session_manager::SessionManagerError, signer::SignerError};
+use crate::{session_store::SessionStoreError, signer::SignerError};
 
 /// Alias for Result with GraphQLError as the error type
 pub type GraphQLResult<T> = std::result::Result<T, GraphQLError>;
@@ -57,8 +57,8 @@ impl From<SignerError> for GraphQLError {
     }
 }
 
-impl From<SessionManagerError> for GraphQLError {
-    fn from(err: SessionManagerError) -> Self {
+impl From<SessionStoreError> for GraphQLError {
+    fn from(err: SessionStoreError) -> Self {
         Self::Authentication(err.to_string())
     }
 }

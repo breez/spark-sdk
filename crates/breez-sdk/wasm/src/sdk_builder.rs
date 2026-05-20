@@ -9,15 +9,15 @@ use crate::{
         fiat_service::{FiatService, WasmFiatService},
         payment_observer::{PaymentObserver, WasmPaymentObserver},
         rest_client::{RestClient, WasmRestClient},
-        session_manager::WasmSessionManager,
+        session_store::WasmSessionStore,
     },
     persist::{
         Storage, WasmStorage,
         pool::{
-            JsPool, create_mysql_pool, create_mysql_session_manager_with_pool,
+            JsPool, create_mysql_pool, create_mysql_session_store_with_pool,
             create_mysql_storage_with_pool, create_mysql_token_store_with_pool,
             create_mysql_tree_store_with_pool, create_postgres_pool,
-            create_postgres_session_manager_with_pool, create_postgres_storage_with_pool,
+            create_postgres_session_store_with_pool, create_postgres_storage_with_pool,
             create_postgres_token_store_with_pool, create_postgres_tree_store_with_pool,
         },
     },
@@ -452,17 +452,17 @@ impl SdkBuilder {
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
 
-                let session_manager_js = create_postgres_session_manager_with_pool(
+                let session_store_js = create_postgres_session_store_with_pool(
                     pool,
                     &identity_bytes,
                     logger_ref,
                     *run_migration,
                 )
                 .await?;
-                let session_manager = Arc::new(WasmSessionManager {
-                    session_manager: session_manager_js,
+                let session_store = Arc::new(WasmSessionStore {
+                    session_store: session_store_js,
                 });
-                self.builder = self.builder.with_session_manager(session_manager);
+                self.builder = self.builder.with_session_store(session_store);
             }
             (None, None, None, Some((pool_rc, run_migration, foreign_key_mode))) => {
                 let pool: &JsPool = pool_rc;
@@ -516,17 +516,17 @@ impl SdkBuilder {
                 let token_store = Arc::new(WasmTokenStore::new(token_store_js));
                 self.builder = self.builder.with_token_output_store(token_store);
 
-                let session_manager_js = create_mysql_session_manager_with_pool(
+                let session_store_js = create_mysql_session_store_with_pool(
                     pool,
                     &identity_bytes,
                     logger_ref,
                     run_migration,
                 )
                 .await?;
-                let session_manager = Arc::new(WasmSessionManager {
-                    session_manager: session_manager_js,
+                let session_store = Arc::new(WasmSessionStore {
+                    session_store: session_store_js,
                 });
-                self.builder = self.builder.with_session_manager(session_manager);
+                self.builder = self.builder.with_session_store(session_store);
             }
             _ => {
                 return Err(WasmError::new(

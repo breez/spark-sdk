@@ -1,11 +1,11 @@
 {
-  "name": "@breez-sdk/postgres-session-manager",
+  "name": "@breez-sdk/postgres-session-store",
   "version": "1.0.0",
-  "description": "Node.js PostgreSQL session manager implementation for Breez SDK WASM (CommonJS)",
+  "description": "Node.js PostgreSQL session store implementation for Breez SDK WASM (CommonJS)",
   "main": "index.cjs",
   "exports": {
     ".": "./index.cjs",
-    "./session-manager": "./index.cjs",
+    "./session-store": "./index.cjs",
     "./migrations": "./migrations.cjs",
     "./errors": "./errors.cjs"
   },

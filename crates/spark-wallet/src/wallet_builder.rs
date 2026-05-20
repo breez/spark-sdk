@@ -5,7 +5,7 @@ use spark::{
     header_provider::HeaderProvider,
     operator::rpc::{ConnectionManager, DefaultConnectionManager},
     services::TransferObserver,
-    session_manager::{InMemorySessionManager, SessionManager},
+    session_store::{InMemorySessionStore, SessionStore},
     signer::Signer,
     token::{InMemoryTokenOutputStore, TokenOutputStore},
     tree::{InMemoryTreeStore, TreeStore},
@@ -18,7 +18,7 @@ pub struct WalletBuilder {
     config: SparkWalletConfig,
     signer: Arc<dyn Signer>,
     cancellation_token: Option<watch::Receiver<()>>,
-    session_manager: Option<Arc<dyn SessionManager>>,
+    session_store: Option<Arc<dyn SessionStore>>,
     tree_store: Option<Arc<dyn TreeStore>>,
     token_output_store: Option<Arc<dyn TokenOutputStore>>,
     connection_manager: Option<Arc<dyn ConnectionManager>>,
@@ -35,7 +35,7 @@ impl WalletBuilder {
             config,
             signer,
             cancellation_token: None,
-            session_manager: None,
+            session_store: None,
             tree_store: None,
             token_output_store: None,
             connection_manager: None,
@@ -56,8 +56,8 @@ impl WalletBuilder {
     }
 
     #[must_use]
-    pub fn with_session_manager(mut self, session_manager: Arc<dyn SessionManager>) -> Self {
-        self.session_manager = Some(session_manager);
+    pub fn with_session_store(mut self, session_store: Arc<dyn SessionStore>) -> Self {
+        self.session_store = Some(session_store);
         self
     }
 
@@ -127,8 +127,8 @@ impl WalletBuilder {
         SparkWallet::new(
             self.config,
             self.signer,
-            self.session_manager
-                .unwrap_or(Arc::new(InMemorySessionManager::default())),
+            self.session_store
+                .unwrap_or(Arc::new(InMemorySessionStore::default())),
             self.tree_store
                 .unwrap_or(Arc::new(InMemoryTreeStore::default())),
             self.token_output_store

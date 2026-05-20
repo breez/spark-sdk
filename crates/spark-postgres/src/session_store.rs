@@ -1,4 +1,4 @@
-//! `PostgreSQL`-backed implementation of the `SessionManager` trait.
+//! `PostgreSQL`-backed implementation of the `SessionStore` trait.
 //!
 //! Provides a persistent session store keyed by tenant identity + service
 //! identity public key, suitable for multi-pod deployments where multiple
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use bitcoin::secp256k1::PublicKey;
 use deadpool_postgres::Pool;
 use macros::async_trait;
-use spark_wallet::{Session, SessionManager, SessionManagerError};
+use spark_wallet::{Session, SessionStore, SessionStoreError};
 
 use crate::config::PostgresStorageConfig;
 use crate::error::PostgresError;
@@ -18,7 +18,7 @@ use crate::pool::create_pool;
 
 const SESSION_MIGRATIONS_TABLE: &str = "brz_session_schema_migrations";
 
-/// Pre-prefix rename map for upgrading session-manager deployments.
+/// Pre-prefix rename map for upgrading session-store deployments.
 const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
     old_migrations_table: "session_schema_migrations",
     new_migrations_table: SESSION_MIGRATIONS_TABLE,
@@ -27,11 +27,11 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
     constraints: &[("brz_sessions", "sessions_pkey", "brz_sessions_pkey")],
 };
 
-/// `PostgreSQL`-backed session manager.
+/// `PostgreSQL`-backed session store.
 ///
 /// Each instance is scoped to a single tenant identity so multiple tenants
 /// can share one Postgres database without leaking sessions across tenants.
-pub struct PostgresSessionManager {
+pub struct PostgresSessionStore {
     pool: Pool,
     /// 33-byte secp256k1 compressed pubkey identifying the tenant. All reads
     /// and writes are filtered by `user_id = self.identity`.
@@ -39,11 +39,11 @@ pub struct PostgresSessionManager {
 }
 
 #[async_trait]
-impl SessionManager for PostgresSessionManager {
+impl SessionStore for PostgresSessionStore {
     async fn get_session(
         &self,
         service_identity_key: &PublicKey,
-    ) -> Result<Session, SessionManagerError> {
+    ) -> Result<Session, SessionStoreError> {
         let client = self.pool.get().await.map_err(map_err)?;
         let service_key = service_identity_key.serialize().to_vec();
         let row = client
@@ -54,11 +54,11 @@ impl SessionManager for PostgresSessionManager {
             )
             .await
             .map_err(map_err)?;
-        let row = row.ok_or(SessionManagerError::NotFound)?;
+        let row = row.ok_or(SessionStoreError::NotFound)?;
         let token: String = row.get(0);
         let expiration: i64 = row.get(1);
         let expiration = u64::try_from(expiration)
-            .map_err(|e| SessionManagerError::Generic(format!("invalid expiration: {e}")))?;
+            .map_err(|e| SessionStoreError::Generic(format!("invalid expiration: {e}")))?;
         Ok(Session { token, expiration })
     }
 
@@ -66,11 +66,11 @@ impl SessionManager for PostgresSessionManager {
         &self,
         service_identity_key: &PublicKey,
         session: Session,
-    ) -> Result<(), SessionManagerError> {
+    ) -> Result<(), SessionStoreError> {
         let client = self.pool.get().await.map_err(map_err)?;
         let service_key = service_identity_key.serialize().to_vec();
         let expiration = i64::try_from(session.expiration)
-            .map_err(|e| SessionManagerError::Generic(format!("expiration overflow: {e}")))?;
+            .map_err(|e| SessionStoreError::Generic(format!("expiration overflow: {e}")))?;
         client
             .execute(
                 r"INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration)
@@ -85,8 +85,8 @@ impl SessionManager for PostgresSessionManager {
     }
 }
 
-impl PostgresSessionManager {
-    /// Creates a new `PostgresSessionManager` from a configuration.
+impl PostgresSessionStore {
+    /// Creates a new `PostgresSessionStore` from a configuration.
     ///
     /// Allocates its own connection pool and runs migrations.
     /// `identity` is the 33-byte secp256k1 pubkey of the tenant.
@@ -99,11 +99,11 @@ impl PostgresSessionManager {
         Self::from_pool(pool, identity, run_migration).await
     }
 
-    /// Creates a new `PostgresSessionManager` from an existing connection pool.
+    /// Creates a new `PostgresSessionStore` from an existing connection pool.
     ///
     /// Useful when sharing a pool with other components (e.g., `PostgresStorage`).
     /// When `run_migration` is `false`, initialization trusts the existing
-    /// schema and skips session manager migrations entirely.
+    /// schema and skips session store migrations entirely.
     pub async fn from_pool(
         pool: Pool,
         identity: &[u8],
@@ -143,41 +143,41 @@ impl PostgresSessionManager {
     }
 }
 
-fn map_err<E: std::fmt::Display>(e: E) -> SessionManagerError {
-    SessionManagerError::Generic(e.to_string())
+fn map_err<E: std::fmt::Display>(e: E) -> SessionStoreError {
+    SessionStoreError::Generic(e.to_string())
 }
 
-/// Creates a `PostgresSessionManager` from a configuration.
+/// Creates a `PostgresSessionStore` from a configuration.
 ///
 /// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
-pub async fn create_postgres_session_manager(
+pub async fn create_postgres_session_store(
     config: PostgresStorageConfig,
     identity: &[u8],
-) -> Result<Arc<dyn SessionManager>, PostgresError> {
+) -> Result<Arc<dyn SessionStore>, PostgresError> {
     Ok(Arc::new(
-        PostgresSessionManager::from_config(config, identity).await?,
+        PostgresSessionStore::from_config(config, identity).await?,
     ))
 }
 
-/// Creates a `PostgresSessionManager` from an existing connection pool.
+/// Creates a `PostgresSessionStore` from an existing connection pool.
 ///
 /// `identity` is the 33-byte secp256k1 pubkey scoping all reads and writes.
 /// When `run_migration` is `false`, skips SDK-managed schema migrations and
 /// trusts that the `sessions` table already exists.
-pub async fn create_postgres_session_manager_from_pool(
+pub async fn create_postgres_session_store_from_pool(
     pool: Pool,
     identity: &[u8],
     run_migration: bool,
-) -> Result<Arc<dyn SessionManager>, PostgresError> {
+) -> Result<Arc<dyn SessionStore>, PostgresError> {
     Ok(Arc::new(
-        PostgresSessionManager::from_pool(pool, identity, run_migration).await?,
+        PostgresSessionStore::from_pool(pool, identity, run_migration).await?,
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spark_wallet::session_manager_tests as shared_tests;
+    use spark_wallet::session_store_tests as shared_tests;
     use testcontainers::{ContainerAsync, runners::AsyncRunner};
     use testcontainers_modules::postgres::Postgres;
 
@@ -189,13 +189,13 @@ mod tests {
         0x1e, 0x1f, 0x20,
     ];
 
-    struct PostgresSessionManagerTestFixture {
-        store: PostgresSessionManager,
+    struct PostgresSessionStoreTestFixture {
+        store: PostgresSessionStore,
         #[allow(dead_code)]
         container: ContainerAsync<Postgres>,
     }
 
-    impl PostgresSessionManagerTestFixture {
+    impl PostgresSessionStoreTestFixture {
         async fn new() -> Self {
             let container = Postgres::default()
                 .start()
@@ -211,12 +211,12 @@ mod tests {
                 "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
             );
 
-            let store = PostgresSessionManager::from_config(
+            let store = PostgresSessionStore::from_config(
                 PostgresStorageConfig::with_defaults(connection_string),
                 &TEST_IDENTITY,
             )
             .await
-            .expect("Failed to create PostgresSessionManager");
+            .expect("Failed to create PostgresSessionStore");
 
             Self { store, container }
         }
@@ -224,31 +224,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_session_not_found() {
-        let fixture = PostgresSessionManagerTestFixture::new().await;
+        let fixture = PostgresSessionStoreTestFixture::new().await;
         shared_tests::test_get_session_not_found(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_set_and_get() {
-        let fixture = PostgresSessionManagerTestFixture::new().await;
+        let fixture = PostgresSessionStoreTestFixture::new().await;
         shared_tests::test_set_and_get(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_overwrite_session() {
-        let fixture = PostgresSessionManagerTestFixture::new().await;
+        let fixture = PostgresSessionStoreTestFixture::new().await;
         shared_tests::test_overwrite_session(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_sessions_are_isolated_by_key() {
-        let fixture = PostgresSessionManagerTestFixture::new().await;
+        let fixture = PostgresSessionStoreTestFixture::new().await;
         shared_tests::test_sessions_are_isolated_by_key(&fixture.store).await;
     }
 
     #[tokio::test]
     async fn test_get_after_unrelated_set() {
-        let fixture = PostgresSessionManagerTestFixture::new().await;
+        let fixture = PostgresSessionStoreTestFixture::new().await;
         shared_tests::test_get_after_unrelated_set(&fixture.store).await;
     }
 }

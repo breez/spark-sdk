@@ -1,4 +1,4 @@
-//! Backend-agnostic scenarios for the persistent `SessionManager`.
+//! Backend-agnostic scenarios for the persistent `SessionStore`.
 //!
 //! Verifies that two SDK pods backed by the same database — wired up via
 //! a shared [`SdkContext`](breez_sdk_spark::SdkContext) constructed with a

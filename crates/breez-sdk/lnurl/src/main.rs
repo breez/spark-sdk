@@ -15,7 +15,7 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 use spark::operator::rpc::DefaultConnectionManager;
-use spark::session_manager::InMemorySessionManager;
+use spark::session_store::InMemorySessionStore;
 use spark::ssp::{ServiceProvider, SparkWalletWebhookEventType};
 use spark::token::InMemoryTokenOutputStore;
 use spark::tree::InMemoryTreeStore;
@@ -219,14 +219,14 @@ where
 
     // Create shared infrastructure components
     let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);
-    let session_manager = Arc::new(InMemorySessionManager::default());
+    let session_store = Arc::new(InMemorySessionStore::default());
     let connection_manager: Arc<dyn spark::operator::rpc::ConnectionManager> =
         Arc::new(DefaultConnectionManager::new());
     let coordinator = spark_config.operator_pool.get_coordinator().clone();
     let service_provider = Arc::new(ServiceProvider::new(
         spark_config.service_provider_config.clone(),
         signer.clone(),
-        session_manager.clone(),
+        session_store.clone(),
         None,
     ));
 
@@ -235,7 +235,7 @@ where
         spark_wallet::SparkWallet::new(
             spark_config.clone(),
             signer.clone(),
-            session_manager.clone(),
+            session_store.clone(),
             Arc::new(InMemoryTreeStore::default()),
             Arc::new(InMemoryTokenOutputStore::default()),
             Arc::clone(&connection_manager),
@@ -370,7 +370,7 @@ where
         connection_manager,
         coordinator,
         signer,
-        session_manager,
+        session_store,
         service_provider,
         subscribed_keys,
         invoice_paid_trigger,

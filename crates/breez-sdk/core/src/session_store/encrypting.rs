@@ -7,7 +7,7 @@ use bitcoin::secp256k1::PublicKey;
 use crate::Network;
 use crate::signer::BreezSigner;
 
-use super::SessionManagerError;
+use super::SessionStoreError;
 
 /// Hardened derivation indices reserved for session-token encryption.
 /// `1397245774` == ASCII "SESN" — distinct from `RTSyncSigner`'s indices and
@@ -18,7 +18,7 @@ const ENCRYPTION_DERIVATION_PATH_TEST: &str = "m/1397245774'/1'/0'/0/0";
 
 /// Internal decorator that encrypts session tokens at rest via
 /// [`BreezSigner::encrypt_ecies`] / [`BreezSigner::decrypt_ecies`], so the
-/// underlying [`spark_wallet::SessionManager`] only ever sees ciphertext. Only
+/// underlying [`spark_wallet::SessionStore`] only ever sees ciphertext. Only
 /// the `Session::token` field is encrypted; `expiration` stays in plaintext so
 /// `is_valid()` can be evaluated cheaply by the caller.
 ///
@@ -27,15 +27,15 @@ const ENCRYPTION_DERIVATION_PATH_TEST: &str = "m/1397245774'/1'/0'/0/0";
 /// from every other subsystem's path. Multiple SDK pods deriving from the
 /// same seed therefore share the same key and can decrypt each other's
 /// stored tokens; an attacker with read-only DB access cannot.
-pub(crate) struct EncryptingSessionManager {
-    inner: Arc<dyn spark_wallet::SessionManager>,
+pub(crate) struct EncryptingSessionStore {
+    inner: Arc<dyn spark_wallet::SessionStore>,
     signer: Arc<dyn BreezSigner>,
     encryption_path: DerivationPath,
 }
 
-impl EncryptingSessionManager {
+impl EncryptingSessionStore {
     pub(crate) fn new(
-        inner: Arc<dyn spark_wallet::SessionManager>,
+        inner: Arc<dyn spark_wallet::SessionStore>,
         signer: Arc<dyn BreezSigner>,
         network: Network,
     ) -> Result<Self, bitcoin::bip32::Error> {
@@ -51,40 +51,40 @@ impl EncryptingSessionManager {
         })
     }
 
-    async fn encrypt_token(&self, plaintext: &str) -> Result<String, SessionManagerError> {
+    async fn encrypt_token(&self, plaintext: &str) -> Result<String, SessionStoreError> {
         let ciphertext = self
             .signer
             .encrypt_ecies(plaintext.as_bytes(), &self.encryption_path)
             .await
             .map_err(|e| {
-                SessionManagerError::Generic(format!("failed to encrypt session token: {e}"))
+                SessionStoreError::Generic(format!("failed to encrypt session token: {e}"))
             })?;
         Ok(BASE64.encode(ciphertext))
     }
 
-    async fn decrypt_token(&self, ciphertext_b64: &str) -> Result<String, SessionManagerError> {
+    async fn decrypt_token(&self, ciphertext_b64: &str) -> Result<String, SessionStoreError> {
         let ciphertext = BASE64.decode(ciphertext_b64.as_bytes()).map_err(|e| {
-            SessionManagerError::Generic(format!("invalid base64 session token: {e}"))
+            SessionStoreError::Generic(format!("invalid base64 session token: {e}"))
         })?;
         let plaintext = self
             .signer
             .decrypt_ecies(&ciphertext, &self.encryption_path)
             .await
             .map_err(|e| {
-                SessionManagerError::Generic(format!("failed to decrypt session token: {e}"))
+                SessionStoreError::Generic(format!("failed to decrypt session token: {e}"))
             })?;
         String::from_utf8(plaintext).map_err(|e| {
-            SessionManagerError::Generic(format!("decrypted session token is not utf-8: {e}"))
+            SessionStoreError::Generic(format!("decrypted session token is not utf-8: {e}"))
         })
     }
 }
 
 #[macros::async_trait]
-impl spark_wallet::SessionManager for EncryptingSessionManager {
+impl spark_wallet::SessionStore for EncryptingSessionStore {
     async fn get_session(
         &self,
         service_identity_key: &PublicKey,
-    ) -> Result<spark_wallet::Session, spark_wallet::SessionManagerError> {
+    ) -> Result<spark_wallet::Session, spark_wallet::SessionStoreError> {
         let stored = self.inner.get_session(service_identity_key).await?;
         let token = self.decrypt_token(&stored.token).await?;
         Ok(spark_wallet::Session {
@@ -97,7 +97,7 @@ impl spark_wallet::SessionManager for EncryptingSessionManager {
         &self,
         service_identity_key: &PublicKey,
         session: spark_wallet::Session,
-    ) -> Result<(), spark_wallet::SessionManagerError> {
+    ) -> Result<(), spark_wallet::SessionStoreError> {
         let token = self.encrypt_token(&session.token).await?;
         self.inner
             .set_session(
@@ -117,7 +117,7 @@ mod tests {
     use std::sync::Mutex;
 
     use macros::async_test_all;
-    use spark_wallet::SessionManager as _;
+    use spark_wallet::SessionStore as _;
 
     use crate::signer::BreezSigner;
     use crate::signer::breez::BreezSignerImpl;
@@ -125,7 +125,7 @@ mod tests {
 
     use super::*;
 
-    /// Trivial in-memory `spark_wallet::SessionManager` used to inspect the
+    /// Trivial in-memory `spark_wallet::SessionStore` used to inspect the
     /// raw bytes the encrypting decorator writes through.
     #[derive(Default)]
     struct InspectableInner {
@@ -133,24 +133,24 @@ mod tests {
     }
 
     #[macros::async_trait]
-    impl spark_wallet::SessionManager for InspectableInner {
+    impl spark_wallet::SessionStore for InspectableInner {
         async fn get_session(
             &self,
             key: &PublicKey,
-        ) -> Result<spark_wallet::Session, spark_wallet::SessionManagerError> {
+        ) -> Result<spark_wallet::Session, spark_wallet::SessionStoreError> {
             self.sessions
                 .lock()
                 .unwrap()
                 .get(key)
                 .cloned()
-                .ok_or(spark_wallet::SessionManagerError::NotFound)
+                .ok_or(spark_wallet::SessionStoreError::NotFound)
         }
 
         async fn set_session(
             &self,
             key: &PublicKey,
             session: spark_wallet::Session,
-        ) -> Result<(), spark_wallet::SessionManagerError> {
+        ) -> Result<(), spark_wallet::SessionStoreError> {
             self.sessions.lock().unwrap().insert(*key, session);
             Ok(())
         }
@@ -176,7 +176,7 @@ mod tests {
     async fn round_trip_decrypts_to_original_token() {
         let inner = Arc::new(InspectableInner::default());
         let signer = test_signer(7);
-        let sm = EncryptingSessionManager::new(inner.clone(), signer, Network::Regtest).unwrap();
+        let sm = EncryptingSessionStore::new(inner.clone(), signer, Network::Regtest).unwrap();
 
         let pk = test_pubkey(1);
         let original = "the-bearer-token";
@@ -206,7 +206,7 @@ mod tests {
     async fn distinct_writes_produce_distinct_ciphertext() {
         let inner = Arc::new(InspectableInner::default());
         let signer = test_signer(9);
-        let sm = EncryptingSessionManager::new(inner.clone(), signer, Network::Regtest).unwrap();
+        let sm = EncryptingSessionStore::new(inner.clone(), signer, Network::Regtest).unwrap();
         let pk = test_pubkey(2);
         let token = "same-plaintext";
 
@@ -244,9 +244,9 @@ mod tests {
         let writer_signer = test_signer(1);
         let reader_signer = test_signer(2);
         let writer =
-            EncryptingSessionManager::new(inner.clone(), writer_signer, Network::Regtest).unwrap();
+            EncryptingSessionStore::new(inner.clone(), writer_signer, Network::Regtest).unwrap();
         let reader =
-            EncryptingSessionManager::new(inner.clone(), reader_signer, Network::Regtest).unwrap();
+            EncryptingSessionStore::new(inner.clone(), reader_signer, Network::Regtest).unwrap();
         let pk = test_pubkey(3);
 
         writer

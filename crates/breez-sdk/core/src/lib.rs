@@ -16,7 +16,7 @@ mod realtime_sync;
 mod sdk;
 mod sdk_builder;
 mod sdk_context;
-mod session_manager;
+mod session_store;
 pub mod signer;
 mod stable_balance;
 mod sync;
@@ -43,7 +43,7 @@ pub use sdk::{
 };
 pub use sdk_builder::SdkBuilder;
 pub use sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context};
-pub use session_manager::{Session, SessionManager, SessionManagerError};
+pub use session_store::{Session, SessionStore, SessionStoreError};
 pub use spark_wallet::{
     CombinedHeaderProvider, HeaderProvider, HeaderProviderError, KeySet, PublicKey,
 };

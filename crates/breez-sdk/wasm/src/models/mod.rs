@@ -7,7 +7,7 @@ pub mod passkey_prf_provider;
 pub mod payment_observer;
 pub mod postgres_pool;
 pub mod rest_client;
-pub mod session_manager;
+pub mod session_store;
 
 use std::collections::HashMap;
 
@@ -1164,8 +1164,8 @@ pub struct Session {
     pub expiration: u64,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::SessionManagerError)]
-pub enum SessionManagerError {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SessionStoreError)]
+pub enum SessionStoreError {
     NotFound,
     Generic(String),
 }

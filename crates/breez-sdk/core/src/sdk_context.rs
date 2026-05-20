@@ -27,7 +27,7 @@ use crate::persist::postgres::{
 ///
 /// The struct is intentionally opaque — all fields are crate-private. There
 /// is no way to inject pre-built sub-components: the factory builds them
-/// from settings so callers don't need to know about session managers,
+/// from settings so callers don't need to know about session stores,
 /// connection-manager wiring, or pool plumbing.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SdkContext {

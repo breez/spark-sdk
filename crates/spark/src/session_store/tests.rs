@@ -1,12 +1,12 @@
-//! Shared test suite for [`SessionManager`] implementations.
+//! Shared test suite for [`SessionStore`] implementations.
 //!
-//! Each function tests a specific behavior against any `SessionManager` impl.
+//! Each function tests a specific behavior against any `SessionStore` impl.
 //! To use, call these functions from implementation-specific test modules
 //! passing a concrete store instance.
 
 use bitcoin::secp256k1::PublicKey;
 
-use crate::session_manager::{Session, SessionManager, SessionManagerError};
+use crate::session_store::{Session, SessionStore, SessionStoreError};
 
 /// Builds a 33-byte compressed public key with `fill_byte` everywhere except
 /// the version prefix. Tests use distinct fill bytes to scope sessions.
@@ -23,15 +23,15 @@ fn session(token: &str, expiration: u64) -> Session {
     }
 }
 
-pub async fn test_get_session_not_found(store: &dyn SessionManager) {
+pub async fn test_get_session_not_found(store: &dyn SessionStore) {
     let pk = create_public_key(1);
     assert!(matches!(
         store.get_session(&pk).await,
-        Err(SessionManagerError::NotFound)
+        Err(SessionStoreError::NotFound)
     ));
 }
 
-pub async fn test_set_and_get(store: &dyn SessionManager) {
+pub async fn test_set_and_get(store: &dyn SessionStore) {
     let pk = create_public_key(1);
     store
         .set_session(&pk, session("token-A", 1_000_000_000))
@@ -43,7 +43,7 @@ pub async fn test_set_and_get(store: &dyn SessionManager) {
     assert_eq!(stored.expiration, 1_000_000_000);
 }
 
-pub async fn test_overwrite_session(store: &dyn SessionManager) {
+pub async fn test_overwrite_session(store: &dyn SessionStore) {
     let pk = create_public_key(1);
     store
         .set_session(&pk, session("first", 1_000_000_000))
@@ -59,7 +59,7 @@ pub async fn test_overwrite_session(store: &dyn SessionManager) {
     assert_eq!(stored.expiration, 2_000_000_000);
 }
 
-pub async fn test_sessions_are_isolated_by_key(store: &dyn SessionManager) {
+pub async fn test_sessions_are_isolated_by_key(store: &dyn SessionStore) {
     let pk1 = create_public_key(1);
     let pk2 = create_public_key(2);
 
@@ -81,7 +81,7 @@ pub async fn test_sessions_are_isolated_by_key(store: &dyn SessionManager) {
     assert_eq!(stored2.expiration, 2_000_000_000);
 }
 
-pub async fn test_get_after_unrelated_set(store: &dyn SessionManager) {
+pub async fn test_get_after_unrelated_set(store: &dyn SessionStore) {
     let pk1 = create_public_key(1);
     let pk2 = create_public_key(2);
 
@@ -92,6 +92,6 @@ pub async fn test_get_after_unrelated_set(store: &dyn SessionManager) {
 
     assert!(matches!(
         store.get_session(&pk2).await,
-        Err(SessionManagerError::NotFound)
+        Err(SessionStoreError::NotFound)
     ));
 }

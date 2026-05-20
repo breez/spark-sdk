@@ -14,14 +14,14 @@ use super::spark_authn::{
 };
 use crate::header_provider::{HeaderProvider, HeaderProviderError};
 use crate::operator::rpc::transport::grpc_client::Transport;
-use crate::session_manager::{Session, SessionManager, SessionManagerError};
+use crate::session_store::{Session, SessionStore, SessionStoreError};
 use crate::signer::Signer;
 
 #[derive(Clone)]
 pub struct SoAuthHeaderProvider {
     transport: Transport,
     signer: Arc<dyn Signer>,
-    session_manager: Arc<dyn SessionManager>,
+    session_store: Arc<dyn SessionStore>,
     identity_public_key: PublicKey,
 }
 
@@ -29,34 +29,34 @@ impl SoAuthHeaderProvider {
     pub fn new(
         transport: Transport,
         signer: Arc<dyn Signer>,
-        session_manager: Arc<dyn SessionManager>,
+        session_store: Arc<dyn SessionStore>,
         identity_public_key: PublicKey,
     ) -> Self {
         Self {
             transport,
             signer,
-            session_manager,
+            session_store,
             identity_public_key,
         }
     }
 
     async fn get_or_authenticate(&self) -> Result<Session> {
         let cached = self
-            .session_manager
+            .session_store
             .get_session(&self.identity_public_key)
             .await;
         match cached {
             Ok(session) if session.is_valid() => return Ok(session),
             Ok(_) => debug!("Operator session expired, authenticating"),
-            Err(SessionManagerError::NotFound) => {
+            Err(SessionStoreError::NotFound) => {
                 debug!("Operator session not found, authenticating")
             }
-            Err(SessionManagerError::Generic(e)) => {
-                error!("Failed to get operator session from session manager: {}", e)
+            Err(SessionStoreError::Generic(e)) => {
+                error!("Failed to get operator session from session store: {}", e)
             }
         }
         let session = self.authenticate().await?;
-        self.session_manager
+        self.session_store
             .set_session(&self.identity_public_key, session.clone())
             .await?;
         Ok(session)

@@ -1,4 +1,4 @@
-//! Session persistence test against the MySQL `SessionManager`.
+//! Session persistence test against the MySQL `SessionStore`.
 //!
 //! Mirrors `session_persistence.rs`, swapping the testcontainers backend
 //! from `Postgres` to `Mysql`. Both delegate to the shared scenario in

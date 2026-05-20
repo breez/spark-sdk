@@ -1,41 +1,47 @@
 /**
- * CommonJS implementation for Node.js MySQL Session Manager.
+ * CommonJS implementation for Node.js PostgreSQL Session Store.
  *
- * Mirrors `postgres-session-manager/index.cjs` for MySQL 8.0+.
+ * Implements the JS-side `SessionStore` interface consumed by the Breez
+ * SDK WASM bindings: `getSession(serviceIdentityKey)` returns the cached
+ * session for the (tenant, service) pair or `null` when not found, and
+ * `setSession(serviceIdentityKey, session)` upserts a session.
+ *
+ * Tenant identity is bound at construction so multiple tenants can share
+ * a single Postgres database without leaking brz_sessions across tenants.
  */
 
-let mysql;
+let pg;
 try {
   const mainModule = require.main;
   if (mainModule) {
-    mysql = mainModule.require("mysql2/promise");
+    pg = mainModule.require("pg");
   } else {
-    mysql = require("mysql2/promise");
+    pg = require("pg");
   }
 } catch (error) {
   try {
-    mysql = require("mysql2/promise");
+    pg = require("pg");
   } catch (fallbackError) {
     throw new Error(
-      `mysql2 not found. Please install it in your project: npm install mysql2@^3.11.0\n` +
+      `pg not found. Please install it in your project: npm install pg@^8.18.0\n` +
         `Original error: ${error.message}\nFallback error: ${fallbackError.message}`
     );
   }
 }
 
-const { SessionManagerError } = require("./errors.cjs");
-const { MysqlSessionManagerMigrationManager } = require("./migrations.cjs");
+const { SessionStoreError } = require("./errors.cjs");
+const { SessionStoreMigrationManager } = require("./migrations.cjs");
 
-class MysqlSessionManager {
+class PostgresSessionStore {
   /**
-   * @param {import('mysql2/promise').Pool} pool
+   * @param {import('pg').Pool} pool
    * @param {Buffer|Uint8Array} identity - 33-byte secp256k1 compressed pubkey
    *   identifying the tenant. All reads and writes are scoped by this.
    * @param {object} [logger]
    */
   constructor(pool, identity, logger = null, runMigration = true) {
     if (!identity || identity.length !== 33) {
-      throw new SessionManagerError(
+      throw new SessionStoreError(
         "tenant identity (33-byte secp256k1 pubkey) is required"
       );
     }
@@ -48,13 +54,13 @@ class MysqlSessionManager {
   async initialize() {
     try {
       if (this.runMigration) {
-        const migrationManager = new MysqlSessionManagerMigrationManager(this.logger);
+        const migrationManager = new SessionStoreMigrationManager(this.logger);
         await migrationManager.migrate(this.pool);
       }
       return this;
     } catch (error) {
-      throw new SessionManagerError(
-        `Failed to initialize MySQL session manager: ${error.message}`,
+      throw new SessionStoreError(
+        `Failed to initialize PostgreSQL session store: ${error.message}`,
         error
       );
     }
@@ -68,18 +74,21 @@ class MysqlSessionManager {
   }
 
   /**
+   * Returns the cached session for the given service identity key, or `null`
+   * if no session is cached. The Rust adapter maps `null` to
+   * `SessionStoreError::NotFound`.
    * @param {string} serviceIdentityKey - hex-encoded 33-byte secp256k1 pubkey
    * @returns {Promise<{token: string, expiration: number} | null>}
    */
   async getSession(serviceIdentityKey) {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
-      const [rows] = await this.pool.execute(
+      const { rows } = await this.pool.query(
         `SELECT token, expiration FROM brz_sessions
-         WHERE user_id = ? AND service_identity_key = ?`,
+         WHERE user_id = $1 AND service_identity_key = $2`,
         [this.identity, serviceKey]
       );
-      if (!rows || rows.length === 0) {
+      if (rows.length === 0) {
         return null;
       }
       const row = rows[0];
@@ -88,7 +97,7 @@ class MysqlSessionManager {
         expiration: Number(row.expiration),
       };
     } catch (error) {
-      throw new SessionManagerError(
+      throw new SessionStoreError(
         `Failed to read session: ${error.message}`,
         error
       );
@@ -96,20 +105,22 @@ class MysqlSessionManager {
   }
 
   /**
+   * Upserts a session for the given service identity key.
    * @param {string} serviceIdentityKey - hex-encoded 33-byte secp256k1 pubkey
    * @param {{token: string, expiration: number}} session
    */
   async setSession(serviceIdentityKey, session) {
     const serviceKey = _decodePubkey(serviceIdentityKey);
     try {
-      await this.pool.execute(
+      await this.pool.query(
         `INSERT INTO brz_sessions (user_id, service_identity_key, token, expiration)
-         VALUES (?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE token = VALUES(token), expiration = VALUES(expiration)`,
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, service_identity_key)
+         DO UPDATE SET token = EXCLUDED.token, expiration = EXCLUDED.expiration`,
         [this.identity, serviceKey, session.token, session.expiration]
       );
     } catch (error) {
-      throw new SessionManagerError(
+      throw new SessionStoreError(
         `Failed to write session: ${error.message}`,
         error
       );
@@ -119,16 +130,22 @@ class MysqlSessionManager {
 
 function _decodePubkey(hex) {
   if (typeof hex !== "string" || hex.length !== 66) {
-    throw new SessionManagerError(
+    throw new SessionStoreError(
       "service_identity_key must be a 66-character hex-encoded 33-byte pubkey"
     );
   }
   return Buffer.from(hex, "hex");
 }
 
-async function createMysqlSessionManager(poolConfig, identity, logger = null) {
-  const pool = mysql.createPool(poolConfig);
-  const manager = new MysqlSessionManager(
+/**
+ * Convenience factory: creates a pool from a Pool config and returns an
+ * initialized `PostgresSessionStore`. Most callers should use
+ * `createPostgresSessionStoreWithPool` instead so the pool can be shared
+ * across stores.
+ */
+async function createPostgresSessionStore(poolConfig, identity, logger = null) {
+  const pool = new pg.Pool(poolConfig);
+  const manager = new PostgresSessionStore(
     pool,
     identity,
     logger,
@@ -138,13 +155,17 @@ async function createMysqlSessionManager(poolConfig, identity, logger = null) {
   return manager;
 }
 
-async function createMysqlSessionManagerWithPool(
+/**
+ * Wraps an existing pool — useful when sharing the pool with the storage,
+ * tree store, and token store implementations.
+ */
+async function createPostgresSessionStoreWithPool(
   pool,
   identity,
   logger = null,
   runMigration = true
 ) {
-  const manager = new MysqlSessionManager(
+  const manager = new PostgresSessionStore(
     pool,
     identity,
     logger,
@@ -155,8 +176,8 @@ async function createMysqlSessionManagerWithPool(
 }
 
 module.exports = {
-  MysqlSessionManager,
-  createMysqlSessionManager,
-  createMysqlSessionManagerWithPool,
-  SessionManagerError,
+  PostgresSessionStore,
+  createPostgresSessionStore,
+  createPostgresSessionStoreWithPool,
+  SessionStoreError,
 };

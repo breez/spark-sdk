@@ -6,7 +6,7 @@ use platform_utils::{HttpClient, create_http_client};
 use crate::{
     default_user_agent,
     header_provider::{CombinedHeaderProvider, HeaderProvider},
-    session_manager::SessionManager,
+    session_store::SessionStore,
     signer::Signer,
     ssp::{
         BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
@@ -28,14 +28,14 @@ impl ServiceProvider {
     /// Create a new SSP service provider.
     ///
     /// Internally builds a [`SspAuthHeaderProvider`] backed by the supplied
-    /// `signer` and `session_manager`. If `extra_header_provider` is set, the
+    /// `signer` and `session_store`. If `extra_header_provider` is set, the
     /// auth provider's headers are combined with it on every request — used,
     /// for example, to attach the Breez partner JWT alongside the SSP session
     /// token.
     pub fn new(
         config: ServiceProviderConfig,
         signer: Arc<dyn Signer>,
-        session_manager: Arc<dyn SessionManager>,
+        session_store: Arc<dyn SessionStore>,
         extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     ) -> Self {
         let user_agent = config.user_agent.clone().unwrap_or_else(default_user_agent);
@@ -43,7 +43,7 @@ impl ServiceProvider {
         Self::new_with_client(
             config,
             signer,
-            session_manager,
+            session_store,
             extra_header_provider,
             http_client,
         )
@@ -57,7 +57,7 @@ impl ServiceProvider {
     pub fn new_with_client(
         config: ServiceProviderConfig,
         signer: Arc<dyn Signer>,
-        session_manager: Arc<dyn SessionManager>,
+        session_store: Arc<dyn SessionStore>,
         extra_header_provider: Option<Arc<dyn HeaderProvider>>,
         http_client: Arc<dyn HttpClient>,
     ) -> Self {
@@ -65,7 +65,7 @@ impl ServiceProvider {
             &config,
             Arc::clone(&http_client),
             signer,
-            session_manager,
+            session_store,
             extra_header_provider,
         );
         Self {
@@ -78,7 +78,7 @@ impl ServiceProvider {
         config: &ServiceProviderConfig,
         http_client: Arc<dyn HttpClient>,
         signer: Arc<dyn Signer>,
-        session_manager: Arc<dyn SessionManager>,
+        session_store: Arc<dyn SessionStore>,
         extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     ) -> Arc<dyn HeaderProvider> {
         let auth_provider: Arc<dyn HeaderProvider> = Arc::new(SspAuthHeaderProvider::new(
@@ -86,7 +86,7 @@ impl ServiceProvider {
             config.schema_endpoint.as_deref(),
             http_client,
             signer,
-            session_manager,
+            session_store,
             config.identity_public_key,
         ));
         match extra_header_provider {

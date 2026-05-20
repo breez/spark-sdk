@@ -18,7 +18,7 @@ pub use pool::{MysqlConnectionPool, create_mysql_connection_pool};
 
 // Re-export store factories
 pub(crate) use base::{
-    create_mysql_session_manager, create_mysql_token_store, create_mysql_tree_store,
+    create_mysql_session_store, create_mysql_token_store, create_mysql_tree_store,
 };
 
 // Re-export storage implementation

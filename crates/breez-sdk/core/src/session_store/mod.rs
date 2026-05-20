@@ -1,9 +1,9 @@
-//! User-facing [`SessionManager`] surface for the Breez SDK.
+//! User-facing [`SessionStore`] surface for the Breez SDK.
 //!
 //! UniFFI-generated bindings can only export traits defined inside the crate
 //! they're generated from, so we re-declare the trait + supporting types
-//! here. The DB-backed implementations (`PostgresSessionManager`,
-//! `MysqlSessionManager`) implement `spark_wallet::SessionManager` directly
+//! here. The DB-backed implementations (`PostgresSessionStore`,
+//! `MysqlSessionStore`) implement `spark_wallet::SessionStore` directly
 //! and are picked up by `SdkBuilder::build()` when a corresponding pool is
 //! configured on the `SdkContext`.
 //!
@@ -13,13 +13,13 @@
 //! auth providers (SO / SSP)
 //!     │ plaintext
 //!     ▼
-//! CachingSessionManager   ← in-memory hot path
+//! CachingSessionStore   ← in-memory hot path
 //!     │ plaintext
 //!     ▼
-//! EncryptingSessionManager ← ECIES on Session::token
+//! EncryptingSessionStore ← ECIES on Session::token
 //!     │ ciphertext (base64)
 //!     ▼
-//! PostgresSessionManager | MysqlSessionManager | InMemorySessionManager
+//! PostgresSessionStore | MysqlSessionStore | InMemorySessionStore
 //! ```
 
 mod adapter;
@@ -29,9 +29,9 @@ mod encrypting;
 use bitcoin::secp256k1::PublicKey;
 use thiserror::Error;
 
-pub(crate) use adapter::SessionManagerAdapter;
-pub(crate) use caching::CachingSessionManager;
-pub(crate) use encrypting::EncryptingSessionManager;
+pub(crate) use adapter::SessionStoreAdapter;
+pub(crate) use caching::CachingSessionStore;
+pub(crate) use encrypting::EncryptingSessionStore;
 
 #[cfg(feature = "uniffi")]
 uniffi::custom_type!(PublicKey, String, {
@@ -45,27 +45,27 @@ uniffi::custom_type!(PublicKey, String, {
 
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
-pub enum SessionManagerError {
+pub enum SessionStoreError {
     #[error("Session not found")]
     NotFound,
     #[error("Generic error: {0}")]
     Generic(String),
 }
 
-impl From<spark_wallet::SessionManagerError> for SessionManagerError {
-    fn from(e: spark_wallet::SessionManagerError) -> Self {
+impl From<spark_wallet::SessionStoreError> for SessionStoreError {
+    fn from(e: spark_wallet::SessionStoreError) -> Self {
         match e {
-            spark_wallet::SessionManagerError::NotFound => SessionManagerError::NotFound,
-            spark_wallet::SessionManagerError::Generic(msg) => SessionManagerError::Generic(msg),
+            spark_wallet::SessionStoreError::NotFound => SessionStoreError::NotFound,
+            spark_wallet::SessionStoreError::Generic(msg) => SessionStoreError::Generic(msg),
         }
     }
 }
 
-impl From<SessionManagerError> for spark_wallet::SessionManagerError {
-    fn from(e: SessionManagerError) -> Self {
+impl From<SessionStoreError> for spark_wallet::SessionStoreError {
+    fn from(e: SessionStoreError) -> Self {
         match e {
-            SessionManagerError::NotFound => spark_wallet::SessionManagerError::NotFound,
-            SessionManagerError::Generic(msg) => spark_wallet::SessionManagerError::Generic(msg),
+            SessionStoreError::NotFound => spark_wallet::SessionStoreError::NotFound,
+            SessionStoreError::Generic(msg) => spark_wallet::SessionStoreError::Generic(msg),
         }
     }
 }
@@ -102,15 +102,15 @@ impl From<Session> for spark_wallet::Session {
 /// auth sharing.
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
-pub trait SessionManager: Send + Sync {
+pub trait SessionStore: Send + Sync {
     async fn get_session(
         &self,
         service_identity_key: PublicKey,
-    ) -> Result<Session, SessionManagerError>;
+    ) -> Result<Session, SessionStoreError>;
 
     async fn set_session(
         &self,
         service_identity_key: PublicKey,
         session: Session,
-    ) -> Result<(), SessionManagerError>;
+    ) -> Result<(), SessionStoreError>;
 }

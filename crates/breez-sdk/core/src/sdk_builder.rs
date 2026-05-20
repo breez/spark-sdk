@@ -8,7 +8,7 @@ use breez_sdk_common::buy::moonpay::MoonpayProvider;
 
 #[cfg(not(target_family = "wasm"))]
 use spark_wallet::Signer;
-use spark_wallet::{InMemorySessionManager, SparkWalletConfig, TokenOutputStore, TreeStore};
+use spark_wallet::{InMemorySessionStore, SparkWalletConfig, TokenOutputStore, TreeStore};
 use tokio::sync::watch;
 use tracing::{debug, info};
 
@@ -28,7 +28,7 @@ use crate::{
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams, SyncCoordinator, runtime_from_config},
     sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context},
-    session_manager::{SessionManager, SessionManagerAdapter},
+    session_store::{SessionStore, SessionStoreAdapter},
     signer::{
         breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
         spark::SparkSigner,
@@ -86,7 +86,7 @@ pub struct SdkBuilder {
     tree_store: Option<Arc<dyn TreeStore>>,
     token_output_store: Option<Arc<dyn TokenOutputStore>>,
     context: Option<Arc<SdkContext>>,
-    session_manager: Option<Arc<dyn SessionManager>>,
+    session_store: Option<Arc<dyn SessionStore>>,
 }
 
 impl SdkBuilder {
@@ -122,7 +122,7 @@ impl SdkBuilder {
             tree_store: None,
             token_output_store: None,
             context: None,
-            session_manager: None,
+            session_store: None,
         }
     }
 
@@ -151,7 +151,7 @@ impl SdkBuilder {
             tree_store: None,
             token_output_store: None,
             context: None,
-            session_manager: None,
+            session_store: None,
         }
     }
 
@@ -291,14 +291,14 @@ impl SdkBuilder {
         Ok(self.with_mysql_connection_pool(pool))
     }
 
-    /// WASM-only seam for the JS-side DB-backed session manager.
+    /// WASM-only seam for the JS-side DB-backed session store.
     ///
     /// Cfg-gated to the WASM target so it literally doesn't exist on native
     /// builds and can't be misused.
     #[cfg(target_family = "wasm")]
     #[must_use]
-    pub fn with_session_manager(mut self, session_manager: Arc<dyn SessionManager>) -> Self {
-        self.session_manager = Some(session_manager);
+    pub fn with_session_store(mut self, session_store: Arc<dyn SessionStore>) -> Self {
+        self.session_store = Some(session_store);
         self
     }
 
@@ -847,16 +847,16 @@ impl SdkBuilder {
         }
 
         #[allow(unused_mut)]
-        let mut inner_session_manager: Option<Arc<dyn spark_wallet::SessionManager>> = self
-            .session_manager
-            .map(|sm| Arc::new(SessionManagerAdapter(sm)) as Arc<dyn spark_wallet::SessionManager>);
+        let mut inner_session_store: Option<Arc<dyn spark_wallet::SessionStore>> = self
+            .session_store
+            .map(|sm| Arc::new(SessionStoreAdapter(sm)) as Arc<dyn spark_wallet::SessionStore>);
 
         #[cfg(feature = "postgres")]
-        if inner_session_manager.is_none()
+        if inner_session_store.is_none()
             && let Some((ref pool, ref identity, run_migration)) = postgres_backend
         {
-            inner_session_manager = Some(
-                crate::persist::postgres::create_postgres_session_manager(
+            inner_session_store = Some(
+                crate::persist::postgres::create_postgres_session_store(
                     pool.clone(),
                     identity,
                     run_migration,
@@ -866,11 +866,11 @@ impl SdkBuilder {
         }
 
         #[cfg(feature = "mysql")]
-        if inner_session_manager.is_none()
+        if inner_session_store.is_none()
             && let Some((ref pool, ref identity, run_migration, _)) = mysql_backend
         {
-            inner_session_manager = Some(
-                crate::persist::mysql::create_mysql_session_manager(
+            inner_session_store = Some(
+                crate::persist::mysql::create_mysql_session_store(
                     pool.clone(),
                     identity,
                     run_migration,
@@ -879,11 +879,11 @@ impl SdkBuilder {
             );
         }
 
-        let inner_session_manager =
-            inner_session_manager.unwrap_or_else(|| Arc::new(InMemorySessionManager::default()));
-        let inner_session_manager: Arc<dyn spark_wallet::SessionManager> = Arc::new(
-            crate::session_manager::EncryptingSessionManager::new(
-                inner_session_manager,
+        let inner_session_store =
+            inner_session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
+        let inner_session_store: Arc<dyn spark_wallet::SessionStore> = Arc::new(
+            crate::session_store::EncryptingSessionStore::new(
+                inner_session_store,
                 signer.clone(),
                 self.config.network,
             )
@@ -891,13 +891,13 @@ impl SdkBuilder {
                 SdkError::Generic(format!("failed to set up session token encryption: {e}"))
             })?,
         );
-        let inner_session_manager: Arc<dyn spark_wallet::SessionManager> = Arc::new(
-            crate::session_manager::CachingSessionManager::new(inner_session_manager),
+        let inner_session_store: Arc<dyn spark_wallet::SessionStore> = Arc::new(
+            crate::session_store::CachingSessionStore::new(inner_session_store),
         );
         let mut wallet_builder =
             spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
                 .with_cancellation_token(shutdown_sender.subscribe())
-                .with_session_manager(inner_session_manager)
+                .with_session_store(inner_session_store)
                 .with_background_processing(background_services_enabled);
         if let Some(provider) = &context.jwt_header_provider {
             wallet_builder = wallet_builder.with_so_extra_header_provider(

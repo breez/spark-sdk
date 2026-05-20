@@ -34,7 +34,7 @@ use spark::{
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
     },
-    session_manager::{InMemorySessionManager, SessionManager},
+    session_store::{InMemorySessionStore, SessionStore},
     signer::Signer,
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
@@ -203,7 +203,7 @@ impl SparkWallet {
         Self::new(
             config,
             signer,
-            Arc::new(InMemorySessionManager::default()),
+            Arc::new(InMemorySessionStore::default()),
             Arc::new(InMemoryTreeStore::default()),
             Arc::new(InMemoryTokenOutputStore::default()),
             Arc::new(DefaultConnectionManager::new()),
@@ -221,7 +221,7 @@ impl SparkWallet {
     pub async fn new(
         config: SparkWalletConfig,
         signer: Arc<dyn Signer>,
-        session_manager: Arc<dyn SessionManager>,
+        session_store: Arc<dyn SessionStore>,
         tree_store: Arc<dyn TreeStore>,
         token_output_store: Arc<dyn TokenOutputStore>,
         connection_manager: Arc<dyn ConnectionManager>,
@@ -240,14 +240,14 @@ impl SparkWallet {
             Some(client) => ServiceProvider::new_with_client(
                 config.service_provider_config.clone(),
                 Arc::clone(&signer),
-                Arc::clone(&session_manager),
+                Arc::clone(&session_store),
                 ssp_extra_header_provider,
                 client,
             ),
             None => ServiceProvider::new(
                 config.service_provider_config.clone(),
                 Arc::clone(&signer),
-                Arc::clone(&session_manager),
+                Arc::clone(&session_store),
                 ssp_extra_header_provider,
             ),
         });
@@ -256,7 +256,7 @@ impl SparkWallet {
             OperatorPool::connect(
                 &config.operator_pool,
                 connection_manager,
-                Arc::clone(&session_manager),
+                Arc::clone(&session_store),
                 Arc::clone(&signer),
                 so_extra_header_provider,
             )

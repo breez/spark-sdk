@@ -155,7 +155,7 @@ class SharedHandlers private constructor(
 /**
  * Builds an SDK for [seed] wired to the shared transports. All callers in
  * this harness go through here so we never accidentally drop one of the
- * shared handlers. The session manager is auto-wired by SdkBuilder on top
+ * shared handlers. The session store is auto-wired by SdkBuilder on top
  * of the shared MySQL pool (see sdk_builder.rs::build()), keyed
  * per-(wallet, service) inside MySQL — no extra plumbing needed here.
  */

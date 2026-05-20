@@ -1,11 +1,11 @@
 {
-  "name": "@breez-sdk/mysql-session-manager",
+  "name": "@breez-sdk/mysql-session-store",
   "version": "1.0.0",
-  "description": "Node.js MySQL session manager implementation for Breez SDK WASM (CommonJS). Targets MySQL 8.0+.",
+  "description": "Node.js MySQL session store implementation for Breez SDK WASM (CommonJS). Targets MySQL 8.0+.",
   "main": "index.cjs",
   "exports": {
     ".": "./index.cjs",
-    "./session-manager": "./index.cjs",
+    "./session-store": "./index.cjs",
     "./migrations": "./migrations.cjs",
     "./errors": "./errors.cjs"
   },

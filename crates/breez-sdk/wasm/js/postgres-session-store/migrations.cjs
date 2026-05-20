@@ -1,22 +1,22 @@
 /**
- * Database Migration Manager for Breez SDK PostgreSQL Session Manager.
+ * Database Migration Manager for Breez SDK PostgreSQL Session Store.
  *
  * Uses a brz_session_schema_migrations table + pg_advisory_xact_lock to safely
  * run migrations from concurrent processes. Mirrors the schema produced by
- * the Rust `PostgresSessionManager`.
+ * the Rust `PostgresSessionStore`.
  */
 
-const { SessionManagerError } = require("./errors.cjs");
+const { SessionStoreError } = require("./errors.cjs");
 
 /**
- * Advisory lock ID for session-manager migrations.
+ * Advisory lock ID for session-store migrations.
  * Uses a different lock ID from the storage / tree store / token store
  * migrations to avoid contention. Derived from ASCII bytes of "SESN"
  * (0x5345534E).
  */
 const MIGRATION_LOCK_ID = "1397245774"; // 0x5345534E as decimal string
 
-class SessionManagerMigrationManager {
+class SessionStoreMigrationManager {
   constructor(logger = null) {
     this.logger = logger;
   }
@@ -51,7 +51,7 @@ class SessionManagerMigrationManager {
       if (currentVersion >= migrations.length) {
         this._log(
           "info",
-          `Session manager database is up to date (version ${currentVersion})`
+          `Session store database is up to date (version ${currentVersion})`
         );
         await client.query("COMMIT");
         return;
@@ -59,7 +59,7 @@ class SessionManagerMigrationManager {
 
       this._log(
         "info",
-        `Migrating session manager database from version ${currentVersion} to ${migrations.length}`
+        `Migrating session store database from version ${currentVersion} to ${migrations.length}`
       );
 
       for (let i = currentVersion; i < migrations.length; i++) {
@@ -67,7 +67,7 @@ class SessionManagerMigrationManager {
         const version = i + 1;
         this._log(
           "debug",
-          `Running session manager migration ${version}: ${migration.name}`
+          `Running session store migration ${version}: ${migration.name}`
         );
 
         for (const sql of migration.sql) {
@@ -83,12 +83,12 @@ class SessionManagerMigrationManager {
       await client.query("COMMIT");
       this._log(
         "info",
-        "Session manager database migration completed successfully"
+        "Session store database migration completed successfully"
       );
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
-      throw new SessionManagerError(
-        `Session manager migration failed: ${error.message}`,
+      throw new SessionStoreError(
+        `Session store migration failed: ${error.message}`,
         error
       );
     } finally {
@@ -137,12 +137,12 @@ class SessionManagerMigrationManager {
     if (this.logger && typeof this.logger.log === "function") {
       this.logger.log({ line: message, level });
     } else if (level === "error") {
-      console.error(`[SessionManagerMigrationManager] ${message}`);
+      console.error(`[SessionStoreMigrationManager] ${message}`);
     }
   }
 
   /**
-   * Migrations matching the Rust PostgresSessionManager schema exactly.
+   * Migrations matching the Rust PostgresSessionStore schema exactly.
    */
   _getMigrations() {
     return [
@@ -162,4 +162,4 @@ class SessionManagerMigrationManager {
   }
 }
 
-module.exports = { SessionManagerMigrationManager };
+module.exports = { SessionStoreMigrationManager };

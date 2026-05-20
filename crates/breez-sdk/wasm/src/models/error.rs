@@ -19,13 +19,13 @@ pub(crate) fn js_error_to_payment_observer_error(
     breez_sdk_spark::PaymentObserverError::Generic(error_message)
 }
 
-pub(crate) fn js_error_to_session_manager_error(
+pub(crate) fn js_error_to_session_store_error(
     js_error: JsValue,
-) -> breez_sdk_spark::SessionManagerError {
+) -> breez_sdk_spark::SessionStoreError {
     let error_message = js_error
         .as_string()
-        .unwrap_or_else(|| "Session manager error occurred".to_string());
-    breez_sdk_spark::SessionManagerError::Generic(error_message)
+        .unwrap_or_else(|| "Session store error occurred".to_string());
+    breez_sdk_spark::SessionStoreError::Generic(error_message)
 }
 
 pub(crate) fn js_error_to_service_connectivity_error(

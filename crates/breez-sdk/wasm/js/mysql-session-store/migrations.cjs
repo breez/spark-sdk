@@ -1,15 +1,15 @@
 /**
- * Session manager migrations for MySQL 8.0+. Mirrors the Rust
- * `MysqlSessionManager` schema exactly.
+ * Session store migrations for MySQL 8.0+. Mirrors the Rust
+ * `MysqlSessionStore` schema exactly.
  */
 
-const { SessionManagerError } = require("./errors.cjs");
+const { SessionStoreError } = require("./errors.cjs");
 
 const SESSION_MIGRATIONS_TABLE = "brz_session_schema_migrations";
 const MIGRATION_LOCK_NAME = "breez_mysql_session_manager_migration_lock";
 const MIGRATION_LOCK_TIMEOUT = 60;
 
-class MysqlSessionManagerMigrationManager {
+class MysqlSessionStoreMigrationManager {
   constructor(logger = null) {
     this.logger = logger;
   }
@@ -25,8 +25,8 @@ class MysqlSessionManagerMigrationManager {
         [MIGRATION_LOCK_NAME, MIGRATION_LOCK_TIMEOUT]
       );
       if (!lockRows || lockRows[0].acquired !== 1) {
-        throw new SessionManagerError(
-          `Failed to acquire session manager migration lock within ${MIGRATION_LOCK_TIMEOUT}s`
+        throw new SessionStoreError(
+          `Failed to acquire session store migration lock within ${MIGRATION_LOCK_TIMEOUT}s`
         );
       }
 
@@ -69,8 +69,8 @@ class MysqlSessionManagerMigrationManager {
         await conn.query("COMMIT");
       } catch (error) {
         await conn.query("ROLLBACK").catch(() => {});
-        throw new SessionManagerError(
-          `Session manager migration failed: ${error.message}`,
+        throw new SessionStoreError(
+          `Session store migration failed: ${error.message}`,
           error
         );
       } finally {
@@ -136,4 +136,4 @@ async function _mysqlTableExists(conn, tableName) {
   return Number(rows[0].c) > 0;
 }
 
-module.exports = { MysqlSessionManagerMigrationManager };
+module.exports = { MysqlSessionStoreMigrationManager };

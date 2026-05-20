@@ -24,7 +24,7 @@ pub use spark::{
         TransferId, TransferObserver, TransferObserverError, TransferStatus, TransferTokenOutput,
         TransferType, Utxo,
     },
-    session_manager::*,
+    session_store::*,
     signer::{
         AggregateFrostRequest, DefaultSigner, DefaultSignerError, EncryptedSecret,
         FrostSigningCommitmentsWithNonces, KeySet, KeySetType, SecretShare, SecretSource,
@@ -55,7 +55,7 @@ pub use wallet::SparkWallet;
 pub use wallet_builder::WalletBuilder;
 
 #[cfg(feature = "test-utils")]
-pub use spark::session_manager::tests as session_manager_tests;
+pub use spark::session_store::tests as session_store_tests;
 #[cfg(feature = "test-utils")]
 pub use spark::tree::tests as tree_store_tests;
 

@@ -9,7 +9,7 @@ use thiserror::Error;
 pub mod tests;
 
 #[derive(Debug, Error, Clone)]
-pub enum SessionManagerError {
+pub enum SessionStoreError {
     #[error("Session not found")]
     NotFound,
     #[error("Generic error: {0}")]
@@ -32,42 +32,42 @@ impl Session {
 }
 
 #[macros::async_trait]
-pub trait SessionManager: Send + Sync {
+pub trait SessionStore: Send + Sync {
     async fn get_session(
         &self,
         service_identity_key: &PublicKey,
-    ) -> Result<Session, SessionManagerError>;
+    ) -> Result<Session, SessionStoreError>;
     async fn set_session(
         &self,
         service_identity_key: &PublicKey,
         session: Session,
-    ) -> Result<(), SessionManagerError>;
+    ) -> Result<(), SessionStoreError>;
 }
 
 #[derive(Default)]
-pub struct InMemorySessionManager {
+pub struct InMemorySessionStore {
     sessions: tokio::sync::Mutex<HashMap<PublicKey, Session>>,
 }
 
 #[macros::async_trait]
-impl SessionManager for InMemorySessionManager {
+impl SessionStore for InMemorySessionStore {
     async fn get_session(
         &self,
         service_identity_key: &PublicKey,
-    ) -> Result<Session, SessionManagerError> {
+    ) -> Result<Session, SessionStoreError> {
         self.sessions
             .lock()
             .await
             .get(service_identity_key)
             .cloned()
-            .ok_or(SessionManagerError::NotFound)
+            .ok_or(SessionStoreError::NotFound)
     }
 
     async fn set_session(
         &self,
         service_identity_key: &PublicKey,
         session: Session,
-    ) -> Result<(), SessionManagerError> {
+    ) -> Result<(), SessionStoreError> {
         self.sessions
             .lock()
             .await
@@ -79,31 +79,31 @@ impl SessionManager for InMemorySessionManager {
 #[cfg(test)]
 mod in_memory_tests {
     use super::*;
-    use crate::session_manager::tests as shared_tests;
+    use crate::session_store::tests as shared_tests;
     use macros::async_test_all;
 
     #[async_test_all]
     async fn test_get_session_not_found() {
-        shared_tests::test_get_session_not_found(&InMemorySessionManager::default()).await;
+        shared_tests::test_get_session_not_found(&InMemorySessionStore::default()).await;
     }
 
     #[async_test_all]
     async fn test_set_and_get() {
-        shared_tests::test_set_and_get(&InMemorySessionManager::default()).await;
+        shared_tests::test_set_and_get(&InMemorySessionStore::default()).await;
     }
 
     #[async_test_all]
     async fn test_overwrite_session() {
-        shared_tests::test_overwrite_session(&InMemorySessionManager::default()).await;
+        shared_tests::test_overwrite_session(&InMemorySessionStore::default()).await;
     }
 
     #[async_test_all]
     async fn test_sessions_are_isolated_by_key() {
-        shared_tests::test_sessions_are_isolated_by_key(&InMemorySessionManager::default()).await;
+        shared_tests::test_sessions_are_isolated_by_key(&InMemorySessionStore::default()).await;
     }
 
     #[async_test_all]
     async fn test_get_after_unrelated_set() {
-        shared_tests::test_get_after_unrelated_set(&InMemorySessionManager::default()).await;
+        shared_tests::test_get_after_unrelated_set(&InMemorySessionStore::default()).await;
     }
 }

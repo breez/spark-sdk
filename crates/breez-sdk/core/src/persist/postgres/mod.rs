@@ -14,7 +14,7 @@ pub use pool::{PostgresConnectionPool, create_postgres_connection_pool};
 
 // Re-export store factories
 pub(crate) use base::{
-    create_postgres_session_manager, create_postgres_token_store, create_postgres_tree_store,
+    create_postgres_session_store, create_postgres_token_store, create_postgres_tree_store,
 };
 
 // Re-export storage implementation
