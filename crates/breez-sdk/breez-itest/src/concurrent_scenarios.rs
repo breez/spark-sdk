@@ -470,6 +470,13 @@ where
         final_payments_0.payments.len(),
         current_balance
     );
+
+    let [instance_0, instance_1, instance_2] = instances;
+    instance_0.sdk.disconnect().await?;
+    instance_1.sdk.disconnect().await?;
+    instance_2.sdk.disconnect().await?;
+    counterparty.sdk.disconnect().await?;
+
     Ok(())
 }
 
