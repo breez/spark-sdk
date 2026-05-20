@@ -36,13 +36,6 @@ pub trait TransferObserver: Send + Sync {
         token_id: &str,
         receiver_outputs: Vec<ReceiverTokenOutput>,
     ) -> Result<(), TransferObserverError>;
-    async fn after_send_token(
-        &self,
-        _partial_tx_id: &str,
-        _final_tx_id: &str,
-    ) -> Result<(), TransferObserverError> {
-        Ok(())
-    }
     async fn before_send_transfer(
         &self,
         transfer_id: &TransferId,
