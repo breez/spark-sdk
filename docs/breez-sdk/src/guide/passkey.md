@@ -6,7 +6,7 @@ For the full technical specification, see the <a target="_blank" href="https://g
 
 ## Setup
 
-Passkey Login uses a Relying Party (RP) domain to scope credentials. Each integrator picks an RP for their app and hosts a configuration file on it for each platform they target: Web, Android, and / or iOS / macOS. Platform authenticators verify the RP claim against the corresponding file before any WebAuthn ceremony.
+Passkey Login uses a Relying Party (RP) domain to scope credentials. Pick an RP for your app and host a configuration file on it for each platform you target: Web, Android, iOS / macOS. Platform authenticators verify the RP claim against the corresponding file before any WebAuthn ceremony.
 
 ### Hosting the configuration files
 
