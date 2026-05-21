@@ -6,7 +6,9 @@ For the full technical specification, see the <a target="_blank" href="https://g
 
 ## Setup
 
-Passkey Login uses a Relying Party (RP) domain to scope credentials. The domain `keys.breez.technology` serves as a shared RP that enables cross-app passkey sharing: applications opting in let users access the same credentials across different platforms and apps. The platform authenticators (browsers, iOS, Android) verify the RP claim against well-known configuration files served from that domain.
+Passkey Login uses a Relying Party (RP) domain to scope credentials. Each integrator picks an RP for their app and hosts three platform-specific configuration files on it: one for Web, one for Android, one for iOS / macOS. Platform authenticators (browsers, iOS, Android) verify the RP claim against those files before any WebAuthn ceremony.
+
+The next subsection covers the two ways to set up the RP. The three subsections after that describe each platform's configuration file in detail.
 
 ### Hosting the configuration files
 
