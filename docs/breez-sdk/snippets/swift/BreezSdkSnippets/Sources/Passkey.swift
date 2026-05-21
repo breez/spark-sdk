@@ -42,16 +42,10 @@ class CustomPrfProvider: PrfProvider {
 
 func checkAvailability() async throws {
     // ANCHOR: check-availability
-    // `createPasskeyClient` wires up the built-in PasskeyProvider with
-    // your `rpId` / `rpName` and forwards the Breez API key from your
-    // SDK Config. Hosts using a custom PrfProvider construct
-    // `PasskeyClient` directly instead.
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
     let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
 
-    // checkAvailability collapses isSupported + checkDomainAssociation
-    // into a single tagged value. Branch on the variant the host needs.
     switch try await passkey.checkAvailability() {
     case .available:
         break // Show passkey as primary option.
@@ -67,12 +61,7 @@ func checkAvailability() async throws {
 
 func connectWithPasskey() async throws -> BreezSdk {
     // ANCHOR: connect-with-passkey
-    // Single-CTA onboarding: silent sign-in for a returning user,
-    // fall-through to register on a fresh device. Internally pins
-    // `preferImmediatelyAvailableCredentials = true` so the silent
-    // attempt fast-fails (no UI) when no local credential exists;
-    // only `CredentialNotFound` flips to register, all other errors
-    // (cancel / timeout / configuration) propagate unchanged.
+    // Single-CTA onboarding: silent sign-in, fall through to register.
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
     let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
@@ -81,10 +70,7 @@ func connectWithPasskey() async throws -> BreezSdk {
         request: ConnectWithPasskeyRequest(label: "personal")
     )
 
-    // `registeredCredential` doubles as the path discriminator: non-nil
-    // when a new credential was just registered (persist credentialId
-    // for future excludeCredentialIds); nil when silent sign-in
-    // succeeded for an existing credential.
+    // `registeredCredential` is the path discriminator (nil on sign-in).
     if let credential = response.registeredCredential {
         let _ = credential.credentialId
     }
@@ -101,10 +87,6 @@ func connectWithPasskey() async throws -> BreezSdk {
 
 func registerNewPasskey() async throws -> BreezSdk {
     // ANCHOR: register-passkey
-    // For a brand-new user with no existing passkey: register() creates
-    // the credential AND derives the wallet seed in one orchestrated
-    // call. On iOS+Android this is 2 OS prompts total (1 create + 1
-    // dual-salt assert) thanks to the SDK's bulk-PRF path.
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
     let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
@@ -113,9 +95,7 @@ func registerNewPasskey() async throws -> BreezSdk {
         request: RegisterRequest(label: "personal")
     )
 
-    // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
-    // bookkeeping) and credential.userId (for server-side correlation).
-    // The SDK generates userId; it is never host-supplied.
+    // Persist credentialId for future excludeCredentialIds.
     let _ = (response.credential.credentialId, response.credential.userId)
 
     let sdk = try await connect(
@@ -136,9 +116,7 @@ func listLabels() async throws -> [String] {
         rpId: "my-app.com",
         rpName: "My App",
         sdkConfig: sdkConfig,
-        // Optional: override the default wallet label used when
-        // register / signIn receive `label = nil`. Falls back to the
-        // SDK's internal "Default" when unset.
+        // Default wallet label when register / signIn receive no label.
         passkeyConfig: PasskeyConfig(defaultLabel: "personal")
     )
 
@@ -162,10 +140,7 @@ func storeLabel() async throws {
 
 func checkDomain() async throws {
     // ANCHOR: domain-association
-    // Lower-level diagnostic on the provider itself. Most hosts can
-    // reach this through `passkey.checkAvailability()`, which folds
-    // PRF support and domain association into a single call (see the
-    // `check-availability` snippet above).
+    // Lower-level provider call. Most hosts use `checkAvailability` instead.
     let prfProvider = PasskeyProvider(rpId: "my-app.com", rpName: "My App")
     let result = try await prfProvider.checkDomainAssociation()
 

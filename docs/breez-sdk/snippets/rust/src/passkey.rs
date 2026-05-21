@@ -61,8 +61,6 @@ async fn check_availability() -> Result<()> {
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
-    // check_availability collapses is_supported + check_domain_association
-    // into a single tagged value. Branch on the variant the host needs.
     match passkey.check_availability().await? {
         PasskeyAvailability::Available => {
             // Show passkey as primary option.
@@ -83,17 +81,7 @@ async fn check_availability() -> Result<()> {
 
 async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
     // ANCHOR: connect-with-passkey
-    // Single-CTA onboarding: silent sign-in for a returning user,
-    // fall-through to register on a fresh device. The SDK pins the
-    // silent attempt to `prefer_immediately_available_credentials =
-    // true` so the OS fast-fails (no UI) when no credential exists,
-    // making the fallback path correct. Only `CredentialNotFound`
-    // flips to register; cancel / timeout / configuration errors
-    // propagate unchanged.
-    //
-    // Mobile-only (iOS 18+ / Android 9+). On web, call `sign_in` and
-    // catch `CredentialNotFound` manually pending cross-browser
-    // `immediateGet` stabilization.
+    // Single-CTA onboarding: silent sign-in, fall through to register.
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
@@ -104,10 +92,7 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
         })
         .await?;
 
-    // `registered_credential` doubles as the path discriminator:
-    // `Some` means a new credential was just registered (persist
-    // `credential_id` for future `exclude_credential_ids`); `None`
-    // means silent sign-in succeeded for an existing credential.
+    // `registered_credential` is the path discriminator (None on sign-in).
     if let Some(credential) = &response.registered_credential {
         let _persist = credential.credential_id.clone();
     }
@@ -125,10 +110,6 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
 
 async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
     // ANCHOR: register-passkey
-    // For a brand-new user with no existing passkey: register() creates
-    // the credential AND derives the wallet seed in one orchestrated
-    // call. On iOS+Android this is 2 OS prompts total (1 create + 1
-    // dual-salt assert) thanks to the SDK's bulk-PRF path.
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
@@ -139,9 +120,7 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
         })
         .await?;
 
-    // Hosts SHOULD persist credential.credential_id (for excludeCredentialIds
-    // bookkeeping) and credential.user_id (for server-side correlation).
-    // The SDK generates user_id; it is never host-supplied.
+    // Persist credential_id for future exclude_credential_ids.
     let _persist = (
         response.credential.credential_id.clone(),
         response.credential.user_id.clone(),
@@ -264,10 +243,7 @@ async fn recover_from_already_exists() -> Result<Wallet> {
 
 async fn handle_timeout() -> Result<SignInResponse> {
     // ANCHOR: handle-timeout
-    // The OS biometric inactivity timeout (~55s+) tore down the prompt
-    // without user intent. Distinct from a real cancel: hosts may
-    // surface a re-prompt UI without treating it as the user opting
-    // out. The SDK reports this as `ErrorKind::Timeout`.
+    // Timeout is distinct from a cancel: surface a re-prompt UI.
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
