@@ -219,7 +219,6 @@ func handleTimeout() async throws -> SignInResponse {
 }
 
 func withCredentialRegistry() async throws {
-    // ANCHOR: with-credential-registry
     let registry = KeychainCredentialRegistry()
     let prfProvider = PasskeyProvider(
         rpId: "<your-rp-domain>",
@@ -228,7 +227,7 @@ func withCredentialRegistry() async throws {
         onRegistryError: { op, err in print("registry \(op): \(err)") }
     )
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
-
+    // ANCHOR: with-credential-registry
     let known = try await passkey.credentials().get()
     print("Known credentials: \(known.count)")
     // ANCHOR_END: with-credential-registry

@@ -218,7 +218,6 @@ const handleTimeout = async () => {
 }
 
 const withCredentialRegistry = async () => {
-  // ANCHOR: with-credential-registry
   const registry: import('@breeztech/breez-sdk-spark-react-native').CredentialRegistry =
     {
       async read(_rpId) { return [] },
@@ -234,10 +233,7 @@ const withCredentialRegistry = async () => {
     onRegistryError: (op, err) => console.warn('registry', op, err),
   })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
-
-  await passkey.signIn({ label: 'personal' })
-  await passkey.register({ label: 'personal' })
-
+  // ANCHOR: with-credential-registry
   const known = await passkey.credentials().get()
   console.log(`Known credentials: ${known.length}`)
   // ANCHOR_END: with-credential-registry

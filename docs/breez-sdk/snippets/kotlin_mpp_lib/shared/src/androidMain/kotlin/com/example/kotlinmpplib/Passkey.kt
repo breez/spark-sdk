@@ -235,7 +235,6 @@ class PasskeySnippets(private val activity: Activity) {
     }
 
     suspend fun withCredentialRegistry() {
-        // ANCHOR: with-credential-registry
         val registry = BlockStoreCredentialRegistry()
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
@@ -245,8 +244,9 @@ class PasskeySnippets(private val activity: Activity) {
             onRegistryError = { op, err -> /* log */ },
         )
         val passkey = PasskeyClient(prfProvider, null, null)
-
+        // ANCHOR: with-credential-registry
         val known = passkey.credentials().get()
+        // Log.v("Breez", "Known credentials: ${known.size}")
         // ANCHOR_END: with-credential-registry
     }
 }
