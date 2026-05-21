@@ -57,8 +57,13 @@ pub fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> Tok
                 token_identifier: identifier.to_string(),
                 token_amount: amount,
             },
-            prev_tx_hash: format!("tx-hash-{}", i),
-            prev_tx_vout: i as u32,
+            // Derive prev_tx_hash from (identifier, amount) so distinct
+            // synthetic outputs get distinct (prev_tx_hash, vout) outpoints,
+            // matching how real on-chain outputs behave. Keeping the helper
+            // index-based would let two unrelated outputs share an outpoint
+            // and confuse the outpoint-keyed pool.
+            prev_tx_hash: format!("tx-hash-{}-{}", identifier, amount),
+            prev_tx_vout: 0,
         })
         .collect();
 
@@ -1578,16 +1583,15 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
 }
 
 pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputStore) {
-    // Insert outputs: token-1 has outputs at (tx-hash-0, 0), (tx-hash-1, 1), (tx-hash-2, 2)
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
     store
         .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
         .await
         .unwrap();
 
-    // Remove the output at (tx-hash-1, 1)
+    // Remove the amount-200 output by its outpoint
     store
-        .update_token_outputs(&[("tx-hash-1".to_string(), 1)], None)
+        .update_token_outputs(&[("tx-hash-token-1-200".to_string(), 0)], None)
         .await
         .unwrap();
 
@@ -1614,9 +1618,9 @@ pub async fn test_remove_token_outputs_prevents_refresh_readd(store: &dyn TokenO
         .await
         .unwrap();
 
-    // Remove the output at (tx-hash-0, 0)
+    // Remove the amount-100 output by its outpoint
     store
-        .update_token_outputs(&[("tx-hash-0".to_string(), 0)], None)
+        .update_token_outputs(&[("tx-hash-token-1-100".to_string(), 0)], None)
         .await
         .unwrap();
 

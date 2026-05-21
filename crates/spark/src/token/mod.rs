@@ -61,8 +61,11 @@ pub struct TokenOutputs {
 }
 
 impl TokenOutputs {
-    pub fn ids(&self) -> HashSet<String> {
-        self.outputs.iter().map(|o| o.output.id.clone()).collect()
+    pub fn prev_outpoints(&self) -> HashSet<(String, u32)> {
+        self.outputs
+            .iter()
+            .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout))
+            .collect()
     }
 }
 
