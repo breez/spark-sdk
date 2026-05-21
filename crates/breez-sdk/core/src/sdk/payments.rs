@@ -2,11 +2,14 @@ use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use platform_utils::time::{Duration, SystemTime};
 use platform_utils::tokio;
-use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
+use spark_wallet::{
+    ExitSpeed, LightningReceivePayment, ListTransfersRequest, SparkAddress, TransferId,
+    TransferStatus, TransferTokenOutput,
+};
 use spark_wallet::{InvoiceDescription, Preimage};
 use std::str::FromStr;
 use tokio::sync::oneshot;
-use tracing::{Instrument, error, info, warn};
+use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
@@ -23,18 +26,27 @@ use crate::{
         ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
         conversion_steps_from_payments,
     },
-    persist::PaymentMetadata,
+    persist::{ObjectCacheRepository, PaymentMetadata},
     token_conversion::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
     utils::{
         payments::{get_payment_and_emit_event, get_payment_with_conversion_details},
+        polling::{PollSchedule, poll_until},
         send_payment_validation::{get_dust_limit_sats, validate_prepare_send_payment_request},
-        token::map_and_persist_token_transaction,
+        token::{map_and_persist_token_transaction, token_transaction_to_payments},
     },
 };
 
-use super::{BreezSdk, helpers::get_deposit_address};
+use super::{
+    BreezSdk,
+    helpers::{get_deposit_address, maybe_get_payment_from_storage, update_balances},
+};
+use crate::sync::SparkSyncService;
+
+// Polling cadence for wait_for_payment.
+const WAIT_FOR_PAYMENT_INITIAL_DELAY_MS: u64 = 500;
+const WAIT_FOR_PAYMENT_MAX_DELAY_MS: u64 = 2000;
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -506,7 +518,27 @@ impl BreezSdk {
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
     ) -> Result<ReceivePaymentResponse, SdkError> {
-        let invoice = if let Some(payment_hash_hex) = payment_hash {
+        let receive = self
+            .receive_bolt11_invoice_inner(description, amount_sats, expiry_secs, payment_hash)
+            .await?;
+        Ok(ReceivePaymentResponse {
+            payment_request: receive.invoice,
+            fee: 0,
+        })
+    }
+
+    /// Internal variant of [`Self::receive_bolt11_invoice`] that keeps the
+    /// full SSP receive object (id + invoice + status + …). Used by
+    /// `lnurl_withdraw` to get the SSP id for the synchronous wait via
+    /// `WaitForPaymentIdentifier::LightningReceive`.
+    pub(crate) async fn receive_bolt11_invoice_inner(
+        &self,
+        description: String,
+        amount_sats: Option<u64>,
+        expiry_secs: Option<u32>,
+        payment_hash: Option<String>,
+    ) -> Result<LightningReceivePayment, SdkError> {
+        let receive = if let Some(payment_hash_hex) = payment_hash {
             let hash = sha256::Hash::from_str(&payment_hash_hex)
                 .map_err(|e| SdkError::InvalidInput(format!("Invalid payment hash: {e}")))?;
             self.spark_wallet
@@ -518,7 +550,6 @@ impl BreezSdk {
                     expiry_secs,
                 )
                 .await?
-                .invoice
         } else {
             self.spark_wallet
                 .create_lightning_invoice(
@@ -529,12 +560,8 @@ impl BreezSdk {
                     self.config.prefer_spark_over_lightning,
                 )
                 .await?
-                .invoice
         };
-        Ok(ReceivePaymentResponse {
-            payment_request: invoice,
-            fee: 0,
-        })
+        Ok(receive)
     }
 
     pub(super) async fn maybe_convert_token_send_payment(
@@ -833,9 +860,7 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         // Wait for the received conversion payment to complete
         let payment = self
-            .runtime
             .wait_for_payment(
-                self,
                 WaitForPaymentIdentifier::PaymentId(
                     conversion_response.received_payment_id.clone(),
                 ),
@@ -1412,6 +1437,59 @@ impl BreezSdk {
         Ok(SendPaymentResponse { payment })
     }
 
+    pub(crate) async fn wait_for_payment(
+        &self,
+        identifier: WaitForPaymentIdentifier,
+        completion_timeout_secs: u32,
+    ) -> Result<Payment, SdkError> {
+        // Fast path: completed payment already in storage.
+        if let Some(payment) =
+            maybe_get_payment_from_storage(self.storage.as_ref(), &identifier).await?
+            && payment.status == PaymentStatus::Completed
+        {
+            return Ok(payment);
+        }
+
+        let schedule = PollSchedule {
+            initial_delay: Duration::from_millis(WAIT_FOR_PAYMENT_INITIAL_DELAY_MS),
+            max_delay: Duration::from_millis(WAIT_FOR_PAYMENT_MAX_DELAY_MS),
+            timeout: Duration::from_secs(completion_timeout_secs.into()),
+        };
+        let shutdown = Some(self.shutdown_sender.subscribe());
+
+        let payment = match identifier {
+            WaitForPaymentIdentifier::PaymentId(pid) => {
+                if let Ok(transfer_id) = TransferId::from_str(&pid) {
+                    poll_until(schedule, shutdown, || {
+                        self.poll_then_process_spark_transfer(transfer_id.clone())
+                    })
+                    .await?
+                } else if let Some((hash, _vout)) = pid.split_once(':') {
+                    let tx_hash = hash.to_string();
+                    // The only `wait_for_payment(PaymentId(token))` site today is
+                    // the conversion received leg (we're the recipient).
+                    let tx_inputs_are_ours = false;
+                    poll_until(schedule, shutdown, || {
+                        self.poll_then_process_token_transaction(&pid, &tx_hash, tx_inputs_are_ours)
+                    })
+                    .await?
+                } else {
+                    return Err(SdkError::Generic(format!(
+                        "Unrecognized payment_id format: {pid}"
+                    )));
+                }
+            }
+            WaitForPaymentIdentifier::LightningReceive { ssp_id, .. } => {
+                poll_until(schedule, shutdown, || {
+                    self.poll_then_process_lightning_receive(&ssp_id)
+                })
+                .await?
+            }
+        };
+        self.finalize_payment(payment.clone()).await;
+        Ok(payment)
+    }
+
     /// Spawns the background poll that watches an outgoing Lightning send to
     /// completion. Returns a receiver that resolves to the terminal `Payment`
     /// when the SSP reports a non-`Pending` status, so callers can `await`
@@ -1909,5 +1987,173 @@ impl BreezSdk {
             )
             .await
             .map_err(Into::into)
+    }
+
+    /// Records a freshly-observed terminal payment: apply any cached
+    /// metadata, run the LNURL receive-metadata sync, persist to storage,
+    /// refresh balances, and emit `PaymentSucceeded` if this is the first
+    /// time we see this status. Returns whether an event was emitted.
+    pub(crate) async fn finalize_payment(&self, mut payment: Payment) -> bool {
+        let existing_status = self
+            .storage
+            .get_payment_by_id(payment.id.clone())
+            .await
+            .ok()
+            .map(|p| p.status);
+        let status_changed = existing_status.is_none_or(|s| s != payment.status);
+
+        let sync_service = SparkSyncService::new(
+            self.spark_wallet.clone(),
+            self.storage.clone(),
+            self.event_emitter.clone(),
+        );
+        if let Err(e) = sync_service.apply_payment_metadata(&payment).await {
+            error!(
+                "finalize_payment({}): failed to apply payment metadata: {e:?}",
+                payment.id
+            );
+        }
+        // No-op for non-Lightning-receive payments; for LNURL receives
+        // this pulls the LNURL metadata into the payment record.
+        self.sync_single_lnurl_metadata(&mut payment).await;
+
+        if let Err(e) = self.storage.insert_payment(payment.clone()).await {
+            error!(
+                "finalize_payment({}): failed to insert payment: {e:?}",
+                payment.id
+            );
+        }
+
+        if let Err(e) = update_balances(self.spark_wallet.clone(), self.storage.clone()).await {
+            error!(
+                "finalize_payment({}): failed to update balances: {e:?}",
+                payment.id
+            );
+        }
+
+        if status_changed {
+            get_payment_and_emit_event(&self.storage, &self.event_emitter, payment).await;
+        }
+        status_changed
+    }
+
+    /// Polls a single Spark transfer by id and, on terminal status, claims
+    /// it locally so its leaves land in the tree-store before the caller
+    /// spends them.
+    async fn poll_then_process_spark_transfer(
+        &self,
+        transfer_id: TransferId,
+    ) -> Result<Option<Payment>, SdkError> {
+        let mut resp = self
+            .spark_wallet
+            .list_transfers(ListTransfersRequest {
+                transfer_ids: vec![transfer_id.clone()],
+                paging: None,
+            })
+            .await?;
+        let Some(wallet_transfer) = resp.items.pop() else {
+            debug!("poll_then_process_spark_transfer({transfer_id}): not yet visible on operators");
+            return Ok(None);
+        };
+        debug!(
+            "poll_then_process_spark_transfer({transfer_id}): status={}",
+            wallet_transfer.status
+        );
+        let payment: Payment = match wallet_transfer.status {
+            // Transfer has already completed. Skip the claim.
+            TransferStatus::Completed => wallet_transfer.try_into()?,
+            // Transfer is claimable. Claim the transfer and promote the
+            // transfer status to completed.
+            TransferStatus::SenderKeyTweaked => {
+                debug!("poll_then_process_spark_transfer({transfer_id}): claiming");
+                self.spark_wallet.process_transfer(&wallet_transfer).await?;
+                let mut claimed = wallet_transfer;
+                claimed.status = TransferStatus::Completed;
+                claimed.try_into()?
+            }
+            // Terminal-failed. Return the `Failed` payment without
+            // claiming.
+            TransferStatus::Expired | TransferStatus::Returned => {
+                debug!(
+                    "poll_then_process_spark_transfer({transfer_id}): terminal-failed ({})",
+                    wallet_transfer.status
+                );
+                wallet_transfer.try_into()?
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(payment))
+    }
+
+    /// Polls a single token tx by hash and, on terminal status, updates the
+    /// local token-output store.
+    async fn poll_then_process_token_transaction(
+        &self,
+        payment_id: &str,
+        tx_hash: &str,
+        tx_inputs_are_ours: bool,
+    ) -> Result<Option<Payment>, SdkError> {
+        let token_transactions = self
+            .spark_wallet
+            .get_token_transactions_by_hashes(vec![tx_hash.to_string()])
+            .await?;
+        let Some(token_transaction) = token_transactions.first() else {
+            debug!("poll_then_process_token_transaction({tx_hash}): not yet visible on operators");
+            return Ok(None);
+        };
+        debug!(
+            "poll_then_process_token_transaction({tx_hash}): operator status={:?}",
+            token_transaction.status
+        );
+        let object_repository = ObjectCacheRepository::new(self.storage.clone());
+        let payments = token_transaction_to_payments(
+            &self.spark_wallet,
+            &object_repository,
+            token_transaction,
+            tx_inputs_are_ours,
+        )
+        .await?;
+        let Some(payment) = payments.into_iter().find(|p| p.id == payment_id) else {
+            debug!(
+                "poll_then_process_token_transaction({tx_hash}): no output matches payment_id {payment_id}"
+            );
+            return Ok(None);
+        };
+        if payment.status == PaymentStatus::Pending {
+            return Ok(None);
+        }
+        debug!(
+            "poll_then_process_token_transaction({tx_hash}): terminal payment status={}, updating local outputs",
+            payment.status
+        );
+        self.spark_wallet
+            .process_token_transaction(token_transaction)
+            .await?;
+        Ok(Some(payment))
+    }
+
+    /// Polls an inbound Lightning payment by SSP id. The receive object
+    /// only carries the transfer id once the SSP has forwarded the payment
+    /// via Spark. Once present, defers to `poll_then_process_spark_transfer`.
+    async fn poll_then_process_lightning_receive(
+        &self,
+        ssp_id: &str,
+    ) -> Result<Option<Payment>, SdkError> {
+        let Some(receive) = self
+            .spark_wallet
+            .fetch_lightning_receive_payment(ssp_id)
+            .await?
+        else {
+            debug!("poll_then_process_lightning_receive({ssp_id}): SSP returned no receive yet");
+            return Ok(None);
+        };
+        debug!(
+            "poll_then_process_lightning_receive({ssp_id}): SSP status={:?}, transfer_id={:?}",
+            receive.status, receive.transfer_id
+        );
+        let Some(transfer_id) = receive.transfer_id else {
+            return Ok(None);
+        };
+        self.poll_then_process_spark_transfer(transfer_id).await
     }
 }

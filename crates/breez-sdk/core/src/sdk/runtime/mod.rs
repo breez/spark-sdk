@@ -2,11 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::watch;
 
-use crate::{
-    GetInfoRequest, GetInfoResponse,
-    error::SdkError,
-    models::{Config, Payment, WaitForPaymentIdentifier},
-};
+use crate::{GetInfoRequest, GetInfoResponse, error::SdkError, models::Config};
 
 use super::{BreezSdk, SyncType};
 
@@ -61,18 +57,6 @@ pub(crate) trait RuntimeProfile: Send + Sync {
         &self,
         sdk: &BreezSdk,
     ) -> Result<(), SdkError>;
-
-    /// Waits for a payment to reach a terminal state.
-    ///
-    /// `ClientRuntime` listens for `SdkEvent::PaymentSucceeded` from the
-    /// wallet event stream. `ServerRuntime` polls Spark / SSP / storage
-    /// directly because no event stream is subscribed in server mode.
-    async fn wait_for_payment(
-        &self,
-        sdk: &BreezSdk,
-        identifier: WaitForPaymentIdentifier,
-        completion_timeout_secs: u32,
-    ) -> Result<Payment, SdkError>;
 }
 
 #[cfg(test)]

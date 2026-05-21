@@ -35,41 +35,8 @@ pub(crate) async fn maybe_get_payment_from_storage(
         WaitForPaymentIdentifier::PaymentId(payment_id) => {
             Ok(storage.get_payment_by_id(payment_id.clone()).await.ok())
         }
-        WaitForPaymentIdentifier::PaymentRequest(payment_request) => Ok(storage
-            .get_payment_by_invoice(payment_request.clone())
-            .await?),
-    }
-}
-
-pub(crate) fn is_payment_match(payment: &Payment, identifier: &WaitForPaymentIdentifier) -> bool {
-    match identifier {
-        WaitForPaymentIdentifier::PaymentId(payment_id) => payment.id == *payment_id,
-        WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
-            if let Some(details) = &payment.details {
-                match details {
-                    PaymentDetails::Lightning { invoice, .. } => {
-                        invoice.to_lowercase() == payment_request.to_lowercase()
-                    }
-                    PaymentDetails::Spark {
-                        invoice_details: invoice,
-                        ..
-                    }
-                    | PaymentDetails::Token {
-                        invoice_details: invoice,
-                        ..
-                    } => {
-                        if let Some(invoice) = invoice {
-                            invoice.invoice.to_lowercase() == payment_request.to_lowercase()
-                        } else {
-                            false
-                        }
-                    }
-                    PaymentDetails::Withdraw { tx_id: _ }
-                    | PaymentDetails::Deposit { tx_id: _ } => false,
-                }
-            } else {
-                false
-            }
+        WaitForPaymentIdentifier::LightningReceive { invoice, .. } => {
+            Ok(storage.get_payment_by_invoice(invoice.clone()).await?)
         }
     }
 }

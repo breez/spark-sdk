@@ -26,7 +26,7 @@ use spark::{
 use crate::SparkWalletError;
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub enum WalletEvent {
     DepositConfirmed(TreeNodeId),
     StreamConnected,
@@ -65,7 +65,7 @@ pub struct WalletInfo {
     pub network: Network,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct WalletTransfer {
     pub id: TransferId,
     pub sender_id: PublicKey,
@@ -82,6 +82,12 @@ pub struct WalletTransfer {
     pub spark_invoice: Option<String>,
     pub htlc_preimage_request: Option<PreimageRequest>,
     pub is_ssp_transfer: bool,
+    /// The underlying `Transfer` this projection was built from. Held in-memory
+    /// so callers can re-claim the transfer via `SparkWallet::process_transfer`
+    /// without an extra operator round-trip. Boxed to keep `WalletTransfer`'s
+    /// stack footprint small (it's carried inside `WalletEvent` variants on
+    /// the broadcast channel hot-path).
+    pub(crate) raw: Box<Transfer>,
 }
 
 impl WalletTransfer {
@@ -92,6 +98,7 @@ impl WalletTransfer {
         our_public_key: PublicKey,
         ssp_public_key: PublicKey,
     ) -> Self {
+        let raw = Box::new(value.clone());
         let direction = if value.sender_identity_public_key == our_public_key {
             TransferDirection::Outgoing
         } else {
@@ -121,7 +128,12 @@ impl WalletTransfer {
             spark_invoice: value.spark_invoice,
             htlc_preimage_request,
             is_ssp_transfer,
+            raw,
         }
+    }
+
+    pub(crate) fn raw(&self) -> &Transfer {
+        &self.raw
     }
 
     pub fn from_preimage_request_with_transfer(
@@ -164,7 +176,7 @@ impl From<PreimageRequestWithTransfer> for PreimageRequest {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct PayLightningInvoiceResult {
     // The transfer associated with this lightinng payment.
     pub transfer: WalletTransfer,
@@ -172,7 +184,7 @@ pub struct PayLightningInvoiceResult {
     pub lightning_payment: Option<LightningSendPayment>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WalletTransferLeaf {
     pub leaf: WalletLeaf,
     pub secret_cipher: String,
@@ -297,7 +309,7 @@ pub struct ListTransfersRequest {
     pub transfer_ids: Vec<TransferId>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub enum FulfillSparkInvoiceResult {
     Transfer(Box<WalletTransfer>),
     TokenTransaction(Box<TokenTransaction>),
