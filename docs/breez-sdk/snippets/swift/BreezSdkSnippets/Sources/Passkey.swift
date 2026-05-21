@@ -1,6 +1,16 @@
 import BreezSdkSpark
 import Foundation
 
+// Stub for the snippet to compile. Use the KeychainCredentialRegistry
+// reference impl from the passkey guide in production.
+public final class KeychainCredentialRegistry: CredentialRegistry {
+    public init() {}
+    public func read(rpId: String) async throws -> [Data] { [] }
+    public func add(rpId: String, credentialId: Data) async throws {}
+    public func remove(rpId: String, credentialId: Data) async throws {}
+    public func clear(rpId: String) async throws {}
+}
+
 // ANCHOR: implement-prf-provider
 // Implement the PrfProvider interface for custom logic if the built-in
 // PasskeyProvider doesn't fit your needs (hardware key, FIDO2 transport,
@@ -42,6 +52,8 @@ class CustomPrfProvider: PrfProvider {
 
 func checkAvailability() async throws {
     // ANCHOR: check-availability
+    // Pass `PasskeyProvider.BREEZ_RP_ID` instead of "my-app.com" if your
+    // app is Breez-registered (shares credentials with other Breez apps).
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
     let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
@@ -83,6 +95,18 @@ func connectWithPasskey() async throws -> BreezSdk {
         ))
     // ANCHOR_END: connect-with-passkey
     return sdk
+}
+
+func signInExistingUser() async throws -> SignInResponse {
+    // ANCHOR: sign-in
+    // Returning-user-only sign-in. No fall-through to register: use
+    // `connectWithPasskey` when you also want the new-user path.
+    var config = defaultConfig(network: .mainnet)
+    config.apiKey = "<breez api key>"
+    let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
+
+    return try await passkey.signIn(request: SignInRequest(label: "personal"))
+    // ANCHOR_END: sign-in
 }
 
 func registerNewPasskey() async throws -> BreezSdk {
@@ -196,4 +220,28 @@ func handleTimeout() async throws -> SignInResponse {
         throw PrfProviderError.UserTimedOut
     }
     // ANCHOR_END: handle-timeout
+}
+
+func withCredentialRegistry() async throws {
+    // ANCHOR: with-credential-registry
+    // Opt-in CredentialRegistry. The SDK auto-merges stored IDs into
+    // excludeCredentialIds on register and allowCredentialIds on
+    // sign-in. Reference impl (KeychainCredentialRegistry) lives in
+    // the passkey guide; copy-paste into your app.
+    let registry = KeychainCredentialRegistry()
+    let prfProvider = PasskeyProvider(
+        rpId: "my-app.com",
+        rpName: "My App",
+        credentialRegistry: registry,
+        onRegistryError: { op, err in print("registry \(op): \(err)") }
+    )
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
+
+    // Inspect / mutate via the credentials() sub-object.
+    let known = try await passkey.credentials().get()
+    print("Known credentials: \(known.count)")
+
+    // On logout, clear the registry.
+    try await passkey.credentials().clear()
+    // ANCHOR_END: with-credential-registry
 }

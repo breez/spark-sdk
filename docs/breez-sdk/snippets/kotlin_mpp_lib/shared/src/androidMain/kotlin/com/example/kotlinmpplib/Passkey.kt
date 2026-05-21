@@ -4,6 +4,16 @@ import android.app.Activity
 import breez_sdk_spark.*
 import technology.breez.spark.passkey.PasskeyProvider
 import technology.breez.spark.passkey.createPasskeyClient
+import technology.breez.spark.passkey.core.CredentialRegistry
+
+// Stub for the snippet to compile. Use the BlockStoreCredentialRegistry
+// reference impl from the passkey guide in production.
+class BlockStoreCredentialRegistry : CredentialRegistry {
+    override suspend fun read(rpId: String): List<ByteArray> = emptyList()
+    override suspend fun add(rpId: String, credentialId: ByteArray) {}
+    override suspend fun remove(rpId: String, credentialId: ByteArray) {}
+    override suspend fun clear(rpId: String) {}
+}
 
 // ANCHOR: implement-prf-provider
 // Implement the PrfProvider interface for custom logic if the built-in
@@ -39,6 +49,8 @@ class CustomPrfProvider : PrfProvider {
 class PasskeySnippets(private val activity: Activity) {
     suspend fun checkAvailability() {
         // ANCHOR: check-availability
+        // Pass `PasskeyProvider.BREEZ_RP_ID` instead of "my-app.com" if your
+        // app is Breez-registered (shares credentials with other Breez apps).
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
@@ -81,6 +93,22 @@ class PasskeySnippets(private val activity: Activity) {
         val sdk = connect(ConnectRequest(config, response.wallet.seed, "./.data"))
         // ANCHOR_END: connect-with-passkey
         return sdk
+    }
+
+    suspend fun signInExistingUser(): SignInResponse {
+        // ANCHOR: sign-in
+        // Returning-user-only sign-in. No fall-through to register: use
+        // `connectWithPasskey` when you also want the new-user path.
+        val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
+        val passkey = createPasskeyClient(
+            activityProvider = { activity },
+            rpId = "my-app.com",
+            rpName = "My App",
+            sdkConfig = config,
+        )
+
+        return passkey.signIn(SignInRequest(label = "personal"))
+        // ANCHOR_END: sign-in
     }
 
     suspend fun registerNewPasskey(): BreezSdk {
@@ -203,5 +231,29 @@ class PasskeySnippets(private val activity: Activity) {
             throw e
         }
         // ANCHOR_END: handle-timeout
+    }
+
+    suspend fun withCredentialRegistry() {
+        // ANCHOR: with-credential-registry
+        // Opt-in CredentialRegistry. The SDK auto-merges stored IDs into
+        // excludeCredentialIds on register and allowCredentialIds on
+        // sign-in. Reference impl (BlockStoreCredentialRegistry) lives
+        // in the passkey guide; copy-paste into your app.
+        val registry = BlockStoreCredentialRegistry()
+        val prfProvider = PasskeyProvider(
+            activityProvider = { activity },
+            rpId = "my-app.com",
+            rpName = "My App",
+            credentialRegistry = registry,
+            onRegistryError = { op, err -> /* log */ },
+        )
+        val passkey = PasskeyClient(prfProvider, null, null)
+
+        // Inspect / mutate via the credentials() sub-object.
+        val known = passkey.credentials().get()
+
+        // On logout, clear the registry.
+        passkey.credentials().clear()
+        // ANCHOR_END: with-credential-registry
     }
 }

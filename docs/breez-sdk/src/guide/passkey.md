@@ -142,7 +142,11 @@ Internally the silent attempt pins `preferImmediatelyAvailableCredentials = true
 
 {{#tabs passkey:connect-with-passkey}}
 
-For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly. {{#name PasskeyClient.register}} alone is the right entry point for a deliberate "create a new wallet" UI (e.g. adding a new label to an existing identity). Pass `wallet.seed` to {{#name connect}} in both cases.
+For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly. {{#name PasskeyClient.register}} alone is the right entry point for a deliberate "create a new wallet" UI (e.g. adding a new label to an existing identity). {{#name PasskeyClient.sign_in}} alone is the right entry point for a "Sign In" button that should NEVER auto-create a credential (i.e. apps that present separate Sign-In and Create-Account flows):
+
+{{#tabs passkey:sign-in}}
+
+Pass `wallet.seed` to {{#name connect}} in either case.
 
 ### Web: manual catch-and-register
 
@@ -487,6 +491,12 @@ const provider = new PasskeyProvider({
     credentialRegistry: new LocalStorageCredentialRegistry(),
 });
 ```
+
+#### Using credentials() with a registry
+
+Once a registry is wired in, the SDK auto-merges its contents into `excludeCredentialIds` on register and `allowCredentialIds` on sign-in. Hosts can also inspect and mutate the stored set directly via the {{#name PasskeyClient.credentials}} sub-object: typical uses are "list registered passkeys on this device" in a settings page, or "forget this device" on logout.
+
+{{#tabs passkey:with-credential-registry}}
 
 #### CredentialRegistry error semantics
 

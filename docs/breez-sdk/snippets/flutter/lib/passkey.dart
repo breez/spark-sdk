@@ -34,6 +34,8 @@ Future<void> clearKnownCredentialIds() async {}
 
 Future<void> checkAvailability() async {
   // ANCHOR: check-availability
+  // Pass `PasskeyProvider.breezRpId` instead of \'my-app.com\' if your
+  // app is Breez-registered (shares credentials with other Breez apps).
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
@@ -81,6 +83,22 @@ Future<BreezSdk> connectWithPasskey() async {
           config: config, seed: response.wallet.seed, storageDir: "./.data"));
   // ANCHOR_END: connect-with-passkey
   return sdk;
+}
+
+Future<SignInResponse> signInExistingUser() async {
+  // ANCHOR: sign-in
+  // Returning-user-only sign-in. No fall-through to register: use
+  // `connectWithPasskey` when you also want the new-user path.
+  final config = defaultConfig(network: Network.mainnet)
+      .copyWith(apiKey: '<breez api key>');
+  final passkey = createPasskeyClient(
+    rpId: 'my-app.com',
+    rpName: 'My App',
+    sdkConfig: config,
+  );
+
+  return await passkey.signIn(request: SignInRequest(label: 'personal'));
+  // ANCHOR_END: sign-in
 }
 
 Future<BreezSdk> registerNewPasskey() async {
@@ -214,4 +232,47 @@ Future<SignInResponse> handleTimeout() async {
     rethrow;
   }
   // ANCHOR_END: handle-timeout
+}
+
+// Stub for the snippet to compile. Use the LocalStorageCredentialRegistry
+// or platform-equivalent reference impl from the passkey guide.
+class StubCredentialRegistry implements CredentialRegistry {
+  @override
+  Future<List<Uint8List>> read(String rpId) async => const [];
+  @override
+  Future<void> add(String rpId, Uint8List credentialId) async {}
+  @override
+  Future<void> remove(String rpId, Uint8List credentialId) async {}
+  @override
+  Future<void> clear(String rpId) async {}
+}
+
+Future<void> withCredentialRegistry() async {
+  // ANCHOR: with-credential-registry
+  // Opt-in CredentialRegistry. The SDK auto-merges stored IDs into
+  // excludeCredentialIds on register and allowCredentialIds on
+  // sign-in. Reference impls live in the passkey guide; copy-paste
+  // the platform-appropriate one into your app.
+  final registry = StubCredentialRegistry();
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(
+    rpId: 'my-app.com',
+    rpName: 'My App',
+    credentialRegistry: registry,
+    onRegistryError: (op, err) {},
+  ));
+  final passkey = PasskeyClient(
+    deriveSeeds: prfProvider.deriveSeeds,
+    isSupported: prfProvider.isSupported,
+    createPasskey: prfProvider.createPasskey,
+    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
+    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
+    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
+  );
+
+  // Inspect / mutate via the credentials() sub-object.
+  final known = await passkey.credentials().get();
+
+  // On logout, clear the registry.
+  await passkey.credentials().clear();
+  // ANCHOR_END: with-credential-registry
 }

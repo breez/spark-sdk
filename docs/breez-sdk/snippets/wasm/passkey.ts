@@ -86,6 +86,16 @@ const connectWithPasskey = async () => {
   return sdk
 }
 
+const signInExistingUser = async () => {
+  // ANCHOR: sign-in
+  // Returning-user-only sign-in. No fall-through to register.
+  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+
+  return await passkey.signIn({ label: 'personal' })
+  // ANCHOR_END: sign-in
+}
+
 const registerNewPasskey = async () => {
   // ANCHOR: register-passkey
   // For a brand-new user with no existing passkey: register() creates
