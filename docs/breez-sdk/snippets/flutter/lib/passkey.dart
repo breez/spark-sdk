@@ -34,13 +34,13 @@ Future<void> clearKnownCredentialIds() async {}
 
 Future<void> checkAvailability() async {
   // ANCHOR: check-availability
-  // Pass `PasskeyProvider.breezRpId` instead of \'my-app.com\' if your
+  // Pass `PasskeyProvider.breezRpId` instead of \'<your-rp-domain>\' if your
   // app is Breez-registered (shares credentials with other Breez apps).
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     sdkConfig: config,
   );
 
@@ -62,8 +62,8 @@ PasskeyClient setupPasskeyClient() {
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     sdkConfig: config,
   );
   // ANCHOR_END: setup-client
@@ -76,8 +76,8 @@ Future<BreezSdk> connectWithPasskey() async {
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     sdkConfig: config,
   );
 
@@ -105,8 +105,8 @@ Future<SignInResponse> signInExistingUser() async {
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     sdkConfig: config,
   );
 
@@ -119,8 +119,8 @@ Future<BreezSdk> registerNewPasskey() async {
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     sdkConfig: config,
   );
 
@@ -144,8 +144,8 @@ Future<List<String>> listLabels() async {
   final sdkConfig = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     sdkConfig: sdkConfig,
     // Default label when register / signIn receive no label.
     passkeyConfig: PasskeyConfig(defaultLabel: 'personal'),
@@ -165,8 +165,8 @@ Future<void> storeLabel() async {
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     sdkConfig: config,
   );
 
@@ -178,7 +178,7 @@ Future<void> storeLabel() async {
 Future<void> checkDomain() async {
   // ANCHOR: domain-association
   // Lower-level provider call. Most hosts use `checkAvailability` instead.
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com', rpName: 'My App'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App'));
   final result = await prfProvider.checkDomainAssociation();
 
   if (result is DomainAssociationAssociated) {
@@ -198,8 +198,8 @@ Future<Wallet?> recoverFromAlreadyExists() async {
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     sdkConfig: config,
   );
 
@@ -229,8 +229,8 @@ Future<SignInResponse> handleTimeout() async {
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     sdkConfig: config,
   );
 
@@ -268,8 +268,8 @@ Future<void> withCredentialRegistry() async {
   // the platform-appropriate one into your app.
   final registry = StubCredentialRegistry();
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     credentialRegistry: registry,
     onRegistryError: (op, err) {},
   ));

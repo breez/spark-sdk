@@ -44,10 +44,10 @@ class CustomPrfProvider {
 
 const checkAvailability = async () => {
   // ANCHOR: check-availability
-  // Pass `PasskeyProvider.BREEZ_RP_ID` instead of \'my-app.com\' if your
+  // Pass `PasskeyProvider.BREEZ_RP_ID` instead of \'<your-rp-domain>\' if your
   // app is Breez-registered (shares credentials with other Breez apps).
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('my-app.com', 'My App', config)
+  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
 
   const availability = await passkey.checkAvailability()
   switch (availability.type) {
@@ -72,7 +72,7 @@ const checkAvailability = async () => {
 const setupPasskeyClient = () => {
   // ANCHOR: setup-client
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('my-app.com', 'My App', config)
+  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
   // ANCHOR_END: setup-client
   return passkey
 }
@@ -81,7 +81,7 @@ const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
   // Single-CTA onboarding: silent sign-in, fall through to register.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('my-app.com', 'My App', config)
+  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
 
   const response = await passkey.connectWithPasskey({
     label: 'personal',
@@ -103,7 +103,7 @@ const signInExistingUser = async () => {
   // Returning-user-only sign-in. No fall-through to register: use
   // `connectWithPasskey` when you also want the new-user path.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('my-app.com', 'My App', config)
+  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
 
   return await passkey.signIn({ label: 'personal' })
   // ANCHOR_END: sign-in
@@ -112,7 +112,7 @@ const signInExistingUser = async () => {
 const registerNewPasskey = async () => {
   // ANCHOR: register-passkey
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('my-app.com', 'My App', config)
+  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
 
   const response = await passkey.register({ label: 'personal' })
 
@@ -130,7 +130,7 @@ const registerNewPasskey = async () => {
 const listLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
   const sdkConfig = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('my-app.com', 'My App', sdkConfig, {
+  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', sdkConfig, {
     // Default label when register / signIn receive no label.
     defaultLabel: 'personal',
   })
@@ -147,7 +147,7 @@ const listLabels = async (): Promise<string[]> => {
 const storeLabel = async () => {
   // ANCHOR: store-label
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('my-app.com', 'My App', config)
+  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
 
   // For a new label on an existing identity, sign in with that label first.
   await passkey.labels().store('personal')
@@ -158,7 +158,7 @@ const storeLabel = async () => {
 const checkDomain = async () => {
   // ANCHOR: domain-association
   // Lower-level provider call. Most hosts use `checkAvailability` instead.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const result = await prfProvider.checkDomainAssociation()
 
   switch (result.kind) {
@@ -184,7 +184,7 @@ const recoverFromAlreadyExists = async () => {
   // ANCHOR: recover-already-exists
   // Recovery: flip to sign-in so the OS picker surfaces the existing credential.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('my-app.com', 'My App', config)
+  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
 
   try {
     await passkey.register({
@@ -209,7 +209,7 @@ const handleTimeout = async () => {
   // ANCHOR: handle-timeout
   // Timeout is distinct from a cancel: surface a re-prompt UI.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('my-app.com', 'My App', config)
+  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
 
   try {
     return await passkey.signIn({ label: 'personal' })
@@ -244,8 +244,8 @@ const withCredentialRegistry = async () => {
     }
 
   const prfProvider = new PasskeyProvider({
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     credentialRegistry: registry,
     onRegistryError: (op, err) => console.warn('registry', op, err),
   })

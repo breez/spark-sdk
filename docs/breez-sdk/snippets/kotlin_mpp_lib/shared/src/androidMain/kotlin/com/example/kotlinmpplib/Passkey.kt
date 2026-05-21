@@ -49,13 +49,13 @@ class CustomPrfProvider : PrfProvider {
 class PasskeySnippets(private val activity: Activity) {
     suspend fun checkAvailability() {
         // ANCHOR: check-availability
-        // Pass `PasskeyProvider.BREEZ_RP_ID` instead of "my-app.com" if your
+        // Pass `PasskeyProvider.BREEZ_RP_ID` instead of "<your-rp-domain>" if your
         // app is Breez-registered (shares credentials with other Breez apps).
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
             sdkConfig = config,
         )
 
@@ -75,8 +75,8 @@ class PasskeySnippets(private val activity: Activity) {
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
             sdkConfig = config,
         )
         // ANCHOR_END: setup-client
@@ -89,8 +89,8 @@ class PasskeySnippets(private val activity: Activity) {
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
             sdkConfig = config,
         )
 
@@ -115,8 +115,8 @@ class PasskeySnippets(private val activity: Activity) {
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
             sdkConfig = config,
         )
 
@@ -129,8 +129,8 @@ class PasskeySnippets(private val activity: Activity) {
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
             sdkConfig = config,
         )
 
@@ -150,8 +150,8 @@ class PasskeySnippets(private val activity: Activity) {
         val sdkConfig = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
             sdkConfig = sdkConfig,
             // Default label when register / signIn receive no label.
             passkeyConfig = PasskeyConfig(defaultLabel = "personal"),
@@ -170,8 +170,8 @@ class PasskeySnippets(private val activity: Activity) {
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
             sdkConfig = config,
         )
 
@@ -187,8 +187,8 @@ class PasskeySnippets(private val activity: Activity) {
         // (see the `check-availability` snippet above).
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
         )
         val result = prfProvider.checkDomainAssociation()
 
@@ -207,8 +207,8 @@ class PasskeySnippets(private val activity: Activity) {
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
             sdkConfig = config,
         )
 
@@ -232,8 +232,8 @@ class PasskeySnippets(private val activity: Activity) {
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
             sdkConfig = config,
         )
 
@@ -255,8 +255,8 @@ class PasskeySnippets(private val activity: Activity) {
         val registry = BlockStoreCredentialRegistry()
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            rpId = "my-app.com",
-            rpName = "My App",
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
             credentialRegistry = registry,
             onRegistryError = { op, err -> /* log */ },
         )

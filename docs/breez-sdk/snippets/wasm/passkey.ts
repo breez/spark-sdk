@@ -45,7 +45,7 @@ const checkAvailability = async () => {
   // ANCHOR: check-availability
   // `rpId` is required. Pass your app's domain, or
   // `PasskeyProvider.BREEZ_RP_ID` if your app is Breez-registered.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
   // checkAvailability collapses isSupported + checkDomainAssociation
@@ -73,7 +73,7 @@ const checkAvailability = async () => {
 const setupPasskeyClient = () => {
   // ANCHOR: setup-client
   // Web constructs PasskeyClient directly (no createPasskeyClient factory).
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
   // ANCHOR_END: setup-client
   return passkey
@@ -81,7 +81,7 @@ const setupPasskeyClient = () => {
 
 const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
   // signIn derives the seed for an existing credential. With
@@ -98,7 +98,7 @@ const connectWithPasskey = async () => {
 const signInExistingUser = async () => {
   // ANCHOR: sign-in
   // Returning-user-only sign-in. No fall-through to register.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
   return await passkey.signIn({ label: 'personal' })
@@ -111,7 +111,7 @@ const registerNewPasskey = async () => {
   // the credential AND derives the seed in one orchestrated call.
   // On iOS+Android this is 2 OS prompts total (1 create + 1 dual-salt
   // assert) thanks to the SDK's bulk-PRF path.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
   const response = await passkey.register({ label: 'personal' })
@@ -132,7 +132,7 @@ const registerNewPasskey = async () => {
 
 const listLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const config: PasskeyConfig = {
     // Optional: override the default label used when register /
     // signIn receive `label = undefined`. Falls back to the SDK's
@@ -157,7 +157,7 @@ const listLabels = async (): Promise<string[]> => {
 
 const storeLabel = async () => {
   // ANCHOR: store-label
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
   // For a new label on an existing identity, call signIn(newLabel)
@@ -171,7 +171,7 @@ const checkDomain = async () => {
   // ANCHOR: domain-association
   // Verify Apple AASA / Android Asset Links / Web Related Origins
   // before the first WebAuthn ceremony. Diagnostic only: never blocks.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const result = await prfProvider.checkDomainAssociation()
 
   switch (result.kind) {
@@ -201,7 +201,7 @@ const recoverFromAlreadyExists = async () => {
   // Route the user to the sign-in path: the OS picker will surface
   // the existing credential and the SDK's identity cache will warm
   // up on the assertion.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
   try {
@@ -230,7 +230,7 @@ const handleTimeout = async () => {
   // surface a re-prompt UI without treating it as the user opting
   // out. The SDK fires PasskeyTimedOutError when assertion or
   // register elapsed time crosses 55_000ms.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
   try {
@@ -256,8 +256,8 @@ const withCredentialRegistry = async () => {
   // passkey guide; copy-paste into your app code.
   const registry = new LocalStorageCredentialRegistry()
   const prfProvider = new PasskeyProvider({
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     credentialRegistry: registry,
     onRegistryError: (op, err) => console.warn('registry', op, err),
   })
