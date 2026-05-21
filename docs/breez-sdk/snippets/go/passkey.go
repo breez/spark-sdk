@@ -71,6 +71,14 @@ func CheckAvailability() {
 	// ANCHOR_END: check-availability
 }
 
+func SetupPasskeyClient() *breez_sdk_spark.PasskeyClient {
+	// ANCHOR: setup-client
+	prfProvider := &CustomPrfProvider{}
+	apiKey := "<breez api key>"
+	return breez_sdk_spark.NewPasskeyClient(prfProvider, &apiKey, nil)
+	// ANCHOR_END: setup-client
+}
+
 func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	// ANCHOR: connect-with-passkey
 	// Single-CTA onboarding: silent sign-in for a returning user,

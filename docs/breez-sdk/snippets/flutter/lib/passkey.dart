@@ -57,6 +57,19 @@ Future<void> checkAvailability() async {
   // ANCHOR_END: check-availability
 }
 
+PasskeyClient setupPasskeyClient() {
+  // ANCHOR: setup-client
+  final config = defaultConfig(network: Network.mainnet)
+      .copyWith(apiKey: '<breez api key>');
+  final passkey = createPasskeyClient(
+    rpId: 'my-app.com',
+    rpName: 'My App',
+    sdkConfig: config,
+  );
+  // ANCHOR_END: setup-client
+  return passkey;
+}
+
 Future<BreezSdk> connectWithPasskey() async {
   // ANCHOR: connect-with-passkey
   // Single-CTA onboarding: silent sign-in, fall through to register.

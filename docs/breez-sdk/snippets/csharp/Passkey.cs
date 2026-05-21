@@ -57,6 +57,14 @@ namespace BreezSdkSnippets
             }
             // ANCHOR_END: check-availability
         }
+
+        PasskeyClient SetupPasskeyClient()
+        {
+            // ANCHOR: setup-client
+            var prfProvider = new CustomPrfProvider();
+            return new PasskeyClient(prfProvider, "<breez api key>", null);
+            // ANCHOR_END: setup-client
+        }
     }
 
     class PasskeySnippets

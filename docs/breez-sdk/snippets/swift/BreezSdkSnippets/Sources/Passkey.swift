@@ -71,6 +71,15 @@ func checkAvailability() async throws {
     // ANCHOR_END: check-availability
 }
 
+func setupPasskeyClient() -> PasskeyClient {
+    // ANCHOR: setup-client
+    var config = defaultConfig(network: .mainnet)
+    config.apiKey = "<breez api key>"
+    let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
+    // ANCHOR_END: setup-client
+    return passkey
+}
+
 func connectWithPasskey() async throws -> BreezSdk {
     // ANCHOR: connect-with-passkey
     // Single-CTA onboarding: silent sign-in, fall through to register.
