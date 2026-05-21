@@ -1,6 +1,6 @@
 # CredentialRegistry
 
-The SDK ships only the contract: a `CredentialRegistry` interface on each platform. Bring your own implementation. Registry calls are best-effort with a 3 second timeout: failures fire `onRegistryError` (when set) and the WebAuthn ceremony proceeds. Pre-tracking credentials get seeded on first assertion so subsequent registrations correctly hit the platform-level "already exists" guard via `excludeCredentialIds`.
+`CredentialRegistry` is an optional app-side store of credential IDs your app has registered. The SDK uses it on register (to populate `excludeCredentialIds` so the OS refuses to create a duplicate) and on sign-in (to populate `allowCredentialIds` so the OS surfaces the right credential in the picker). You implement it yourself, backed by whatever local storage fits your platform; the SDK does not ship a default.
 
 ## Interface
 
@@ -47,7 +47,7 @@ Dedup behavior on an empty `excludeCredentialIds`:
 
 Reserve `clear()` for explicit factory-reset flows where orphan credentials are acceptable.
 
-## Error semantics
+## Error handling
 
 - Every registry call is bounded by a 3 second timeout. Slow backends never block the WebAuthn ceremony.
 - Failures and timeouts are logged (Rust `tracing::warn`, Swift `os_log`, Kotlin `Log.w`, JS `console.warn`) and surfaced via the per-provider `onRegistryError` callback when set. `read` defaults to an empty list; `add`/`remove`/`clear` fire-and-forget.
