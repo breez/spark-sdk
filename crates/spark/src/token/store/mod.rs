@@ -107,8 +107,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
 
         // Build new pools from refresh data, excluding spent outputs
         let now = SystemTime::now();
-        let spent_outpoints: HashSet<OutPoint> =
-            state.spent_outpoints.keys().cloned().collect();
+        let spent_outpoints: HashSet<OutPoint> = state.spent_outpoints.keys().cloned().collect();
         for to in token_outputs {
             let identifier = to.metadata.identifier.clone();
             let entry = state
@@ -384,13 +383,12 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             {
                 Some(existing) => {
                     for o in &token_outputs.outputs {
-                        existing
-                            .outputs
-                            .entry(outpoint_of(o))
-                            .or_insert_with(|| StoredTokenOutput {
+                        existing.outputs.entry(outpoint_of(o)).or_insert_with(|| {
+                            StoredTokenOutput {
                                 output: o.clone(),
                                 added_at: now,
-                            });
+                            }
+                        });
                     }
                 }
                 None => {
