@@ -6,17 +6,18 @@ For the full technical specification, see the <a target="_blank" href="https://g
 
 ## Setup
 
-### Relying Party ID
+Passkey Login uses a Relying Party (RP) domain to scope credentials. The domain `keys.breez.technology` serves as a shared RP that enables cross-app passkey sharing: applications opting in let users access the same credentials across different platforms and apps. The platform authenticators (browsers, iOS, Android) verify the RP claim against well-known configuration files served from that domain.
 
-The domain `keys.breez.technology` serves as a common Relying Party (RP) that enables cross-app passkey sharing. Applications that use this RP ID allow users to access the same passkey credentials across different platforms and apps.
+### Hosting the configuration files
 
-To enable this cross-domain passkey sharing, `keys.breez.technology` serves three configuration files that declare which origins and apps are authorized to use it as an RP ID.
+You have two choices for where the well-known files live:
 
-#### Web: Related Origins
+- **Use Breez's domain.** [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to register your app under `keys.breez.technology`. Breez hosts the files; pass `PasskeyProvider.BREEZ_RP_ID` as your `rpId` and you do nothing else on the hosting side.
+- **Use your own domain.** Host the files yourself at the paths listed below and pass your own `rpId` to `PasskeyProvider` instead of `BREEZ_RP_ID`. Each platform's file lives at a well-known path on the RP domain's HTTPS root.
 
-**File**: `https://keys.breez.technology/.well-known/webauthn`
+### Web: Related Origins
 
-Declares which web origins can use the centralized RP ID for WebAuthn operations:
+**Path**: `/.well-known/webauthn`
 
 ```json
 {
@@ -27,19 +28,21 @@ Declares which web origins can use the centralized RP ID for WebAuthn operations
 }
 ```
 
-**Default RP domain**: [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to register your web origin. Breez manages the configuration files for registered apps.
+**Requirements**: Chrome 116+, Safari 18+, Edge 116+. HTTPS required (localhost exempt during development).
 
-**Custom RP domain**: Host this file on your own domain at `/.well-known/webauthn`.
+<div class="warning">
+<h4>Related Origins: developer notes</h4>
 
-**Requirements**:
-- Chrome 116+, Safari 18+, Edge 116+
-- HTTPS (localhost is exempt during development)
+**Firefox does not implement Related Origins.** Users on Firefox can only use credentials whose RP ID matches their current origin's eTLD+1. If you need Firefox support across multiple domains, host your own RP ID per domain or accept that Firefox users register fresh on each origin.
 
-#### Android: Asset Links
+**Chrome and Edge cap the number of distinct labels** in `related_origins` (around 5 distinct eTLD+1 labels per RP). For larger app families, partition into multiple RP IDs.
 
-**File**: `https://keys.breez.technology/.well-known/assetlinks.json`
+**Browsers cache the `.well-known/webauthn` file aggressively.** Adding or removing an origin won't propagate immediately; expect a delay until the cache TTL expires.
+</div>
 
-Establishes digital asset links between the domain and Android applications:
+### Android: Asset Links
+
+**Path**: `/.well-known/assetlinks.json`
 
 ```json
 [
@@ -59,19 +62,13 @@ Establishes digital asset links between the domain and Android applications:
 ]
 ```
 
-**Default RP domain**: [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to register your Android app. Breez manages the configuration files for registered apps.
+Replace `com.example.yourapp` with your application's package name and the fingerprint with your app's signing certificate SHA256. See the <a target="_blank" href="https://developers.google.com/digital-asset-links/v1/getting-started">Digital Asset Links</a> documentation and <a target="_blank" href="https://developer.android.com/identity/credential-manager/prerequisites">Credential Manager prerequisites</a>.
 
-**Custom RP domain**: Host this file on your own domain at `/.well-known/assetlinks.json`. Replace `com.example.yourapp` with your application package name and the fingerprint with your app's signing certificate SHA256 fingerprint. See the <a target="_blank" href="https://developers.google.com/digital-asset-links/v1/getting-started">Digital Asset Links</a> documentation and <a target="_blank" href="https://developer.android.com/identity/credential-manager/prerequisites">Credential Manager prerequisites</a> for details.
+**Requirements**: Android 9+ (API 28) with Google Play Services, or Android 14+ (API 34) with any compatible credential provider. `compileSdkVersion` must be at least 34 (required by the `androidx.credentials` library, not the device).
 
-**Requirements**:
-- Android 9+ (API 28) with Google Play Services, or Android 14+ (API 34) with any compatible credential provider
-- `compileSdkVersion` must be at least 34 (required by the `androidx.credentials` library, not the device)
+### iOS / macOS: Apple App Site Association
 
-#### iOS / macOS: Apple App Site Association
-
-**File**: `https://keys.breez.technology/.well-known/apple-app-site-association`
-
-Connects the domain to iOS and macOS applications for passkey sharing:
+**Path**: `/.well-known/apple-app-site-association`
 
 ```json
 {
@@ -83,19 +80,14 @@ Connects the domain to iOS and macOS applications for passkey sharing:
 }
 ```
 
-Your app must have the <a target="_blank" href="https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.associated-domains">Associated Domains</a> capability enabled. In Xcode, go to **Signing & Capabilities** → add **Associated Domains** → add the entry `webcredentials:keys.breez.technology`.
+Replace `TEAMID` with your Apple Developer Team ID and `com.example.yourapp` with your bundle identifier. Your app must also declare the <a target="_blank" href="https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.associated-domains">Associated Domains</a> capability in Xcode (**Signing & Capabilities** → **Associated Domains** → `webcredentials:<your-rp-domain>`).
+
+**Requirements**: iOS 18.0+, macOS 15.0+.
 
 <div class="warning">
 <h4>Expo Managed Workflow</h4>
 If you're using Expo, the Breez SDK plugin can configure this automatically. See the <a href="install_react_native.html#plugin-options">React Native/Expo installation guide</a> for details on the <code>enablePasskey</code> option.
 </div>
-
-**Default RP domain**: [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to register your iOS app. Breez manages the configuration files for registered apps.
-
-**Custom RP domain**: Host this file on your own domain at `/.well-known/apple-app-site-association`. Replace `TEAMID` with your Apple Developer Team ID and `com.example.yourapp` with your bundle identifier.
-
-**Requirements**:
-- iOS 18.0+, macOS 15.0+
 
 <div class="warning">
 <h4>Associated Domains entitlement must be enabled</h4>
