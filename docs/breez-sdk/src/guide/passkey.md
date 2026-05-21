@@ -114,7 +114,7 @@ Without the Associated Domains entitlement, passkey operations will fail with a 
 
 ## Configuring the PasskeyClient
 
-On every platform that ships a built-in `PasskeyProvider` (Swift, Kotlin, Flutter, React Native, Web), the recommended setup is the {{#name createPasskeyClient}} convenience factory. It wires up the platform passkey provider with sensible defaults, forwards the Breez API key from your SDK `Config`, and returns a ready-to-use {{#name PasskeyClient}}:
+On Swift, Kotlin, Flutter, and React Native, the recommended setup is the {{#name createPasskeyClient}} convenience factory. It wires up the platform passkey provider with sensible defaults, forwards the Breez API key from your SDK `Config`, and returns a ready-to-use {{#name PasskeyClient}}:
 
 - **`rpId`**: Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` (= `keys.breez.technology`) if your app is Breez-registered. Required because changing it later strands existing credentials.
 - **`rpName`**: Display name shown to the user in the OS passkey picker and credential-management UIs (iCloud Keychain, Google Password Manager, 1Password, etc.) when choosing a credential. Required.
@@ -124,6 +124,12 @@ On every platform that ships a built-in `PasskeyProvider` (Swift, Kotlin, Flutte
 The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.
 
 For custom PRF providers (CLI YubiKey, FIDO2, file-backed) or non-default platform options (`credentialRegistry`, `userName`, etc.), see the [Advanced](#advanced) section below.
+
+<div class="warning">
+<h4>Web limitation</h4>
+
+`createPasskeyClient` is not surfaced on the WASM target. The web SDK still ships a built-in `PasskeyProvider`, but it is constructed directly: `new PasskeyClient(new PasskeyProvider({ rpId, rpName }), breezApiKey, passkeyConfig)`. See the WASM tab in the snippets below for the runnable shape.
+</div>
 
 ## Checking passkey availability
 
@@ -148,11 +154,13 @@ For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClien
 
 Pass `wallet.seed` to {{#name connect}} in either case.
 
-### Web: manual catch-and-register
+<div class="warning">
+<h4>Web limitation</h4>
 
-`connect_with_passkey` is not surfaced on the WASM target: it depends on `preferImmediatelyAvailableCredentials` for a silent fast-fail, and the web equivalent (`mediation: 'immediate'` / `uiMode: 'immediate'`) is not yet stable cross-browser. On web, implement the equivalent flow manually by calling `signIn` and catching the credential-not-found error:
+`connect_with_passkey` is not surfaced on the WASM target. The unified flow depends on `preferImmediatelyAvailableCredentials` for a silent fast-fail, and the web equivalent (`mediation: 'immediate'` / `uiMode: 'immediate'`) is not yet stable cross-browser. On web, implement the equivalent flow manually by calling `signIn` and catching the credential-not-found error:
 
 {{#tabs passkey:signin-fallback-register}}
+</div>
 
 <h2 id="listing-labels">
     <a class="header" href="#listing-labels">Listing labels</a>
@@ -219,7 +227,11 @@ The convenience factory only takes `rpId` and `rpName`. The underlying `PasskeyP
 | {{#name user_display_name}} | {{#name user_name}} | Primary label shown in passkey picker on platforms that surface a separate display name (Android via WebAuthn JSON `user.displayName`, web via WebAuthn L3). iOS ignores. |
 | {{#name credential_registry}} | none | Opt-in app-side store of known credential IDs. See [CredentialRegistry](#credentialregistry) below. |
 
-Built-in providers are not available for C#, Go, and Python: integrators on those bindings implement their own `PrfProvider` (see [Custom PrfProvider](#custom-prfprovider) below).
+<div class="warning">
+<h4>C# / Go / Python limitation</h4>
+
+The SDK does not ship a built-in `PasskeyProvider` for C#, Go, or Python (no native passkey API to wrap on those targets). Integrators on those bindings implement their own `PrfProvider` and pass it to `PasskeyClient::new(...)` directly. See [Custom PrfProvider](#custom-prfprovider) below.
+</div>
 
 ### Built-in behaviours
 
