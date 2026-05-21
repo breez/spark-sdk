@@ -12,6 +12,7 @@ import {
   PasskeyAlreadyExistsError,
   PasskeyProvider,
   PasskeyTimedOutError,
+  createPasskeyClient,
 } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
 
 // ANCHOR: implement-prf-provider
@@ -43,10 +44,12 @@ class CustomPrfProvider {
 
 const checkAvailability = async () => {
   // ANCHOR: check-availability
-  // `rpId` is required. Pass your app's domain, or
-  // `PasskeyProvider.BREEZ_RP_ID` if your app is Breez-registered.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  // `createPasskeyClient` wires up the built-in PasskeyProvider with
+  // your `rpId` / `rpName` and forwards the Breez API key from your
+  // SDK Config. Hosts using a custom PrfProvider construct
+  // `PasskeyClient` directly instead.
+  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
+  const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
   // checkAvailability collapses isSupported + checkDomainAssociation
   // into a single tagged value. Branch on the variant the host needs.
@@ -78,8 +81,8 @@ const connectWithPasskey = async () => {
   // attempt fast-fails (no UI) when no local credential exists; only
   // `CredentialNotFound` flips to register, all other errors (cancel
   // / timeout / configuration) propagate unchanged.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
+  const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
   const response = await passkey.connectWithPasskey({
     label: 'personal',
@@ -94,7 +97,6 @@ const connectWithPasskey = async () => {
     const _persist = response.registeredCredential.credentialId
   }
 
-  const config = defaultConfig(Network.Mainnet)
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })
   // ANCHOR_END: connect-with-passkey
   return sdk
@@ -105,8 +107,8 @@ const registerNewPasskey = async () => {
   // For a brand-new user: register() creates the credential AND derives
   // the wallet seed in one orchestrated call. 2 OS prompts on iOS+Android
   // (1 create + 1 dual-salt assert) thanks to the SDK's bulk-PRF path.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
+  const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
   const response = await passkey.register({ label: 'personal' })
 
@@ -118,7 +120,6 @@ const registerNewPasskey = async () => {
     userId: response.credential.userId,
   }
 
-  const config = defaultConfig(Network.Mainnet)
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })
   // ANCHOR_END: register-passkey
   return sdk
@@ -126,16 +127,13 @@ const registerNewPasskey = async () => {
 
 const listLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
-  const config: PasskeyConfig = {
+  const sdkConfig = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
+  const passkey = createPasskeyClient('my-app.com', 'My App', sdkConfig, {
     // Optional: override the default wallet label used when register /
     // signIn receive `label = undefined`. Falls back to the SDK's
     // internal "Default" when unset.
     defaultLabel: 'personal',
-  }
-  // breezApiKey enables authenticated (NIP-42) Breez relay access for
-  // label sync; pass undefined for public-relay-only.
-  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', config)
+  })
 
   // signIn with discovery mode (no label) lists labels in the same
   // ceremony; subsequent labels().list() reads from the cached identity.
@@ -150,8 +148,8 @@ const listLabels = async (): Promise<string[]> => {
 
 const storeLabel = async () => {
   // ANCHOR: store-label
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
-  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
+  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
+  const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
   // For a new label on an existing identity, signIn(newLabel) warms
   // the identity cache, then labels().store() runs free off the cached
@@ -170,8 +168,10 @@ const isCredentialNotFound = (error: unknown): boolean => {
 
 const checkDomain = async () => {
   // ANCHOR: domain-association
-  // Verify Apple AASA / Android Asset Links before the first WebAuthn
-  // ceremony. Diagnostic only: never blocks.
+  // Lower-level diagnostic on the provider itself. Most hosts can
+  // reach this through `passkey.checkAvailability()`, which folds PRF
+  // support and domain association into a single call (see the
+  // `check-availability` snippet above).
   const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
   const result = await prfProvider.checkDomainAssociation()
 
@@ -201,8 +201,8 @@ const recoverFromAlreadyExists = async () => {
   // Route the user to the sign-in path: the OS picker will surface
   // the existing credential and the SDK's identity cache will warm
   // up on the assertion.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
+  const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
   try {
     await passkey.register({
@@ -230,8 +230,8 @@ const handleTimeout = async () => {
   // surface a re-prompt UI without treating it as the user opting
   // out. The SDK fires PasskeyTimedOutError when assertion or register
   // elapsed time crosses 55_000ms.
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
+  const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
   try {
     return await passkey.signIn({ label: 'personal' })
