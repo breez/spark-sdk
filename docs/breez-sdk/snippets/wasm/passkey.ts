@@ -229,7 +229,6 @@ const handleTimeout = async () => {
 
 
 const withCredentialRegistry = async () => {
-  // ANCHOR: with-credential-registry
   const registry = new LocalStorageCredentialRegistry()
   const prfProvider = new PasskeyProvider({
     rpId: '<your-rp-domain>',
@@ -241,7 +240,7 @@ const withCredentialRegistry = async () => {
 
   await passkey.signIn({ label: 'personal' })
   await passkey.register({ label: 'personal' })
-
+  // ANCHOR: with-credential-registry
   const known = await passkey.credentials().get()
   console.log(`Known credentials: ${known.length}`)
   // ANCHOR_END: with-credential-registry
