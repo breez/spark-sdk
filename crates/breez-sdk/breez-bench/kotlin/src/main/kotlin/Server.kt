@@ -25,6 +25,7 @@ import io.ktor.server.routing.routing
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.UUID
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
@@ -167,12 +168,26 @@ fun runServer(opts: Map<String, String>) {
                             }
                             else -> null
                         }
+                        // Pre-supply the idempotency key so the SDK records
+                        // it as `payment_id` on the bench send_payment span
+                        // before any child RPC span closes. Lets aggregate.py
+                        // correlate per-RPC close events back to this send.
+                        // Token sends reject idempotency_key (no-op there).
+                        val idempotencyKey = UUID.randomUUID().toString()
+                        t.paymentId = idempotencyKey
                         val tSendNs = System.nanoTime()
                         val sendResp = sdk.sendPayment(
-                            SendPaymentRequest(prepareResponse = prepared, options = sendOptions)
+                            SendPaymentRequest(
+                                prepareResponse = prepared,
+                                options = sendOptions,
+                                idempotencyKey = idempotencyKey,
+                            )
                         )
                         t.sendMs = (System.nanoTime() - tSendNs) / 1_000_000
-                        t.paymentId = sendResp.payment.id
+                        // sendResp.payment.id == idempotencyKey for the paths
+                        // exercised here (LN + spark transfer); reuse the
+                        // SDK-returned value rather than the local for the
+                        // wire response in case the SDK ever normalizes.
                         SendResult(
                             paymentId = sendResp.payment.id,
                             feeSats = feeOf(prepared.paymentMethod),

@@ -426,21 +426,6 @@ impl BreezSdk {
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
         self.maybe_ensure_spark_private_mode_initialized().await?;
-        // Pre-generate the idempotency key (= transfer_id = payment.id
-        // for non-token paths) so it can be recorded on the current
-        // span BEFORE any child RPC spans fire. Without this, child
-        // close-events render with an empty parent payment_id since
-        // tracing's `record()` only updates the parent's field for
-        // events that close *after* the call site — every RPC inside
-        // the send chain closes before we'd otherwise know the id.
-        // Token payments reject idempotency keys (see check in
-        // `maybe_convert_token_send_payment`), so leave them alone;
-        // their phase events will simply lack `payment_id` correlation.
-        let mut request = request;
-        let is_token = request.prepare_response.token_identifier.is_some();
-        if !is_token && request.idempotency_key.is_none() {
-            request.idempotency_key = Some(uuid::Uuid::now_v7().to_string());
-        }
         if let Some(key) = request.idempotency_key.as_deref() {
             tracing::Span::current().record("payment_id", key);
         }
