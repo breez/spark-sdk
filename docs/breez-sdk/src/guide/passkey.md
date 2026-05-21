@@ -144,9 +144,13 @@ The recommended UX on web is two buttons: a **Sign In** button calling `signIn` 
 
 <h3 id="direct-sign-in-register">Direct sign-in / register</h3>
 
-For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly. {{#name PasskeyClient.register}} alone is the right entry point for a deliberate "add a new label" UI on a returning user. {{#name PasskeyClient.sign_in}} alone is the right entry point for a "Sign In" button that should NEVER auto-create a credential (i.e. apps that present separate Sign-In and Create-Account flows).
+For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly. Use this path when separating Sign-In and Create-Account flows, or when adding a new label on a returning user without going through `connect_with_passkey`.
+
+Sign in to an existing credential:
 
 {{#tabs passkey:sign-in}}
+
+Register a fresh credential:
 
 {{#tabs passkey:register-passkey}}
 
@@ -190,9 +194,13 @@ The SDK collapses every passkey failure into seven actionable [`ErrorKind`](http
 
 Web also exposes typed exception classes (`PasskeyAlreadyExistsError`, `PasskeyTimedOutError`, `PasskeyCredentialNotFoundError`) as an alternative to `error.kind()` for `instanceof` matching.
 
-Two recovery paths are common enough to warrant runnable examples: `AlreadyExists` (flip to sign-in) and `Timeout` (sticky retry):
+Two recovery paths are common enough to warrant runnable examples.
+
+Flip to sign-in when register hits an existing credential (`AlreadyExists`):
 
 {{#tabs passkey:recover-already-exists}}
+
+Show a sticky retry UI when the OS biometric timeout fires (`Timeout`):
 
 {{#tabs passkey:handle-timeout}}
 
