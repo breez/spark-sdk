@@ -241,7 +241,8 @@ func withCredentialRegistry() async throws {
     let known = try await passkey.credentials().get()
     print("Known credentials: \(known.count)")
 
-    // On logout, clear the registry.
+    // `clear()` drops the app's bookkeeping; existing credentials
+    // stay on the OS / cloud authenticator and can be signed in with.
     try await passkey.credentials().clear()
     // ANCHOR_END: with-credential-registry
 }
