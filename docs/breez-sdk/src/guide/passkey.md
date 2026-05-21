@@ -142,21 +142,21 @@ Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The 
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.connect_with_passkey">API docs</a>
 </h2>
 
-The recommended flow depends on the platform. Mobile gets a single CTA backed by {{#name PasskeyClient.connect_with_passkey}}. Web gets two CTAs and lets the user pick. Hosts that want explicit control over each path call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly.
+The recommended flow depends on the platform. Mobile uses a single-call unified flow backed by {{#name PasskeyClient.connect_with_passkey}}. Web uses two buttons (Sign In and Create Account) and lets the user pick. Hosts that want explicit control over each path call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly.
 
-### Single CTA (mobile)
+### Unified flow (mobile)
 
-A single "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's `registered_credential` field doubles as the path discriminator: `Some` (with the new credential metadata) on the register path, `None` on the sign-in path.
+One "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's `registered_credential` field doubles as the path discriminator: `Some` (with the new credential metadata) on the register path, `None` on the sign-in path.
 
 Internally the silent attempt pins `preferImmediatelyAvailableCredentials = true` so the OS fast-fails (no UI, sub-300ms on iOS / Android) when no local credential exists; only {{#enum PrfProviderError::CredentialNotFound}} flips to register, all other errors (`Cancel`, `Timeout`, `Configuration`) propagate unchanged.
 
 {{#tabs passkey:connect-with-passkey}}
 
-### Two CTAs (web)
+### Two-button flow (web)
 
 `connect_with_passkey` is not surfaced on the WASM target. The unified flow needs a silent "no credential here" signal so it can fall through to register, and WebAuthn deliberately collapses that case into the same `NotAllowedError` as a user cancel for privacy reasons. There is no reliable way on web for the SDK to tell the two apart.
 
-The recommended UX on web is **two CTAs**: a "Sign In" button calling `signIn` and a separate "Create Account" / "Register" button calling `register`. Let the user pick the right one instead of trying to auto-detect. See the [Direct sign-in / register](#direct-sign-in-register) tabs below for the call shapes.
+The recommended UX on web is two buttons: a **Sign In** button calling `signIn` and a separate **Create Account** button calling `register`. Let the user pick the right one instead of trying to auto-detect. See the [Direct sign-in / register](#direct-sign-in-register) tabs below for the call shapes.
 
 <h3 id="direct-sign-in-register">Direct sign-in / register</h3>
 
