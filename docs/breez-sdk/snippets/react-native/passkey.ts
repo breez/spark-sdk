@@ -69,6 +69,14 @@ const checkAvailability = async () => {
   // ANCHOR_END: check-availability
 }
 
+const setupPasskeyClient = () => {
+  // ANCHOR: setup-client
+  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
+  const passkey = createPasskeyClient('my-app.com', 'My App', config)
+  // ANCHOR_END: setup-client
+  return passkey
+}
+
 const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
   // Single-CTA onboarding: silent sign-in, fall through to register.

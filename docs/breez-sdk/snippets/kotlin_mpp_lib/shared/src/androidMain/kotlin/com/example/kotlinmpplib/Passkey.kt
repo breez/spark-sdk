@@ -70,6 +70,19 @@ class PasskeySnippets(private val activity: Activity) {
         // ANCHOR_END: check-availability
     }
 
+    fun setupPasskeyClient(): PasskeyClient {
+        // ANCHOR: setup-client
+        val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
+        val passkey = createPasskeyClient(
+            activityProvider = { activity },
+            rpId = "my-app.com",
+            rpName = "My App",
+            sdkConfig = config,
+        )
+        // ANCHOR_END: setup-client
+        return passkey
+    }
+
     suspend fun connectWithPasskey(): BreezSdk {
         // ANCHOR: connect-with-passkey
         // Single-CTA onboarding: silent sign-in, fall through to register.

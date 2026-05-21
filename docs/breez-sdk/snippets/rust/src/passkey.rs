@@ -79,6 +79,13 @@ async fn check_availability() -> Result<()> {
     Ok(())
 }
 
+fn setup_passkey_client() -> PasskeyClient {
+    // ANCHOR: setup-client
+    let prf_provider = Arc::new(CustomPrfProvider);
+    PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None)
+    // ANCHOR_END: setup-client
+}
+
 async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
     // ANCHOR: connect-with-passkey
     // Single-CTA onboarding: silent sign-in, fall through to register.

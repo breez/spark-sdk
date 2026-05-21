@@ -70,6 +70,15 @@ const checkAvailability = async () => {
   // ANCHOR_END: check-availability
 }
 
+const setupPasskeyClient = () => {
+  // ANCHOR: setup-client
+  // Web constructs PasskeyClient directly (no createPasskeyClient factory).
+  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
+  // ANCHOR_END: setup-client
+  return passkey
+}
+
 const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
   const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })

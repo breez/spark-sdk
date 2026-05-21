@@ -96,22 +96,22 @@ Without the Associated Domains entitlement, passkey operations will fail with a 
 
 ## Configuring the PasskeyClient
 
-On Swift, Kotlin, Flutter, and React Native, the recommended setup is the {{#name createPasskeyClient}} convenience factory. It wires up the platform passkey provider with sensible defaults, forwards the Breez API key from your SDK `Config`, and returns a ready-to-use {{#name PasskeyClient}}:
+{{#name PasskeyClient}} is the entry point for every passkey-derived wallet operation. It composes a {{#name PrfProvider}} (the platform-specific bridge to WebAuthn / Credential Manager / AuthenticationServices) with the SDK's internal Nostr-backed label store, then exposes register / sign-in / connect / labels / credentials to your app code. Construct one per app session and reuse it.
+
+The recommended setup is the {{#name createPasskeyClient}} convenience factory, which builds the platform-default {{#name PasskeyProvider}} and forwards the Breez API key from your SDK {{#name Config}}:
+
+{{#tabs passkey:setup-client}}
+
+Parameters:
 
 - **`rpId`**: Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` (= `keys.breez.technology`) if your app is Breez-registered. Required because changing it later strands existing credentials.
 - **`rpName`**: Display name shown to the user in the OS passkey picker and credential-management UIs (iCloud Keychain, Google Password Manager, 1Password, etc.) when choosing a credential. Required.
 - **`sdkConfig`**: Your main SDK {{#name Config}}. The factory forwards `sdkConfig.api_key` to the Breez relay for authenticated (<a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>) label storage. Hosts without an API key get public-relay-only label sync.
-- **`passkeyConfig`** (optional): Carries {{#name default_label}}, the wallet label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive no label. Falls back to the SDK's internal `"Default"` when unset.
+- **`passkeyConfig`** (optional): Carries {{#name default_label}}, the label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive no label. Falls back to the SDK's internal `"Default"` when unset.
 
 The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.
 
-For custom PRF providers (CLI YubiKey, FIDO2, file-backed) or non-default platform options (`credentialRegistry`, `userName`, etc.), see the [Advanced](#advanced) section below.
-
-<div class="warning">
-<h4>Web limitation</h4>
-
-`createPasskeyClient` is not surfaced on the WASM target. The web SDK still ships a built-in `PasskeyProvider`, but it is constructed directly: `new PasskeyClient(new PasskeyProvider({ rpId, rpName }), breezApiKey, passkeyConfig)`. See the WASM tab in the snippets below for the runnable shape.
-</div>
+`createPasskeyClient` is not surfaced on web; the WASM tab above shows the equivalent direct construction. For custom PRF providers (CLI YubiKey, FIDO2, file-backed) or non-default platform options (`credentialRegistry`, `userName`, etc.), see the [Advanced](#advanced) section below.
 
 ## Checking passkey availability
 

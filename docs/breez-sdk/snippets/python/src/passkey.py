@@ -71,6 +71,14 @@ async def check_availability():
     # ANCHOR_END: check-availability
 
 
+def setup_passkey_client() -> PasskeyClient:
+    # ANCHOR: setup-client
+    prf_provider = CustomPrfProvider()
+    passkey = PasskeyClient(prf_provider, "<breez api key>", None)
+    # ANCHOR_END: setup-client
+    return passkey
+
+
 async def connect_with_passkey():
     # ANCHOR: connect-with-passkey
     # Single-CTA onboarding: silent sign-in for a returning user,
