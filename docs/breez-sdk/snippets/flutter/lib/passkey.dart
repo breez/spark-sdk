@@ -3,9 +3,8 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 // ANCHOR: implement-prf-provider
 // Implement custom callbacks if the built-in PasskeyProvider doesn't
-// fit your needs. Six callbacks: deriveSeeds for derivation,
-// createPasskey for registration, isSupported for availability, and
-// get/remove/clearKnownCredentialIds for the credentials() sub-object.
+// fit your needs. Pass them to PasskeyClient.fromCallbacks instead
+// of the regular PasskeyClient(provider, ...) constructor.
 Future<List<Uint8List>> deriveSeeds(DeriveSeedsRequest request) async {
   // Call platform passkey API with PRF extension. Use the dual-salt
   // ceremony when the authenticator supports it (one OS prompt for N
@@ -40,15 +39,7 @@ Future<void> checkAvailability() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-    breezApiKey: '<breez api key>',
-  );
+  final passkey = PasskeyClient(prfProvider, breezApiKey: '<breez api key>');
 
   final availability = await passkey.checkAvailability();
   if (availability is PasskeyAvailability_Available) {
@@ -69,15 +60,7 @@ PasskeyClient setupPasskeyClient() {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-    breezApiKey: '<breez api key>',
-  );
+  final passkey = PasskeyClient(prfProvider, breezApiKey: '<breez api key>');
   // ANCHOR_END: setup-client
   return passkey;
 }
@@ -91,15 +74,7 @@ Future<BreezSdk> connectWithPasskey() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-    breezApiKey: config.apiKey,
-  );
+  final passkey = PasskeyClient(prfProvider, breezApiKey: config.apiKey);
 
   final response = await passkey.connectWithPasskey(
     request: ConnectWithPasskeyRequest(label: 'personal', excludeCredentialIds: const []),
@@ -126,15 +101,7 @@ Future<SignInResponse> signInExistingUser() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-    breezApiKey: '<breez api key>',
-  );
+  final passkey = PasskeyClient(prfProvider, breezApiKey: '<breez api key>');
 
   return await passkey.signIn(request: SignInRequest(label: 'personal'));
   // ANCHOR_END: sign-in
@@ -148,15 +115,7 @@ Future<BreezSdk> registerNewPasskey() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-    breezApiKey: config.apiKey,
-  );
+  final passkey = PasskeyClient(prfProvider, breezApiKey: config.apiKey);
 
   final response = await passkey.register(
     request: RegisterRequest(label: 'personal'),
@@ -178,15 +137,7 @@ Future<List<String>> listLabels() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-    breezApiKey: '<breez api key>',
-  );
+  final passkey = PasskeyClient(prfProvider, breezApiKey: '<breez api key>');
   // ANCHOR: list-labels
   final labels = await passkey.labels().list();
   for (final label in labels) {
@@ -201,15 +152,7 @@ Future<void> storeLabel() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-    breezApiKey: '<breez api key>',
-  );
+  final passkey = PasskeyClient(prfProvider, breezApiKey: '<breez api key>');
   // ANCHOR: store-label
   await passkey.labels().store(label: "personal");
   // ANCHOR_END: store-label
@@ -239,15 +182,7 @@ Future<Wallet?> recoverFromAlreadyExists() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-    breezApiKey: '<breez api key>',
-  );
+  final passkey = PasskeyClient(prfProvider, breezApiKey: '<breez api key>');
 
   try {
     final response = await passkey.register(
@@ -276,15 +211,7 @@ Future<SignInResponse> handleTimeout() async {
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-    breezApiKey: '<breez api key>',
-  );
+  final passkey = PasskeyClient(prfProvider, breezApiKey: '<breez api key>');
 
   try {
     return await passkey.signIn(
@@ -313,7 +240,6 @@ class StubCredentialRegistry implements CredentialRegistry {
 }
 
 Future<void> withCredentialRegistry() async {
-  // ANCHOR: with-credential-registry
   final registry = StubCredentialRegistry();
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(
     rpId: '<your-rp-domain>',
@@ -321,15 +247,9 @@ Future<void> withCredentialRegistry() async {
     credentialRegistry: registry,
     onRegistryError: (op, err) {},
   ));
-  final passkey = PasskeyClient(
-    deriveSeeds: prfProvider.deriveSeeds,
-    isSupported: prfProvider.isSupported,
-    createPasskey: prfProvider.createPasskey,
-    getKnownCredentialIds: prfProvider.getKnownCredentialIds,
-    removeKnownCredentialId: prfProvider.removeKnownCredentialId,
-    clearKnownCredentialIds: prfProvider.clearKnownCredentialIds,
-  );
-
+  final passkey = PasskeyClient(prfProvider);
+  // ANCHOR: with-credential-registry
   final known = await passkey.credentials().get();
+  print("Known credentials: ${known.length}");
   // ANCHOR_END: with-credential-registry
 }
