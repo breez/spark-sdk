@@ -252,9 +252,6 @@ class PasskeySnippets(private val activity: Activity) {
         // Inspect / mutate via the credentials() sub-object.
         val known = passkey.credentials().get()
 
-        // `clear()` drops the app's bookkeeping; existing credentials
-        // stay on the OS / cloud authenticator and can be signed in with.
-        passkey.credentials().clear()
         // ANCHOR_END: with-credential-registry
     }
 }

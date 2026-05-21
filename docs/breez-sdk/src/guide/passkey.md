@@ -506,9 +506,13 @@ const provider = new PasskeyProvider({
 
 #### Using credentials() with a registry
 
-Once a registry is wired in, the SDK auto-merges its contents into `excludeCredentialIds` on register and `allowCredentialIds` on sign-in. Hosts can also inspect and mutate the stored set directly via the {{#name PasskeyClient.credentials}} sub-object. The typical use case is a settings page that lists registered passkeys on this device, with per-row remove. `clear()` only wipes the app's own bookkeeping: existing credentials remain on the OS / cloud authenticator (iCloud Keychain, Google Password Manager, etc.) and the user can still sign in with them. Don't call `clear()` on a normal sign-out: it strands the host's `excludeCredentialIds` tracking, so the next `register` call can mint a duplicate credential alongside the existing one.
+Once a registry is wired in, the SDK auto-merges its contents into `excludeCredentialIds` on register and `allowCredentialIds` on sign-in. Hosts can also inspect and mutate the stored set directly via the {{#name PasskeyClient.credentials}} sub-object, typically to back a settings page that lists registered passkeys on this device with per-row remove.
 
 {{#tabs passkey:with-credential-registry}}
+
+#### When (not) to call `credentials().clear()`
+
+`clear()` wipes the app's bookkeeping only: existing credentials remain on the OS / cloud authenticator (iCloud Keychain, Google Password Manager, etc.) and the user can still sign in with them. Don't call it on a normal sign-out: it strands the host's `excludeCredentialIds` tracking, so the next `register` call can mint a duplicate credential alongside the existing one. Reserve `clear()` for explicit "factory reset" flows.
 
 #### CredentialRegistry error semantics
 
