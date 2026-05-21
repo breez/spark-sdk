@@ -42,8 +42,16 @@ jobs:
         run: make fmt-check
 
   itest:
-    name: Integration test
+    name: Integration test (${{ matrix.backend.name }})
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.backend.allow-failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        backend:
+          - { name: in-memory, target: itest,             allow-failure: false }
+          - { name: postgres,  target: spark-itest-pg,    allow-failure: true }
+          - { name: mysql,     target: spark-itest-mysql, allow-failure: true }
     env:
       FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
       FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
@@ -56,7 +64,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Tests
-        run: make itest
+        run: make ${{ matrix.backend.target }}
 
   test:
     name: Test
