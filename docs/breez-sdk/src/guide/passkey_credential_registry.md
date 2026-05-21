@@ -15,7 +15,7 @@ interface CredentialRegistry {
 }
 ```
 
-The SDK calls `read` before any sign-in / register ceremony to populate `allowCredentialIds` / `excludeCredentialIds`, and calls `add` after a successful ceremony to record the new credential ID. `remove` and `clear` are app-driven (typically wired to a settings page; see [When (not) to call `credentials().clear()`](#when-not-to-call-credentialsclear) for the destructive-semantics caveat).
+`read` and `add` are SDK-driven: the SDK calls `read` before every sign-in and register so the OS sees the right `allowCredentialIds` / `excludeCredentialIds`, and calls `add` after a successful register to record the new ID. `remove` and `clear` are app-driven: wire them to a settings page where users manage registered passkeys. See [When (not) to call `credentials().clear()`](#when-not-to-call-credentialsclear) before exposing `clear`.
 
 Credential IDs are public per WebAuthn spec, so no encryption is required at rest.
 
@@ -27,22 +27,22 @@ Credential IDs are public per WebAuthn spec, so no encryption is required at res
 
 ## Using credentials() with a registry
 
-Once a registry is wired in, the SDK auto-merges its contents into `excludeCredentialIds` on register and `allowCredentialIds` on sign-in. You can also inspect and mutate the stored set directly via the {{#name PasskeyClient.credentials}} sub-object, typically to back a settings page that lists registered passkeys on this device with per-row remove.
+With a registry wired in, the SDK auto-populates `excludeCredentialIds` on register and `allowCredentialIds` on sign-in. {{#name PasskeyClient.credentials}} lets you read and modify the stored set yourself, typically to back a settings page that lists registered passkeys on this device with per-row remove.
 
 {{#tabs passkey:with-credential-registry}}
 
 ## When (not) to call `credentials().clear()`
 
-`clear()` wipes the app's local bookkeeping only. Existing credentials stay on the OS / cloud authenticator and the user can still sign in with them.
+`clear()` wipes only the app's local list of credential IDs. The passkey itself stays on the OS or cloud authenticator, so the user can still sign in with it. `clear()` is not a logout.
 
-**Don't call `clear()` on a normal sign-out.** With the registry empty, the next `register()` sends an empty `excludeCredentialIds`. On some authenticators that mints a **sibling credential**: same RP, different credential ID, **different PRF output → different seed → different wallet**. If the user picks the sibling at next sign-in, they reach an unfamiliar wallet.
+**Don't call `clear()` on a normal sign-out.** With an empty registry, the next `register()` sends an empty `excludeCredentialIds`. Some authenticators treat that as "no duplicates known" and mint a **sibling credential**: same RP, different credential ID. The new credential ID produces a different PRF output, which derives a different seed, which lands the user in a different wallet at next sign-in.
 
-Dedup behavior on an empty `excludeCredentialIds`:
+Dedup behaviour with an empty `excludeCredentialIds`:
 
-| Authenticator | Behavior |
+| Authenticator | Behaviour |
 |---|---|
-| iOS / iCloud Keychain | Mints sibling silently |
-| Hardware keys (YubiKey etc.) | Mints sibling silently |
+| iOS / iCloud Keychain | Mints a sibling silently |
+| Hardware keys (YubiKey etc.) | Mints a sibling silently |
 | Google Password Manager | Usually warns or dedupes |
 
 Reserve `clear()` for explicit factory-reset flows where orphan credentials are acceptable.
@@ -50,6 +50,6 @@ Reserve `clear()` for explicit factory-reset flows where orphan credentials are 
 ## Error handling
 
 - Every registry call is bounded by a 3 second timeout. Slow backends never block the WebAuthn ceremony.
-- Failures and timeouts are logged (Rust `tracing::warn`, Swift `os_log`, Kotlin `Log.w`, JS `console.warn`) and surfaced via the per-provider `onRegistryError` callback when set. `read` defaults to an empty list; `add`/`remove`/`clear` fire-and-forget.
-- Web/RN/Flutter perform a constructor-time conformance check. A registry object missing one of `read` / `add` / `remove` / `clear` throws on construction so misconfiguration surfaces at startup. iOS / Kotlin / Rust enforce conformance at compile time.
-- When a `CredentialNotFound` would propagate AND no `allowCredentialIds` AND no `credentialRegistry` were supplied, the SDK appends a help URL to the error message pointing here.
+- Failures and timeouts are logged and surfaced via the `onRegistryError` callback when set. A failed `read` falls back to an empty list; failed writes are dropped without blocking the ceremony.
+- An incomplete registry (missing one of `read`, `add`, `remove`, `clear`) is rejected as early as your platform allows: either at app startup or at build time.
+- If sign-in fails with no matching credential and you have not supplied `allowCredentialIds` or a registry to narrow the lookup, the SDK links back to this page in the error message.
