@@ -130,18 +130,9 @@ namespace BreezSdkSnippets
 
         async Task<List<string>> ListLabels()
         {
-            // ANCHOR: list-labels
             var prfProvider = new CustomPrfProvider();
-            var config = new PasskeyConfig(
-                // Optional: override the default label used when
-                // Register / SignIn receive `label = null`. Falls back to
-                // the SDK's internal "Default" when unset.
-                defaultLabel: "personal"
-            );
-            // breezApiKey enables authenticated (NIP-42) Breez relay
-            // access for label sync; pass null for public-relay-only.
-            var passkey = new PasskeyClient(prfProvider, "<breez api key>", config);
-
+            var passkey = new PasskeyClient(prfProvider, "<breez api key>", null);
+            // ANCHOR: list-labels
             var labels = await passkey.Labels().List();
             foreach (var label in labels)
             {
@@ -153,10 +144,9 @@ namespace BreezSdkSnippets
 
         async Task StoreLabel()
         {
-            // ANCHOR: store-label
             var prfProvider = new CustomPrfProvider();
             var passkey = new PasskeyClient(prfProvider, "<breez api key>", null);
-
+            // ANCHOR: store-label
             await passkey.Labels().Store(label: "personal");
             // ANCHOR_END: store-label
         }

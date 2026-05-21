@@ -1,5 +1,4 @@
 import type {
-  PasskeyConfig,
   RegisteredCredential,
 } from '@breeztech/breez-sdk-spark-react-native'
 import {
@@ -12,7 +11,6 @@ import {
   PasskeyAlreadyExistsError,
   PasskeyProvider,
   PasskeyTimedOutError,
-  createPasskeyClient,
 } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
 
 // ANCHOR: implement-prf-provider
@@ -46,8 +44,8 @@ const checkAvailability = async () => {
   // ANCHOR: check-availability
   // Pass `PasskeyProvider.BREEZ_RP_ID` instead of \'<your-rp-domain>\' if your
   // app is Breez-registered (shares credentials with other Breez apps).
-  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
   const availability = await passkey.checkAvailability()
   switch (availability.type) {
@@ -71,8 +69,8 @@ const checkAvailability = async () => {
 
 const setupPasskeyClient = () => {
   // ANCHOR: setup-client
-  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
   // ANCHOR_END: setup-client
   return passkey
 }
@@ -81,7 +79,8 @@ const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
   // Single-CTA onboarding: silent sign-in, fall through to register.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, config.apiKey, undefined)
 
   const response = await passkey.connectWithPasskey({
     label: 'personal',
@@ -102,8 +101,8 @@ const signInExistingUser = async () => {
   // ANCHOR: sign-in
   // Returning-user-only sign-in. No fall-through to register: use
   // `connectWithPasskey` when you also want the new-user path.
-  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
   return await passkey.signIn({ label: 'personal' })
   // ANCHOR_END: sign-in
@@ -112,7 +111,8 @@ const signInExistingUser = async () => {
 const registerNewPasskey = async () => {
   // ANCHOR: register-passkey
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, config.apiKey, undefined)
 
   const response = await passkey.register({ label: 'personal' })
 
@@ -128,15 +128,10 @@ const registerNewPasskey = async () => {
 }
 
 const listLabels = async (): Promise<string[]> => {
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
   // ANCHOR: list-labels
-  const sdkConfig = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', sdkConfig, {
-    // Default label when register / signIn receive no label.
-    defaultLabel: 'personal',
-  })
-
   const labels = await passkey.labels().list()
-
   for (const label of labels) {
     console.log(`Found label: ${label}`)
   }
@@ -145,11 +140,9 @@ const listLabels = async (): Promise<string[]> => {
 }
 
 const storeLabel = async () => {
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
   // ANCHOR: store-label
-  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
-
-  // For a new label on an existing identity, sign in with that label first.
   await passkey.labels().store('personal')
   // ANCHOR_END: store-label
 }
@@ -183,8 +176,8 @@ const checkDomain = async () => {
 const recoverFromAlreadyExists = async () => {
   // ANCHOR: recover-already-exists
   // Recovery: flip to sign-in so the OS picker surfaces the existing credential.
-  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
   try {
     await passkey.register({
@@ -208,8 +201,8 @@ const recoverFromAlreadyExists = async () => {
 const handleTimeout = async () => {
   // ANCHOR: handle-timeout
   // Timeout is distinct from a cancel: surface a re-prompt UI.
-  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const passkey = createPasskeyClient('<your-rp-domain>', 'Your App', config)
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
   try {
     return await passkey.signIn({ label: 'personal' })
@@ -226,15 +219,6 @@ const handleTimeout = async () => {
 
 const withCredentialRegistry = async () => {
   // ANCHOR: with-credential-registry
-  // Opt-in CredentialRegistry. The JS-side wrapper merges stored IDs
-  // into allowCredentials on assertion and excludeCredentials on
-  // registration, then auto-adds new credential IDs after success.
-  // The native module never sees the registry: all bookkeeping is
-  // done in JS.
-  //
-  // The SDK doesn't ship a default impl: copy the iOS Keychain or
-  // Android Block Store reference impl from the passkey guide and
-  // wire it up here. (Stubbed below so the snippet compiles.)
   const registry: import('@breeztech/breez-sdk-spark-react-native').CredentialRegistry =
     {
       async read(_rpId) { return [] },
@@ -251,16 +235,10 @@ const withCredentialRegistry = async () => {
   })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
-  // signIn: registry IDs are auto-merged into allowCredentials.
   await passkey.signIn({ label: 'personal' })
-
-  // register: registry IDs are auto-merged into excludeCredentials.
   await passkey.register({ label: 'personal' })
 
-  // Inspect / mutate the registry via the credentials() sub-object.
-  // get() returns the stored IDs; remove() / clear() drop entries.
   const known = await passkey.credentials().get()
   console.log(`Known credentials: ${known.length}`)
-
   // ANCHOR_END: with-credential-registry
 }

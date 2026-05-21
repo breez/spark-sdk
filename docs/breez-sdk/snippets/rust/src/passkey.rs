@@ -1,7 +1,7 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
     ConnectWithPasskeyRequest, DeriveSeedsRequest, DomainAssociation, ErrorKind,
-    PasskeyAvailability, PasskeyClient, PasskeyConfig, PrfProvider, PrfProviderError,
+    PasskeyAvailability, PasskeyClient, PrfProvider, PrfProviderError,
     RegisterRequest, RegisteredCredential, SignInRequest, SignInResponse, Wallet,
 };
 use breez_sdk_spark::{ConnectRequest, Network, connect, default_config};
@@ -160,26 +160,10 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
 }
 
 async fn list_labels() -> Result<Vec<String>> {
-    // ANCHOR: list-labels
     let prf_provider = Arc::new(CustomPrfProvider);
-    // breez_api_key enables authenticated (NIP-42) access to the Breez
-    // relay; pass None for public-relay-only label sync.
-    let passkey = PasskeyClient::new(
-        prf_provider,
-        Some("<breez api key>".to_string()),
-        Some(PasskeyConfig {
-            // Optional: override the label used when register /
-            // sign_in receive `label = None`. Falls back to the SDK's
-            // internal "Default" when unset.
-            default_label: Some("personal".to_string()),
-        }),
-    );
-
-    // sign_in with no label runs in discovery mode: it derives the
-    // master seed AND lists labels in the same ceremony, so a follow-up
-    // labels().list() reads from the cached identity for free.
+    let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None);
+    // ANCHOR: list-labels
     let labels = passkey.labels().list().await?;
-
     for label in &labels {
         println!("Found label: {label}");
     }
@@ -188,13 +172,9 @@ async fn list_labels() -> Result<Vec<String>> {
 }
 
 async fn store_label() -> Result<()> {
-    // ANCHOR: store-label
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None);
-
-    // For a new label on an existing identity, call sign_in(new_label)
-    // first to warm the SDK's identity cache, THEN
-    // labels().store() uses the cached identity for free (1 OS prompt total).
+    // ANCHOR: store-label
     passkey.labels().store("personal".to_string()).await?;
     // ANCHOR_END: store-label
     Ok(())

@@ -1,6 +1,6 @@
 # PRF providers
 
-`createPasskeyClient` is the right entry point for the vast majority of apps. Reach for this page when:
+The built-in {{#name PasskeyProvider}} covers the common case. Reach for this page when:
 
 - You need fine-grained `PasskeyProvider` options (custom `userName`, [CredentialRegistry](./passkey_credential_registry.md), etc.).
 - You're integrating Python, Go, or C# (no built-in `PasskeyProvider` ships for those bindings).
@@ -8,7 +8,7 @@
 
 ## Built-in PasskeyProvider options
 
-The convenience factory only takes `rpId` and `rpName`. The underlying `PasskeyProvider` constructor accepts a few more knobs:
+In addition to `rpId` and `rpName`, the `PasskeyProvider` constructor accepts:
 
 | Option | Default | Description |
 |--------|---------|-------------|

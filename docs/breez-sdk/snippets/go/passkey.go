@@ -154,28 +154,14 @@ func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 }
 
 func ListLabels() ([]string, error) {
-	// ANCHOR: list-labels
 	prfProvider := &CustomPrfProvider{}
-	defaultLabel := "personal"
-	config := &breez_sdk_spark.PasskeyConfig{
-		// Optional: override the default label used when Register /
-		// SignIn receive `Label = nil`. Falls back to the SDK's internal
-		// "Default" when unset.
-		DefaultLabel: &defaultLabel,
-	}
-	// breezApiKey enables authenticated (NIP-42) Breez relay access
-	// for label sync; pass nil for public-relay-only.
 	breezApiKey := "<breez api key>"
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, &breezApiKey, config)
-
-	// SignIn with no label runs in discovery mode: it derives the master
-	// seed AND lists labels in the same ceremony, so a follow-up
-	// Labels().List() reads from the cached identity for free.
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, &breezApiKey, nil)
+	// ANCHOR: list-labels
 	labels, err := passkey.Labels().List()
 	if err != nil {
 		return nil, err
 	}
-
 	for _, label := range labels {
 		log.Printf("Found label: %s", label)
 	}
@@ -184,14 +170,10 @@ func ListLabels() ([]string, error) {
 }
 
 func StoreLabel() error {
-	// ANCHOR: store-label
 	prfProvider := &CustomPrfProvider{}
 	breezApiKey := "<breez api key>"
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, &breezApiKey, nil)
-
-	// For a new label on an existing identity, call SignIn(newLabel)
-	// first to warm the SDK's identity cache, THEN
-	// Labels().Store() uses the cached identity for free (1 OS prompt total).
+	// ANCHOR: store-label
 	err := passkey.Labels().Store("personal")
 	if err != nil {
 		return err
