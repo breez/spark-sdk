@@ -280,6 +280,11 @@ fun auditBolt11(opts: Map<String, String>) = runBlocking {
     data class Expected(val rps: Int, val userId: String, val invoiceIdx: Int, val invoice: String)
     val expected = mutableListOf<Expected>()
 
+    // Skip errored dispatches too: those never reached sendPayment (HTTP 500
+    // from a handler crash, ConnectException from a dead server, etc.) so the
+    // invoice was never spent. Counting them as "expected" would inflate
+    // `not_found` and bake harness-side failures into the LN settled_rate.
+    var skippedErrored = 0
     for (dir in stepDirs) {
         val rps = dir.fileName.toString().removePrefix("rps-").toInt()
         val latencyPath = dir.resolve("latency.jsonl")
@@ -290,6 +295,10 @@ fun auditBolt11(opts: Map<String, String>) = runBlocking {
                 val obj = codec.parseToJsonElement(line).jsonObject
                 if (obj["op"]?.jsonPrimitive?.contentOrNull != "send_ln") return@inner
                 if (obj["dropped"]?.jsonPrimitive?.booleanOrNull == true) return@inner
+                if (obj["error"]?.jsonPrimitive?.contentOrNull != null) {
+                    skippedErrored++
+                    return@inner
+                }
                 val idx = obj["invoice_idx"]?.jsonPrimitive?.intOrNull ?: return@inner
                 val uid = obj["user_id"]?.jsonPrimitive?.contentOrNull ?: return@inner
                 if (idx !in pool.indices) return@inner
@@ -297,7 +306,8 @@ fun auditBolt11(opts: Map<String, String>) = runBlocking {
             }
         }
     }
-    println("[audit] expected non-dropped send_ln dispatches: ${expected.size}")
+    println("[audit] expected dispatches (non-dropped, non-errored send_ln): ${expected.size} " +
+        "(skipped $skippedErrored errored)")
     if (expected.isEmpty()) {
         // Nothing to audit — write a trivially-empty doc and return.
         val emptyDoc = AuditDoc(pool.size, 0, 0, 0, 0, 0, 0.0, emptyList(), emptyList())

@@ -17,6 +17,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -27,6 +28,7 @@ import java.nio.file.Path
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 // --- HTTP request/response shapes -----------------------------------------
 
@@ -146,7 +148,24 @@ fun runServer(opts: Map<String, String>) {
 
             post("/users/{userId}/receive") {
                 val userId = call.parameters["userId"]!!
-                val body = runCatching { call.receive<ReceiveBody>() }.getOrElse { ReceiveBody() }
+                // Empty body → spark-address default. Non-empty but malformed
+                // → 400. (Silently defaulting on parse failure would let a
+                // loadgen wire-format typo show up as a successful spark
+                // receive, conflating it with the LN path in the measurement.)
+                val raw = call.receiveText()
+                val body: ReceiveBody = if (raw.isBlank()) {
+                    ReceiveBody()
+                } else {
+                    try {
+                        Json.decodeFromString(ReceiveBody.serializer(), raw)
+                    } catch (e: Exception) {
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            ErrorBody(error = "malformed receive body: ${e.message}"),
+                        )
+                        return@post
+                    }
+                }
                 handleAndLog(call, "receive", userId, requestsWriter) { t ->
                     provider.withUser(userId, t) { sdk ->
                         val method: ReceivePaymentMethod = when (body.method?.lowercase()) {

@@ -15,10 +15,18 @@ import kotlinx.serialization.Serializable
 
 // --- bench config ---------------------------------------------------------
 
-// Raised from SDK default of 4 to drain the treasurer's claim backlog faster.
+// Config for the funding/setup pipeline (treasurer top-up, sender seeding,
+// invoice minting, post-run audit). The treasurer accumulates an unclaimed
+// transfer backlog across runs; 32 concurrent claims (vs SDK default 4)
+// drains it ~8× faster.
 fun benchConfig(): breez_sdk_spark.Config = defaultServerConfig(Network.REGTEST).apply {
     maxConcurrentClaims = 32u
 }
+
+// Config for the per-request server handler. SDK defaults — handlers
+// disconnect after one op and almost never run claims, so the bumped
+// `maxConcurrentClaims` from benchConfig() would only add noise here.
+fun handlerConfig(): breez_sdk_spark.Config = defaultServerConfig(Network.REGTEST)
 
 // --- shared SDK transports ------------------------------------------------
 
@@ -76,7 +84,7 @@ class BenchSdkProvider(
     private val masterSecret: String,
     private val handlers: SharedHandlers,
 ) {
-    private val config = benchConfig()
+    private val config = handlerConfig()
 
     suspend fun <T> withUser(
         userId: String,

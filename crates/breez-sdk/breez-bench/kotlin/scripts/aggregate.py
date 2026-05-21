@@ -128,7 +128,7 @@ def per_op_subtimings(rows, op_field="op"):
     """
     by_op_field = {}
     for r in rows:
-        if r.get("error"):
+        if r.get("error") is not None:
             continue
         op = r.get(op_field)
         if op is None:
@@ -154,8 +154,7 @@ def per_op_latency(rows, duration_field, op_field):
     so blending them into one literal `send` p99 would be bimodal junk;
     splitting them across rows is right for the table, rolling them up
     is right for the cliff metric). Underscore-prefixed so the per-op
-    table renderer skips them. For legacy spark-only data with a
-    literal `send` label, derive_p99_doubling falls back to the literal.
+    table renderer skips them.
     """
     by_op = {}
     for r in rows:
@@ -322,11 +321,12 @@ def derive_p99_doubling(steps_summary):
         # enforce that.
         if step_state(s) == "collapsed":
             continue
-        # Prefer the synthetic send-class rollup (handles mixed
-        # send_spark/send_ln runs); fall back to the literal `send`
-        # bucket for legacy spark-only data.
+        # Use the synthetic send-class rollup (union of send / send_spark
+        # / send_ln durations). per_op_latency emits this whenever any
+        # send* op has data, so it's always present when there's send data
+        # to consider.
         lat = s.get("client_latency_ms", {})
-        send = lat.get("_send_rollup") or lat.get("send")
+        send = lat.get("_send_rollup")
         if not send or send.get("count", 0) < 30:
             continue
         candidates.append((rps, send["p99"]))
@@ -725,9 +725,9 @@ def render_results_md(sweep_id, manifest, steps_summary, headline, audit=None):
     # returns the moment the SSP accepts the payment, well before
     # settlement, so the per-step `client_ok` and `send_ln` p99 numbers
     # could otherwise be silently masking a tail of unsettled payments.
-    # If `settled` < ~99% something needs investigation; "not_found"
-    # means the SSP rejected the dispatch before the Payment row was
-    # persisted (a different failure mode than `failed`).
+    # `expected` excludes both dropped and errored dispatches (no
+    # sendPayment was ever called for those), so the denominator is
+    # specifically "server-accepted send_ln dispatches".
     if audit:
         lines.append("## Lightning settlement audit")
         lines.append("")
@@ -746,9 +746,10 @@ def render_results_md(sweep_id, manifest, steps_summary, headline, audit=None):
             "for the dispatched invoice on the sender wallet after a post-run "
             "syncWallet. `Pending` = SDK has the payment row but settlement "
             "hadn't propagated by audit time. `Failed` = SDK marked the payment "
-            "Failed. `NotFound` = no Payment row matches the dispatched invoice "
-            "on this sender (SSP rejected the dispatch before the SDK could "
-            "persist the row — separate failure mode from Failed)."
+            "Failed. `NotFound` = the server accepted the dispatch (2xx) but no "
+            "Payment row matches the invoice (race / persistence bug). "
+            "Dispatch-layer errors (HTTP 500, connection drops) are excluded "
+            "from `expected`."
         )
         lines.append("")
         per_step = audit.get("per_step", [])

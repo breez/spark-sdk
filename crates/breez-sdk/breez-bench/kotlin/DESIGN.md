@@ -321,7 +321,7 @@ e.g.  2026-05-20T11-45-00Z
 
 ```
 out/<sweep-id>/
-  manifest.json            sweep config + host info + funding budget + MASTER_SECRET (chmod 600; out/ is gitignored)
+  manifest.json            sweep config + host info + funding budget + MASTER_SECRET (out/ is gitignored)
   driver.log               live [sweep]/[fund]/[seed]/[loadgen] output (tee'd by `make run`)
   RESULTS.md               headline tables (read this)
   summary.json             full structured per-step breakdown

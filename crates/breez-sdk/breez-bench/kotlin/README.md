@@ -33,7 +33,7 @@ appends a human suffix (e.g. `2026-05-20T11-45-00Z-mysql-recycle`).
 
 ```
 out/<sweep-id>/
-  manifest.json            sweep config + host info + funding budget + MASTER_SECRET (chmod 600)
+  manifest.json            sweep config + host info + funding budget + MASTER_SECRET
   driver.log               live [sweep]/[fund]/[seed]/[loadgen] output
   RESULTS.md               headline tables (read this)
   summary.json             full structured per-step breakdown
