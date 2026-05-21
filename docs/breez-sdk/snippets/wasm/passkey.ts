@@ -1,5 +1,4 @@
 import type {
-  PasskeyConfig,
   RegisteredCredential,
 } from '@breeztech/breez-sdk-spark'
 import { PasskeyClient, connect, defaultConfig } from '@breeztech/breez-sdk-spark'
@@ -72,7 +71,6 @@ const checkAvailability = async () => {
 
 const setupPasskeyClient = () => {
   // ANCHOR: setup-client
-  // Web constructs PasskeyClient directly (no createPasskeyClient factory).
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
   // ANCHOR_END: setup-client
@@ -131,23 +129,10 @@ const registerNewPasskey = async () => {
 }
 
 const listLabels = async (): Promise<string[]> => {
-  // ANCHOR: list-labels
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const config: PasskeyConfig = {
-    // Optional: override the default label used when register /
-    // signIn receive `label = undefined`. Falls back to the SDK's
-    // internal "Default" when unset.
-    defaultLabel: 'personal',
-  }
-  // breezApiKey enables authenticated (NIP-42) Breez relay access for
-  // label sync; pass undefined for public-relay-only.
-  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', config)
-
-  // signIn with no label runs in discovery mode: it derives the
-  // master seed AND lists labels in the same ceremony, so a follow-up
-  // labels().list() reads from the cached identity for free.
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
+  // ANCHOR: list-labels
   const labels = await passkey.labels().list()
-
   for (const label of labels) {
     console.log(`Found label: ${label}`)
   }
@@ -156,13 +141,9 @@ const listLabels = async (): Promise<string[]> => {
 }
 
 const storeLabel = async () => {
-  // ANCHOR: store-label
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
-
-  // For a new label on an existing identity, call signIn(newLabel)
-  // first to warm the SDK's identity cache, THEN
-  // labels().store() uses the cached identity for free (1 OS prompt total).
+  // ANCHOR: store-label
   await passkey.labels().store('personal')
   // ANCHOR_END: store-label
 }
@@ -249,11 +230,6 @@ const handleTimeout = async () => {
 
 const withCredentialRegistry = async () => {
   // ANCHOR: with-credential-registry
-  // Opt-in CredentialRegistry. The SDK auto-merges stored IDs into
-  // allowCredentials on assertion and excludeCredentials on
-  // registration, then auto-adds new credential IDs after success.
-  // Reference impl (LocalStorageCredentialRegistry) is in the
-  // passkey guide; copy-paste into your app code.
   const registry = new LocalStorageCredentialRegistry()
   const prfProvider = new PasskeyProvider({
     rpId: '<your-rp-domain>',
@@ -263,17 +239,11 @@ const withCredentialRegistry = async () => {
   })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
-  // signIn: registry IDs are auto-merged into allowCredentials.
   await passkey.signIn({ label: 'personal' })
-
-  // register: registry IDs are auto-merged into excludeCredentials.
   await passkey.register({ label: 'personal' })
 
-  // Inspect / mutate the registry via the credentials() sub-object.
-  // get() returns the stored IDs; remove() / clear() drop entries.
   const known = await passkey.credentials().get()
   console.log(`Known credentials: ${known.length}`)
-
   // ANCHOR_END: with-credential-registry
 }
 

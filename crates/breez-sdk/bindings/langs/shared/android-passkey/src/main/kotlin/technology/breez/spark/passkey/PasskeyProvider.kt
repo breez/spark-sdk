@@ -1,11 +1,8 @@
 package technology.breez.spark.passkey
 
 import android.app.Activity
-import breez_sdk_spark.Config
 import breez_sdk_spark.DeriveSeedsRequest
 import breez_sdk_spark.DomainAssociation
-import breez_sdk_spark.PasskeyClient
-import breez_sdk_spark.PasskeyConfig
 import breez_sdk_spark.PrfProvider
 import breez_sdk_spark.PrfProviderException
 import breez_sdk_spark.RegisteredCredential
@@ -263,30 +260,4 @@ public class PasskeyProvider(
             CredentialManagerPrfCore.Kind.Generic ->
                 PrfProviderException.Generic(message ?: "")
         }
-}
-
-/**
- * Convenience factory: builds the platform [PasskeyProvider] with
- * sensible defaults and wires it to a new [PasskeyClient], forwarding
- * the Breez API key from the SDK [Config].
- *
- * Equivalent to:
- * ```kotlin
- * val provider = PasskeyProvider(activityProvider = activityProvider, rpId = rpId, rpName = rpName)
- * val client = PasskeyClient(provider, sdkConfig.apiKey, passkeyConfig)
- * ```
- *
- * Hosts that need a custom [PrfProvider] (CLI / YubiKey / FIDO2) or
- * non-default [PasskeyProvider] options should use the regular
- * `PasskeyClient(...)` constructor instead.
- */
-public fun createPasskeyClient(
-    activityProvider: () -> Activity,
-    rpId: String,
-    rpName: String,
-    sdkConfig: Config,
-    passkeyConfig: PasskeyConfig? = null,
-): PasskeyClient {
-    val provider = PasskeyProvider(activityProvider = activityProvider, rpId = rpId, rpName = rpName)
-    return PasskeyClient(provider, sdkConfig.apiKey, passkeyConfig)
 }

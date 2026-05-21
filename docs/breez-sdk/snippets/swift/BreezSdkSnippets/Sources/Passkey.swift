@@ -54,9 +54,8 @@ func checkAvailability() async throws {
     // ANCHOR: check-availability
     // Pass `PasskeyProvider.BREEZ_RP_ID` instead of "<your-rp-domain>" if your
     // app is Breez-registered (shares credentials with other Breez apps).
-    var config = defaultConfig(network: .mainnet)
-    config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     switch try await passkey.checkAvailability() {
     case .available:
@@ -73,9 +72,8 @@ func checkAvailability() async throws {
 
 func setupPasskeyClient() -> PasskeyClient {
     // ANCHOR: setup-client
-    var config = defaultConfig(network: .mainnet)
-    config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
     // ANCHOR_END: setup-client
     return passkey
 }
@@ -85,7 +83,8 @@ func connectWithPasskey() async throws -> BreezSdk {
     // Single-CTA onboarding: silent sign-in, fall through to register.
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: config.apiKey, config: nil)
 
     let response = try await passkey.connectWithPasskey(
         request: ConnectWithPasskeyRequest(label: "personal")
@@ -110,9 +109,8 @@ func signInExistingUser() async throws -> SignInResponse {
     // ANCHOR: sign-in
     // Returning-user-only sign-in. No fall-through to register: use
     // `connectWithPasskey` when you also want the new-user path.
-    var config = defaultConfig(network: .mainnet)
-    config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     return try await passkey.signIn(request: SignInRequest(label: "personal"))
     // ANCHOR_END: sign-in
@@ -122,7 +120,8 @@ func registerNewPasskey() async throws -> BreezSdk {
     // ANCHOR: register-passkey
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: config.apiKey, config: nil)
 
     let response = try await passkey.register(
         request: RegisterRequest(label: "personal")
@@ -142,17 +141,9 @@ func registerNewPasskey() async throws -> BreezSdk {
 }
 
 func listLabels() async throws -> [String] {
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
     // ANCHOR: list-labels
-    var sdkConfig = defaultConfig(network: .mainnet)
-    sdkConfig.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(
-        rpId: "<your-rp-domain>",
-        rpName: "Your App",
-        sdkConfig: sdkConfig,
-        // Default label when register / signIn receive no label.
-        passkeyConfig: PasskeyConfig(defaultLabel: "personal")
-    )
-
     let labels = try await passkey.labels().list()
     for label in labels {
         print("Found label: \(label)")
@@ -162,11 +153,9 @@ func listLabels() async throws -> [String] {
 }
 
 func storeLabel() async throws {
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
     // ANCHOR: store-label
-    var sdkConfig = defaultConfig(network: .mainnet)
-    sdkConfig.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: sdkConfig)
-
     try await passkey.labels().store(label: "personal")
     // ANCHOR_END: store-label
 }
@@ -191,9 +180,8 @@ func checkDomain() async throws {
 
 func recoverFromAlreadyExists() async throws -> Wallet {
     // ANCHOR: recover-already-exists
-    var config = defaultConfig(network: .mainnet)
-    config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     do {
         let response = try await passkey.register(
@@ -216,9 +204,8 @@ func recoverFromAlreadyExists() async throws -> Wallet {
 
 func handleTimeout() async throws -> SignInResponse {
     // ANCHOR: handle-timeout
-    var config = defaultConfig(network: .mainnet)
-    config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     do {
         return try await passkey.signIn(
@@ -233,10 +220,6 @@ func handleTimeout() async throws -> SignInResponse {
 
 func withCredentialRegistry() async throws {
     // ANCHOR: with-credential-registry
-    // Opt-in CredentialRegistry. The SDK auto-merges stored IDs into
-    // excludeCredentialIds on register and allowCredentialIds on
-    // sign-in. Reference impl (KeychainCredentialRegistry) lives in
-    // the passkey guide; copy-paste into your app.
     let registry = KeychainCredentialRegistry()
     let prfProvider = PasskeyProvider(
         rpId: "<your-rp-domain>",
@@ -246,9 +229,7 @@ func withCredentialRegistry() async throws {
     )
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 
-    // Inspect / mutate via the credentials() sub-object.
     let known = try await passkey.credentials().get()
     print("Known credentials: \(known.count)")
-
     // ANCHOR_END: with-credential-registry
 }

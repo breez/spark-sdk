@@ -6,7 +6,6 @@ from breez_sdk_spark import (
     Network,
     PasskeyAvailability,
     PasskeyClient,
-    PasskeyConfig,
     PrfProvider,
     PrfProviderError,
     RegisterRequest,
@@ -135,23 +134,10 @@ async def register_new_passkey():
 
 
 async def list_labels() -> list[str]:
-    # ANCHOR: list-labels
     prf_provider = CustomPrfProvider()
-    config = PasskeyConfig(
-        # Optional: override the default label used when
-        # register / sign_in receive `label = None`. Falls back to the
-        # SDK's internal "Default" when unset.
-        default_label="personal",
-    )
-    # breez_api_key enables authenticated (NIP-42) Breez relay access
-    # for label sync; pass None for public-relay-only.
-    passkey = PasskeyClient(prf_provider, "<breez api key>", config)
-
-    # sign_in with no label runs in discovery mode: it derives the
-    # master seed AND lists labels in the same ceremony, so a follow-up
-    # labels().list() reads from the cached identity for free.
+    passkey = PasskeyClient(prf_provider, "<breez api key>", None)
+    # ANCHOR: list-labels
     labels = await passkey.labels().list()
-
     for label in labels:
         print(f"Found label: {label}")
     # ANCHOR_END: list-labels
@@ -159,13 +145,9 @@ async def list_labels() -> list[str]:
 
 
 async def store_label():
-    # ANCHOR: store-label
     prf_provider = CustomPrfProvider()
     passkey = PasskeyClient(prf_provider, "<breez api key>", None)
-
-    # For a new label on an existing identity, call sign_in(new_label)
-    # first to warm the SDK's identity cache, THEN
-    # labels().store() uses the cached identity for free (1 OS prompt total).
+    # ANCHOR: store-label
     await passkey.labels().store(label="personal")
     # ANCHOR_END: store-label
 

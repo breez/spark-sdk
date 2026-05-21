@@ -2,8 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
-import 'rust/models.dart' show Config, DeriveSeedsRequest, PasskeyConfig, RegisteredCredential;
-import 'rust/passkey.dart' show PasskeyClient;
+import 'rust/models.dart' show DeriveSeedsRequest, RegisteredCredential;
 
 /// Result of a domain-association verification check against the
 /// platform's well-known configuration source. Mirrors the Rust
@@ -418,45 +417,4 @@ class PasskeyProvider {
       _ => PasskeyPrfException(code: 'unknown', message: message),
     };
   }
-}
-
-/// Convenience factory: builds the platform [PasskeyProvider] with
-/// sensible defaults and wires it to a new [PasskeyClient], forwarding
-/// the Breez API key from the SDK [Config].
-///
-/// Equivalent to:
-/// ```dart
-/// final provider = PasskeyProvider(PasskeyProviderOptions(rpId: rpId, rpName: rpName));
-/// final client = PasskeyClient(
-///   deriveSeeds: provider.deriveSeeds,
-///   isSupported: provider.isSupported,
-///   createPasskey: provider.createPasskey,
-///   getKnownCredentialIds: provider.getKnownCredentialIds,
-///   removeKnownCredentialId: provider.removeKnownCredentialId,
-///   clearKnownCredentialIds: provider.clearKnownCredentialIds,
-///   breezApiKey: sdkConfig.apiKey,
-///   config: passkeyConfig,
-/// );
-/// ```
-///
-/// Hosts that need a custom `PrfProvider` (CLI / YubiKey / FIDO2) or
-/// non-default [PasskeyProviderOptions] should construct
-/// [PasskeyClient] directly with the appropriate callbacks instead.
-PasskeyClient createPasskeyClient({
-  required String rpId,
-  required String rpName,
-  required Config sdkConfig,
-  PasskeyConfig? passkeyConfig,
-}) {
-  final provider = PasskeyProvider(PasskeyProviderOptions(rpId: rpId, rpName: rpName));
-  return PasskeyClient(
-    deriveSeeds: provider.deriveSeeds,
-    isSupported: provider.isSupported,
-    createPasskey: provider.createPasskey,
-    getKnownCredentialIds: provider.getKnownCredentialIds,
-    removeKnownCredentialId: provider.removeKnownCredentialId,
-    clearKnownCredentialIds: provider.clearKnownCredentialIds,
-    breezApiKey: sdkConfig.apiKey,
-    config: passkeyConfig,
-  );
 }
