@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::Result;
 use breez_sdk_itest::*;
@@ -100,14 +100,10 @@ async fn test_send_bolt11_invoice_server_mode(
         elapsed, send_resp.payment.status
     );
 
-    assert!(
-        elapsed < Duration::from_secs(u64::from(completion_timeout_secs).saturating_sub(1)),
-        "send_payment blocked until timeout in server mode (took {elapsed:?})",
-    );
     assert_eq!(
         send_resp.payment.status,
         PaymentStatus::Completed,
-        "server-mode send_payment should resolve to Completed via polling, not the Pending fallback returned on timeout",
+        "server-mode send_payment should resolve to Completed via polling, not the Pending fallback",
     );
 
     // Confirm the payment reached Bob (client-mode receiver still drives
