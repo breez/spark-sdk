@@ -3,6 +3,7 @@ package com.example.kotlinmpplib
 import android.app.Activity
 import breez_sdk_spark.*
 import technology.breez.spark.passkey.PasskeyProvider
+import technology.breez.spark.passkey.createPasskeyClient
 
 // ANCHOR: implement-prf-provider
 // Implement the PrfProvider interface for custom logic if the built-in
@@ -38,14 +39,17 @@ class CustomPrfProvider : PrfProvider {
 class PasskeySnippets(private val activity: Activity) {
     suspend fun checkAvailability() {
         // ANCHOR: check-availability
-        // rpId is required. Pass your app's domain, or
-        // PasskeyProvider.BREEZ_RP_ID if your app is Breez-registered.
-        val prfProvider = PasskeyProvider(
+        // `createPasskeyClient` wires up the built-in PasskeyProvider
+        // with your `rpId` / `rpName` and forwards the Breez API key
+        // from your SDK Config. Hosts using a custom PrfProvider
+        // construct `PasskeyClient` directly instead.
+        val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
+        val passkey = createPasskeyClient(
             activityProvider = { activity },
             rpId = "my-app.com",
             rpName = "My App",
+            sdkConfig = config,
         )
-        val passkey = PasskeyClient(prfProvider, null, null)
 
         when (val availability = passkey.checkAvailability()) {
             is PasskeyAvailability.Available -> Unit
@@ -66,12 +70,13 @@ class PasskeySnippets(private val activity: Activity) {
         // attempt fast-fails (no UI) when no local credential exists;
         // only `CredentialNotFound` flips to register, all other errors
         // (cancel / timeout / configuration) propagate unchanged.
-        val prfProvider = PasskeyProvider(
+        val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
+        val passkey = createPasskeyClient(
             activityProvider = { activity },
             rpId = "my-app.com",
             rpName = "My App",
+            sdkConfig = config,
         )
-        val passkey = PasskeyClient(prfProvider, null, null)
 
         val response = passkey.connectWithPasskey(
             ConnectWithPasskeyRequest(label = "personal")
@@ -85,7 +90,6 @@ class PasskeySnippets(private val activity: Activity) {
             val persistedId = credential.credentialId
         }
 
-        val config = defaultConfig(Network.MAINNET)
         val sdk = connect(ConnectRequest(config, response.wallet.seed, "./.data"))
         // ANCHOR_END: connect-with-passkey
         return sdk
@@ -93,12 +97,13 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun registerNewPasskey(): BreezSdk {
         // ANCHOR: register-passkey
-        val prfProvider = PasskeyProvider(
+        val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
+        val passkey = createPasskeyClient(
             activityProvider = { activity },
             rpId = "my-app.com",
             rpName = "My App",
+            sdkConfig = config,
         )
-        val passkey = PasskeyClient(prfProvider, null, null)
 
         val response = passkey.register(RegisterRequest(label = "personal"))
 
@@ -108,7 +113,6 @@ class PasskeySnippets(private val activity: Activity) {
         val persistedCredentialId = response.credential.credentialId
         val persistedUserId = response.credential.userId
 
-        val config = defaultConfig(Network.MAINNET)
         val sdk = connect(ConnectRequest(config, response.wallet.seed, "./.data"))
         // ANCHOR_END: register-passkey
         return sdk
@@ -116,20 +120,17 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun listLabels(): List<String> {
         // ANCHOR: list-labels
-        val prfProvider = PasskeyProvider(
+        val sdkConfig = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
+        val passkey = createPasskeyClient(
             activityProvider = { activity },
             rpId = "my-app.com",
             rpName = "My App",
-        )
-        val config = PasskeyConfig(
+            sdkConfig = sdkConfig,
             // Optional: override the default wallet label used when
-            // register / signIn receive `label = null`. Falls back to the
-            // SDK's internal "Default" when unset.
-            defaultLabel = "personal",
+            // register / signIn receive `label = null`. Falls back to
+            // the SDK's internal "Default" when unset.
+            passkeyConfig = PasskeyConfig(defaultLabel = "personal"),
         )
-        // breezApiKey enables authenticated (NIP-42) Breez relay access
-        // for label sync; pass null for public-relay-only.
-        val passkey = PasskeyClient(prfProvider, "<breez api key>", config)
 
         val labels = passkey.labels().list()
         for (label in labels) {
@@ -141,12 +142,13 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun storeLabel() {
         // ANCHOR: store-label
-        val prfProvider = PasskeyProvider(
+        val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
+        val passkey = createPasskeyClient(
             activityProvider = { activity },
             rpId = "my-app.com",
             rpName = "My App",
+            sdkConfig = config,
         )
-        val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
 
         passkey.labels().store("personal")
         // ANCHOR_END: store-label
@@ -154,6 +156,10 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun checkDomain() {
         // ANCHOR: domain-association
+        // Lower-level diagnostic on the provider itself. Most hosts
+        // can reach this through `passkey.checkAvailability()`, which
+        // folds PRF support and domain association into a single call
+        // (see the `check-availability` snippet above).
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
             rpId = "my-app.com",
@@ -173,12 +179,13 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun recoverFromAlreadyExists(): Wallet {
         // ANCHOR: recover-already-exists
-        val prfProvider = PasskeyProvider(
+        val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
+        val passkey = createPasskeyClient(
             activityProvider = { activity },
             rpId = "my-app.com",
             rpName = "My App",
+            sdkConfig = config,
         )
-        val passkey = PasskeyClient(prfProvider, null, null)
 
         return try {
             val response = passkey.register(
@@ -197,12 +204,13 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun handleTimeout(): SignInResponse {
         // ANCHOR: handle-timeout
-        val prfProvider = PasskeyProvider(
+        val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
+        val passkey = createPasskeyClient(
             activityProvider = { activity },
             rpId = "my-app.com",
             rpName = "My App",
+            sdkConfig = config,
         )
-        val passkey = PasskeyClient(prfProvider, null, null)
 
         return try {
             passkey.signIn(SignInRequest(label = "personal"))
