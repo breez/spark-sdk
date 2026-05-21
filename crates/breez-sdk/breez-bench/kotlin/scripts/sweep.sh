@@ -189,13 +189,16 @@ if [ "$SEND_LN_PRESENT" = "1" ]; then
         echo "[sweep] mint-invoices failed (rc=$STREAM_RC); see $mint_log"
         exit "$STREAM_RC"
     fi
-    # Probed SSP fee. Multiplied by LN_FEE_SAFETY in the math so a fee
-    # bump mid-run doesn't drain a sender.
-    PROBED_FEE=$(grep -E '^\[mint\] ln_fee_sats=' "$mint_log" | tail -n1 | sed 's/.*=//')
-    if [ -z "$PROBED_FEE" ]; then
-        echo "[sweep] mint-invoices did not emit ln_fee_sats — aborting"
+    # Probed SSP fee. Read from the sidecar mint-invoices writes
+    # (<pool>.fee) — the same file compute_funding.py picks up as a
+    # fallback. Multiplied by LN_FEE_SAFETY in the math so a fee bump
+    # mid-run doesn't drain a sender.
+    FEE_FILE="$INVOICE_POOL_FILE.fee"
+    if [ ! -s "$FEE_FILE" ]; then
+        echo "[sweep] mint-invoices did not write $FEE_FILE — aborting"
         exit 2
     fi
+    PROBED_FEE=$(cat "$FEE_FILE")
     LN_FEE_SATS=$(python3 -c "import math,sys; print(math.ceil(int(sys.argv[1]) * float(sys.argv[2])))" "$PROBED_FEE" "$LN_FEE_SAFETY")
     echo "[sweep] probed ln_fee_sats=$PROBED_FEE  × safety=$LN_FEE_SAFETY → ${LN_FEE_SATS}sat per send_ln"
     # Pass 2: re-run with the real fee so per-sender drain reflects LN leakage.

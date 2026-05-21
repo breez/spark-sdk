@@ -11,6 +11,7 @@ so the sweep driver doesn't have to branch.
 
 import argparse
 import math
+from pathlib import Path
 
 
 def parse_duration_secs(s: str) -> int:
@@ -44,8 +45,16 @@ def main() -> None:
                     help="Treasurer buffer over K × per_sender")
     ap.add_argument("--floor", type=int, default=50_000,
                     help="Minimum treasurer target")
-    ap.add_argument("--ln-fee-sats", type=int, default=0,
-                    help="Per-send LN fee headroom for send_ln drain (probed by mint-invoices)")
+    ap.add_argument("--ln-fee-sats", type=int, default=None,
+                    help="Per-send LN fee headroom for send_ln drain. "
+                         "Falls back to --ln-fee-file when omitted, else 0. "
+                         "Caller is responsible for any safety multiplier; "
+                         "this value is added verbatim to per-send drain.")
+    ap.add_argument("--ln-fee-file", default=None,
+                    help="Sidecar file written by mint-invoices (<pool>.fee), "
+                         "containing the raw SSP-probed fee. Used as a fallback "
+                         "for --ln-fee-sats so manual reruns don't have to "
+                         "re-pass the probed value.")
     ap.add_argument("--invoice-safety", type=float, default=1.05,
                     help="Pool-count safety multiplier for send_ln dispatches; separate "
                          "from --safety. Pool overshoot is cheap (1-2 extra dispatches "
@@ -57,6 +66,13 @@ def main() -> None:
     dur_s = parse_duration_secs(args.duration)
     mix = parse_mix(args.mix)
     total_w = sum(mix.values())
+
+    if args.ln_fee_sats is not None:
+        ln_fee_sats = args.ln_fee_sats
+    elif args.ln_fee_file and Path(args.ln_fee_file).is_file():
+        ln_fee_sats = int(Path(args.ln_fee_file).read_text().strip())
+    else:
+        ln_fee_sats = 0
 
     # Bare `send`/`receive` are spark aliases (back-compat). LN variants
     # are their own labels; their drain includes the SSP fee headroom.
@@ -74,7 +90,7 @@ def main() -> None:
     else:
         per_sender_drain = (
             total_spark_sends * args.payment_sats
-            + total_ln_sends * (args.payment_sats + args.ln_fee_sats)
+            + total_ln_sends * (args.payment_sats + ln_fee_sats)
         ) / args.senders
         per_sender = math.ceil(per_sender_drain * args.safety)
     treasurer = max(int(args.senders * per_sender * args.buffer), args.floor)
