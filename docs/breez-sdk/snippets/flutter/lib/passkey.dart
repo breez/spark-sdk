@@ -34,10 +34,6 @@ Future<void> clearKnownCredentialIds() async {}
 
 Future<void> checkAvailability() async {
   // ANCHOR: check-availability
-  // `createPasskeyClient` wires up the built-in PasskeyProvider with
-  // your `rpId` / `rpName` and forwards the Breez API key from your
-  // SDK Config. Hosts using a custom PrfProvider construct
-  // PasskeyClient directly with their own callbacks instead.
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
@@ -46,8 +42,6 @@ Future<void> checkAvailability() async {
     sdkConfig: config,
   );
 
-  // checkAvailability collapses isSupported + checkDomainAssociation
-  // into a single tagged value. Branch on the variant the host needs.
   final availability = await passkey.checkAvailability();
   if (availability is PasskeyAvailability_Available) {
     // Show passkey as primary option.
@@ -63,12 +57,7 @@ Future<void> checkAvailability() async {
 
 Future<BreezSdk> connectWithPasskey() async {
   // ANCHOR: connect-with-passkey
-  // Single-CTA onboarding: silent sign-in for a returning user,
-  // fall-through to register on a fresh device. Internally pins
-  // `preferImmediatelyAvailableCredentials = true` so the silent
-  // attempt fast-fails (no UI) when no local credential exists; only
-  // `CredentialNotFound` flips to register, all other errors (cancel
-  // / timeout / configuration) propagate unchanged.
+  // Single-CTA onboarding: silent sign-in, fall through to register.
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
@@ -81,10 +70,7 @@ Future<BreezSdk> connectWithPasskey() async {
     request: ConnectWithPasskeyRequest(label: 'personal', excludeCredentialIds: const []),
   );
 
-  // `registeredCredential` doubles as the path discriminator: non-null
-  // when a new credential was just registered (persist credentialId
-  // for future excludeCredentialIds); null when silent sign-in
-  // succeeded for an existing credential.
+  // `registeredCredential` is the path discriminator (null on sign-in).
   final credential = response.registeredCredential;
   if (credential != null) {
     final _ = credential.credentialId;
@@ -99,10 +85,6 @@ Future<BreezSdk> connectWithPasskey() async {
 
 Future<BreezSdk> registerNewPasskey() async {
   // ANCHOR: register-passkey
-  // For a brand-new user with no existing passkey: register() creates
-  // the credential AND derives the wallet seed in one orchestrated
-  // call. On iOS+Android this is 2 OS prompts total (1 create + 1
-  // dual-salt assert) thanks to the SDK's bulk-PRF path.
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
@@ -115,9 +97,7 @@ Future<BreezSdk> registerNewPasskey() async {
     request: RegisterRequest(label: 'personal'),
   );
 
-  // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
-  // bookkeeping) and credential.userId (for server-side correlation).
-  // The SDK generates userId; it is never host-supplied.
+  // Persist credentialId for future excludeCredentialIds.
   final _persistedCredentialId = response.credential.credentialId;
   final _persistedUserId = response.credential.userId;
 
@@ -136,15 +116,10 @@ Future<List<String>> listLabels() async {
     rpId: 'my-app.com',
     rpName: 'My App',
     sdkConfig: sdkConfig,
-    // Optional: override the default wallet label used when register /
-    // signIn receive `label = null`. Falls back to the SDK's internal
-    // "Default" when unset.
+    // Default wallet label when register / signIn receive no label.
     passkeyConfig: PasskeyConfig(defaultLabel: 'personal'),
   );
 
-  // signIn with no label runs in discovery mode: it derives the master
-  // seed AND lists labels in the same ceremony, so a follow-up
-  // labels().list() reads from the cached identity for free.
   final labels = await passkey.labels().list();
 
   for (final label in labels) {
@@ -164,19 +139,14 @@ Future<void> storeLabel() async {
     sdkConfig: config,
   );
 
-  // For a new label on an existing identity, call signIn(newLabel)
-  // first to warm the SDK's identity cache, THEN
-  // labels().store() uses the cached identity for free (1 OS prompt total).
+  // For a new label on an existing identity, sign in with that label first.
   await passkey.labels().store(label: "personal");
   // ANCHOR_END: store-label
 }
 
 Future<void> checkDomain() async {
   // ANCHOR: domain-association
-  // Lower-level diagnostic on the provider itself. Most hosts can
-  // reach this through `passkey.checkAvailability()`, which folds PRF
-  // support and domain association into a single call (see the
-  // `check-availability` snippet above).
+  // Lower-level provider call. Most hosts use `checkAvailability` instead.
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: 'my-app.com', rpName: 'My App'));
   final result = await prfProvider.checkDomainAssociation();
 
@@ -193,11 +163,7 @@ Future<void> checkDomain() async {
 
 Future<Wallet?> recoverFromAlreadyExists() async {
   // ANCHOR: recover-already-exists
-  // The OS rejected register because the user's password manager
-  // already holds a credential matching `excludeCredentialIds`.
-  // Route the user to the sign-in path: the OS picker will surface
-  // the existing credential and the SDK's identity cache will warm
-  // up on the assertion.
+  // Recovery: flip to sign-in so the OS picker surfaces the existing credential.
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(
@@ -228,11 +194,7 @@ Future<Wallet?> recoverFromAlreadyExists() async {
 
 Future<SignInResponse> handleTimeout() async {
   // ANCHOR: handle-timeout
-  // The OS biometric inactivity timeout (~55s+) tore down the prompt
-  // without user intent. Distinct from a real cancel: hosts may
-  // surface a re-prompt UI without treating it as the user opting
-  // out. The SDK fires PasskeyPrfException with code 'userTimedOut'
-  // when assertion or register elapsed time crosses 55_000 ms.
+  // Timeout is distinct from a cancel: surface a re-prompt UI.
   final config = defaultConfig(network: Network.mainnet)
       .copyWith(apiKey: '<breez api key>');
   final passkey = createPasskeyClient(

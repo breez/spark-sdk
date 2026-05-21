@@ -44,15 +44,9 @@ class CustomPrfProvider {
 
 const checkAvailability = async () => {
   // ANCHOR: check-availability
-  // `createPasskeyClient` wires up the built-in PasskeyProvider with
-  // your `rpId` / `rpName` and forwards the Breez API key from your
-  // SDK Config. Hosts using a custom PrfProvider construct
-  // `PasskeyClient` directly instead.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
-  // checkAvailability collapses isSupported + checkDomainAssociation
-  // into a single tagged value. Branch on the variant the host needs.
   const availability = await passkey.checkAvailability()
   switch (availability.type) {
     case 'available':
@@ -75,12 +69,7 @@ const checkAvailability = async () => {
 
 const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
-  // Single-CTA onboarding: silent sign-in for a returning user,
-  // fall-through to register on a fresh device. Internally pins
-  // `preferImmediatelyAvailableCredentials = true` so the silent
-  // attempt fast-fails (no UI) when no local credential exists; only
-  // `CredentialNotFound` flips to register, all other errors (cancel
-  // / timeout / configuration) propagate unchanged.
+  // Single-CTA onboarding: silent sign-in, fall through to register.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
@@ -89,10 +78,7 @@ const connectWithPasskey = async () => {
     excludeCredentialIds: [],
   })
 
-  // `registeredCredential` doubles as the path discriminator: defined
-  // when a new credential was just registered (persist credentialId
-  // for future excludeCredentialIds); undefined when silent sign-in
-  // succeeded for an existing credential.
+  // `registeredCredential` is the path discriminator (undefined on sign-in).
   if (response.registeredCredential) {
     const _persist = response.registeredCredential.credentialId
   }
@@ -104,17 +90,12 @@ const connectWithPasskey = async () => {
 
 const registerNewPasskey = async () => {
   // ANCHOR: register-passkey
-  // For a brand-new user: register() creates the credential AND derives
-  // the wallet seed in one orchestrated call. 2 OS prompts on iOS+Android
-  // (1 create + 1 dual-salt assert) thanks to the SDK's bulk-PRF path.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
   const response = await passkey.register({ label: 'personal' })
 
-  // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
-  // bookkeeping) and credential.userId (for server-side correlation).
-  // The SDK generates userId; it is never host-supplied.
+  // Persist credentialId for future excludeCredentialIds.
   const _persist = {
     credentialId: response.credential.credentialId,
     userId: response.credential.userId,
@@ -129,14 +110,10 @@ const listLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
   const sdkConfig = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const passkey = createPasskeyClient('my-app.com', 'My App', sdkConfig, {
-    // Optional: override the default wallet label used when register /
-    // signIn receive `label = undefined`. Falls back to the SDK's
-    // internal "Default" when unset.
+    // Default wallet label when register / signIn receive no label.
     defaultLabel: 'personal',
   })
 
-  // signIn with discovery mode (no label) lists labels in the same
-  // ceremony; subsequent labels().list() reads from the cached identity.
   const labels = await passkey.labels().list()
 
   for (const label of labels) {
@@ -151,9 +128,7 @@ const storeLabel = async () => {
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
-  // For a new label on an existing identity, signIn(newLabel) warms
-  // the identity cache, then labels().store() runs free off the cached
-  // identity (1 OS prompt total).
+  // For a new label on an existing identity, sign in with that label first.
   await passkey.labels().store('personal')
   // ANCHOR_END: store-label
 }
@@ -168,10 +143,7 @@ const isCredentialNotFound = (error: unknown): boolean => {
 
 const checkDomain = async () => {
   // ANCHOR: domain-association
-  // Lower-level diagnostic on the provider itself. Most hosts can
-  // reach this through `passkey.checkAvailability()`, which folds PRF
-  // support and domain association into a single call (see the
-  // `check-availability` snippet above).
+  // Lower-level provider call. Most hosts use `checkAvailability` instead.
   const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
   const result = await prfProvider.checkDomainAssociation()
 
@@ -196,11 +168,7 @@ const checkDomain = async () => {
 
 const recoverFromAlreadyExists = async () => {
   // ANCHOR: recover-already-exists
-  // The OS rejected register because the user's password manager
-  // already holds a credential matching `excludeCredentialIds`.
-  // Route the user to the sign-in path: the OS picker will surface
-  // the existing credential and the SDK's identity cache will warm
-  // up on the assertion.
+  // Recovery: flip to sign-in so the OS picker surfaces the existing credential.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
@@ -225,11 +193,7 @@ const recoverFromAlreadyExists = async () => {
 
 const handleTimeout = async () => {
   // ANCHOR: handle-timeout
-  // The OS biometric inactivity timeout (~55s+) tore down the prompt
-  // without user intent. Distinct from a real cancel: hosts may
-  // surface a re-prompt UI without treating it as the user opting
-  // out. The SDK fires PasskeyTimedOutError when assertion or register
-  // elapsed time crosses 55_000ms.
+  // Timeout is distinct from a cancel: surface a re-prompt UI.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const passkey = createPasskeyClient('my-app.com', 'My App', config)
 

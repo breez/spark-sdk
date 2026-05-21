@@ -39,10 +39,6 @@ class CustomPrfProvider : PrfProvider {
 class PasskeySnippets(private val activity: Activity) {
     suspend fun checkAvailability() {
         // ANCHOR: check-availability
-        // `createPasskeyClient` wires up the built-in PasskeyProvider
-        // with your `rpId` / `rpName` and forwards the Breez API key
-        // from your SDK Config. Hosts using a custom PrfProvider
-        // construct `PasskeyClient` directly instead.
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
@@ -64,12 +60,7 @@ class PasskeySnippets(private val activity: Activity) {
 
     suspend fun connectWithPasskey(): BreezSdk {
         // ANCHOR: connect-with-passkey
-        // Single-CTA onboarding: silent sign-in for a returning user,
-        // fall-through to register on a fresh device. Internally pins
-        // `preferImmediatelyAvailableCredentials = true` so the silent
-        // attempt fast-fails (no UI) when no local credential exists;
-        // only `CredentialNotFound` flips to register, all other errors
-        // (cancel / timeout / configuration) propagate unchanged.
+        // Single-CTA onboarding: silent sign-in, fall through to register.
         val config = defaultConfig(Network.MAINNET).apply { apiKey = "<breez api key>" }
         val passkey = createPasskeyClient(
             activityProvider = { activity },
@@ -82,10 +73,7 @@ class PasskeySnippets(private val activity: Activity) {
             ConnectWithPasskeyRequest(label = "personal")
         )
 
-        // `registeredCredential` doubles as the path discriminator:
-        // non-null when a new credential was just registered (persist
-        // credentialId for future excludeCredentialIds); null when
-        // silent sign-in succeeded for an existing credential.
+        // `registeredCredential` is the path discriminator (null on sign-in).
         response.registeredCredential?.let { credential ->
             val persistedId = credential.credentialId
         }
@@ -107,9 +95,7 @@ class PasskeySnippets(private val activity: Activity) {
 
         val response = passkey.register(RegisterRequest(label = "personal"))
 
-        // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
-        // bookkeeping) and credential.userId (for server-side correlation).
-        // The SDK generates userId; it is never host-supplied.
+        // Persist credentialId for future excludeCredentialIds.
         val persistedCredentialId = response.credential.credentialId
         val persistedUserId = response.credential.userId
 
@@ -126,9 +112,7 @@ class PasskeySnippets(private val activity: Activity) {
             rpId = "my-app.com",
             rpName = "My App",
             sdkConfig = sdkConfig,
-            // Optional: override the default wallet label used when
-            // register / signIn receive `label = null`. Falls back to
-            // the SDK's internal "Default" when unset.
+            // Default wallet label when register / signIn receive no label.
             passkeyConfig = PasskeyConfig(defaultLabel = "personal"),
         )
 
