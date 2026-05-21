@@ -13,7 +13,7 @@ Passkey Login uses a Relying Party (RP) domain to scope credentials. Each integr
 Two ways to set up the RP, depending on which ecosystem the passkey belongs to:
 
 - **Shared with the Breez ecosystem (Breez-hosted).** A passkey registered in one Breez-registered app works in every other Breez-registered app on the same device, with no re-registration. [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to add your app to the configuration files Breez hosts at `keys.breez.technology`, then pass `PasskeyProvider.BREEZ_RP_ID` as your `rpId`.
-- **Scoped to your ecosystem (self-hosted).** A passkey registered against your RP works across the apps and web origins you list in your configuration files. You host the well-known files yourself at the paths below, on an HTTPS domain you control. Pass that domain as your `rpId` (for example, `"<your-rp-domain>"`).
+- **Scoped to your ecosystem (self-hosted).** A passkey registered against your RP works across the apps and web origins you list in your configuration files. You host the well-known files yourself on an HTTPS domain you control. Pass that domain as your `rpId` (for example, `"<your-rp-domain>"`).
 
 Same code paths in either case; only the `rpId` value and who hosts the JSON differs.
 
@@ -113,7 +113,7 @@ Parameters:
 
 The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.
 
-`createPasskeyClient` is not surfaced on web; the WASM tab above shows the equivalent direct construction. For custom PRF providers (CLI YubiKey, FIDO2, file-backed) or non-default platform options (`credentialRegistry`, `userName`, etc.), see the [Advanced](#advanced) section below.
+`createPasskeyClient` is not surfaced on web; the WASM tab shows the equivalent direct construction. For custom PRF providers (CLI YubiKey, FIDO2, file-backed) or non-default platform options (`credentialRegistry`, `userName`, etc.), see [Advanced](#advanced).
 
 ## Checking passkey availability
 
@@ -140,7 +140,7 @@ Internally the silent attempt pins `preferImmediatelyAvailableCredentials = true
 
 `connect_with_passkey` is not surfaced on the WASM target. The unified flow needs a silent "no credential here" signal so it can fall through to register, and WebAuthn deliberately collapses that case into the same `NotAllowedError` as a user cancel for privacy reasons. There is no reliable way on web for the SDK to tell the two apart.
 
-The recommended UX on web is two buttons: a **Sign In** button calling `signIn` and a separate **Create Account** button calling `register`. Let the user pick the right one instead of trying to auto-detect. See the [Direct sign-in / register](#direct-sign-in-register) tabs below for the call shapes.
+The recommended UX on web is two buttons: a **Sign In** button calling `signIn` and a separate **Create Account** button calling `register`. Let the user pick the right one instead of trying to auto-detect. See [Direct sign-in / register](#direct-sign-in-register) for the call shapes.
 
 <h3 id="direct-sign-in-register">Direct sign-in / register</h3>
 
@@ -202,7 +202,7 @@ For the full mapping (including the iOS sub-300ms fast-fail nuance that bundles 
 
 ## Advanced
 
-The sections below cover customization points most apps never need. The happy path above (with {{#name createPasskeyClient}}) handles the typical onboarding flow on every platform with a built-in `PasskeyProvider`. Reach for the topics here when:
+Customization points most apps never need. {{#name createPasskeyClient}} handles the typical onboarding flow on every platform with a built-in `PasskeyProvider`. Reach for the topics here when:
 
 - You need a custom `PrfProvider` (CLI YubiKey, FIDO2, air-gapped backup file).
 - You're integrating Python, Go, or C# (no built-in `PasskeyProvider` ships for those bindings).
@@ -219,12 +219,12 @@ The convenience factory only takes `rpId` and `rpName`. The underlying `PasskeyP
 | {{#name rp_name}} | **required** | Display name shown to the user in the OS passkey picker and credential-management UIs when choosing a credential. Only used at credential registration; changing it does not affect existing credentials. |
 | {{#name user_name}} | {{#name rp_name}} | User name stored with the credential (registration only). On iOS this is the only field surfaced in the iCloud Keychain / passkey picker: the platform's `ASAuthorizationPlatformPublicKeyCredentialProvider` API has no `displayName` slot. Pass the per-credential friendly label here if you want users to see it. |
 | {{#name user_display_name}} | {{#name user_name}} | Primary label shown in passkey picker on platforms that surface a separate display name (Android via WebAuthn JSON `user.displayName`, web via WebAuthn L3). iOS ignores. |
-| {{#name credential_registry}} | none | Opt-in app-side store of known credential IDs. See [CredentialRegistry](#credentialregistry) below. |
+| {{#name credential_registry}} | none | Opt-in app-side store of known credential IDs. See [CredentialRegistry](#credentialregistry). |
 
 <div class="warning">
 <h4>C# / Go / Python limitation</h4>
 
-The SDK does not ship a built-in `PasskeyProvider` for C#, Go, or Python (no native passkey API to wrap on those targets). Integrators on those bindings implement their own `PrfProvider` and pass it to `PasskeyClient::new(...)` directly. See [Custom PrfProvider](#custom-prfprovider) below.
+The SDK does not ship a built-in `PasskeyProvider` for C#, Go, or Python (no native passkey API to wrap on those targets). Integrators on those bindings implement their own `PrfProvider` and pass it to `PasskeyClient::new(...)` directly. See [Custom PrfProvider](#custom-prfprovider).
 </div>
 
 ### Built-in behaviours
@@ -234,7 +234,7 @@ The native built-in providers (iOS / Android / Flutter / RN) handle several plat
 - **Bulk PRF (single OS prompt for N salts).** {{#name derive_seeds}} uses the WebAuthn dual-salt extension (`saltInput1` + `saltInput2` on iOS, `prfFirst` + `prfSecond` on Android) when the authenticator supports it, falling back to per-salt assertions otherwise. The SDK's {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} both go through this path so a master + label derivation costs **one** prompt where supported.
 - **Post-create grace (800ms).** After a successful {{#name create_passkey}}, the next derive call holds briefly so the OS finishes indexing the new credential before the immediate post-register assertion. Without this, on Apple Passwords the dual-salt assertion can drop `prf.second` and force a fallback prompt; on Google Password Manager the credential can be briefly invisible to the picker.
 - **Fast-fail on no-credential.** Assertions set `preferImmediatelyAvailableCredentials` (iOS) / `preferImmediatelyAvailableCredentials=true` (Android) so a missing credential surfaces as `CredentialNotFound` immediately rather than the cross-device "use another device" hybrid sheet.
-- **Opt-in CredentialRegistry auto-merge.** Hosts that supply a `CredentialRegistry` get registry IDs unioned into `allowCredentialIds` before assertion and into `excludeCredentialIds` before registration, plus the asserted/created credential ID is auto-added back. See [CredentialRegistry](#credentialregistry) below for reference impls.
+- **Opt-in CredentialRegistry auto-merge.** Hosts that supply a `CredentialRegistry` get registry IDs unioned into `allowCredentialIds` before assertion and into `excludeCredentialIds` before registration, plus the asserted/created credential ID is auto-added back. See [CredentialRegistry](#credentialregistry) for reference impls.
 
 These run by default. Hosts that need to override (e.g. for a custom credential-management UI) can pass an explicit `allowCredentialIds`.
 
