@@ -6,11 +6,11 @@ For the full technical specification, see the <a target="_blank" href="https://g
 
 ## Setup
 
-Passkey Login uses a Relying Party (RP) domain to scope credentials. Pick an RP for your app and host a configuration file on it for each platform you target: Web, Android, iOS / macOS. Platform authenticators verify the RP claim against the corresponding file before any WebAuthn ceremony.
+Passkey Login uses a Relying Party (RP) domain to scope credentials. Your app needs an RP and a configuration file hosted on it for each platform you target: Web, Android, iOS / macOS. Platform authenticators verify the RP claim against the corresponding file before any WebAuthn ceremony.
 
 ### Hosting the configuration files
 
-Two ways to set up the RP, depending on which ecosystem the passkey belongs to:
+Two ways to set up the RP:
 
 - **Shared with the Breez ecosystem (Breez-hosted).** A passkey registered in one Breez-registered app works in every other Breez-registered app on the same device, with no re-registration. [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to add your app to the configuration files Breez hosts at `keys.breez.technology`, then pass `PasskeyProvider.BREEZ_RP_ID` as your `rpId`.
 - **Scoped to your ecosystem (self-hosted).** A passkey registered against your RP works across the apps and web origins you list in your configuration files. You host the well-known files yourself on an HTTPS domain you control. Pass that domain as your `rpId` (for example, `"<your-rp-domain>"`).
@@ -108,7 +108,7 @@ Parameters:
 
 - **`rpId`**: Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` (= `keys.breez.technology`) if your app is Breez-registered. Required because changing it later strands existing credentials.
 - **`rpName`**: Display name shown to the user in the OS passkey picker and credential-management UIs (iCloud Keychain, Google Password Manager, 1Password, etc.) when choosing a credential. Required.
-- **`sdkConfig`**: Your main SDK {{#name Config}}. The factory forwards `sdkConfig.api_key` to the Breez relay for authenticated (<a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>) label storage. Hosts without an API key get public-relay-only label sync.
+- **`sdkConfig`**: Your main SDK {{#name Config}}. The factory forwards `sdkConfig.api_key` to the Breez relay for authenticated (<a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>) label storage. Without an API key, label sync falls back to public relays only.
 - **`passkeyConfig`** (optional): Carries {{#name default_label}}, the label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive no label. Falls back to the SDK's internal `"Default"` when unset.
 
 The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.
@@ -117,7 +117,7 @@ The SDK also implements <a target="_blank" href="https://github.com/nostr-protoc
 
 ## Checking passkey availability
 
-Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The single call collapses {{#name PrfProvider.is_supported}} and {{#name PrfProvider.check_domain_association}} into a tagged {{#name PasskeyAvailability}} value with four variants: `Available`, `PrfUnsupported`, `NotAssociated { source, reason }`, `Skipped { reason }`. Hosts can fall back to mnemonic-based onboarding on unsupported platforms (Android < 9, iOS < 18) and surface configuration mistakes (missing entitlement, AASA not deployed) without firing a WebAuthn ceremony:
+Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The single call collapses {{#name PrfProvider.is_supported}} and {{#name PrfProvider.check_domain_association}} into a tagged {{#name PasskeyAvailability}} value with four variants: `Available`, `PrfUnsupported`, `NotAssociated { source, reason }`, `Skipped { reason }`. Branch on the variant to fall back to mnemonic-based onboarding on unsupported platforms (Android < 9, iOS < 18) or surface configuration mistakes (missing entitlement, AASA not deployed) without firing a WebAuthn ceremony:
 
 {{#tabs passkey:check-availability}}
 
@@ -126,7 +126,7 @@ Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The 
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.connect_with_passkey">API docs</a>
 </h2>
 
-The recommended flow depends on the platform. Mobile uses a single-call unified flow backed by {{#name PasskeyClient.connect_with_passkey}}. Web uses two buttons (Sign In and Create Account) and lets the user pick. Hosts that want explicit control over each path call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly.
+The recommended flow depends on the platform. Mobile uses a single-call unified flow backed by {{#name PasskeyClient.connect_with_passkey}}. Web uses two buttons (Sign In and Create Account) and lets the user pick. For explicit control over each path, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly.
 
 ### Unified flow (mobile)
 
@@ -154,7 +154,7 @@ Pass `wallet.seed` to {{#name connect}} in either case.
 
 ## Managing labels
 
-Most apps brand a single label and never call these directly. Listing and publishing labels matters when the host supports multiple wallets per passkey identity.
+Most apps brand a single label and never call these directly. Listing and publishing labels matters when your app supports multiple wallets per passkey identity.
 
 <h3 id="listing-labels">
     <a class="header" href="#listing-labels">Listing</a>
@@ -234,9 +234,9 @@ The native built-in providers (iOS / Android / Flutter / RN) handle several plat
 - **Bulk PRF (single OS prompt for N salts).** {{#name derive_seeds}} uses the WebAuthn dual-salt extension (`saltInput1` + `saltInput2` on iOS, `prfFirst` + `prfSecond` on Android) when the authenticator supports it, falling back to per-salt assertions otherwise. The SDK's {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} both go through this path so a master + label derivation costs **one** prompt where supported.
 - **Post-create grace (800ms).** After a successful {{#name create_passkey}}, the next derive call holds briefly so the OS finishes indexing the new credential before the immediate post-register assertion. Without this, on Apple Passwords the dual-salt assertion can drop `prf.second` and force a fallback prompt; on Google Password Manager the credential can be briefly invisible to the picker.
 - **Fast-fail on no-credential.** Assertions set `preferImmediatelyAvailableCredentials` (iOS) / `preferImmediatelyAvailableCredentials=true` (Android) so a missing credential surfaces as `CredentialNotFound` immediately rather than the cross-device "use another device" hybrid sheet.
-- **Opt-in CredentialRegistry auto-merge.** Hosts that supply a `CredentialRegistry` get registry IDs unioned into `allowCredentialIds` before assertion and into `excludeCredentialIds` before registration, plus the asserted/created credential ID is auto-added back. See [CredentialRegistry](#credentialregistry) for reference impls.
+- **Opt-in CredentialRegistry auto-merge.** Supplying a `CredentialRegistry` unions its IDs into `allowCredentialIds` before assertion and into `excludeCredentialIds` before registration, and auto-adds the asserted / created credential ID back. See [CredentialRegistry](#credentialregistry) for reference impls.
 
-These run by default. Hosts that need to override (e.g. for a custom credential-management UI) can pass an explicit `allowCredentialIds`.
+These run by default. To override (e.g. for a custom credential-management UI), pass an explicit `allowCredentialIds`.
 
 <a id="custom-prfprovider"></a>
 
@@ -500,7 +500,7 @@ const provider = new PasskeyProvider({
 
 #### Using credentials() with a registry
 
-Once a registry is wired in, the SDK auto-merges its contents into `excludeCredentialIds` on register and `allowCredentialIds` on sign-in. Hosts can also inspect and mutate the stored set directly via the {{#name PasskeyClient.credentials}} sub-object, typically to back a settings page that lists registered passkeys on this device with per-row remove.
+Once a registry is wired in, the SDK auto-merges its contents into `excludeCredentialIds` on register and `allowCredentialIds` on sign-in. You can also inspect and mutate the stored set directly via the {{#name PasskeyClient.credentials}} sub-object, typically to back a settings page that lists registered passkeys on this device with per-row remove.
 
 {{#tabs passkey:with-credential-registry}}
 
@@ -525,7 +525,7 @@ Reserve `clear()` for explicit factory-reset flows where orphan credentials are 
 - Every registry call is bounded by a 3 second timeout. Slow backends never block the WebAuthn ceremony.
 - Failures and timeouts are logged (Rust `tracing::warn`, Swift `os_log`, Kotlin `Log.w`, JS `console.warn`) and surfaced via the per-provider `onRegistryError` callback when set. `read` defaults to an empty list; `add`/`remove`/`clear` fire-and-forget.
 - Web/RN/Flutter perform a constructor-time conformance check. A registry object missing one of `read` / `add` / `remove` / `clear` throws on construction so misconfiguration surfaces at startup. iOS / Kotlin / Rust enforce conformance at compile time.
-- When a `CredentialNotFound` would propagate to the host AND no `allowCredentialIds` AND no `credentialRegistry` were supplied, the SDK appends a help URL to the error message pointing here.
+- When a `CredentialNotFound` would propagate AND no `allowCredentialIds` AND no `credentialRegistry` were supplied, the SDK appends a help URL to the error message pointing here.
 
 ### Domain association diagnostic
 
@@ -535,7 +535,7 @@ Reserve `clear()` for explicit factory-reset flows where orphan credentials are 
 
 ### Capacitor plugins
 
-When the host is a Capacitor app, the JS layer talks to the iOS Swift / Android Kotlin native plugin through Capacitor's bridge. The SDK ships a TypeScript-only contract sub-export so plugin authors can keep their `definitions.ts` in lockstep with the canonical native shape:
+For Capacitor apps, the JS layer talks to the iOS Swift / Android Kotlin native plugin through Capacitor's bridge. The SDK ships a TypeScript-only contract sub-export so plugin authors can keep their `definitions.ts` in lockstep with the canonical native shape:
 
 ```ts
 import type {
