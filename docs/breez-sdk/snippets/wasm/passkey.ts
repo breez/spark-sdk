@@ -75,7 +75,7 @@ const connectWithPasskey = async () => {
   const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
-  // signIn derives the wallet seed for an existing credential. With
+  // signIn derives the seed for an existing credential. With
   // bulk PRF on iOS+Android this is a single OS prompt that derives
   // master + label seeds in one ceremony.
   const response = await passkey.signIn({ label: 'personal' })
@@ -99,7 +99,7 @@ const signInExistingUser = async () => {
 const registerNewPasskey = async () => {
   // ANCHOR: register-passkey
   // For a brand-new user with no existing passkey: register() creates
-  // the credential AND derives the wallet seed in one orchestrated call.
+  // the credential AND derives the seed in one orchestrated call.
   // On iOS+Android this is 2 OS prompts total (1 create + 1 dual-salt
   // assert) thanks to the SDK's bulk-PRF path.
   const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
@@ -125,7 +125,7 @@ const listLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
   const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
   const config: PasskeyConfig = {
-    // Optional: override the default wallet label used when register /
+    // Optional: override the default label used when register /
     // signIn receive `label = undefined`. Falls back to the SDK's
     // internal "Default" when unset.
     defaultLabel: 'personal',
@@ -205,7 +205,7 @@ const recoverFromAlreadyExists = async () => {
   } catch (error) {
     if (error instanceof PasskeyAlreadyExistsError) {
       // Flip to sign-in. The existing credential's PRF output is
-      // the same wallet seed the host would have minted on register.
+      // the same seed the host would have minted on register.
       const response = await passkey.signIn({ label: 'personal' })
       return response.wallet
     }

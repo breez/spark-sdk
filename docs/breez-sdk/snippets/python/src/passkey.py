@@ -104,7 +104,7 @@ async def connect_with_passkey():
 async def register_new_passkey():
     # ANCHOR: register-passkey
     # For a brand-new user with no existing passkey: register() creates
-    # the credential AND derives the wallet seed in one orchestrated
+    # the credential AND derives the seed in one orchestrated
     # call. On iOS+Android this is 2 OS prompts total (1 create + 1
     # dual-salt assert) thanks to the SDK's bulk-PRF path.
     prf_provider = CustomPrfProvider()
@@ -130,7 +130,7 @@ async def list_labels() -> list[str]:
     # ANCHOR: list-labels
     prf_provider = CustomPrfProvider()
     config = PasskeyConfig(
-        # Optional: override the default wallet label used when
+        # Optional: override the default label used when
         # register / sign_in receive `label = None`. Falls back to the
         # SDK's internal "Default" when unset.
         default_label="personal",
@@ -202,7 +202,7 @@ async def recover_from_already_exists():
         )
     except PrfProviderError.CredentialAlreadyExists:
         # Flip to sign-in. The existing credential's PRF output is
-        # the same wallet seed the host would have minted on register.
+        # the same seed the host would have minted on register.
         response = await passkey.sign_in(SignInRequest(label="personal"))
         return response.wallet
     # ANCHOR_END: recover-already-exists

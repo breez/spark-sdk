@@ -123,7 +123,7 @@ const listLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
   const sdkConfig = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const passkey = createPasskeyClient('my-app.com', 'My App', sdkConfig, {
-    // Default wallet label when register / signIn receive no label.
+    // Default label when register / signIn receive no label.
     defaultLabel: 'personal',
   })
 
@@ -188,7 +188,7 @@ const recoverFromAlreadyExists = async () => {
   } catch (error) {
     if (error instanceof PasskeyAlreadyExistsError) {
       // Flip to sign-in. The existing credential's PRF output is
-      // the same wallet seed the host would have minted on register.
+      // the same seed the host would have minted on register.
       const response = await passkey.signIn({ label: 'personal' })
       return response.wallet
     }

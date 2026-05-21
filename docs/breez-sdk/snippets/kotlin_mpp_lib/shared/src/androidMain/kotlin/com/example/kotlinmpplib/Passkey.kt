@@ -140,7 +140,7 @@ class PasskeySnippets(private val activity: Activity) {
             rpId = "my-app.com",
             rpName = "My App",
             sdkConfig = sdkConfig,
-            // Default wallet label when register / signIn receive no label.
+            // Default label when register / signIn receive no label.
             passkeyConfig = PasskeyConfig(defaultLabel = "personal"),
         )
 

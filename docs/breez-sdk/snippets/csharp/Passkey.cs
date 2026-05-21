@@ -125,7 +125,7 @@ namespace BreezSdkSnippets
             // ANCHOR: list-labels
             var prfProvider = new CustomPrfProvider();
             var config = new PasskeyConfig(
-                // Optional: override the default wallet label used when
+                // Optional: override the default label used when
                 // Register / SignIn receive `label = null`. Falls back to
                 // the SDK's internal "Default" when unset.
                 defaultLabel: "personal"

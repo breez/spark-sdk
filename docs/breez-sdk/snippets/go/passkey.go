@@ -114,7 +114,7 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	// ANCHOR: register-passkey
 	// For a brand-new user with no existing passkey: Register() creates
-	// the credential AND derives the wallet seed in one orchestrated
+	// the credential AND derives the seed in one orchestrated
 	// call. On iOS+Android this is 2 OS prompts total (1 create + 1
 	// dual-salt assert) thanks to the SDK's bulk-PRF path.
 	prfProvider := &CustomPrfProvider{}
@@ -150,7 +150,7 @@ func ListLabels() ([]string, error) {
 	prfProvider := &CustomPrfProvider{}
 	defaultLabel := "personal"
 	config := &breez_sdk_spark.PasskeyConfig{
-		// Optional: override the default wallet label used when Register /
+		// Optional: override the default label used when Register /
 		// SignIn receive `Label = nil`. Falls back to the SDK's internal
 		// "Default" when unset.
 		DefaultLabel: &defaultLabel,
