@@ -512,7 +512,19 @@ Once a registry is wired in, the SDK auto-merges its contents into `excludeCrede
 
 #### When (not) to call `credentials().clear()`
 
-`clear()` wipes the app's bookkeeping only: existing credentials remain on the OS / cloud authenticator (iCloud Keychain, Google Password Manager, etc.) and the user can still sign in with them. Don't call it on a normal sign-out: with the registry empty, the next `register()` call passes an empty `excludeCredentialIds` to the platform, and the platform may mint a sibling credential alongside the existing one. Behavior varies by authenticator: iOS Keychain and hardware keys do not deduplicate on the create side, Google Password Manager often warns or dedupes. Siblings are not literal duplicates (different credential ID, different `user.id`, **different PRF output**), which means a different seed and a different wallet at next sign-in if the user picks the sibling in the OS picker. Reserve `clear()` for explicit "factory reset" flows where the integrator accepts the risk of orphan credentials.
+`clear()` wipes the app's local bookkeeping only. Existing credentials stay on the OS / cloud authenticator and the user can still sign in with them.
+
+**Don't call `clear()` on a normal sign-out.** With the registry empty, the next `register()` sends an empty `excludeCredentialIds`. On some authenticators that mints a **sibling credential**: same RP, different credential ID, **different PRF output → different seed → different wallet**. If the user picks the sibling at next sign-in, they reach an unfamiliar wallet.
+
+Dedup behavior on an empty `excludeCredentialIds`:
+
+| Authenticator | Behavior |
+|---|---|
+| iOS / iCloud Keychain | Mints sibling silently |
+| Hardware keys (YubiKey etc.) | Mints sibling silently |
+| Google Password Manager | Usually warns or dedupes |
+
+Reserve `clear()` for explicit factory-reset flows where orphan credentials are acceptable.
 
 #### CredentialRegistry error semantics
 
