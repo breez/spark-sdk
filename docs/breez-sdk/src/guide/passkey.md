@@ -10,10 +10,10 @@ Passkey Login uses a Relying Party (RP) domain to scope credentials. The domain 
 
 ### Hosting the configuration files
 
-Two ways to set up the RP, depending on whether you want a user's passkey to work across multiple Breez-registered apps or stay scoped to your app alone:
+Two ways to set up the RP, depending on which ecosystem the passkey belongs to:
 
-- **Shared passkey (Breez-hosted).** A passkey registered in one Breez-registered app works in every other Breez-registered app on the same device, with no re-registration. [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to add your app to the configuration files Breez hosts at `keys.breez.technology`, then pass `PasskeyProvider.BREEZ_RP_ID` as your `rpId`.
-- **App-scoped passkey (self-hosted).** A passkey registered in your app only works in your app (and any related web origins you list). You host the well-known files yourself at the paths below, on an HTTPS domain you control. Pass that domain as your `rpId` (for example, `"<your-rp-domain>"`).
+- **Shared with the Breez ecosystem (Breez-hosted).** A passkey registered in one Breez-registered app works in every other Breez-registered app on the same device, with no re-registration. [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to add your app to the configuration files Breez hosts at `keys.breez.technology`, then pass `PasskeyProvider.BREEZ_RP_ID` as your `rpId`.
+- **Scoped to your ecosystem (self-hosted).** A passkey registered against your RP works across the apps and web origins you list in your configuration files. You host the well-known files yourself at the paths below, on an HTTPS domain you control. Pass that domain as your `rpId` (for example, `"<your-rp-domain>"`).
 
 Same code paths in either case; only the `rpId` value and who hosts the JSON differs.
 
