@@ -11,7 +11,7 @@ KMP_CLI_DIR := ../../bindings/examples/cli/langs/kotlin-multiplatform
 export MASTER_SECRET ?= breez-bench
 export MYSQL_URL ?= mysql://root:password@127.0.0.1:3306/breez_bench
 
-.PHONY: help setup mysql-up build smoke-test run-server fund seed-senders loadgen sweep aggregate run trace-sync clean
+.PHONY: help setup mysql-up build smoke-test run-server fund seed-senders mint-invoices loadgen sweep aggregate audit run trace-sync clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -55,8 +55,13 @@ fund: build ## Top up the treasurer (TARGET_SATS=N; needs FAUCET_USERNAME + FAUC
 seed-senders: build ## Top each of K sender wallets up to PER_SENDER_SATS from the treasurer
 	$(GRADLE) run --console=plain --args="--mode=seed-senders --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --senders=$${SENDERS:-50} --per-sender-sats=$${PER_SENDER_SATS:-5000}"
 
-loadgen: build ## Run the load generator against an already-running server (TARGET_RPS + DURATION required)
-	$(GRADLE) run --console=plain --args="--mode=loadgen --base-url=$${BASE_URL:-http://localhost:8080} --target-rps=$$TARGET_RPS --duration=$$DURATION --users=$${USERS:-10000} --mix=$${MIX:-info=40,receive=30,send=30} --user-distribution=$${DIST:-uniform} --senders=$${SENDERS:-50} --payment-sats=$${PAYMENT_SATS:-1}$${RUN_ID:+ --run-id=$$RUN_ID}"
+mint-invoices: build ## Pre-mint bolt11 invoice pool for LN sends (COUNT + OUT required; AMOUNT_SATS defaults to 1)
+	@test -n "$$COUNT" || (echo "COUNT is required (number of invoices to mint)"; exit 2)
+	@test -n "$$OUT"   || (echo "OUT is required (pool file path)"; exit 2)
+	$(GRADLE) run --console=plain --args="--mode=mint-invoices --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --count=$$COUNT --amount-sats=$${AMOUNT_SATS:-1} --banks=$${BANKS:-50} --expiry-secs=$${EXPIRY_SECS:-604800} --parallelism=$${PARALLELISM:-20} --out=$$OUT"
+
+loadgen: build ## Run the load generator against an already-running server (TARGET_RPS + DURATION required; INVOICE_POOL needed if MIX has send_ln)
+	$(GRADLE) run --console=plain --args="--mode=loadgen --base-url=$${BASE_URL:-http://localhost:8080} --target-rps=$$TARGET_RPS --duration=$$DURATION --users=$${USERS:-10000} --mix=$${MIX:-info=40,receive=30,send=30} --user-distribution=$${DIST:-uniform} --senders=$${SENDERS:-50} --payment-sats=$${PAYMENT_SATS:-1}$${RUN_ID:+ --run-id=$$RUN_ID}$${INVOICE_POOL:+ --invoice-pool=$$INVOICE_POOL}$${TREASURER_SPARK_ADDR:+ --treasurer-spark-addr=$$TREASURER_SPARK_ADDR}"
 
 sweep: build ## RPS sweep only (no aggregation). See scripts/sweep.sh for env knobs.
 	./scripts/sweep.sh
@@ -64,6 +69,10 @@ sweep: build ## RPS sweep only (no aggregation). See scripts/sweep.sh for env kn
 aggregate: ## Aggregate a sweep into summary.json + RESULTS.md (SWEEP_ID required)
 	@test -n "$$SWEEP_ID" || (echo "SWEEP_ID is required (e.g. SWEEP_ID=2026-05-08T15-00-00)"; exit 2)
 	python3 scripts/aggregate.py --sweep-dir out/$$SWEEP_ID
+
+audit: build ## Run the bolt11 settlement audit on a completed sweep (SWEEP_ID required). Auto-run by `make run` when MIX has send_ln.
+	@test -n "$$SWEEP_ID" || (echo "SWEEP_ID is required"; exit 2)
+	$(GRADLE) run --console=plain --args="--mode=audit-bolt11 --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --sweep-dir=out/$$SWEEP_ID --parallelism=$${AUDIT_PARALLELISM:-5}"
 
 trace-sync: build ## Trace an explicit syncWallet() on a wallet with full Rust tracing (USER_ID defaults to __treasurer__; LOG_FILTER=debug)
 	$(GRADLE) run --console=plain --args="--mode=trace-sync --mysql-url=$$MYSQL_URL --master-secret=$$MASTER_SECRET --user-id=$${USER_ID:-__treasurer__} --log-filter=$${LOG_FILTER:-debug}"

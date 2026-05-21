@@ -112,8 +112,51 @@ def summary_stats(values):
 
 # --- per-step aggregation ------------------------------------------------
 
+SUBTIMING_FIELDS = ("build_ms", "prepare_ms", "send_ms", "op_ms", "disconnect_ms")
+
+
+def per_op_subtimings(rows, op_field="op"):
+    """Per-op sub-timing breakdown from requests.jsonl (server-side).
+
+    Returns dict[op] → dict[field] → summary_stats. Splits a send_ln's
+    duration into where it actually went (build / prepare / send /
+    disconnect). The dominant column is the bottleneck row in RESULTS.
+
+    Errored rows are excluded so the breakdown reflects the successful
+    flow only; a partial-error row's sub-timings would conflate the
+    pre-error phase with `null` for the post-error phases.
+    """
+    by_op_field = {}
+    for r in rows:
+        if r.get("error"):
+            continue
+        op = r.get(op_field)
+        if op is None:
+            continue
+        for f in SUBTIMING_FIELDS:
+            v = r.get(f)
+            if v is None:
+                continue
+            by_op_field.setdefault(op, {}).setdefault(f, []).append(v)
+    out = {}
+    for op, fields in by_op_field.items():
+        out[op] = {f: summary_stats(v) for f, v in fields.items()}
+    return out
+
+
 def per_op_latency(rows, duration_field, op_field):
-    """Group durations by op, return summary stats per op."""
+    """Group durations by op, return summary stats per op.
+
+    Also emits synthetic `_send_rollup` / `_receive_rollup` entries: the
+    union of all `send*` / `receive*` durations. These power the
+    headline `max_safe_rps` metric (defined on the send class as a
+    whole — a `send_ln` is ~2 SSP roundtrips vs a local Spark transfer,
+    so blending them into one literal `send` p99 would be bimodal junk;
+    splitting them across rows is right for the table, rolling them up
+    is right for the cliff metric). Underscore-prefixed so the per-op
+    table renderer skips them. For legacy spark-only data with a
+    literal `send` label, derive_p99_doubling falls back to the literal.
+    """
     by_op = {}
     for r in rows:
         if r.get("error") is not None:
@@ -127,7 +170,14 @@ def per_op_latency(rows, duration_field, op_field):
         if op is None:
             continue
         by_op.setdefault(op, []).append(d)
-    return {op: summary_stats(v) for op, v in by_op.items()}
+    result = {op: summary_stats(v) for op, v in by_op.items()}
+    send_durs = [d for op, ds in by_op.items() if op.startswith("send") for d in ds]
+    if send_durs:
+        result["_send_rollup"] = summary_stats(send_durs)
+    receive_durs = [d for op, ds in by_op.items() if op.startswith("receive") for d in ds]
+    if receive_durs:
+        result["_receive_rollup"] = summary_stats(receive_durs)
+    return result
 
 
 def metrics_window(metrics_rows, ts_lo, ts_hi):
@@ -217,6 +267,7 @@ def aggregate_step(step_dir):
 
     client_lat = per_op_latency(latency_rows, duration_field="duration_ms", op_field="op")
     server_lat = per_op_latency(requests_rows, duration_field="duration_ms", op_field="op")
+    server_subtimings = per_op_subtimings(requests_rows, op_field="op")
 
     metrics = metrics_window(metrics_rows, ts_lo, ts_hi) if metrics_rows else {}
 
@@ -233,6 +284,7 @@ def aggregate_step(step_dir):
         "server_err": server_err,
         "client_latency_ms": client_lat,
         "server_latency_ms": server_lat,
+        "server_subtimings_ms": server_subtimings,
         "metrics": metrics,
         "errors_by_category_client": client_errors_by_category,
         "errors_by_category_server": server_errors_by_category,
@@ -270,7 +322,11 @@ def derive_p99_doubling(steps_summary):
         # enforce that.
         if step_state(s) == "collapsed":
             continue
-        send = s.get("client_latency_ms", {}).get("send")
+        # Prefer the synthetic send-class rollup (handles mixed
+        # send_spark/send_ln runs); fall back to the literal `send`
+        # bucket for legacy spark-only data.
+        lat = s.get("client_latency_ms", {})
+        send = lat.get("_send_rollup") or lat.get("send")
         if not send or send.get("count", 0) < 30:
             continue
         candidates.append((rps, send["p99"]))
@@ -352,7 +408,10 @@ def render_table(headers, rows):
     return out
 
 
-def render_results_md(sweep_id, manifest, steps_summary, headline):
+def render_results_md(sweep_id, manifest, steps_summary, headline, audit=None):
+    # Unpack here so both the headline verdict (below) and the deeper
+    # `max_safe_rps` line further down can consult the same values.
+    max_safe, baseline_rps, baseline_p99, crossed_at = headline
     lines = []
     lines.append(f"# Bench RPS sweep — `{sweep_id}`")
     lines.append("")
@@ -379,11 +438,43 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
     sustained = max(ok_rps) if ok_rps else None
     mix = manifest.get("mix", "?")
 
-    if not deg_rps and not col_rps:
-        all_rps = [r for r, _ in states]
+    # `step_state` is goodput-based: a step at congestion-collapse with
+    # all dispatches eventually completing within the 60s drain window
+    # still reads as "ok" even though p99 may have multiplied. So a
+    # truthful headline must AND together (a) no degraded/collapsed
+    # steps AND (b) no p99(send) cliff vs the swept range — the latter
+    # is the `max_safe_rps < max swept RPS` signal from
+    # `derive_p99_doubling`. Without (b), a queueing-only collapse
+    # silently passes as "stable".
+    all_rps = [r for r, _ in states]
+    max_swept = max(all_rps) if all_rps else None
+    latency_cliff = (
+        max_safe is not None
+        and max_swept is not None
+        and max_safe < max_swept
+    )
+
+    if not deg_rps and not col_rps and not latency_cliff:
         verdict = (
             f"**Stable across the whole sweep** (mix `{mix}`): sustained "
-            f"≥ {max(all_rps)} RPS with no degradation observed."
+            f"≥ {max_swept} RPS with no goodput or latency degradation observed."
+        )
+    elif not deg_rps and not col_rps and latency_cliff:
+        # Goodput held but latency doubled — the cliff is queueing, not
+        # error-collapse. Surface that explicitly: the partner sees an
+        # n× p99 inflation while goodput still reads 100%.
+        ratio = max(steps_summary, key=lambda x: x[0])[1] \
+            .get("client_latency_ms", {}) \
+            .get("_send_rollup", {}).get("p99")
+        ratio_str = ""
+        if ratio is not None and baseline_p99:
+            ratio_str = f" — p99(send) inflated **{ratio / baseline_p99:.1f}×** vs baseline at top of sweep"
+        verdict = (
+            f"**Latency cliff** (mix `{mix}`): goodput held but p99(send) crossed 2× "
+            f"baseline above **{max_safe} RPS** (baseline `{baseline_p99:.0f}`ms @ `{baseline_rps}` RPS, "
+            f"crossed at `{crossed_at}` RPS){ratio_str}. The completion-rate ceiling is below the "
+            f"dispatch rate at top of sweep; the in-flight queue grows monotonically — a real "
+            f"external-dependency saturation."
         )
     else:
         head = (
@@ -426,7 +517,6 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
     lines.append(f"- client goodput (ok / offered): {cli}")
     lines.append(f"- server goodput (handler ok / offered): {srv}")
 
-    max_safe, baseline_rps, baseline_p99, crossed_at = headline
     if max_safe is not None:
         lines.append(
             f"- max_safe_rps (client p99(send) < 2× baseline, **pre-collapse "
@@ -435,7 +525,27 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
         )
     lines.append("")
 
-    ops = ["info", "send", "receive"]
+    # Op list is derived from data (union across steps), in canonical
+    # order. New `_ln` variants render as their own rows alongside the
+    # spark variants — distinct payment paths must not be blended in a
+    # single percentile cell. The `_send_rollup`/`_receive_rollup`
+    # synthetic entries are skipped here (they're only for the headline
+    # cliff metric in derive_p99_doubling).
+    _CANONICAL_OP_ORDER = [
+        "info",
+        "send", "send_spark", "send_ln",
+        "receive", "receive_spark", "receive_ln",
+    ]
+
+    def _collect_ops(latency_key):
+        seen = set()
+        for _, s in steps_summary:
+            for op in (s.get(latency_key) or {}).keys():
+                if not op.startswith("_"):
+                    seen.add(op)
+        ordered = [op for op in _CANONICAL_OP_ORDER if op in seen]
+        rest = sorted(seen - set(ordered))
+        return ordered + rest
 
     lines.append(
         "> `state` ∈ ok / degrading / **collapsed**. Collapsed rows show "
@@ -449,6 +559,7 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
     lines.append("")
 
     def render_lat_table(title, latency_key, count_headers, count_cells):
+        ops = _collect_ops(latency_key)
         lines.append(title)
         lines.append("")
         headers = ["RPS", "state"] + count_headers
@@ -488,6 +599,55 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
         ["completed", "ok", "err"],
         lambda s: [s["server_completed"], s["server_ok"], s["server_err"]],
     )
+
+    # Sub-timing breakdown: where does a send's latency go? `prepare_ms`
+    # is one SSP RPC (fee estimate); `send_ms` is the heavy one (SSP
+    # requestLightningSend + Spark transfer + storage). `build_ms` is
+    # the per-request SDK build cost; near-zero means the shared
+    # SdkContext is doing its job. Dominant column at the cliff = the
+    # bottleneck row.
+    def _has_send_subtimings():
+        for _, s in steps_summary:
+            sub = s.get("server_subtimings_ms") or {}
+            for op in sub:
+                if op.startswith("send"):
+                    return True
+        return False
+
+    if _has_send_subtimings():
+        lines.append("## Server-side send sub-timings (ms; successful sends only)")
+        lines.append("")
+        lines.append(
+            "> `build` = SDK construction; `prepare` = `prepareSendPayment` "
+            "(includes the SSP fee-estimate RPC for bolt11); `send` = "
+            "`sendPayment` itself (SSP `requestLightningSend` + Spark "
+            "transfer + storage); `disconnect` = SDK teardown. The dominant "
+            "column where p99 inflates between RPS steps is the bottleneck."
+        )
+        lines.append("")
+        send_ops = sorted({
+            op for _, s in steps_summary
+            for op in (s.get("server_subtimings_ms") or {}).keys()
+            if op.startswith("send")
+        })
+        for op in send_ops:
+            lines.append(f"### `{op}`")
+            lines.append("")
+            headers = ["RPS"]
+            for phase in ("build", "prepare", "send", "disconnect"):
+                headers += [f"{phase} p50", f"{phase} p95", f"{phase} p99"]
+            rows = []
+            for rps, s in steps_summary:
+                cells = [str(rps)]
+                opst = (s.get("server_subtimings_ms") or {}).get(op, {})
+                for phase in ("build", "prepare", "send", "disconnect"):
+                    stats = opst.get(f"{phase}_ms", {}) or {}
+                    cells.append(fmt_ms(stats.get("p50")))
+                    cells.append(fmt_ms(stats.get("p95")))
+                    cells.append(fmt_ms(stats.get("p99")))
+                rows.append(cells)
+            lines.extend(render_table(headers, rows))
+            lines.append("")
 
     lines.append("## Process metrics")
     lines.append("")
@@ -557,6 +717,59 @@ def render_results_md(sweep_id, manifest, steps_summary, headline):
             ec_rows.append(row)
         lines.extend(render_table(ec_headers, ec_rows))
         lines.append("")
+
+    # --- Lightning settlement audit ----------------------------------
+    # Only emitted when audit.json is present. The audit re-syncs each
+    # sender wallet and asks `listPayments(Send, Lightning)` what
+    # actually settled on the LN side — `completionTimeoutSecs=0`
+    # returns the moment the SSP accepts the payment, well before
+    # settlement, so the per-step `client_ok` and `send_ln` p99 numbers
+    # could otherwise be silently masking a tail of unsettled payments.
+    # If `settled` < ~99% something needs investigation; "not_found"
+    # means the SSP rejected the dispatch before the Payment row was
+    # persisted (a different failure mode than `failed`).
+    if audit:
+        lines.append("## Lightning settlement audit")
+        lines.append("")
+        et = audit.get("expected_total", 0)
+        c = audit.get("completed", 0)
+        p = audit.get("pending", 0)
+        f = audit.get("failed", 0)
+        nf = audit.get("not_found", 0)
+        sr = 100.0 * audit.get("settled_rate", 0.0)
+        lines.append(
+            f"- **{c}/{et} send_ln dispatches actually settled** "
+            f"({sr:.1f}%). Pending={p}, Failed={f}, NotFound={nf}."
+        )
+        lines.append(
+            "- `Completed` = SDK's listPayments observed `PaymentStatus.Completed` "
+            "for the dispatched invoice on the sender wallet after a post-run "
+            "syncWallet. `Pending` = SDK has the payment row but settlement "
+            "hadn't propagated by audit time. `Failed` = SDK marked the payment "
+            "Failed. `NotFound` = no Payment row matches the dispatched invoice "
+            "on this sender (SSP rejected the dispatch before the SDK could "
+            "persist the row — separate failure mode from Failed)."
+        )
+        lines.append("")
+        per_step = audit.get("per_step", [])
+        if per_step:
+            headers = ["RPS", "expected", "completed", "pending", "failed", "not_found", "settled %"]
+            rows = []
+            for s in per_step:
+                exp = s.get("expected", 0)
+                cc = s.get("completed", 0)
+                pct = (100.0 * cc / exp) if exp else 0.0
+                rows.append([
+                    str(s.get("rps", "?")),
+                    str(exp),
+                    str(cc),
+                    str(s.get("pending", 0)),
+                    str(s.get("failed", 0)),
+                    str(s.get("not_found", 0)),
+                    f"{pct:.1f}",
+                ])
+            lines.extend(render_table(headers, rows))
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -628,7 +841,14 @@ def main():
     summary_path = sweep_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
-    md = render_results_md(sweep_id, manifest, steps_summary, headline)
+    audit = None
+    audit_path = sweep_dir / "audit.json"
+    if audit_path.is_file():
+        try:
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"warn: malformed audit.json: {e}", file=sys.stderr)
+    md = render_results_md(sweep_id, manifest, steps_summary, headline, audit)
     results_path = sweep_dir / "RESULTS.md"
     results_path.write_text(md, encoding="utf-8")
 

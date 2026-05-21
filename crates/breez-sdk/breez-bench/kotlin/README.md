@@ -25,48 +25,26 @@ All three steps are idempotent. Subsequent sessions just need
 `make run` since the closed-loop funding flow keeps the bench wallets
 populated.
 
-## Output naming — read before kicking off a sweep
+## Output
 
-**One sweep → one directory `out/<sweep-id>/`.** Naming rule (enforced by `sweep.sh`, warn-on-deviate):
-
-```
-out/<sweep-id>/    where  <sweep-id> = <UTC-ISO-8601-timestamp>[-<label>]
-```
-
-Examples:
-
-```
-out/2026-05-20T11-45-00Z/                       # default: just the timestamp
-out/2026-05-20T11-45-00Z-mysql-recycle/         # LABEL=mysql-recycle make run
-out/2026-05-20T11-45-00Z-phase6-fastpass/       # LABEL=phase6-fastpass make run
-```
-
-Rules:
-
-- **Always** start with the UTC timestamp prefix so `ls out/` sorts chronologically and entries from different sessions don't collide.
-- Tag a run with `LABEL=<kebab-slug>` (`[a-z0-9][a-z0-9-]*`). Don't bake the label into a custom `SWEEP_ID` — let the Makefile compose it from `LABEL`.
-- **No bare files at the top level of `out/`.** Everything a run produces — including the live driver log — lives inside the sweep dir. Don't `make run > out/foo.log 2>&1`; the recipe already tees its combined stdout/stderr into `out/<sweep-id>/driver.log` for you (so progress is visible on the terminal AND persisted).
-- Set `SWEEP_ID=…` directly only to resume / share an existing dir across phases. `sweep.sh` warns if `SWEEP_ID` doesn't match the convention but still runs.
-
-**Inside the sweep dir:**
+One sweep → one directory `out/<sweep-id>/` (gitignored). Default
+`<sweep-id>` is a UTC ISO-8601 timestamp; `LABEL=<kebab-slug> make run`
+appends a human suffix (e.g. `2026-05-20T11-45-00Z-mysql-recycle`).
 
 ```
 out/<sweep-id>/
-  manifest.json            sweep config + host info + funding budget
-  driver.log               live [sweep]/[fund]/[seed]/[loadgen] output (tee'd by `make run`)
+  manifest.json            sweep config + host info + funding budget + MASTER_SECRET (chmod 600)
+  driver.log               live [sweep]/[fund]/[seed]/[loadgen] output
   RESULTS.md               headline tables (read this)
   summary.json             full structured per-step breakdown
   fund.log seed.log        pre-sweep step output (skipped if no-op)
   rps-50/
-    server.log             server stdout/stderr
-    loadgen.log            loadgen stdout/stderr
+    server.log loadgen.log
     requests.jsonl         server-side per-request timings
     metrics.jsonl          1Hz process metrics
     latency.jsonl          client-side per-request timings
   rps-100/  ...
 ```
-
-`out/` is gitignored. Headline numbers live wherever they're shared (Slack, partner doc, etc.), not in git.
 
 ## Tweaking the sweep
 
@@ -76,22 +54,55 @@ All knobs are env vars. Defaults give the fast pass.
 |---|---|---|
 | `SWEEP_RPS` | `50,100,250` | Comma-separated RPS list |
 | `DURATION` | `2m` | Per-step duration (`Xs` / `Xm` / `Xh`) |
-| `MIX` | `info=40,receive=30,send=30` | Op weights (any positive numbers) |
+| `MIX` | `info=40,receive=30,send=30` | Op weights (`label=N,...`). Labels: `info`, `send`/`send_spark`, `send_ln`, `receive`/`receive_spark`, `receive_ln`. Bare `send`/`receive` = spark variants |
 | `USERS` | `10000` | Workload pool size for `/info` + `/receive` |
 | `SENDERS` | `50` | Sender wallet pool for `/send` |
+| `BANKS` | `50` | Receiver wallets for the bolt11 pre-mint pool (only used when `MIX` has `send_ln`) |
+| `INVOICE_EXPIRY_SECS` | `604800` | Expiry per pre-minted invoice (7 days) |
+| `MINT_PARALLELISM` | `20` | Concurrent in-flight `receivePayment` during pre-mint |
+| `LN_FEE_SAFETY` | `1.5` | Headroom multiplier on the probed LN fee for sender prefunding |
 | `DIST` | `uniform` | `uniform` or `zipf` |
 | `PAYMENT_SATS` | `1` | Sats per `/send` |
 | `PORT` | `8080` | HTTP listen port |
 | `MASTER_SECRET` | `breez-bench` | Wallet seed namespace; standardized so wallets persist between runs |
 | `MYSQL_URL` | `mysql://root:password@127.0.0.1:3306/breez_bench` | Bench DB |
-| `CONNS_PER_OPERATOR` | unset → `null` | gRPC connections per operator in the shared context. `null` = one multiplexed connection (prod default); set a positive int to fan out and check whether that single connection caps top-of-sweep throughput |
-| `MYSQL_MAX_POOL` | unset → SDK default (`num_cpus*4`) | Max connections in the shared MySQL pool. Set a positive int to probe whether the default pool caps top-of-sweep throughput; compare against `mysql_conns` in `metrics.jsonl`. **Must stay below the server's `max_connections`** (set on container start by `make mysql-up`; see `MYSQL_SERVER_MAX_CONNECTIONS` in the Makefile) — otherwise the server rejects new connections with `HY000: Too many connections` |
-| `LOG_FILTER` | unset → off | Rust SDK tracing in the per-step server (tracing `EnvFilter`). e.g. `warn,spark_wallet=info,spark::operator::rpc=debug` logs every operator gRPC method call + rate-limit retries to `out/<id>/rps-N/.trace-logs/sdk.log`. Off by default (no overhead) |
-| `LABEL` | unset | Optional kebab-case slug appended to the auto-generated `SWEEP_ID`. Use this rather than a custom `SWEEP_ID` so runs stay sortable. See "Output naming". |
-| `SWEEP_ID` | fresh UTC ISO-8601 timestamp (`+ -LABEL` if set) | Override only to resume/share a dir. Should match `<YYYY-MM-DDTHH-MM-SSZ>[-<kebab-slug>]`; `sweep.sh` warns on deviations. |
+| `CONNS_PER_OPERATOR` | unset → `null` | gRPC conns per operator. `null` = one multiplexed (prod default); set int to fan out for capacity-isolation runs |
+| `MYSQL_MAX_POOL` | unset → SDK default | Max conns in the shared MySQL pool. Must stay below the server's `max_connections` (see Makefile) |
+| `LOG_FILTER` | unset → off | Rust SDK tracing filter (`tracing` `EnvFilter` syntax). Logs to `out/<id>/rps-N/.trace-logs/sdk.log` |
+| `LABEL` | unset | Optional kebab-case slug appended to `SWEEP_ID` (`<timestamp>-<label>`) |
+| `SWEEP_ID` | fresh UTC ISO-8601 timestamp | Override only to resume an existing sweep dir |
 
 Headline-grade run: `SWEEP_RPS=50,100,250,500,1000 DURATION=5m make run`
 (~30 min wall time).
+
+## Op-mix vocabulary
+
+The `MIX` weights are the spark-vs-Lightning percentage control — labels
+name the payment method. Bare `send`/`receive` mean the spark variants.
+
+| Label | Endpoint | Behavior |
+|---|---|---|
+| `info` | `GET /info` | Local read, no sync. |
+| `send` (alias `send_spark`) | `POST /send` | Spark transfer → treasurer Spark addr. Zero-fee, closed-loop. |
+| `send_ln` | `POST /send` | Pay a pre-minted bolt11 invoice via real LN (SSP-routed). Non-zero fee. Requires the pre-mint step. |
+| `receive` (alias `receive_spark`) | `POST /receive` | Spark address generation (no SSP roundtrip). |
+| `receive_ln` | `POST /receive` | Mint a real bolt11 invoice on the user's wallet (one SSP roundtrip). |
+
+Example mixed run:
+
+```bash
+MIX='info=40,send_spark=20,send_ln=10,receive_spark=20,receive_ln=10' \
+  SWEEP_RPS=50,100,250 DURATION=2m make run
+```
+
+### Lightning specifics
+
+Adding `send_ln` to `MIX` triggers a one-shot pre-mint step (sized from
+the sweep config) before the RPS loop. **Pool exhaustion is a hard-stop**
+(non-zero exit) — re-run and the sweep driver re-mints automatically.
+
+Real LN fees are non-zero, so the closed-loop sat-conservation breaks;
+net leakage is replenished from the faucet on the next `make fund`.
 
 ## Other commands
 
@@ -108,23 +119,16 @@ Headline-grade run: `SWEEP_RPS=50,100,250,500,1000 DURATION=5m make run`
   ad-hoc / debugging.
 - `make seed-senders PER_SENDER_SATS=N` — same, for the K sender
   wallets.
+- `make mint-invoices COUNT=N OUT=path` — pre-mint a pool of bolt11
+  invoices (used by sweeps with `send_ln` in the mix). Auto-run by the
+  sweep driver with workload-sized `COUNT`; this is for ad-hoc /
+  debugging.
 - `make help` — list all targets.
 
 ## Endpoints
 
-The server exposes three:
-
 | Endpoint | Body | Maps to |
 |---|---|---|
 | `GET /users/{userId}/info` | — | `getInfo({ ensureSynced: false })` (local read, no sync) |
-| `POST /users/{userId}/send` | `{"destination":"<spark addr>","amountSats":N}` | `prepareSendPayment` + `sendPayment` |
-| `POST /users/{userId}/receive` | `{}` | `receivePayment(SparkAddress)` (address generation only) |
-
-Each request does a fresh `connect → op → disconnect` using
-`defaultServerConfig` (server mode). All shared resources — MySQL pool,
-HTTP client (SSP, LNURL, JWT, chain), operator gRPC, Breez-backend gRPC —
-are bundled into one `SdkContext` threaded into every build. All
-requests run fully in parallel — there is no per-user serialization
-(safe: operator-enforced single-spend + coordinator reconciliation, see
-`DESIGN.md`). No request handler syncs; syncs are explicit and confined to
-the `fund` / `seed-senders` / `trace-sync` steps (see `DESIGN.md`).
+| `POST /users/{userId}/send` | `{"destination":"<spark addr or bolt11>","amountSats":N}` | `prepareSendPayment` + `sendPayment`; LN options injected when `prepared.paymentMethod` is `Bolt11Invoice` |
+| `POST /users/{userId}/receive` | `{}` or `{"method":"bolt11","amountSats":N}` | `receivePayment(SparkAddress)` (default) or `receivePayment(Bolt11Invoice)` (real LN, SSP-mediated) |

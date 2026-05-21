@@ -50,7 +50,11 @@ if ! [[ "$SWEEP_ID" =~ $SWEEP_ID_RE ]]; then
     echo "[sweep]          <YYYY-MM-DDTHH-MM-SSZ>[-<kebab-slug>] (see README 'Output naming')."
     echo "[sweep]          Continuing, but prefer LABEL=<slug> over a custom SWEEP_ID so out/ stays sortable."
 fi
-INTER_STEP_SLEEP_SECS="${INTER_STEP_SLEEP_SECS:-5}"
+# 120s default lets SSP / operator rate-limit windows reset between steps so
+# step N+1 isn't sampling step N's tail-end congestion state. Cheap insurance
+# against cross-step contamination; override to 5 for fast iteration if you
+# know the steps don't push external limits.
+INTER_STEP_SLEEP_SECS="${INTER_STEP_SLEEP_SECS:-120}"
 # Optional Rust-side SDK tracing in the per-step server. Unset = off (no
 # overhead). A tracing EnvFilter string enables it; logs land in
 # out/<id>/rps-<N>/.trace-logs/sdk.log. Scoped to the load-step server
@@ -59,10 +63,40 @@ LOG_FILTER="${LOG_FILTER:-}"
 # Per-sender fund safety buffer (so we never drain a sender during the
 # sweep) and treasurer buffer over total seeded amount.
 SEED_SAFETY="${SEED_SAFETY:-2.0}"
+# Pool-count safety for send_ln only; separate from SEED_SAFETY because pool
+# overshoot is cheap (1-2 extra dispatches from dispatch-loop rounding) but
+# sender-drain overshoot is fatal mid-run. 1.05 absorbs slop without 2x'ing
+# SSP-bound pre-mint time.
+INVOICE_SAFETY="${INVOICE_SAFETY:-1.05}"
 TREASURER_BUFFER="${TREASURER_BUFFER:-1.5}"
 # Floor: even info/receive-only sweeps need a small treasurer balance
 # for the treasurer wallet to exist & for /receive to point somewhere.
 TREASURER_MIN_FLOOR="${TREASURER_MIN_FLOOR:-50000}"
+# Lightning knobs: only used when the mix contains a send_ln op. The
+# pre-mint step (Main.kt mint-invoices) mints a pool of fixed-amount,
+# long-expiry bolt11 invoices across BANKS receiver wallets and probes
+# the SSP for `lightningFeeSats` once. Sender prefunding then gets
+# `(payment_sats + ln_fee × LN_FEE_SAFETY)` headroom per send.
+BANKS="${BANKS:-50}"
+INVOICE_EXPIRY_SECS="${INVOICE_EXPIRY_SECS:-604800}"   # 7 days
+MINT_PARALLELISM="${MINT_PARALLELISM:-20}"
+LN_FEE_SAFETY="${LN_FEE_SAFETY:-1.5}"
+
+# Detect whether the mix uses LN sends / spark sends. This drives:
+# (a) whether we run mint-invoices + size sender prefunding for LN
+#     fee leakage; (b) whether we run the treasurer-addr bootstrap
+# (skip the multi-minute cold-start if no spark-send needs the addr).
+detect_mix_kinds() {
+    python3 -c '
+import sys
+labels = {e.split("=")[0].strip() for e in sys.argv[1].split(",") if "=" in e}
+has_ln = bool(labels & {"send_ln", "send_lightning", "send_bolt11"})
+has_spark = bool(labels & {"send", "send_spark"})
+print(int(has_ln), int(has_spark))
+' "$1"
+}
+read SEND_LN_PRESENT SPARK_SEND_PRESENT < <(detect_mix_kinds "$MIX")
+echo "[sweep] mix kinds: send_ln=$SEND_LN_PRESENT  send_spark=$SPARK_SEND_PRESENT"
 
 SWEEP_DIR="out/$SWEEP_ID"
 mkdir -p "$SWEEP_DIR"
@@ -111,7 +145,8 @@ echo "[sweep] sweep-id=$SWEEP_ID  rps=[$SWEEP_RPS]  duration=$DURATION  out=$SWE
 # only on the first run — subsequent runs are no-ops since the closed
 # loop preserves the system total).
 
-read PER_SENDER_SATS TREASURER_TARGET < <(
+compute_funding() {
+    # Echoes "PER_SENDER TREASURER INVOICE_COUNT" — 3 ints.
     python3 "$SCRIPT_DIR/compute_funding.py" \
         --rps "$SWEEP_RPS" \
         --duration "$DURATION" \
@@ -119,13 +154,58 @@ read PER_SENDER_SATS TREASURER_TARGET < <(
         --senders "$SENDERS" \
         --payment-sats "$PAYMENT_SATS" \
         --safety "$SEED_SAFETY" \
+        --invoice-safety "$INVOICE_SAFETY" \
         --buffer "$TREASURER_BUFFER" \
-        --floor "$TREASURER_MIN_FLOOR"
-)
+        --floor "$TREASURER_MIN_FLOOR" \
+        --ln-fee-sats "$1"
+}
+
+# Pass 1: ln_fee=0 (just to discover INVOICE_COUNT, which is independent
+# of fee). For spark-only mixes this is the only pass and INVOICE_COUNT=0.
+read PER_SENDER_SATS TREASURER_TARGET INVOICE_COUNT < <(compute_funding 0)
+LN_FEE_SATS=0
+INVOICE_POOL_FILE=""
+
+if [ "$SEND_LN_PRESENT" = "1" ]; then
+    if [ "$INVOICE_COUNT" -le 0 ]; then
+        echo "[sweep] mix has send_ln but compute_funding returned invoice_count=0 — aborting"
+        exit 2
+    fi
+    INVOICE_POOL_FILE="$SWEEP_DIR/invoices.txt"
+    echo
+    echo "[sweep] === mint-invoices (count=$INVOICE_COUNT, banks=$BANKS) ==="
+    mint_log="$SWEEP_DIR/mint.log"
+    stream_filtered "$mint_log" '^\[mint\]' \
+        ./gradlew run --console=plain --args="--mode=mint-invoices \
+        --mysql-url=$MYSQL_URL \
+        --master-secret=$MASTER_SECRET \
+        --count=$INVOICE_COUNT \
+        --amount-sats=$PAYMENT_SATS \
+        --banks=$BANKS \
+        --expiry-secs=$INVOICE_EXPIRY_SECS \
+        --parallelism=$MINT_PARALLELISM \
+        --out=$INVOICE_POOL_FILE"
+    if [ "$STREAM_RC" -ne 0 ]; then
+        echo "[sweep] mint-invoices failed (rc=$STREAM_RC); see $mint_log"
+        exit "$STREAM_RC"
+    fi
+    # Probed SSP fee. Multiplied by LN_FEE_SAFETY in the math so a fee
+    # bump mid-run doesn't drain a sender.
+    PROBED_FEE=$(grep -E '^\[mint\] ln_fee_sats=' "$mint_log" | tail -n1 | sed 's/.*=//')
+    if [ -z "$PROBED_FEE" ]; then
+        echo "[sweep] mint-invoices did not emit ln_fee_sats — aborting"
+        exit 2
+    fi
+    LN_FEE_SATS=$(python3 -c "import math,sys; print(math.ceil(int(sys.argv[1]) * float(sys.argv[2])))" "$PROBED_FEE" "$LN_FEE_SAFETY")
+    echo "[sweep] probed ln_fee_sats=$PROBED_FEE  × safety=$LN_FEE_SAFETY → ${LN_FEE_SATS}sat per send_ln"
+    # Pass 2: re-run with the real fee so per-sender drain reflects LN leakage.
+    read PER_SENDER_SATS TREASURER_TARGET _ < <(compute_funding "$LN_FEE_SATS")
+fi
 
 echo "[sweep] computed funding budget:"
-echo "[sweep]   per-sender = ${PER_SENDER_SATS} sats  (sends-per-sender × payment × safety=${SEED_SAFETY})"
-echo "[sweep]   treasurer  = ${TREASURER_TARGET} sats (K × per-sender × buffer=${TREASURER_BUFFER}, floor=${TREASURER_MIN_FLOOR})"
+echo "[sweep]   per-sender    = ${PER_SENDER_SATS} sats  (drain × safety=${SEED_SAFETY}, ln_fee=${LN_FEE_SATS})"
+echo "[sweep]   treasurer     = ${TREASURER_TARGET} sats (K × per-sender × buffer=${TREASURER_BUFFER}, floor=${TREASURER_MIN_FLOOR})"
+echo "[sweep]   invoice_count = ${INVOICE_COUNT}"
 
 # Manifest captures the inputs so the aggregator (and a partner reader)
 # can reconstruct what the sweep was. Written before any steps run so
@@ -133,6 +213,7 @@ echo "[sweep]   treasurer  = ${TREASURER_TARGET} sats (K × per-sender × buffer
 cat > "$SWEEP_DIR/manifest.json" <<EOF
 {
   "sweep_id": "$SWEEP_ID",
+  "master_secret": "$MASTER_SECRET",
   "rps_steps": [$(echo "$SWEEP_RPS" | sed 's/,/, /g')],
   "duration_per_step": "$DURATION",
   "mix": "$MIX",
@@ -141,6 +222,15 @@ cat > "$SWEEP_DIR/manifest.json" <<EOF
   "distribution": "$DIST",
   "payment_sats": $PAYMENT_SATS,
   "port": $PORT,
+  "send_ln_present": $SEND_LN_PRESENT,
+  "spark_send_present": $SPARK_SEND_PRESENT,
+  "lightning": {
+    "banks": $BANKS,
+    "invoice_count": $INVOICE_COUNT,
+    "invoice_expiry_secs": $INVOICE_EXPIRY_SECS,
+    "ln_fee_sats": $LN_FEE_SATS,
+    "ln_fee_safety": $LN_FEE_SAFETY
+  },
   "funding": {
     "per_sender_sats": $PER_SENDER_SATS,
     "treasurer_target_sats": $TREASURER_TARGET,
@@ -305,7 +395,15 @@ stop_server() {
 
 # Fetch (or load cached) treasurer Spark address now that helpers are
 # defined. Done after fund + seed so the wallet is guaranteed to exist.
-ensure_treasurer_addr || exit 1
+# Skipped for pure-LN / info+receive-only sweeps — the treasurer is never
+# a send destination there, and the bootstrap pays multi-minute cold-start
+# sync the first time per master secret.
+if [ "$SPARK_SEND_PRESENT" = "1" ]; then
+    ensure_treasurer_addr || exit 1
+else
+    echo "[sweep] mix has no spark-send op — skipping treasurer-addr bootstrap"
+    TREASURER_ADDR=""
+fi
 
 # --- main loop ------------------------------------------------------------
 
@@ -356,6 +454,16 @@ for raw_rps in "${RPS_LIST[@]}"; do
     # Loadgen produces a [loadgen] +Xs progress line every 5s; surface
     # those live so the user sees dispatched / in_flight / errors as
     # they grow rather than waiting for $DURATION of silence.
+    # Build the optional flags (treasurer addr only when spark-send is in
+    # the mix; invoice pool only when send_ln is). Empty values would
+    # confuse the loadgen arg parser, so omit them entirely instead.
+    LOADGEN_OPT_ARGS=""
+    if [ -n "$TREASURER_ADDR" ]; then
+        LOADGEN_OPT_ARGS="$LOADGEN_OPT_ARGS --treasurer-spark-addr=$TREASURER_ADDR"
+    fi
+    if [ -n "$INVOICE_POOL_FILE" ]; then
+        LOADGEN_OPT_ARGS="$LOADGEN_OPT_ARGS --invoice-pool=$INVOICE_POOL_FILE"
+    fi
     stream_filtered "$step_dir/loadgen.log" '^\[loadgen\]' \
         ./gradlew run --console=plain --args="\
         --mode=loadgen \
@@ -368,8 +476,7 @@ for raw_rps in "${RPS_LIST[@]}"; do
         --senders=$SENDERS \
         --payment-sats=$PAYMENT_SATS \
         --run-id=$SWEEP_ID/rps-$rps \
-        --out-dir=$step_dir \
-        --treasurer-spark-addr=$TREASURER_ADDR"
+        --out-dir=$step_dir$LOADGEN_OPT_ARGS"
     loadgen_rc=$STREAM_RC
 
     stop_server "$server_pid"
@@ -408,4 +515,26 @@ for raw_rps in "${RPS_LIST[@]}"; do
 done
 
 echo
+
+# Post-run bolt11 audit. send_ln dispatches return on SSP-accept, which
+# is well before LN settlement, so client_ok in latency.jsonl can mask
+# a tail of unsettled payments. The audit syncs each sender wallet and
+# classifies every dispatched invoice via listPayments; aggregate.py
+# picks up audit.json and adds a "Lightning settlement audit" section
+# to RESULTS.md. Skipped for spark-only sweeps (no audit relevance).
+if [ "$SEND_LN_PRESENT" = "1" ]; then
+    echo "[sweep] === audit-bolt11 (validate settlement on sender wallets) ==="
+    audit_log="$SWEEP_DIR/audit.log"
+    AUDIT_PARALLELISM="${AUDIT_PARALLELISM:-5}"
+    stream_filtered "$audit_log" '^\[audit\]' \
+        ./gradlew run --console=plain --args="--mode=audit-bolt11 \
+        --mysql-url=$MYSQL_URL \
+        --master-secret=$MASTER_SECRET \
+        --sweep-dir=$SWEEP_DIR \
+        --parallelism=$AUDIT_PARALLELISM"
+    if [ "$STREAM_RC" -ne 0 ]; then
+        echo "[sweep] audit-bolt11 failed (rc=$STREAM_RC); see $audit_log — RESULTS.md will lack the audit section"
+    fi
+fi
+
 echo "[sweep] done. Steps in $SWEEP_DIR/. Aggregate with: make aggregate SWEEP_ID=$SWEEP_ID"
