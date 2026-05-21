@@ -32,6 +32,20 @@ import kotlinx.serialization.json.Json
 
 // --- HTTP request/response shapes -----------------------------------------
 
+// Preset filter for `--bench-trace`. Two targets:
+//   - `spark::tree::service=trace`        — payment-time leaf swaps
+//     (the "Swapped leaves to match target amount" log line)
+//   - `breez_sdk_core::send_phases=info`  — `#[tracing::instrument]`
+//     spans on `send_payment` + every SSP / operator RPC method.
+//     `aggregate.py` reads these as FmtSpan::CLOSE events to render
+//     the per-RPC slow-payment breakdown.
+// Trailing `error` keeps every other module at error-level so the file
+// surfaces real failures without unbounded growth at high RPS.
+private const val BENCH_TRACE_FILTER =
+    "spark::tree::service=trace," +
+    "breez_sdk_core::send_phases=info," +
+    "error"
+
 @Serializable
 data class InfoResponse(val balanceSats: Long)
 
@@ -66,11 +80,31 @@ fun runServer(opts: Map<String, String>) {
     val runId = opts["run-id"] ?: defaultRunId()
     val outDir = Path.of(opts["out-dir"] ?: "out/$runId").also { Files.createDirectories(it) }
 
-    opts["log-filter"]?.let { logFilter ->
+    // Tracing wiring. Three states:
+    //   1. --bench-trace defaults to true → preset filter that turns on
+    //      leaves-swap detection + per-RPC close-event spans (consumed
+    //      by aggregate.py). The narrow filter keeps the trace log
+    //      small under load; the SDK's prod-safe init_logging
+    //      additionally silences the bench target on every layer
+    //      except the dedicated bench layer, so this is opt-in for
+    //      the *bench* but provably off for integrators.
+    //   2. --bench-trace=false           → no SDK tracing (zero overhead;
+    //      use to A/B against (1) when measuring instrumentation cost).
+    //   3. --log-filter=<spec>           → explicit override, user takes
+    //      full control (must include the bench targets themselves if
+    //      they want aggregate.py to pick up swap/phase data).
+    val explicitFilter = opts["log-filter"]
+    val benchTrace = opts["bench-trace"]?.equals("true", ignoreCase = true) ?: true
+    val effectiveFilter = when {
+        explicitFilter != null -> explicitFilter
+        benchTrace -> BENCH_TRACE_FILTER
+        else -> null
+    }
+    if (effectiveFilter != null) {
         val logDir = opts["log-dir"] ?: outDir.resolve(".trace-logs").toString()
         Files.createDirectories(Path.of(logDir))
-        println("[server] init_logging dir=$logDir filter=$logFilter")
-        initLogging(logDir, null, logFilter)
+        println("[server] init_logging dir=$logDir filter=$effectiveFilter")
+        initLogging(logDir, null, effectiveFilter)
     }
 
     val handlers = runBlocking { SharedHandlers.create(mysqlUrl) }
@@ -138,6 +172,7 @@ fun runServer(opts: Map<String, String>) {
                             SendPaymentRequest(prepareResponse = prepared, options = sendOptions)
                         )
                         t.sendMs = (System.nanoTime() - tSendNs) / 1_000_000
+                        t.paymentId = sendResp.payment.id
                         SendResult(
                             paymentId = sendResp.payment.id,
                             feeSats = feeOf(prepared.paymentMethod),
@@ -236,6 +271,7 @@ private suspend inline fun <reified T : Any> handleAndLog(
                 prepareMs = timings.prepareMs,
                 sendMs = timings.sendMs,
                 disconnectMs = timings.disconnectMs,
+                paymentId = timings.paymentId,
             )
         )
     }

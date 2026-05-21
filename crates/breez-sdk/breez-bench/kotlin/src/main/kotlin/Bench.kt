@@ -124,6 +124,10 @@ data class ServerRequestLogEntry(
     @SerialName("prepare_ms") val prepareMs: Long? = null,
     @SerialName("send_ms") val sendMs: Long? = null,
     @SerialName("disconnect_ms") val disconnectMs: Long? = null,
+    // Populated only for successful sends; lets aggregate.py join slow
+    // requests against `send_payment_completed` tracing events to render
+    // the per-payment phase breakdown.
+    @SerialName("payment_id") val paymentId: String? = null,
 )
 
 class RequestTimings {
@@ -134,6 +138,8 @@ class RequestTimings {
     var disconnectMs: Long? = null
     // Post-classified op label, set after the SDK call resolves spark-vs-LN.
     var opOverride: String? = null
+    // Populated by the /send handler after the SDK returns.
+    var paymentId: String? = null
 }
 
 // --- reserved user-ids (funding pipeline) ---------------------------------

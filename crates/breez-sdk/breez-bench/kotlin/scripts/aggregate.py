@@ -79,6 +79,158 @@ def read_jsonl(path):
     return rows
 
 
+# --- trace log parsing ----------------------------------------------------
+# Per-step server writes its tracing output to <step>/.trace-logs/sdk.log
+# when started with --bench-trace (or an explicit --log-filter). We parse
+# two event categories out of it:
+#
+#   1. "Swapped leaves to match target amount" message
+#      → payment-time leaf swap (one per send that required a swap)
+#   2. Span CLOSE events on target `breez_sdk_core::send_phases`
+#      → emitted by `#[tracing::instrument]` on the top-level
+#        `send_payment`, every SSP method, and every operator-RPC
+#        method. The span hierarchy carries `payment_id` (top-level
+#        span field) and, for operator RPCs, `operator_id`. Format
+#        produced by `tracing_subscriber::fmt::FmtSpan::CLOSE`:
+#
+#          <ts>  INFO send_payment{payment_id="..."}:rpc_name{operator_id=3}:
+#                breez_sdk_core::send_phases: close time.busy=2.53ms time.idle=24.9µs
+#
+# The sdk.log file is naturally per-step (each step gets a fresh server),
+# so no timestamp filtering is needed inside this parser.
+
+SWAP_MESSAGE = "Swapped leaves to match target amount"
+# Must stay in sync with the bench filter the server installs — see
+# `BENCH_TRACE_FILTER` in Server.kt. If you change the target name, the
+# tracing level, or the close-event format on either side, update both.
+BENCH_TARGET = "breez_sdk_core::send_phases"
+TOP_LEVEL_SPAN_NAME = "send_payment"
+
+# Matches one CLOSE event. The span hierarchy is captured as the
+# colon-separated run of `name{fields}` segments preceding the target
+# marker. Field values are either quoted strings (`payment_id="abc"`)
+# or bare tokens (`operator_id=3`).
+_CLOSE_RE = re.compile(
+    r"^\S+\s+INFO\s+(?P<hierarchy>\S+?):\s+"
+    + re.escape(BENCH_TARGET)
+    + r":\s+close\s+time\.busy=(?P<busy>[\d.]+(?:ns|µs|us|ms|s))"
+    + r"(?:\s+time\.idle=(?P<idle>[\d.]+(?:ns|µs|us|ms|s)))?"
+)
+
+# Within a hierarchy segment: `name` or `name{field=value, ...}`.
+_SEGMENT_RE = re.compile(r"(\w+)(?:\{([^}]*)\})?")
+_FIELD_RE = re.compile(r'(\w+)=("[^"]*"|[^\s,}]+)')
+_DURATION_RE = re.compile(r"^([\d.]+)(ns|µs|us|ms|s)$")
+_DURATION_UNIT_MS = {
+    "ns": 1e-6,
+    "µs": 1e-3,
+    "us": 1e-3,
+    "ms": 1.0,
+    "s": 1000.0,
+}
+
+
+def _parse_duration_ms(s):
+    if not s:
+        return None
+    m = _DURATION_RE.match(s)
+    if not m:
+        return None
+    return float(m.group(1)) * _DURATION_UNIT_MS[m.group(2)]
+
+
+def _parse_fields(s):
+    """Returns {field → value} where quoted values keep their quotes
+    stripped. Bare numeric / identifier values are returned as strings;
+    the caller converts where needed."""
+    out = {}
+    for k, v in _FIELD_RE.findall(s):
+        out[k] = v.strip('"') if v.startswith('"') else v
+    return out
+
+
+def _parse_hierarchy(s):
+    """Splits a span hierarchy into ordered [{name, fields}, ...]
+    segments. Splits on top-level `:` only — field bodies may contain
+    them (in quoted strings), so we track `{}` depth."""
+    pieces = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(s):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif ch == ":" and depth == 0:
+            pieces.append(s[start:i])
+            start = i + 1
+    pieces.append(s[start:])
+    out = []
+    for piece in pieces:
+        m = _SEGMENT_RE.match(piece)
+        if not m:
+            continue
+        out.append({
+            "name": m.group(1),
+            "fields": _parse_fields(m.group(2) or ""),
+        })
+    return out
+
+
+def parse_trace_log(path):
+    """Returns swap count and the list of parsed close events.
+
+    Phase events: list of dicts each carrying
+      {payment_id, rpc_name, operator_id (or None), duration_ms}.
+    Top-level `send_payment` spans are kept (they're the per-payment
+    total elapsed time) — callers distinguish them by `rpc_name`.
+    Missing file ⇒ zero + empty list, which is also the
+    'server ran without --bench-trace' signal further up.
+    """
+    out = {"swap_count": 0, "phase_events": []}
+    if not path.exists():
+        return out
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if SWAP_MESSAGE in line:
+                out["swap_count"] += 1
+            m = _CLOSE_RE.match(line)
+            if not m:
+                continue
+            busy_ms = _parse_duration_ms(m.group("busy"))
+            idle_ms = _parse_duration_ms(m.group("idle")) or 0.0
+            if busy_ms is None:
+                continue
+            segments = _parse_hierarchy(m.group("hierarchy"))
+            if not segments:
+                continue
+            # Walk the hierarchy to find payment_id (set by the
+            # top-level `send_payment` span). Missing ⇒ orphaned event
+            # (instrumented code ran outside a send_payment call,
+            # e.g. claim flows); skip it for the slow-payment view.
+            payment_id = None
+            for seg in segments:
+                pid = seg["fields"].get("payment_id")
+                if pid:
+                    payment_id = pid
+                    break
+            if payment_id is None:
+                continue
+            leaf = segments[-1]
+            op_raw = leaf["fields"].get("operator_id")
+            try:
+                operator_id = int(op_raw) if op_raw is not None else None
+            except ValueError:
+                operator_id = None
+            out["phase_events"].append({
+                "payment_id": payment_id,
+                "rpc_name": leaf["name"],
+                "operator_id": operator_id,
+                "duration_ms": busy_ms + idle_ms,
+            })
+    return out
+
+
 # --- stats ---------------------------------------------------------------
 
 def percentile(sorted_values, p):
@@ -108,6 +260,86 @@ def summary_stats(values):
         "p95": percentile(sv, 95),
         "p99": percentile(sv, 99),
     }
+
+
+# --- slow-payment phase helpers -----------------------------------------
+
+def _phases_by_payment(phase_events):
+    """Index parsed close events by payment_id. Returns
+    {payment_id → list[event]}, preserving insertion order."""
+    out = {}
+    for ev in phase_events:
+        out.setdefault(ev["payment_id"], []).append(ev)
+    return out
+
+
+def _payment_summary(events):
+    """Per-RPC summary for one payment. Operator RPCs fan out to N
+    operators concurrently, so each rpc_name gets a list of durations.
+    Returns (per_rpc: {rpc_name → list[(operator_id, ms)]}, total_ms).
+    """
+    per_rpc = {}
+    total_ms = None
+    for ev in events:
+        if ev["rpc_name"] == TOP_LEVEL_SPAN_NAME:
+            # Top-level `send_payment` span — record as the wall-clock
+            # total but don't list it as an RPC row.
+            total_ms = ev["duration_ms"]
+            continue
+        per_rpc.setdefault(ev["rpc_name"], []).append(
+            (ev["operator_id"], ev["duration_ms"])
+        )
+    return per_rpc, total_ms
+
+
+def _dominant_rpc(per_rpc):
+    """Returns (rpc_name, worst_ms) — the slowest individual RPC call
+    in the payment (max across all operator fan-outs). None if the
+    payment has no RPC data (unlikely but possible)."""
+    best = None
+    best_ms = -1.0
+    for rpc, calls in per_rpc.items():
+        for _, ms in calls:
+            if ms > best_ms:
+                best_ms = ms
+                best = rpc
+    return (best, best_ms) if best is not None else None
+
+
+def _slow_phase_aggregate(slow_rows, phase_by_payment):
+    """Per-RPC aggregate over the slow set. For each rpc_name, gather
+    every individual call (across all payments and all operators), then
+    compute summary_stats. Also tracks dominance: how many slow
+    payments had this RPC as their slowest individual call.
+    """
+    per_rpc_ms = {}
+    dominance = {}
+    classified = 0
+    for r in slow_rows:
+        pid = r.get("payment_id")
+        if not pid:
+            continue
+        events = phase_by_payment.get(pid)
+        if not events:
+            continue
+        per_rpc, _ = _payment_summary(events)
+        if not per_rpc:
+            continue
+        classified += 1
+        for rpc, calls in per_rpc.items():
+            ms_list = per_rpc_ms.setdefault(rpc, [])
+            for _, ms in calls:
+                ms_list.append(ms)
+        dom = _dominant_rpc(per_rpc)
+        if dom:
+            dominance[dom[0]] = dominance.get(dom[0], 0) + 1
+    out = {}
+    for rpc, ms_list in per_rpc_ms.items():
+        stats = summary_stats(ms_list)
+        dpct = (100.0 * dominance.get(rpc, 0) / classified) if classified else None
+        out[rpc] = {**stats, "dominant_pct": dpct}
+    out["_classified"] = classified
+    return out
 
 
 # --- per-step aggregation ------------------------------------------------
@@ -219,11 +451,16 @@ def metrics_window(metrics_rows, ts_lo, ts_hi):
     }
 
 
-def aggregate_step(step_dir):
-    """Aggregate one rps-N directory. Returns a dict (or None if no data)."""
+def aggregate_step(step_dir, slow_abs_ms=2000, slow_rel_pct=95, slow_top_n=20):
+    """Aggregate one rps-N directory. Returns a dict (or None if no data).
+
+    Slow-payment knobs are forwarded so the per-step slow set + Top-N
+    table can be computed while the raw rows are still in scope.
+    """
     latency_rows = read_jsonl(step_dir / "latency.jsonl")
     requests_rows = read_jsonl(step_dir / "requests.jsonl")
     metrics_rows = read_jsonl(step_dir / "metrics.jsonl")
+    trace = parse_trace_log(step_dir / ".trace-logs" / "sdk.log")
 
     if not latency_rows and not requests_rows:
         return None
@@ -270,6 +507,70 @@ def aggregate_step(step_dir):
 
     metrics = metrics_window(metrics_rows, ts_lo, ts_hi) if metrics_rows else {}
 
+    # Leaf-swap rate: denominator is successful send-class handler
+    # completions for this step. Counts come from the per-step trace
+    # log (only populated under --bench-trace). Zero count with the
+    # file absent ⇒ render section will be skipped.
+    send_ok_rows = [
+        r for r in requests_rows
+        if r.get("error") is None and (r.get("op") or "").startswith("send")
+    ]
+    send_ok_count = len(send_ok_rows)
+    swap_count = trace["swap_count"]
+    swap_rate = (swap_count / send_ok_count) if send_ok_count else None
+
+    # Slow-payment phase breakdown. Threshold is
+    # `max(slow_abs_ms, step_p_rel)` so we always honour the absolute
+    # floor (catches the pathological tails) while the relative cap
+    # keeps the slow set bounded at high RPS.
+    send_durations_ok = [
+        r.get("duration_ms") for r in send_ok_rows if r.get("duration_ms") is not None
+    ]
+    if send_durations_ok:
+        step_p_rel = percentile(sorted(send_durations_ok), slow_rel_pct)
+        slow_threshold_ms = max(slow_abs_ms, step_p_rel or 0)
+    else:
+        step_p_rel = None
+        slow_threshold_ms = slow_abs_ms
+    slow_rows = [
+        r for r in send_ok_rows
+        if (r.get("duration_ms") or 0) >= slow_threshold_ms
+    ]
+    slow_rows.sort(key=lambda r: r.get("duration_ms") or 0, reverse=True)
+
+    phase_by_payment = _phases_by_payment(trace["phase_events"])
+    slow_top_n_rows = []
+    for r in slow_rows[:slow_top_n]:
+        pid = r.get("payment_id")
+        events = phase_by_payment.get(pid, []) if pid else []
+        per_rpc, span_total_ms = _payment_summary(events) if events else ({}, None)
+        dom = _dominant_rpc(per_rpc) if per_rpc else None
+        slow_top_n_rows.append({
+            "payment_id": pid,
+            "op": r.get("op"),
+            "duration_ms": r.get("duration_ms"),
+            "span_total_ms": span_total_ms,
+            "per_rpc": {
+                # Per-RPC summary: count, sum, max (worst-of-N for
+                # operator RPCs), and the operator id of the worst
+                # call when applicable.
+                rpc: {
+                    "count": len(calls),
+                    "sum_ms": sum(ms for _, ms in calls),
+                    "max_ms": max(ms for _, ms in calls),
+                    "worst_operator_id": next(
+                        (op for op, ms in calls if ms == max(m for _, m in calls)),
+                        None,
+                    ),
+                }
+                for rpc, calls in per_rpc.items()
+            },
+            "dominant_rpc": dom[0] if dom else None,
+            "dominant_ms": dom[1] if dom else None,
+        })
+    # Per-RPC aggregate over the slow set.
+    slow_phase_agg = _slow_phase_aggregate(slow_rows, phase_by_payment)
+
     return {
         "ts_window_ms": [ts_lo, ts_hi],
         "total_dispatched": total_dispatched,
@@ -287,6 +588,16 @@ def aggregate_step(step_dir):
         "metrics": metrics,
         "errors_by_category_client": client_errors_by_category,
         "errors_by_category_server": server_errors_by_category,
+        "send_ok_count": send_ok_count,
+        "swap_count": swap_count,
+        "swap_rate": swap_rate,
+        "slow_threshold_ms": slow_threshold_ms,
+        "slow_abs_ms": slow_abs_ms,
+        "slow_rel_pct": slow_rel_pct,
+        "slow_rel_p_value_ms": step_p_rel,
+        "slow_count": len(slow_rows),
+        "slow_top_n": slow_top_n_rows,
+        "slow_phase_aggregate": slow_phase_agg,
     }
 
 
@@ -405,6 +716,157 @@ def render_table(headers, rows):
     out.append("|" + "|".join("-" * (w + 2) for w in sep_widths) + "|")
     for row in rows:
         out.append(fmt_row(row))
+    return out
+
+
+def render_swap_section(steps_summary):
+    """Per-step leaves-swap rate. Counts come from `.trace-logs/sdk.log`
+    (only populated when the server ran with `--bench-trace`). Section
+    is skipped if no swap events were seen across any step — keeps the
+    report quiet for runs that didn't ask for the data.
+    """
+    has_any = any(s.get("swap_count", 0) for _, s in steps_summary)
+    if not has_any:
+        return []
+    out = ["## Leaves swap (per step)", ""]
+    out.append(
+        "> Counted from `.trace-logs/sdk.log` — populated when the "
+        "server ran with `--bench-trace`. Denominator is the step's "
+        "successful `send*` handler completions; high swap rate at a "
+        "given RPS implies the leaf set isn't pre-shaped for the "
+        "payment denominations being sent."
+    )
+    out.append("")
+    headers = ["RPS", "successful sends", "swaps", "swap rate"]
+    rows = []
+    for rps, s in steps_summary:
+        sok = s.get("send_ok_count", 0)
+        sr = s.get("swap_rate")
+        rows.append([
+            str(rps),
+            str(sok),
+            str(s.get("swap_count", 0)),
+            "—" if sr is None else f"{100.0 * sr:.1f}%",
+        ])
+    out.extend(render_table(headers, rows))
+    out.append("")
+    return out
+
+
+def render_slow_payments_section(steps_summary):
+    """Per-step slow-payment phase breakdown. For every slow send we
+    list its slowest individual RPC call (with operator_id when
+    applicable). A second sub-table aggregates per-RPC stats across
+    the whole slow set so a recurring bottleneck (e.g. one SSP method
+    always > 1s) jumps out.
+
+    Section is skipped if no phase events were parsed across any step
+    (typically: ran without `--bench-trace`).
+    """
+    has_phase_data = any(
+        any(t.get("per_rpc") for t in s.get("slow_top_n", []))
+        for _, s in steps_summary
+    )
+    if not has_phase_data:
+        return []
+    first = steps_summary[0][1] if steps_summary else {}
+    abs_ms = first.get("slow_abs_ms", "?")
+    rel_pct = first.get("slow_rel_pct", "?")
+    out = [
+        "## Slow payments — per-RPC breakdown (per step)",
+        "",
+        (
+            f"> A send is 'slow' if `duration_ms ≥ max({abs_ms}ms, "
+            f"step p{rel_pct})` (override via `--slow-abs-ms` / "
+            f"`--slow-rel-pct`). Per-RPC timings come from "
+            "`#[tracing::instrument]`-decorated SSP and operator-RPC "
+            "methods; correlation to server log rows is by `payment_id` "
+            "carried on the top-level `send_payment` span. The "
+            "**dominant** column is the slowest individual RPC call in "
+            "the payment — for operator RPCs that includes a "
+            "`(so-N)` tag identifying which of the parallel "
+            "operators held up the FROST round. Empty `per_rpc` (rendered "
+            "as `—`) means the trace events were missed or the server "
+            "ran without `--bench-trace`."
+        ),
+        "",
+    ]
+    for rps, s in steps_summary:
+        if step_state(s) == "collapsed":
+            continue
+        slow_threshold_ms = s.get("slow_threshold_ms")
+        slow_count = s.get("slow_count", 0)
+        top_n = s.get("slow_top_n", [])
+        agg = s.get("slow_phase_aggregate") or {}
+        if not top_n:
+            continue
+        out.append(
+            f"### RPS {rps} — slow threshold {slow_threshold_ms:.0f}ms "
+            f"({slow_count} slow send{'s' if slow_count != 1 else ''})"
+        )
+        out.append("")
+        out.append("#### Top slowest sends")
+        out.append("")
+        headers = [
+            "payment_id", "op", "total ms", "span total ms",
+            "dominant RPC", "dominant ms", "# RPCs",
+        ]
+        rows = []
+        for t in top_n:
+            dom_rpc = t.get("dominant_rpc")
+            per_rpc = t.get("per_rpc") or {}
+            # For operator-fanout RPCs, surface which operator was
+            # slowest so the Spark team can correlate to a specific SO.
+            worst_op = (
+                per_rpc.get(dom_rpc, {}).get("worst_operator_id")
+                if dom_rpc else None
+            )
+            dom_label = (
+                f"{dom_rpc} (so-{worst_op})" if dom_rpc and worst_op is not None
+                else (dom_rpc or "—")
+            )
+            rows.append([
+                (t.get("payment_id") or "—")[:16],
+                t.get("op") or "—",
+                str(t.get("duration_ms") or "—"),
+                fmt_ms(t.get("span_total_ms")),
+                dom_label,
+                fmt_ms(t.get("dominant_ms")),
+                str(len(per_rpc)) if per_rpc else "—",
+            ])
+        out.extend(render_table(headers, rows))
+        out.append("")
+        # Per-RPC aggregate across the slow set (every individual call
+        # of each RPC across every slow payment, regardless of operator).
+        classified = agg.get("_classified", 0)
+        out.append(
+            f"#### Per-RPC aggregate over slow set "
+            f"({classified} payments with phase data of {slow_count} slow)"
+        )
+        out.append("")
+        agg_headers = ["rpc", "calls", "p50", "p95", "p99", "max", "% slow dominated by"]
+        # Order RPCs by p99 descending — biggest contributors first.
+        rpc_rows = []
+        for rpc, stats in agg.items():
+            if rpc.startswith("_"):
+                continue
+            rpc_rows.append((rpc, stats))
+        rpc_rows.sort(key=lambda x: x[1].get("p99") or 0, reverse=True)
+        agg_rows = []
+        for rpc, stats in rpc_rows:
+            dpct = stats.get("dominant_pct")
+            agg_rows.append([
+                rpc,
+                str(stats.get("count", 0)),
+                fmt_ms(stats.get("p50")),
+                fmt_ms(stats.get("p95")),
+                fmt_ms(stats.get("p99")),
+                fmt_ms(stats.get("max")),
+                "—" if dpct is None else f"{dpct:.0f}%",
+            ])
+        if agg_rows:
+            out.extend(render_table(agg_headers, agg_rows))
+            out.append("")
     return out
 
 
@@ -649,6 +1111,9 @@ def render_results_md(sweep_id, manifest, steps_summary, headline, audit=None):
             lines.extend(render_table(headers, rows))
             lines.append("")
 
+    lines.extend(render_swap_section(steps_summary))
+    lines.extend(render_slow_payments_section(steps_summary))
+
     lines.append("## Process metrics")
     lines.append("")
     cpu_cores = next(
@@ -786,10 +1251,37 @@ def main():
         help="Classify one rps-<N> dir (ok|degrading|collapsed) to stdout "
         "and exit. Used by sweep.sh to stop the sweep at collapse.",
     )
+    ap.add_argument(
+        "--slow-abs-ms",
+        type=int,
+        default=2000,
+        help="Absolute ms floor for the slow-payment section. A send is "
+        "'slow' if its duration_ms ≥ max(this, step p<rel>).",
+    )
+    ap.add_argument(
+        "--slow-rel-pct",
+        type=int,
+        default=95,
+        help="Relative percentile used to bound the slow set per step "
+        "(default p95). Combined with --slow-abs-ms via max().",
+    )
+    ap.add_argument(
+        "--slow-top-n",
+        type=int,
+        default=20,
+        help="How many slowest sends to list individually per step "
+        "(default 20). Aggregate stats are over the entire slow set, "
+        "not just the top-N.",
+    )
     args = ap.parse_args()
 
     if args.step_state:
-        s = aggregate_step(Path(args.step_state).resolve())
+        s = aggregate_step(
+            Path(args.step_state).resolve(),
+            slow_abs_ms=args.slow_abs_ms,
+            slow_rel_pct=args.slow_rel_pct,
+            slow_top_n=args.slow_top_n,
+        )
         # No data ⇒ treat as collapsed so the sweep stops rather than
         # marching on into more junk steps.
         print(step_state(s) if s is not None else "collapsed")
@@ -815,7 +1307,12 @@ def main():
 
     steps_summary = []
     for rps, step_dir in step_dirs(sweep_dir):
-        s = aggregate_step(step_dir)
+        s = aggregate_step(
+            step_dir,
+            slow_abs_ms=args.slow_abs_ms,
+            slow_rel_pct=args.slow_rel_pct,
+            slow_top_n=args.slow_top_n,
+        )
         if s is None:
             print(f"warn: skipping {step_dir.name} (no data)", file=sys.stderr)
             continue
