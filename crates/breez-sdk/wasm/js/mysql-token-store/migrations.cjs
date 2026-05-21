@@ -109,7 +109,7 @@ class MysqlTokenStoreMigrationManager {
         await conn.query(`
           CREATE TABLE IF NOT EXISTS \`${TOKEN_MIGRATIONS_TABLE}\` (
             version INT PRIMARY KEY,
-            applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))
           )
         `);
 
@@ -132,7 +132,7 @@ class MysqlTokenStoreMigrationManager {
             await runMigrationStep(conn, step);
           }
           await conn.query(
-            `INSERT INTO \`${TOKEN_MIGRATIONS_TABLE}\` (version) VALUES (?)`,
+            `INSERT INTO \`${TOKEN_MIGRATIONS_TABLE}\` (version, applied_at) VALUES (?, UTC_TIMESTAMP(6))`,
             [version]
           );
         }
@@ -454,9 +454,10 @@ class MysqlTokenStoreMigrationManager {
         // gets a UTC value rather than a session-TZ-dependent one.
         name: "Pin DATETIME defaults to UTC",
         sql: [
-          `ALTER TABLE brz_token_outputs       MODIFY COLUMN added_at  DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
-          `ALTER TABLE brz_token_reservations  MODIFY COLUMN created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
-          `ALTER TABLE brz_token_spent_outputs MODIFY COLUMN spent_at  DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_token_outputs            MODIFY COLUMN added_at   DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_token_reservations       MODIFY COLUMN created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_token_spent_outputs      MODIFY COLUMN spent_at   DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_token_schema_migrations  MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
         ],
       },
     ];

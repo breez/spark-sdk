@@ -735,6 +735,10 @@ impl MysqlTreeStore {
                     "ALTER TABLE brz_tree_spent_leaves MODIFY COLUMN spent_at \
                      DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
                 ),
+                Migration::sql(
+                    "ALTER TABLE brz_tree_schema_migrations MODIFY COLUMN applied_at \
+                     DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+                ),
             ],
         ]
     }

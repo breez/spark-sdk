@@ -804,6 +804,10 @@ impl MysqlTokenStore {
                     "ALTER TABLE brz_token_spent_outputs MODIFY COLUMN spent_at \
                      DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
                 ),
+                Migration::sql(
+                    "ALTER TABLE brz_token_schema_migrations MODIFY COLUMN applied_at \
+                     DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+                ),
             ],
         ]
     }

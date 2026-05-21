@@ -344,11 +344,13 @@ async fn run_migrations_inner(
         .await
         .map_err(map_db_error)?;
 
-    // Create migrations table if it doesn't exist.
+    // Create migrations table if it doesn't exist. `applied_at` is pinned to
+    // UTC (rather than session-local) so the migration audit log is consistent
+    // regardless of MySQL session TZ.
     let create_table_sql = format!(
         "CREATE TABLE IF NOT EXISTS `{migrations_table}` (
             version INT PRIMARY KEY,
-            applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))
         )"
     );
     conn.query_drop(&create_table_sql)
@@ -370,7 +372,9 @@ async fn run_migrations_inner(
             for step in migration {
                 run_step(conn, version, step).await?;
             }
-            let insert_sql = format!("INSERT INTO `{migrations_table}` (version) VALUES (?)");
+            let insert_sql = format!(
+                "INSERT INTO `{migrations_table}` (version, applied_at) VALUES (?, UTC_TIMESTAMP(6))"
+            );
             conn.exec_drop(&insert_sql, (version,))
                 .await
                 .map_err(map_db_error)?;
