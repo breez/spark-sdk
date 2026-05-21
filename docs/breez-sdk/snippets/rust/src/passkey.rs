@@ -161,7 +161,7 @@ async fn list_labels() -> Result<Vec<String>> {
         prf_provider,
         Some("<breez api key>".to_string()),
         Some(PasskeyConfig {
-            // Optional: override the wallet label used when register /
+            // Optional: override the label used when register /
             // sign_in receive `label = None`. Falls back to the SDK's
             // internal "Default" when unset.
             default_label: Some("personal".to_string()),
@@ -242,7 +242,7 @@ async fn recover_from_already_exists() -> Result<Wallet> {
         Ok(response) => Ok(response.wallet),
         Err(e) if e.kind() == ErrorKind::AlreadyExists => {
             // Flip to sign-in. The existing credential's PRF output is
-            // the same wallet seed the host would have minted on register.
+            // the same seed the host would have minted on register.
             let response = passkey
                 .sign_in(SignInRequest {
                     label: Some("personal".to_string()),
