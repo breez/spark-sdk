@@ -4,7 +4,7 @@ Passkey Login lets users access their wallet with biometrics (fingerprint, face 
 
 For the full technical specification, see the <a target="_blank" href="https://github.com/breez/passkey-login/blob/main/spec.md">Passkey Login spec</a>.
 
-## Application configuration
+## Setup
 
 ### Relying Party ID
 
@@ -137,44 +137,54 @@ Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The 
 
 {{#tabs passkey:check-availability}}
 
-<h2 id="connecting-with-passkey">
-    <a class="header" href="#connecting-with-passkey">Connecting with a passkey</a>
+<h2 id="onboarding">
+    <a class="header" href="#onboarding">Onboarding</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyClient.html#method.connect_with_passkey">API docs</a>
 </h2>
 
-The recommended onboarding flow on mobile is a single CTA backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's `registered_credential` field doubles as the path discriminator: `Some` (with the new credential metadata) on the register path, `None` on the sign-in path.
+The recommended flow depends on the platform. Mobile gets a single CTA backed by {{#name PasskeyClient.connect_with_passkey}}. Web gets two CTAs and lets the user pick. Hosts that want explicit control over each path call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly.
+
+### Single CTA (mobile)
+
+A single "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's `registered_credential` field doubles as the path discriminator: `Some` (with the new credential metadata) on the register path, `None` on the sign-in path.
 
 Internally the silent attempt pins `preferImmediatelyAvailableCredentials = true` so the OS fast-fails (no UI, sub-300ms on iOS / Android) when no local credential exists; only {{#enum PrfProviderError::CredentialNotFound}} flips to register, all other errors (`Cancel`, `Timeout`, `Configuration`) propagate unchanged.
 
 {{#tabs passkey:connect-with-passkey}}
 
-For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly. {{#name PasskeyClient.register}} alone is the right entry point for a deliberate "create a new wallet" UI (e.g. adding a new label to an existing identity). {{#name PasskeyClient.sign_in}} alone is the right entry point for a "Sign In" button that should NEVER auto-create a credential (i.e. apps that present separate Sign-In and Create-Account flows):
-
-{{#tabs passkey:sign-in}}
-
-Pass `wallet.seed` to {{#name connect}} in either case.
-
-<div class="warning">
-<h4>Web limitation</h4>
+### Two CTAs (web)
 
 `connect_with_passkey` is not surfaced on the WASM target. The unified flow needs a silent "no credential here" signal so it can fall through to register, and WebAuthn deliberately collapses that case into the same `NotAllowedError` as a user cancel for privacy reasons. There is no reliable way on web for the SDK to tell the two apart.
 
-The recommended UX on web is **two CTAs**: a "Sign In" button calling `signIn` and a separate "Create Account" / "Register" button calling `register`. Let the user pick the right one instead of trying to auto-detect. See the [sign-in](#connecting-with-passkey) and [register-passkey](#connecting-with-passkey) tabs above for the call shapes.
-</div>
+The recommended UX on web is **two CTAs**: a "Sign In" button calling `signIn` and a separate "Create Account" / "Register" button calling `register`. Let the user pick the right one instead of trying to auto-detect. See the [Direct sign-in / register](#direct-sign-in-register) tabs below for the call shapes.
 
-<h2 id="listing-labels">
-    <a class="header" href="#listing-labels">Listing labels</a>
+<h3 id="direct-sign-in-register">Direct sign-in / register</h3>
+
+For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly. {{#name PasskeyClient.register}} alone is the right entry point for a deliberate "add a new label" UI on a returning user. {{#name PasskeyClient.sign_in}} alone is the right entry point for a "Sign In" button that should NEVER auto-create a credential (i.e. apps that present separate Sign-In and Create-Account flows).
+
+{{#tabs passkey:sign-in}}
+
+{{#tabs passkey:register-passkey}}
+
+Pass `wallet.seed` to {{#name connect}} in either case.
+
+## Managing labels
+
+Most apps brand a single label and never call these directly. Listing and publishing labels matters when the host supports multiple wallets per passkey identity.
+
+<h3 id="listing-labels">
+    <a class="header" href="#listing-labels">Listing</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyLabels.html#method.list">API docs</a>
-</h2>
+</h3>
 
 Discover labels associated to the passkey using Nostr. {{#name PasskeyClient.sign_in}} already lists labels in discovery mode (when no `label` is specified), so a separate {{#name PasskeyLabels.list}} call (via {{#name PasskeyClient.labels}}) is only needed when re-fetching the label set after sign-in.
 
 {{#tabs passkey:list-labels}}
 
-<h2 id="storing-a-label">
-    <a class="header" href="#storing-a-label">Storing a label</a>
+<h3 id="storing-a-label">
+    <a class="header" href="#storing-a-label">Storing</a>
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/struct.PasskeyLabels.html#method.store">API docs</a>
-</h2>
+</h3>
 
 Publish a label to Nostr so it can be discovered later. {{#name PasskeyClient.register}} publishes the label automatically on registration; use {{#name PasskeyLabels.store}} (via {{#name PasskeyClient.labels}}) only when adding a new label to an existing identity (e.g. a "create a new wallet" path on a returning user).
 
