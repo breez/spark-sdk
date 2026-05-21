@@ -172,7 +172,6 @@ fun runServer(opts: Map<String, String>) {
                         // it as `payment_id` on the bench send_payment span
                         // before any child RPC span closes. Lets aggregate.py
                         // correlate per-RPC close events back to this send.
-                        // Token sends reject idempotency_key (no-op there).
                         val idempotencyKey = UUID.randomUUID().toString()
                         t.paymentId = idempotencyKey
                         val tSendNs = System.nanoTime()

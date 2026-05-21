@@ -128,9 +128,6 @@ pub async fn parse_input(
     .into())
 }
 
-// UniFFI requires owned `String` in the FFI surface; the internal
-// helper takes `&str` so it can be reused with non-owning callers
-// (and stays clippy-clean — every internal use is via borrow).
 #[allow(clippy::needless_pass_by_value)]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn init_logging(

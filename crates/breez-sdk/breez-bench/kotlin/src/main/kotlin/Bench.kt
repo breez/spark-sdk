@@ -125,7 +125,7 @@ data class ServerRequestLogEntry(
     @SerialName("send_ms") val sendMs: Long? = null,
     @SerialName("disconnect_ms") val disconnectMs: Long? = null,
     // Populated only for successful sends; lets aggregate.py join slow
-    // requests against `send_payment_completed` tracing events to render
+    // requests against `send_payment` tracing events to render
     // the per-payment phase breakdown.
     @SerialName("payment_id") val paymentId: String? = null,
 )
