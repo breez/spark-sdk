@@ -22,9 +22,9 @@ use crate::{
 
 /// Looks up the payment matching `identifier` from storage, if present.
 ///
-/// Used as a fast-path check by `wait_for_payment` in both runtime
-/// profiles — if the payment is already there and complete, callers can
-/// short-circuit before subscribing to events / starting a poll loop.
+/// Used as a fast-path check by `wait_for_incoming_payment` — if the
+/// payment is already there and complete, callers can short-circuit
+/// before starting a poll loop.
 /// Returns `Ok(None)` when the row doesn't exist; surfaces real storage
 /// errors so callers can bubble them rather than mask them.
 pub(crate) async fn maybe_get_payment_from_storage(

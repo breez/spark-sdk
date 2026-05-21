@@ -44,9 +44,9 @@ use super::{
 };
 use crate::sync::SparkSyncService;
 
-// Polling cadence for wait_for_payment.
-const WAIT_FOR_PAYMENT_INITIAL_DELAY_MS: u64 = 500;
-const WAIT_FOR_PAYMENT_MAX_DELAY_MS: u64 = 2000;
+// Polling cadence for wait_for_incoming_payment.
+const WAIT_FOR_INCOMING_PAYMENT_INITIAL_DELAY_MS: u64 = 500;
+const WAIT_FOR_INCOMING_PAYMENT_MAX_DELAY_MS: u64 = 2000;
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -860,7 +860,7 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         // Wait for the received conversion payment to complete
         let payment = self
-            .wait_for_payment(
+            .wait_for_incoming_payment(
                 WaitForPaymentIdentifier::PaymentId(
                     conversion_response.received_payment_id.clone(),
                 ),
@@ -1437,7 +1437,7 @@ impl BreezSdk {
         Ok(SendPaymentResponse { payment })
     }
 
-    pub(crate) async fn wait_for_payment(
+    pub(crate) async fn wait_for_incoming_payment(
         &self,
         identifier: WaitForPaymentIdentifier,
         completion_timeout_secs: u32,
@@ -1451,8 +1451,8 @@ impl BreezSdk {
         }
 
         let schedule = PollSchedule {
-            initial_delay: Duration::from_millis(WAIT_FOR_PAYMENT_INITIAL_DELAY_MS),
-            max_delay: Duration::from_millis(WAIT_FOR_PAYMENT_MAX_DELAY_MS),
+            initial_delay: Duration::from_millis(WAIT_FOR_INCOMING_PAYMENT_INITIAL_DELAY_MS),
+            max_delay: Duration::from_millis(WAIT_FOR_INCOMING_PAYMENT_MAX_DELAY_MS),
             timeout: Duration::from_secs(completion_timeout_secs.into()),
         };
         let shutdown = Some(self.shutdown_sender.subscribe());
@@ -1466,8 +1466,8 @@ impl BreezSdk {
                     .await?
                 } else if let Some((hash, _vout)) = pid.split_once(':') {
                     let tx_hash = hash.to_string();
-                    // The only `wait_for_payment(PaymentId(token))` site today is
-                    // the conversion received leg (we're the recipient).
+                    // The only `wait_for_incoming_payment(PaymentId(token))` site
+                    // today is the conversion received leg (we're the recipient).
                     let tx_inputs_are_ours = false;
                     poll_until(schedule, shutdown, || {
                         self.poll_then_process_token_transaction(&pid, &tx_hash, tx_inputs_are_ours)

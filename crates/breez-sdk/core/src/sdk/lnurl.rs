@@ -387,7 +387,7 @@ impl BreezSdk {
 
         // Wait for the LNURL service to pay the invoice
         let payment = self
-            .wait_for_payment(
+            .wait_for_incoming_payment(
                 WaitForPaymentIdentifier::LightningReceive {
                     invoice: payment_request.clone(),
                     ssp_id: ssp_receive_id,

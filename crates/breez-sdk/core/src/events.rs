@@ -178,7 +178,7 @@ pub trait EventMiddleware: Send + Sync {
 /// Event publisher that manages event listeners and middleware.
 ///
 /// Events flow through three phases:
-/// 1. Internal listeners see raw events (SDK components like `wait_for_payment`)
+/// 1. Internal listeners see raw events (SDK components like `ClientSyncListener`)
 /// 2. Middleware chain can transform or suppress events
 /// 3. External listeners see processed events (client event handlers)
 pub struct EventEmitter {
@@ -248,7 +248,7 @@ impl EventEmitter {
 
     /// Add an internal listener that sees all raw events before middleware processing.
     ///
-    /// Used by SDK components (e.g., `wait_for_payment`) that need to observe events
+    /// Used by SDK components (e.g., `ClientSyncListener`) that need to observe events
     /// that middleware may suppress.
     pub async fn add_internal_listener(&self, listener: Box<dyn EventListener>) -> String {
         let index = self.listener_index.fetch_add(1, Ordering::Relaxed);
