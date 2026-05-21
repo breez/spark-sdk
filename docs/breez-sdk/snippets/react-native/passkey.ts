@@ -44,6 +44,8 @@ class CustomPrfProvider {
 
 const checkAvailability = async () => {
   // ANCHOR: check-availability
+  // Pass `PasskeyProvider.BREEZ_RP_ID` instead of \'my-app.com\' if your
+  // app is Breez-registered (shares credentials with other Breez apps).
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const passkey = createPasskeyClient('my-app.com', 'My App', config)
 
@@ -86,6 +88,17 @@ const connectWithPasskey = async () => {
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })
   // ANCHOR_END: connect-with-passkey
   return sdk
+}
+
+const signInExistingUser = async () => {
+  // ANCHOR: sign-in
+  // Returning-user-only sign-in. No fall-through to register: use
+  // `connectWithPasskey` when you also want the new-user path.
+  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
+  const passkey = createPasskeyClient('my-app.com', 'My App', config)
+
+  return await passkey.signIn({ label: 'personal' })
+  // ANCHOR_END: sign-in
 }
 
 const registerNewPasskey = async () => {

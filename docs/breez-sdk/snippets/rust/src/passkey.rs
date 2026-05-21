@@ -108,6 +108,21 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
     Ok(sdk)
 }
 
+async fn sign_in_existing_user() -> Result<SignInResponse> {
+    // ANCHOR: sign-in
+    // Returning-user-only sign-in. No fall-through to register.
+    let prf_provider = Arc::new(CustomPrfProvider);
+    let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None);
+
+    Ok(passkey
+        .sign_in(SignInRequest {
+            label: Some("personal".to_string()),
+            ..Default::default()
+        })
+        .await?)
+    // ANCHOR_END: sign-in
+}
+
 async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
     // ANCHOR: register-passkey
     let prf_provider = Arc::new(CustomPrfProvider);
