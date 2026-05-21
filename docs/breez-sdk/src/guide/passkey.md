@@ -67,16 +67,6 @@ Establishes digital asset links between the domain and Android applications:
 - Android 9+ (API 28) with Google Play Services, or Android 14+ (API 34) with any compatible credential provider
 - `compileSdkVersion` must be at least 34 (required by the `androidx.credentials` library, not the device)
 
-<div class="warning">
-<h4>Android emulators</h4>
-Most Android emulator images ship with Google Play Services as the only available credential provider, and many don't have a passkey-capable provider at all. Physical devices are recommended for passkey testing.
-</div>
-
-<div class="warning">
-<h4>Credential provider requirement</h4>
-On Android 9-13, passkeys are provided via Google Play Services and require Google Password Manager to be present and up to date. Android 14+ adds native passkey support and can integrate with any installed credential provider. However, at least one credential provider must be installed for passkeys to function (e.g., Google Password Manager, Bitwarden, 1Password etc.).
-</div>
-
 #### iOS / macOS: Apple App Site Association
 
 **File**: `https://keys.breez.technology/.well-known/apple-app-site-association`
