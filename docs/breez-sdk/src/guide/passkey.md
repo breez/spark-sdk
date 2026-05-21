@@ -157,9 +157,9 @@ Pass `wallet.seed` to {{#name connect}} in either case.
 <div class="warning">
 <h4>Web limitation</h4>
 
-`connect_with_passkey` is not surfaced on the WASM target. The unified flow depends on `preferImmediatelyAvailableCredentials` for a silent fast-fail, and the web equivalent (`mediation: 'immediate'` / `uiMode: 'immediate'`) is not yet stable cross-browser. On web, implement the equivalent flow manually by calling `signIn` and catching the credential-not-found error:
+`connect_with_passkey` is not surfaced on the WASM target. The unified flow needs a silent "no credential here" signal so it can fall through to register, and WebAuthn deliberately collapses that case into the same `NotAllowedError` as a user cancel for privacy reasons. There is no reliable way on web for the SDK to tell the two apart.
 
-{{#tabs passkey:signin-fallback-register}}
+The recommended UX on web is **two CTAs**: a "Sign In" button calling `signIn` and a separate "Create Account" / "Register" button calling `register`. Let the user pick the right one instead of trying to auto-detect. See the [sign-in](#connecting-with-passkey) and [register-passkey](#connecting-with-passkey) tabs above for the call shapes.
 </div>
 
 <h2 id="listing-labels">

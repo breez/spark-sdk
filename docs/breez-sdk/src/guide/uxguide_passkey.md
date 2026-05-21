@@ -5,22 +5,20 @@
 - **Be transparent about the trust model.** Users should know up front that the passkey is the wallet, not just a convenience layer.
 - **Make passkey login a choice on supported devices, not a forced default.** Users who prefer mnemonic onboarding should be able to opt out without friction.
 
-### Recommended onboarding flow: silent sign-in → fall through to create
+### Recommended onboarding flow
 
-The simplest user-facing UX is a single primary CTA ("Use Passkey") that does the right thing regardless of whether the user is new or returning:
+The recommended UX differs by platform because web and mobile authenticators expose different error semantics.
 
-1. Call {{#name PasskeyClient.sign_in}} with `label = None` (discovery mode) or your default label (`Some("Default")`). On iOS+Android, the platform's `preferImmediatelyAvailableCredentials` flag means this is a **silent assertion**: a returning user gets one biometric prompt and is signed in; a fresh-device user with no credential fast-fails (no UI shown) with {{#enum PrfProviderError::CredentialNotFound}} in under 300ms.
-2. Catch {{#enum PrfProviderError::CredentialNotFound}} (and on iOS also `UserCancelled` returned in under ~300ms: Apple's API conflates the two when no UI was shown). Call {{#name PasskeyClient.register}} to create + derive.
-3. On {{#enum PrfProviderError::UserCancelled}} taking longer than ~300ms, the user actively dismissed the prompt: show a sticky retry screen, do NOT auto-fall-through to register.
+**Mobile (iOS 18+, Android 9+):** Single primary CTA ("Use Passkey") backed by {{#name PasskeyClient.connect_with_passkey}}. The SDK runs a silent sign-in attempt first (`preferImmediatelyAvailableCredentials = true`); a returning user gets one biometric prompt, a fresh-device user fast-fails with no UI shown and the SDK transparently falls through to register. Only {{#enum PrfProviderError::CredentialNotFound}} triggers the fall-through. `Cancel`, `Timeout`, and `Configuration` errors propagate unchanged: on a real user cancel (≥ 300ms), show a sticky retry screen and do NOT auto-fall-through to register.
 
-Total OS prompt count for the user-visible flow:
-
-| Path | iOS / Android |
+| Path | OS prompts on mobile |
 |---|---|
 | Returning user (silent sign-in succeeds) | **1** prompt (single dual-salt assertion derives master + label) |
 | New user (silent sign-in fast-fails → register) | **2** prompts (1 create + 1 dual-salt assertion) |
 
 The SDK's bulk-PRF path runs the create + label-store + assertion as the two prompts above; a naive sequence would cost three.
+
+**Web:** Two CTAs ("Sign In" and "Create Account"), letting the user pick the right one. WebAuthn deliberately collapses "no credential found" and "user cancelled" into the same `NotAllowedError` for privacy reasons, so the SDK cannot reliably auto-fall-through on web the way it can on mobile. The unified `connect_with_passkey` is therefore not surfaced on the WASM target: call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} as separate entry points and trust the user to know whether they're returning or new.
 
 ### Adding a new label to an existing identity
 
@@ -81,7 +79,7 @@ The SDK does the sub-300ms / 300ms-55s / 55s+ classification internally on iOS: 
 ### Guidelines
 
 1. **Gate passkey UI on availability.** Call {{#name PasskeyClient.check_availability}} at startup and fall back to mnemonic onboarding on unsupported devices (Android < 9, iOS < 18, browsers without WebAuthn PRF). The same call surfaces domain-association failures, so a single check covers both "device can't" and "config is broken".
-2. **Use the silent-sign-in-fallback-create flow.** Don't gate registration behind a separate "I understand" review screen for the typical user: the OS already shows its own consent UI. {{#name PasskeyClient.sign_in}} returns the wallet directly; pass `wallet.seed` straight to {{#name connect}}.
+2. **Match the CTA layout to the platform.** On mobile, the recommended UX is a single primary CTA backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for returning users, automatic fall-through to register for new ones. On web, present two CTAs ("Sign In" and "Create Account") and let the user pick: WebAuthn's privacy-preserving error collapse makes auto-detection unreliable. Don't gate registration behind a separate "I understand" review screen on either platform: the OS already shows its own consent UI.
 3. **Cache the derived seed within a session.** The SDK caches the Nostr identity inside the {{#name PasskeyClient}} instance for the duration of a sign-in / register call, so subsequent {{#name PasskeyLabels.list}} / {{#name PasskeyLabels.store}} calls (via {{#name PasskeyClient.labels}}) don't re-prompt. For longer-lived caching (e.g. across a router rebuild on app launch), store the seed in your own in-memory cache and pass it to {{#name connect}} when reconnecting; do not persist to disk.
 4. **Never persist the derived mnemonic.** Re-derive from the passkey and label on each session. Persisting the mnemonic would bypass the OS authentication prompt.
 5. **Allow manual mnemonic backup.** Offer a user-initiated "Show recovery phrase" path that derives the mnemonic on demand via {{#name PasskeyClient.sign_in}}. This gives users a recovery option if they lose access to their passkey.

@@ -158,41 +158,6 @@ const storeLabel = async () => {
   // ANCHOR_END: store-label
 }
 
-const singleCtaOnboarding = async () => {
-  // ANCHOR: signin-fallback-register
-  // Single-CTA onboarding: try silent signIn first, fall through to
-  // register on CredentialNotFound. The OS shows ONE prompt for a
-  // returning user (silent assertion succeeds), TWO for a new user
-  // (silent assertion fast-fails, then create + dual-salt assert).
-  const prfProvider = new PasskeyProvider({ rpId: 'my-app.com', rpName: 'My App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
-
-  try {
-    // Discovery mode (label undefined): derives master + configured
-    // default label in a single ceremony.
-    const response = await passkey.signIn({ label: undefined })
-    return response.wallet
-  } catch (error) {
-    // CredentialNotFound is the SDK's classification for "no matching
-    // credential on this device", including iOS's <300ms fast-fail
-    // case where the platform conflates no-cred with user-cancel.
-    if (!isCredentialNotFound(error)) throw error
-
-    // No credential. Onboard a new user.
-    const response = await passkey.register({ label: 'personal' })
-    return response.wallet
-  }
-  // ANCHOR_END: signin-fallback-register
-}
-
-const isCredentialNotFound = (error: unknown): boolean => {
-  // Hosts can branch on the SDK's typed error name. The Web JS layer
-  // emits 'CredentialNotFound' both for genuine no-cred cases and for
-  // the iOS <300ms fast-fail UserCancelled case (which is no-cred in
-  // disguise). See uxguide_passkey.md for the full mapping table.
-  return (error as { name?: string })?.name === 'CredentialNotFound'
-}
-
 const checkDomain = async () => {
   // ANCHOR: domain-association
   // Verify Apple AASA / Android Asset Links / Web Related Origins

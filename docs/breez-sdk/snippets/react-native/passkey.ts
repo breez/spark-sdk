@@ -147,13 +147,6 @@ const storeLabel = async () => {
 }
 
 
-const isCredentialNotFound = (error: unknown): boolean => {
-  // The SDK emits 'CredentialNotFound' both for genuine no-cred cases
-  // and for the iOS <300ms fast-fail UserCancelled case (which is
-  // no-cred in disguise). See uxguide_passkey.md for the full mapping.
-  return (error as { name?: string })?.name === 'CredentialNotFound'
-}
-
 const checkDomain = async () => {
   // ANCHOR: domain-association
   // Lower-level provider call. Most hosts use `checkAvailability` instead.
