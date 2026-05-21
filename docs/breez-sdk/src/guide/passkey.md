@@ -12,7 +12,7 @@ Passkey Login uses a Relying Party (RP) to tie passkeys to your apps. Each platf
 
 Two ways to set up the RP:
 
-- **Shared with the Breez ecosystem (Breez-hosted).** A passkey registered in one Breez-registered app works in every other Breez-registered app on the same device, with no re-registration. [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to add your app to the configuration files Breez hosts at `keys.breez.technology`, then pass `PasskeyProvider.BREEZ_RP_ID` as your `rpId`.
+- **Shared with the Breez ecosystem (Breez-hosted).** A passkey registered in one Breez-registered app works in every other Breez-registered app on the same device, with no re-registration. [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to register your app, then pass `PasskeyProvider.BREEZ_RP_ID` as your `rpId`.
 - **Scoped to your ecosystem (self-hosted).** A passkey registered against your RP works across the apps and web origins you list in your configuration files. You host the well-known files yourself on an HTTPS domain you control. Pass that domain as your `rpId` (for example, `"<your-rp-domain>"`).
 
 Same code paths in either case; only the `rpId` value and who hosts the JSON differs.
