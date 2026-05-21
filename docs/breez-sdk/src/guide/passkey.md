@@ -4,12 +4,182 @@ Passkey Login lets users access their wallet with biometrics (fingerprint, face 
 
 For the full technical specification, see the <a target="_blank" href="https://github.com/breez/passkey-login/blob/main/spec.md">Passkey Login spec</a>. For UX recommendations, see the [UX guide](./uxguide_passkey.md).
 
-## Integration outline
+## Setup
 
-1. [Setup](./passkey_setup.md): pick an RP and host the per-platform configuration files.
-2. [Initialization](./passkey_initializing.md): construct a {{#name PasskeyClient}} and gate UI on availability.
-3. [Onboarding](./passkey_onboarding.md): run sign-in / register / unified flow; handle recoverable errors.
-4. [Advanced](./passkey_advanced.md): drop down from `createPasskeyClient` for custom providers, registries, label management, and platform-specific diagnostics.
+Passkey Login uses a Relying Party (RP) to tie passkeys to your apps. Each platform you target (Web, Android, iOS / macOS) needs a configuration file declaring your app under the RP. Platform authenticators validate the RP association against these files before any WebAuthn ceremony.
+
+### Hosting the configuration files
+
+Two ways to set up the RP:
+
+- **Shared with the Breez ecosystem (Breez-hosted).** A passkey registered in one Breez-registered app works in every other Breez-registered app on the same device, with no re-registration. [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to register your app, then pass `PasskeyProvider.BREEZ_RP_ID` as your `rpId`.
+- **Scoped to your ecosystem (self-hosted).** A passkey registered against your RP works across the apps and web origins you list in your configuration files. You host the well-known files yourself on an HTTPS domain you control. Pass that domain as your `rpId` (for example, `"<your-rp-domain>"`).
+
+Same code paths in either case; only the `rpId` value and who hosts the JSON differs.
+
+### Web: Related Origins
+
+**Path**: `/.well-known/webauthn`
+
+```json
+{
+  "related_origins": [
+    "https://keys.breez.technology",
+    "https://your-app.example.com"
+  ]
+}
+```
+
+**Requirements**: Chrome 116+, Safari 18+, Edge 116+. HTTPS required (localhost exempt during development).
+
+<div class="warning">
+<h4>Related Origins: developer notes</h4>
+
+**Firefox does not implement Related Origins.** Users on Firefox can only use credentials whose RP ID matches their current origin's eTLD+1. If you need Firefox support across multiple domains, host your own RP ID per domain or accept that Firefox users register fresh on each origin.
+
+**Chrome and Edge cap the number of distinct labels** in `related_origins` (around 5 distinct eTLD+1 labels per RP). For larger app families, partition into multiple RP IDs.
+
+**Browsers cache the `.well-known/webauthn` file aggressively.** Adding or removing an origin won't propagate immediately; expect a delay until the cache TTL expires.
+</div>
+
+### Android: Asset Links
+
+**Path**: `/.well-known/assetlinks.json`
+
+```json
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls",
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.example.yourapp",
+      "sha256_cert_fingerprints": [
+        "B6:16:AD:FE:C5:C6:D3:4C:93:01:5B:4A:79:20:21:4E:62:43:AB:29:28:EE:34:9A:F2:46:55:4B:54:FC:42:DF"
+      ]
+    }
+  }
+]
+```
+
+Replace `com.example.yourapp` with your application's package name and the fingerprint with your app's signing certificate SHA256. See the <a target="_blank" href="https://developers.google.com/digital-asset-links/v1/getting-started">Digital Asset Links</a> documentation and <a target="_blank" href="https://developer.android.com/identity/credential-manager/prerequisites">Credential Manager prerequisites</a>.
+
+**Requirements**: Android 9+ (API 28) with Google Play Services, or Android 14+ (API 34) with any compatible credential provider. `compileSdkVersion` must be at least 34 (required by the `androidx.credentials` library, not the device).
+
+### iOS / macOS: Apple App Site Association
+
+**Path**: `/.well-known/apple-app-site-association`
+
+```json
+{
+  "webcredentials": {
+    "apps": [
+      "TEAMID.com.example.yourapp"
+    ]
+  }
+}
+```
+
+Replace `TEAMID` with your Apple Developer Team ID and `com.example.yourapp` with your bundle identifier. Your app must also declare the <a target="_blank" href="https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.associated-domains">Associated Domains</a> capability in Xcode (**Signing & Capabilities** → **Associated Domains** → `webcredentials:<your-rp-domain>`).
+
+<div class="warning">
+<h4>iOS / macOS: Associated Domains entitlement required</h4>
+Without the Associated Domains entitlement declared in Xcode, passkey operations on iOS / macOS will fail with a configuration error even though {{#name check_availability}} returns {{#enum PasskeyAvailability::Available}} (the OS-level check can't verify entitlements at runtime).
+</div>
+
+<div class="warning">
+<h4>iOS / macOS: Expo Managed Workflow</h4>
+If you're using Expo, the Breez SDK plugin can configure the Associated Domains entitlement automatically. See the <a href="install_react_native.html#plugin-options">React Native/Expo installation guide</a> for details on the <code>enablePasskey</code> option.
+</div>
+
+**Requirements**: iOS 18.0+, macOS 15.0+.
+
+## Initialization
+
+{{#name PasskeyClient}} is the entry point for every passkey-derived wallet operation. It composes a {{#name PrfProvider}} (the platform-specific bridge to WebAuthn / Credential Manager / AuthenticationServices) with the SDK's internal Nostr-backed label store, then exposes register / sign-in / connect / labels / credentials to your app code. Construct one per app session and reuse it.
+
+The recommended setup is the {{#name createPasskeyClient}} convenience factory, which builds the platform-default {{#name PasskeyProvider}} and forwards the Breez API key from your SDK {{#name Config}}:
+
+{{#tabs passkey:setup-client}}
+
+Parameters:
+
+- **`rpId`**: Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` (= `keys.breez.technology`) if your app is Breez-registered. Required because changing it later strands existing credentials.
+- **`rpName`**: Display name shown to the user in the OS passkey picker and credential-management UIs (iCloud Keychain, Google Password Manager, 1Password, etc.) when choosing a credential. Required.
+- **`sdkConfig`**: Your main SDK {{#name Config}}. The factory forwards `sdkConfig.api_key` to the Breez relay for authenticated (<a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>) label storage. Without an API key, label sync falls back to public relays only.
+- **`passkeyConfig`** (optional): Carries {{#name default_label}}, the label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive no label. Falls back to the SDK's internal `"Default"` when unset.
+
+The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.
+
+`createPasskeyClient` is not surfaced on web; the WASM tab shows the equivalent direct construction. For custom PRF providers (CLI YubiKey, FIDO2, file-backed) or non-default platform options, see [PRF providers](./passkey_prf_providers.md).
+
+### Checking passkey availability
+
+Use {{#name PasskeyClient.check_availability}} to gate passkey UI elements. The single call collapses {{#name PrfProvider.is_supported}} and {{#name PrfProvider.check_domain_association}} into a tagged {{#name PasskeyAvailability}} value with four variants: `Available`, `PrfUnsupported`, `NotAssociated { source, reason }`, `Skipped { reason }`. Branch on the variant to fall back to mnemonic-based onboarding on unsupported platforms (Android < 9, iOS < 18) or surface configuration mistakes (missing entitlement, AASA not deployed) without firing a WebAuthn ceremony:
+
+{{#tabs passkey:check-availability}}
+
+## Onboarding
+
+The recommended flow depends on the platform. Mobile uses a single-call unified flow backed by {{#name PasskeyClient.connect_with_passkey}}. Web uses two buttons (Sign In and Create Account) and lets the user pick. For explicit control over each path, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly.
+
+### Unified flow (mobile)
+
+One "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's `registered_credential` field doubles as the path discriminator: `Some` (with the new credential metadata) on the register path, `None` on the sign-in path.
+
+Internally the silent attempt pins `preferImmediatelyAvailableCredentials = true` so the OS fast-fails (no UI, sub-300ms on iOS / Android) when no local credential exists; only {{#enum PrfProviderError::CredentialNotFound}} flips to register, all other errors (`Cancel`, `Timeout`, `Configuration`) propagate unchanged.
+
+{{#tabs passkey:connect-with-passkey}}
+
+### Two-button flow (web)
+
+`connect_with_passkey` is not surfaced on the WASM target. The unified flow needs a silent "no credential here" signal so it can fall through to register, and WebAuthn deliberately collapses that case into the same `NotAllowedError` as a user cancel for privacy reasons. There is no reliable way on web for the SDK to tell the two apart.
+
+The recommended UX on web is two buttons: a **Sign In** button calling `signIn` and a separate **Create Account** button calling `register`. Let the user pick the right one instead of trying to auto-detect. See [Direct sign-in / register](#direct-sign-in--register) for the call shapes.
+
+### Direct sign-in / register
+
+For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly. Use this path when separating Sign-In and Create-Account flows, or when adding a new label on a returning user without going through `connect_with_passkey`.
+
+Sign in to an existing credential:
+
+{{#tabs passkey:sign-in}}
+
+Register a fresh credential:
+
+{{#tabs passkey:register-passkey}}
+
+Pass `wallet.seed` to {{#name connect}} in either case.
+
+### Error recovery
+
+The SDK collapses every passkey failure into seven actionable [`ErrorKind`](https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/enum.ErrorKind.html) values: branching on `error.kind()` is the canonical recovery pattern:
+
+| `ErrorKind` | What it means | Recommended action |
+|---|---|---|
+| `Cancel` | User dismissed the OS prompt (≥ 300ms, < 55s) | Sticky retry UI with "Try Again" |
+| `NoCredential` | No matching credential on this device (includes iOS sub-300ms fast-fail) | Fall through to {{#name PasskeyClient.register}} |
+| `AlreadyExists` | Register hit a credential in `excludeCredentialIds` | Flip to {{#name PasskeyClient.sign_in}}; the OS picker surfaces the existing credential |
+| `Timeout` | OS biometric inactivity timeout (≥ 55s): distinct from a user-cancel | Sticky retry with timeout-specific copy. **Do not** auto-retry |
+| `PrfUnsupported` | Authenticator doesn't implement the PRF extension | Fall back to mnemonic onboarding |
+| `Configuration` | Entitlement missing, AASA stale, or assetlinks malformed | Developer-facing error; surface {{#name check_domain_association}}'s `NotAssociated` reason |
+| `Internal` | Network / library / generic failure | Generic "try again later" UI |
+
+Web also exposes typed exception classes (`PasskeyAlreadyExistsError`, `PasskeyTimedOutError`, `PasskeyCredentialNotFoundError`) as an alternative to `error.kind()` for `instanceof` matching.
+
+Two recovery paths are common enough to warrant runnable examples.
+
+Flip to sign-in when register hits an existing credential (`AlreadyExists`):
+
+{{#tabs passkey:recover-already-exists}}
+
+Show a sticky retry UI when the OS biometric timeout fires (`Timeout`):
+
+{{#tabs passkey:handle-timeout}}
+
+For the full mapping (including the iOS sub-300ms fast-fail nuance that bundles "no-credential" under `UserCancelled`), see the [UX guide](./uxguide_passkey.md).
 
 ## Supported specs
 
