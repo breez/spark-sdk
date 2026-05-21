@@ -52,11 +52,11 @@ class CustomPrfProvider: PrfProvider {
 
 func checkAvailability() async throws {
     // ANCHOR: check-availability
-    // Pass `PasskeyProvider.BREEZ_RP_ID` instead of "my-app.com" if your
+    // Pass `PasskeyProvider.BREEZ_RP_ID` instead of "<your-rp-domain>" if your
     // app is Breez-registered (shares credentials with other Breez apps).
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
+    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
 
     switch try await passkey.checkAvailability() {
     case .available:
@@ -75,7 +75,7 @@ func setupPasskeyClient() -> PasskeyClient {
     // ANCHOR: setup-client
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
+    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
     // ANCHOR_END: setup-client
     return passkey
 }
@@ -85,7 +85,7 @@ func connectWithPasskey() async throws -> BreezSdk {
     // Single-CTA onboarding: silent sign-in, fall through to register.
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
+    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
 
     let response = try await passkey.connectWithPasskey(
         request: ConnectWithPasskeyRequest(label: "personal")
@@ -112,7 +112,7 @@ func signInExistingUser() async throws -> SignInResponse {
     // `connectWithPasskey` when you also want the new-user path.
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
+    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
 
     return try await passkey.signIn(request: SignInRequest(label: "personal"))
     // ANCHOR_END: sign-in
@@ -122,7 +122,7 @@ func registerNewPasskey() async throws -> BreezSdk {
     // ANCHOR: register-passkey
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
+    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
 
     let response = try await passkey.register(
         request: RegisterRequest(label: "personal")
@@ -146,8 +146,8 @@ func listLabels() async throws -> [String] {
     var sdkConfig = defaultConfig(network: .mainnet)
     sdkConfig.apiKey = "<breez api key>"
     let passkey = createPasskeyClient(
-        rpId: "my-app.com",
-        rpName: "My App",
+        rpId: "<your-rp-domain>",
+        rpName: "Your App",
         sdkConfig: sdkConfig,
         // Default label when register / signIn receive no label.
         passkeyConfig: PasskeyConfig(defaultLabel: "personal")
@@ -165,7 +165,7 @@ func storeLabel() async throws {
     // ANCHOR: store-label
     var sdkConfig = defaultConfig(network: .mainnet)
     sdkConfig.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: sdkConfig)
+    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: sdkConfig)
 
     try await passkey.labels().store(label: "personal")
     // ANCHOR_END: store-label
@@ -174,7 +174,7 @@ func storeLabel() async throws {
 func checkDomain() async throws {
     // ANCHOR: domain-association
     // Lower-level provider call. Most hosts use `checkAvailability` instead.
-    let prfProvider = PasskeyProvider(rpId: "my-app.com", rpName: "My App")
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
     let result = try await prfProvider.checkDomainAssociation()
 
     switch result {
@@ -193,7 +193,7 @@ func recoverFromAlreadyExists() async throws -> Wallet {
     // ANCHOR: recover-already-exists
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
+    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
 
     do {
         let response = try await passkey.register(
@@ -218,7 +218,7 @@ func handleTimeout() async throws -> SignInResponse {
     // ANCHOR: handle-timeout
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let passkey = createPasskeyClient(rpId: "my-app.com", rpName: "My App", sdkConfig: config)
+    let passkey = createPasskeyClient(rpId: "<your-rp-domain>", rpName: "Your App", sdkConfig: config)
 
     do {
         return try await passkey.signIn(
@@ -239,8 +239,8 @@ func withCredentialRegistry() async throws {
     // the passkey guide; copy-paste into your app.
     let registry = KeychainCredentialRegistry()
     let prfProvider = PasskeyProvider(
-        rpId: "my-app.com",
-        rpName: "My App",
+        rpId: "<your-rp-domain>",
+        rpName: "Your App",
         credentialRegistry: registry,
         onRegistryError: { op, err in print("registry \(op): \(err)") }
     )

@@ -13,7 +13,7 @@ Passkey Login uses a Relying Party (RP) domain to scope credentials. The domain 
 Two ways to set up the RP, depending on whether you want a user's passkey to work across multiple Breez-registered apps or stay scoped to your app alone:
 
 - **Shared passkey (Breez-hosted).** A passkey registered in one Breez-registered app works in every other Breez-registered app on the same device, with no re-registration. [Contact us](mailto:contact@breez.technology?subject=Passkey%20configuration) to add your app to the configuration files Breez hosts at `keys.breez.technology`, then pass `PasskeyProvider.BREEZ_RP_ID` as your `rpId`.
-- **App-scoped passkey (self-hosted).** A passkey registered in your app only works in your app (and any related web origins you list). You host the well-known files yourself at the paths below, on an HTTPS domain you control. Pass that domain as your `rpId` (for example, `"my-app.com"`).
+- **App-scoped passkey (self-hosted).** A passkey registered in your app only works in your app (and any related web origins you list). You host the well-known files yourself at the paths below, on an HTTPS domain you control. Pass that domain as your `rpId` (for example, `"<your-rp-domain>"`).
 
 Same code paths in either case; only the `rpId` value and who hosts the JSON differs.
 
@@ -84,17 +84,17 @@ Replace `com.example.yourapp` with your application's package name and the finge
 
 Replace `TEAMID` with your Apple Developer Team ID and `com.example.yourapp` with your bundle identifier. Your app must also declare the <a target="_blank" href="https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.associated-domains">Associated Domains</a> capability in Xcode (**Signing & Capabilities** → **Associated Domains** → `webcredentials:<your-rp-domain>`).
 
+<div class="warning">
+<h4>iOS / macOS: Associated Domains entitlement required</h4>
+Without the Associated Domains entitlement declared in Xcode, passkey operations on iOS / macOS will fail with a configuration error even though {{#name check_availability}} returns {{#enum PasskeyAvailability::Available}} (the OS-level check can't verify entitlements at runtime).
+</div>
+
+<div class="warning">
+<h4>iOS / macOS: Expo Managed Workflow</h4>
+If you're using Expo, the Breez SDK plugin can configure the Associated Domains entitlement automatically. See the <a href="install_react_native.html#plugin-options">React Native/Expo installation guide</a> for details on the <code>enablePasskey</code> option.
+</div>
+
 **Requirements**: iOS 18.0+, macOS 15.0+.
-
-<div class="warning">
-<h4>Expo Managed Workflow</h4>
-If you're using Expo, the Breez SDK plugin can configure this automatically. See the <a href="install_react_native.html#plugin-options">React Native/Expo installation guide</a> for details on the <code>enablePasskey</code> option.
-</div>
-
-<div class="warning">
-<h4>Associated Domains entitlement must be enabled</h4>
-Without the Associated Domains entitlement, passkey operations will fail with a configuration error even though {{#name check_availability}} returns {{#enum PasskeyAvailability::Available}} (the OS-level check can't verify entitlements at runtime).
-</div>
 
 ## Configuring the PasskeyClient
 
@@ -334,8 +334,8 @@ Pass to the provider:
 
 ```swift
 let provider = PasskeyProvider(
-    rpId: "my-app.com",
-    rpName: "My App",
+    rpId: "<your-rp-domain>",
+    rpName: "Your App",
     credentialRegistry: KeychainCredentialRegistry()
 )
 ```
@@ -435,8 +435,8 @@ Pass to the provider:
 ```kotlin
 val provider = PasskeyProvider(
     activityProvider = { activity },
-    rpId = "my-app.com",
-    rpName = "My App",
+    rpId = "<your-rp-domain>",
+    rpName = "Your App",
     credentialRegistry = BlockStoreCredentialRegistry(activity.applicationContext),
 )
 ```
@@ -492,8 +492,8 @@ Pass to the provider:
 
 ```typescript
 const provider = new PasskeyProvider({
-    rpId: 'my-app.com',
-    rpName: 'My App',
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
     credentialRegistry: new LocalStorageCredentialRegistry(),
 });
 ```
