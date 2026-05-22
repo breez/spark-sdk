@@ -5,14 +5,62 @@ use anyhow::Result;
 use bitcoin::Amount;
 use rand::Rng;
 use rstest::*;
-use spark_wallet::{DefaultSigner, Network, SparkWallet, SparkWalletConfig, WalletEvent};
+use spark_mysql::{
+    MysqlSessionStore, MysqlTokenStore, MysqlTreeStore, default_mysql_storage_config,
+};
+use spark_postgres::{
+    PostgresSessionStore, PostgresTokenStore, PostgresTreeStore, default_postgres_storage_config,
+};
+use spark_wallet::{
+    DefaultSigner, Network, Signer, SparkWallet, SparkWalletConfig, WalletBuilder, WalletEvent,
+};
 use tokio::sync::broadcast::Receiver;
 use tracing::{debug, info};
 
+use crate::backend::Backend;
 use crate::fixtures::{
     bitcoind::BitcoindFixture,
     setup::{TestFixtures, create_test_signer_alice, create_test_signer_bob},
 };
+
+/// Builds a `SparkWallet` whose session, tree, and token-output stores are
+/// backed by the resolved `Backend`. For `Backend::InMemory` this is
+/// equivalent to `SparkWallet::connect(config, signer)`; for the SQL variants
+/// all three stores share the connection string (so they live in one
+/// database) and are scoped per-wallet by the signer's identity pubkey.
+pub async fn build_test_wallet(
+    config: SparkWalletConfig,
+    signer: Arc<dyn Signer>,
+    backend: &Backend,
+) -> Result<SparkWallet> {
+    let mut builder = WalletBuilder::new(config, signer.clone());
+    match backend {
+        Backend::InMemory => {}
+        Backend::Postgres(conn_str) => {
+            let identity = signer.get_identity_public_key().await?.serialize();
+            let pg_config = default_postgres_storage_config(conn_str.clone());
+            let session = PostgresSessionStore::from_config(pg_config.clone(), &identity).await?;
+            let tree = PostgresTreeStore::from_config(pg_config.clone(), &identity).await?;
+            let token = PostgresTokenStore::from_config(pg_config, &identity).await?;
+            builder = builder
+                .with_session_store(Arc::new(session))
+                .with_tree_store(Arc::new(tree))
+                .with_token_output_store(Arc::new(token));
+        }
+        Backend::Mysql(conn_str) => {
+            let identity = signer.get_identity_public_key().await?.serialize();
+            let my_config = default_mysql_storage_config(conn_str.clone());
+            let session = MysqlSessionStore::from_config(my_config.clone(), &identity).await?;
+            let tree = MysqlTreeStore::from_config(my_config.clone(), &identity).await?;
+            let token = MysqlTokenStore::from_config(my_config, &identity).await?;
+            builder = builder
+                .with_session_store(Arc::new(session))
+                .with_tree_store(Arc::new(tree))
+                .with_token_output_store(Arc::new(token));
+        }
+    }
+    Ok(builder.build().await?)
+}
 
 pub async fn wait_for_event<F>(
     event_rx: &mut Receiver<WalletEvent>,
@@ -78,7 +126,8 @@ pub async fn create_regtest_wallet() -> Result<(SparkWallet, Receiver<WalletEven
     let signer = Arc::new(DefaultSigner::new(&seed, Network::Regtest)?);
 
     info!("Connecting wallet to deployed regtest operators...");
-    let wallet = SparkWallet::connect(config, signer).await?;
+    let backend = crate::backend::resolve_backend().await?;
+    let wallet = build_test_wallet(config, signer, &backend).await?;
     let mut listener = wallet.subscribe_events();
 
     // Wait for initial sync
@@ -118,15 +167,26 @@ pub async fn wallets(#[future] test_fixtures: TestFixtures) -> WalletsFixture {
         .expect("failed to create wallet config");
     let signer = create_test_signer_alice();
 
-    let alice_wallet = SparkWallet::connect(config.clone(), Arc::new(signer))
+    // Subscribe to events BEFORE the wallet has time to emit Synced. Wallet
+    // background tasks start as soon as build_test_wallet returns, and they
+    // race against subscribe_events because the broadcast channel doesn't
+    // replay past events. With the slower SQL backends, building a second
+    // wallet takes long enough that the first wallet's Synced fires before
+    // we'd otherwise get to subscribe.
+    let alice_backend = crate::backend::resolve_backend()
+        .await
+        .expect("failed to resolve backend for alice wallet");
+    let alice_wallet = build_test_wallet(config.clone(), Arc::new(signer), &alice_backend)
         .await
         .expect("Failed to connect alice wallet");
+    let mut alice_listener = alice_wallet.subscribe_events();
 
-    let bob_wallet = SparkWallet::connect(config, Arc::new(create_test_signer_bob()))
+    let bob_backend = crate::backend::resolve_backend()
+        .await
+        .expect("failed to resolve backend for bob wallet");
+    let bob_wallet = build_test_wallet(config, Arc::new(create_test_signer_bob()), &bob_backend)
         .await
         .expect("Failed to connect bob wallet");
-
-    let mut alice_listener = alice_wallet.subscribe_events();
     let mut bob_listener = bob_wallet.subscribe_events();
     loop {
         let event = alice_listener

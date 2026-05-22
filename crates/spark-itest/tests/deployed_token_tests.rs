@@ -3,10 +3,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use rand::Rng;
 use rstest::*;
-use spark_itest::helpers::wait_for_event;
+use spark_itest::backend::resolve_backend;
+use spark_itest::helpers::{build_test_wallet, wait_for_event};
 use spark_wallet::{
-    DefaultSigner, Network, SelectionStrategy, SparkWallet, SparkWalletConfig, TransferTokenOutput,
-    WalletEvent,
+    DefaultSigner, Network, SelectionStrategy, SparkWalletConfig, TransferTokenOutput, WalletEvent,
 };
 use tracing::info;
 
@@ -30,11 +30,16 @@ async fn test_many_outputs() -> Result<()> {
     rand::thread_rng().fill(&mut bob_seed);
     let signer_bob = Arc::new(DefaultSigner::new(&bob_seed, Network::Regtest).unwrap());
 
-    let alice_wallet = SparkWallet::connect(config.clone(), signer_alice).await?;
-    let bob_wallet = SparkWallet::connect(config, signer_bob).await?;
-
-    // Wait for wallets to sync
+    // Subscribe immediately after each build so Synced (emitted once during
+    // operator connect) isn't lost to a late subscribe — the broadcast
+    // channel doesn't replay past events, and SQL-backend builds + container
+    // startup are slow enough that Alice's Synced would otherwise fire before
+    // we'd subscribe.
+    let alice_backend = resolve_backend().await?;
+    let alice_wallet = build_test_wallet(config.clone(), signer_alice, &alice_backend).await?;
     let mut alice_listener = alice_wallet.subscribe_events();
+    let bob_backend = resolve_backend().await?;
+    let bob_wallet = build_test_wallet(config, signer_bob, &bob_backend).await?;
     let mut bob_listener = bob_wallet.subscribe_events();
     wait_for_event(&mut alice_listener, 30, "Synced", |event| match event {
         WalletEvent::Synced => Ok(Some(event)),

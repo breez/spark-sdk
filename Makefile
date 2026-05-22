@@ -61,6 +61,12 @@ flutter-check:
 itest:
 	cargo xtask itest
 
+spark-itest-pg:
+	USE_POSTGRES_BACKEND=true cargo xtask itest
+
+spark-itest-mysql:
+	USE_MYSQL_BACKEND=true cargo xtask itest
+
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 
