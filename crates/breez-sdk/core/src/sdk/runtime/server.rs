@@ -1,4 +1,5 @@
 use tokio::sync::watch;
+use tracing::error;
 
 use crate::{GetInfoRequest, GetInfoResponse, error::SdkError};
 
@@ -14,11 +15,17 @@ impl RuntimeProfile for ServerRuntime {
         false
     }
 
-    async fn start_sdk_services(
-        &self,
-        sdk: &BreezSdk,
-        _initial_synced_sender: watch::Sender<bool>,
-    ) {
+    async fn start_sdk_services(&self, sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>) {
+        // The host drives `sync_wallet` explicitly in server mode, so mark the
+        // SDK as "initially synced" up front. `SparkSyncService::sync_payments`
+        // gates `PaymentSucceeded` emission on this watcher: without it set,
+        // completed receives inserted on sync silently skip the emit, and any
+        // event-driven flow (e.g. a host that subscribes to `PaymentSucceeded`)
+        // misses the notification.
+        if let Err(e) = initial_synced_sender.send(true) {
+            error!("Failed to set initial synced signal in server mode: {e:?}");
+        }
+
         sdk.event_emitter
             .add_runtime_event_handler(Box::new(ServerRuntimeEventHandler { sdk: sdk.clone() }))
             .await;
