@@ -129,6 +129,23 @@ impl SparkRpcClient {
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn finalize_deposit_tree_creation(
+        &self,
+        req: FinalizeDepositTreeCreationRequest,
+    ) -> Result<FinalizeDepositTreeCreationResponse> {
+        debug!(
+            "Calling finalize_deposit_tree_creation with request: {:?}",
+            req
+        );
+        Ok(self
+            .spark_service_client()
+            .await?
+            .finalize_deposit_tree_creation(req)
+            .await?
+            .into_inner())
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn start_transfer_v2(
         &self,
         req: StartTransferRequest,
