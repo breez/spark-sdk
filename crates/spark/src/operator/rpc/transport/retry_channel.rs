@@ -7,6 +7,7 @@ use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
+    time::Duration,
 };
 use tonic::{Status, body::BoxBody};
 use tower_service::Service;
@@ -19,6 +20,15 @@ pub enum RetryChannelError {
     #[error("transport error: {0}")]
     Transport(#[from] tonic::transport::Error),
 }
+
+/// Pause between the initial transport failure and the retry, so that
+/// tonic's `Reconnect` middleware has time to drop the dying connection
+/// and start a fresh one before the retry's `poll_ready`. Without it
+/// the retry tends to hit the same teardown window — e.g. when an L7
+/// proxy sends a graceful `GoAway` to recycle the HTTP/2 connection,
+/// the original call and an immediate retry on the same `inner.clone()`
+/// both fail with the same `hyper::Error(Canceled)`.
+const RETRY_DELAY: Duration = Duration::from_millis(5);
 
 /// A channel that retries a gRPC call once if a transport error occurs
 #[derive(Debug, Clone)]
@@ -79,9 +89,10 @@ where
             };
 
             debug!(
-                "RetryChannel: transport error detected: {:?}, retrying...",
-                err
+                "RetryChannel: transport error detected: {:?}, retrying after {:?}",
+                err, RETRY_DELAY
             );
+            tokio::time::sleep(RETRY_DELAY).await;
 
             // Wait for the retry clone to be ready and make the call
             poll_fn(|cx| inner_clone.poll_ready(cx)).await?;
