@@ -47,9 +47,12 @@ private struct RegistryTimeoutError: Error {
 }
 
 /// Run `body` with a `registryTimeout` deadline. Throws
-/// `RegistryTimeoutError` on timeout. The original task is not
-/// cancelled (Swift `Task` cancellation is cooperative); the result is
-/// simply ignored.
+/// `RegistryTimeoutError` on timeout. `cancelAll()` only requests
+/// cancellation cooperatively, so a non-cooperative registry backend
+/// that ignores cancellation keeps running in the background until it
+/// finishes; its result is simply discarded. Acceptable because
+/// registry writes are advisory, but a pathological backend can leak a
+/// background task.
 @available(iOS 18.0, macOS 15.0, *)
 private func withRegistryTimeout<T: Sendable>(
     operation: RegistryOperation,
@@ -690,6 +693,11 @@ public final class PasskeyAssertionCore {
         return { [weak self] credentialId in
             self?.recordObservedCredentialId(credentialId)
             if let reg = credentialRegistry {
+                // `detached` is deliberate: this callback fires on the
+                // ASAuthorization delegate (main), and the best-effort
+                // write must neither inherit MainActor isolation nor be
+                // cancelled when the ceremony returns. It's already 3s
+                // timeout-bounded inside registryAddBestEffort.
                 Task.detached {
                     await registryAddBestEffort(
                         registry: reg,
@@ -791,8 +799,9 @@ public final class PasskeyAssertionCore {
 
         // Record the new credential so subsequent registrations on
         // this device auto-exclude it. Best-effort, fire-and-forget.
-        // Copy fields to locals so the detached task captures values,
-        // not `self`.
+        // `detached` so the write isn't cancelled when this function
+        // returns and doesn't inherit caller actor isolation; fields are
+        // copied to locals so the task captures values, not `self`.
         if let reg = credentialRegistry {
             let credentialId = credential.credentialId
             let rpId = self.rpId

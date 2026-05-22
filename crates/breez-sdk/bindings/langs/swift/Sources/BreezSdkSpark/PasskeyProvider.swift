@@ -150,10 +150,22 @@ public class PasskeyProvider: PrfProvider {
     /// - Returns: One 32-byte output per salt, in input order.
     /// - Throws: `PrfProviderError` if any underlying ceremony fails. The
     ///   first failing ceremony aborts the rest.
+    ///
+    /// Passes `autoRegister: false`: this provider never implicitly
+    /// creates a credential during derivation. Sign-up and sign-in stay
+    /// explicit (the host calls `createPasskey` to register), so a
+    /// missing credential surfaces as `.credentialNotFound` rather than
+    /// silently minting a new passkey. (The core defaults `autoRegister`
+    /// to true for direct callers; the provider opts out.)
     public func deriveSeeds(request: DeriveSeedsRequest) async throws -> [Data] {
-        let saltDatas: [Data] = request.salts.compactMap { $0.data(using: .utf8) }
-        guard saltDatas.count == request.salts.count else {
-            throw PrfProviderError.Generic("Failed to encode salts as UTF-8")
+        // Map (not compactMap) so a salt that somehow can't UTF-8 encode
+        // fails loudly with its position rather than being dropped and
+        // detected after the fact by a count mismatch.
+        let saltDatas = try request.salts.map { salt -> Data in
+            guard let data = salt.data(using: .utf8) else {
+                throw PrfProviderError.Generic("Failed to encode salt as UTF-8: \(salt)")
+            }
+            return data
         }
         do {
             return try await core.deriveSeeds(
@@ -338,21 +350,6 @@ public class PasskeyProvider: PrfProvider {
             return .AuthenticationFailed(msg)
         case .generic(let msg):
             return .Generic(msg)
-        }
-    }
-}
-
-// MARK: - Error Extension
-
-@available(iOS 18.0, macOS 15.0, *)
-extension PrfProviderError {
-    /// Whether this error indicates no credential was found (recoverable by registration).
-    var isCredentialNotFound: Bool {
-        switch self {
-        case .CredentialNotFound:
-            return true
-        default:
-            return false
         }
     }
 }

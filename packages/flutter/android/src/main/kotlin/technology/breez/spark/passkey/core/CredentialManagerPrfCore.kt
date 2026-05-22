@@ -31,6 +31,7 @@ import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicReference
 
 // =====================================================================
 // !!! SOURCE-OF-TRUTH NOTICE !!!
@@ -101,8 +102,46 @@ public interface CredentialRegistry {
 /** Discriminator passed to the core's `onRegistryError` callback. */
 public enum class RegistryOperation { Read, Add, Remove, Clear }
 
+/**
+ * Content-equality wrapper so credential-ID byte arrays can key a Set
+ * directly. `ByteArray` uses identity equality, so the alternative is
+ * a `.toList()` boxing allocation per element on every dedupe. (A
+ * `value class` would be zero-cost, but custom `equals`/`hashCode` on
+ * one isn't allowed on the pinned Kotlin version.)
+ */
+private class ByteArrayKey(private val bytes: ByteArray) {
+    override fun equals(other: Any?): Boolean =
+        other is ByteArrayKey && bytes.contentEquals(other.bytes)
+
+    override fun hashCode(): Int = bytes.contentHashCode()
+}
+
+/** Append [extra] to [base], skipping entries already present by content. */
+private fun mergeUniqueCredentialIds(
+    base: List<ByteArray>,
+    extra: List<ByteArray>,
+): List<ByteArray> {
+    if (extra.isEmpty()) return base
+    val seen = base.mapTo(HashSet()) { ByteArrayKey(it) }
+    val out = base.toMutableList()
+    for (id in extra) {
+        if (seen.add(ByteArrayKey(id))) out.add(id)
+    }
+    return out
+}
+
 private const val REGISTRY_TAG = "CredentialRegistry"
+private const val CORE_TAG = "PasskeyPrfCore"
 private const val REGISTRY_TIMEOUT_MS: Long = 3_000L
+
+/**
+ * Process-lifetime scope for best-effort, fire-and-forget registry
+ * writes that must outlive the ceremony coroutine (so the seed return
+ * isn't blocked on the write). A single shared `SupervisorJob` keeps
+ * one child's failure from cancelling siblings; deliberately not
+ * cancelled (these are short, 3s-capped writes).
+ */
+private val registryIoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 /**
  * Run [body] under a 3 second timeout. Returns null on timeout. The
@@ -147,9 +186,7 @@ private fun registryAddFireAndForget(
     credentialId: ByteArray,
     onRegistryError: ((RegistryOperation, Throwable) -> Unit)?,
 ) {
-    @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    scope.launch {
+    registryIoScope.launch {
         try {
             val ok = withRegistryTimeout { registry.add(rpId, credentialId) }
             if (ok == null) {
@@ -237,6 +274,19 @@ public class CredentialManagerPrfCore(
         private fun decodeBase64Url(s: String): ByteArray =
             Base64.decode(s, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
 
+        /**
+         * Decode URL-safe base64 from a provider response, logging and
+         * returning null on malformed input (a provider/protocol fault)
+         * rather than silently swallowing it.
+         */
+        private fun decodeBase64UrlOrNull(s: String, what: String): ByteArray? =
+            try {
+                decodeBase64Url(s)
+            } catch (e: IllegalArgumentException) {
+                Log.w(CORE_TAG, "Malformed base64url in provider response ($what)", e)
+                null
+            }
+
         private fun randomBase64Url(byteCount: Int): String {
             val bytes = ByteArray(byteCount)
             secureRandom.nextBytes(bytes)
@@ -245,20 +295,16 @@ public class CredentialManagerPrfCore(
     }
 
     /** Credential ID asserted in the most recent ceremony; read-and-clear. */
-    @Volatile
-    private var lastObservedCredentialId: ByteArray? = null
+    private val lastObservedCredentialId = AtomicReference<ByteArray?>(null)
 
     /**
      * Take ownership of the credential ID captured by the most recent
-     * assertion, clearing the slot. Returns `null` if no assertion has
-     * completed since the last call. Backs the binding layer's
-     * `SignInResponse.credential_id`.
+     * assertion, clearing the slot atomically. Returns `null` if no
+     * assertion has completed since the last call. Backs the binding
+     * layer's `SignInResponse.credential_id`.
      */
-    public fun takeLastObservedCredentialId(): ByteArray? {
-        val v = lastObservedCredentialId
-        lastObservedCredentialId = null
-        return v
-    }
+    public fun takeLastObservedCredentialId(): ByteArray? =
+        lastObservedCredentialId.getAndSet(null)
 
     /** Help suffix when the host gave no allow-list and no registry. */
     private fun helpSuffixIfApplicable(allowCredentials: List<ByteArray>): String =
@@ -276,6 +322,13 @@ public class CredentialManagerPrfCore(
      * single-salt re-assert. When no credential exists yet and
      * [autoRegister] is set, the first miss registers a passkey and
      * retries. Output ordering matches input ordering.
+     *
+     * Expected biometric-prompt count for the common 2-salt setup
+     * (`account-master` + label): 1 on a conformant authenticator. The
+     * worst case on a misbehaving provider that both lacks a credential
+     * AND drops `prf.second` is 3 prompts (assert-miss, register,
+     * dual-assert-that-drops-second + a single-salt recover) — register
+     * happens at most once per call, so prompts never grow unbounded.
      */
     public suspend fun deriveSeeds(
         salts: List<String>,
@@ -284,12 +337,11 @@ public class CredentialManagerPrfCore(
         preferImmediatelyAvailableCredentials: Boolean = true,
     ): List<ByteArray> = withContext(Dispatchers.Main) {
         // Union the caller's allow-list with the registry's stored IDs.
-        val allow = allowCredentials.toMutableList()
+        var allow = allowCredentials
         credentialRegistry?.let { registry ->
-            val seen = allow.map { it.toList() }.toMutableSet()
-            for (id in registryReadBestEffort(registry, rpId, onRegistryError)) {
-                if (seen.add(id.toList())) allow.add(id)
-            }
+            allow = mergeUniqueCredentialIds(
+                allow, registryReadBestEffort(registry, rpId, onRegistryError),
+            )
         }
         if (salts.isEmpty()) return@withContext emptyList()
 
@@ -579,9 +631,9 @@ public class CredentialManagerPrfCore(
         // and seed the registry (so a returning user's pre-tracking
         // credential is captured on first assertion).
         responseJson.optString("rawId", "").takeIf { it.isNotEmpty() }
-            ?.let { runCatching { decodeBase64Url(it) }.getOrNull() }
+            ?.let { decodeBase64UrlOrNull(it, "assertion rawId") }
             ?.let { credentialId ->
-                lastObservedCredentialId = credentialId
+                lastObservedCredentialId.set(credentialId)
                 credentialRegistry?.let {
                     registryAddFireAndForget(it, rpId, credentialId, onRegistryError)
                 }
@@ -604,7 +656,7 @@ public class CredentialManagerPrfCore(
         // implementations; omit it so the caller re-asserts single-salt.
         if (salts.size > 1) {
             results.optString("second", "").takeIf { it.isNotEmpty() }
-                ?.let { runCatching { decodeBase64Url(it) }.getOrNull() }
+                ?.let { decodeBase64UrlOrNull(it, "prf.results.second") }
                 ?.let { out.add(it) }
         }
         return out
@@ -629,21 +681,15 @@ public class CredentialManagerPrfCore(
             // even after a reinstall (when the registry survives).
             var effectiveExclude = excludeCredentials
             credentialRegistry?.let { reg ->
-                val known = registryReadBestEffort(reg, rpId, onRegistryError)
-                if (known.isNotEmpty()) {
-                    val seen = effectiveExclude.map { it.toList() }.toMutableSet()
-                    val merged = effectiveExclude.toMutableList()
-                    for (id in known) {
-                        if (seen.add(id.toList())) merged.add(id)
-                    }
-                    effectiveExclude = merged
-                }
+                effectiveExclude = mergeUniqueCredentialIds(
+                    effectiveExclude, registryReadBestEffort(reg, rpId, onRegistryError),
+                )
             }
             // Mint a fresh random 16-byte user handle per call; the SDK
             // never lets hosts supply one. The base64url string (JSON
             // request) and raw bytes (RegisteredCredential.userId) come
             // from the same buffer.
-            val userIdBytes = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+            val userIdBytes = ByteArray(16).also { secureRandom.nextBytes(it) }
 
             // JSONObject (not template interpolation) so integrator
             // strings are escaped correctly instead of breaking on
@@ -794,12 +840,13 @@ public class CredentialManagerPrfCore(
     ): CredentialManagerPrfCoreException = when (this) {
         is GetCredentialCancellationException,
         is CreateCredentialCancellationException ->
-            CredentialManagerPrfCoreException(classifyCancellation(elapsedMs))
+            CredentialManagerPrfCoreException(classifyCancellation(elapsedMs), cause = this)
 
         is NoCredentialException ->
             CredentialManagerPrfCoreException(
                 Kind.CredentialNotFound,
                 message ?: "No matching credential on this device",
+                this,
             )
 
         // Surface the platform's duplicate-prevention check as a typed
@@ -814,11 +861,13 @@ public class CredentialManagerPrfCore(
                 CredentialManagerPrfCoreException(
                     Kind.CredentialAlreadyExists,
                     message ?: "Credential already registered for this RP",
+                    this,
                 )
             } else {
                 CredentialManagerPrfCoreException(
                     Kind.AuthenticationFailed,
                     "${type}: ${message ?: toString()}",
+                    this,
                 )
             }
 
@@ -826,12 +875,14 @@ public class CredentialManagerPrfCore(
             CredentialManagerPrfCoreException(
                 Kind.AuthenticationFailed,
                 "${type}: ${message ?: toString()}",
+                this,
             )
 
         is CreateCredentialException ->
             CredentialManagerPrfCoreException(
                 Kind.AuthenticationFailed,
                 "${type}: ${message ?: toString()}",
+                this,
             )
 
         else -> {
@@ -849,7 +900,7 @@ public class CredentialManagerPrfCore(
                         "14+ with a compatible Credential Manager provider."
                 else -> raw
             }
-            CredentialManagerPrfCoreException(Kind.Generic, hint)
+            CredentialManagerPrfCoreException(Kind.Generic, hint, this)
         }
     }
 
@@ -889,7 +940,15 @@ public class CredentialManagerPrfCore(
         AuthenticationFailed,
         /** PRF evaluation produced an empty or malformed response. */
         PrfEvaluationFailed,
-        /** Platform or app configuration error (e.g. missing assetlinks.json, misconfigured RP ID). */
+        /**
+         * Platform or app configuration error (e.g. missing
+         * assetlinks.json, misconfigured RP ID). Reserved for parity
+         * with the cross-platform error taxonomy (`PrfProviderException`
+         * / the iOS core's `.configuration`); the Android Credential
+         * Manager surfaces these as `AuthenticationFailed` rather than
+         * a distinct code, so this kind is mapped by hosts but not
+         * currently emitted here.
+         */
         Configuration,
         /**
          * Credential registration was refused because a credential matching
@@ -911,7 +970,8 @@ public class CredentialManagerPrfCore(
 public class CredentialManagerPrfCoreException(
     public val kind: CredentialManagerPrfCore.Kind,
     message: String? = null,
-) : Exception(message)
+    cause: Throwable? = null,
+) : Exception(message, cause)
 
 /**
  * Result of a domain-association check. Mirrors the Rust

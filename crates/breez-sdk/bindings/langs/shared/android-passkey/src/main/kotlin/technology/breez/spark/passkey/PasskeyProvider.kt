@@ -1,6 +1,7 @@
 package technology.breez.spark.passkey
 
 import android.app.Activity
+import android.util.Log
 import breez_sdk_spark.DeriveSeedsRequest
 import breez_sdk_spark.DomainAssociation
 import breez_sdk_spark.PrfProvider
@@ -29,7 +30,11 @@ import technology.breez.spark.passkey.core.RegistryOperation
  * @param activityProvider Called lazily on every request to obtain the
  *   current top Activity. Using a lambda (rather than a direct Activity
  *   reference) avoids holding a stale instance across configuration
- *   changes.
+ *   changes. Credential Manager is lifecycle-sensitive, so the lambda
+ *   MUST return the foreground, RESUMED, non-finishing Activity at call
+ *   time (it shows system UI on top of it) and MUST NOT return a
+ *   destroyed or cached background instance. Returning the wrong
+ *   Activity surfaces as opaque Credential Manager failures.
  * @param rpId Relying Party ID. Must match the domain configured for
  *   cross-platform credential sharing.
  * @param rpName Maps to the WebAuthn `rp.name`. Deprecated in
@@ -75,17 +80,19 @@ public class PasskeyProvider(
          * own RP domain pass their own string.
          */
         public const val BREEZ_RP_ID: String = CredentialManagerPrfCore.DEFAULT_RP_ID
+
+        private const val TAG = "PasskeyProvider"
     }
 
-    private val userName: String = userName ?: rpName
-    private val userDisplayName: String = userDisplayName ?: (userName ?: rpName)
+    private val resolvedUserName: String = userName ?: rpName
+    private val resolvedUserDisplayName: String = userDisplayName ?: resolvedUserName
 
     /** The configured PRF engine; holds rp identity + registry. */
     private val core = CredentialManagerPrfCore(
         rpId = rpId,
         rpName = rpName,
-        userName = this.userName,
-        userDisplayName = this.userDisplayName,
+        userName = resolvedUserName,
+        userDisplayName = resolvedUserDisplayName,
         credentialRegistry = credentialRegistry,
         onRegistryError = onRegistryError,
         activityProvider = activityProvider,
@@ -99,6 +106,13 @@ public class PasskeyProvider(
      * Uses the WebAuthn PRF dual-salt fast path where the authenticator
      * honors `prf.eval.second`, falling back to single-salt otherwise.
      * Output ordering matches input ordering.
+     *
+     * Passes `autoRegister = false`: this provider never implicitly
+     * creates a credential during derivation. Sign-up and sign-in are
+     * explicit (the host calls [createPasskey] for registration), so a
+     * missing credential surfaces as `CredentialNotFound` rather than
+     * silently minting a new passkey. (The core defaults `autoRegister`
+     * to true for direct callers; the provider opts out.)
      */
     override suspend fun deriveSeeds(request: DeriveSeedsRequest): List<ByteArray> =
         try {
@@ -189,6 +203,7 @@ public class PasskeyProvider(
         return try {
             reg.read(rpId)
         } catch (t: Throwable) {
+            Log.w(TAG, "CredentialRegistry.read failed", t)
             onRegistryError?.invoke(RegistryOperation.Read, t)
             emptyList()
         }
@@ -199,6 +214,7 @@ public class PasskeyProvider(
         try {
             reg.remove(rpId, id)
         } catch (t: Throwable) {
+            Log.w(TAG, "CredentialRegistry.remove failed", t)
             onRegistryError?.invoke(RegistryOperation.Remove, t)
         }
     }
@@ -208,6 +224,7 @@ public class PasskeyProvider(
         try {
             reg.clear(rpId)
         } catch (t: Throwable) {
+            Log.w(TAG, "CredentialRegistry.clear failed", t)
             onRegistryError?.invoke(RegistryOperation.Clear, t)
         }
     }
