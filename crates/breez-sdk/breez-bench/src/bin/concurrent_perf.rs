@@ -631,7 +631,7 @@ async fn build_sender_postgres_context(conn_str: &str) -> Result<Arc<SdkContext>
     let mut pg_config = default_postgres_storage_config(conn_str.to_string());
     pg_config.max_pool_size = 30;
     Ok(new_shared_sdk_context(SdkContextConfig {
-        storage_config: Some(breez_sdk_spark::postgres_storage(pg_config)),
+        storage: Some(breez_sdk_spark::postgres_storage(pg_config)?),
         ..SdkContextConfig::new(Network::Regtest)
     })
     .await?)
@@ -645,7 +645,7 @@ async fn build_sender_mysql_context(conn_str: &str) -> Result<Arc<SdkContext>> {
     let mut my_config = default_mysql_storage_config(conn_str.to_string());
     my_config.max_pool_size = 30;
     Ok(new_shared_sdk_context(SdkContextConfig {
-        storage_config: Some(breez_sdk_spark::mysql_storage(my_config)),
+        storage: Some(breez_sdk_spark::mysql_storage(my_config)?),
         ..SdkContextConfig::new(Network::Regtest)
     })
     .await?)

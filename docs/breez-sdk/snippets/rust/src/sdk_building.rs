@@ -21,7 +21,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // Build the SDK using the config, seed and default storage
     let builder = SdkBuilder::new(config, seed).with_default_storage("./.data".to_string());
     // You can also pass your custom implementations:
-    // let builder = builder.with_storage(<your storage implementation>)
+    // let builder = builder.with_storage_backend(custom_storage(<your storage implementation>))
     // let builder = builder.with_chain_service(<your chain service implementation>)
     // let builder = builder.with_rest_client(<your rest client implementation>)
     // let builder = builder.with_key_set(KeySetConfig { key_set_type: <your key set type>, use_address_index: <use address index>, account_number: <account number> })
@@ -110,7 +110,7 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     // and token store). Per-tenant scoping (rows isolated by seed identity) is
     // applied automatically.
     let sdk = SdkBuilder::new(config, seed)
-        .with_storage_backend(postgres_storage(postgres_config))
+        .with_storage_backend(postgres_storage(postgres_config)?)
         .build()
         .await?;
     // ANCHOR_END: init-sdk-postgres
@@ -147,7 +147,7 @@ pub(crate) async fn init_sdk_mysql() -> Result<BreezSdk> {
     // token store). Per-tenant scoping (rows isolated by seed identity) is
     // applied automatically.
     let sdk = SdkBuilder::new(config, seed)
-        .with_storage_backend(mysql_storage(mysql_config))
+        .with_storage_backend(mysql_storage(mysql_config)?)
         .build()
         .await?;
     // ANCHOR_END: init-sdk-mysql

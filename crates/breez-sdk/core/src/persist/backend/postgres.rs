@@ -4,10 +4,9 @@ use std::sync::Arc;
 
 use macros::async_trait;
 use spark_postgres::deadpool_postgres;
-use spark_wallet::PublicKey;
 
 use crate::{
-    SdkError,
+    Network, SdkError,
     persist::postgres::{
         PostgresStorage, create_postgres_session_store, create_postgres_token_store,
         create_postgres_tree_store,
@@ -35,8 +34,11 @@ impl PostgresBackend {
 
 #[async_trait]
 impl StorageBackend for PostgresBackend {
-    async fn create_stores(&self, identity: &PublicKey) -> Result<ResolvedStores, SdkError> {
-        let identity = identity.serialize();
+    async fn create_stores(
+        &self,
+        _network: Network,
+        identity: Vec<u8>,
+    ) -> Result<Arc<ResolvedStores>, SdkError> {
         let storage = Arc::new(
             PostgresStorage::new_with_pool(self.pool.clone(), &identity, self.run_migration)
                 .await?,
@@ -47,11 +49,11 @@ impl StorageBackend for PostgresBackend {
             create_postgres_token_store(self.pool.clone(), &identity, self.run_migration).await?;
         let session_store =
             create_postgres_session_store(self.pool.clone(), &identity, self.run_migration).await?;
-        Ok(ResolvedStores {
+        Ok(Arc::new(ResolvedStores {
             storage,
             tree_store: Some(tree_store),
             token_output_store: Some(token_output_store),
             session_store: Some(session_store),
-        })
+        }))
     }
 }

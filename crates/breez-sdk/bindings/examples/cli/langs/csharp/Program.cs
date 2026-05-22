@@ -293,7 +293,7 @@ static async Task RunInteractiveMode(
             network: network,
             apiKey: apiKey,
             connectionsPerOperator: null,
-            storageConfig: BreezSdkSparkMethods.PostgresStorage(BreezSdkSparkMethods.DefaultPostgresStorageConfig(postgresConnectionString))
+            storage: BreezSdkSparkMethods.PostgresStorage(BreezSdkSparkMethods.DefaultPostgresStorageConfig(postgresConnectionString))
         ));
         await builder.WithSharedContext(context: context);
     }
@@ -303,7 +303,7 @@ static async Task RunInteractiveMode(
             network: network,
             apiKey: apiKey,
             connectionsPerOperator: null,
-            storageConfig: BreezSdkSparkMethods.MysqlStorage(BreezSdkSparkMethods.DefaultMysqlStorageConfig(mysqlConnectionString))
+            storage: BreezSdkSparkMethods.MysqlStorage(BreezSdkSparkMethods.DefaultMysqlStorageConfig(mysqlConnectionString))
         ));
         await builder.WithSharedContext(context: context);
     }

@@ -109,7 +109,11 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	// and token store). Per-tenant scoping (rows isolated by seed identity)
 	// is applied automatically.
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithStorageBackend(breez_sdk_spark.PostgresStorage(postgresConfig))
+	storageBackend, err := breez_sdk_spark.PostgresStorage(postgresConfig)
+	if err != nil {
+		return nil, err
+	}
+	builder.WithStorageBackend(storageBackend)
 	sdk, err := builder.Build()
 	if err != nil {
 		return nil, err
@@ -149,7 +153,11 @@ func InitSdkMysql() (*breez_sdk_spark.BreezSdk, error) {
 	// token store). Per-tenant scoping (rows isolated by seed identity) is
 	// applied automatically.
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithStorageBackend(breez_sdk_spark.MysqlStorage(mysqlConfig))
+	storageBackend, err := breez_sdk_spark.MysqlStorage(mysqlConfig)
+	if err != nil {
+		return nil, err
+	}
+	builder.WithStorageBackend(storageBackend)
 	sdk, err := builder.Build()
 	if err != nil {
 		return nil, err

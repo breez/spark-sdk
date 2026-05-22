@@ -4,10 +4,9 @@ use std::sync::Arc;
 
 use macros::async_trait;
 use spark_mysql::mysql_async;
-use spark_wallet::PublicKey;
 
 use crate::{
-    SdkError,
+    Network, SdkError,
     persist::mysql::{
         MysqlForeignKeyMode, MysqlStorage, create_mysql_session_store, create_mysql_token_store,
         create_mysql_tree_store,
@@ -41,8 +40,11 @@ impl MysqlBackend {
 
 #[async_trait]
 impl StorageBackend for MysqlBackend {
-    async fn create_stores(&self, identity: &PublicKey) -> Result<ResolvedStores, SdkError> {
-        let identity = identity.serialize();
+    async fn create_stores(
+        &self,
+        _network: Network,
+        identity: Vec<u8>,
+    ) -> Result<Arc<ResolvedStores>, SdkError> {
         let storage = Arc::new(
             MysqlStorage::new_with_pool(self.pool.clone(), &identity, self.run_migration).await?,
         );
@@ -62,11 +64,11 @@ impl StorageBackend for MysqlBackend {
         .await?;
         let session_store =
             create_mysql_session_store(self.pool.clone(), &identity, self.run_migration).await?;
-        Ok(ResolvedStores {
+        Ok(Arc::new(ResolvedStores {
             storage,
             tree_store: Some(tree_store),
             token_output_store: Some(token_output_store),
             session_store: Some(session_store),
-        })
+        }))
     }
 }

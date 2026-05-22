@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
-    RestClient, SdkContext, SdkError, Seed, Storage, StorageConfig,
+    RestClient, SdkContext, SdkError, Seed, Storage, StorageBackend,
     chain::rest_client::ChainApiType,
 };
 
@@ -40,23 +40,29 @@ impl SdkBuilder {
         *builder = builder.clone().with_default_storage(storage_dir);
     }
 
-    /// Sets the storage implementation to be used by the SDK.
+    /// Sets the storage backend to be used by the SDK.
+    ///
+    /// Build the [`StorageBackend`](crate::StorageBackend) via
+    /// [`default_storage`](crate::default_storage),
+    /// [`postgres_storage`](crate::postgres_storage),
+    /// [`mysql_storage`](crate::mysql_storage) or
+    /// [`create_storage_backend`](crate::create_storage_backend).
+    /// Arguments:
+    /// - `storage`: The storage backend to be used.
+    pub async fn with_storage_backend(&self, storage: Arc<dyn StorageBackend>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_storage_backend(storage);
+    }
+
+    /// **Deprecated.** Use
+    /// [`with_storage_backend`](SdkBuilder::with_storage_backend) with
+    /// [`create_storage_backend`](crate::create_storage_backend).
     /// Arguments:
     /// - `storage`: The storage implementation to be used.
+    #[allow(deprecated)]
     pub async fn with_storage(&self, storage: Arc<dyn Storage>) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_storage(storage);
-    }
-
-    /// Sets one of the SDK's built-in storage backends.
-    ///
-    /// Construct the [`StorageConfig`](crate::StorageConfig) via
-    /// [`default_storage`](crate::default_storage),
-    /// [`postgres_storage`](crate::postgres_storage) or
-    /// [`mysql_storage`](crate::mysql_storage).
-    pub async fn with_storage_backend(&self, storage: StorageConfig) {
-        let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_storage_backend(storage);
     }
 
     /// Sets the key set type to be used by the SDK.
@@ -133,8 +139,7 @@ impl SdkBuilder {
 #[cfg(feature = "postgres")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl SdkBuilder {
-    /// **Deprecated.** Use
-    /// [`with_storage_backend`](SdkBuilder::with_storage_backend) with
+    /// **Deprecated.** Use [`with_storage`](SdkBuilder::with_storage) with
     /// [`postgres_storage`](crate::postgres_storage).
     #[allow(deprecated)]
     pub async fn with_postgres_backend(
@@ -150,8 +155,7 @@ impl SdkBuilder {
 #[cfg(feature = "mysql")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl SdkBuilder {
-    /// **Deprecated.** Use
-    /// [`with_storage_backend`](SdkBuilder::with_storage_backend) with
+    /// **Deprecated.** Use [`with_storage`](SdkBuilder::with_storage) with
     /// [`mysql_storage`](crate::mysql_storage).
     #[allow(deprecated)]
     pub async fn with_mysql_backend(

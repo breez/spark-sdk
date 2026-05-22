@@ -7,9 +7,9 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
-    EventListener, Network, SdkBuilder, SdkContextConfig, SdkEvent, Seed, StableBalanceConfig,
-    StableBalanceToken, default_config, default_mysql_storage_config,
-    default_postgres_storage_config, default_server_config, new_shared_sdk_context,
+    EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig, StableBalanceToken,
+    default_config, default_mysql_storage_config, default_postgres_storage_config,
+    default_server_config,
 };
 use clap::Parser;
 use command::{Command, execute_command};
@@ -198,25 +198,13 @@ async fn run_interactive_mode(
 
     let mut sdk_builder = SdkBuilder::new(config, seed);
     if let Some(connection_string) = postgres_connection_string {
-        let context = new_shared_sdk_context(SdkContextConfig {
-            api_key: breez_api_key.clone(),
-            storage_config: Some(breez_sdk_spark::postgres_storage(
-                default_postgres_storage_config(connection_string),
-            )),
-            ..SdkContextConfig::new(network)
-        })
-        .await?;
-        sdk_builder = sdk_builder.with_shared_context(context);
+        sdk_builder = sdk_builder.with_storage_backend(breez_sdk_spark::postgres_storage(
+            default_postgres_storage_config(connection_string),
+        )?);
     } else if let Some(connection_string) = mysql_connection_string {
-        let context = new_shared_sdk_context(SdkContextConfig {
-            api_key: breez_api_key.clone(),
-            storage_config: Some(breez_sdk_spark::mysql_storage(
-                default_mysql_storage_config(connection_string),
-            )),
-            ..SdkContextConfig::new(network)
-        })
-        .await?;
-        sdk_builder = sdk_builder.with_shared_context(context);
+        sdk_builder = sdk_builder.with_storage_backend(breez_sdk_spark::mysql_storage(
+            default_mysql_storage_config(connection_string),
+        )?);
     } else {
         sdk_builder = sdk_builder.with_default_storage(data_dir.to_string_lossy().to_string());
     }

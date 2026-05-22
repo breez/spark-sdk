@@ -98,7 +98,8 @@ func initSdkPostgres() async throws -> BreezSdk {
     // and token store). Per-tenant scoping (rows isolated by seed identity)
     // is applied automatically.
     let builder = SdkBuilder(config: config, seed: seed)
-    await builder.withStorageBackend(storage: postgresStorage(config: postgresConfig))
+    await builder.withStorageBackend(
+        storage: try postgresStorage(config: postgresConfig))
     let sdk = try await builder.build()
     // ANCHOR_END: init-sdk-postgres
 
@@ -131,7 +132,8 @@ func initSdkMysql() async throws -> BreezSdk {
     // token store). Per-tenant scoping (rows isolated by seed identity) is
     // applied automatically.
     let builder = SdkBuilder(config: config, seed: seed)
-    await builder.withStorageBackend(storage: mysqlStorage(config: mysqlConfig))
+    await builder.withStorageBackend(
+        storage: try mysqlStorage(config: mysqlConfig))
     let sdk = try await builder.build()
     // ANCHOR_END: init-sdk-mysql
 

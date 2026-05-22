@@ -8,8 +8,7 @@ use super::SessionStore;
 /// trait (which has its own identical-shape trait).
 ///
 /// Used by the WASM bindings to plumb a JS-side session store into a
-/// [`CustomStorage`](crate::CustomStorage)'s
-/// `session_store` field.
+/// caller-supplied [`StorageBackend`](crate::StorageBackend).
 pub struct SessionStoreAdapter(pub Arc<dyn SessionStore>);
 
 impl SessionStoreAdapter {

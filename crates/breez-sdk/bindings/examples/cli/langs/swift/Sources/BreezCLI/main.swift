@@ -257,14 +257,14 @@ if let connectionString = opts.postgresConnectionString {
     let context = try await newSharedSdkContext(config: SdkContextConfig(
         network: network,
         apiKey: breezApiKey,
-        storageConfig: postgresStorage(config: defaultPostgresStorageConfig(connectionString: connectionString))
+        storage: try postgresStorage(config: defaultPostgresStorageConfig(connectionString: connectionString))
     ))
     await builder.withSharedContext(context: context)
 } else if let connectionString = opts.mysqlConnectionString {
     let context = try await newSharedSdkContext(config: SdkContextConfig(
         network: network,
         apiKey: breezApiKey,
-        storageConfig: mysqlStorage(config: defaultMysqlStorageConfig(connectionString: connectionString))
+        storage: try mysqlStorage(config: defaultMysqlStorageConfig(connectionString: connectionString))
     ))
     await builder.withSharedContext(context: context)
 } else {

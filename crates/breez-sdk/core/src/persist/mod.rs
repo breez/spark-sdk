@@ -8,8 +8,8 @@ pub mod postgres;
 pub(crate) mod sqlite;
 
 // The `sqlite`, `postgres` and `mysql` storage backends use native-only Rust
-// drivers and cannot be built for the wasm32 target. WASM builds use JS-backed
-// storage instead (a `CustomStorage`), so none of these features apply there.
+// drivers and cannot be built for the wasm32 target. WASM builds use a
+// JS-backed storage backend instead, so none of these features apply there.
 #[cfg(all(
     any(feature = "sqlite", feature = "postgres", feature = "mysql"),
     target_family = "wasm",

@@ -114,7 +114,7 @@ namespace BreezSdkSnippets
             // seed identity) is applied automatically.
             var builder = new SdkBuilder(config: config, seed: seed);
             await builder.WithStorageBackend(
-                storage: BreezSdkSparkMethods.PostgresStorage(config: postgresConfig)
+                storage: BreezSdkSparkMethods.PostgresStorage(postgresConfig)
             );
             var sdk = await builder.Build();
             // ANCHOR_END: init-sdk-postgres
@@ -151,7 +151,7 @@ namespace BreezSdkSnippets
             // seed identity) is applied automatically.
             var builder = new SdkBuilder(config: config, seed: seed);
             await builder.WithStorageBackend(
-                storage: BreezSdkSparkMethods.MysqlStorage(config: mysqlConfig)
+                storage: BreezSdkSparkMethods.MysqlStorage(mysqlConfig)
             );
             var sdk = await builder.Build();
             // ANCHOR_END: init-sdk-mysql

@@ -37,7 +37,7 @@ pub use models::*;
 pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, StorageListPaymentsRequest,
     StoragePaymentDetailsFilter, UpdateDepositPayload,
-    backend::{CustomStorage, StorageConfig},
+    backend::{PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage},
     path::default_storage_path,
 };
 pub use sdk::{

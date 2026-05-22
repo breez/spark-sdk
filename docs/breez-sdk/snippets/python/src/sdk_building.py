@@ -5,8 +5,8 @@ from breez_sdk_spark import (
     default_config,
     default_server_config,
     default_postgres_storage_config,
-    postgres_storage,
     default_mysql_storage_config,
+    postgres_storage,
     mysql_storage,
     Network,
     ProvisionalPayment,
@@ -121,7 +121,9 @@ async def init_sdk_postgres():
         # store, and token store). Per-tenant scoping (rows isolated by seed
         # identity) is applied automatically.
         builder = SdkBuilder(config=config, seed=seed)
-        await builder.with_storage_backend(storage=postgres_storage(config=postgres_config))
+        await builder.with_storage_backend(
+            storage=postgres_storage(config=postgres_config)
+        )
         sdk = await builder.build()
         return sdk
     except Exception as error:
@@ -157,7 +159,9 @@ async def init_sdk_mysql():
         # and token store). Per-tenant scoping (rows isolated by seed identity)
         # is applied automatically.
         builder = SdkBuilder(config=config, seed=seed)
-        await builder.with_storage_backend(storage=mysql_storage(config=mysql_config))
+        await builder.with_storage_backend(
+            storage=mysql_storage(config=mysql_config)
+        )
         sdk = await builder.build()
         return sdk
     except Exception as error:

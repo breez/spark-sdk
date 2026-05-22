@@ -23,9 +23,7 @@ use crate::{
     lnurl::{DefaultLnurlServerClient, LnurlServerClient},
     models::Config,
     payment_observer::{PaymentObserver, SparkTransferObserver},
-    persist::backend::{
-        CustomStorage, ResolvedStores, StorageBackend, StorageConfig, StorageSetup,
-    },
+    persist::backend::StorageBackend,
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams, SyncCoordinator, runtime_from_config},
     sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context},
@@ -71,7 +69,7 @@ pub struct SdkBuilder {
     config: Config,
     signer_source: SignerSource,
 
-    storage_setup: Option<StorageSetup>,
+    storage: Option<Arc<dyn StorageBackend>>,
     chain_service: Option<Arc<dyn BitcoinChainService>>,
     rest_chain_service_config: Option<RestChainServiceConfig>,
     fiat_service: Option<Arc<dyn FiatService>>,
@@ -99,7 +97,7 @@ impl SdkBuilder {
                 use_address_index: false,
                 account_number: None,
             },
-            storage_setup: None,
+            storage: None,
             chain_service: None,
             rest_chain_service_config: None,
             fiat_service: None,
@@ -120,7 +118,7 @@ impl SdkBuilder {
         SdkBuilder {
             config,
             signer_source: SignerSource::External(signer),
-            storage_setup: None,
+            storage: None,
             chain_service: None,
             rest_chain_service_config: None,
             fiat_service: None,
@@ -166,51 +164,53 @@ impl SdkBuilder {
     }
 
     #[must_use]
-    /// Sets the storage implementation to be used by the SDK.
+    /// Sets the storage backend to be used by the SDK.
     ///
-    /// Accepts an `Arc<dyn Storage>`, or a [`CustomStorage`](crate::CustomStorage)
-    /// to also supply custom tree, token-output and session stores.
+    /// Build the [`StorageBackend`](crate::StorageBackend) with
+    /// [`default_storage`](crate::default_storage),
+    /// [`postgres_storage`](crate::postgres_storage),
+    /// [`mysql_storage`](crate::mysql_storage) or
+    /// [`custom_storage`](crate::custom_storage).
+    /// Arguments:
+    /// - `storage`: The storage backend to be used.
+    pub fn with_storage_backend(mut self, storage: Arc<dyn StorageBackend>) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
+    #[must_use]
+    /// **Deprecated.** Use
+    /// [`with_storage_backend`](Self::with_storage_backend) with
+    /// [`custom_storage`](crate::custom_storage).
     /// Arguments:
     /// - `storage`: The storage implementation to be used.
-    pub fn with_storage(mut self, storage: impl Into<CustomStorage>) -> Self {
-        self.storage_setup = Some(StorageSetup::Custom(storage.into()));
-        self
+    #[deprecated(note = "use `with_storage_backend(custom_storage(storage))`")]
+    pub fn with_storage(self, storage: Arc<dyn crate::Storage>) -> Self {
+        self.with_storage_backend(crate::custom_storage(storage))
     }
 
-    /// Sets one of the SDK's built-in storage backends.
-    ///
-    /// Construct the [`StorageConfig`] via
-    /// [`default_storage`](crate::default_storage),
-    /// [`postgres_storage`](crate::postgres_storage) or
-    /// [`mysql_storage`](crate::mysql_storage).
-    #[must_use]
-    pub fn with_storage_backend(mut self, storage: StorageConfig) -> Self {
-        self.storage_setup = Some(StorageSetup::Config(storage));
-        self
-    }
-
-    /// **Deprecated.** Use [`with_storage_backend`](Self::with_storage_backend)
-    /// with [`postgres_storage`](crate::postgres_storage).
+    /// **Deprecated.** Use
+    /// [`with_storage_backend`](Self::with_storage_backend) with
+    /// [`postgres_storage`](crate::postgres_storage).
     #[cfg(feature = "postgres")]
-    #[deprecated(note = "use `with_storage_backend(postgres_storage(config))`")]
-    #[allow(clippy::unnecessary_wraps)]
+    #[deprecated(note = "use `with_storage_backend(postgres_storage(config)?)`")]
     pub fn with_postgres_backend(
         self,
         config: crate::persist::postgres::PostgresStorageConfig,
     ) -> Result<Self, SdkError> {
-        Ok(self.with_storage_backend(crate::postgres_storage(config)))
+        Ok(self.with_storage_backend(crate::postgres_storage(config)?))
     }
 
-    /// **Deprecated.** Use [`with_storage_backend`](Self::with_storage_backend)
-    /// with [`mysql_storage`](crate::mysql_storage).
+    /// **Deprecated.** Use
+    /// [`with_storage_backend`](Self::with_storage_backend) with
+    /// [`mysql_storage`](crate::mysql_storage).
     #[cfg(feature = "mysql")]
-    #[deprecated(note = "use `with_storage_backend(mysql_storage(config))`")]
-    #[allow(clippy::unnecessary_wraps)]
+    #[deprecated(note = "use `with_storage_backend(mysql_storage(config)?)`")]
     pub fn with_mysql_backend(
         self,
         config: crate::persist::mysql::MysqlStorageConfig,
     ) -> Result<Self, SdkError> {
-        Ok(self.with_storage_backend(crate::mysql_storage(config)))
+        Ok(self.with_storage_backend(crate::mysql_storage(config)?))
     }
 
     /// Threads a shared [`SdkContext`] into this builder.
@@ -441,12 +441,12 @@ impl SdkBuilder {
         }
 
         // Resolve the single storage backend. It comes either from the
-        // builder (a `StorageConfig` or a `CustomStorage`) or from a shared
-        // `SdkContext` — exactly one must supply it. All per-database wiring
-        // lives behind `StorageBackend::create_stores`.
+        // builder's `with_storage` or from a shared `SdkContext` — exactly one
+        // must supply it. All per-database wiring lives behind
+        // `StorageBackend::create_stores`.
         let storage_backend: Arc<dyn StorageBackend> =
-            match (self.storage_setup, context.storage_backend.clone()) {
-                (Some(setup), None) => setup.into_backend(self.config.network)?,
+            match (self.storage, context.storage_backend.clone()) {
+                (Some(storage), None) => storage,
                 (None, Some(backend)) => backend,
                 (Some(_), Some(_)) => {
                     return Err(SdkError::Generic(
@@ -462,12 +462,16 @@ impl SdkBuilder {
             .get_identity_public_key()
             .await
             .map_err(|e| SdkError::Generic(e.to_string()))?;
-        let ResolvedStores {
-            storage,
-            tree_store,
-            token_output_store,
-            session_store,
-        } = storage_backend.create_stores(&identity_public_key).await?;
+        let resolved = storage_backend
+            .create_stores(
+                self.config.network,
+                identity_public_key.serialize().to_vec(),
+            )
+            .await?;
+        let storage = resolved.storage.clone();
+        let tree_store = resolved.tree_store.clone();
+        let token_output_store = resolved.token_output_store.clone();
+        let session_store = resolved.session_store.clone();
 
         let chain_service: Arc<dyn BitcoinChainService> = if let Some(service) = self.chain_service
         {

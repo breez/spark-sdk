@@ -138,7 +138,7 @@ async fn apply_backend_choice(
         BackendChoice::Postgres(conn_str) => {
             let pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str.clone());
             let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
-                storage_config: Some(breez_sdk_spark::postgres_storage(pg_config)),
+                storage: Some(breez_sdk_spark::postgres_storage(pg_config)?),
                 ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
             })
             .await?;
@@ -147,7 +147,7 @@ async fn apply_backend_choice(
         BackendChoice::Mysql(conn_str) => {
             let my_config = breez_sdk_spark::default_mysql_storage_config(conn_str.clone());
             let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
-                storage_config: Some(breez_sdk_spark::mysql_storage(my_config)),
+                storage: Some(breez_sdk_spark::mysql_storage(my_config)?),
                 ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
             })
             .await?;
@@ -684,7 +684,7 @@ pub async fn build_sdk_with_tree_store_config(
             let mut pg_config = breez_sdk_spark::default_postgres_storage_config(conn_str);
             pg_config.max_pool_size = 30;
             let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
-                storage_config: Some(breez_sdk_spark::postgres_storage(pg_config)),
+                storage: Some(breez_sdk_spark::postgres_storage(pg_config)?),
                 ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
             })
             .await?;
@@ -699,7 +699,7 @@ pub async fn build_sdk_with_tree_store_config(
             let mut my_config = breez_sdk_spark::default_mysql_storage_config(conn_str);
             my_config.max_pool_size = 30;
             let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
-                storage_config: Some(breez_sdk_spark::mysql_storage(my_config)),
+                storage: Some(breez_sdk_spark::mysql_storage(my_config)?),
                 ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
             })
             .await?;
@@ -1653,7 +1653,7 @@ pub async fn build_sdk_with_postgres(
     let postgres_config =
         breez_sdk_spark::default_postgres_storage_config(connection_string.to_string());
     let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
-        storage_config: Some(breez_sdk_spark::postgres_storage(postgres_config)),
+        storage: Some(breez_sdk_spark::postgres_storage(postgres_config)?),
         ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
     })
     .await?;
@@ -1712,7 +1712,7 @@ pub async fn build_sdk_with_mysql(
         breez_sdk_spark::default_mysql_storage_config(connection_string.to_string());
     mysql_config.max_pool_size = 30;
     let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
-        storage_config: Some(breez_sdk_spark::mysql_storage(mysql_config)),
+        storage: Some(breez_sdk_spark::mysql_storage(mysql_config)?),
         ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
     })
     .await?;
@@ -1767,7 +1767,7 @@ pub async fn build_sdk_with_postgres_server_mode(
     let postgres_config =
         breez_sdk_spark::default_postgres_storage_config(connection_string.to_string());
     let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
-        storage_config: Some(breez_sdk_spark::postgres_storage(postgres_config)),
+        storage: Some(breez_sdk_spark::postgres_storage(postgres_config)?),
         ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
     })
     .await?;
@@ -1816,7 +1816,7 @@ pub async fn build_sdk_with_mysql_server_mode(
         breez_sdk_spark::default_mysql_storage_config(connection_string.to_string());
     mysql_config.max_pool_size = 30;
     let ctx = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
-        storage_config: Some(breez_sdk_spark::mysql_storage(mysql_config)),
+        storage: Some(breez_sdk_spark::mysql_storage(mysql_config)?),
         ..breez_sdk_spark::SdkContextConfig::new(breez_sdk_spark::Network::Regtest)
     })
     .await?;

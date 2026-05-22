@@ -6,9 +6,8 @@ use platform_utils::{HttpClient, create_http_client};
 use spark_wallet::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager};
 
 use crate::{
-    Network, SdkError, default_user_agent,
-    jwt_header_provider::BreezJwtHeaderProvider,
-    persist::backend::{StorageBackend, StorageConfig},
+    Network, SdkError, default_user_agent, jwt_header_provider::BreezJwtHeaderProvider,
+    persist::backend::StorageBackend,
 };
 
 /// Process-shared resources that can back many `BreezSdk` instances.
@@ -16,14 +15,17 @@ use crate::{
 /// Construct one with [`new_shared_sdk_context`] and pass the same `Arc` to every
 /// [`SdkBuilder`](crate::SdkBuilder) whose SDKs should share those resources
 /// (a single HTTP client across SSP / chain / LNURL / JWT / etc., a gRPC
-/// channel pool to the Spark operators, the Breez backend gRPC client, a
-/// database connection pool, …). Useful for multi-tenant servers that load
-/// many wallets in one process.
+/// channel pool to the Spark operators, the Breez backend gRPC client, …).
+/// Useful for multi-tenant servers that load many wallets in one process.
+///
+/// To share a database connection pool across SDKs, pass a
+/// [`StorageBackend`](crate::StorageBackend) as
+/// [`SdkContextConfig::storage`]: every SDK built from the context reuses it.
 ///
 /// The struct is intentionally opaque — all fields are crate-private. There
 /// is no way to inject pre-built sub-components: the factory builds them
-/// from settings so callers don't need to know about session stores,
-/// connection-manager wiring, or pool plumbing.
+/// from settings so callers don't need to know about session stores or
+/// connection-manager wiring.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SdkContext {
     /// Single shared HTTP client used for every reqwest-based call out of the
@@ -44,8 +46,8 @@ pub struct SdkContext {
     /// can cross-check against `Config.api_key` and refuse a mismatch.
     pub(crate) api_key: Option<String>,
     pub(crate) connection_manager: Arc<dyn ConnectionManager>,
-    /// The storage backend SDKs built from this context share. `None` for a
-    /// context with no shared storage; each `SdkBuilder` then supplies its own.
+    /// The storage backend SDKs built from this context share. `None` when the
+    /// context carries no storage; each `SdkBuilder` then supplies its own.
     pub(crate) storage_backend: Option<Arc<dyn StorageBackend>>,
 }
 
@@ -71,16 +73,15 @@ pub struct SdkContextConfig {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub connections_per_operator: Option<u32>,
 
-    /// Shared storage backend for SDKs built from this context. When set, the
-    /// context resolves it once (e.g. opening a database connection pool) and
-    /// every SDK built from the context shares it. Construct via
+    /// Shared storage backend for SDKs built from this context. When set,
+    /// every SDK built from the context reuses it (and its database
+    /// connection pool). Construct via
     /// [`default_storage`](crate::default_storage),
-    /// [`postgres_storage`](crate::postgres_storage) or
-    /// [`mysql_storage`](crate::mysql_storage).
-    ///
-    /// Has no effect on WASM, where storage is JS-backed and supplied per SDK.
+    /// [`postgres_storage`](crate::postgres_storage),
+    /// [`mysql_storage`](crate::mysql_storage) or
+    /// [`create_storage_backend`](crate::create_storage_backend).
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub storage_config: Option<StorageConfig>,
+    pub storage: Option<Arc<dyn StorageBackend>>,
 }
 
 impl SdkContextConfig {
@@ -94,17 +95,15 @@ impl SdkContextConfig {
             network,
             api_key: None,
             connections_per_operator: None,
-            storage_config: None,
+            storage: None,
         }
     }
 }
 
 /// Constructs an [`SdkContext`] from a `SdkContextConfig`.
 ///
-/// The returned `Arc` is cheap to clone and can back many SDK instances.
-/// `SdkContextConfig::new(network)` yields an in-memory, single-tenant setup;
-/// supply a DB config to back the SDKs with a shared `PostgreSQL` or `MySQL`
-/// pool.
+/// The returned `Arc` is cheap to clone and can back many SDK instances,
+/// sharing their HTTP client and operator gRPC channels.
 // Async-on-tokio so UniFFI runs it on the managed runtime: building the
 // shared resources `tokio::spawn`s internally (gRPC channel; mainnet JWT
 // task) and aborts off-runtime, despite no `.await` here.
@@ -141,12 +140,9 @@ pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkC
         _ => Arc::new(DefaultConnectionManager::new()),
     };
 
-    // Resolve the shared storage backend once. Every SDK built from this
-    // context reuses it (and its connection pool, for a database backend).
-    let storage_backend = match config.storage_config {
-        Some(storage) => Some(storage.into_backend(config.network)?),
-        None => None,
-    };
+    // Every SDK built from this context shares the one storage backend (and
+    // its database connection pool).
+    let storage_backend = config.storage;
 
     Ok(Arc::new(SdkContext {
         http_client,

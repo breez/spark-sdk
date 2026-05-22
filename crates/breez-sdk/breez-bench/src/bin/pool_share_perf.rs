@@ -195,7 +195,7 @@ async fn make_context(conn_str: &str, max_pool_size: u32) -> Result<Arc<SdkConte
     let mut cfg = default_postgres_storage_config(conn_str.to_string());
     cfg.max_pool_size = max_pool_size;
     Ok(new_shared_sdk_context(SdkContextConfig {
-        storage_config: Some(breez_sdk_spark::postgres_storage(cfg)),
+        storage: Some(breez_sdk_spark::postgres_storage(cfg)?),
         ..SdkContextConfig::new(Network::Regtest)
     })
     .await?)
