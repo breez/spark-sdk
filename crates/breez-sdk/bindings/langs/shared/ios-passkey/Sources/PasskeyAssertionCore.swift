@@ -176,71 +176,6 @@ public enum PasskeyAssertionError: Error {
     case generic(String)
 }
 
-// MARK: - Derive options
-
-/// Per-call shaping options for `performBulkDerivation`. Lets the
-/// upstream callers (UniFFI Swift `PasskeyProvider`, Flutter plugin,
-/// React Native module) override the `allowCredentials` and the
-/// `preferImmediatelyAvailableCredentials` behavior on a per-ceremony
-/// basis without reconstructing the core.
-@available(iOS 18.0, macOS 15.0, *)
-public struct DeriveSeedsOptions {
-    /// A list of credential IDs the assertion is restricted to. The
-    /// primary use case is reauthentication when the user is already
-    /// known: if any of the listed credentials is available locally,
-    /// the OS prompts for device unlock straight away (no account
-    /// picker); otherwise the user is asked to present another
-    /// device (paired phone or security key) that holds a valid
-    /// credential. Empty defers to the legacy positional
-    /// `explicitAllowCredentials` parameter (for back-compat).
-    public let allowCredentials: [Data]
-    /// Per-call control over the OS picker. `nil` keeps the historical
-    /// default (`.preferImmediatelyAvailableCredentials` on iOS 16+).
-    /// `true` is identical to `nil`; `false` opts back into the
-    /// cross-device picker (QR sign-in / hybrid transports).
-    public let preferImmediatelyAvailableCredentials: Bool?
-    /// Optional opt-in registry. When non-nil, the core auto-merges
-    /// stored IDs into the assertion allow-list before the ceremony
-    /// and auto-adds the asserted credential ID after success. All
-    /// registry calls are best-effort with a 3 second timeout.
-    public let credentialRegistry: CredentialRegistry?
-    /// Fired when a `CredentialRegistry` call throws or times out.
-    /// Best-effort: invocation never blocks ceremony progress.
-    public let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
-
-    public init(
-        allowCredentials: [Data] = [],
-        preferImmediatelyAvailableCredentials: Bool? = nil,
-        credentialRegistry: CredentialRegistry? = nil,
-        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
-    ) {
-        self.allowCredentials = allowCredentials
-        self.preferImmediatelyAvailableCredentials = preferImmediatelyAvailableCredentials
-        self.credentialRegistry = credentialRegistry
-        self.onRegistryError = onRegistryError
-    }
-}
-
-// MARK: - Create options
-
-/// Per-call shaping options for `createPasskey`. Exposes the same
-/// optional registry plumbing as `DeriveSeedsOptions` so registration
-/// can auto-merge stored IDs into `excludeCredentials` and capture
-/// the new credential ID afterwards.
-@available(iOS 18.0, macOS 15.0, *)
-public struct CreatePasskeyOptions {
-    public let credentialRegistry: CredentialRegistry?
-    public let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
-
-    public init(
-        credentialRegistry: CredentialRegistry? = nil,
-        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
-    ) {
-        self.credentialRegistry = credentialRegistry
-        self.onRegistryError = onRegistryError
-    }
-}
-
 // MARK: - Registered credential
 
 /// Result of a successful registration. Named `Ios*` so it does not
@@ -424,17 +359,23 @@ public final class DefaultPasskeyPresentationAnchorProvider: PasskeyPresentation
 /// take an `rpId` plus credential metadata and return a typed result.
 ///
 /// All ASAuthorizationController orchestration lives here:
-/// - single-salt assertion (`assertionWithPrf`)
-/// - dual-salt assertion (`dualSaltAssertion`)
-/// - bulk derivation walking salts in pairs (`performBulkDerivation`)
-/// - registration with iOS 17.4+ displayName overload (`registerCredential`)
+/// - one assertion ceremony for 1-2 salts (`assertPrf`)
+/// - bulk derivation walking salts in pairs (`deriveSeeds`)
+/// - registration (`register`)
 /// - opt-in `CredentialRegistry` auto-merge / auto-capture
 /// - `preferImmediatelyAvailableCredentials` for fast-fail on no-cred
-/// - `matchedExcludedCredential` -> `credentialAlreadyExists`
 /// - AAGUID + BE flag extraction from attestation CBOR
-/// - 800ms post-create grace tracker
+/// - post-create grace tracker
 @available(iOS 18.0, macOS 15.0, *)
 public final class PasskeyAssertionCore {
+    private let rpId: String
+    private let rpName: String
+    private let userName: String
+    private let userDisplayName: String
+    private let credentialRegistry: CredentialRegistry?
+    private let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
+    private let explicitTeamId: String?
+    private let urlSession: URLSession
     private let anchor: PasskeyPresentationAnchorProvider
     private let graceTracker: PostCreateGraceTracker
     private let postCreateGraceTotal: TimeInterval
@@ -446,10 +387,26 @@ public final class PasskeyAssertionCore {
     private let lastObservedLock = NSLock()
 
     public init(
+        rpId: String,
+        rpName: String,
+        userName: String,
+        userDisplayName: String,
+        credentialRegistry: CredentialRegistry? = nil,
+        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil,
+        explicitTeamId: String? = nil,
+        urlSession: URLSession = .shared,
         anchorProvider: PasskeyPresentationAnchorProvider? = nil,
         graceTracker: PostCreateGraceTracker = PostCreateGraceTracker(),
         postCreateGraceTotal: TimeInterval = PostCreateGraceTracker.defaultTotal
     ) {
+        self.rpId = rpId
+        self.rpName = rpName
+        self.userName = userName
+        self.userDisplayName = userDisplayName
+        self.credentialRegistry = credentialRegistry
+        self.onRegistryError = onRegistryError
+        self.explicitTeamId = explicitTeamId
+        self.urlSession = urlSession
         self.anchor = anchorProvider ?? DefaultPasskeyPresentationAnchorProvider()
         self.graceTracker = graceTracker
         self.postCreateGraceTotal = postCreateGraceTotal
@@ -474,217 +431,89 @@ public final class PasskeyAssertionCore {
 
     // MARK: Public entry points
 
-    /// Single-salt PRF derivation with auto-register fallback. Used
-    /// internally by `performBulkDerivation` for the `salts.count == 1`
-    /// case. Public callers always go through `performBulkDerivation`;
-    /// the bulk path short-circuits to this helper for single-element
-    /// inputs so a single-salt derive still costs one prompt.
-    private func performDerivation(
-        saltData: Data,
-        rpId: String,
-        rpName: String,
-        userName: String,
-        userDisplayName: String,
+    /// Derive one 32-byte PRF output per salt in as few authenticator
+    /// ceremonies as the platform supports: salts are walked in pairs
+    /// (one dual-salt assertion each via `prf.eval.first`/`.second`),
+    /// and an authenticator that drops `second` is recovered with a
+    /// single-salt re-assert. When no credential exists yet and
+    /// [autoRegister] is set, the first miss registers a passkey and
+    /// retries. Output ordering matches input ordering.
+    public func deriveSeeds(
+        salts: [Data],
         autoRegister: Bool,
-        explicitAllowCredentials: [Data] = [],
-        preferImmediatelyAvailableCredentials: Bool? = nil,
-        credentialRegistry: CredentialRegistry? = nil,
-        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
-    ) async throws -> Data {
-        await graceTracker.consume()
-        do {
-            return try await assertionWithPrf(
-                saltData: saltData,
-                rpId: rpId,
-                explicitAllowCredentials: explicitAllowCredentials,
-                preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials,
-                credentialRegistry: credentialRegistry,
-                onRegistryError: onRegistryError
-            )
-        } catch PasskeyAssertionError.credentialNotFound(_) {
-            guard autoRegister else {
-                throw augmentCredentialNotFound(
-                    explicitAllowCredentials: explicitAllowCredentials,
-                    credentialRegistry: credentialRegistry
-                )
+        allowCredentials: [Data] = [],
+        preferImmediatelyAvailableCredentials: Bool = true
+    ) async throws -> [Data] {
+        // Union the caller's allow-list with the registry's stored IDs.
+        var allow = allowCredentials
+        if let reg = credentialRegistry {
+            var seen = Set(allow)
+            for id in await registryReadBestEffort(registry: reg, rpId: rpId, onRegistryError: onRegistryError)
+            where seen.insert(id).inserted {
+                allow.append(id)
             }
+        }
+        // Wait out the post-create grace before any assertion so the
+        // immediate setup_wallet derive doesn't race the credential's
+        // PRF-readiness window (dual-salt would drop `second`, forcing
+        // a second prompt).
+        await graceTracker.consume()
+        if salts.isEmpty { return [] }
+
+        // One assertion for 1-2 salts, registering + retrying once when
+        // the device holds no credential. Returns (first, second?);
+        // `second` is nil when the authenticator dropped saltInput2.
+        func assertChunk(_ salt1: Data, _ salt2: Data?) async throws -> (Data, Data?) {
             do {
-                _ = try await registerCredential(
-                    rpId: rpId,
-                    rpName: rpName,
-                    userName: userName,
-                    userDisplayName: userDisplayName,
-                    credentialRegistry: credentialRegistry,
-                    onRegistryError: onRegistryError
+                return try await assertPrf(
+                    salt1: salt1, salt2: salt2, allowCredentials: allow,
+                    preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials
                 )
             } catch PasskeyAssertionError.credentialNotFound(_) {
-                throw PasskeyAssertionError.configuration(
-                    "Associated Domains entitlement not configured. "
-                    + "Add 'webcredentials:\(rpId)' to your app's entitlements "
-                    + "and ensure a valid provisioning profile."
+                guard autoRegister else {
+                    throw augmentCredentialNotFound(
+                        explicitAllowCredentials: allow, credentialRegistry: credentialRegistry
+                    )
+                }
+                do {
+                    _ = try await register()
+                } catch PasskeyAssertionError.credentialNotFound(_) {
+                    throw PasskeyAssertionError.configuration(
+                        "Associated Domains entitlement not configured. "
+                        + "Add 'webcredentials:\(rpId)' to your app's entitlements "
+                        + "and ensure a valid provisioning profile."
+                    )
+                }
+                // Retry once. A second miss (e.g. the user deleted the
+                // pinned credential from Settings) escapes as
+                // credentialNotFound for hosts to treat as deletion
+                // recovery.
+                return try await assertPrf(
+                    salt1: salt1, salt2: salt2, allowCredentials: allow,
+                    preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials
                 )
             }
-            return try await assertionWithPrf(
-                saltData: saltData,
-                rpId: rpId,
-                explicitAllowCredentials: explicitAllowCredentials,
-                preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials,
-                credentialRegistry: credentialRegistry,
-                onRegistryError: onRegistryError
-            )
         }
-    }
 
-    /// Bulk PRF derivation. Walks `salts` two-at-a-time, attempting a
-    /// dual-salt single-ceremony assertion per pair; if the authenticator
-    /// drops `saltInput2` we fall back to a single-salt re-assert for that
-    /// element. Odd-count tail is a single-salt assertion. Mirrors the
-    /// upstream Swift `dualSaltAssertion` flow used by glow-app.
-    public func performBulkDerivation(
-        salts: [Data],
-        rpId: String,
-        rpName: String,
-        userName: String,
-        userDisplayName: String,
-        autoRegister: Bool,
-        explicitAllowCredentials: [Data] = [],
-        options: DeriveSeedsOptions = DeriveSeedsOptions()
-    ) async throws -> [Data] {
-        // Per-call options win over the legacy positional
-        // `explicitAllowCredentials` when non-empty. The positional
-        // parameter remains for back-compat with older call sites
-        // (Swift PasskeyProvider's per-instance `allowCredentials`,
-        // FFI bridges that haven't been ported yet).
-        var allowIds = options.allowCredentials.isEmpty
-            ? explicitAllowCredentials
-            : options.allowCredentials
-        let preferImmediate = options.preferImmediatelyAvailableCredentials
-        let registry = options.credentialRegistry
-        let onRegistryError = options.onRegistryError
-        // Auto-merge: read registry IDs and union them into the allow
-        // list before the OS call.
-        if let reg = registry {
-            let registryIds = await registryReadBestEffort(
-                registry: reg, rpId: rpId, onRegistryError: onRegistryError
-            )
-            if !registryIds.isEmpty {
-                var seen = Set(allowIds)
-                for id in registryIds where seen.insert(id).inserted {
-                    allowIds.append(id)
-                }
-            }
-        }
-        // Wait out post-create grace before any assertion in the batch.
-        // Without this, the immediate setup_wallet derive after register
-        // races the credential's PRF-readiness window: dual-salt comes
-        // back with `prf.first` set and `prf.second == nil`, forcing a
-        // second single-salt prompt.
-        await graceTracker.consume()
-        if salts.isEmpty {
-            return []
-        }
-        if salts.count == 1 {
-            return [try await performDerivation(
-                saltData: salts[0],
-                rpId: rpId,
-                rpName: rpName,
-                userName: userName,
-                userDisplayName: userDisplayName,
-                autoRegister: autoRegister,
-                explicitAllowCredentials: allowIds,
-                preferImmediatelyAvailableCredentials: preferImmediate,
-                credentialRegistry: registry,
-                onRegistryError: onRegistryError
-            )]
-        }
         var out: [Data] = []
         var i = 0
         while i < salts.count {
-            let salt1 = salts[i]
-            let salt2: Data? = (i + 1 < salts.count) ? salts[i + 1] : nil
-            do {
-                let pair = try await dualSaltAssertion(
-                    salt1: salt1,
-                    salt2: salt2,
-                    rpId: rpId,
-                    explicitAllowCredentials: allowIds,
-                    preferImmediatelyAvailableCredentials: preferImmediate,
-                    credentialRegistry: registry,
-                    onRegistryError: onRegistryError
-                )
-                out.append(pair.0)
-                if let second = pair.1 {
+            if i + 1 < salts.count {
+                let (first, second) = try await assertChunk(salts[i], salts[i + 1])
+                out.append(first)
+                if let second = second {
                     out.append(second)
-                    i += 2
-                } else if let salt2 = salt2 {
-                    // Authenticator dropped saltInput2: fall back to a
-                    // separate single-salt assertion for the second salt.
-                    let recovered = try await assertionWithPrf(
-                        saltData: salt2,
-                        rpId: rpId,
-                        explicitAllowCredentials: allowIds,
-                        preferImmediatelyAvailableCredentials: preferImmediate,
-                        credentialRegistry: registry,
-                        onRegistryError: onRegistryError
-                    )
-                    out.append(recovered)
-                    i += 2
                 } else {
-                    i += 1
+                    // Authenticator dropped `second`: single-salt recover.
+                    out.append(try await assertChunk(salts[i + 1], nil).0)
                 }
-            } catch PasskeyAssertionError.credentialNotFound(_) {
-                // No credential on the device. Single-salt path can fall
-                // back to register; the bulk path defers to single-salt.
-                guard autoRegister else {
-                    throw augmentCredentialNotFound(
-                        explicitAllowCredentials: allowIds,
-                        credentialRegistry: registry
-                    )
-                }
-                _ = try await registerCredential(
-                    rpId: rpId,
-                    rpName: rpName,
-                    userName: userName,
-                    userDisplayName: userDisplayName,
-                    credentialRegistry: registry,
-                    onRegistryError: onRegistryError
-                )
-                // Retry the same pair after registration.
-                continue
+                i += 2
+            } else {
+                out.append(try await assertChunk(salts[i], nil).0)
+                i += 1
             }
         }
         return out
-    }
-
-    /// Create a new passkey with PRF support. When the caller supplies
-    /// a `CredentialRegistry`, registered IDs are auto-merged into the
-    /// `excludeCredentials` (so the platform refuses to create a
-    /// duplicate even after a reinstall) and the new credential ID is
-    /// auto-added to the registry on success. Arms the post-create
-    /// grace tracker either way.
-    ///
-    /// `userId` is never host-supplied: the core mints a fresh random
-    /// 16-byte value per call and surfaces it via the returned
-    /// `IosRegisteredCredential.userId`.
-    @discardableResult
-    public func createPasskey(
-        rpId: String,
-        rpName: String,
-        userName: String,
-        userDisplayName: String,
-        excludeCredentials: [Data] = [],
-        options: CreatePasskeyOptions = CreatePasskeyOptions()
-    ) async throws -> IosRegisteredCredential {
-        let credential = try await registerCredential(
-            rpId: rpId,
-            rpName: rpName,
-            userName: userName,
-            userDisplayName: userDisplayName,
-            excludeCredentials: excludeCredentials,
-            credentialRegistry: options.credentialRegistry,
-            onRegistryError: options.onRegistryError
-        )
-        return credential
     }
 
     /// Verify the app's bundle identifier is listed in the
@@ -706,11 +535,7 @@ public final class PasskeyAssertionCore {
     /// Never throws: verification-level failures (no bundle ID, no
     /// team ID, network errors, malformed JSON) all map to `.skipped`
     /// so callers have one surface to handle.
-    public func checkDomainAssociation(
-        rpId: String,
-        explicitTeamId: String? = nil,
-        urlSession: URLSession = .shared
-    ) async -> IosDomainAssociation {
+    public func checkDomainAssociation() async -> IosDomainAssociation {
         let bundleId = Bundle.main.bundleIdentifier ?? ""
         guard !bundleId.isEmpty else {
             return .skipped(
@@ -808,61 +633,23 @@ public final class PasskeyAssertionCore {
         }
     }
 
-    private func assertionWithPrf(
-        saltData: Data,
-        rpId: String,
-        explicitAllowCredentials: [Data],
-        preferImmediatelyAvailableCredentials: Bool? = nil,
-        credentialRegistry: CredentialRegistry? = nil,
-        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
-    ) async throws -> Data {
-        let request = makeAssertionRequest(
-            rpId: rpId,
-            explicitAllowCredentials: explicitAllowCredentials
-        ) { req in
-            // PRF types are NS_REFINED_FOR_SWIFT with no accessible Swift
-            // initializers; the ObjC helper sets them via runtime KVC.
-            PasskeyPRFHelper.setAssertionPRFOn(req, withSalt: saltData)
-        }
-
-        let delegate = PasskeyDelegate()
-        let controller = ASAuthorizationController(authorizationRequests: [request])
-        controller.delegate = delegate
-        controller.presentationContextProvider = delegate
-        delegate.anchor = anchor.presentationAnchor()
-        delegate.onAssertionCredentialId = makeCaptureCallback(
-            rpId: rpId,
-            credentialRegistry: credentialRegistry,
-            onRegistryError: onRegistryError
-        )
-
-        let preferImmediate = preferImmediatelyAvailableCredentials ?? true
-        return try await withCheckedThrowingContinuation { continuation in
-            delegate.continuation = continuation
-            delegate.extractPrf = true
-            delegate.ceremonyStartedAt = Date()
-            DispatchQueue.main.async {
-                Self.performAssertionRequest(
-                    controller,
-                    preferImmediatelyAvailableCredentials: preferImmediate
-                )
-            }
-        }
-    }
-
-    private func dualSaltAssertion(
+    /// Run one assertion ceremony for `salt1` (+ optional `salt2`) and
+    /// return `(first, second?)`. `second` is nil when only one salt
+    /// was requested or the authenticator dropped `saltInput2`. The
+    /// ObjC helper treats a nil `salt2` as a single-salt evaluation, so
+    /// this is the only assertion entry point for both cases.
+    private func assertPrf(
         salt1: Data,
         salt2: Data?,
-        rpId: String,
-        explicitAllowCredentials: [Data],
-        preferImmediatelyAvailableCredentials: Bool? = nil,
-        credentialRegistry: CredentialRegistry? = nil,
-        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
+        allowCredentials: [Data],
+        preferImmediatelyAvailableCredentials: Bool = true
     ) async throws -> (Data, Data?) {
         let request = makeAssertionRequest(
             rpId: rpId,
-            explicitAllowCredentials: explicitAllowCredentials
+            explicitAllowCredentials: allowCredentials
         ) { req in
+            // PRF types are NS_REFINED_FOR_SWIFT with no accessible Swift
+            // initializers; the ObjC helper sets them via runtime KVC.
             PasskeyPRFHelper.setAssertionPRFOn(req, withSalt1: salt1, salt2: salt2)
         }
 
@@ -871,17 +658,12 @@ public final class PasskeyAssertionCore {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
-        delegate.onAssertionCredentialId = makeCaptureCallback(
-            rpId: rpId,
-            credentialRegistry: credentialRegistry,
-            onRegistryError: onRegistryError
-        )
+        delegate.onAssertionCredentialId = makeCaptureCallback()
 
-        let preferImmediate = preferImmediatelyAvailableCredentials ?? true
+        let preferImmediate = preferImmediatelyAvailableCredentials
         return try await withCheckedThrowingContinuation { continuation in
-            delegate.dualSaltContinuation = continuation
+            delegate.assertionContinuation = continuation
             delegate.extractPrf = true
-            delegate.extractSecondPrf = true
             delegate.ceremonyStartedAt = Date()
             DispatchQueue.main.async {
                 Self.performAssertionRequest(
@@ -901,11 +683,10 @@ public final class PasskeyAssertionCore {
     ///    so a returning user's pre-tracking credential gets seeded
     ///    on first assertion and subsequent registrations hit the
     ///    platform-level "already exists" guard via `excludedCredentials`.
-    private func makeCaptureCallback(
-        rpId: String,
-        credentialRegistry: CredentialRegistry?,
-        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
-    ) -> (Data) -> Void {
+    private func makeCaptureCallback() -> (Data) -> Void {
+        let rpId = self.rpId
+        let credentialRegistry = self.credentialRegistry
+        let onRegistryError = self.onRegistryError
         return { [weak self] credentialId in
             self?.recordObservedCredentialId(credentialId)
             if let reg = credentialRegistry {
@@ -937,15 +718,17 @@ public final class PasskeyAssertionCore {
         }
     }
 
+    /// Register a new passkey with PRF support (one platform prompt, no
+    /// seed derivation). The configured registry's stored IDs are
+    /// auto-merged into [excludeCredentials] so the platform refuses to
+    /// create a duplicate even after a reinstall; the new credential ID
+    /// is auto-added on success, and the post-create grace tracker is
+    /// armed. `userId` is never host-supplied: the core mints a fresh
+    /// random 16-byte value and surfaces it via the returned
+    /// `IosRegisteredCredential.userId`.
     @discardableResult
-    private func registerCredential(
-        rpId: String,
-        rpName: String,
-        userName: String,
-        userDisplayName: String,
-        excludeCredentials: [Data] = [],
-        credentialRegistry: CredentialRegistry? = nil,
-        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
+    public func register(
+        excludeCredentials: [Data] = []
     ) async throws -> IosRegisteredCredential {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = Self.randomBytes(count: 32)
@@ -1008,8 +791,12 @@ public final class PasskeyAssertionCore {
 
         // Record the new credential so subsequent registrations on
         // this device auto-exclude it. Best-effort, fire-and-forget.
+        // Copy fields to locals so the detached task captures values,
+        // not `self`.
         if let reg = credentialRegistry {
             let credentialId = credential.credentialId
+            let rpId = self.rpId
+            let onRegistryError = self.onRegistryError
             Task.detached {
                 await registryAddBestEffort(
                     registry: reg,
@@ -1137,16 +924,16 @@ public func extractRegistrationMetadata(from attestation: Data) -> (aaguid: Data
 
 // MARK: - Authorization Delegate
 
-/// Unified delegate handling both single-salt and dual-salt assertion
-/// paths plus registration. Selected at the call site by which
-/// continuation is set (`continuation`, `dualSaltContinuation`, or
-/// `registrationContinuation`).
+/// Delegate handling both the assertion and registration ceremonies,
+/// selected at the call site by which continuation is set
+/// (`assertionContinuation` or `registrationContinuation`).
 @available(iOS 18.0, macOS 15.0, *)
 private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate,
     ASAuthorizationControllerPresentationContextProviding
 {
-    var continuation: CheckedContinuation<Data, Error>?
-    var dualSaltContinuation: CheckedContinuation<(Data, Data?), Error>?
+    /// Resolves `(first, second?)`; `second` is nil for a single-salt
+    /// assertion or when the authenticator dropped `saltInput2`.
+    var assertionContinuation: CheckedContinuation<(Data, Data?), Error>?
     var registrationContinuation: CheckedContinuation<IosRegisteredCredential, Error>?
     /// User handle the core chose for the in-flight registration. The
     /// platform never echoes `user.id` back through the credential
@@ -1154,8 +941,8 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
     /// `IosRegisteredCredential.userId` field.
     var registrationUserId: Data = Data()
     var anchor: ASPresentationAnchor = ASPresentationAnchor()
+    /// `true` for assertion ceremonies, `false` for registration.
     var extractPrf = true
-    var extractSecondPrf = false
     /// Invoked with the credential ID from a successful assertion. Set
     /// by the core so hosts can record which credential was used. No-op
     /// on registration (the credential ID flows out via the
@@ -1180,33 +967,23 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
             guard let credential = authorization.credential
                 as? ASAuthorizationPlatformPublicKeyCredentialAssertion
             else {
-                let err = PasskeyAssertionError.authenticationFailed("Unexpected credential type")
-                continuation?.resume(throwing: err)
-                dualSaltContinuation?.resume(throwing: err)
+                assertionContinuation?.resume(
+                    throwing: PasskeyAssertionError.authenticationFailed("Unexpected credential type"))
                 return
             }
 
             guard let prfFirst = PasskeyPRFHelper.extractPRFOutput(from: credential) else {
-                let err = PasskeyAssertionError.prfNotSupported
-                continuation?.resume(throwing: err)
-                dualSaltContinuation?.resume(throwing: err)
+                assertionContinuation?.resume(throwing: PasskeyAssertionError.prfNotSupported)
                 return
             }
 
             // Surface the credential ID before resolving so hosts can
             // record it. Failures here are best-effort and must not
-            // block the seed return.
+            // block the seed return. `second` is nil for single-salt
+            // ceremonies or when the authenticator dropped saltInput2.
             onAssertionCredentialId?(credential.credentialID)
-
-            if let dualCont = dualSaltContinuation {
-                let prfSecond = extractSecondPrf
-                    ? PasskeyPRFHelper.extractSecondPRFOutput(from: credential)
-                    : nil
-                dualCont.resume(returning: (prfFirst, prfSecond))
-                return
-            }
-
-            continuation?.resume(returning: prfFirst)
+            assertionContinuation?.resume(
+                returning: (prfFirst, PasskeyPRFHelper.extractSecondPRFOutput(from: credential)))
         } else {
             guard let credential = authorization.credential
                 as? ASAuthorizationPlatformPublicKeyCredentialRegistration
@@ -1240,8 +1017,7 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
         let elapsedMs: Double? = ceremonyStartedAt
             .map { Date().timeIntervalSince($0) * 1000.0 }
         let mapped = mapPasskeyError(error, elapsedMs: elapsedMs)
-        continuation?.resume(throwing: mapped)
-        dualSaltContinuation?.resume(throwing: mapped)
+        assertionContinuation?.resume(throwing: mapped)
         registrationContinuation?.resume(throwing: mapped)
     }
 }

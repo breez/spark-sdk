@@ -12,8 +12,6 @@ import React
 @objc(BreezSdkSparkPasskey)
 class BreezSdkSparkPasskey: NSObject {
 
-    private let core = PasskeyAssertionCore()
-
     @objc
     static func requiresMainQueueSetup() -> Bool {
         return false
@@ -49,19 +47,16 @@ class BreezSdkSparkPasskey: NSObject {
         let allowIds: [Data] = allowCredentials.compactMap { Data(base64Encoded: $0) }
         let preferImmediate = preferImmediatelyAvailableCredentials?.boolValue
 
+        let core = PasskeyAssertionCore(
+            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName
+        )
         Task { @MainActor in
             do {
-                let seeds = try await core.performBulkDerivation(
+                let seeds = try await core.deriveSeeds(
                     salts: saltDatas,
-                    rpId: rpId,
-                    rpName: rpName,
-                    userName: userName,
-                    userDisplayName: userDisplayName,
                     autoRegister: autoRegister,
-                    options: DeriveSeedsOptions(
-                        allowCredentials: allowIds,
-                        preferImmediatelyAvailableCredentials: preferImmediate
-                    )
+                    allowCredentials: allowIds,
+                    preferImmediatelyAvailableCredentials: preferImmediate ?? true
                 )
                 resolve(seeds.map { $0.base64EncodedString() })
             } catch let err as PasskeyAssertionError {
@@ -90,15 +85,12 @@ class BreezSdkSparkPasskey: NSObject {
     ) {
         let excludeIds: [Data] = excludeCredentials.compactMap { Data(base64Encoded: $0) }
 
+        let core = PasskeyAssertionCore(
+            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName
+        )
         Task { @MainActor in
             do {
-                let registered = try await core.createPasskey(
-                    rpId: rpId,
-                    rpName: rpName,
-                    userName: userName,
-                    userDisplayName: userDisplayName,
-                    excludeCredentials: excludeIds
-                )
+                let registered = try await core.register(excludeCredentials: excludeIds)
                 resolve([
                     "credentialId": registered.credentialId.base64EncodedString(),
                     "userId": registered.userId.base64EncodedString(),
@@ -139,11 +131,14 @@ class BreezSdkSparkPasskey: NSObject {
         resolve: @escaping RCTPromiseResolveBlock,
         reject: @escaping RCTPromiseRejectBlock
     ) {
+        // Branding fields are unused by the domain check; pass rpId as
+        // a placeholder since this is a check-only core.
+        let core = PasskeyAssertionCore(
+            rpId: rpId, rpName: rpId, userName: rpId, userDisplayName: rpId,
+            explicitTeamId: teamId
+        )
         Task { @MainActor in
-            let outcome = await core.checkDomainAssociation(
-                rpId: rpId,
-                explicitTeamId: teamId
-            )
+            let outcome = await core.checkDomainAssociation()
             switch outcome {
             case .associated:
                 resolve(["kind": "Associated"])

@@ -6,11 +6,9 @@ import breez_sdk_spark.DomainAssociation
 import breez_sdk_spark.PrfProvider
 import breez_sdk_spark.PrfProviderException
 import breez_sdk_spark.RegisteredCredential
-import technology.breez.spark.passkey.core.CreatePasskeyOptions
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
 import technology.breez.spark.passkey.core.CredentialRegistry
-import technology.breez.spark.passkey.core.DeriveSeedsOptions
 import technology.breez.spark.passkey.core.DomainAssociationResult
 import technology.breez.spark.passkey.core.RegistryOperation
 
@@ -82,68 +80,44 @@ public class PasskeyProvider(
     private val userName: String = userName ?: rpName
     private val userDisplayName: String = userDisplayName ?: (userName ?: rpName)
 
-    /** Slot used to surface the credential ID asserted in the most
-     *  recent ceremony. Read once, cleared on read. Used by the
-     *  binding-layer `SignInResponse.credential_id` plumbing.
-     */
-    @Volatile
-    private var lastObservedCredentialId: ByteArray? = null
+    /** The configured PRF engine; holds rp identity + registry. */
+    private val core = CredentialManagerPrfCore(
+        rpId = rpId,
+        rpName = rpName,
+        userName = this.userName,
+        userDisplayName = this.userDisplayName,
+        credentialRegistry = credentialRegistry,
+        onRegistryError = onRegistryError,
+        activityProvider = activityProvider,
+    )
 
-    /** Take ownership of the credential ID captured by the most
-     *  recent assertion, clearing the slot. Returns `null` if no
-     *  assertion has completed since the last call.
-     */
-    override suspend fun takeLastObservedCredentialId(): ByteArray? {
-        val v = lastObservedCredentialId
-        lastObservedCredentialId = null
-        return v
-    }
+    override suspend fun takeLastObservedCredentialId(): ByteArray? =
+        core.takeLastObservedCredentialId()
 
     /**
-     * Bulk PRF derivation backed by [CredentialManagerPrfCore.deriveSeedsOrRegister].
-     *
-     * Uses the WebAuthn PRF dual-salt fast path on authenticators that
-     * honor `prf.eval.second` (Google Password Manager on recent
-     * versions). Falls back to sequential single-salt assertions on
-     * authenticators that silently drop the second salt; the verdict
-     * is cached per process so the first failed attempt is not paid
-     * twice.
-     *
+     * Bulk PRF derivation backed by [CredentialManagerPrfCore.deriveSeeds].
+     * Uses the WebAuthn PRF dual-salt fast path where the authenticator
+     * honors `prf.eval.second`, falling back to single-salt otherwise.
      * Output ordering matches input ordering.
      */
-    override suspend fun deriveSeeds(request: DeriveSeedsRequest): List<ByteArray> {
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): List<ByteArray> =
         try {
-            val options = DeriveSeedsOptions(
-                allowCredentials = request.allowCredentials,
-                preferImmediatelyAvailableCredentials = request.preferImmediatelyAvailableCredentials,
-                credentialRegistry = credentialRegistry,
-                onRegistryError = onRegistryError,
-            )
-            return CredentialManagerPrfCore.deriveSeedsOrRegister(
-                activity = activityProvider(),
+            core.deriveSeeds(
                 salts = request.salts,
-                rpId = rpId,
-                rpName = rpName,
-                userName = userName,
-                userDisplayName = userDisplayName,
                 autoRegister = false,
-                captureCredentialId = { id -> lastObservedCredentialId = id },
-                options = options,
+                allowCredentials = request.allowCredentials,
+                preferImmediatelyAvailableCredentials =
+                    request.preferImmediatelyAvailableCredentials ?: true,
             )
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()
         }
-    }
 
     override suspend fun isSupported(): Boolean =
         CredentialManagerPrfCore.isSupported()
 
     override suspend fun checkDomainAssociation(): DomainAssociation {
-        val activity = activityProvider()
-        val result = CredentialManagerPrfCore.checkDomainAssociation(
-            context = activity.applicationContext,
-            rpId = rpId,
-        )
+        val result = core.checkDomainAssociation()
         return when (result) {
             is DomainAssociationResult.Associated ->
                 DomainAssociation.Associated
@@ -203,19 +177,8 @@ public class PasskeyProvider(
      */
     override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential {
         try {
-            val core = CredentialManagerPrfCore.createCredential(
-                activity = activityProvider(),
-                rpId = rpId,
-                rpName = rpName,
-                userName = userName,
-                userDisplayName = userDisplayName,
-                excludeCredentials = excludeCredentials,
-                options = CreatePasskeyOptions(
-                    credentialRegistry = credentialRegistry,
-                    onRegistryError = onRegistryError,
-                ),
-            )
-            return RegisteredCredential(core.credentialId, core.userId, core.aaguid, core.backupEligible)
+            val c = core.register(excludeCredentials)
+            return RegisteredCredential(c.credentialId, c.userId, c.aaguid, c.backupEligible)
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()
         }

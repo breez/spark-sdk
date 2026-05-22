@@ -11,8 +11,6 @@ import UIKit
 @available(iOS 18.0, *)
 public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
 
-    private let core = PasskeyAssertionCore()
-
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(
             name: "breez_sdk_spark_passkey",
@@ -61,15 +59,12 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
             excludeCredentials = base64Ids.compactMap { Data(base64Encoded: $0) }
         }
 
+        let core = PasskeyAssertionCore(
+            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName
+        )
         Task { @MainActor in
             do {
-                let registered = try await core.createPasskey(
-                    rpId: rpId,
-                    rpName: rpName,
-                    userName: userName,
-                    userDisplayName: userDisplayName,
-                    excludeCredentials: excludeCredentials
-                )
+                let registered = try await core.register(excludeCredentials: excludeCredentials)
                 result([
                     "credentialId": registered.credentialId.base64EncodedString(),
                     "userId": registered.userId.base64EncodedString(),
@@ -114,19 +109,16 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         }
         let preferImmediate = args["preferImmediatelyAvailableCredentials"] as? Bool
 
+        let core = PasskeyAssertionCore(
+            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName
+        )
         Task { @MainActor in
             do {
-                let seeds = try await core.performBulkDerivation(
+                let seeds = try await core.deriveSeeds(
                     salts: saltDatas,
-                    rpId: rpId,
-                    rpName: rpName,
-                    userName: userName,
-                    userDisplayName: userDisplayName,
                     autoRegister: autoRegister,
-                    options: DeriveSeedsOptions(
-                        allowCredentials: allowCredentials,
-                        preferImmediatelyAvailableCredentials: preferImmediate
-                    )
+                    allowCredentials: allowCredentials,
+                    preferImmediatelyAvailableCredentials: preferImmediate ?? true
                 )
                 result(seeds.map { $0.base64EncodedString() })
             } catch let err as PasskeyAssertionError {
@@ -150,11 +142,14 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         // where SecTask / provisioning-profile lookup doesn't work.
         let explicitTeamId = args["teamId"] as? String
 
+        // Branding fields are unused by the domain check; pass rpId as
+        // a placeholder since this is a check-only core.
+        let core = PasskeyAssertionCore(
+            rpId: rpId, rpName: rpId, userName: rpId, userDisplayName: rpId,
+            explicitTeamId: explicitTeamId
+        )
         Task { @MainActor in
-            let outcome = await core.checkDomainAssociation(
-                rpId: rpId,
-                explicitTeamId: explicitTeamId
-            )
+            let outcome = await core.checkDomainAssociation()
             result(Self.serializeDomainAssociation(outcome))
         }
     }

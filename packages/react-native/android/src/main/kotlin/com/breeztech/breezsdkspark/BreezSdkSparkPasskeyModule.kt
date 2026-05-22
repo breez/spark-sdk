@@ -17,7 +17,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
-import technology.breez.spark.passkey.core.DeriveSeedsOptions
 
 /**
  * Holds the next derive call for up to [POST_CREATE_GRACE_TOTAL_MS]
@@ -131,18 +130,17 @@ class BreezSdkSparkPasskeyModule(
         scope.launch {
             try {
                 graceTracker.consume()
-                val seeds = CredentialManagerPrfCore.deriveSeedsOrRegister(
-                    activity = activity,
-                    salts = salts,
+                val seeds = CredentialManagerPrfCore(
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
+                    activityProvider = { activity },
+                ).deriveSeeds(
+                    salts = salts,
                     autoRegister = autoRegister,
-                    options = DeriveSeedsOptions(
-                        allowCredentials = allowIds,
-                        preferImmediatelyAvailableCredentials = preferImmediatelyAvailableCredentials,
-                    ),
+                    allowCredentials = allowIds,
+                    preferImmediatelyAvailableCredentials = preferImmediatelyAvailableCredentials ?: true,
                 )
                 // Encode each seed as base64 so the React bridge can carry it
                 // as an array of strings. JS side base64-decodes back to
@@ -175,10 +173,15 @@ class BreezSdkSparkPasskeyModule(
         }
         scope.launch {
             try {
-                val outcome = CredentialManagerPrfCore.checkDomainAssociation(
-                    context = activity.applicationContext,
+                // Branding fields are unused by the domain check; pass
+                // rpId as a placeholder since this is a check-only core.
+                val outcome = CredentialManagerPrfCore(
                     rpId = rpId,
-                )
+                    rpName = rpId,
+                    userName = rpId,
+                    userDisplayName = rpId,
+                    activityProvider = { activity },
+                ).checkDomainAssociation()
                 val map = Arguments.createMap()
                 when (outcome) {
                     is technology.breez.spark.passkey.core.DomainAssociationResult.Associated -> {
@@ -232,14 +235,13 @@ class BreezSdkSparkPasskeyModule(
 
         scope.launch {
             try {
-                val credential = CredentialManagerPrfCore.createCredential(
-                    activity = activity,
+                val credential = CredentialManagerPrfCore(
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
-                    excludeCredentials = excludeIds,
-                )
+                    activityProvider = { activity },
+                ).register(excludeIds)
                 // Hold the next derive call for up to 800ms so the
                 // immediate post-register assertion doesn't race the
                 // credential's PRF-readiness window.

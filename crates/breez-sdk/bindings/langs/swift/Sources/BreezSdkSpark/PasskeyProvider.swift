@@ -56,11 +56,6 @@ public class PasskeyProvider: PrfProvider {
     public static let BREEZ_RP_ID: String = "keys.breez.technology"
 
     private let rpId: String
-    private let rpName: String
-    private let userName: String
-    private let userDisplayName: String
-    private let explicitTeamId: String?
-    private let urlSession: URLSession
     private let core: PasskeyAssertionCore
     private let credentialRegistry: CredentialRegistry?
     private let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
@@ -124,14 +119,19 @@ public class PasskeyProvider: PrfProvider {
         iosOptions: IOSOptions? = nil
     ) {
         self.rpId = rpId
-        self.rpName = rpName
-        self.userName = userName ?? rpName
-        self.userDisplayName = userDisplayName ?? (userName ?? rpName)
-        self.explicitTeamId = iosOptions?.teamId
-        self.urlSession = iosOptions?.urlSession ?? .shared
-        self.core = PasskeyAssertionCore(anchorProvider: iosOptions?.anchorProvider)
         self.credentialRegistry = credentialRegistry
         self.onRegistryError = onRegistryError
+        self.core = PasskeyAssertionCore(
+            rpId: rpId,
+            rpName: rpName,
+            userName: userName ?? rpName,
+            userDisplayName: userDisplayName ?? (userName ?? rpName),
+            credentialRegistry: credentialRegistry,
+            onRegistryError: onRegistryError,
+            explicitTeamId: iosOptions?.teamId,
+            urlSession: iosOptions?.urlSession ?? .shared,
+            anchorProvider: iosOptions?.anchorProvider
+        )
     }
 
     /// Derive multiple PRF outputs in as few authenticator ceremonies as
@@ -155,22 +155,13 @@ public class PasskeyProvider: PrfProvider {
         guard saltDatas.count == request.salts.count else {
             throw PrfProviderError.Generic("Failed to encode salts as UTF-8")
         }
-        let perCallAllow = request.allowCredentials.map { Data($0) }
-        let options = DeriveSeedsOptions(
-            allowCredentials: perCallAllow,
-            preferImmediatelyAvailableCredentials: request.preferImmediatelyAvailableCredentials,
-            credentialRegistry: credentialRegistry,
-            onRegistryError: onRegistryError
-        )
         do {
-            return try await core.performBulkDerivation(
+            return try await core.deriveSeeds(
                 salts: saltDatas,
-                rpId: rpId,
-                rpName: rpName,
-                userName: userName,
-                userDisplayName: userDisplayName,
                 autoRegister: false,
-                options: options
+                allowCredentials: request.allowCredentials.map { Data($0) },
+                preferImmediatelyAvailableCredentials:
+                    request.preferImmediatelyAvailableCredentials ?? true
             )
         } catch let err as PasskeyAssertionError {
             throw Self.toPrfProviderError(err)
@@ -194,17 +185,7 @@ public class PasskeyProvider: PrfProvider {
     @discardableResult
     public func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
         do {
-            let credential = try await core.createPasskey(
-                rpId: rpId,
-                rpName: rpName,
-                userName: userName,
-                userDisplayName: userDisplayName,
-                excludeCredentials: excludeCredentials,
-                options: CreatePasskeyOptions(
-                    credentialRegistry: credentialRegistry,
-                    onRegistryError: onRegistryError
-                )
-            )
+            let credential = try await core.register(excludeCredentials: excludeCredentials)
             return RegisteredCredential(
                 credentialId: credential.credentialId,
                 userId: credential.userId,
@@ -319,11 +300,7 @@ public class PasskeyProvider: PrfProvider {
     public func checkDomainAssociation() async throws -> DomainAssociation {
         // Delegate to the canonical core. Translate from the layer-
         // neutral `IosDomainAssociation` to UniFFI's `DomainAssociation`.
-        let result = await core.checkDomainAssociation(
-            rpId: rpId,
-            explicitTeamId: explicitTeamId,
-            urlSession: urlSession
-        )
+        let result = await core.checkDomainAssociation()
         switch result {
         case .associated:
             return .associated

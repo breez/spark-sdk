@@ -19,7 +19,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
-import technology.breez.spark.passkey.core.DeriveSeedsOptions
 
 /**
  * After a successful `createPasskey` the platform takes a moment to
@@ -150,18 +149,17 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
         scope.launch {
             try {
                 graceTracker.consume()
-                val seeds = CredentialManagerPrfCore.deriveSeedsOrRegister(
-                    activity = currentActivity,
-                    salts = salts,
+                val seeds = CredentialManagerPrfCore(
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
+                    activityProvider = { currentActivity },
+                ).deriveSeeds(
+                    salts = salts,
                     autoRegister = autoRegister,
-                    options = DeriveSeedsOptions(
-                        allowCredentials = allowIds,
-                        preferImmediatelyAvailableCredentials = preferImmediate,
-                    ),
+                    allowCredentials = allowIds,
+                    preferImmediatelyAvailableCredentials = preferImmediate ?: true,
                 )
                 // Encode each seed as base64 so MethodChannel can carry
                 // it as a List<String>. Dart side base64-decodes back
@@ -187,10 +185,15 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
         }
         scope.launch {
             try {
-                val outcome = CredentialManagerPrfCore.checkDomainAssociation(
-                    context = currentActivity.applicationContext,
+                // Branding fields are unused by the domain check; pass
+                // rpId as a placeholder since this is a check-only core.
+                val outcome = CredentialManagerPrfCore(
                     rpId = rpId,
-                )
+                    rpName = rpId,
+                    userName = rpId,
+                    userDisplayName = rpId,
+                    activityProvider = { currentActivity },
+                ).checkDomainAssociation()
                 // Soft-fail to Skipped on Android: see the upstream
                 // PasskeyProvider for the rationale (CredentialManager
                 // runs its own DAL check internally and a public-API
@@ -237,14 +240,13 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
 
         scope.launch {
             try {
-                val credential = CredentialManagerPrfCore.createCredential(
-                    activity = currentActivity,
+                val credential = CredentialManagerPrfCore(
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
-                    excludeCredentials = excludeIds,
-                )
+                    activityProvider = { currentActivity },
+                ).register(excludeIds)
                 // Hold the next derive call for up to 800ms so the
                 // immediate post-register assertion doesn't race the
                 // credential's PRF-readiness window.
