@@ -32,7 +32,7 @@ class CustomPrfProvider : PrfProvider {
         TODO("Check platform passkey availability")
     }
 
-    override suspend fun createPasskey(excludeCredentialIds: List<ByteArray>): RegisteredCredential {
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential {
         // Register a new credential and return its ID, the WebAuthn
         // user.id the platform recorded (returned for host-side
         // correlation, never host-supplied), AAGUID, and BE flag.
@@ -132,7 +132,7 @@ class PasskeySnippets(private val activity: Activity) {
 
         val response = passkey.register(RegisterRequest(label = "personal"))
 
-        // Persist credentialId for future excludeCredentialIds.
+        // Persist credentialId for future excludeCredentials.
         val persistedCredentialId = response.credential.credentialId
         val persistedUserId = response.credential.userId
 
@@ -205,7 +205,7 @@ class PasskeySnippets(private val activity: Activity) {
             val response = passkey.register(
                 RegisterRequest(
                     label = "personal",
-                    excludeCredentialIds = emptyList(), // app-persisted credential IDs from prior registrations
+                    excludeCredentials = emptyList(), // app-persisted credential IDs from prior registrations
                 )
             )
             response.wallet

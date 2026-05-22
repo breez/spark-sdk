@@ -30,7 +30,7 @@ export interface RegisteredCredential {
 
 /**
  * Thrown when `createPasskey` asks the platform to register a new
- * passkey but it refuses because an entry in `excludeCredentialIds`
+ * passkey but it refuses because an entry in `excludeCredentials`
  * matches a credential already on the device. Hosts should route the
  * user to the sign-in path instead of treating this as a generic
  * registration failure.
@@ -68,12 +68,16 @@ export declare class PasskeyCredentialNotFoundError extends Error {
  */
 export interface DeriveSeedOptions {
     /**
-     * Restrict assertion to one of these credential IDs. The browser
-     * refuses any other credential for this RP. Use to pin sign-in to
-     * a specific passkey when multiple credentials exist for the RP.
-     * Empty / omitted lets the browser pick any matching credential.
+     * A list of credential IDs the assertion is restricted to. The
+     * primary use case is reauthentication when the user is already
+     * known: if any of the listed credentials is available locally,
+     * the browser prompts for device unlock straight away (no account
+     * picker); otherwise the user is asked to present another device
+     * (paired phone or security key) that holds a valid credential.
+     * Empty / omitted lets the browser pick any matching credential
+     * for this RP.
      */
-    allowCredentialIds?: Uint8Array[];
+    allowCredentials?: Uint8Array[];
 
     /**
      * Per-call control over the platform's "fast-fail when no local
@@ -147,25 +151,35 @@ export interface PasskeyProviderOptions {
     rpId: string;
 
     /**
-     * Display name shown to the user in the OS passkey picker and
-     * credential-management UIs (iCloud Keychain, Google Password
-     * Manager, 1Password, etc.) when choosing a credential. Only used
-     * at credential registration; changing it does not affect existing
+     * Maps to the WebAuthn `rp.name`. Deprecated in WebAuthn L3 but
+     * still required by all current browser implementations: the
+     * provider rejects an empty string at construction to keep
+     * registrations interoperable. Surfaces in some credential-
+     * management UIs (iCloud Keychain, Google Password Manager,
+     * 1Password); platform UIs increasingly ignore it. Only used at
+     * credential registration; changing it does not affect existing
      * credentials.
      */
     rpName: string;
 
     /**
-     * User name stored with the credential, shown as a secondary label in some
-     * passkey managers. Defaults to rpName. Only used during registration;
-     * changing it does not affect existing credentials.
+     * Maps to the WebAuthn `user.name`. Treated as the user's unique
+     * identifier for the credential and shown in the account picker
+     * during sign-in (Apple's Passwords app, in particular, dedupes
+     * credentials by `(rpId, user.name)`). Pass a stable per-user
+     * value if you want each registration to surface as a distinct
+     * entry. Defaults to `rpName`. Only used at registration; changing
+     * it does not affect existing credentials.
      */
     userName?: string;
 
     /**
-     * User display name shown as the primary label in the passkey picker.
-     * Defaults to userName. Only used during registration; changing it does
-     * not affect existing credentials.
+     * Maps to the WebAuthn `user.displayName`. The user-friendly label
+     * the browser MAY (but is not required to) show in the picker.
+     * Behavior varies by platform: some show it as the primary label,
+     * others only as a secondary one, others ignore it entirely.
+     * Defaults to `userName`. Only used at registration; changing it
+     * does not affect existing credentials.
      */
     userDisplayName?: string;
 
@@ -212,7 +226,7 @@ export interface PasskeyProviderOptions {
      * stored IDs into `excludeCredentials` on `createPasskey` and
      * into `allowCredentials` on assertion, then auto-adds new
      * credential IDs after success. Omit to disable auto-population
-     * (the host manages `excludeCredentialIds` / `allowCredentialIds`
+     * (the host manages `excludeCredentials` / `allowCredentials`
      * manually). All registry calls are best-effort with a 3s
      * timeout; failures fire {@link onRegistryError} and the
      * ceremony proceeds.
@@ -278,18 +292,19 @@ export declare class PasskeyProvider {
     /**
      * Create a new passkey with PRF support.
      *
-     * `excludeCredentialIds` (optional) lists credential IDs the
-     * authenticator must refuse to duplicate. When any entry matches a
-     * credential already on the device, `PasskeyAlreadyExistsError` is
-     * raised. The `user.id` is always provider-minted and returned via
-     * `RegisteredCredential.userId`.
+     * `excludeCredentials` (optional) is a list of already-registered
+     * credential IDs. Prevents registering the same device twice:
+     * when any entry matches a credential already on the device,
+     * `PasskeyAlreadyExistsError` is raised. The `user.id` is always
+     * provider-minted and returned via `RegisteredCredential.userId`.
      *
-     * @throws {PasskeyAlreadyExistsError} If an entry in `excludeCredentialIds`
-     *   matches a credential already on the device.
+     * @throws {PasskeyAlreadyExistsError} If an entry in
+     *   `excludeCredentials` matches a credential already on the
+     *   device.
      * @throws If the user cancels or PRF is not supported by the
      *   authenticator.
      */
-    createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<RegisteredCredential>;
+    createPasskey(excludeCredentials?: Uint8Array[]): Promise<RegisteredCredential>;
 
     /**
      * Check if a PRF-capable passkey is available on this device.

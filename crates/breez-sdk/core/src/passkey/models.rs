@@ -27,11 +27,11 @@ pub struct SetupWalletRequest {
     pub publish_label: bool,
 
     /// Forwarded to
-    /// [`crate::passkey::DeriveSeedsRequest::allow_credential_ids`].
+    /// [`crate::passkey::DeriveSeedsRequest::allow_credentials`].
     /// Useful for server-driven flows that resolve the credential set
     /// out-of-band.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub allow_credential_ids: Vec<Vec<u8>>,
+    pub allow_credentials: Vec<Vec<u8>>,
 
     /// Forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::prefer_immediately_available_credentials`].

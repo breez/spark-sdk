@@ -189,7 +189,7 @@ impl Passkey {
             .prf_provider
             .derive_seeds(DeriveSeedsRequest {
                 salts,
-                allow_credential_ids: request.allow_credential_ids,
+                allow_credentials: request.allow_credentials,
                 prefer_immediately_available_credentials: request
                     .prefer_immediately_available_credentials,
             })

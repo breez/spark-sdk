@@ -19,7 +19,7 @@ namespace BreezSdkSnippets
             throw new NotImplementedException("Check platform passkey availability");
         }
 
-        public async Task<RegisteredCredential> CreatePasskey(List<byte[]> excludeCredentialIds)
+        public async Task<RegisteredCredential> CreatePasskey(List<byte[]> excludeCredentials)
         {
             // Register a new credential and return its ID, the WebAuthn
             // user.id the platform recorded (returned for host-side
@@ -82,12 +82,12 @@ namespace BreezSdkSnippets
             var passkey = new PasskeyClient(prfProvider, null, null);
 
             var response = await passkey.ConnectWithPasskey(
-                new ConnectWithPasskeyRequest(label: "personal", excludeCredentialIds: new List<byte[]>())
+                new ConnectWithPasskeyRequest(label: "personal", excludeCredentials: new List<byte[]>())
             );
 
             // registeredCredential doubles as the path discriminator:
             // non-null when a new credential was just registered (persist
-            // credentialId for future excludeCredentialIds); null when
+            // credentialId for future excludeCredentials); null when
             // silent sign-in succeeded for an existing credential.
             if (response.registeredCredential is not null)
             {
@@ -112,7 +112,7 @@ namespace BreezSdkSnippets
 
             var response = await passkey.Register(new RegisterRequest(label: "personal"));
 
-            // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
+            // Hosts SHOULD persist credential.credentialId (for excludeCredentials
             // bookkeeping) and credential.userId (for server-side correlation).
             // The SDK generates userId; it is never host-supplied.
             var _persistedCredentialId = response.credential.credentialId;
@@ -181,7 +181,7 @@ namespace BreezSdkSnippets
             {
                 var response = await passkey.Register(new RegisterRequest(
                     label: "personal",
-                    excludeCredentialIds: new List<byte[]>
+                    excludeCredentials: new List<byte[]>
                     {
                         // app-persisted credential IDs from prior registrations
                     }

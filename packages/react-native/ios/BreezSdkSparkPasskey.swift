@@ -33,7 +33,7 @@ class BreezSdkSparkPasskey: NSObject {
         userName: String,
         userDisplayName: String,
         autoRegister: Bool,
-        allowCredentialIds: [String],
+        allowCredentials: [String],
         preferImmediatelyAvailableCredentials: NSNumber?,
         resolve: @escaping RCTPromiseResolveBlock,
         reject: @escaping RCTPromiseRejectBlock
@@ -46,7 +46,7 @@ class BreezSdkSparkPasskey: NSObject {
             return
         }
 
-        let allowIds: [Data] = allowCredentialIds.compactMap { Data(base64Encoded: $0) }
+        let allowIds: [Data] = allowCredentials.compactMap { Data(base64Encoded: $0) }
         let preferImmediate = preferImmediatelyAvailableCredentials?.boolValue
 
         Task { @MainActor in
@@ -59,7 +59,7 @@ class BreezSdkSparkPasskey: NSObject {
                     userDisplayName: userDisplayName,
                     autoRegister: autoRegister,
                     options: DeriveSeedsOptions(
-                        allowCredentialIds: allowIds,
+                        allowCredentials: allowIds,
                         preferImmediatelyAvailableCredentials: preferImmediate
                     )
                 )
@@ -84,11 +84,11 @@ class BreezSdkSparkPasskey: NSObject {
         rpName: String,
         userName: String,
         userDisplayName: String,
-        excludeCredentialIds: [String],
+        excludeCredentials: [String],
         resolve: @escaping RCTPromiseResolveBlock,
         reject: @escaping RCTPromiseRejectBlock
     ) {
-        let excludeIds: [Data] = excludeCredentialIds.compactMap { Data(base64Encoded: $0) }
+        let excludeIds: [Data] = excludeCredentials.compactMap { Data(base64Encoded: $0) }
 
         Task { @MainActor in
             do {
@@ -97,7 +97,7 @@ class BreezSdkSparkPasskey: NSObject {
                     rpName: rpName,
                     userName: userName,
                     userDisplayName: userDisplayName,
-                    excludeCredentialIds: excludeIds
+                    excludeCredentials: excludeIds
                 )
                 resolve([
                     "credentialId": registered.credentialId.base64EncodedString(),

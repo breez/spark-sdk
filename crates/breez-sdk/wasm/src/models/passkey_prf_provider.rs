@@ -173,7 +173,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
 
     async fn create_passkey(
         &self,
-        exclude_credential_ids: Vec<Vec<u8>>,
+        exclude_credentials: Vec<Vec<u8>>,
     ) -> Result<RegisteredCredential, PrfProviderError> {
         // Custom providers may not implement explicit creation; fall
         // back to the trait default (`PrfNotSupported`).
@@ -189,7 +189,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
                 PrfProviderError::Generic("createPasskey is not a function".to_string())
             })?;
 
-        let js_exclude = build_exclude_credential_ids(&exclude_credential_ids);
+        let js_exclude = build_exclude_credentials(&exclude_credentials);
         let result_promise = func
             .call1(target, &js_exclude)
             .map_err(js_error_to_prf_provider_error)?
@@ -299,12 +299,12 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
 fn build_derive_seeds_options(request: &DeriveSeedsRequest) -> Result<JsValue, PrfProviderError> {
     let obj = js_sys::Object::new();
 
-    if !request.allow_credential_ids.is_empty() {
+    if !request.allow_credentials.is_empty() {
         let arr = js_sys::Array::new();
-        for id in &request.allow_credential_ids {
+        for id in &request.allow_credentials {
             arr.push(&js_sys::Uint8Array::from(id.as_slice()));
         }
-        js_sys::Reflect::set(&obj, &JsValue::from_str("allowCredentialIds"), &arr)
+        js_sys::Reflect::set(&obj, &JsValue::from_str("allowCredentials"), &arr)
             .map_err(js_error_to_prf_provider_error)?;
     }
     if let Some(prefer) = request.prefer_immediately_available_credentials {
@@ -319,13 +319,13 @@ fn build_derive_seeds_options(request: &DeriveSeedsRequest) -> Result<JsValue, P
     Ok(obj.into())
 }
 
-/// Marshal `exclude_credential_ids` into a JS `Uint8Array[]` for the
-/// `createPasskey(excludeCredentialIds)` provider call. `Vec<u8>`
+/// Marshal `exclude_credentials` into a JS `Uint8Array[]` for the
+/// `createPasskey(excludeCredentials)` provider call. `Vec<u8>`
 /// entries cross as `Uint8Array` (not plain arrays) to match what
 /// `navigator.credentials.create` expects.
-fn build_exclude_credential_ids(exclude_credential_ids: &[Vec<u8>]) -> JsValue {
+fn build_exclude_credentials(exclude_credentials: &[Vec<u8>]) -> JsValue {
     let arr = js_sys::Array::new();
-    for id in exclude_credential_ids {
+    for id in exclude_credentials {
         arr.push(&js_sys::Uint8Array::from(id.as_slice()));
     }
     arr.into()
@@ -433,20 +433,21 @@ export interface PrfProvider {
      * (browser WebAuthn, iOS / Android) implement this to drive the OS
      * create ceremony and return credential metadata (`credentialId`,
      * `userId`, optional `aaguid`, optional `backupEligible`) that
-     * callers need for `excludeCredentialIds` bookkeeping and
+     * callers need for `excludeCredentials` bookkeeping and
      * server-side correlation. Custom providers without an explicit
      * creation step can omit this method.
      *
-     * `excludeCredentialIds` is the only per-call knob: when any entry
+     * `excludeCredentials` is a list of already-registered credential
+     * IDs. Prevents registering the same device twice: when any entry
      * matches a credential already on the device, the provider raises
      * `PasskeyAlreadyExistsError`. Branding fields (rpName, userName,
      * userDisplayName) live on the provider constructor.
      *
      * @throws `PasskeyAlreadyExistsError` when an entry in
-     *   `excludeCredentialIds` matches a credential already on the
+     *   `excludeCredentials` matches a credential already on the
      *   device.
      */
-    createPasskey?(excludeCredentialIds: Uint8Array[]): Promise<RegisteredCredentialJSON>;
+    createPasskey?(excludeCredentials: Uint8Array[]): Promise<RegisteredCredentialJSON>;
 
     /**
      * Whether this provider can produce PRF outputs on the current
@@ -485,8 +486,16 @@ export interface PrfProvider {
  * the same shaping fields the Rust-side `DeriveSeedsRequest` carries.
  */
 export interface DeriveSeedsOptionsJSON {
-    /** Allow-list; empty / omitted lets the provider default apply. */
-    allowCredentialIds?: Uint8Array[];
+    /**
+     * A list of credential IDs the assertion is restricted to. The
+     * primary use case is reauthentication when the user is already
+     * known: if any of the listed credentials is available locally,
+     * the platform prompts for device unlock straight away (no
+     * account picker); otherwise the user is asked to present another
+     * device (paired phone or security key) that holds a valid
+     * credential. Empty / omitted lets the provider default apply.
+     */
+    allowCredentials?: Uint8Array[];
     /**
      * Controls the platform's "fast-fail when no local credential is
      * available" behavior. On the web this maps to the WebAuthn

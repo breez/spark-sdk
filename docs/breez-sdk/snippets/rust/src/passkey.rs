@@ -36,7 +36,7 @@ impl PrfProvider for CustomPrfProvider {
 
     async fn create_passkey(
         &self,
-        _exclude_credential_ids: Vec<Vec<u8>>,
+        _exclude_credentials: Vec<Vec<u8>>,
     ) -> Result<RegisteredCredential, PrfProviderError> {
         // Register a new credential and return its ID, the WebAuthn
         // user.id the platform recorded (returned for host-side
@@ -95,7 +95,7 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
     let response = passkey
         .connect_with_passkey(ConnectWithPasskeyRequest {
             label: Some("personal".to_string()),
-            exclude_credential_ids: vec![],
+            exclude_credentials: vec![],
         })
         .await?;
 
@@ -138,11 +138,11 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
     let response = passkey
         .register(RegisterRequest {
             label: Some("personal".to_string()),
-            exclude_credential_ids: vec![],
+            exclude_credentials: vec![],
         })
         .await?;
 
-    // Persist credential_id for future exclude_credential_ids.
+    // Persist credential_id for future exclude_credentials.
     let _persist = (
         response.credential.credential_id.clone(),
         response.credential.user_id.clone(),
@@ -210,7 +210,7 @@ async fn check_domain() -> Result<()> {
 async fn recover_from_already_exists() -> Result<Wallet> {
     // ANCHOR: recover-already-exists
     // The OS rejected register because the user's password manager
-    // already holds a credential matching `exclude_credential_ids`.
+    // already holds a credential matching `exclude_credentials`.
     // Route the user to the sign-in path: the OS picker will surface
     // the existing credential and the SDK's identity cache will warm
     // up on the assertion.
@@ -220,7 +220,7 @@ async fn recover_from_already_exists() -> Result<Wallet> {
     match passkey
         .register(RegisterRequest {
             label: Some("personal".to_string()),
-            exclude_credential_ids: vec![
+            exclude_credentials: vec![
                 // app-persisted credential IDs from prior registrations
             ],
         })

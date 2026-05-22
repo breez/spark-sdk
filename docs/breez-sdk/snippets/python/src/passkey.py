@@ -34,7 +34,7 @@ class CustomPrfProvider(PrfProvider):
         # platform / device.
         raise NotImplementedError("Check platform passkey availability")
 
-    async def create_passkey(self, exclude_credential_ids: list[bytes]) -> RegisteredCredential:
+    async def create_passkey(self, exclude_credentials: list[bytes]) -> RegisteredCredential:
         # Register a new credential and return its ID, the WebAuthn
         # user.id the platform recorded (returned for host-side
         # correlation, never host-supplied), AAGUID, and BE flag.
@@ -90,12 +90,12 @@ async def connect_with_passkey():
     passkey = PasskeyClient(prf_provider, None, None)
 
     response = await passkey.connect_with_passkey(
-        ConnectWithPasskeyRequest(label="personal", exclude_credential_ids=[])
+        ConnectWithPasskeyRequest(label="personal", exclude_credentials=[])
     )
 
     # `registered_credential` doubles as the path discriminator:
     # not None when a new credential was just registered (persist
-    # credential_id for future exclude_credential_ids); None when
+    # credential_id for future exclude_credentials); None when
     # silent sign-in succeeded for an existing credential.
     if response.registered_credential is not None:
         _persist = response.registered_credential.credential_id
@@ -119,7 +119,7 @@ async def register_new_passkey():
 
     response = await passkey.register(RegisterRequest(label="personal"))
 
-    # Hosts SHOULD persist credential.credential_id (for excludeCredentialIds
+    # Hosts SHOULD persist credential.credential_id (for excludeCredentials
     # bookkeeping) and credential.user_id (for server-side correlation).
     # The SDK generates user_id; it is never host-supplied.
     _persisted_credential_id = response.credential.credential_id
@@ -174,7 +174,7 @@ async def check_domain():
 async def recover_from_already_exists():
     # ANCHOR: recover-already-exists
     # The OS rejected register because the user's password manager
-    # already holds a credential matching `exclude_credential_ids`.
+    # already holds a credential matching `exclude_credentials`.
     # Route the user to the sign-in path: the OS picker will surface
     # the existing credential and the SDK's identity cache will warm
     # up on the assertion.
@@ -185,7 +185,7 @@ async def recover_from_already_exists():
         await passkey.register(
             RegisterRequest(
                 label="personal",
-                exclude_credential_ids=[
+                exclude_credentials=[
                     # app-persisted credential IDs from prior registrations
                 ],
             )

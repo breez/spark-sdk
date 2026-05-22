@@ -1,6 +1,6 @@
 # CredentialRegistry
 
-`CredentialRegistry` is an optional app-side store of credential IDs your app has registered. The SDK uses it on register (to populate `excludeCredentialIds` so the OS refuses to create a duplicate) and on sign-in (to populate `allowCredentialIds` so the OS surfaces the right credential in the picker). You implement it yourself, backed by whatever local storage fits your platform; the SDK does not ship a default.
+`CredentialRegistry` is an optional app-side store of credential IDs your app has registered. The SDK uses it on register (to populate `excludeCredentials` so the OS refuses to create a duplicate) and on sign-in (to populate `allowCredentials` so the OS surfaces the right credential in the picker). You implement it yourself, backed by whatever local storage fits your platform; the SDK does not ship a default.
 
 ## Interface
 
@@ -15,7 +15,7 @@ interface CredentialRegistry {
 }
 ```
 
-`read` and `add` are SDK-driven: the SDK calls `read` before every sign-in and register so the OS sees the right `allowCredentialIds` / `excludeCredentialIds`, and calls `add` after a successful register to record the new ID. `remove` and `clear` are app-driven: wire them to a settings page where users manage registered passkeys. See [When (not) to call `credentials().clear()`](#when-not-to-call-credentialsclear) before exposing `clear`.
+`read` and `add` are SDK-driven: the SDK calls `read` before every sign-in and register so the OS sees the right `allowCredentials` / `excludeCredentials`, and calls `add` after a successful register to record the new ID. `remove` and `clear` are app-driven: wire them to a settings page where users manage registered passkeys. See [When (not) to call `credentials().clear()`](#when-not-to-call-credentialsclear) before exposing `clear`.
 
 Credential IDs are public per WebAuthn spec, so no encryption is required at rest.
 
@@ -27,7 +27,7 @@ Credential IDs are public per WebAuthn spec, so no encryption is required at res
 
 ## Using credentials() with a registry
 
-With a registry wired in, the SDK auto-populates `excludeCredentialIds` on register and `allowCredentialIds` on sign-in. {{#name PasskeyClient.credentials}} lets you read and modify the stored set yourself, typically to back a settings page that lists registered passkeys on this device with per-row remove.
+With a registry wired in, the SDK auto-populates `excludeCredentials` on register and `allowCredentials` on sign-in. {{#name PasskeyClient.credentials}} lets you read and modify the stored set yourself, typically to back a settings page that lists registered passkeys on this device with per-row remove.
 
 {{#tabs passkey:with-credential-registry}}
 
@@ -35,9 +35,9 @@ With a registry wired in, the SDK auto-populates `excludeCredentialIds` on regis
 
 `clear()` wipes only the app's local list of credential IDs. The passkey itself stays on the OS or cloud authenticator, so the user can still sign in with it. `clear()` is not a logout.
 
-**Don't call `clear()` on a normal sign-out.** With an empty registry, the next `register()` sends an empty `excludeCredentialIds`. Some authenticators treat that as "no duplicates known" and mint a **sibling credential**: same RP, different credential ID. The new credential ID produces a different PRF output, which derives a different seed, which lands the user in a different wallet at next sign-in.
+**Don't call `clear()` on a normal sign-out.** With an empty registry, the next `register()` sends an empty `excludeCredentials`. Some authenticators treat that as "no duplicates known" and mint a **sibling credential**: same RP, different credential ID. The new credential ID produces a different PRF output, which derives a different seed, which lands the user in a different wallet at next sign-in.
 
-Dedup behaviour with an empty `excludeCredentialIds`:
+Dedup behaviour with an empty `excludeCredentials`:
 
 | Authenticator | Behaviour |
 |---|---|
@@ -52,4 +52,4 @@ Reserve `clear()` for explicit factory-reset flows where orphan credentials are 
 - Every registry call is bounded by a 3 second timeout. Slow backends never block the WebAuthn ceremony.
 - Failures and timeouts are logged and surfaced via the `onRegistryError` callback when set. A failed `read` falls back to an empty list; failed writes are dropped without blocking the ceremony.
 - An incomplete registry (missing one of `read`, `add`, `remove`, `clear`) is rejected as early as your platform allows: either at app startup or at build time.
-- If sign-in fails with no matching credential and you have not supplied `allowCredentialIds` or a registry to narrow the lookup, the SDK links back to this page in the error message.
+- If sign-in fails with no matching credential and you have not supplied `allowCredentials` or a registry to narrow the lookup, the SDK links back to this page in the error message.

@@ -107,25 +107,32 @@ export interface PasskeyProviderOptions {
   rpId: string;
 
   /**
-   * Display name shown to the user in the OS passkey picker and
+   * Maps to the WebAuthn `rp.name`. Deprecated in WebAuthn L3 but
+   * still required by current OS prompts. Surfaces in some
    * credential-management UIs (iCloud Keychain, Google Password
-   * Manager, 1Password, etc.) when choosing a credential. Only used
-   * at credential registration; changing it does not affect existing
-   * credentials.
+   * Manager, 1Password); platform UIs increasingly ignore it. Only
+   * used at credential registration; changing it does not affect
+   * existing credentials.
    */
   rpName: string;
 
   /**
-   * User name stored with the credential, shown as a secondary label in some
-   * passkey managers. Defaults to rpName. Only used during registration;
-   * changing it does not affect existing credentials.
+   * Maps to the WebAuthn `user.name`. Treated as the user's unique
+   * identifier for the credential and shown in the account picker
+   * during sign-in. Pass a stable per-user value if each registration
+   * should surface as a distinct entry (Apple's Passwords app, in
+   * particular, dedupes credentials by `(rpId, user.name)`). Defaults
+   * to `rpName`. Only used at registration; changing it does not
+   * affect existing credentials.
    */
   userName?: string;
 
   /**
-   * User display name shown as the primary label in the passkey picker.
-   * Defaults to userName. Only used during registration; changing it does
-   * not affect existing credentials.
+   * Maps to the WebAuthn `user.displayName`. The user-friendly label
+   * the OS / browser MAY (but is not required to) show in the
+   * picker; behavior varies by platform. Defaults to `userName`. Only
+   * used at registration; changing it does not affect existing
+   * credentials.
    */
   userDisplayName?: string;
 
@@ -351,20 +358,22 @@ export class PasskeyProvider {
    * derivation into one prompt.
    *
    * Accepts the SDK's `DeriveSeedsRequest` shape. Per-call
-   * `allowCredentialIds` overrides the constructor default when
-   * non-empty; `preferImmediatelyAvailableCredentials` overrides the
-   * platform default when non-null.
+   * `allowCredentials` (a list of credential IDs the assertion is
+   * restricted to, primary use case: reauthentication) overrides the
+   * constructor default when non-empty;
+   * `preferImmediatelyAvailableCredentials` overrides the platform
+   * default when non-null.
    */
   async deriveSeeds(request: {
     salts: string[];
-    allowCredentialIds?: Uint8Array[];
+    allowCredentials?: Uint8Array[];
     preferImmediatelyAvailableCredentials?: boolean | null;
   }): Promise<Uint8Array[]> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('deriveSeeds');
     }
 
-    let effectiveAllow = request.allowCredentialIds ?? [];
+    let effectiveAllow = request.allowCredentials ?? [];
     // Auto-merge registry IDs into the allow-list. JS-side dance:
     // the native module never sees the registry.
     if (this.credentialRegistry) {
@@ -442,23 +451,25 @@ export class PasskeyProvider {
    * exactly 1 platform prompt. Use this to separate credential
    * creation from derivation in multi-step onboarding flows.
    *
-   * `excludeCredentialIds` is the only per-call knob: branding
-   * fields (`userName`, `userDisplayName`) live on the constructor.
-   * `user.id` is never host-supplied: the native plugin mints a fresh
-   * random 16-byte handle per call and returns it via the result's
-   * `userId` field.
+   * `excludeCredentials` is a list of already-registered credential
+   * IDs. Prevents registering the same device twice: when any entry
+   * matches a credential already on the device, the platform raises
+   * `CredentialAlreadyExists`. Branding fields (`userName`,
+   * `userDisplayName`) live on the constructor. `user.id` is never
+   * host-supplied: the native plugin mints a fresh random 16-byte
+   * handle per call and returns it via the result's `userId` field.
    *
    * @returns Credential ID, the generated user handle, plus AAGUID and
    *   backup-eligibility parsed from the attestation object. AAGUID and
    *   `backupEligible` are null when the attestation can't be parsed.
    * @throws If the user cancels or PRF is not supported by the authenticator.
    */
-  async createPasskey(excludeCredentialIds: Uint8Array[] = []): Promise<RegisteredCredential> {
+  async createPasskey(excludeCredentials: Uint8Array[] = []): Promise<RegisteredCredential> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('createPasskey');
     }
 
-    let excludeIds = excludeCredentialIds;
+    let excludeIds = excludeCredentials;
     // Merge registry IDs into the exclude list before the native call.
     if (this.credentialRegistry) {
       const registryIds = await _registryReadBestEffort(

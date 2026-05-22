@@ -142,7 +142,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
         // Dart side before the MethodChannel call. The native plugin
         // never reads or writes credential IDs itself.
         val allowIds: List<ByteArray> =
-            (call.argument<List<String>>("allowCredentialIds") ?: emptyList()).map {
+            (call.argument<List<String>>("allowCredentials") ?: emptyList()).map {
                 Base64.decode(it, Base64.NO_WRAP)
             }
         val preferImmediate = call.argument<Boolean>("preferImmediatelyAvailableCredentials")
@@ -159,7 +159,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                     userDisplayName = userDisplayName,
                     autoRegister = autoRegister,
                     options = DeriveSeedsOptions(
-                        allowCredentialIds = allowIds,
+                        allowCredentials = allowIds,
                         preferImmediatelyAvailableCredentials = preferImmediate,
                     ),
                 )
@@ -231,7 +231,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
         }
 
         val excludeIds: List<ByteArray> =
-            (call.argument<List<String>>("excludeCredentialIds") ?: emptyList()).map {
+            (call.argument<List<String>>("excludeCredentials") ?: emptyList()).map {
                 Base64.decode(it, Base64.NO_WRAP)
             }
 
@@ -243,7 +243,7 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
-                    excludeCredentialIds = excludeIds,
+                    excludeCredentials = excludeIds,
                 )
                 // Hold the next derive call for up to 800ms so the
                 // immediate post-register assertion doesn't race the

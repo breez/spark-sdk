@@ -40,7 +40,7 @@ Total: **1** OS prompt. The reverse order (`labels().store` before `sign_in`) co
 
 Store the credential ID locally (for example in `localStorage`, `SharedPreferences`, or `UserDefaults`) so you can:
 
-1. **Prevent duplicate credentials.** On subsequent calls to `createPasskey()`, pass the stored IDs via the `excludeCredentialIds` parameter. When the authenticator already holds one of these credentials, the platform will reject the registration with a "credential already registered" error instead of silently creating a duplicate.
+1. **Prevent duplicate credentials.** On subsequent calls to `createPasskey()`, pass the stored IDs via the `excludeCredentials` parameter. When the authenticator already holds one of these credentials, the platform will reject the registration with a "credential already registered" error instead of silently creating a duplicate.
 2. **Correlate credentials server-side.** Persist `userId` alongside any server record you keep for the credential. The SDK never sends this value anywhere; hosts that maintain a backend account model use it to match a WebAuthn assertion's user handle back to their record.
 3. **Track which credentials belong to this app instance.** The credential ID is an opaque byte array assigned by the authenticator. It is not sensitive, but it is only useful on the device where the credential was created.
 4. **Display provider name + sync state in account-management UI.** AAGUID identifies the credential provider (iCloud Keychain, Google Password Manager, 1Password, hardware key, etc.) when looked up against a known-AAGUID database such as [passkeydeveloper/passkey-authenticator-aaguids](https://github.com/passkeydeveloper/passkey-authenticator-aaguids). `backupEligible` indicates whether the credential will sync to the user's other devices. Both AAGUID and BE are unverified attestation: use as display hints only, never for trust decisions.
@@ -57,7 +57,7 @@ const existingId = localStorage.getItem('passkeyCredentialId');
 const exclude = existingId
   ? [Uint8Array.from(atob(existingId), c => c.charCodeAt(0))]
   : [];
-const newCredential = await prfProvider.createPasskey({ excludeCredentialIds: exclude });
+const newCredential = await prfProvider.createPasskey({ excludeCredentials: exclude });
 ```
 
 ### Recovery paths

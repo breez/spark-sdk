@@ -11,13 +11,16 @@ pub struct DeriveSeedsRequest {
     /// returned per salt, in the same order.
     pub salts: Vec<String>,
 
-    /// Assertion allow-list. When non-empty, the platform refuses any
-    /// credential whose ID is not in this list (canonical use case:
-    /// server-driven auth where `/passkey/options` returns the user's
-    /// known credentials). Empty falls through to the provider's
-    /// configured default.
+    /// A list of credential IDs the assertion is restricted to. The
+    /// primary use case is reauthentication when the user is already
+    /// known: if any of the listed credentials is available locally,
+    /// the OS prompts for device unlock straight away (no account
+    /// picker); otherwise the user is asked to present another
+    /// device (paired phone or security key) that holds a valid
+    /// credential. Empty falls through to the provider's configured
+    /// default.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub allow_credential_ids: Vec<Vec<u8>>,
+    pub allow_credentials: Vec<Vec<u8>>,
 
     /// Restrict the assertion to credentials already present on this
     /// device. When `true`, the OS skips the cross-device picker (iOS
@@ -72,7 +75,7 @@ pub trait PrfProvider: Send + Sync {
     /// count); custom providers without bulk capability should loop
     /// internally.
     ///
-    /// `request.allow_credential_ids` and
+    /// `request.allow_credentials` and
     /// `request.prefer_immediately_available_credentials` shape the
     /// platform ceremony for this single call. Custom providers that
     /// don't model those concepts (file-backed, `YubiKey` HMAC, etc.)
@@ -88,21 +91,22 @@ pub trait PrfProvider: Send + Sync {
 
     /// Explicit registration. Platform passkey providers override this
     /// to drive the OS create ceremony and surface credential metadata
-    /// hosts need for `exclude_credential_ids` bookkeeping. CLI /
+    /// hosts need for `exclude_credentials` bookkeeping. CLI /
     /// hardware providers register lazily inside [`Self::derive_seeds`]
     /// and inherit the default `PrfNotSupported`.
     ///
-    /// `exclude_credential_ids` is the only per-call knob: when any
-    /// entry matches a credential already on the device, the platform
-    /// raises `CredentialAlreadyExists`. Branding fields (`user_name`,
-    /// `user_display_name`) live on the platform `PasskeyProvider`
-    /// constructor. The `user.id` is always provider-minted and
-    /// surfaced on `RegisteredCredential.user_id`.
+    /// `exclude_credentials` is a list of already-registered
+    /// credential IDs: it prevents registering the same device twice
+    /// by surfacing duplicates as `CredentialAlreadyExists`.
+    /// Branding fields (`user_name`, `user_display_name`) live on
+    /// the platform `PasskeyProvider` constructor. The `user.id` is
+    /// always provider-minted and surfaced on
+    /// `RegisteredCredential.user_id`.
     async fn create_passkey(
         &self,
-        exclude_credential_ids: Vec<Vec<u8>>,
+        exclude_credentials: Vec<Vec<u8>>,
     ) -> Result<RegisteredCredential, PrfProviderError> {
-        let _ = exclude_credential_ids;
+        let _ = exclude_credentials;
         Err(PrfProviderError::PrfNotSupported)
     }
 

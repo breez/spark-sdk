@@ -1325,7 +1325,7 @@ pub struct _RegisteredCredential {
 #[frb(mirror(RegisterRequest))]
 pub struct _RegisterRequest {
     pub label: Option<String>,
-    pub exclude_credential_ids: Vec<Vec<u8>>,
+    pub exclude_credentials: Vec<Vec<u8>>,
 }
 
 #[frb(mirror(RegisterResponse))]
@@ -1337,14 +1337,14 @@ pub struct _RegisterResponse {
 #[frb(mirror(SignInRequest))]
 pub struct _SignInRequest {
     pub label: Option<String>,
-    pub allow_credential_ids: Vec<Vec<u8>>,
+    pub allow_credentials: Vec<Vec<u8>>,
     pub prefer_immediately_available_credentials: Option<bool>,
 }
 
 #[frb(mirror(DeriveSeedsRequest))]
 pub struct _DeriveSeedsRequest {
     pub salts: Vec<String>,
-    pub allow_credential_ids: Vec<Vec<u8>>,
+    pub allow_credentials: Vec<Vec<u8>>,
     pub prefer_immediately_available_credentials: Option<bool>,
 }
 
@@ -1358,7 +1358,7 @@ pub struct _SignInResponse {
 #[frb(mirror(ConnectWithPasskeyRequest))]
 pub struct _ConnectWithPasskeyRequest {
     pub label: Option<String>,
-    pub exclude_credential_ids: Vec<Vec<u8>>,
+    pub exclude_credentials: Vec<Vec<u8>>,
 }
 
 #[frb(mirror(ConnectWithPasskeyResponse))]

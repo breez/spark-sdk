@@ -13,7 +13,7 @@ Future<List<Uint8List>> deriveSeeds(DeriveSeedsRequest request) async {
   throw UnimplementedError('Implement using platform passkey APIs');
 }
 
-Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentialIds) async {
+Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentials) async {
   // Register a new credential and return its ID, the WebAuthn user.id
   // the native plugin minted for it (returned for host-side
   // correlation, never host-supplied), AAGUID, and BE flag.
@@ -77,7 +77,7 @@ Future<BreezSdk> connectWithPasskey() async {
   final passkey = PasskeyClient(prfProvider, breezApiKey: config.apiKey);
 
   final response = await passkey.connectWithPasskey(
-    request: ConnectWithPasskeyRequest(label: 'personal', excludeCredentialIds: const []),
+    request: ConnectWithPasskeyRequest(label: 'personal', excludeCredentials: const []),
   );
 
   // `registeredCredential` is the path discriminator (null on sign-in).
@@ -121,7 +121,7 @@ Future<BreezSdk> registerNewPasskey() async {
     request: RegisterRequest(label: 'personal'),
   );
 
-  // Persist credentialId for future excludeCredentialIds.
+  // Persist credentialId for future excludeCredentials.
   final _persistedCredentialId = response.credential.credentialId;
   final _persistedUserId = response.credential.userId;
 
@@ -188,7 +188,7 @@ Future<Wallet?> recoverFromAlreadyExists() async {
     final response = await passkey.register(
       request: RegisterRequest(
         label: 'personal',
-        excludeCredentialIds: [
+        excludeCredentials: [
           // app-persisted credential IDs from prior registrations
         ],
       ),

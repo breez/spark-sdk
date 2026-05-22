@@ -180,16 +180,20 @@ public enum PasskeyAssertionError: Error {
 
 /// Per-call shaping options for `performBulkDerivation`. Lets the
 /// upstream callers (UniFFI Swift `PasskeyProvider`, Flutter plugin,
-/// React Native module) override the `allowCredentialIds` and the
+/// React Native module) override the `allowCredentials` and the
 /// `preferImmediatelyAvailableCredentials` behavior on a per-ceremony
 /// basis without reconstructing the core.
 @available(iOS 18.0, macOS 15.0, *)
 public struct DeriveSeedsOptions {
-    /// Per-call assertion allow-list. When non-empty, this list
-    /// overrides any caller-supplied default for the duration of the
-    /// ceremony. Empty defers to the legacy positional
-    /// `explicitAllowCredentialIds` parameter (for back-compat).
-    public let allowCredentialIds: [Data]
+    /// A list of credential IDs the assertion is restricted to. The
+    /// primary use case is reauthentication when the user is already
+    /// known: if any of the listed credentials is available locally,
+    /// the OS prompts for device unlock straight away (no account
+    /// picker); otherwise the user is asked to present another
+    /// device (paired phone or security key) that holds a valid
+    /// credential. Empty defers to the legacy positional
+    /// `explicitAllowCredentials` parameter (for back-compat).
+    public let allowCredentials: [Data]
     /// Per-call control over the OS picker. `nil` keeps the historical
     /// default (`.preferImmediatelyAvailableCredentials` on iOS 16+).
     /// `true` is identical to `nil`; `false` opts back into the
@@ -205,12 +209,12 @@ public struct DeriveSeedsOptions {
     public let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
 
     public init(
-        allowCredentialIds: [Data] = [],
+        allowCredentials: [Data] = [],
         preferImmediatelyAvailableCredentials: Bool? = nil,
         credentialRegistry: CredentialRegistry? = nil,
         onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) {
-        self.allowCredentialIds = allowCredentialIds
+        self.allowCredentials = allowCredentials
         self.preferImmediatelyAvailableCredentials = preferImmediatelyAvailableCredentials
         self.credentialRegistry = credentialRegistry
         self.onRegistryError = onRegistryError
@@ -221,7 +225,7 @@ public struct DeriveSeedsOptions {
 
 /// Per-call shaping options for `createPasskey`. Exposes the same
 /// optional registry plumbing as `DeriveSeedsOptions` so registration
-/// can auto-merge stored IDs into `excludeCredentialIds` and capture
+/// can auto-merge stored IDs into `excludeCredentials` and capture
 /// the new credential ID afterwards.
 @available(iOS 18.0, macOS 15.0, *)
 public struct CreatePasskeyOptions {
@@ -482,7 +486,7 @@ public final class PasskeyAssertionCore {
         userName: String,
         userDisplayName: String,
         autoRegister: Bool,
-        explicitAllowCredentialIds: [Data] = [],
+        explicitAllowCredentials: [Data] = [],
         preferImmediatelyAvailableCredentials: Bool? = nil,
         credentialRegistry: CredentialRegistry? = nil,
         onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
@@ -492,7 +496,7 @@ public final class PasskeyAssertionCore {
             return try await assertionWithPrf(
                 saltData: saltData,
                 rpId: rpId,
-                explicitAllowCredentialIds: explicitAllowCredentialIds,
+                explicitAllowCredentials: explicitAllowCredentials,
                 preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials,
                 credentialRegistry: credentialRegistry,
                 onRegistryError: onRegistryError
@@ -500,7 +504,7 @@ public final class PasskeyAssertionCore {
         } catch PasskeyAssertionError.credentialNotFound(_) {
             guard autoRegister else {
                 throw augmentCredentialNotFound(
-                    explicitAllowCredentialIds: explicitAllowCredentialIds,
+                    explicitAllowCredentials: explicitAllowCredentials,
                     credentialRegistry: credentialRegistry
                 )
             }
@@ -523,7 +527,7 @@ public final class PasskeyAssertionCore {
             return try await assertionWithPrf(
                 saltData: saltData,
                 rpId: rpId,
-                explicitAllowCredentialIds: explicitAllowCredentialIds,
+                explicitAllowCredentials: explicitAllowCredentials,
                 preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials,
                 credentialRegistry: credentialRegistry,
                 onRegistryError: onRegistryError
@@ -543,17 +547,17 @@ public final class PasskeyAssertionCore {
         userName: String,
         userDisplayName: String,
         autoRegister: Bool,
-        explicitAllowCredentialIds: [Data] = [],
+        explicitAllowCredentials: [Data] = [],
         options: DeriveSeedsOptions = DeriveSeedsOptions()
     ) async throws -> [Data] {
         // Per-call options win over the legacy positional
-        // `explicitAllowCredentialIds` when non-empty. The positional
+        // `explicitAllowCredentials` when non-empty. The positional
         // parameter remains for back-compat with older call sites
-        // (Swift PasskeyProvider's per-instance `allowCredentialIds`,
+        // (Swift PasskeyProvider's per-instance `allowCredentials`,
         // FFI bridges that haven't been ported yet).
-        var allowIds = options.allowCredentialIds.isEmpty
-            ? explicitAllowCredentialIds
-            : options.allowCredentialIds
+        var allowIds = options.allowCredentials.isEmpty
+            ? explicitAllowCredentials
+            : options.allowCredentials
         let preferImmediate = options.preferImmediatelyAvailableCredentials
         let registry = options.credentialRegistry
         let onRegistryError = options.onRegistryError
@@ -587,7 +591,7 @@ public final class PasskeyAssertionCore {
                 userName: userName,
                 userDisplayName: userDisplayName,
                 autoRegister: autoRegister,
-                explicitAllowCredentialIds: allowIds,
+                explicitAllowCredentials: allowIds,
                 preferImmediatelyAvailableCredentials: preferImmediate,
                 credentialRegistry: registry,
                 onRegistryError: onRegistryError
@@ -603,7 +607,7 @@ public final class PasskeyAssertionCore {
                     salt1: salt1,
                     salt2: salt2,
                     rpId: rpId,
-                    explicitAllowCredentialIds: allowIds,
+                    explicitAllowCredentials: allowIds,
                     preferImmediatelyAvailableCredentials: preferImmediate,
                     credentialRegistry: registry,
                     onRegistryError: onRegistryError
@@ -618,7 +622,7 @@ public final class PasskeyAssertionCore {
                     let recovered = try await assertionWithPrf(
                         saltData: salt2,
                         rpId: rpId,
-                        explicitAllowCredentialIds: allowIds,
+                        explicitAllowCredentials: allowIds,
                         preferImmediatelyAvailableCredentials: preferImmediate,
                         credentialRegistry: registry,
                         onRegistryError: onRegistryError
@@ -633,7 +637,7 @@ public final class PasskeyAssertionCore {
                 // back to register; the bulk path defers to single-salt.
                 guard autoRegister else {
                     throw augmentCredentialNotFound(
-                        explicitAllowCredentialIds: allowIds,
+                        explicitAllowCredentials: allowIds,
                         credentialRegistry: registry
                     )
                 }
@@ -654,7 +658,7 @@ public final class PasskeyAssertionCore {
 
     /// Create a new passkey with PRF support. When the caller supplies
     /// a `CredentialRegistry`, registered IDs are auto-merged into the
-    /// `excludeCredentialIds` (so the platform refuses to create a
+    /// `excludeCredentials` (so the platform refuses to create a
     /// duplicate even after a reinstall) and the new credential ID is
     /// auto-added to the registry on success. Arms the post-create
     /// grace tracker either way.
@@ -668,7 +672,7 @@ public final class PasskeyAssertionCore {
         rpName: String,
         userName: String,
         userDisplayName: String,
-        excludeCredentialIds: [Data] = [],
+        excludeCredentials: [Data] = [],
         options: CreatePasskeyOptions = CreatePasskeyOptions()
     ) async throws -> IosRegisteredCredential {
         let credential = try await registerCredential(
@@ -676,7 +680,7 @@ public final class PasskeyAssertionCore {
             rpName: rpName,
             userName: userName,
             userDisplayName: userDisplayName,
-            excludeCredentialIds: excludeCredentialIds,
+            excludeCredentials: excludeCredentials,
             credentialRegistry: options.credentialRegistry,
             onRegistryError: options.onRegistryError
         )
@@ -777,14 +781,14 @@ public final class PasskeyAssertionCore {
     /// and the caller-supplied PRF setup. Shared by single- and dual-salt.
     private func makeAssertionRequest(
         rpId: String,
-        explicitAllowCredentialIds: [Data],
+        explicitAllowCredentials: [Data],
         configurePrf: (ASAuthorizationPlatformPublicKeyCredentialAssertionRequest) -> Void
     ) -> ASAuthorizationPlatformPublicKeyCredentialAssertionRequest {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let request = provider.createCredentialAssertionRequest(challenge: Self.randomBytes(count: 32))
         applyAllowedCredentials(
             to: request,
-            explicitAllowCredentialIds: explicitAllowCredentialIds
+            explicitAllowCredentials: explicitAllowCredentials
         )
         configurePrf(request)
         return request
@@ -795,10 +799,10 @@ public final class PasskeyAssertionCore {
     /// to a single matching credential. Empty means fully discoverable.
     private func applyAllowedCredentials(
         to request: ASAuthorizationPlatformPublicKeyCredentialAssertionRequest,
-        explicitAllowCredentialIds: [Data]
+        explicitAllowCredentials: [Data]
     ) {
-        if !explicitAllowCredentialIds.isEmpty {
-            request.allowedCredentials = explicitAllowCredentialIds.map {
+        if !explicitAllowCredentials.isEmpty {
+            request.allowedCredentials = explicitAllowCredentials.map {
                 ASAuthorizationPlatformPublicKeyCredentialDescriptor(credentialID: $0)
             }
         }
@@ -807,14 +811,14 @@ public final class PasskeyAssertionCore {
     private func assertionWithPrf(
         saltData: Data,
         rpId: String,
-        explicitAllowCredentialIds: [Data],
+        explicitAllowCredentials: [Data],
         preferImmediatelyAvailableCredentials: Bool? = nil,
         credentialRegistry: CredentialRegistry? = nil,
         onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) async throws -> Data {
         let request = makeAssertionRequest(
             rpId: rpId,
-            explicitAllowCredentialIds: explicitAllowCredentialIds
+            explicitAllowCredentials: explicitAllowCredentials
         ) { req in
             // PRF types are NS_REFINED_FOR_SWIFT with no accessible Swift
             // initializers; the ObjC helper sets them via runtime KVC.
@@ -850,14 +854,14 @@ public final class PasskeyAssertionCore {
         salt1: Data,
         salt2: Data?,
         rpId: String,
-        explicitAllowCredentialIds: [Data],
+        explicitAllowCredentials: [Data],
         preferImmediatelyAvailableCredentials: Bool? = nil,
         credentialRegistry: CredentialRegistry? = nil,
         onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) async throws -> (Data, Data?) {
         let request = makeAssertionRequest(
             rpId: rpId,
-            explicitAllowCredentialIds: explicitAllowCredentialIds
+            explicitAllowCredentials: explicitAllowCredentials
         ) { req in
             PasskeyPRFHelper.setAssertionPRFOn(req, withSalt1: salt1, salt2: salt2)
         }
@@ -939,7 +943,7 @@ public final class PasskeyAssertionCore {
         rpName: String,
         userName: String,
         userDisplayName: String,
-        excludeCredentialIds: [Data] = [],
+        excludeCredentials: [Data] = [],
         credentialRegistry: CredentialRegistry? = nil,
         onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil
     ) async throws -> IosRegisteredCredential {
@@ -963,8 +967,8 @@ public final class PasskeyAssertionCore {
         // Auto-merge previously-registered credential IDs from the
         // opt-in registry so the platform refuses to create a duplicate
         // even after a reinstall (when the registry survives).
-        var allExclusions = excludeCredentialIds
-        var seen = Set(excludeCredentialIds)
+        var allExclusions = excludeCredentials
+        var seen = Set(excludeCredentials)
         if let reg = credentialRegistry {
             let known = await registryReadBestEffort(
                 registry: reg, rpId: rpId, onRegistryError: onRegistryError
@@ -1035,10 +1039,10 @@ public final class PasskeyAssertionCore {
     /// the host had no allow-list and no registry, so the SDK had no
     /// way to populate `allowCredentials` itself.
     public static func shouldAugmentCredentialNotFound(
-        explicitAllowCredentialIds: [Data],
+        explicitAllowCredentials: [Data],
         credentialRegistry: CredentialRegistry?
     ) -> Bool {
-        explicitAllowCredentialIds.isEmpty && credentialRegistry == nil
+        explicitAllowCredentials.isEmpty && credentialRegistry == nil
     }
 }
 
@@ -1051,19 +1055,19 @@ public final class PasskeyAssertionCore {
 /// per-binding string manipulation.
 @available(iOS 18.0, macOS 15.0, *)
 fileprivate func augmentCredentialNotFound(
-    explicitAllowCredentialIds: [Data],
+    explicitAllowCredentials: [Data],
     credentialRegistry: CredentialRegistry?
 ) -> PasskeyAssertionError {
     let base = "No matching credential on this device"
     let augment = PasskeyAssertionCore.shouldAugmentCredentialNotFound(
-        explicitAllowCredentialIds: explicitAllowCredentialIds,
+        explicitAllowCredentials: explicitAllowCredentials,
         credentialRegistry: credentialRegistry
     )
     return .credentialNotFound(augment ? base + credentialRegistryHelpSuffix : base)
 }
 
 /// Suffix appended to `CredentialNotFound` errors when the host had no
-/// `allowCredentialIds` and no `CredentialRegistry`, pointing at the
+/// `allowCredentials` and no `CredentialRegistry`, pointing at the
 /// docs section that explains the opt-in auto-discovery path.
 @available(iOS 18.0, macOS 15.0, *)
 public let credentialRegistryHelpSuffix: String =

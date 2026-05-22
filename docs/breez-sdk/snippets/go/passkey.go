@@ -28,7 +28,7 @@ func (p *CustomPrfProvider) IsSupported() (bool, error) {
 	panic("Check platform passkey availability")
 }
 
-func (p *CustomPrfProvider) CreatePasskey(excludeCredentialIds [][]byte) (breez_sdk_spark.RegisteredCredential, error) {
+func (p *CustomPrfProvider) CreatePasskey(excludeCredentials [][]byte) (breez_sdk_spark.RegisteredCredential, error) {
 	// Register a new credential and return its ID, the WebAuthn user.id
 	// the platform recorded (returned for host-side correlation, never
 	// host-supplied), AAGUID, and BE flag.

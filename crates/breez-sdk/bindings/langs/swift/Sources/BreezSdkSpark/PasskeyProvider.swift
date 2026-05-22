@@ -84,18 +84,29 @@ public class PasskeyProvider: PrfProvider {
     ///     `keys.breez.technology` RP (only valid for Breez-registered apps).
     ///     Changing this after users have registered passkeys will make
     ///     their existing credentials undiscoverable.
-    ///   - rpName: **Required.** Display name shown to the user in the OS
-    ///     passkey picker and credential-management UIs (iCloud Keychain,
-    ///     Google Password Manager, 1Password, etc.) when choosing a
-    ///     credential. Only used at credential registration; changing it
-    ///     does not affect existing credentials.
-    ///   - userName: User name stored with the credential. Defaults to
-    ///     rpName. Only used during registration.
-    ///   - userDisplayName: User display name shown in the passkey
-    ///     picker. Defaults to userName. Only used during registration.
+    ///   - rpName: **Required.** Maps to the WebAuthn `rp.name`.
+    ///     Deprecated in WebAuthn L3 but still required by current
+    ///     iOS / macOS prompts. Surfaces in some credential-management
+    ///     UIs (iCloud Keychain, Google Password Manager, 1Password);
+    ///     platform UIs increasingly ignore it. Only used at
+    ///     credential registration; changing it does not affect
+    ///     existing credentials.
+    ///   - userName: Maps to the WebAuthn `user.name`. Treated as the
+    ///     user's unique identifier for the credential and shown in
+    ///     Apple's account picker during sign-in. Pass a stable
+    ///     per-user value if each registration should surface as a
+    ///     distinct entry (iCloud Keychain dedupes by
+    ///     `(rpId, user.name)`). Defaults to `rpName`. Only used at
+    ///     registration; changing it does not affect existing
+    ///     credentials.
+    ///   - userDisplayName: Maps to the WebAuthn `user.displayName`.
+    ///     The user-friendly label the OS MAY (but is not required to)
+    ///     show in the picker. Defaults to `userName`. Only used at
+    ///     registration; changing it does not affect existing
+    ///     credentials.
     ///   - credentialRegistry: Opt-in app-side store of known
     ///     credential IDs. When supplied, the SDK auto-merges stored
-    ///     IDs into `allowCredentialIds` / `excludeCredentialIds` and
+    ///     IDs into `allowCredentials` / `excludeCredentials` and
     ///     writes new IDs back after success.
     ///   - onRegistryError: Best-effort callback for registry failures;
     ///     never blocks the WebAuthn ceremony.
@@ -144,9 +155,9 @@ public class PasskeyProvider: PrfProvider {
         guard saltDatas.count == request.salts.count else {
             throw PrfProviderError.Generic("Failed to encode salts as UTF-8")
         }
-        let perCallAllow = request.allowCredentialIds.map { Data($0) }
+        let perCallAllow = request.allowCredentials.map { Data($0) }
         let options = DeriveSeedsOptions(
-            allowCredentialIds: perCallAllow,
+            allowCredentials: perCallAllow,
             preferImmediatelyAvailableCredentials: request.preferImmediatelyAvailableCredentials,
             credentialRegistry: credentialRegistry,
             onRegistryError: onRegistryError
@@ -176,19 +187,19 @@ public class PasskeyProvider: PrfProvider {
     /// `userDisplayName`) live on this provider's constructor.
     ///
     /// Auto-merges previously-registered credential IDs from the
-    /// optional `CredentialRegistry` into `excludeCredentialIds` so the
+    /// optional `CredentialRegistry` into `excludeCredentials` so the
     /// platform refuses to create a duplicate even after a reinstall
     /// (the registry is iCloud-synced when host-backed). Records the
     /// new credential ID after a successful create.
     @discardableResult
-    public func createPasskey(excludeCredentialIds: [Data]) async throws -> RegisteredCredential {
+    public func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
         do {
             let credential = try await core.createPasskey(
                 rpId: rpId,
                 rpName: rpName,
                 userName: userName,
                 userDisplayName: userDisplayName,
-                excludeCredentialIds: excludeCredentialIds,
+                excludeCredentials: excludeCredentials,
                 options: CreatePasskeyOptions(
                     credentialRegistry: credentialRegistry,
                     onRegistryError: onRegistryError

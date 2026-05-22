@@ -44,12 +44,14 @@ pub struct RegisterRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// Forwarded to [`PrfProvider::create_passkey`]; routes "this
-    /// device already has a credential" to
+    /// A list of already-registered credential IDs. Prevents
+    /// registering the same device twice: when any entry matches a
+    /// credential already on the device, the platform raises
     /// [`crate::passkey::PrfProviderError::CredentialAlreadyExists`]
-    /// so the host can flip to the sign-in path.
+    /// so the host can flip the user to the sign-in path. Forwarded
+    /// to [`PrfProvider::create_passkey`].
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub exclude_credential_ids: Vec<Vec<u8>>,
+    pub exclude_credentials: Vec<Vec<u8>>,
 }
 
 /// Response from [`PasskeyClient::register`].
@@ -60,7 +62,7 @@ pub struct RegisterResponse {
     pub wallet: Wallet,
     /// Metadata for the credential the platform just registered. Hosts
     /// SHOULD persist [`RegisteredCredential::credential_id`] so they
-    /// can populate `exclude_credential_ids` on future
+    /// can populate `exclude_credentials` on future
     /// [`PasskeyClient::register`] calls.
     pub credential: RegisteredCredential,
 }
@@ -76,10 +78,17 @@ pub struct SignInRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// Forwarded to
-    /// [`crate::passkey::DeriveSeedsRequest::allow_credential_ids`].
+    /// A list of credential IDs the assertion is restricted to. The
+    /// primary use case is reauthentication when the user is already
+    /// known: if any of the listed credentials is available locally,
+    /// the OS prompts for device unlock straight away (no account
+    /// picker); otherwise the user is asked to present another
+    /// device (paired phone or security key) that holds a valid
+    /// credential. Empty / omitted lets the OS pick any matching
+    /// credential for this RP. Forwarded to
+    /// [`crate::passkey::DeriveSeedsRequest::allow_credentials`].
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub allow_credential_ids: Vec<Vec<u8>>,
+    pub allow_credentials: Vec<Vec<u8>>,
 
     /// Forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::prefer_immediately_available_credentials`].
@@ -112,10 +121,19 @@ pub struct ConnectWithPasskeyRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// Forwarded to [`RegisterRequest::exclude_credential_ids`] on the
-    /// fallback registration path. Ignored on the sign-in path.
+    /// A list of credential IDs to restrict the silent sign-in
+    /// attempt to (reauthentication path). See
+    /// [`SignInRequest::allow_credentials`]. Ignored on the fallback
+    /// registration path.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub exclude_credential_ids: Vec<Vec<u8>>,
+    pub allow_credentials: Vec<Vec<u8>>,
+
+    /// A list of already-registered credential IDs to surface
+    /// duplicates on the fallback registration path. See
+    /// [`RegisterRequest::exclude_credentials`]. Ignored on the
+    /// silent sign-in attempt.
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub exclude_credentials: Vec<Vec<u8>>,
 }
 
 /// Response from [`PasskeyClient::connect_with_passkey`].
@@ -123,7 +141,7 @@ pub struct ConnectWithPasskeyRequest {
 /// `registered_credential` doubles as the path discriminator:
 /// - `Some(credential)`: a new credential was registered (silent
 ///   sign-in fast-failed with `CredentialNotFound`). Persist
-///   `credential.credential_id` in your `excludeCredentialIds` set.
+///   `credential.credential_id` in your `excludeCredentials` set.
 /// - `None`: silent sign-in succeeded for an existing credential.
 ///   Hosts that need the asserted credential ID per sign-in (e.g.
 ///   to mark "recently used" in a `CredentialRegistry`) should use
@@ -191,7 +209,7 @@ impl PasskeyClient {
         let credential = self
             .passkey
             .prf_provider()
-            .create_passkey(request.exclude_credential_ids)
+            .create_passkey(request.exclude_credentials)
             .await?;
 
         let setup = self
@@ -201,7 +219,7 @@ impl PasskeyClient {
                 publish_label: true,
                 // Registration always derives via the just-created
                 // credential; callers don't drive sign-in pinning here.
-                allow_credential_ids: Vec::new(),
+                allow_credentials: Vec::new(),
                 prefer_immediately_available_credentials: None,
             })
             .await?;
@@ -224,7 +242,7 @@ impl PasskeyClient {
             .setup_wallet(SetupWalletRequest {
                 label: request.label,
                 publish_label: false,
-                allow_credential_ids: request.allow_credential_ids,
+                allow_credentials: request.allow_credentials,
                 prefer_immediately_available_credentials: request
                     .prefer_immediately_available_credentials,
             })
@@ -280,7 +298,7 @@ impl PasskeyClient {
         let sign_in_result = self
             .sign_in(SignInRequest {
                 label: request.label.clone(),
-                allow_credential_ids: Vec::new(),
+                allow_credentials: request.allow_credentials,
                 prefer_immediately_available_credentials: Some(true),
             })
             .await;
@@ -294,7 +312,7 @@ impl PasskeyClient {
                 let register_response = self
                     .register(RegisterRequest {
                         label: request.label,
-                        exclude_credential_ids: request.exclude_credential_ids,
+                        exclude_credentials: request.exclude_credentials,
                     })
                     .await?;
                 Ok(ConnectWithPasskeyResponse {
@@ -477,7 +495,7 @@ mod tests {
 
         async fn create_passkey(
             &self,
-            _exclude_credential_ids: Vec<Vec<u8>>,
+            _exclude_credentials: Vec<Vec<u8>>,
         ) -> Result<RegisteredCredential, PrfProviderError> {
             if self.fail_create {
                 return Err(PrfProviderError::PrfNotSupported);

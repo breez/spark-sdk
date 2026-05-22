@@ -24,7 +24,7 @@ class CustomPrfProvider {
   }
 
   createPasskey = async (
-    _excludeCredentialIds: Uint8Array[]
+    _excludeCredentials: Uint8Array[]
   ): Promise<RegisteredCredential> => {
     // Register a new credential and return its ID, the WebAuthn
     // user.id the provider minted for it (returned for host-side
@@ -114,7 +114,7 @@ const registerNewPasskey = async () => {
 
   const response = await passkey.register({ label: 'personal' })
 
-  // Hosts SHOULD persist credential.credentialId (for excludeCredentialIds
+  // Hosts SHOULD persist credential.credentialId (for excludeCredentials
   // bookkeeping) and credential.userId (for server-side correlation).
   // The SDK generates userId; it is never host-supplied.
   const _persist = {
@@ -178,7 +178,7 @@ const checkDomain = async () => {
 const recoverFromAlreadyExists = async () => {
   // ANCHOR: recover-already-exists
   // The OS rejected register because the user's password manager
-  // already holds a credential matching `excludeCredentialIds`.
+  // already holds a credential matching `excludeCredentials`.
   // Route the user to the sign-in path: the OS picker will surface
   // the existing credential and the SDK's identity cache will warm
   // up on the assertion.
@@ -188,7 +188,7 @@ const recoverFromAlreadyExists = async () => {
   try {
     await passkey.register({
       label: 'personal',
-      excludeCredentialIds: [
+      excludeCredentials: [
         // app-persisted credential IDs from prior registrations
       ],
     })

@@ -34,17 +34,27 @@ import technology.breez.spark.passkey.core.RegistryOperation
  *   changes.
  * @param rpId Relying Party ID. Must match the domain configured for
  *   cross-platform credential sharing.
- * @param rpName Display name shown to the user in the OS passkey
- *   picker and credential-management UIs (iCloud Keychain, Google
- *   Password Manager, 1Password, etc.) when choosing a credential.
- *   Only used at credential registration; changing it does not affect
- *   existing credentials.
- * @param userName User name stored with the credential. Defaults to [rpName].
- * @param userDisplayName User display name shown in the passkey picker.
- *   Defaults to [userName] (or [rpName] if [userName] is null).
+ * @param rpName Maps to the WebAuthn `rp.name`. Deprecated in
+ *   WebAuthn L3 but still required by current Credential Manager
+ *   prompts. Surfaces in some credential-management UIs (Google
+ *   Password Manager, 1Password); platform UIs increasingly ignore
+ *   it. Only used at credential registration; changing it does not
+ *   affect existing credentials.
+ * @param userName Maps to the WebAuthn `user.name`. Treated as the
+ *   user's unique identifier for the credential and shown in the
+ *   account picker during sign-in. Pass a stable per-user value if
+ *   each registration should surface as a distinct entry. Defaults
+ *   to [rpName]. Only used at registration; changing it does not
+ *   affect existing credentials.
+ * @param userDisplayName Maps to the WebAuthn `user.displayName`.
+ *   The user-friendly label the OS / browser MAY (but is not
+ *   required to) show in the picker; behavior varies by Credential
+ *   Manager backend. Defaults to [userName] (or [rpName] if
+ *   [userName] is null). Only used at registration; changing it
+ *   does not affect existing credentials.
  * @param credentialRegistry Opt-in app-side store of known credential
  *   IDs. When supplied, the SDK auto-merges stored IDs into
- *   `allowCredentialIds` / `excludeCredentialIds` and writes new IDs
+ *   `allowCredentials` / `excludeCredentials` and writes new IDs
  *   back after success.
  * @param onRegistryError Best-effort callback for registry failures;
  *   never blocks the ceremony.
@@ -104,7 +114,7 @@ public class PasskeyProvider(
     override suspend fun deriveSeeds(request: DeriveSeedsRequest): List<ByteArray> {
         try {
             val options = DeriveSeedsOptions(
-                allowCredentialIds = request.allowCredentialIds,
+                allowCredentials = request.allowCredentials,
                 preferImmediatelyAvailableCredentials = request.preferImmediatelyAvailableCredentials,
                 credentialRegistry = credentialRegistry,
                 onRegistryError = onRegistryError,
@@ -188,10 +198,10 @@ public class PasskeyProvider(
      *
      * When the provider was constructed with a `credentialRegistry`,
      * the registry's stored IDs are auto-merged into
-     * `excludeCredentialIds` and the new credential ID is auto-added
+     * `excludeCredentials` and the new credential ID is auto-added
      * on success.
      */
-    override suspend fun createPasskey(excludeCredentialIds: List<ByteArray>): RegisteredCredential {
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential {
         try {
             val core = CredentialManagerPrfCore.createCredential(
                 activity = activityProvider(),
@@ -199,7 +209,7 @@ public class PasskeyProvider(
                 rpName = rpName,
                 userName = userName,
                 userDisplayName = userDisplayName,
-                excludeCredentialIds = excludeCredentialIds,
+                excludeCredentials = excludeCredentials,
                 options = CreatePasskeyOptions(
                     credentialRegistry = credentialRegistry,
                     onRegistryError = onRegistryError,

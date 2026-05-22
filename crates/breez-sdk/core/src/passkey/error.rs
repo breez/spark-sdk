@@ -17,7 +17,7 @@ pub enum ErrorKind {
     /// Platform / app configuration is wrong (entitlement, assetlinks,
     /// rpId scope). Not retryable until the integrator fixes setup.
     Configuration,
-    /// `excludeCredentialIds` matched an existing credential. Route the
+    /// `excludeCredentials` matched an existing credential. Route the
     /// user to the sign-in path.
     AlreadyExists,
     /// The OS biometric prompt timed out (the user did not interact
@@ -72,7 +72,7 @@ pub enum PrfProviderError {
     #[error("Configuration error: {0}")]
     Configuration(String),
 
-    /// An entry in `excludeCredentialIds` matched a credential
+    /// An entry in `excludeCredentials` matched a credential
     /// already on the device. Route the user to sign-in.
     #[error("Credential already exists: {0}")]
     CredentialAlreadyExists(String),

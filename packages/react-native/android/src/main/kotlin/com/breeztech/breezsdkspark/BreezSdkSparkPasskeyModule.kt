@@ -102,7 +102,7 @@ class BreezSdkSparkPasskeyModule(
         userName: String,
         userDisplayName: String,
         autoRegister: Boolean,
-        allowCredentialIdsArg: com.facebook.react.bridge.ReadableArray,
+        allowCredentialsArg: com.facebook.react.bridge.ReadableArray,
         preferImmediatelyAvailableCredentials: Boolean?,
         promise: Promise,
     ) {
@@ -123,8 +123,8 @@ class BreezSdkSparkPasskeyModule(
         }
 
         val allowIds = mutableListOf<ByteArray>()
-        for (i in 0 until allowCredentialIdsArg.size()) {
-            val b64 = allowCredentialIdsArg.getString(i) ?: continue
+        for (i in 0 until allowCredentialsArg.size()) {
+            val b64 = allowCredentialsArg.getString(i) ?: continue
             allowIds.add(Base64.decode(b64, Base64.NO_WRAP))
         }
 
@@ -140,7 +140,7 @@ class BreezSdkSparkPasskeyModule(
                     userDisplayName = userDisplayName,
                     autoRegister = autoRegister,
                     options = DeriveSeedsOptions(
-                        allowCredentialIds = allowIds,
+                        allowCredentials = allowIds,
                         preferImmediatelyAvailableCredentials = preferImmediatelyAvailableCredentials,
                     ),
                 )
@@ -215,7 +215,7 @@ class BreezSdkSparkPasskeyModule(
         rpName: String,
         userName: String,
         userDisplayName: String,
-        excludeCredentialIdsBase64: com.facebook.react.bridge.ReadableArray,
+        excludeCredentialsBase64: com.facebook.react.bridge.ReadableArray,
         promise: Promise,
     ) {
         val activity = currentActivity
@@ -225,8 +225,8 @@ class BreezSdkSparkPasskeyModule(
         }
 
         val excludeIds = mutableListOf<ByteArray>()
-        for (i in 0 until excludeCredentialIdsBase64.size()) {
-            val b64 = excludeCredentialIdsBase64.getString(i)
+        for (i in 0 until excludeCredentialsBase64.size()) {
+            val b64 = excludeCredentialsBase64.getString(i)
             excludeIds.add(Base64.decode(b64, Base64.NO_WRAP))
         }
 
@@ -238,7 +238,7 @@ class BreezSdkSparkPasskeyModule(
                     rpName = rpName,
                     userName = userName,
                     userDisplayName = userDisplayName,
-                    excludeCredentialIds = excludeIds,
+                    excludeCredentials = excludeIds,
                 )
                 // Hold the next derive call for up to 800ms so the
                 // immediate post-register assertion doesn't race the

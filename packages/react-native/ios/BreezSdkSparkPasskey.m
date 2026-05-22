@@ -8,7 +8,7 @@ RCT_EXTERN_METHOD(deriveSeeds:(NSArray *)salts
                   userName:(NSString *)userName
                   userDisplayName:(NSString *)userDisplayName
                   autoRegister:(BOOL)autoRegister
-                  allowCredentialIds:(NSArray *)allowCredentialIds
+                  allowCredentials:(NSArray *)allowCredentials
                   preferImmediatelyAvailableCredentials:(nullable NSNumber *)preferImmediatelyAvailableCredentials
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
@@ -17,7 +17,7 @@ RCT_EXTERN_METHOD(createPasskey:(NSString *)rpId
                   rpName:(NSString *)rpName
                   userName:(NSString *)userName
                   userDisplayName:(NSString *)userDisplayName
-                  excludeCredentialIds:(NSArray *)excludeCredentialIds
+                  excludeCredentials:(NSArray *)excludeCredentials
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 

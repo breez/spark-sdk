@@ -116,7 +116,7 @@ class PasskeyProviderOptions {
   final String? userDisplayName;
 
   /// Optional opt-in registry. When set, the Dart-side wrapper
-  /// merges stored IDs into `allowCredentialIds` / `excludeCredentialIds`
+  /// merges stored IDs into `allowCredentials` / `excludeCredentials`
   /// before the MethodChannel call and writes the asserted /
   /// created credential ID back after success. The native plugin
   /// never sees the registry. Calls are best-effort with a 3s
@@ -222,7 +222,7 @@ class PasskeyProvider {
       'userDisplayName': _userDisplayName,
       'autoRegister': false,
     };
-    List<Uint8List> effectiveAllow = request.allowCredentialIds
+    List<Uint8List> effectiveAllow = request.allowCredentials
         .map(Uint8List.fromList)
         .toList();
     // Auto-merge registry IDs into the allow-list. Dart-side dance:
@@ -243,7 +243,7 @@ class PasskeyProvider {
       }
     }
     if (effectiveAllow.isNotEmpty) {
-      args['allowCredentialIds'] = effectiveAllow.map(base64Encode).toList();
+      args['allowCredentials'] = effectiveAllow.map(base64Encode).toList();
     }
     final preferImmediate = request.preferImmediatelyAvailableCredentials;
     if (preferImmediate != null) {
@@ -272,7 +272,7 @@ class PasskeyProvider {
     }
   }
 
-  /// Register a new passkey with PRF support. `excludeCredentialIds`
+  /// Register a new passkey with PRF support. `excludeCredentials`
   /// is the only per-call knob: branding fields (`userName`,
   /// `userDisplayName`) live on the constructor.
   ///
@@ -280,14 +280,14 @@ class PasskeyProvider {
   /// random 16-byte handle per call and surfaces it via
   /// [RegisteredCredential.userId]. Throws [PasskeyPrfException] on
   /// failure.
-  Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentialIds) async {
+  Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentials) async {
     final args = <String, Object?>{
       'rpId': _rpId,
       'rpName': _rpName,
       'userName': _userName,
       'userDisplayName': _userDisplayName,
     };
-    var excludeIds = List<Uint8List>.from(excludeCredentialIds);
+    var excludeIds = List<Uint8List>.from(excludeCredentials);
     final registry = _credentialRegistry;
     if (registry != null) {
       final registryIds = await _registryReadBestEffort(registry, _rpId, _onRegistryError);
@@ -302,7 +302,7 @@ class PasskeyProvider {
       }
     }
     if (excludeIds.isNotEmpty) {
-      args['excludeCredentialIds'] = excludeIds.map(base64Encode).toList();
+      args['excludeCredentials'] = excludeIds.map(base64Encode).toList();
     }
     try {
       final result = await _channel.invokeMethod<Map<Object?, Object?>>('createPasskey', args);

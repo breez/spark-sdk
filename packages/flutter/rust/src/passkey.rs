@@ -86,9 +86,9 @@ impl PrfProvider for CallbackPrfProvider {
 
     async fn create_passkey(
         &self,
-        exclude_credential_ids: Vec<Vec<u8>>,
+        exclude_credentials: Vec<Vec<u8>>,
     ) -> Result<RegisteredCredential, PrfProviderError> {
-        let result = AssertUnwindSafe((self.create_passkey_fn)(exclude_credential_ids))
+        let result = AssertUnwindSafe((self.create_passkey_fn)(exclude_credentials))
             .catch_unwind()
             .await
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;

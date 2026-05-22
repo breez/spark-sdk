@@ -104,7 +104,7 @@ function extractRegistrationMetadata(credential) {
 
 /**
  * Thrown when `createPasskey` asks the platform to register a new
- * passkey but it refuses because an entry in `excludeCredentialIds`
+ * passkey but it refuses because an entry in `excludeCredentials`
  * matches a credential already on the device. Hosts should route the
  * user to the sign-in path instead of treating this as a generic
  * registration failure.
@@ -167,7 +167,7 @@ function _base64UrlToBytes(s) {
 const REGISTRY_TIMEOUT_MS = 3_000;
 
 /** Suffix appended to a `Credential not found` error when the host
- *  had no `allowCredentialIds` and no `CredentialRegistry`. Lets
+ *  had no `allowCredentials` and no `CredentialRegistry`. Lets
  *  integrators discover the opt-in auto-discovery path from the error.
  */
 const CREDENTIAL_REGISTRY_HELP_SUFFIX =
@@ -235,17 +235,27 @@ export class PasskeyProvider {
      *   Must match the domain hosting your passkeys. Pass
      *   `PasskeyProvider.BREEZ_RP_ID` to opt into the Breez-managed
      *   shared RP (only valid for Breez-registered apps).
-     * @param {string} options.rpName - **Required.** Display name shown to
-     *   the user in the OS passkey picker and credential-management UIs
-     *   (iCloud Keychain, Google Password Manager, 1Password, etc.) when
-     *   choosing a credential. Only used at credential registration;
-     *   changing it does not affect existing credentials.
-     * @param {string} [options.userName] - User name stored with the credential,
-     *   shown as a secondary label in some passkey managers. Defaults to rpName.
-     *   Only used during registration; changing it does not affect existing credentials.
-     * @param {string} [options.userDisplayName] - User display name shown as the
-     *   primary label in the passkey picker. Defaults to userName. Only used during
-     *   registration; changing it does not affect existing credentials.
+     * @param {string} options.rpName - **Required.** Maps to the WebAuthn
+     *   `rp.name`. Deprecated in WebAuthn L3 but still required by all
+     *   current browser implementations. Surfaces in some credential-
+     *   management UIs (iCloud Keychain, Google Password Manager,
+     *   1Password); platform UIs increasingly ignore it. Only used at
+     *   credential registration; changing it does not affect existing
+     *   credentials.
+     * @param {string} [options.userName] - Maps to the WebAuthn
+     *   `user.name`. Treated as the user's unique identifier for the
+     *   credential and shown in the account picker during sign-in
+     *   (Apple's Passwords app, in particular, dedupes credentials by
+     *   `(rpId, user.name)`). Pass a stable per-user value if each
+     *   registration should surface as a distinct entry. Defaults to
+     *   `rpName`. Only used at registration; changing it does not
+     *   affect existing credentials.
+     * @param {string} [options.userDisplayName] - Maps to the WebAuthn
+     *   `user.displayName`. The user-friendly label the browser MAY
+     *   (but is not required to) show in the picker; behavior varies
+     *   by platform. Defaults to `userName`. Only used at
+     *   registration; changing it does not affect existing
+     *   credentials.
      * @param {'platform'|'cross-platform'} [options.authenticatorAttachment]
      *   When set, narrows the create-time UI to the chosen authenticator
      *   class. `'platform'` scopes registration to the local platform
@@ -445,16 +455,19 @@ export class PasskeyProvider {
     /**
      * Register a new passkey with PRF support. One ceremony, no seed
      * derivation. Browsers allow multiple credentials per RP, so this
-     * may add a sibling credential: pass `excludeCredentialIds` to
+     * may add a sibling credential: pass `excludeCredentials` to
      * surface that case as `PasskeyAlreadyExistsError`.
      *
-     * @param {Uint8Array[]} [excludeCredentialIds] - Credential IDs the
-     *   authenticator must refuse to duplicate.
+     * @param {Uint8Array[]} [excludeCredentials] - A list of
+     *   already-registered credential IDs. Prevents registering the
+     *   same device twice: when any entry matches a credential already
+     *   on the device, the authenticator refuses to register and the
+     *   provider raises `PasskeyAlreadyExistsError`.
      * @returns {Promise<RegisteredCredential>} `aaguid`/`backupEligible`
      *   are null on browsers without `getAuthenticatorData()`.
      */
-    async createPasskey(excludeCredentialIds = []) {
-        return await this._registerCredential(excludeCredentialIds);
+    async createPasskey(excludeCredentials = []) {
+        return await this._registerCredential(excludeCredentials);
     }
 
     /**
@@ -620,7 +633,7 @@ export class PasskeyProvider {
      * @private
      */
     async _performAssertion(prfEval, options) {
-        let allowList = options.allowCredentialIds || [];
+        let allowList = options.allowCredentials || [];
         // Auto-merge registry IDs into the allow-list.
         if (this.credentialRegistry) {
             const registryIds = await _registryReadBestEffort(
@@ -781,12 +794,14 @@ export class PasskeyProvider {
 
     /**
      * Register a new discoverable credential with PRF extension enabled.
-     * @param {Uint8Array[]} [excludeCredentialIds=[]] - Credential IDs
-     *   the authenticator must refuse to duplicate.
+     * @param {Uint8Array[]} [excludeCredentials=[]] - A list of
+     *   already-registered credential IDs. The authenticator refuses
+     *   to register if any entry matches a credential already on the
+     *   device, preventing duplicate registrations on the same device.
      * @returns {Promise<{ credentialId: Uint8Array, userId: Uint8Array, aaguid: Uint8Array | null, backupEligible: boolean | null }>}
      * @private
      */
-    async _registerCredential(excludeCredentialIds = []) {
+    async _registerCredential(excludeCredentials = []) {
         // WebAuthn spec: user.id must be 1-64 bytes. The provider
         // always mints a fresh 16 random bytes per call and returns
         // them via `RegisteredCredential.userId` (never host-supplied).
@@ -830,7 +845,7 @@ export class PasskeyProvider {
         }
 
         // Merge caller-supplied IDs with the registry, dedupe by base64url.
-        const mergedExcludeIds = await this._buildExcludeCredentialIds(excludeCredentialIds);
+        const mergedExcludeIds = await this._buildExcludeCredentials(excludeCredentials);
         if (mergedExcludeIds.length > 0) {
             publicKeyOptions.excludeCredentials = mergedExcludeIds.map((id) => ({
                 type: 'public-key',
@@ -906,12 +921,12 @@ export class PasskeyProvider {
     }
 
     /**
-     * Merge caller-supplied excludeCredentialIds with whatever the
+     * Merge caller-supplied excludeCredentials with whatever the
      * registry has stored for `this.rpId`. Dedupes by base64url
      * encoding so the same credential isn't sent twice.
      * @private
      */
-    async _buildExcludeCredentialIds(callerIds) {
+    async _buildExcludeCredentials(callerIds) {
         if (!this.credentialRegistry) {
             return Array.isArray(callerIds) ? [...callerIds] : [];
         }

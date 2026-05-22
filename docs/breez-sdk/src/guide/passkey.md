@@ -107,7 +107,9 @@ Build the platform's {{#name PasskeyProvider}}, then pass it to {{#name PasskeyC
 Parameters:
 
 - **`rpId`**: Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` if your app is Breez-registered. Required because changing it later strands existing credentials.
-- **`rpName`**: Display name shown to the user in the OS passkey picker and credential-management UIs (iCloud Keychain, Google Password Manager, 1Password, etc.) when choosing a credential. Required.
+- **`rpName`**: Maps to the WebAuthn `rp.name`. Required by current OS prompts (deprecated in WebAuthn L3 but still enforced everywhere). Surfaces in some credential-management UIs (iCloud Keychain, Google Password Manager, 1Password); platform UIs increasingly ignore it. Set at registration only; changing it does not affect existing credentials.
+- **`userName`** (optional): Maps to the WebAuthn `user.name`. Treated as the user's unique identifier for the credential and shown in the OS account picker during sign-in. Pass a stable per-user value if each registration should surface as a distinct entry (Apple's Passwords app, in particular, dedupes credentials by `(rpId, user.name)`). Defaults to `rpName`. Registration-only.
+- **`userDisplayName`** (optional): Maps to the WebAuthn `user.displayName`. The user-friendly label the OS / browser MAY (but is not required to) show in the picker; behavior varies by platform. Defaults to `userName`. Registration-only.
 - **`breezApiKey`**: Your Breez API key. Used to authenticate to the Breez relay (<a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>) for label storage. Without an API key, label sync falls back to public relays only.
 - **`passkeyConfig`** (optional): Carries {{#name default_label}}, the label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive no label. Falls back to the SDK's internal `"Default"` when unset.
 
@@ -161,7 +163,7 @@ The SDK collapses every passkey failure into seven actionable [`ErrorKind`](http
 |---|---|---|
 | `Cancel` | User dismissed the OS prompt (≥ 300ms, < 55s) | Sticky retry UI with "Try Again" |
 | `NoCredential` | No matching credential on this device (includes iOS sub-300ms fast-fail) | Fall through to {{#name PasskeyClient.register}} |
-| `AlreadyExists` | Register hit a credential in `excludeCredentialIds` | Flip to {{#name PasskeyClient.sign_in}}; the OS picker surfaces the existing credential |
+| `AlreadyExists` | Register hit a credential in `excludeCredentials` | Flip to {{#name PasskeyClient.sign_in}}; the OS picker surfaces the existing credential |
 | `Timeout` | OS biometric inactivity timeout (≥ 55s): distinct from a user-cancel | Sticky retry with timeout-specific copy. **Do not** auto-retry |
 | `PrfUnsupported` | Authenticator doesn't implement the PRF extension | Fall back to mnemonic onboarding |
 | `Configuration` | Entitlement missing, AASA stale, or assetlinks malformed | Developer-facing error; surface {{#name check_domain_association}}'s `NotAssociated` reason |

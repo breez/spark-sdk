@@ -93,10 +93,34 @@ export interface PasskeyPrfPlugin {
      */
     createPasskey(options: {
         rpId?: string;
+        /**
+         * Maps to WebAuthn `rp.name`. Deprecated in WebAuthn L3 but
+         * still required by current browsers / OS prompts. Surfaces in
+         * some credential-management UIs (iCloud Keychain, Google
+         * Password Manager); platform UIs increasingly ignore it.
+         */
         rpName?: string;
+        /**
+         * Maps to WebAuthn `user.name`. Treated as the user's unique
+         * identifier for the credential and shown in the OS account
+         * picker during sign-in (Apple's Passwords app, in
+         * particular, dedupes credentials by `(rpId, user.name)`).
+         */
         userName?: string;
+        /**
+         * Maps to WebAuthn `user.displayName`. The user-friendly label
+         * the OS / browser MAY (but is not required to) show in the
+         * picker; behavior varies by platform.
+         */
         userDisplayName?: string;
-        excludeCredentialIds?: string[];
+        /**
+         * A list of already-registered credential IDs (base64).
+         * Prevents registering the same device twice: when any entry
+         * matches a credential already on the device, the platform
+         * raises `CREDENTIAL_ALREADY_EXISTS` so the caller can route
+         * the user to sign-in.
+         */
+        excludeCredentials?: string[];
     }): Promise<{
         credentialId: string;
         userId: string;
@@ -118,7 +142,16 @@ export interface PasskeyPrfPlugin {
         rpId?: string;
         salts: string[];
         autoRegister?: boolean;
-        allowCredentialIds?: string[];
+        /**
+         * A list of credential IDs the assertion is restricted to
+         * (base64). The primary use case is reauthentication when the
+         * user is already known: if any of the listed credentials is
+         * available locally, the OS prompts for device unlock straight
+         * away (no account picker); otherwise the user is asked to
+         * present another device (paired phone or security key) that
+         * holds a valid credential.
+         */
+        allowCredentials?: string[];
         /**
          * Per-call override for the platform's "fast-fail when no
          * local credential is available" behavior. `true` (default)
@@ -147,7 +180,7 @@ export interface PasskeyPrfPlugin {
      * `rpId`. Backed by the platform's synced keychain (iCloud
      * Keychain on iOS, Block Store on Android), so the list survives
      * app uninstall + reinstall. Used by hosts to populate
-     * `excludeCredentialIds` on `createPasskey` without depending on
+     * `excludeCredentials` on `createPasskey` without depending on
      * `localStorage` (which is wiped on uninstall).
      *
      * Returns an empty list when the store is missing, invalid, or

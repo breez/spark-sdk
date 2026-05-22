@@ -54,11 +54,11 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
             return
         }
 
-        var excludeCredentialIds: [Data] = []
-        if let rawIds = args["excludeCredentialIds"] as? [FlutterStandardTypedData] {
-            excludeCredentialIds = rawIds.map { $0.data }
-        } else if let base64Ids = args["excludeCredentialIds"] as? [String] {
-            excludeCredentialIds = base64Ids.compactMap { Data(base64Encoded: $0) }
+        var excludeCredentials: [Data] = []
+        if let rawIds = args["excludeCredentials"] as? [FlutterStandardTypedData] {
+            excludeCredentials = rawIds.map { $0.data }
+        } else if let base64Ids = args["excludeCredentials"] as? [String] {
+            excludeCredentials = base64Ids.compactMap { Data(base64Encoded: $0) }
         }
 
         Task { @MainActor in
@@ -68,7 +68,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                     rpName: rpName,
                     userName: userName,
                     userDisplayName: userDisplayName,
-                    excludeCredentialIds: excludeCredentialIds
+                    excludeCredentials: excludeCredentials
                 )
                 result([
                     "credentialId": registered.credentialId.base64EncodedString(),
@@ -106,11 +106,11 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
             return
         }
 
-        var allowCredentialIds: [Data] = []
-        if let base64Ids = args["allowCredentialIds"] as? [String] {
-            allowCredentialIds = base64Ids.compactMap { Data(base64Encoded: $0) }
-        } else if let rawIds = args["allowCredentialIds"] as? [FlutterStandardTypedData] {
-            allowCredentialIds = rawIds.map { $0.data }
+        var allowCredentials: [Data] = []
+        if let base64Ids = args["allowCredentials"] as? [String] {
+            allowCredentials = base64Ids.compactMap { Data(base64Encoded: $0) }
+        } else if let rawIds = args["allowCredentials"] as? [FlutterStandardTypedData] {
+            allowCredentials = rawIds.map { $0.data }
         }
         let preferImmediate = args["preferImmediatelyAvailableCredentials"] as? Bool
 
@@ -124,7 +124,7 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
                     userDisplayName: userDisplayName,
                     autoRegister: autoRegister,
                     options: DeriveSeedsOptions(
-                        allowCredentialIds: allowCredentialIds,
+                        allowCredentials: allowCredentials,
                         preferImmediatelyAvailableCredentials: preferImmediate
                     )
                 )

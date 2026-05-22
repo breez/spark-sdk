@@ -26,7 +26,7 @@ class CustomPrfProvider {
   }
 
   createPasskey = async (
-    _excludeCredentialIds: Uint8Array[]
+    _excludeCredentials: Uint8Array[]
   ): Promise<RegisteredCredential> => {
     // Register a new credential and return its ID, the WebAuthn user.id
     // the native plugin minted for it (returned for host-side
@@ -84,7 +84,7 @@ const connectWithPasskey = async () => {
 
   const response = await passkey.connectWithPasskey({
     label: 'personal',
-    excludeCredentialIds: [],
+    excludeCredentials: [],
   })
 
   // `registeredCredential` is the path discriminator (undefined on sign-in).
@@ -116,7 +116,7 @@ const registerNewPasskey = async () => {
 
   const response = await passkey.register({ label: 'personal' })
 
-  // Persist credentialId for future excludeCredentialIds.
+  // Persist credentialId for future excludeCredentials.
   const _persist = {
     credentialId: response.credential.credentialId,
     userId: response.credential.userId,
@@ -182,7 +182,7 @@ const recoverFromAlreadyExists = async () => {
   try {
     await passkey.register({
       label: 'personal',
-      excludeCredentialIds: [
+      excludeCredentials: [
         // app-persisted credential IDs from prior registrations
       ],
     })

@@ -32,7 +32,7 @@ class CustomPrfProvider: PrfProvider {
         fatalError("Check platform passkey availability")
     }
 
-    func createPasskey(excludeCredentialIds: [Data]) async throws -> RegisteredCredential {
+    func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
         // Register a new credential and return its ID, the WebAuthn
         // user.id the platform recorded (returned for host-side
         // correlation, never host-supplied), AAGUID, and BE flag.
@@ -127,7 +127,7 @@ func registerNewPasskey() async throws -> BreezSdk {
         request: RegisterRequest(label: "personal")
     )
 
-    // Persist credentialId for future excludeCredentialIds.
+    // Persist credentialId for future excludeCredentials.
     let _ = (response.credential.credentialId, response.credential.userId)
 
     let sdk = try await connect(
@@ -187,7 +187,7 @@ func recoverFromAlreadyExists() async throws -> Wallet {
         let response = try await passkey.register(
             request: RegisterRequest(
                 label: "personal",
-                excludeCredentialIds: [
+                excludeCredentials: [
                     // app-persisted credential IDs from prior registrations
                 ]
             )
