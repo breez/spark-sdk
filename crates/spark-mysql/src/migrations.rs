@@ -344,16 +344,20 @@ async fn run_migrations_inner(
         .await
         .map_err(map_db_error)?;
 
-    // Create migrations table if it doesn't exist.
-    let create_table_sql = format!(
-        "CREATE TABLE IF NOT EXISTS `{migrations_table}` (
-            version INT PRIMARY KEY,
-            applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-        )"
-    );
-    conn.query_drop(&create_table_sql)
-        .await
-        .map_err(map_db_error)?;
+    // Avoid no-op DDL when the table already exists. Some deployments manage
+    // SDK schema externally and grant runtime users DML only; MySQL still
+    // requires CREATE permission for CREATE TABLE IF NOT EXISTS.
+    if !table_exists(conn, migrations_table).await? {
+        let create_table_sql = format!(
+            "CREATE TABLE IF NOT EXISTS `{migrations_table}` (
+                version INT PRIMARY KEY,
+                applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            )"
+        );
+        conn.query_drop(&create_table_sql)
+            .await
+            .map_err(map_db_error)?;
+    }
 
     // Get current version.
     let current_version: i32 = conn
@@ -900,5 +904,54 @@ mod tests {
             Some(("w1".to_string(), "alpha".to_string())),
             "table + data preserved despite missing index/FK"
         );
+    }
+
+    #[tokio::test]
+    async fn test_existing_migration_table_does_not_require_create_privilege() {
+        let container: ContainerAsync<Mysql> = Mysql::default()
+            .start()
+            .await
+            .expect("Failed to start MySQL container");
+        let host_port = container
+            .get_host_port_ipv4(3306)
+            .await
+            .expect("Failed to get host port");
+        let root_pool = create_pool(&MysqlStorageConfig::with_defaults(format!(
+            "mysql://root@127.0.0.1:{host_port}/test"
+        )))
+        .expect("Failed to create root pool");
+
+        let mut conn = root_pool.get_conn().await.expect("get root conn");
+        conn.query_drop(
+            "CREATE TABLE test_schema_migrations (
+                version INT PRIMARY KEY,
+                applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            )",
+        )
+        .await
+        .expect("create externally managed migration table");
+        conn.query_drop("INSERT INTO test_schema_migrations (version) VALUES (1)")
+            .await
+            .expect("seed current migration version");
+        conn.query_drop("CREATE USER 'runtime'@'%' IDENTIFIED BY 'runtime_pw'")
+            .await
+            .expect("create runtime user");
+        conn.query_drop("GRANT SELECT ON test.* TO 'runtime'@'%'")
+            .await
+            .expect("grant runtime select");
+        drop(conn);
+        drop(root_pool);
+
+        let runtime_pool = create_pool(&MysqlStorageConfig::with_defaults(format!(
+            "mysql://runtime:runtime_pw@127.0.0.1:{host_port}/test"
+        )))
+        .expect("Failed to create runtime pool");
+        let migrations = vec![vec![Migration::sql(
+            "CREATE TABLE should_not_run (id INT PRIMARY KEY)",
+        )]];
+
+        run_migrations(&runtime_pool, "test_schema_migrations", &migrations, None)
+            .await
+            .expect("current external migration table should not require runtime CREATE privilege");
     }
 }

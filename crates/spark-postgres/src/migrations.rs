@@ -75,17 +75,20 @@ pub async fn run_migrations(
         apply_renames_in_tx(&tx, renames).await?;
     }
 
-    // Create migrations table if it doesn't exist
-    // Note: table names cannot be parameterized in PostgreSQL, so we use format!
-    let create_table_sql = format!(
-        "CREATE TABLE IF NOT EXISTS {migrations_table} (
-            version INTEGER PRIMARY KEY,
-            applied_at TIMESTAMPTZ DEFAULT NOW()
-        )"
-    );
-    tx.execute(&create_table_sql, &[])
-        .await
-        .map_err(map_db_error)?;
+    // Avoid no-op DDL when the table already exists. Some deployments manage
+    // SDK schema externally and grant runtime users DML only.
+    if !table_exists_in_tx(&tx, migrations_table).await? {
+        // Note: table names cannot be parameterized in PostgreSQL, so we use format!
+        let create_table_sql = format!(
+            "CREATE TABLE IF NOT EXISTS {migrations_table} (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMPTZ DEFAULT NOW()
+            )"
+        );
+        tx.execute(&create_table_sql, &[])
+            .await
+            .map_err(map_db_error)?;
+    }
 
     // Get current version
     let get_version_sql = format!("SELECT COALESCE(MAX(version), 0) FROM {migrations_table}");
@@ -182,6 +185,17 @@ async fn apply_renames_in_tx(
     tx.execute(&sql, &[]).await.map_err(map_db_error)?;
 
     Ok(())
+}
+
+async fn table_exists_in_tx(tx: &Transaction<'_>, table: &str) -> Result<bool, PostgresError> {
+    let exists_sql = "SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = current_schema() AND table_name = $1
+    )";
+    tx.query_one(exists_sql, &[&table])
+        .await
+        .map_err(map_db_error)
+        .map(|row| row.get(0))
 }
 
 #[cfg(test)]
@@ -381,5 +395,53 @@ mod tests {
             Some(("w1".to_string(), "alpha".to_string())),
             "table + data preserved despite missing index/constraint"
         );
+    }
+
+    #[tokio::test]
+    async fn test_existing_migration_table_does_not_require_create_privilege() {
+        let container: ContainerAsync<Postgres> = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start PostgreSQL container");
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get host port");
+        let root_pool = create_pool(&PostgresStorageConfig::with_defaults(format!(
+            "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+        )))
+        .expect("Failed to create root pool");
+
+        {
+            let client = root_pool.get().await.expect("get root conn");
+            client
+                .batch_execute(
+                    "CREATE TABLE test_schema_migrations (
+                         version INTEGER PRIMARY KEY,
+                         applied_at TIMESTAMPTZ DEFAULT NOW()
+                     );
+                     INSERT INTO test_schema_migrations (version) VALUES (1);
+                     CREATE ROLE runtime LOGIN PASSWORD 'runtime_pw';
+                     REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+                     REVOKE ALL ON SCHEMA public FROM runtime;
+                     GRANT USAGE ON SCHEMA public TO runtime;
+                     GRANT SELECT ON test_schema_migrations TO runtime;",
+                )
+                .await
+                .expect("seed externally managed schema");
+        }
+        drop(root_pool);
+
+        let runtime_pool = create_pool(&PostgresStorageConfig::with_defaults(format!(
+            "host=127.0.0.1 port={host_port} user=runtime password=runtime_pw dbname=postgres"
+        )))
+        .expect("Failed to create runtime pool");
+        let migrations = vec![vec![
+            "CREATE TABLE should_not_run (id INTEGER PRIMARY KEY)".to_string(),
+        ]];
+
+        run_migrations(&runtime_pool, "test_schema_migrations", &migrations, None)
+            .await
+            .expect("current external migration table should not require runtime CREATE privilege");
     }
 }
