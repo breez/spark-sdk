@@ -177,6 +177,20 @@ impl SparkRpcClient {
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn claim_transfer(
+        &self,
+        req: ClaimTransferRequest,
+    ) -> Result<ClaimTransferResponse> {
+        debug!("Calling claim_transfer with request: {:?}", req);
+        Ok(self
+            .spark_service_client()
+            .await?
+            .claim_transfer(req)
+            .await?
+            .into_inner())
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_pending_transfers(
         &self,
         req: TransferFilter,
