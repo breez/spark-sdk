@@ -10,13 +10,14 @@ use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
 use crate::services::{ProofMap, TransferId, TransferObserver, TransferStatus};
 use crate::signer::{
-    FrostSigningCommitmentsWithNonces, SecretSource, SecretToSplit, VerifiableSecretShare,
+    FrostSigningCommitmentsWithNonces, SecretSource, SecretToSplit, SignFrostRequest,
+    VerifiableSecretShare,
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::paging::{PagingFilter, PagingResult, pager};
 use crate::utils::refund::{
     RefundSignatures, SignRefundsParams, SignedRefundTransactions, prepare_refund_so_signing_jobs,
-    sign_aggregate_refunds, sign_refunds,
+    sign_refunds,
 };
 use crate::utils::tagged_hasher::TaggedHasher;
 use crate::utils::time::web_time_to_prost_timestamp;
@@ -34,6 +35,7 @@ use prost::Message as ProstMessage;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
+    bitcoin::sighash_from_tx,
     signer::Signer,
     tree::{TreeNode, TreeNodeId},
 };
@@ -803,134 +805,143 @@ impl TransferService {
         leaves_to_claim: Vec<LeafKeyTweak>,
     ) -> Result<Vec<TreeNode>, ServiceError> {
         trace!("Claiming transfer with leaves: {:?}", leaves_to_claim);
-        // Check if we need to apply key tweaks first
-        let proof_map = if transfer.status == TransferStatus::SenderKeyTweaked {
-            Some(
-                self.claim_transfer_tweak_keys(transfer, &leaves_to_claim)
-                    .await
-                    .map_err(|e| {
-                        debug!("Failed to claim transfer tweak keys: {}", e);
-                        e
-                    })?,
-            )
-        } else {
-            None
-        };
 
-        debug!("Claim transfer tweak keys successful.");
-        let node_signatures = self
-            .claim_transfer_sign_refunds(transfer, &leaves_to_claim, proof_map.as_ref())
+        let claim_package = self
+            .prepare_claim_package(transfer, &leaves_to_claim)
             .await?;
-        debug!("Claim transfer sign refunds successful.");
-        let finalized_nodes = self.finalize_node_signatures(&node_signatures).await?;
-        debug!("Finalize node signatures successful.");
-        Ok(finalized_nodes)
+
+        let response = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .claim_transfer(operator_rpc::spark::ClaimTransferRequest {
+                transfer_id: transfer.id.to_string(),
+                owner_identity_public_key: self
+                    .signer
+                    .get_identity_public_key()
+                    .await?
+                    .serialize()
+                    .to_vec(),
+                claim_package: Some(claim_package),
+            })
+            .await?;
+
+        let claimed_transfer: Transfer = response
+            .transfer
+            .ok_or_else(|| {
+                ServiceError::Generic("claim_transfer returned no transfer".to_string())
+            })?
+            .try_into()?;
+
+        Ok(claimed_transfer
+            .leaves
+            .into_iter()
+            .map(|l| l.leaf)
+            .collect())
     }
 
-    /// Claims transfer by applying key tweaks across all operators
-    async fn claim_transfer_tweak_keys(
+    /// Assembles a signed `ClaimPackage` for the coordinator: per-operator
+    /// ECIES-encrypted key tweaks, user-signed refund jobs, and an
+    /// identity-key signature over the package payload.
+    async fn prepare_claim_package(
         &self,
         transfer: &Transfer,
         leaves: &[LeafKeyTweak],
-    ) -> Result<ProofMap, ServiceError> {
-        let (leaves_tweaks_map, proof_map) = self.prepare_claim_leaves_key_tweaks(leaves).await?;
+    ) -> Result<operator_rpc::spark::ClaimPackage, ServiceError> {
+        let (leaves_tweaks_map, _proof_map) =
+            self.prepare_claim_leaves_key_tweaks(leaves).await?;
 
-        // Send claim transfer tweak keys to all signing operators in parallel
-        let mut tasks = Vec::new();
-
-        let identity_public_key = self
-            .signer
-            .get_identity_public_key()
-            .await?
-            .serialize()
-            .to_vec();
-
-        for operator in self.operator_pool.get_all_operators() {
-            let Some(leaves_to_receive) = leaves_tweaks_map.get(&operator.identifier) else {
-                continue;
-            };
-
-            let identity_public_key = identity_public_key.clone();
-            let leaves_to_receive = leaves_to_receive.clone();
-
-            let task = async move {
-                let result = operator
-                    .client
-                    .claim_transfer_tweak_keys(operator_rpc::spark::ClaimTransferTweakKeysRequest {
-                        transfer_id: transfer.id.to_string(),
-                        owner_identity_public_key: identity_public_key,
-                        leaves_to_receive,
-                    })
-                    .await;
-
-                let err = match result {
-                    Ok(()) => {
-                        trace!(
-                            "Operator {} successfully applied key tweaks for transfer {}",
-                            operator.identity_public_key, transfer.id
-                        );
-                        return Ok::<_, ServiceError>(());
-                    }
-                    Err(e) => e,
-                };
-
-                let OperatorRpcError::Connection(status) = err else {
-                    return Err(err.into());
-                };
-
-                debug!(
-                    "Operator {} returned connection error: {:?}",
-                    operator.identity_public_key, status
-                );
-
-                // There was an error tweaking the keys. It's likely the transfer was not in state SenderKeyTweaked after all.
-                // Let's find out what state we're in.
-                // Fetch the leaf remotely from the operator. Determine its state, and return info about it to the caller.
-                let operator_transfers = operator
-                    .client
-                    .query_all_transfers(TransferFilter {
-                        transfer_ids: vec![transfer.id.to_string()],
-                        network: self.network.to_proto_network() as i32,
-                        participant: Some(Participant::ReceiverIdentityPublicKey(
-                            self.signer
-                                .get_identity_public_key()
-                                .await?
-                                .serialize()
-                                .to_vec(),
-                        )),
-                        ..Default::default()
-                    })
-                    .await?;
-                let Some(operator_transfer) = operator_transfers.transfers.into_iter().nth(0)
-                else {
-                    debug!(
-                        "Attempting to recover from operator error, but operator doesn't know transfer {}",
-                        transfer.id
-                    );
-                    return Err(ServiceError::ClaimTransferError(status.to_string()));
-                };
-
-                let operator_transfer: Transfer = operator_transfer.try_into()?;
-                debug!(
-                    "Operator {} reports transfer {} is now in {} state (expected SenderKeyTweaked)",
-                    operator.identity_public_key, operator_transfer.id, operator_transfer.status
-                );
-                match operator_transfer.status {
-                    TransferStatus::ReceiverKeyTweaked
-                    | TransferStatus::ReceiverKeyTweakApplied
-                    | TransferStatus::ReceiverKeyTweakLocked
-                    | TransferStatus::ReceiverRefundSigned
-                    | TransferStatus::Completed => Ok(()),
-                    _ => Err(ServiceError::ClaimTransferError(status.to_string())),
-                }
-            };
-
-            tasks.push(task);
+        // ECIES-encrypt the per-operator claim leaf key tweaks.
+        let mut key_tweak_package: HashMap<String, Vec<u8>> = HashMap::new();
+        for (identifier, leaves_to_receive) in leaves_tweaks_map {
+            let proto = operator_rpc::spark::ClaimLeafKeyTweaks { leaves_to_receive };
+            let operator = self
+                .operator_pool
+                .get_operator_by_identifier(&identifier)
+                .ok_or_else(|| ServiceError::Generic("Operator not found".to_string()))?;
+            let encrypted = self
+                .encrypt_with_public_key(&operator.identity_public_key, &proto.encode_to_vec())?;
+            key_tweak_package.insert(hex::encode(identifier.serialize()), encrypted);
         }
 
-        futures::future::try_join_all(tasks).await?;
+        // Fetch operator signing commitments. The receiver does not yet own the
+        // leaves, so request commitments by count rather than by node id.
+        let signing_commitments = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .get_signing_commitments(operator_rpc::spark::GetSigningCommitmentsRequest {
+                node_ids: Vec::new(),
+                count: 3,
+                node_id_count: leaves.len() as u32,
+            })
+            .await?
+            .signing_commitments
+            .iter()
+            .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(proof_map)
+        let chunks = signing_commitments
+            .chunks(leaves.len())
+            .collect::<Vec<_>>();
+        if chunks.len() != 3 {
+            return Err(ServiceError::Generic(
+                "Not enough signing commitments returned".to_string(),
+            ));
+        }
+
+        // Sign the claim refunds (current timelock) operator-commits-first;
+        // the operators aggregate server-side during `claim_transfer`.
+        let (cpfp_jobs, direct_jobs, direct_from_cpfp_jobs) = self
+            .sign_claim_refunds(leaves, chunks[0], chunks[1], chunks[2])
+            .await?;
+
+        let mut claim_package = operator_rpc::spark::ClaimPackage {
+            leaves_to_claim: cpfp_jobs,
+            direct_leaves_to_claim: direct_jobs,
+            direct_from_cpfp_leaves_to_claim: direct_from_cpfp_jobs,
+            key_tweak_package,
+            user_signature: Vec::new(),
+            hash_variant: HashVariant::V2.into(),
+        };
+
+        let signing_payload =
+            self.get_claim_package_signing_payload(&transfer.id, &claim_package)?;
+        let signature = self
+            .signer
+            .sign_message_ecdsa_with_identity_key(&signing_payload)
+            .await
+            .map_err(ServiceError::SignerError)?;
+        claim_package.user_signature = signature.serialize_der().to_vec();
+
+        Ok(claim_package)
+    }
+
+    /// Creates the signing payload for a claim package using tagged hashing.
+    /// Uses V2 structured hashing with domain tag for collision resistance.
+    fn get_claim_package_signing_payload(
+        &self,
+        transfer_id: &TransferId,
+        claim_package: &operator_rpc::spark::ClaimPackage,
+    ) -> Result<Vec<u8>, ServiceError> {
+        let transfer_id_bytes =
+            hex::decode(transfer_id.to_string().replace('-', "")).map_err(|e| {
+                ServiceError::ValidationError(format!("Failed to decode transfer ID: {e}"))
+            })?;
+
+        // Convert HashMap to BTreeMap for deterministic ordering
+        let key_tweak_package: std::collections::BTreeMap<String, Vec<u8>> = claim_package
+            .key_tweak_package
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let signable_message = TaggedHasher::new(&["spark", "claim", "signing payload"])
+            .add_bytes(&transfer_id_bytes)
+            .add_map_string_to_bytes(&key_tweak_package)
+            .signable_message();
+
+        Ok(signable_message)
     }
 
     /// Prepares claim leaves key tweaks for all operators
@@ -1040,108 +1051,191 @@ impl TransferService {
         Ok((leaf_tweaks_map, *proof))
     }
 
-    /// Claims transfer by signing refunds with the coordinator.
-    async fn claim_transfer_sign_refunds(
+    /// Signs claim refund transactions operator-commits-first. The operator
+    /// aggregates server-side during `claim_transfer`.
+    async fn sign_claim_refunds(
         &self,
-        transfer: &Transfer,
-        leaf_keys: &[LeafKeyTweak],
-        // TODO: do something with proofs? Currently not used in js implementation
-        _proof_map: Option<&ProofMap>,
-    ) -> Result<Vec<operator_rpc::spark::NodeSignatures>, ServiceError> {
-        // Prepare leaf data map with refund signing information
-        let mut leaf_data_map = HashMap::new();
-        for leaf_key in leaf_keys {
-            let signing_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
-            let direct_signing_nonce_commitment =
-                self.signer.generate_random_signing_commitment().await?;
-            let direct_from_cpfp_signing_nonce_commitment =
-                self.signer.generate_random_signing_commitment().await?;
-
+        leaves: &[LeafKeyTweak],
+        cpfp_commitments: &[std::collections::BTreeMap<
+            Identifier,
+            frost_secp256k1_tr::round1::SigningCommitments,
+        >],
+        direct_commitments: &[std::collections::BTreeMap<
+            Identifier,
+            frost_secp256k1_tr::round1::SigningCommitments,
+        >],
+        direct_from_cpfp_commitments: &[std::collections::BTreeMap<
+            Identifier,
+            frost_secp256k1_tr::round1::SigningCommitments,
+        >],
+    ) -> Result<
+        (
+            Vec<operator_rpc::spark::UserSignedTxSigningJob>,
+            Vec<operator_rpc::spark::UserSignedTxSigningJob>,
+            Vec<operator_rpc::spark::UserSignedTxSigningJob>,
+        ),
+        ServiceError,
+    > {
+        // Build per-leaf signing data using the receiver's new signing key.
+        let mut leaf_data_map: HashMap<TreeNodeId, LeafRefundSigningData> = HashMap::new();
+        for leaf in leaves {
             let signing_public_key = self
                 .signer
-                .public_key_from_secret(&leaf_key.new_signing_key)
+                .public_key_from_secret(&leaf.new_signing_key)
                 .await?;
-
             leaf_data_map.insert(
-                leaf_key.node.id.clone(),
+                leaf.node.id.clone(),
                 LeafRefundSigningData {
-                    signing_private_key: leaf_key.new_signing_key.clone(),
+                    signing_private_key: leaf.new_signing_key.clone(),
                     signing_public_key,
                     receiving_public_key: signing_public_key,
-                    tx: leaf_key.node.node_tx.clone(),
-                    direct_tx: leaf_key.node.direct_tx.clone(),
+                    tx: leaf.node.node_tx.clone(),
+                    direct_tx: leaf.node.direct_tx.clone(),
                     refund_tx: None,
                     direct_refund_tx: None,
                     direct_from_cpfp_refund_tx: None,
-                    signing_nonce_commitment,
-                    direct_signing_nonce_commitment,
-                    direct_from_cpfp_signing_nonce_commitment,
-                    vout: leaf_key.node.vout,
+                    signing_nonce_commitment: self
+                        .signer
+                        .generate_random_signing_commitment()
+                        .await?,
+                    direct_signing_nonce_commitment: self
+                        .signer
+                        .generate_random_signing_commitment()
+                        .await?,
+                    direct_from_cpfp_signing_nonce_commitment: self
+                        .signer
+                        .generate_random_signing_commitment()
+                        .await?,
+                    vout: leaf.node.vout,
                     connector_prev_out: None,
                 },
             );
         }
 
-        // Prepare refund signing jobs for the coordinator
-        let signing_jobs =
-            prepare_refund_so_signing_jobs(self.network, leaf_keys, &mut leaf_data_map, true)?;
+        // Build the claim refund transactions (current timelock) into
+        // `leaf_data_map`. The (fused-form) signing jobs returned here are
+        // discarded — we sign operator-commits-first below.
+        prepare_refund_so_signing_jobs(self.network, leaves, &mut leaf_data_map, true)?;
 
-        // Call the coordinator to get signing results
-        let response = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .claim_transfer_sign_refunds_v2(operator_rpc::spark::ClaimTransferSignRefundsRequest {
-                transfer_id: transfer.id.to_string(),
-                owner_identity_public_key: self
-                    .signer
-                    .get_identity_public_key()
-                    .await?
-                    .serialize()
-                    .to_vec(),
-                signing_jobs,
-            })
-            .await?;
+        let mut cpfp_jobs = Vec::new();
+        let mut direct_jobs = Vec::new();
+        let mut direct_from_cpfp_jobs = Vec::new();
+        for (i, leaf) in leaves.iter().enumerate() {
+            let data = leaf_data_map.remove(&leaf.node.id).ok_or_else(|| {
+                ServiceError::Generic(format!("Leaf data not found for leaf {}", leaf.node.id))
+            })?;
+            let verifying_key = leaf.node.verifying_public_key;
 
-        // Sign the refunds using FROST
-        let node_signatures = sign_aggregate_refunds(
-            &self.signer,
-            &leaf_data_map.into_iter().collect(),
-            &response.signing_results,
-            None,
-            None,
-            None,
-        )
-        .await?;
+            let LeafRefundSigningData {
+                signing_private_key,
+                signing_public_key,
+                tx: node_tx,
+                direct_tx,
+                refund_tx,
+                direct_refund_tx,
+                direct_from_cpfp_refund_tx,
+                signing_nonce_commitment,
+                direct_signing_nonce_commitment,
+                direct_from_cpfp_signing_nonce_commitment,
+                ..
+            } = data;
 
-        Ok(node_signatures)
+            let cpfp_refund_tx = refund_tx
+                .ok_or_else(|| ServiceError::Generic("Missing cpfp refund tx".to_string()))?;
+            let cpfp_sighash = sighash_from_tx(&cpfp_refund_tx, 0, &node_tx.output[0])?;
+            cpfp_jobs.push(
+                self.sign_claim_refund_job(
+                    &leaf.node.id,
+                    cpfp_refund_tx,
+                    cpfp_sighash.as_byte_array(),
+                    &signing_public_key,
+                    &signing_private_key,
+                    signing_nonce_commitment,
+                    cpfp_commitments[i].clone(),
+                    &verifying_key,
+                )
+                .await?,
+            );
+
+            if let (Some(direct_tx), Some(direct_refund_tx)) = (direct_tx, direct_refund_tx) {
+                let sighash = sighash_from_tx(&direct_refund_tx, 0, &direct_tx.output[0])?;
+                direct_jobs.push(
+                    self.sign_claim_refund_job(
+                        &leaf.node.id,
+                        direct_refund_tx,
+                        sighash.as_byte_array(),
+                        &signing_public_key,
+                        &signing_private_key,
+                        direct_signing_nonce_commitment,
+                        direct_commitments[i].clone(),
+                        &verifying_key,
+                    )
+                    .await?,
+                );
+            }
+
+            if let Some(dfc_refund_tx) = direct_from_cpfp_refund_tx {
+                let sighash = sighash_from_tx(&dfc_refund_tx, 0, &node_tx.output[0])?;
+                direct_from_cpfp_jobs.push(
+                    self.sign_claim_refund_job(
+                        &leaf.node.id,
+                        dfc_refund_tx,
+                        sighash.as_byte_array(),
+                        &signing_public_key,
+                        &signing_private_key,
+                        direct_from_cpfp_signing_nonce_commitment,
+                        direct_from_cpfp_commitments[i].clone(),
+                        &verifying_key,
+                    )
+                    .await?,
+                );
+            }
+        }
+
+        Ok((cpfp_jobs, direct_jobs, direct_from_cpfp_jobs))
     }
 
-    /// Finalizes node signatures with the coordinator.
-    async fn finalize_node_signatures(
+    #[allow(clippy::too_many_arguments)]
+    async fn sign_claim_refund_job(
         &self,
-        node_signatures: &[operator_rpc::spark::NodeSignatures],
-    ) -> Result<Vec<TreeNode>, ServiceError> {
-        let response = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .finalize_node_signatures_v2(operator_rpc::spark::FinalizeNodeSignaturesRequest {
-                intent: operator_rpc::common::SignatureIntent::Transfer as i32,
-                node_signatures: node_signatures.to_vec(),
+        node_id: &TreeNodeId,
+        refund_tx: Transaction,
+        sighash_bytes: &[u8],
+        signing_public_key: &PublicKey,
+        signing_private_key: &SecretSource,
+        self_nonce_commitment: FrostSigningCommitmentsWithNonces,
+        operator_commitments: std::collections::BTreeMap<
+            Identifier,
+            frost_secp256k1_tr::round1::SigningCommitments,
+        >,
+        verifying_key: &PublicKey,
+    ) -> Result<operator_rpc::spark::UserSignedTxSigningJob, ServiceError> {
+        let user_signature = self
+            .signer
+            .sign_frost(SignFrostRequest {
+                message: sighash_bytes,
+                public_key: signing_public_key,
+                private_key: signing_private_key,
+                verifying_key,
+                self_nonce_commitment: &self_nonce_commitment,
+                statechain_commitments: operator_commitments.clone(),
+                adaptor_public_key: None,
             })
             .await?;
 
-        let nodes = response
-            .nodes
-            .into_iter()
-            .map(|node| node.try_into())
-            .collect::<Result<Vec<TreeNode>, _>>()?;
-
-        Ok(nodes)
+        let signed_tx = SignedTx {
+            node_id: node_id.clone(),
+            signing_public_key: *signing_public_key,
+            tx: refund_tx,
+            user_signature,
+            signing_commitments: operator_commitments,
+            self_nonce_commitment,
+            network: self.network,
+        };
+        (&signed_tx).try_into()
     }
 
-    pub async fn verify_pending_transfer(
+pub async fn verify_pending_transfer(
         &self,
         transfer: &Transfer,
     ) -> Result<HashMap<TreeNodeId, SecretSource>, ServiceError> {
