@@ -848,8 +848,7 @@ impl TransferService {
         transfer: &Transfer,
         leaves: &[LeafKeyTweak],
     ) -> Result<operator_rpc::spark::ClaimPackage, ServiceError> {
-        let (leaves_tweaks_map, _proof_map) =
-            self.prepare_claim_leaves_key_tweaks(leaves).await?;
+        let (leaves_tweaks_map, _proof_map) = self.prepare_claim_leaves_key_tweaks(leaves).await?;
 
         // ECIES-encrypt the per-operator claim leaf key tweaks.
         let mut key_tweak_package: HashMap<String, Vec<u8>> = HashMap::new();
@@ -881,9 +880,7 @@ impl TransferService {
             .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let chunks = signing_commitments
-            .chunks(leaves.len())
-            .collect::<Vec<_>>();
+        let chunks = signing_commitments.chunks(leaves.len()).collect::<Vec<_>>();
         if chunks.len() != 3 {
             return Err(ServiceError::Generic(
                 "Not enough signing commitments returned".to_string(),
@@ -1235,7 +1232,7 @@ impl TransferService {
         (&signed_tx).try_into()
     }
 
-pub async fn verify_pending_transfer(
+    pub async fn verify_pending_transfer(
         &self,
         transfer: &Transfer,
     ) -> Result<HashMap<TreeNodeId, SecretSource>, ServiceError> {
