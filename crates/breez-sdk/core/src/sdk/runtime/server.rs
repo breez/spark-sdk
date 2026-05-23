@@ -16,12 +16,6 @@ impl RuntimeProfile for ServerRuntime {
     }
 
     async fn start_sdk_services(&self, sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>) {
-        // The host drives `sync_wallet` explicitly in server mode, so mark the
-        // SDK as "initially synced" up front. `SparkSyncService::sync_payments`
-        // gates `PaymentSucceeded` emission on this watcher: without it set,
-        // completed receives inserted on sync silently skip the emit, and any
-        // event-driven flow (e.g. a host that subscribes to `PaymentSucceeded`)
-        // misses the notification.
         if let Err(e) = initial_synced_sender.send(true) {
             error!("Failed to set initial synced signal in server mode: {e:?}");
         }
