@@ -1,4 +1,5 @@
 use tokio::sync::watch;
+use tracing::error;
 
 use crate::{GetInfoRequest, GetInfoResponse, error::SdkError};
 
@@ -14,11 +15,11 @@ impl RuntimeProfile for ServerRuntime {
         false
     }
 
-    async fn start_sdk_services(
-        &self,
-        sdk: &BreezSdk,
-        _initial_synced_sender: watch::Sender<bool>,
-    ) {
+    async fn start_sdk_services(&self, sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>) {
+        if let Err(e) = initial_synced_sender.send(true) {
+            error!("Failed to set initial synced signal in server mode: {e:?}");
+        }
+
         sdk.event_emitter
             .add_runtime_event_handler(Box::new(ServerRuntimeEventHandler { sdk: sdk.clone() }))
             .await;
