@@ -1485,47 +1485,6 @@ impl TransferService {
             None => Ok(None),
         }
     }
-
-    pub async fn deliver_transfer_package(
-        &self,
-        transfer: &Transfer,
-        leaves: &[LeafKeyTweak],
-        refund_signatures: RefundSignatures,
-    ) -> Result<Transfer, ServiceError> {
-        let prepared_transfer_request = self
-            .prepare_transfer_request(
-                &transfer.id,
-                leaves,
-                &transfer.receiver_identity_public_key,
-                refund_signatures,
-                None,
-                None,
-                None, // No adaptor public key for regular transfers
-            )
-            .await?;
-
-        let response = self
-            .operator_pool
-            .get_coordinator()
-            .client
-            .finalize_transfer_with_transfer_package(
-                operator_rpc::spark::FinalizeTransferWithTransferPackageRequest {
-                    transfer_id: prepared_transfer_request.transfer_request.transfer_id,
-                    owner_identity_public_key: prepared_transfer_request
-                        .transfer_request
-                        .owner_identity_public_key,
-                    transfer_package: prepared_transfer_request.transfer_request.transfer_package,
-                },
-            )
-            .await?;
-
-        match response.transfer {
-            Some(transfer) => Ok(transfer.try_into()?),
-            None => Err(ServiceError::Generic(
-                "No transfer response from operator".to_string(),
-            )),
-        }
-    }
 }
 
 fn find_share(

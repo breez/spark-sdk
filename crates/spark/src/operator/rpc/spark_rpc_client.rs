@@ -64,23 +64,6 @@ impl SparkRpcClient {
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
-    pub async fn finalize_node_signatures_v2(
-        &self,
-        req: FinalizeNodeSignaturesRequest,
-    ) -> Result<FinalizeNodeSignaturesResponse> {
-        debug!(
-            "Calling finalize_node_signatures_v2 with request: {:?}",
-            req
-        );
-        Ok(self
-            .spark_service_client()
-            .await?
-            .finalize_node_signatures_v2(req)
-            .await?
-            .into_inner())
-    }
-
-    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn generate_deposit_address(
         &self,
         req: GenerateDepositAddressRequest,
@@ -107,23 +90,6 @@ impl SparkRpcClient {
             .spark_service_client()
             .await?
             .query_unused_deposit_addresses(req)
-            .await?
-            .into_inner())
-    }
-
-    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
-    pub async fn start_deposit_tree_creation(
-        &self,
-        req: StartDepositTreeCreationRequest,
-    ) -> Result<StartDepositTreeCreationResponse> {
-        debug!(
-            "Calling start_deposit_tree_creation with request: {:?}",
-            req
-        );
-        Ok(self
-            .spark_service_client()
-            .await?
-            .start_deposit_tree_creation(req)
             .await?
             .into_inner())
     }
@@ -211,37 +177,6 @@ impl SparkRpcClient {
             .spark_service_client()
             .await?
             .query_all_transfers(req)
-            .await?
-            .into_inner())
-    }
-
-    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
-    pub async fn claim_transfer_tweak_keys(
-        &self,
-        req: ClaimTransferTweakKeysRequest,
-    ) -> Result<()> {
-        debug!("Calling claim_transfer_tweak_keys with request: {:?}", req);
-        self.spark_service_client()
-            .await?
-            .claim_transfer_tweak_keys(req)
-            .await?
-            .into_inner();
-        Ok(())
-    }
-
-    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
-    pub async fn claim_transfer_sign_refunds_v2(
-        &self,
-        req: ClaimTransferSignRefundsRequest,
-    ) -> Result<ClaimTransferSignRefundsResponse> {
-        debug!(
-            "Calling claim_transfer_sign_refunds_v2 with request: {:?}",
-            req
-        );
-        Ok(self
-            .spark_service_client()
-            .await?
-            .claim_transfer_sign_refunds_v2(req)
             .await?
             .into_inner())
     }
