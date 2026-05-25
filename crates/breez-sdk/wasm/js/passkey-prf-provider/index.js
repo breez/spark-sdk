@@ -871,12 +871,9 @@ export class PasskeyProvider {
             // it as a generic registration failure. The browser raises
             // InvalidStateError DOMException when an entry in
             // excludeCredentials matches a credential already on the
-            // device. Only meaningful in the create path. Use the class
-            // default message: the raw DOMException text ("The user
-            // attempted to register an authenticator that contains one of
-            // the credentials already registered...") is not end-user copy.
+            // device. Only meaningful in the create path.
             if (error instanceof DOMException && error.name === 'InvalidStateError') {
-                throw new PasskeyAlreadyExistsError();
+                throw new PasskeyAlreadyExistsError(error.message);
             }
             const elapsed = ((typeof performance !== 'undefined' && performance.now)
                 ? performance.now()
