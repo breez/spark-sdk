@@ -457,6 +457,35 @@ class MigrationManager {
           }
         }
       },
+      {
+        // Recovery migration for the missing "contacts" object store.
+        //
+        // The original "Create contacts store" migration above was INSERTED into
+        // the middle of this array (at index 12) instead of being appended, in
+        // SDK 0.11.0. That index was already occupied by the "Clear cached
+        // lightning address for LnurlInfo schema change" migration, which had
+        // shipped one release earlier in SDK 0.10.0 (dbVersion 13).
+        //
+        // Migration array indices map 1:1 to DB version transitions, so any
+        // database that ran 0.10.0 reached version 13 and, on upgrading to
+        // 0.11.0+ (dbVersion 14), ran only migrations[13] — permanently skipping
+        // the newly-inserted migrations[12]. Those databases never got a
+        // "contacts" object store, so every contact operation fails with
+        // NotFoundError.
+        //
+        // This migration is correctly appended and idempotently (re)creates the
+        // store, so affected databases recover on their next upgrade while
+        // unaffected databases treat it as a no-op. Keep the original migration
+        // in place; do not delete or reorder it.
+        name: "Create contacts store (recovery for skipped migration)",
+        upgrade: (db) => {
+          if (!db.objectStoreNames.contains("contacts")) {
+            const contactsStore = db.createObjectStore("contacts", { keyPath: "id" });
+            contactsStore.createIndex("name_identifier", ["name", "paymentIdentifier"], { unique: false });
+            contactsStore.createIndex("name", "name", { unique: false });
+          }
+        }
+      },
     ];
   }
 }
@@ -480,7 +509,12 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 15; // Current schema version
+    // IMPORTANT: the migrations array in MigrationManager is append-only. The
+    // migration at array index N is the upgrade step from DB version N to N+1,
+    // so existing databases depend on indices never shifting. Never insert,
+    // reorder, or delete a migration — only append. dbVersion MUST equal the
+    // number of migrations (enforced by the guard in initialize()).
+    this.dbVersion = 17; // Current schema version (= migration count)
   }
 
   /**
@@ -493,6 +527,17 @@ class IndexedDBStorage {
 
     if (typeof window === "undefined" || !window.indexedDB) {
       throw new StorageError("IndexedDB is not available in this environment");
+    }
+
+    // Guard: dbVersion must equal the migration count. If they drift apart, the
+    // upgrade loop either skips the trailing migration(s) or requests a version
+    // no migration fills in. Fail fast — this is a programming error.
+    const migrationCount = new MigrationManager(null, StorageError).migrations.length;
+    if (this.dbVersion !== migrationCount) {
+      throw new StorageError(
+        `dbVersion (${this.dbVersion}) must equal the migration count (${migrationCount}). ` +
+        `Migrations are append-only: append a new migration and bump dbVersion to match.`
+      );
     }
 
     return new Promise((resolve, reject) => {
