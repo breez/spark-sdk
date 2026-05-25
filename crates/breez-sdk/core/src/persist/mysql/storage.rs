@@ -456,6 +456,16 @@ impl MysqlStorage {
             // SQL-injection surface even though the value is concatenated
             // rather than parameter-bound.
             multi_tenant_migration(identity),
+            // Migration 17: Pin the migration-tracking table's `applied_at`
+            // default to UTC. The migration manager already writes
+            // `UTC_TIMESTAMP(6)` explicitly on INSERT, but aligning the
+            // default keeps `SHOW CREATE TABLE` output consistent with the
+            // token-store / tree-store migrations table and matches the JS
+            // mysql-storage migration of the same name.
+            vec![Migration::sql(
+                "ALTER TABLE brz_schema_migrations MODIFY COLUMN applied_at \
+                 DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+            )],
         ]
     }
 }
@@ -2505,7 +2515,12 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(16), "migration version must be preserved");
+        assert_eq!(
+            version,
+            Some(17),
+            "migration version must advance to 17 (the legacy fixture starts at 16, migration 17 \
+             pins applied_at default to UTC)"
+        );
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())
@@ -2777,7 +2792,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(16), "migration must advance to 16");
+        assert_eq!(version, Some(17), "migration must advance to 17");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

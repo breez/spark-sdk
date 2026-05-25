@@ -38,7 +38,7 @@ class MysqlSessionStoreMigrationManager {
         await conn.query(`
           CREATE TABLE IF NOT EXISTS \`${SESSION_MIGRATIONS_TABLE}\` (
             version INT PRIMARY KEY,
-            applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))
           )
         `);
 
@@ -61,7 +61,7 @@ class MysqlSessionStoreMigrationManager {
             await conn.query(sql);
           }
           await conn.query(
-            `INSERT INTO \`${SESSION_MIGRATIONS_TABLE}\` (version) VALUES (?)`,
+            `INSERT INTO \`${SESSION_MIGRATIONS_TABLE}\` (version, applied_at) VALUES (?, UTC_TIMESTAMP(6))`,
             [version]
           );
         }
@@ -121,6 +121,12 @@ class MysqlSessionStoreMigrationManager {
             expiration BIGINT NOT NULL,
             PRIMARY KEY (user_id, service_identity_key)
           )`,
+        ],
+      },
+      {
+        name: "Pin schema-migrations applied_at default to UTC",
+        sql: [
+          `ALTER TABLE \`${SESSION_MIGRATIONS_TABLE}\` MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
         ],
       },
     ];

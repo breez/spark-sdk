@@ -138,15 +138,21 @@ impl MysqlSessionStore {
     }
 
     fn migrations() -> Vec<Vec<Migration>> {
-        vec![vec![Migration::sql(
-            "CREATE TABLE IF NOT EXISTS brz_sessions (
-                user_id VARBINARY(33) NOT NULL,
-                service_identity_key VARBINARY(33) NOT NULL,
-                token TEXT NOT NULL,
-                expiration BIGINT NOT NULL,
-                PRIMARY KEY (user_id, service_identity_key)
-            )",
-        )]]
+        vec![
+            vec![Migration::sql(
+                "CREATE TABLE IF NOT EXISTS brz_sessions (
+                    user_id VARBINARY(33) NOT NULL,
+                    service_identity_key VARBINARY(33) NOT NULL,
+                    token TEXT NOT NULL,
+                    expiration BIGINT NOT NULL,
+                    PRIMARY KEY (user_id, service_identity_key)
+                )",
+            )],
+            vec![Migration::sql(
+                "ALTER TABLE brz_session_schema_migrations MODIFY COLUMN applied_at \
+                 DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+            )],
+        ]
     }
 }
 

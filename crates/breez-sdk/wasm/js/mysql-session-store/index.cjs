@@ -127,7 +127,10 @@ function _decodePubkey(hex) {
 }
 
 async function createMysqlSessionStore(poolConfig, identity, logger = null) {
-  const pool = mysql.createPool(poolConfig);
+  // Serialize JS `Date` parameters as UTC strings rather than host-local
+  // time. Paired with explicit `UTC_TIMESTAMP(6)` on the server side, this
+  // keeps timestamp comparisons consistent regardless of the host TZ.
+  const pool = mysql.createPool({ ...poolConfig, timezone: "Z" });
   const manager = new MysqlSessionStore(
     pool,
     identity,

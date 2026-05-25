@@ -1332,6 +1332,10 @@ function createMysqlPool(config) {
     connectTimeout: (config.createTimeoutSecs || 0) * 1000 || 10000,
     idleTimeout: (config.recycleTimeoutSecs || 0) * 1000 || 10000,
     waitForConnections: true,
+    // Serialize JS `Date` parameters as UTC strings rather than host-local
+    // time. Paired with explicit `UTC_TIMESTAMP(6)` on the server side, this
+    // keeps timestamp comparisons consistent regardless of the host TZ.
+    timezone: "Z",
   });
 }
 

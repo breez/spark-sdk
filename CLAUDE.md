@@ -39,6 +39,15 @@ Run a single test:
 cargo test <test_name> -p <package>
 ```
 
+**Node.js version**: `make wasm-test` (and any target depending on `wasm-test-node`)
+requires Node.js 22. `better-sqlite3`'s native bindings fail to build on Node 23+
+(uses removed `v8::AccessorGetterCallback` API). If `node --version` reports >=23,
+switch first:
+
+```bash
+nvm use 22 || nvm install 22  # then re-run the make target
+```
+
 ## Code Quality
 
 ```bash

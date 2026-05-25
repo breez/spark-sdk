@@ -448,7 +448,7 @@ async fn test_remove_token_outputs_by_prev_tx_ref() {
 }
 
 #[async_test_all]
-async fn test_remove_token_outputs_prevents_refresh_readd() {
+async fn test_remove_token_outputs_prevents_refresh_re_add() {
     let store = InMemoryTokenOutputStore::default();
-    shared_tests::test_remove_token_outputs_prevents_refresh_readd(&store).await;
+    shared_tests::test_remove_token_outputs_prevents_refresh_re_add(&store).await;
 }

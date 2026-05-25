@@ -1606,7 +1606,7 @@ pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputSto
     assert_eq!(amounts, vec![100, 300]);
 }
 
-pub async fn test_remove_token_outputs_prevents_refresh_readd(store: &dyn TokenOutputStore) {
+pub async fn test_remove_token_outputs_prevents_refresh_re_add(store: &dyn TokenOutputStore) {
     // Insert outputs
     let token1 = create_token_outputs(1, vec![100, 200]);
     store

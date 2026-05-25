@@ -558,7 +558,7 @@ class MysqlTokenStore {
                 [this.identity, outputId]
               );
               await conn.query(
-                "INSERT IGNORE INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES (?, ?, NOW())",
+                "INSERT IGNORE INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES (?, ?, UTC_TIMESTAMP(6))",
                 [this.identity, outputId]
               );
             }
@@ -727,7 +727,7 @@ class MysqlTokenStore {
         const reservationId = this._generateId();
 
         await conn.query(
-          "INSERT INTO brz_token_reservations (user_id, id, purpose) VALUES (?, ?, ?)",
+          "INSERT INTO brz_token_reservations (user_id, id, purpose, created_at) VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
           [this.identity, reservationId, purpose]
         );
 
@@ -801,7 +801,7 @@ class MysqlTokenStore {
 
         if (reservedOutputIds.length > 0) {
           const valueClauses = new Array(reservedOutputIds.length)
-            .fill("(?, ?)")
+            .fill("(?, ?, UTC_TIMESTAMP(6))")
             .join(", ");
           const params = [];
           for (const outputId of reservedOutputIds) {
@@ -809,7 +809,7 @@ class MysqlTokenStore {
           }
           // Suppress duplicate-PK errors only.
           await conn.query(
-            `INSERT INTO brz_token_spent_outputs (user_id, output_id) VALUES ${valueClauses}
+            `INSERT INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES ${valueClauses}
              ON DUPLICATE KEY UPDATE output_id = output_id`,
             params
           );
@@ -828,7 +828,7 @@ class MysqlTokenStore {
         // (and thus has no row) gets one created lazily.
         if (isSwap) {
           await conn.query(
-            `INSERT INTO brz_token_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
+            `INSERT INTO brz_token_swap_status (user_id, last_completed_at) VALUES (?, UTC_TIMESTAMP(6))
              ON DUPLICATE KEY UPDATE last_completed_at = VALUES(last_completed_at)`,
             [this.identity]
           );
@@ -854,7 +854,7 @@ class MysqlTokenStore {
 
   async now() {
     try {
-      const [rows] = await this.pool.query("SELECT NOW(6) AS now");
+      const [rows] = await this.pool.query("SELECT UTC_TIMESTAMP(6) AS now");
       const value = rows[0].now;
       if (value instanceof Date) return value.getTime();
       return new Date(value).getTime();
@@ -892,14 +892,14 @@ class MysqlTokenStore {
            SELECT id FROM (
              SELECT id FROM brz_token_reservations
              WHERE user_id = ?
-               AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)
+               AND created_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)
            ) AS stale
          )`,
       [this.identity, this.identity, RESERVATION_TIMEOUT_SECS]
     );
     await conn.query(
       `DELETE FROM brz_token_reservations
-       WHERE user_id = ? AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)`,
+       WHERE user_id = ? AND created_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)`,
       [this.identity, RESERVATION_TIMEOUT_SECS]
     );
   }
@@ -941,7 +941,7 @@ class MysqlTokenStore {
         (user_id, id, token_identifier, owner_public_key, revocation_commitment,
          withdraw_bond_sats, withdraw_relative_block_locktime,
          token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(6))
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))
        ON DUPLICATE KEY UPDATE id = id`,
       [
         this.identity,
@@ -999,6 +999,10 @@ function createMysqlPool(config) {
     connectTimeout: (config.createTimeoutSecs || 0) * 1000 || 10000,
     idleTimeout: (config.recycleTimeoutSecs || 0) * 1000 || 10000,
     waitForConnections: true,
+    // Serialize JS `Date` parameters as UTC strings rather than host-local
+    // time. Paired with explicit `UTC_TIMESTAMP(6)` on the server side, this
+    // keeps timestamp comparisons consistent regardless of the host TZ.
+    timezone: "Z",
   });
 }
 

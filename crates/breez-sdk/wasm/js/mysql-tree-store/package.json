@@ -11,7 +11,8 @@
   },
   "scripts": {
     "lint": "eslint *.cjs",
-    "lint:fix": "eslint *.cjs --fix"
+    "lint:fix": "eslint *.cjs --fix",
+    "test": "node --test tests/timezone.test.cjs"
   },
   "dependencies": {
     "mysql2": "^3.11.0"
