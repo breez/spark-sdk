@@ -33,18 +33,25 @@ import kotlinx.serialization.json.Json
 
 // --- HTTP request/response shapes -----------------------------------------
 
-// Preset filter for `--bench-trace`. Two targets:
-//   - `spark::tree::service=trace`        — payment-time leaf swaps
+// Preset filter for `--bench-trace`. Targets:
+//   - `spark::tree::service=trace`           — payment-time leaf swaps
 //     (the "Swapped leaves to match target amount" log line)
-//   - `breez_sdk_core::send_phases=info`  — `#[tracing::instrument]`
-//     spans on `send_payment` + every SSP / operator RPC method.
-//     `aggregate.py` reads these as FmtSpan::CLOSE events to render
-//     the per-RPC slow-payment breakdown.
+//   - `breez_sdk_core::send_payment=info`    — top-level `send_payment`
+//     span; carries `payment_id` field.
+//   - `spark::operator_rpc=info`             — every operator-RPC span
+//     (carries `operator_id`).
+//   - `spark::ssp=info`                      — every SSP-method span.
+// The three info-level targets are SDK span-trace targets — they only
+// produce close-event lines when the SDK is built with the `span-trace`
+// cargo feature (off by default, on for bench builds). `aggregate.py`
+// reads the close events to render the per-RPC slow-payment breakdown.
 // Trailing `error` keeps every other module at error-level so the file
 // surfaces real failures without unbounded growth at high RPS.
 private const val BENCH_TRACE_FILTER =
     "spark::tree::service=trace," +
-    "breez_sdk_core::send_phases=info," +
+    "breez_sdk_core::send_payment=info," +
+    "spark::operator_rpc=info," +
+    "spark::ssp=info," +
     "error"
 
 @Serializable
@@ -84,16 +91,15 @@ fun runServer(opts: Map<String, String>) {
     // Tracing wiring. Three states:
     //   1. --bench-trace defaults to true → preset filter that turns on
     //      leaves-swap detection + per-RPC close-event spans (consumed
-    //      by aggregate.py). The narrow filter keeps the trace log
-    //      small under load; the SDK's prod-safe init_logging
-    //      additionally silences the bench target on every layer
-    //      except the dedicated bench layer, so this is opt-in for
-    //      the *bench* but provably off for integrators.
+    //      by aggregate.py). Close-event capture requires the SDK to be
+    //      built with the `span-trace` cargo feature — prod builds (no
+    //      feature) contain none of that code, so these targets are
+    //      structurally inaccessible to integrators.
     //   2. --bench-trace=false           → no SDK tracing (zero overhead;
     //      use to A/B against (1) when measuring instrumentation cost).
     //   3. --log-filter=<spec>           → explicit override, user takes
-    //      full control (must include the bench targets themselves if
-    //      they want aggregate.py to pick up swap/phase data).
+    //      full control (must include the span-trace targets themselves
+    //      if they want aggregate.py to pick up swap/phase data).
     val explicitFilter = opts["log-filter"]
     val benchTrace = opts["bench-trace"]?.equals("true", ignoreCase = true) ?: true
     val effectiveFilter = when {

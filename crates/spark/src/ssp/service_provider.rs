@@ -101,7 +101,7 @@ impl ServiceProvider {
     }
 
     /// Get a swap fee estimate
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn get_swap_fee_estimate(
         &self,
         amount_sats: u64,
@@ -110,7 +110,7 @@ impl ServiceProvider {
     }
 
     /// Get a lightning send fee estimate
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn get_lightning_send_fee_estimate(
         &self,
         encoded_invoice: &str,
@@ -123,7 +123,7 @@ impl ServiceProvider {
     }
 
     /// Get a coop exit fee quote
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn get_coop_exit_fee_quote(
         &self,
         leaf_external_ids: Vec<String>,
@@ -136,7 +136,7 @@ impl ServiceProvider {
     }
 
     /// Complete a cooperative exit
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn complete_coop_exit(
         &self,
         user_outbound_transfer_external_id: &str,
@@ -149,7 +149,7 @@ impl ServiceProvider {
     }
 
     /// Request a cooperative exit
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn request_coop_exit(
         &self,
         input: RequestCoopExitInput,
@@ -158,7 +158,7 @@ impl ServiceProvider {
     }
 
     /// Request lightning receive
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn request_lightning_receive(
         &self,
         input: RequestLightningReceiveInput,
@@ -167,7 +167,7 @@ impl ServiceProvider {
     }
 
     /// Request lightning send
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn request_lightning_send(
         &self,
         input: RequestLightningSendInput,
@@ -176,7 +176,7 @@ impl ServiceProvider {
     }
 
     /// Request swap (v3)
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn request_swap(
         &self,
         input: RequestSwapInput,
@@ -185,7 +185,7 @@ impl ServiceProvider {
     }
 
     /// Get claim deposit quote
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn get_claim_deposit_quote(
         &self,
         transaction_id: String,
@@ -199,7 +199,7 @@ impl ServiceProvider {
     }
 
     /// Get a lightning receive request by ID
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn get_lightning_receive_request(
         &self,
         request_id: &str,
@@ -211,7 +211,7 @@ impl ServiceProvider {
     }
 
     /// Get a lightning send request by ID
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn get_lightning_send_request(
         &self,
         request_id: &str,
@@ -223,7 +223,7 @@ impl ServiceProvider {
     }
 
     /// Get a leaves swap request by ID
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn get_leaves_swap_request(
         &self,
         request_id: &str,
@@ -232,7 +232,7 @@ impl ServiceProvider {
     }
 
     /// Get a cooperative exit request by ID
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn get_coop_exit_request(
         &self,
         request_id: &str,
@@ -241,7 +241,7 @@ impl ServiceProvider {
     }
 
     /// Claim static deposit
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn claim_static_deposit(
         &self,
         input: ClaimStaticDepositInput,
@@ -250,7 +250,7 @@ impl ServiceProvider {
     }
 
     /// Get transfers by IDs
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn get_transfers(
         &self,
         transfer_spark_ids: Vec<String>,
@@ -259,7 +259,7 @@ impl ServiceProvider {
     }
 
     /// Register a wallet webhook with the SSP
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn register_wallet_webhook(
         &self,
         url: &str,
@@ -273,13 +273,13 @@ impl ServiceProvider {
     }
 
     /// Delete a wallet webhook from the SSP
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn delete_wallet_webhook(&self, webhook_id: &str) -> ServiceProviderResult<bool> {
         Ok(self.gql_client.delete_wallet_webhook(webhook_id).await?)
     }
 
     /// List wallet webhooks from the SSP
-    #[instrument(level = "info", target = "breez_sdk_core::send_phases", skip_all)]
+    #[instrument(level = "info", target = "spark::ssp", skip_all)]
     pub async fn list_wallet_webhooks(&self) -> ServiceProviderResult<Vec<WebhookEntry>> {
         Ok(self.gql_client.list_wallet_webhooks().await?)
     }

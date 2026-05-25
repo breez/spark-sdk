@@ -16,8 +16,8 @@ export MYSQL_URL ?= mysql://root:password@127.0.0.1:3306/breez_bench
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
 
-setup: ## Build and publish KMP bindings to mavenLocal (one-time per branch)
-	cd $(KMP_CLI_DIR) && $(MAKE) setup
+setup: ## Build and publish KMP bindings (with the bench's `span-trace` cargo feature) to mavenLocal (one-time per branch)
+	cd $(KMP_CLI_DIR) && $(MAKE) setup CARGO_FEATURES=span-trace
 
 # Server-side `max_connections` for the bench container. The mysql:8.0 default
 # is 151, which the bench saturates as concurrency rises (`HY000: Too many

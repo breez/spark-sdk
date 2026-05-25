@@ -17,6 +17,12 @@ postgres = [
 mysql = [
     "dep:spark-mysql",
 ]
+# Bench-only: installs an extra tracing layer in `init_logging` that
+# captures span CLOSE events for the instrumented `send_payment`,
+# `spark::operator_rpc`, and `spark::ssp` targets. Off by default — prod
+# binaries built without this feature contain none of the bench-layer
+# setup code.
+span-trace = []
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]

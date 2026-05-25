@@ -86,34 +86,45 @@ def read_jsonl(path):
 #
 #   1. "Swapped leaves to match target amount" message
 #      → payment-time leaf swap (one per send that required a swap)
-#   2. Span CLOSE events on target `breez_sdk_core::send_phases`
-#      → emitted by `#[tracing::instrument]` on the top-level
-#        `send_payment`, every SSP method, and every operator-RPC
-#        method. The span hierarchy carries `payment_id` (top-level
-#        span field) and, for operator RPCs, `operator_id`. Format
-#        produced by `tracing_subscriber::fmt::FmtSpan::CLOSE`:
+#   2. Span CLOSE events on the SDK span-trace targets:
+#        - `breez_sdk_core::send_payment` — top-level `send_payment`
+#        - `spark::ssp`                   — every SSP method
+#        - `spark::operator_rpc`          — every operator-RPC method
+#      Each crate uses its own target to avoid the spark crate
+#      referencing a breez-owned name. The span hierarchy carries
+#      `payment_id` (top-level span field) and, for operator RPCs,
+#      `operator_id`. Format produced by `FmtSpan::CLOSE`:
 #
 #          <ts>  INFO send_payment{payment_id="..."}:rpc_name{operator_id=3}:
-#                breez_sdk_core::send_phases: close time.busy=2.53ms time.idle=24.9µs
+#                spark::operator_rpc: close time.busy=2.53ms time.idle=24.9µs
 #
 # The sdk.log file is naturally per-step (each step gets a fresh server),
 # so no timestamp filtering is needed inside this parser.
 
 SWAP_MESSAGE = "Swapped leaves to match target amount"
-# Must stay in sync with the bench filter the server installs — see
-# `BENCH_TRACE_FILTER` in Server.kt. If you change the target name, the
-# tracing level, or the close-event format on either side, update both.
-BENCH_TARGET = "breez_sdk_core::send_phases"
+# Must stay in sync with the SDK targets and the bench filter the server
+# installs — see `BENCH_TRACE_FILTER` in Server.kt and `SPAN_TRACE_TARGETS`
+# in core/src/logger.rs. Changes to a target name, the tracing level, or
+# the close-event format need to land on all three sides.
+BENCH_TARGETS = (
+    "breez_sdk_core::send_payment",
+    "spark::ssp",
+    "spark::operator_rpc",
+)
 TOP_LEVEL_SPAN_NAME = "send_payment"
 
 # Matches one CLOSE event. The span hierarchy is captured as the
 # colon-separated run of `name{fields}` segments preceding the target
 # marker. Field values are either quoted strings (`payment_id="abc"`)
-# or bare tokens (`operator_id=3`).
+# or bare tokens (`operator_id=3`). The optional `<lineno>:` between
+# target and `close` is rendered by tracing-subscriber when the SDK's
+# fmt layer is configured with `with_line_number(true)` — that's the
+# prod default, which the simplified `init_logging` reuses for the
+# bench build too.
 _CLOSE_RE = re.compile(
     r"^\S+\s+INFO\s+(?P<hierarchy>\S+?):\s+"
-    + re.escape(BENCH_TARGET)
-    + r":\s+close\s+time\.busy=(?P<busy>[\d.]+(?:ns|µs|us|ms|s))"
+    + r"(?:" + "|".join(re.escape(t) for t in BENCH_TARGETS) + r")"
+    + r":\s+(?:\d+:\s+)?close\s+time\.busy=(?P<busy>[\d.]+(?:ns|µs|us|ms|s))"
     + r"(?:\s+time\.idle=(?P<idle>[\d.]+(?:ns|µs|us|ms|s)))?"
 )
 

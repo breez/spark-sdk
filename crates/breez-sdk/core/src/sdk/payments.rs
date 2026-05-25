@@ -417,7 +417,7 @@ impl BreezSdk {
 
     #[instrument(
         level = "info",
-        target = "breez_sdk_core::send_phases",
+        target = "breez_sdk_core::send_payment",
         skip_all,
         fields(payment_id = tracing::field::Empty),
     )]
