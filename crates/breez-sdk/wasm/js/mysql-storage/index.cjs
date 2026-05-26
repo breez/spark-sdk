@@ -16,6 +16,8 @@
  *   → `conn.beginTransaction()`/`conn.commit()`/`conn.rollback()`.
  */
 
+const crypto = require("crypto");
+
 let mysql;
 try {
   const mainModule = require.main;
@@ -37,6 +39,8 @@ try {
 
 const { StorageError } = require("./errors.cjs");
 const { MysqlMigrationManager } = require("./migrations.cjs");
+
+const PAYMENT_UPDATE_LOCK_TIMEOUT_SECS = 10;
 
 /**
  * Base query for payment lookups. All columns are accessed by name in _rowToPayment.
@@ -360,129 +364,228 @@ class MysqlStorage {
     }
   }
 
-  async insertPayment(payment) {
+  async applyPaymentUpdate(payment) {
+    if (!payment) {
+      throw new StorageError("Payment cannot be null or undefined");
+    }
+
+    let conn = null;
+    const lockName = this._paymentUpdateLockName(payment.id);
+    let acquired = false;
+    let shouldEmit = false;
+    let operationError = null;
+    let releaseError = null;
+
     try {
-      if (!payment) {
-        throw new StorageError("Payment cannot be null or undefined");
+      conn = await this.pool.getConnection();
+      const [lockRows] = await conn.query("SELECT GET_LOCK(?, ?) AS acquired", [
+        lockName,
+        PAYMENT_UPDATE_LOCK_TIMEOUT_SECS,
+      ]);
+      acquired = Number(lockRows?.[0]?.acquired) === 1;
+      if (!acquired) {
+        throw new StorageError(`Timed out acquiring payment update lock '${lockName}'`);
       }
 
-      await this._withTransaction(async (conn) => {
-        const withdrawTxId =
-          payment.details?.type === "withdraw" ? payment.details.txId : null;
-        const depositTxId =
-          payment.details?.type === "deposit" ? payment.details.txId : null;
-        const spark = payment.details?.type === "spark" ? 1 : null;
-
-        await conn.query(
-          `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE
-             payment_type=VALUES(payment_type),
-             status=VALUES(status),
-             amount=VALUES(amount),
-             fees=VALUES(fees),
-             timestamp=VALUES(timestamp),
-             method=VALUES(method),
-             withdraw_tx_id=VALUES(withdraw_tx_id),
-             deposit_tx_id=VALUES(deposit_tx_id),
-             spark=VALUES(spark)`,
-          [
-            this.identity,
-            payment.id,
-            payment.paymentType,
-            payment.status,
-            payment.amount.toString(),
-            payment.fees.toString(),
-            payment.timestamp,
-            payment.method ? JSON.stringify(payment.method) : null,
-            withdrawTxId,
-            depositTxId,
-            spark,
-          ]
+      await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
+      await conn.beginTransaction();
+      try {
+        const [rows] = await conn.query(
+          "SELECT status FROM brz_payments WHERE user_id = ? AND id = ?",
+          [this.identity, payment.id]
         );
+        const stored = rows.length > 0
+          ? this._normalizePaymentStatus(rows[0].status)
+          : null;
+        const next = this._normalizePaymentStatus(payment.status);
 
-        if (
-          payment.details?.type === "spark" &&
-          (payment.details.invoiceDetails != null ||
-            payment.details.htlcDetails != null)
-        ) {
-          await conn.query(
-            `INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
-             VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-               invoice_details=COALESCE(VALUES(invoice_details), invoice_details),
-               htlc_details=COALESCE(VALUES(htlc_details), htlc_details)`,
-            [
-              this.identity,
-              payment.id,
-              payment.details.invoiceDetails
-                ? JSON.stringify(payment.details.invoiceDetails)
-                : null,
-              payment.details.htlcDetails
-                ? JSON.stringify(payment.details.htlcDetails)
-                : null,
-            ]
+        if (stored == null) {
+          await this._runPaymentUpsert(conn, payment);
+          shouldEmit = true;
+        } else if (stored === next) {
+          console.debug(
+            `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
+          await this._runPaymentUpsert(conn, payment);
+          shouldEmit = false;
+        } else if (this._isFinalPaymentStatus(stored)) {
+          console.warn(
+            `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
+          );
+          shouldEmit = false;
+        } else {
+          await this._runPaymentUpsert(conn, payment);
+          shouldEmit = true;
         }
 
-        if (payment.details?.type === "lightning") {
-          await conn.query(
-            `INSERT INTO brz_payment_details_lightning
-              (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON DUPLICATE KEY UPDATE
-                invoice=VALUES(invoice),
-                payment_hash=VALUES(payment_hash),
-                destination_pubkey=VALUES(destination_pubkey),
-                description=VALUES(description),
-                preimage=COALESCE(VALUES(preimage), preimage),
-                htlc_status=COALESCE(VALUES(htlc_status), htlc_status),
-                htlc_expiry_time=COALESCE(VALUES(htlc_expiry_time), htlc_expiry_time)`,
-            [
-              this.identity,
-              payment.id,
-              payment.details.invoice,
-              payment.details.htlcDetails.paymentHash,
-              payment.details.destinationPubkey,
-              payment.details.description,
-              payment.details.htlcDetails?.preimage,
-              payment.details.htlcDetails?.status ?? null,
-              payment.details.htlcDetails?.expiryTime ?? 0,
-            ]
-          );
-        }
-
-        if (payment.details?.type === "token") {
-          await conn.query(
-            `INSERT INTO brz_payment_details_token
-              (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
-              VALUES (?, ?, ?, ?, ?, ?)
-              ON DUPLICATE KEY UPDATE
-                metadata=VALUES(metadata),
-                tx_hash=VALUES(tx_hash),
-                tx_type=VALUES(tx_type),
-                invoice_details=COALESCE(VALUES(invoice_details), invoice_details)`,
-            [
-              this.identity,
-              payment.id,
-              JSON.stringify(payment.details.metadata),
-              payment.details.txHash,
-              payment.details.txType,
-              payment.details.invoiceDetails
-                ? JSON.stringify(payment.details.invoiceDetails)
-                : null,
-            ]
-          );
-        }
-      });
+        await conn.commit();
+      } catch (error) {
+        await conn.rollback().catch(() => {});
+        throw error;
+      }
     } catch (error) {
-      if (error instanceof StorageError) throw error;
+      operationError = error;
+    } finally {
+      if (conn && acquired) {
+        try {
+          await conn.query("SELECT RELEASE_LOCK(?)", [lockName]);
+        } catch (error) {
+          releaseError = error;
+        }
+      }
+      if (conn) {
+        conn.release();
+      }
+    }
+
+    if (operationError) {
+      if (operationError instanceof StorageError) {
+        throw operationError;
+      }
       throw new StorageError(
-        `Failed to insert payment '${payment.id}': ${error.message}`,
-        error
+        `Failed to apply payment update '${payment.id}': ${operationError.message}`,
+        operationError
+      );
+    }
+
+    if (releaseError) {
+      throw new StorageError(
+        `Failed to release payment update lock '${lockName}': ${releaseError.message}`,
+        releaseError
+      );
+    }
+
+    return shouldEmit;
+  }
+
+  async _runPaymentUpsert(conn, payment) {
+    const withdrawTxId =
+      payment.details?.type === "withdraw" ? payment.details.txId : null;
+    const depositTxId =
+      payment.details?.type === "deposit" ? payment.details.txId : null;
+    const spark = payment.details?.type === "spark" ? 1 : null;
+
+    await conn.query(
+      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         payment_type=VALUES(payment_type),
+         status=VALUES(status),
+         amount=VALUES(amount),
+         fees=VALUES(fees),
+         timestamp=VALUES(timestamp),
+         method=VALUES(method),
+         withdraw_tx_id=VALUES(withdraw_tx_id),
+         deposit_tx_id=VALUES(deposit_tx_id),
+         spark=VALUES(spark)`,
+      [
+        this.identity,
+        payment.id,
+        payment.paymentType,
+        payment.status,
+        payment.amount.toString(),
+        payment.fees.toString(),
+        payment.timestamp,
+        payment.method ? JSON.stringify(payment.method) : null,
+        withdrawTxId,
+        depositTxId,
+        spark,
+      ]
+    );
+
+    if (
+      payment.details?.type === "spark" &&
+      (payment.details.invoiceDetails != null ||
+        payment.details.htlcDetails != null)
+    ) {
+      await conn.query(
+        `INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           invoice_details=COALESCE(VALUES(invoice_details), invoice_details),
+           htlc_details=COALESCE(VALUES(htlc_details), htlc_details)`,
+        [
+          this.identity,
+          payment.id,
+          payment.details.invoiceDetails
+            ? JSON.stringify(payment.details.invoiceDetails)
+            : null,
+          payment.details.htlcDetails
+            ? JSON.stringify(payment.details.htlcDetails)
+            : null,
+        ]
+      );
+    }
+
+    if (payment.details?.type === "lightning") {
+      await conn.query(
+        `INSERT INTO brz_payment_details_lightning
+          (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE
+            invoice=VALUES(invoice),
+            payment_hash=VALUES(payment_hash),
+            destination_pubkey=VALUES(destination_pubkey),
+            description=VALUES(description),
+            preimage=COALESCE(VALUES(preimage), preimage),
+            htlc_status=COALESCE(VALUES(htlc_status), htlc_status),
+            htlc_expiry_time=COALESCE(VALUES(htlc_expiry_time), htlc_expiry_time)`,
+        [
+          this.identity,
+          payment.id,
+          payment.details.invoice,
+          payment.details.htlcDetails.paymentHash,
+          payment.details.destinationPubkey,
+          payment.details.description,
+          payment.details.htlcDetails?.preimage,
+          payment.details.htlcDetails?.status ?? null,
+          payment.details.htlcDetails?.expiryTime ?? 0,
+        ]
+      );
+    }
+
+    if (payment.details?.type === "token") {
+      await conn.query(
+        `INSERT INTO brz_payment_details_token
+          (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE
+            metadata=VALUES(metadata),
+            tx_hash=VALUES(tx_hash),
+            tx_type=VALUES(tx_type),
+            invoice_details=COALESCE(VALUES(invoice_details), invoice_details)`,
+        [
+          this.identity,
+          payment.id,
+          JSON.stringify(payment.details.metadata),
+          payment.details.txHash,
+          payment.details.txType,
+          payment.details.invoiceDetails
+            ? JSON.stringify(payment.details.invoiceDetails)
+            : null,
+        ]
       );
     }
   }
+
+  _paymentUpdateLockName(paymentId) {
+    const lockKey = Buffer.concat([this.identity, Buffer.from(paymentId)]);
+    return `brz_payment_${crypto
+      .createHash("sha256")
+      .update(lockKey)
+      .digest("hex")
+      .slice(0, 32)}`;
+  }
+
+  _normalizePaymentStatus(status) {
+    return typeof status === "string" ? status.toLowerCase() : status;
+  }
+
+  _isFinalPaymentStatus(status) {
+    const normalized = this._normalizePaymentStatus(status);
+    return normalized === "completed" || normalized === "failed";
+  }
+
 
   async getPaymentById(id) {
     try {

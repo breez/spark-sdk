@@ -5,6 +5,7 @@ mod tests;
 
 use breez_sdk_spark::StorageError;
 use macros::async_trait;
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::js_sys::Promise;
@@ -74,6 +75,15 @@ fn get_detailed_js_error(js_error: &JsValue) -> String {
     "JavaScript storage operation failed (Unknown error type)".to_string()
 }
 
+fn should_emit_from_js(value: &JsValue) -> Result<bool, StorageError> {
+    value.as_bool().ok_or_else(|| {
+        StorageError::Implementation(
+            "applyPaymentUpdate must return a boolean indicating whether to emit an event"
+                .to_string(),
+        )
+    })
+}
+
 // This assumes that we'll always be running in a single thread (true for Wasm environments)
 unsafe impl Send for WasmStorage {}
 unsafe impl Sync for WasmStorage {}
@@ -131,14 +141,17 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(payments.into_iter().map(|p| p.into()).collect())
     }
 
-    async fn insert_payment(&self, payment: breez_sdk_spark::Payment) -> Result<(), StorageError> {
+    async fn apply_payment_update(
+        &self,
+        payment: breez_sdk_spark::Payment,
+    ) -> Result<bool, StorageError> {
         let promise = self
             .storage
-            .insert_payment(payment.into())
+            .apply_payment_update(payment.into())
             .map_err(js_error_to_storage_error)?;
         let future = JsFuture::from(promise);
-        future.await.map_err(js_error_to_storage_error)?;
-        Ok(())
+        let result = future.await.map_err(js_error_to_storage_error)?;
+        should_emit_from_js(&result)
     }
 
     async fn insert_payment_metadata(
@@ -478,7 +491,15 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     setCachedItem: (key: string, value: string) => Promise<void>;
     deleteCachedItem: (key: string) => Promise<void>;
     listPayments: (request: StorageListPaymentsRequest) => Promise<Payment[]>;
-    insertPayment: (payment: Payment) => Promise<void>;
+    /**
+     * Insert or update a payment, applying a terminal-status guard.
+     *
+     * Returns `true` when the caller should emit a payment event (the row was
+     * newly inserted, or its status transitioned). Returns `false` for
+     * redundant same-status updates and for rejected updates that would
+     * replace an already-terminal status.
+     */
+    applyPaymentUpdate: (payment: Payment) => Promise<boolean>;
     insertPaymentMetadata: (paymentId: string, metadata: PaymentMetadata) => Promise<void>;
     getPaymentById: (id: string) => Promise<Payment>;
     getPaymentByInvoice: (invoice: string) => Promise<Payment>;
@@ -523,8 +544,8 @@ extern "C" {
         request: StorageListPaymentsRequest,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = insertPayment, catch)]
-    pub fn insert_payment(this: &Storage, payment: Payment) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(structural, method, js_name = applyPaymentUpdate, catch)]
+    pub fn apply_payment_update(this: &Storage, payment: Payment) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = insertPaymentMetadata, catch)]
     pub fn insert_payment_metadata(

@@ -16,7 +16,7 @@ use crate::{
     events::{EventListener, SdkEvent},
     persist::ObjectCacheRepository,
     token_conversion::TokenConverter,
-    utils::{payments::get_payment_and_emit_event, run_with_shutdown},
+    utils::{payments::emit_payment_update, run_with_shutdown},
 };
 use crate::{PaymentType, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
 
@@ -275,8 +275,7 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
                 cleanup_claimed_deposit(sdk, &tx_id, vout).await;
             }
             if let Ok(payment) = Payment::try_from(transfer) {
-                sdk.finalize_payment(payment).await;
-                true
+                sdk.finalize_payment(payment).await
             } else {
                 false
             }
@@ -285,13 +284,22 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
             info!("Transfer claim starting");
             let mut payment_emitted = false;
             if let Ok(mut payment) = Payment::try_from(transfer) {
-                if let Err(e) = sdk.storage.insert_payment(payment.clone()).await {
-                    error!("Failed to insert pending payment: {e:?}");
-                }
+                // Persist before syncing metadata so the Pending payment is not
+                // delayed by the metadata fetch.
+                let should_emit = match sdk.storage.apply_payment_update(payment.clone()).await {
+                    Ok(should_emit) => should_emit,
+                    Err(e) => {
+                        error!("Failed to apply pending payment update: {e:?}");
+                        return false;
+                    }
+                };
 
                 sdk.sync_single_lnurl_metadata(&mut payment).await;
-                get_payment_and_emit_event(&sdk.storage, &sdk.event_emitter, payment).await;
-                payment_emitted = true;
+
+                // Drop this Pending event if sync already saw the transfer Completed.
+                payment_emitted =
+                    emit_payment_update(&sdk.storage, &sdk.event_emitter, payment, should_emit)
+                        .await;
             }
             payment_emitted
         }

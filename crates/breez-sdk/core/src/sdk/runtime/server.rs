@@ -78,9 +78,18 @@ struct ServerRuntimeEventHandler {
 impl crate::events::RuntimeEventHandler for ServerRuntimeEventHandler {
     async fn handle(&self, event: RuntimeEvent) {
         match event {
-            RuntimeEvent::DepositClaimed { payment } => {
-                get_payment_and_emit_event(&self.sdk.storage, &self.sdk.event_emitter, *payment)
+            RuntimeEvent::DepositClaimed {
+                payment,
+                should_emit_event,
+            } => {
+                if should_emit_event {
+                    get_payment_and_emit_event(
+                        &self.sdk.storage,
+                        &self.sdk.event_emitter,
+                        *payment,
+                    )
                     .await;
+                }
             }
             RuntimeEvent::StableBalanceConversionCompleted => {}
         }

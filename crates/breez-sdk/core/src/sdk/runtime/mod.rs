@@ -23,6 +23,7 @@ pub(crate) enum RuntimeEvent {
     StableBalanceConversionCompleted,
     DepositClaimed {
         payment: Box<crate::models::Payment>,
+        should_emit_event: bool,
     },
 }
 

@@ -2,6 +2,8 @@
  * CommonJS implementation for Node.js PostgreSQL Storage
  */
 
+const crypto = require("crypto");
+
 let pg;
 try {
   const mainModule = require.main;
@@ -353,126 +355,172 @@ class PostgresStorage {
     }
   }
 
-  async insertPayment(payment) {
+  async applyPaymentUpdate(payment) {
+    if (!payment) {
+      throw new StorageError("Payment cannot be null or undefined");
+    }
+
     try {
-      if (!payment) {
-        throw new StorageError("Payment cannot be null or undefined");
-      }
-
-      await this._withTransaction(async (client) => {
-        const withdrawTxId =
-          payment.details?.type === "withdraw" ? payment.details.txId : null;
-        const depositTxId =
-          payment.details?.type === "deposit" ? payment.details.txId : null;
-        const spark = payment.details?.type === "spark" ? true : null;
-
+      return await this._withTransaction(async (client) => {
+        const lockKey = this._paymentUpdateLockKey(payment.id);
         await client.query(
-          `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-           ON CONFLICT(user_id, id) DO UPDATE SET
-             payment_type=EXCLUDED.payment_type,
-             status=EXCLUDED.status,
-             amount=EXCLUDED.amount,
-             fees=EXCLUDED.fees,
-             timestamp=EXCLUDED.timestamp,
-             method=EXCLUDED.method,
-             withdraw_tx_id=EXCLUDED.withdraw_tx_id,
-             deposit_tx_id=EXCLUDED.deposit_tx_id,
-             spark=EXCLUDED.spark`,
-          [
-            this.identity,
-            payment.id,
-            payment.paymentType,
-            payment.status,
-            payment.amount.toString(),
-            payment.fees.toString(),
-            payment.timestamp,
-            payment.method ? JSON.stringify(payment.method) : null,
-            withdrawTxId,
-            depositTxId,
-            spark,
-          ]
+          "SELECT pg_advisory_xact_lock($1::bigint)",
+          [lockKey]
         );
 
-        if (
-          payment.details?.type === "spark" &&
-          (payment.details.invoiceDetails != null ||
-            payment.details.htlcDetails != null)
-        ) {
-          await client.query(
-            `INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT(user_id, payment_id) DO UPDATE SET
-               invoice_details=COALESCE(EXCLUDED.invoice_details, brz_payment_details_spark.invoice_details),
-               htlc_details=COALESCE(EXCLUDED.htlc_details, brz_payment_details_spark.htlc_details)`,
-            [
-              this.identity,
-              payment.id,
-              payment.details.invoiceDetails
-                ? JSON.stringify(payment.details.invoiceDetails)
-                : null,
-              payment.details.htlcDetails
-                ? JSON.stringify(payment.details.htlcDetails)
-                : null,
-            ]
+        const { rows } = await client.query(
+          "SELECT status FROM brz_payments WHERE user_id = $1 AND id = $2 FOR UPDATE",
+          [this.identity, payment.id]
+        );
+        const stored = rows.length > 0
+          ? this._normalizePaymentStatus(rows[0].status)
+          : null;
+        const next = this._normalizePaymentStatus(payment.status);
+
+        if (stored != null
+            && this._isFinalPaymentStatus(stored)
+            && stored !== next) {
+          console.warn(
+            `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
           );
+          return false;
         }
 
-        if (payment.details?.type === "lightning") {
-          await client.query(
-            `INSERT INTO brz_payment_details_lightning
-              (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-              ON CONFLICT(user_id, payment_id) DO UPDATE SET
-                invoice=EXCLUDED.invoice,
-                payment_hash=EXCLUDED.payment_hash,
-                destination_pubkey=EXCLUDED.destination_pubkey,
-                description=EXCLUDED.description,
-                preimage=COALESCE(EXCLUDED.preimage, brz_payment_details_lightning.preimage),
-                htlc_status=COALESCE(EXCLUDED.htlc_status, brz_payment_details_lightning.htlc_status),
-                htlc_expiry_time=COALESCE(EXCLUDED.htlc_expiry_time, brz_payment_details_lightning.htlc_expiry_time)`,
-            [
-              this.identity,
-              payment.id,
-              payment.details.invoice,
-              payment.details.htlcDetails.paymentHash,
-              payment.details.destinationPubkey,
-              payment.details.description,
-              payment.details.htlcDetails?.preimage,
-              payment.details.htlcDetails?.status ?? null,
-              payment.details.htlcDetails?.expiryTime ?? 0,
-            ]
+        const sameStatus = stored === next;
+        if (sameStatus) {
+          console.debug(
+            `Skipping redundant payment event: id=${payment.id} status=${next}`
           );
         }
-
-        if (payment.details?.type === "token") {
-          await client.query(
-            `INSERT INTO brz_payment_details_token
-              (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
-              VALUES ($1, $2, $3, $4, $5, $6)
-              ON CONFLICT(user_id, payment_id) DO UPDATE SET
-                metadata=EXCLUDED.metadata,
-                tx_hash=EXCLUDED.tx_hash,
-                tx_type=EXCLUDED.tx_type,
-                invoice_details=COALESCE(EXCLUDED.invoice_details, brz_payment_details_token.invoice_details)`,
-            [
-              this.identity,
-              payment.id,
-              JSON.stringify(payment.details.metadata),
-              payment.details.txHash,
-              payment.details.txType,
-              payment.details.invoiceDetails
-                ? JSON.stringify(payment.details.invoiceDetails)
-                : null,
-            ]
-          );
-        }
+        await this._runPaymentUpsert(client, payment);
+        return !sameStatus;
       });
     } catch (error) {
       if (error instanceof StorageError) throw error;
       throw new StorageError(
-        `Failed to insert payment '${payment.id}': ${error.message}`,
+        `Failed to apply payment update '${payment.id}': ${error.message}`,
         error
+      );
+    }
+  }
+
+  _paymentUpdateLockKey(paymentId) {
+    return crypto
+      .createHash("sha256")
+      .update("brz_payment_update")
+      .update(this.identity)
+      .update(Buffer.from(paymentId))
+      .digest()
+      .readBigInt64BE(0)
+      .toString();
+  }
+
+  async _runPaymentUpsert(client, payment) {
+    const withdrawTxId =
+      payment.details?.type === "withdraw" ? payment.details.txId : null;
+    const depositTxId =
+      payment.details?.type === "deposit" ? payment.details.txId : null;
+    const spark = payment.details?.type === "spark" ? true : null;
+
+    await client.query(
+      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT(user_id, id) DO UPDATE SET
+         payment_type=EXCLUDED.payment_type,
+         status=EXCLUDED.status,
+         amount=EXCLUDED.amount,
+         fees=EXCLUDED.fees,
+         timestamp=EXCLUDED.timestamp,
+         method=EXCLUDED.method,
+         withdraw_tx_id=EXCLUDED.withdraw_tx_id,
+         deposit_tx_id=EXCLUDED.deposit_tx_id,
+         spark=EXCLUDED.spark`,
+      [
+        this.identity,
+        payment.id,
+        payment.paymentType,
+        payment.status,
+        payment.amount.toString(),
+        payment.fees.toString(),
+        payment.timestamp,
+        payment.method ? JSON.stringify(payment.method) : null,
+        withdrawTxId,
+        depositTxId,
+        spark,
+      ]
+    );
+
+    if (
+      payment.details?.type === "spark" &&
+      (payment.details.invoiceDetails != null ||
+        payment.details.htlcDetails != null)
+    ) {
+      await client.query(
+        `INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT(user_id, payment_id) DO UPDATE SET
+           invoice_details=COALESCE(EXCLUDED.invoice_details, brz_payment_details_spark.invoice_details),
+           htlc_details=COALESCE(EXCLUDED.htlc_details, brz_payment_details_spark.htlc_details)`,
+        [
+          this.identity,
+          payment.id,
+          payment.details.invoiceDetails
+            ? JSON.stringify(payment.details.invoiceDetails)
+            : null,
+          payment.details.htlcDetails
+            ? JSON.stringify(payment.details.htlcDetails)
+            : null,
+        ]
+      );
+    }
+
+    if (payment.details?.type === "lightning") {
+      await client.query(
+        `INSERT INTO brz_payment_details_lightning
+          (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT(user_id, payment_id) DO UPDATE SET
+            invoice=EXCLUDED.invoice,
+            payment_hash=EXCLUDED.payment_hash,
+            destination_pubkey=EXCLUDED.destination_pubkey,
+            description=EXCLUDED.description,
+            preimage=COALESCE(EXCLUDED.preimage, brz_payment_details_lightning.preimage),
+            htlc_status=COALESCE(EXCLUDED.htlc_status, brz_payment_details_lightning.htlc_status),
+            htlc_expiry_time=COALESCE(EXCLUDED.htlc_expiry_time, brz_payment_details_lightning.htlc_expiry_time)`,
+        [
+          this.identity,
+          payment.id,
+          payment.details.invoice,
+          payment.details.htlcDetails.paymentHash,
+          payment.details.destinationPubkey,
+          payment.details.description,
+          payment.details.htlcDetails?.preimage,
+          payment.details.htlcDetails?.status ?? null,
+          payment.details.htlcDetails?.expiryTime ?? 0,
+        ]
+      );
+    }
+
+    if (payment.details?.type === "token") {
+      await client.query(
+        `INSERT INTO brz_payment_details_token
+          (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT(user_id, payment_id) DO UPDATE SET
+            metadata=EXCLUDED.metadata,
+            tx_hash=EXCLUDED.tx_hash,
+            tx_type=EXCLUDED.tx_type,
+            invoice_details=COALESCE(EXCLUDED.invoice_details, brz_payment_details_token.invoice_details)`,
+        [
+          this.identity,
+          payment.id,
+          JSON.stringify(payment.details.metadata),
+          payment.details.txHash,
+          payment.details.txType,
+          payment.details.invoiceDetails
+            ? JSON.stringify(payment.details.invoiceDetails)
+            : null,
+        ]
       );
     }
   }
