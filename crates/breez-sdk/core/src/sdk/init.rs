@@ -52,13 +52,6 @@ impl BreezSdk {
 
     /// Starts the SDK runtime services selected during construction.
     pub(super) async fn start(&self, initial_synced_sender: watch::Sender<bool>) {
-        // Client mode runs auto-optimization in the background, so the
-        // forwarder must be live before any optimization can fire. Server
-        // mode defers the spawn to the first explicit `start_leaf_optimization`
-        // call — see [`Self::ensure_optimization_forwarder_spawned`].
-        if self.runtime.starts_background_services() {
-            self.ensure_optimization_forwarder_spawned().await;
-        }
         self.runtime
             .start_sdk_services(self, initial_synced_sender)
             .await;

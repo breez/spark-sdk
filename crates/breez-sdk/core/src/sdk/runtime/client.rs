@@ -35,6 +35,11 @@ impl RuntimeProfile for ClientRuntime {
     }
 
     async fn start_sdk_services(&self, sdk: &BreezSdk, initial_synced_sender: watch::Sender<bool>) {
+        // Auto-optimization can fire from `BackgroundProcessor` in client
+        // mode, so the forwarder must be live before any of the background
+        // tasks below start. Server mode defers this to the first explicit
+        // `start_leaf_optimization` call.
+        sdk.ensure_optimization_forwarder_spawned().await;
         register_client_sync_listener(sdk).await;
         register_client_runtime_event_handler(sdk).await;
         sdk.spawn_spark_private_mode_initialization();
