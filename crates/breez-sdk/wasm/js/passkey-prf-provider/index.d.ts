@@ -63,6 +63,15 @@ export declare class PasskeyCredentialNotFoundError extends Error {
 }
 
 /**
+ * Thrown when the user actively dismisses the OS passkey prompt.
+ * Distinct from `PasskeyTimedOutError`: hosts should not auto-retry a
+ * deliberate cancel.
+ */
+export declare class PasskeyUserCancelledError extends Error {
+    constructor(message?: string);
+}
+
+/**
  * Per-call options for {@link PasskeyProvider.deriveSeeds}. All fields
  * optional.
  */
@@ -80,22 +89,11 @@ export interface DeriveSeedOptions {
     allowCredentials?: Uint8Array[];
 
     /**
-     * Per-call control over the platform's "fast-fail when no local
-     * credential is available" behavior. On the web the closest
-     * analogue is the WebAuthn L3 immediate-mediation flag.
-     *
-     * `true` (the historical default) opts into immediate mediation
-     * when the browser advertises the capability via
-     * `PublicKeyCredential.getClientCapabilities('public-key')`. The
-     * browser then fast-fails a no-credential ceremony instead of
-     * showing the cross-device QR sheet.
-     *
-     * `false` falls back to the browser's standard picker (cross-
-     * device QR sign-in, hybrid transports). Useful for hosts that
-     * want users to be able to sign in from a passkey on a paired
-     * device.
-     *
-     * Omitted (the default) preserves the historical behavior.
+     * Cross-platform control over "fast-fail when no local credential
+     * is available". The web provider currently ignores it: the
+     * WebAuthn immediate-mediation flag it maps to is still
+     * experimental, so the standard browser picker is always used. It
+     * will be honored on web once that flag reaches stable browsers.
      */
     preferImmediatelyAvailableCredentials?: boolean;
 

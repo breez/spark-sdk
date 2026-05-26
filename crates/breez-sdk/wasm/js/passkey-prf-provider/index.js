@@ -52,16 +52,6 @@ const NO_CRED_FAST_FAIL_MS = 250;
 const BIOMETRIC_TIMEOUT_MS = 55_000;
 
 /**
- * Module-level caches. Survive `PasskeyProvider` reconstruction
- * (e.g. host signs out and signs back in within the same tab), so
- * the capability probes only run once per page load.
- *   _immediateGetCache: undefined = not probed, null = unsupported, true/false = result
- *   _chromeMajorCache:  undefined = not parsed, NaN = non-Chrome, number = major
- */
-let _immediateGetCache;
-let _chromeMajorCache;
-
-/**
  * Generate cryptographically random bytes.
  * @param {number} length
  * @returns {Uint8Array}
@@ -143,6 +133,18 @@ export class PasskeyCredentialNotFoundError extends Error {
     constructor(message = 'Credential not found') {
         super(message);
         this.name = 'PasskeyCredentialNotFoundError';
+    }
+}
+
+/**
+ * Thrown when the user actively dismisses the OS passkey prompt.
+ * Distinct from `PasskeyTimedOutError` (the prompt timed out with no
+ * interaction): hosts should not auto-retry a deliberate cancel.
+ */
+export class PasskeyUserCancelledError extends Error {
+    constructor(message = 'User cancelled authentication') {
+        super(message);
+        this.name = 'PasskeyUserCancelledError';
     }
 }
 
@@ -350,54 +352,6 @@ export class PasskeyProvider {
         const v = this._lastObservedCredentialId;
         this._lastObservedCredentialId = null;
         return v;
-    }
-
-    /**
-     * Whether `mediation`/`uiMode: 'immediate'` is supported in this
-     * tab. Result cached at module scope (see top of file) so
-     * `PasskeyProvider` reconstruction doesn't re-probe.
-     * @returns {Promise<boolean>}
-     * @private
-     */
-    async _supportsImmediateGet() {
-        if (_immediateGetCache !== undefined) return _immediateGetCache === true;
-        try {
-            if (typeof PublicKeyCredential === 'undefined'
-                || typeof PublicKeyCredential.getClientCapabilities !== 'function') {
-                _immediateGetCache = null;
-                return false;
-            }
-            const caps = await PublicKeyCredential.getClientCapabilities('public-key');
-            _immediateGetCache = caps?.immediateGet === true;
-        } catch {
-            _immediateGetCache = null;
-        }
-        return _immediateGetCache === true;
-    }
-
-    /**
-     * Set the immediate-mediation option on the get() request, picking
-     * the right field name across the spec transition. Chrome <= 144
-     * implements the original `mediation: 'immediate'`; Chrome 145+
-     * renamed it to `uiMode: 'immediate'`. Both names are set when
-     * the field-rename milestone is unknown so older Chromes ignore
-     * `uiMode` (unknown property) and newer Chromes ignore the
-     * `mediation` value because the enum no longer accepts it. Since
-     * both throw TypeError if a known property gets an unknown
-     * value, we pick by Chrome major when detectable and fall back
-     * to `uiMode` for non-Chrome / unknown UA.
-     * @private
-     */
-    _applyImmediateOption(options) {
-        if (_chromeMajorCache === undefined) {
-            const m = (typeof navigator !== 'undefined' && /Chrome\/(\d+)/.exec(navigator.userAgent || ''));
-            _chromeMajorCache = m ? parseInt(m[1], 10) : NaN;
-        }
-        if (Number.isFinite(_chromeMajorCache) && _chromeMajorCache <= 144) {
-            options.mediation = 'immediate';
-        } else {
-            options.uiMode = 'immediate';
-        }
     }
 
     /**
@@ -666,20 +620,6 @@ export class PasskeyProvider {
         };
         if (Array.isArray(this.hints) && this.hints.length > 0) {
             publicKey.hints = [...this.hints];
-        }
-        // `preferImmediatelyAvailableCredentials` is the cross-platform
-        // name; on the web the closest analogue is the WebAuthn L3
-        // immediate-mediation flag. Default (undefined / true) keeps
-        // the historical behavior; explicit `false` opts out so the
-        // browser falls through to its standard picker (cross-device
-        // QR sign-in, hybrid transports, etc.).
-        const preferImmediate = options.preferImmediatelyAvailableCredentials !== false;
-        // Immediate mediation is privacy-gated to empty allowCredentials
-        // and only enabled when getClientCapabilities() advertises it.
-        if (preferImmediate
-            && allowCredentials.length === 0
-            && await this._supportsImmediateGet()) {
-            this._applyImmediateOption({ publicKey });
         }
         if (typeof this.defaultTimeoutMs === 'number' && this.defaultTimeoutMs > 0) {
             publicKey.timeout = this.defaultTimeoutMs;
@@ -968,7 +908,7 @@ export class PasskeyProvider {
             if (elapsedMs >= BIOMETRIC_TIMEOUT_MS) {
                 return new PasskeyTimedOutError();
             }
-            return new Error('User cancelled authentication');
+            return new PasskeyUserCancelledError();
         }
         return this._mapError(error);
     }
@@ -1000,14 +940,14 @@ export class PasskeyProvider {
                     error.message.includes('denied') ||
                     error.message.includes('The operation either timed out or was not allowed')
                 )) {
-                    return new Error('User cancelled authentication');
+                    return new PasskeyUserCancelledError();
                 }
                 return error;
             case 'SecurityError':
             case 'InvalidStateError':
                 return new Error(`Authentication failed: ${error.message}`);
             case 'AbortError':
-                return new Error('User cancelled authentication');
+                return new PasskeyUserCancelledError();
             default:
                 return error;
         }

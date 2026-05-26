@@ -1,6 +1,5 @@
 use std::sync::OnceLock;
 
-use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
@@ -25,6 +24,9 @@ pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderEr
             }
             "PasskeyTimedOutError" => {
                 return PrfProviderError::UserTimedOut;
+            }
+            "PasskeyUserCancelledError" => {
+                return PrfProviderError::UserCancelled;
             }
             "PasskeyCredentialNotFoundError" => {
                 let message = js_sys::Reflect::get(&js_error, &JsValue::from_str("message"))
@@ -106,18 +108,10 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         // reconstructing themselves.
         let options = build_derive_seeds_options(&request)?;
 
-        let target: &JsValue = self.inner.as_ref();
-        let func = js_sys::Reflect::get(target, &JsValue::from_str("deriveSeeds"))
-            .map_err(js_error_to_prf_provider_error)?
-            .dyn_into::<js_sys::Function>()
-            .map_err(|_| PrfProviderError::Generic("deriveSeeds is not a function".to_string()))?;
-        let result_promise = func
-            .call2(target, &salts_array, &options)
-            .map_err(js_error_to_prf_provider_error)?
-            .dyn_into::<Promise>()
-            .map_err(|_| {
-                PrfProviderError::Generic("deriveSeeds did not return a Promise".to_string())
-            })?;
+        let result_promise = self
+            .inner
+            .derive_seeds(salts_array, options)
+            .map_err(js_error_to_prf_provider_error)?;
         let result = JsFuture::from(result_promise)
             .await
             .map_err(js_error_to_prf_provider_error)?;
@@ -159,12 +153,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         ) {
             return None;
         }
-        let target: &JsValue = self.inner.as_ref();
-        let func = js_sys::Reflect::get(target, &JsValue::from_str("takeLastObservedCredentialId"))
-            .ok()?
-            .dyn_into::<js_sys::Function>()
-            .ok()?;
-        let raw = func.call0(target).ok()?;
+        let raw = self.inner.take_last_observed_credential_id().ok()?;
         if raw.is_undefined() || raw.is_null() {
             return None;
         }
@@ -181,22 +170,11 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
             return Err(PrfProviderError::PrfNotSupported);
         }
 
-        let target: &JsValue = self.inner.as_ref();
-        let func = js_sys::Reflect::get(target, &JsValue::from_str("createPasskey"))
-            .map_err(js_error_to_prf_provider_error)?
-            .dyn_into::<js_sys::Function>()
-            .map_err(|_| {
-                PrfProviderError::Generic("createPasskey is not a function".to_string())
-            })?;
-
         let js_exclude = build_exclude_credentials(&exclude_credentials);
-        let result_promise = func
-            .call1(target, &js_exclude)
-            .map_err(js_error_to_prf_provider_error)?
-            .dyn_into::<Promise>()
-            .map_err(|_| {
-                PrfProviderError::Generic("createPasskey did not return a Promise".to_string())
-            })?;
+        let result_promise = self
+            .inner
+            .create_passkey(js_exclude)
+            .map_err(js_error_to_prf_provider_error)?;
         let result = JsFuture::from(result_promise)
             .await
             .map_err(js_error_to_prf_provider_error)?;
@@ -208,22 +186,10 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         if !self.js_has_method("getKnownCredentialIds", &self.supports_get_known) {
             return Ok(vec![]);
         }
-        let target: &JsValue = self.inner.as_ref();
-        let func = js_sys::Reflect::get(target, &JsValue::from_str("getKnownCredentialIds"))
-            .map_err(js_error_to_prf_provider_error)?
-            .dyn_into::<js_sys::Function>()
-            .map_err(|_| {
-                PrfProviderError::Generic("getKnownCredentialIds is not a function".to_string())
-            })?;
-        let promise = func
-            .call0(target)
-            .map_err(js_error_to_prf_provider_error)?
-            .dyn_into::<Promise>()
-            .map_err(|_| {
-                PrfProviderError::Generic(
-                    "getKnownCredentialIds did not return a Promise".to_string(),
-                )
-            })?;
+        let promise = self
+            .inner
+            .get_known_credential_ids()
+            .map_err(js_error_to_prf_provider_error)?;
         let result = JsFuture::from(promise)
             .await
             .map_err(js_error_to_prf_provider_error)?;
@@ -241,23 +207,11 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         if !self.js_has_method("removeKnownCredentialId", &self.supports_remove_known) {
             return Ok(());
         }
-        let target: &JsValue = self.inner.as_ref();
-        let func = js_sys::Reflect::get(target, &JsValue::from_str("removeKnownCredentialId"))
-            .map_err(js_error_to_prf_provider_error)?
-            .dyn_into::<js_sys::Function>()
-            .map_err(|_| {
-                PrfProviderError::Generic("removeKnownCredentialId is not a function".to_string())
-            })?;
         let arg = js_sys::Uint8Array::from(id.as_slice());
-        let promise = func
-            .call1(target, &arg)
-            .map_err(js_error_to_prf_provider_error)?
-            .dyn_into::<Promise>()
-            .map_err(|_| {
-                PrfProviderError::Generic(
-                    "removeKnownCredentialId did not return a Promise".to_string(),
-                )
-            })?;
+        let promise = self
+            .inner
+            .remove_known_credential_id(arg)
+            .map_err(js_error_to_prf_provider_error)?;
         JsFuture::from(promise)
             .await
             .map_err(js_error_to_prf_provider_error)?;
@@ -268,22 +222,10 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         if !self.js_has_method("clearKnownCredentialIds", &self.supports_clear_known) {
             return Ok(());
         }
-        let target: &JsValue = self.inner.as_ref();
-        let func = js_sys::Reflect::get(target, &JsValue::from_str("clearKnownCredentialIds"))
-            .map_err(js_error_to_prf_provider_error)?
-            .dyn_into::<js_sys::Function>()
-            .map_err(|_| {
-                PrfProviderError::Generic("clearKnownCredentialIds is not a function".to_string())
-            })?;
-        let promise = func
-            .call0(target)
-            .map_err(js_error_to_prf_provider_error)?
-            .dyn_into::<Promise>()
-            .map_err(|_| {
-                PrfProviderError::Generic(
-                    "clearKnownCredentialIds did not return a Promise".to_string(),
-                )
-            })?;
+        let promise = self
+            .inner
+            .clear_known_credential_ids()
+            .map_err(js_error_to_prf_provider_error)?;
         JsFuture::from(promise)
             .await
             .map_err(js_error_to_prf_provider_error)?;
@@ -477,6 +419,15 @@ export interface PrfProvider {
      * providers without a registry (no-op default).
      */
     clearKnownCredentialIds?(): Promise<void>;
+
+    /**
+     * Optional. Read-and-clear the credential ID observed during the
+     * most recent successful assertion. The SDK calls this after sign-in
+     * to surface the credential ID to the caller. Returns `null` when no
+     * assertion has completed since the last read. Providers that don't
+     * track this may omit it.
+     */
+    takeLastObservedCredentialId?(): Uint8Array | null;
 }
 
 /**
@@ -528,6 +479,36 @@ extern "C" {
     #[wasm_bindgen(typescript_type = "PrfProvider")]
     pub type PrfProvider;
 
+    #[wasm_bindgen(structural, method, js_name = "deriveSeeds", catch)]
+    pub fn derive_seeds(
+        this: &PrfProvider,
+        salts: js_sys::Array,
+        options: JsValue,
+    ) -> Result<Promise, JsValue>;
+
     #[wasm_bindgen(structural, method, js_name = "isSupported", catch)]
     pub fn is_supported(this: &PrfProvider) -> Result<Promise, JsValue>;
+
+    // Optional methods. Custom providers may omit them; callers probe
+    // with `js_has_method` before invoking.
+    #[wasm_bindgen(structural, method, js_name = "createPasskey", catch)]
+    pub fn create_passkey(
+        this: &PrfProvider,
+        exclude_credentials: JsValue,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "takeLastObservedCredentialId", catch)]
+    pub fn take_last_observed_credential_id(this: &PrfProvider) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "getKnownCredentialIds", catch)]
+    pub fn get_known_credential_ids(this: &PrfProvider) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "removeKnownCredentialId", catch)]
+    pub fn remove_known_credential_id(
+        this: &PrfProvider,
+        id: js_sys::Uint8Array,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = "clearKnownCredentialIds", catch)]
+    pub fn clear_known_credential_ids(this: &PrfProvider) -> Result<Promise, JsValue>;
 }
