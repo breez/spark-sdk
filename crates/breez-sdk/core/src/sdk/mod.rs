@@ -5,6 +5,7 @@ mod helpers;
 mod init;
 mod lightning_address;
 mod lnurl;
+mod optimization_forwarder;
 mod payments;
 mod runtime;
 mod sync;

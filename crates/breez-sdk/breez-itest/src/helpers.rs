@@ -331,6 +331,7 @@ pub async fn build_sdk_with_custom_config_and_backend(
         config.lnurl_domain = None;
     }
 
+    let background_tasks_enabled = config.background_tasks_enabled;
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
     let builder = SdkBuilder::new(config, seed);
@@ -345,12 +346,17 @@ pub async fn build_sdk_with_custom_config_and_backend(
     let event_listener = Box::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
-    // Ensure initial sync completes
-    let _ = sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(true),
-        })
-        .await?;
+    // Ensure initial sync completes. Server mode rejects `ensure_synced=true`
+    // (there's no background sync to await), so drive it explicitly instead.
+    if background_tasks_enabled {
+        let _ = sdk
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(true),
+            })
+            .await?;
+    } else {
+        sdk.sync_wallet(SyncWalletRequest {}).await?;
+    }
 
     Ok(SdkInstance {
         sdk,
@@ -1201,6 +1207,8 @@ pub enum EventResult {
     Synced,
     /// Lightning address changed
     LightningAddressChanged(Option<LightningAddressInfo>),
+    /// Leaf optimization reached a terminal state (`Completed` or `Skipped`).
+    OptimizationFinished,
 }
 
 pub async fn clear_event_receiver(event_rx: &mut mpsc::Receiver<SdkEvent>) {
@@ -1463,6 +1471,45 @@ pub async fn wait_for_synced_event(
             Ok(None)
         }
     })
+    .await
+    .map(|_| ())
+}
+
+/// Wait for leaf optimization to reach a terminal state.
+///
+/// Succeeds on `Completed` and `Skipped` (both prove the
+/// `WalletEvent::Optimization` → `SdkEvent::Optimization` bridge is wired
+/// up). Fails on `Failed`/`Cancelled` and on timeout — a timeout is the
+/// exact symptom of the bridge being missing.
+pub async fn wait_for_optimization_completed_event(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    timeout_secs: u64,
+) -> Result<()> {
+    wait_for_event(
+        event_rx,
+        timeout_secs,
+        "Optimization",
+        |event| match event {
+            SdkEvent::Optimization { optimization_event } => match optimization_event {
+                OptimizationEvent::Completed | OptimizationEvent::Skipped => {
+                    info!("Received Optimization terminal event: {optimization_event:?}");
+                    Ok(Some(EventResult::OptimizationFinished))
+                }
+                OptimizationEvent::Failed { error } => {
+                    Err(anyhow::anyhow!("Optimization failed: {error}"))
+                }
+                OptimizationEvent::Cancelled => Err(anyhow::anyhow!("Optimization was cancelled")),
+                other => {
+                    info!("Optimization progress event: {other:?}");
+                    Ok(None)
+                }
+            },
+            other => {
+                info!("Ignored SDK event: {other:?}");
+                Ok(None)
+            }
+        },
+    )
     .await
     .map(|_| ())
 }

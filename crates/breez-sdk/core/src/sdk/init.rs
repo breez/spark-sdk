@@ -5,7 +5,10 @@ use tracing::{Instrument, error, info};
 
 use crate::{Network, error::SdkError, persist::ObjectCacheRepository};
 
-use super::{BreezSdk, BreezSdkParams, helpers::validate_breez_api_key};
+use super::{
+    BreezSdk, BreezSdkParams, helpers::validate_breez_api_key,
+    optimization_forwarder::spawn_optimization_forwarder,
+};
 
 impl BreezSdk {
     /// Creates a new instance of the `BreezSdk`
@@ -48,6 +51,7 @@ impl BreezSdk {
 
     /// Starts the SDK runtime services selected during construction.
     pub(super) async fn start(&self, initial_synced_sender: watch::Sender<bool>) {
+        spawn_optimization_forwarder(self);
         self.runtime
             .start_sdk_services(self, initial_synced_sender)
             .await;
