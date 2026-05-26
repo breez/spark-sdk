@@ -188,7 +188,6 @@ class PasskeyProvider {
   final String _userDisplayName;
   final CredentialRegistry? _credentialRegistry;
   final void Function(RegistryOperation, Object)? _onRegistryError;
-  Uint8List? _lastObservedCredentialId;
 
   PasskeyProvider(PasskeyProviderOptions options)
     : _rpId = options.rpId,
@@ -197,15 +196,6 @@ class PasskeyProvider {
       _userDisplayName = options.userDisplayName ?? (options.userName ?? options.rpName),
       _credentialRegistry = options.credentialRegistry,
       _onRegistryError = options.onRegistryError;
-
-  /// Take ownership of the credential ID captured by the most recent
-  /// successful assertion. Returns `null` if no assertion has
-  /// completed since the last call.
-  Uint8List? takeLastObservedCredentialId() {
-    final v = _lastObservedCredentialId;
-    _lastObservedCredentialId = null;
-    return v;
-  }
 
   /// Derive multiple 32-byte seeds from passkey PRF with the given salts
   /// in as few OS ceremonies as the platform supports (dual-salt

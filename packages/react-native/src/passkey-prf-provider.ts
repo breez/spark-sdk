@@ -305,7 +305,6 @@ export class PasskeyProvider {
   private userDisplayName: string;
   private credentialRegistry: CredentialRegistry | undefined;
   private onRegistryError: ((op: RegistryOperation, err: Error) => void) | undefined;
-  private _lastObservedCredentialId: Uint8Array | null = null;
 
   constructor(options: PasskeyProviderOptions) {
     if (!options?.rpId || options.rpId.length === 0) {
@@ -336,17 +335,6 @@ export class PasskeyProvider {
       }
     }
     this.onRegistryError = options.onRegistryError;
-  }
-
-  /**
-   * Take ownership of the credential ID captured by the most recent
-   * successful assertion. Returns `null` if no assertion has
-   * completed since the last call.
-   */
-  takeLastObservedCredentialId(): Uint8Array | null {
-    const v = this._lastObservedCredentialId;
-    this._lastObservedCredentialId = null;
-    return v;
   }
 
   /**
@@ -433,14 +421,6 @@ export class PasskeyProvider {
       throw mapped;
     }
 
-    // Attempt to capture the asserted credential ID. The native
-    // module already returns just seeds, but every successful
-    // assertion has exactly one credential ID. We defer to the
-    // caller-supplied registry: post-success, the SDK doesn't have a
-    // way to learn the assertion's credential ID through the seeds
-    // path, so the `takeLastObservedCredentialId` slot stays empty
-    // for now. Future revisions of the native plugin can return the
-    // credential ID alongside the seeds.
     return base64Results.map(b64 => base64ToUint8Array(b64));
   }
 
