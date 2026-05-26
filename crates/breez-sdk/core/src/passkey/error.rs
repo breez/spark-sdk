@@ -40,8 +40,34 @@ pub enum ErrorKind {
     Internal,
 }
 
-/// Error type for passkey PRF operations.
-/// Platforms implement `PrfProvider` and return this error type.
+/// Error type for passkey PRF operations. Platforms implement
+/// [`PrfProvider`](super::PrfProvider) and return this type.
+///
+/// # Canonical platform-error mapping
+///
+/// Every binding maps its platform's native errors onto these variants
+/// before they cross the FFI boundary, so hosts pattern-match a single
+/// taxonomy regardless of platform. The mapping code cannot be shared
+/// because the sources differ (the WASM bridge matches the typed JS
+/// error classes the browser provider throws; the Flutter bridge
+/// matches the codes the Dart side emits; React Native matches the
+/// native module's `ERR_*` codes), but every binding targets the same
+/// variants below. Use this as the reference when adding or auditing a
+/// binding's mapping:
+///
+/// - [`PrfNotSupported`](Self::PrfNotSupported): the authenticator has no PRF / hmac-secret extension.
+/// - [`UserCancelled`](Self::UserCancelled): the user actively dismissed the OS prompt.
+/// - [`UserTimedOut`](Self::UserTimedOut): the prompt closed on the platform inactivity timeout, with no user action.
+/// - [`CredentialNotFound`](Self::CredentialNotFound): no credential matched for this RP (includes the `WebAuthn` no-credential fast-fail).
+/// - [`AuthenticationFailed`](Self::AuthenticationFailed): the assertion ran but verification failed (bad PIN, security error).
+/// - [`PrfEvaluationFailed`](Self::PrfEvaluationFailed): the ceremony succeeded but produced no usable PRF output.
+/// - [`Configuration`](Self::Configuration): platform / app misconfiguration (AASA, assetlinks, RP ID scope).
+/// - [`CredentialAlreadyExists`](Self::CredentialAlreadyExists): an `excludeCredentials` entry matched a credential already on the device.
+/// - [`Generic`](Self::Generic): anything a binding cannot classify; carries the raw message.
+///
+/// A binding only maps the variants its platform can actually surface;
+/// the rest fall through to [`Generic`](Self::Generic). That is expected,
+/// not a coverage gap.
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum PrfProviderError {
