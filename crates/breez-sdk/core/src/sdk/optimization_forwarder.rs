@@ -2,11 +2,15 @@
 //! `OptimizationEvent` broadcast channel to `SdkEvent::Optimization` on the
 //! external `EventEmitter`.
 //!
-//! Spawned from `BreezSdk::start` so it runs in both client and server mode —
-//! the public `start_leaf_optimization` API is available in both, and listeners
-//! should see progress events in both. The dedicated channel is silent when
-//! no optimization is running, so the forwarder has no per-event cost in the
-//! common case.
+//! The forwarder is gated by `BreezSdk::ensure_optimization_forwarder_spawned`,
+//! which is `OnceCell`-backed so at most one task is ever spawned per SDK
+//! instance. It's invoked from two places:
+//!
+//! - `ClientRuntime::start_sdk_services` — eagerly at startup, because client
+//!   mode's `BackgroundProcessor` can trigger auto-optimization at any time.
+//! - `BreezSdk::start_leaf_optimization` — lazily on first call, so server-mode
+//!   SDK instances that never opt into optimization carry no forwarder task
+//!   (matching the `background_tasks_enabled = false` contract).
 
 use platform_utils::tokio;
 use tokio::{select, sync::broadcast};
