@@ -17,12 +17,12 @@ pub use spark::{
     operator::rpc::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
-        FreezeIssuerTokenResponse, InvoiceDescription, LightningSendPayment, LightningSendStatus,
-        Preimage, PreimageRequestStatus, ReceiverTokenOutput, ServiceError,
-        SingleUseDepositAddress, StaticDepositAddress, TokenInputs, TokenMintInput,
-        TokenOutputToSpend, TokenTransaction, TokenTransactionStatus, TokenTransferInput,
-        TransferId, TransferObserver, TransferObserverError, TransferStatus, TransferTokenOutput,
-        TransferType, Utxo,
+        FreezeIssuerTokenResponse, InvoiceDescription, LightningReceivePayment,
+        LightningSendPayment, LightningSendStatus, Preimage, PreimageRequestStatus,
+        ReceiverTokenOutput, ServiceError, SingleUseDepositAddress, StaticDepositAddress,
+        TokenInputs, TokenMintInput, TokenOutputToSpend, TokenTransaction, TokenTransactionStatus,
+        TokenTransferInput, TransferId, TransferObserver, TransferObserverError, TransferStatus,
+        TransferTokenOutput, TransferType, Utxo,
     },
     session_store::*,
     signer::{

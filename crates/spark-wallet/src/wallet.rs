@@ -1099,6 +1099,14 @@ impl SparkWallet {
         .await
     }
 
+    /// Claims a transfer and performs a tree-store insert.
+    pub async fn process_transfer(
+        &self,
+        transfer: &WalletTransfer,
+    ) -> Result<Vec<TreeNode>, SparkWalletError> {
+        claim_transfer(transfer.raw(), &self.transfer_service, &self.tree_service).await
+    }
+
     /// Queries the SSP for user requests by their associated transfer IDs
     /// and returns a map of transfer IDs to user requests
     pub async fn query_ssp_user_requests(
@@ -1390,6 +1398,17 @@ impl SparkWallet {
             .query_token_transactions_by_hashes(hashes)
             .await
             .map_err(Into::into)
+    }
+
+    /// Reconciles the local token-output store for a single token tx.
+    pub async fn process_token_transaction(
+        &self,
+        transaction: &TokenTransaction,
+    ) -> Result<(), SparkWalletError> {
+        self.token_service
+            .update_token_outputs_for_transaction(transaction, &self.identity_public_key)
+            .await?;
+        Ok(())
     }
 
     pub fn get_token_l1_address(&self) -> Result<String, SparkWalletError> {

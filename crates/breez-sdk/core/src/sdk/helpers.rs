@@ -20,35 +20,23 @@ use crate::{
     persist::{CachedAccountInfo, ObjectCacheRepository, Storage},
 };
 
-pub(crate) fn is_payment_match(payment: &Payment, identifier: &WaitForPaymentIdentifier) -> bool {
+/// Looks up the payment matching `identifier` from storage, if present.
+///
+/// Used as a fast-path check by `wait_for_incoming_payment` — if the
+/// payment is already there and complete, callers can short-circuit
+/// before starting a poll loop.
+/// Returns `Ok(None)` when the row doesn't exist; surfaces real storage
+/// errors so callers can bubble them rather than mask them.
+pub(crate) async fn maybe_get_payment_from_storage(
+    storage: &dyn Storage,
+    identifier: &WaitForPaymentIdentifier,
+) -> Result<Option<Payment>, SdkError> {
     match identifier {
-        WaitForPaymentIdentifier::PaymentId(payment_id) => payment.id == *payment_id,
-        WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
-            if let Some(details) = &payment.details {
-                match details {
-                    PaymentDetails::Lightning { invoice, .. } => {
-                        invoice.to_lowercase() == payment_request.to_lowercase()
-                    }
-                    PaymentDetails::Spark {
-                        invoice_details: invoice,
-                        ..
-                    }
-                    | PaymentDetails::Token {
-                        invoice_details: invoice,
-                        ..
-                    } => {
-                        if let Some(invoice) = invoice {
-                            invoice.invoice.to_lowercase() == payment_request.to_lowercase()
-                        } else {
-                            false
-                        }
-                    }
-                    PaymentDetails::Withdraw { tx_id: _ }
-                    | PaymentDetails::Deposit { tx_id: _ } => false,
-                }
-            } else {
-                false
-            }
+        WaitForPaymentIdentifier::PaymentId(payment_id) => {
+            Ok(storage.get_payment_by_id(payment_id.clone()).await.ok())
+        }
+        WaitForPaymentIdentifier::LightningReceive { invoice, .. } => {
+            Ok(storage.get_payment_by_invoice(invoice.clone()).await?)
         }
     }
 }

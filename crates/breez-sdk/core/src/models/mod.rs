@@ -1761,7 +1761,7 @@ pub struct SparkStatus {
 
 pub(crate) enum WaitForPaymentIdentifier {
     PaymentId(String),
-    PaymentRequest(String),
+    LightningReceive { invoice: String, ssp_id: String },
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
