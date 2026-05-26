@@ -16,10 +16,7 @@ use spark::{
     },
     ssp::{SspTransfer, SspUserRequest},
     token::TokenMetadata,
-    tree::{
-        Leaves, LeavesReservation, OptimizationEvent, SigningKeyshare, TargetAmounts, TreeNode,
-        TreeNodeId,
-    },
+    tree::{Leaves, LeavesReservation, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId},
     utils::paging::PagingFilter,
 };
 
@@ -35,8 +32,6 @@ pub enum WalletEvent {
     TransferClaimed(WalletTransfer),
     TransferClaimStarting(WalletTransfer),
     TokenTransaction(TokenTransaction),
-    /// Optimization lifecycle event.
-    Optimization(OptimizationEvent),
 }
 
 impl Display for WalletEvent {
@@ -50,9 +45,6 @@ impl Display for WalletEvent {
             }
             WalletEvent::TokenTransaction(transaction) => {
                 write!(f, "TokenTransaction({})", transaction.hash)
-            }
-            WalletEvent::Optimization(event) => {
-                write!(f, "Optimization({:?})", event)
             }
             _ => write!(f, "{:?}", self),
         }

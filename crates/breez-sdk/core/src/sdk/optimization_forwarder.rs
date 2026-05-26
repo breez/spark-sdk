@@ -1,20 +1,18 @@
-//! Runtime-agnostic bridge from `WalletEvent::Optimization` (emitted by the
-//! spark-wallet leaf optimizer) to `SdkEvent::Optimization` on the external
-//! `EventEmitter`.
+//! Runtime-agnostic bridge from spark-wallet's dedicated
+//! `OptimizationEvent` broadcast channel to `SdkEvent::Optimization` on the
+//! external `EventEmitter`.
 //!
 //! Spawned from `BreezSdk::start` so it runs in both client and server mode —
 //! the public `start_leaf_optimization` API is available in both, and listeners
-//! should see progress events in both.
+//! should see progress events in both. The dedicated channel is silent when
+//! no optimization is running, so the forwarder has no per-event cost in the
+//! common case.
 
 use platform_utils::tokio;
-use spark_wallet::WalletEvent;
 use tokio::{select, sync::broadcast};
 use tracing::{Instrument, info, warn};
 
-use crate::{
-    events::SdkEvent,
-    sdk::BreezSdk,
-};
+use crate::{events::SdkEvent, sdk::BreezSdk};
 
 pub(super) fn spawn_optimization_forwarder(sdk: &BreezSdk) {
     let sdk = sdk.clone();
@@ -22,7 +20,7 @@ pub(super) fn spawn_optimization_forwarder(sdk: &BreezSdk) {
 
     tokio::spawn(
         async move {
-            let mut wallet_events = sdk.spark_wallet.subscribe_events();
+            let mut optimization_events = sdk.spark_wallet.subscribe_optimization_events();
             let mut shutdown = sdk.shutdown_sender.subscribe();
 
             loop {
@@ -31,20 +29,19 @@ pub(super) fn spawn_optimization_forwarder(sdk: &BreezSdk) {
                         info!("Optimization forwarder shutdown signal received");
                         return;
                     }
-                    event = wallet_events.recv() => match event {
-                        Ok(WalletEvent::Optimization(e)) => {
+                    event = optimization_events.recv() => match event {
+                        Ok(e) => {
                             sdk.event_emitter
                                 .emit(&SdkEvent::Optimization {
                                     optimization_event: e.into(),
                                 })
                                 .await;
                         }
-                        Ok(_) => {}
                         Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("Optimization forwarder lagged by {n} wallet events");
+                            warn!("Optimization forwarder lagged by {n} events");
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            info!("Wallet event stream closed; optimization forwarder exiting");
+                            info!("Optimization event stream closed; forwarder exiting");
                             return;
                         }
                     }

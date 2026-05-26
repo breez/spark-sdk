@@ -304,13 +304,6 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
                     false
                 })
         }
-        WalletEvent::Optimization(event) => {
-            // Forwarding to `SdkEvent::Optimization` is handled by the
-            // runtime-agnostic `optimization_forwarder` so server mode sees
-            // the same events as client mode.
-            info!("Optimization event: {:?}", event);
-            false
-        }
     }
 }
 

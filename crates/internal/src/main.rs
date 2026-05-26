@@ -138,10 +138,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         spark_wallet::WalletEvent::TransferClaimed(transfer) => info!("Transfer claimed: {}", transfer.id),
                         spark_wallet::WalletEvent::TransferClaimStarting(transfer) => info!("Transfer claim starting: {}", transfer.id),
                         spark_wallet::WalletEvent::TokenTransaction(transaction) => info!("Token transaction: {}", transaction.hash),
-                        spark_wallet::WalletEvent::Optimization(event) => info!("Optimization event: {:?}", event),
                     }
                 }
                 else => warn!("Event stream closed."),
+            }
+        }
+    });
+
+    // Spawn optimization event listener (separate channel)
+    let clone = Arc::clone(&wallet);
+    tokio::spawn(async move {
+        let mut receiver = clone.subscribe_optimization_events();
+        loop {
+            tokio::select! {
+                Ok(event) = receiver.recv() => info!("Optimization event: {:?}", event),
+                else => warn!("Optimization event stream closed."),
             }
         }
     });

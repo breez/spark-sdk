@@ -2,10 +2,10 @@ use anyhow::Result;
 use breez_sdk_itest::*;
 use rstest::*;
 
-/// Regression test for the missing `WalletEvent::Optimization` →
-/// `SdkEvent::Optimization` bridge: the variant existed and was exposed
-/// through the bindings, but core dropped the wallet event on the floor,
-/// so external listeners never saw any optimization events.
+/// Regression test for the missing `SdkEvent::Optimization` bridge: the
+/// variant was defined and exposed through the bindings, but core never
+/// subscribed to spark-wallet's optimization channel, so external listeners
+/// never saw any optimization events.
 ///
 /// The fixture disables auto-optimization (so nothing races us) and sets a
 /// high multiplicity (so triggering optimization on a freshly-funded

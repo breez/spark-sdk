@@ -1477,10 +1477,10 @@ pub async fn wait_for_synced_event(
 
 /// Wait for leaf optimization to reach a terminal state.
 ///
-/// Succeeds on `Completed` and `Skipped` (both prove the
-/// `WalletEvent::Optimization` → `SdkEvent::Optimization` bridge is wired
-/// up). Fails on `Failed`/`Cancelled` and on timeout — a timeout is the
-/// exact symptom of the bridge being missing.
+/// Succeeds on `Completed` and `Skipped` (both prove spark-wallet's
+/// dedicated optimization channel is being forwarded to
+/// `SdkEvent::Optimization`). Fails on `Failed`/`Cancelled` and on timeout —
+/// a timeout is the exact symptom of the bridge being missing.
 pub async fn wait_for_optimization_completed_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     timeout_secs: u64,

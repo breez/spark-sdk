@@ -1314,6 +1314,16 @@ impl SparkWallet {
         self.event_manager.listen()
     }
 
+    /// Subscribes to leaf-optimization lifecycle events on a dedicated
+    /// broadcast channel separate from [`Self::subscribe_events`].
+    ///
+    /// Consumers that only care about optimization should prefer this so they
+    /// don't pay the clone cost of unrelated [`WalletEvent`]s. The channel is
+    /// silent when no optimization is running.
+    pub fn subscribe_optimization_events(&self) -> broadcast::Receiver<OptimizationEvent> {
+        self.event_manager.listen_optimization()
+    }
+
     /// Returns the balances of all tokens in the wallet.
     ///
     /// Balances are returned in a map keyed by the token identifier.
@@ -2028,15 +2038,15 @@ async fn claim_transfer(
     Ok(result_nodes)
 }
 
-/// Event handler that bridges OptimizationEvent to WalletEvent.
+/// Event handler that forwards `OptimizationEvent`s onto the wallet's
+/// dedicated optimization broadcast channel.
 struct WalletOptimizationEventHandler {
     event_manager: Arc<EventManager>,
 }
 
 impl OptimizationEventHandler for WalletOptimizationEventHandler {
     fn on_optimization_event(&self, event: OptimizationEvent) {
-        self.event_manager
-            .notify_listeners(WalletEvent::Optimization(event));
+        self.event_manager.notify_optimization_listeners(event);
     }
 }
 
