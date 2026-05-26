@@ -44,6 +44,21 @@ pub struct SetupWalletRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct WalletSetup {
     pub wallet: Wallet,
+    /// Credential ID observed during the assertion that derived this
+    /// wallet, when the provider surfaces it. Feeds
+    /// [`SignInResponse::credential_id`](crate::passkey::SignInResponse).
+    pub credential_id: Option<Vec<u8>>,
+}
+
+/// Output of [`crate::passkey::PrfProvider::derive_seeds`]: the derived
+/// seeds plus the credential ID observed in the same assertion.
+/// `credential_id` is `None` when the provider does not surface it
+/// (CLI / hardware backends).
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct DeriveSeedsOutput {
+    pub seeds: Vec<Vec<u8>>,
+    pub credential_id: Option<Vec<u8>>,
 }
 
 /// Result of a successful [`crate::passkey::PrfProvider::create_passkey`].

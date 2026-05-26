@@ -248,13 +248,9 @@ impl PasskeyClient {
             })
             .await?;
 
-        // Capture the credential ID from the just-completed assertion
-        // before any subsequent PRF call (list_labels) overwrites it.
-        let credential_id = self
-            .passkey
-            .prf_provider()
-            .take_last_observed_credential_id()
-            .await;
+        // The credential ID observed during the derive ceremony, carried
+        // back on the setup result.
+        let credential_id = setup.credential_id.clone();
 
         let labels = if discovery {
             self.passkey.list_labels().await.unwrap_or_default()
@@ -471,7 +467,7 @@ mod tests {
         async fn derive_seeds(
             &self,
             request: DeriveSeedsRequest,
-        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        ) -> Result<DeriveSeedsOutput, PrfProviderError> {
             if let Some(err) = {
                 let mut errs = self.derive_errors.lock().unwrap();
                 if errs.is_empty() {
@@ -482,11 +478,14 @@ mod tests {
             } {
                 return Err(err);
             }
-            Ok(request
-                .salts
-                .into_iter()
-                .map(|s| self.output_for(&s))
-                .collect())
+            Ok(DeriveSeedsOutput {
+                seeds: request
+                    .salts
+                    .into_iter()
+                    .map(|s| self.output_for(&s))
+                    .collect(),
+                credential_id: None,
+            })
         }
 
         async fn is_supported(&self) -> Result<bool, PrfProviderError> {

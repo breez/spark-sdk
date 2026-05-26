@@ -55,7 +55,9 @@ mod passkey_prf_provider;
 pub use derivation::ACCOUNT_MASTER_SALT;
 use derivation::prf_to_mnemonic;
 pub use error::{ErrorKind, PasskeyError, PrfProviderError};
-pub use models::{PasskeyConfig, RegisteredCredential, SetupWalletRequest, Wallet, WalletSetup};
+pub use models::{
+    DeriveSeedsOutput, PasskeyConfig, RegisteredCredential, SetupWalletRequest, Wallet, WalletSetup,
+};
 pub use passkey_client::{
     ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, PasskeyAvailability, PasskeyClient,
     PasskeyCredentials, PasskeyLabels, RegisterRequest, RegisterResponse, SignInRequest,
@@ -151,14 +153,14 @@ impl Passkey {
     async fn nostr_client(&self) -> Result<&NostrSaltClient, PasskeyError> {
         self.nostr_client
             .get_or_try_init(|| async {
-                let mut seeds = self
+                let mut output = self
                     .prf_provider
                     .derive_seeds(DeriveSeedsRequest {
                         salts: vec![ACCOUNT_MASTER_SALT.to_string()],
                         ..Default::default()
                     })
                     .await?;
-                let account_master = seeds.pop().ok_or_else(|| {
+                let account_master = output.seeds.pop().ok_or_else(|| {
                     PrfProviderError::Generic("derive_seeds returned no output".to_string())
                 })?;
                 let keys = derive_nostr_keypair(&account_master)?;
@@ -185,7 +187,10 @@ impl Passkey {
         let salts = vec![ACCOUNT_MASTER_SALT.to_string(), label.clone()];
         let expected = salts.len();
 
-        let seeds = self
+        let DeriveSeedsOutput {
+            seeds,
+            credential_id,
+        } = self
             .prf_provider
             .derive_seeds(DeriveSeedsRequest {
                 salts,
@@ -226,7 +231,10 @@ impl Passkey {
             warn!("setup_wallet: store_label failed, returning wallet anyway: {e}");
         }
 
-        Ok(WalletSetup { wallet })
+        Ok(WalletSetup {
+            wallet,
+            credential_id,
+        })
     }
 
     /// List labels published for this passkey's identity. Requires
@@ -286,12 +294,15 @@ mod tests {
         async fn derive_seeds(
             &self,
             request: DeriveSeedsRequest,
-        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-            Ok(request
-                .salts
-                .into_iter()
-                .map(|_| self.seed.to_vec())
-                .collect())
+        ) -> Result<DeriveSeedsOutput, PrfProviderError> {
+            Ok(DeriveSeedsOutput {
+                seeds: request
+                    .salts
+                    .into_iter()
+                    .map(|_| self.seed.to_vec())
+                    .collect(),
+                credential_id: None,
+            })
         }
 
         async fn is_supported(&self) -> Result<bool, PrfProviderError> {
@@ -315,7 +326,7 @@ mod tests {
         async fn derive_seeds(
             &self,
             _request: DeriveSeedsRequest,
-        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        ) -> Result<DeriveSeedsOutput, PrfProviderError> {
             Err(self.error.clone())
         }
 
@@ -331,7 +342,7 @@ mod tests {
         async fn derive_seeds(
             &self,
             _request: DeriveSeedsRequest,
-        ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        ) -> Result<DeriveSeedsOutput, PrfProviderError> {
             Err(PrfProviderError::PrfNotSupported)
         }
 
