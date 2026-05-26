@@ -525,6 +525,15 @@ class PostgresStorage {
     }
   }
 
+  _normalizePaymentStatus(status) {
+    return typeof status === "string" ? status.toLowerCase() : status;
+  }
+
+  _isFinalPaymentStatus(status) {
+    const normalized = this._normalizePaymentStatus(status);
+    return normalized === "completed" || normalized === "failed";
+  }
+
   async getPaymentById(id) {
     try {
       if (!id) {
