@@ -405,8 +405,8 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use super::super::DeriveSeedsRequest;
     use super::super::error::PrfProviderError;
+    use super::super::{DeriveSeedsOutput, DeriveSeedsRequest};
 
     /// Salt-aware mock that produces deterministic per-salt PRF
     /// outputs so multi-salt ceremonies can round-trip through tests.

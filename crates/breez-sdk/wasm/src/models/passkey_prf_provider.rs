@@ -3,7 +3,9 @@ use std::sync::OnceLock;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
-use breez_sdk_spark::passkey::{DeriveSeedsRequest, PrfProviderError, RegisteredCredential};
+use breez_sdk_spark::passkey::{
+    DeriveSeedsOutput, DeriveSeedsRequest, PrfProviderError, RegisteredCredential,
+};
 
 pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderError {
     // Map typed JS error classes thrown by the bundled JS provider
@@ -50,10 +52,6 @@ pub struct WasmPrfProvider {
     /// Cached `createPasskey` presence probe: JS providers may omit
     /// it (only platform passkey backends implement registration).
     supports_create: OnceLock<bool>,
-    /// Cached `takeLastObservedCredentialId` presence probe: JS
-    /// providers may omit it (only the bundled platform-passkey
-    /// provider currently implements the read-and-clear slot).
-    supports_take_last_observed: OnceLock<bool>,
     /// Cached presence probes for the three known-credential methods.
     /// Custom providers (no built-in registry) may omit them and
     /// inherit the trait defaults (empty list / no-op writes).
@@ -67,7 +65,6 @@ impl WasmPrfProvider {
         Self {
             inner,
             supports_create: OnceLock::new(),
-            supports_take_last_observed: OnceLock::new(),
             supports_get_known: OnceLock::new(),
             supports_remove_known: OnceLock::new(),
             supports_clear_known: OnceLock::new(),
@@ -97,7 +94,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
     async fn derive_seeds(
         &self,
         request: DeriveSeedsRequest,
-    ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+    ) -> Result<DeriveSeedsOutput, PrfProviderError> {
         let salts_array = js_sys::Array::new();
         for salt in &request.salts {
             salts_array.push(&JsValue::from_str(salt));
@@ -116,7 +113,12 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
             .await
             .map_err(js_error_to_prf_provider_error)?;
 
-        let array = js_sys::Array::from(&result);
+        // The JS provider resolves to `{ seeds, credentialId }`: seeds
+        // in input order plus the credential ID observed in the same
+        // assertion (null when the provider does not surface one).
+        let seeds_raw = js_sys::Reflect::get(&result, &JsValue::from_str("seeds"))
+            .map_err(js_error_to_prf_provider_error)?;
+        let array = js_sys::Array::from(&seeds_raw);
         let len = array.length() as usize;
         if len != request.salts.len() {
             return Err(PrfProviderError::Generic(format!(
@@ -125,12 +127,21 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
                 request.salts.len()
             )));
         }
-        let mut out = Vec::with_capacity(len);
+        let mut seeds = Vec::with_capacity(len);
         for i in 0..array.length() {
             let item = array.get(i);
-            out.push(js_sys::Uint8Array::new(&item).to_vec());
+            seeds.push(js_sys::Uint8Array::new(&item).to_vec());
         }
-        Ok(out)
+
+        let credential_id = js_sys::Reflect::get(&result, &JsValue::from_str("credentialId"))
+            .ok()
+            .and_then(|v| (!v.is_null() && !v.is_undefined()).then_some(v))
+            .map(|v| js_sys::Uint8Array::new(&v).to_vec());
+
+        Ok(DeriveSeedsOutput {
+            seeds,
+            credential_id,
+        })
     }
 
     async fn is_supported(&self) -> Result<bool, PrfProviderError> {
@@ -144,20 +155,6 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
         result
             .as_bool()
             .ok_or_else(|| PrfProviderError::Generic("Expected boolean result".to_string()))
-    }
-
-    async fn take_last_observed_credential_id(&self) -> Option<Vec<u8>> {
-        if !self.js_has_method(
-            "takeLastObservedCredentialId",
-            &self.supports_take_last_observed,
-        ) {
-            return None;
-        }
-        let raw = self.inner.take_last_observed_credential_id().ok()?;
-        if raw.is_undefined() || raw.is_null() {
-            return None;
-        }
-        Some(js_sys::Uint8Array::new(&raw).to_vec())
     }
 
     async fn create_passkey(
@@ -326,8 +323,9 @@ const PRF_PROVIDER_INTERFACE: &'static str = r#"/**
  * @example
  * ```typescript
  * class BrowserPasskeyProvider implements PrfProvider {
- *     async deriveSeeds(salts: string[]): Promise<Uint8Array[]> {
- *         const out: Uint8Array[] = [];
+ *     async deriveSeeds(salts: string[]): Promise<{ seeds: Uint8Array[]; credentialId: Uint8Array | null }> {
+ *         const seeds: Uint8Array[] = [];
+ *         let credentialId: Uint8Array | null = null;
  *         for (const salt of salts) {
  *             const credential = await navigator.credentials.get({
  *                 publicKey: {
@@ -340,9 +338,10 @@ const PRF_PROVIDER_INTERFACE: &'static str = r#"/**
  *                 }
  *             });
  *             const ext = credential.getClientExtensionResults();
- *             out.push(new Uint8Array(ext.prf.results.first));
+ *             seeds.push(new Uint8Array(ext.prf.results.first));
+ *             credentialId = new Uint8Array(credential.rawId);
  *         }
- *         return out;
+ *         return { seeds, credentialId };
  *     }
  *
  *     async isSupported(): Promise<boolean> {
@@ -364,11 +363,17 @@ export interface PrfProvider {
      * forward them to the underlying WebAuthn / Credential Manager
      * call; custom providers without an OS picker can ignore them.
      *
+     * Resolves to `{ seeds, credentialId }`: the 32-byte outputs in
+     * input order plus the credential ID observed in the same assertion
+     * (`null` when the provider does not surface one). The SDK reads
+     * `credentialId` to surface the signed-in credential to callers, so
+     * providers without an OS picker may return `null`.
+     *
      * @param salts - Salt strings in caller order
      * @param options - Optional per-call overrides
-     * @returns A Promise resolving to one 32-byte output per salt
+     * @returns A Promise resolving to the seeds plus observed credential ID
      */
-    deriveSeeds(salts: string[], options?: DeriveSeedsOptionsJSON): Promise<Uint8Array[]>;
+    deriveSeeds(salts: string[], options?: DeriveSeedsOptionsJSON): Promise<DeriveSeedsResultJSON>;
 
     /**
      * Optional explicit registration. Platform passkey providers
@@ -419,15 +424,6 @@ export interface PrfProvider {
      * providers without a registry (no-op default).
      */
     clearKnownCredentialIds?(): Promise<void>;
-
-    /**
-     * Optional. Read-and-clear the credential ID observed during the
-     * most recent successful assertion. The SDK calls this after sign-in
-     * to surface the credential ID to the caller. Returns `null` when no
-     * assertion has completed since the last read. Providers that don't
-     * track this may omit it.
-     */
-    takeLastObservedCredentialId?(): Uint8Array | null;
 }
 
 /**
@@ -457,6 +453,17 @@ export interface DeriveSeedsOptionsJSON {
      * default apply.
      */
     preferImmediatelyAvailableCredentials?: boolean;
+}
+
+/**
+ * Plain-object shape returned by {@link PrfProvider.deriveSeeds}: the
+ * derived 32-byte outputs in input order plus the credential ID observed
+ * in the same assertion. `credentialId` is `null` when the provider does
+ * not surface one (custom deterministic sources without an OS picker).
+ */
+export interface DeriveSeedsResultJSON {
+    seeds: Uint8Array[];
+    credentialId?: Uint8Array | null;
 }
 
 /**
@@ -496,9 +503,6 @@ extern "C" {
         this: &PrfProvider,
         exclude_credentials: JsValue,
     ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = "takeLastObservedCredentialId", catch)]
-    pub fn take_last_observed_credential_id(this: &PrfProvider) -> Result<JsValue, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "getKnownCredentialIds", catch)]
     pub fn get_known_credential_ids(this: &PrfProvider) -> Result<Promise, JsValue>;

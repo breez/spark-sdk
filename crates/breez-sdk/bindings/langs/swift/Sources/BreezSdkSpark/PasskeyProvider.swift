@@ -60,14 +60,6 @@ public class PasskeyProvider: PrfProvider {
     private let credentialRegistry: CredentialRegistry?
     private let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
 
-    /// Take ownership of the credential ID captured by the most recent
-    /// successful assertion. Returns nil if no assertion has completed
-    /// since the last call. Used by binding-layer code that wants to
-    /// surface the credential ID to a higher-level response type.
-    public func takeLastObservedCredentialId() -> Data? {
-        core.takeLastObservedCredentialId()
-    }
-
     /// Protocol for providing a presentation anchor for the authorization controller.
     public typealias PresentationAnchorProvider = PasskeyPresentationAnchorProvider
 
@@ -147,7 +139,9 @@ public class PasskeyProvider: PrfProvider {
     ///   salt uses the single-salt path.
     ///
     /// - Parameter salts: Salt strings in order.
-    /// - Returns: One 32-byte output per salt, in input order.
+    /// - Returns: One 32-byte output per salt (in input order) plus the
+    ///   credential ID observed in the same assertion (nil when none was
+    ///   captured, e.g. empty `salts`).
     /// - Throws: `PrfProviderError` if any underlying ceremony fails. The
     ///   first failing ceremony aborts the rest.
     ///
@@ -157,7 +151,7 @@ public class PasskeyProvider: PrfProvider {
     /// missing credential surfaces as `.credentialNotFound` rather than
     /// silently minting a new passkey. (The core defaults `autoRegister`
     /// to true for direct callers; the provider opts out.)
-    public func deriveSeeds(request: DeriveSeedsRequest) async throws -> [Data] {
+    public func deriveSeeds(request: DeriveSeedsRequest) async throws -> DeriveSeedsOutput {
         // Map (not compactMap) so a salt that somehow can't UTF-8 encode
         // fails loudly with its position rather than being dropped and
         // detected after the fact by a count mismatch.
@@ -168,12 +162,19 @@ public class PasskeyProvider: PrfProvider {
             return data
         }
         do {
-            return try await core.deriveSeeds(
+            let seeds = try await core.deriveSeeds(
                 salts: saltDatas,
                 autoRegister: false,
                 allowCredentials: request.allowCredentials.map { Data($0) },
                 preferImmediatelyAvailableCredentials:
                     request.preferImmediatelyAvailableCredentials ?? true
+            )
+            // The core captures the asserted credential ID during the
+            // ceremony; fold it into the result so callers get it without
+            // a separate read-and-clear call.
+            return DeriveSeedsOutput(
+                seeds: seeds,
+                credentialId: core.takeLastObservedCredentialId()
             )
         } catch let err as PasskeyAssertionError {
             throw Self.toPrfProviderError(err)

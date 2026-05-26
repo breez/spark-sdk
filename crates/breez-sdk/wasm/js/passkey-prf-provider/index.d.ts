@@ -29,6 +29,17 @@ export interface RegisteredCredential {
 }
 
 /**
+ * Result of {@link PasskeyProvider.deriveSeeds}: the derived 32-byte
+ * outputs in input order plus the credential ID observed in the same
+ * assertion. `credentialId` is `null` when no assertion ran (empty
+ * `salts`).
+ */
+export interface DeriveSeedsResult {
+    seeds: Uint8Array[];
+    credentialId: Uint8Array | null;
+}
+
+/**
  * Thrown when `createPasskey` asks the platform to register a new
  * passkey but it refuses because an entry in `excludeCredentials`
  * matches a credential already on the device. Hosts should route the
@@ -274,11 +285,13 @@ export declare class PasskeyProvider {
      * `prf.eval.second` per ceremony where the platform honors it.
      * Authenticators that drop `second` fall back to single-salt for
      * the affected salt; worst case prompt count is one per salt.
-     * Output order matches input order.
+     * Output order matches input order. Resolves to `{ seeds,
+     * credentialId }`: the outputs plus the credential ID observed in
+     * the same assertion (`null` when `salts` is empty).
      *
      * @throws If authentication fails, PRF is not supported, or the user cancels.
      */
-    deriveSeeds(salts: string[], options?: DeriveSeedOptions): Promise<Uint8Array[]>;
+    deriveSeeds(salts: string[], options?: DeriveSeedOptions): Promise<DeriveSeedsResult>;
 
     /**
      * Create a new passkey with PRF support.

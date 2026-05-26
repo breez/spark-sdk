@@ -334,24 +334,12 @@ export class PasskeyProvider {
         this.onRegistryError = options.onRegistryError;
 
         /**
-         * Slot used to surface the credential ID asserted in the most
-         * recent ceremony to higher-level callers. Read-and-clear via
-         * `takeLastObservedCredentialId()`.
+         * Capture slot for the credential ID asserted in the most
+         * recent ceremony. Reset at the start of {@link deriveSeeds}
+         * and read into its return value once derivation completes.
          * @private
          */
         this._lastObservedCredentialId = null;
-    }
-
-    /**
-     * Take ownership of the credential ID captured by the most recent
-     * successful assertion. Returns `null` if no assertion has
-     * completed since the last call.
-     * @returns {Uint8Array | null}
-     */
-    takeLastObservedCredentialId() {
-        const v = this._lastObservedCredentialId;
-        this._lastObservedCredentialId = null;
-        return v;
     }
 
     /**
@@ -375,35 +363,43 @@ export class PasskeyProvider {
      *
      * @param {string[]} salts - Caller-ordered.
      * @param {DeriveSeedOptions} [options]
-     * @returns {Promise<Uint8Array[]>} One 32-byte output per salt, in input order.
+     * @returns {Promise<{ seeds: Uint8Array[], credentialId: Uint8Array | null }>}
+     *   One 32-byte output per salt (in input order) plus the credential
+     *   ID observed in the same assertion (`null` when none was seen).
      */
     async deriveSeeds(salts, options = {}) {
         if (!Array.isArray(salts) || salts.length === 0) {
-            return [];
-        }
-        if (salts.length === 1) {
-            return [await this._deriveSeed(salts[0], options)];
+            return { seeds: [], credentialId: null };
         }
 
-        const out = [];
+        // Reset so the returned credential ID reflects only this call's
+        // ceremonies, never a credential observed on a prior call.
+        this._lastObservedCredentialId = null;
+
+        const seeds = [];
+        if (salts.length === 1) {
+            seeds.push(await this._deriveSeed(salts[0], options));
+            return { seeds, credentialId: this._lastObservedCredentialId };
+        }
+
         let idx = 0;
         while (idx < salts.length) {
             if (idx + 1 < salts.length) {
                 const pair = await this._tryDualSaltAssertion(salts[idx], salts[idx + 1], options);
-                out.push(pair[0]);
+                seeds.push(pair[0]);
                 if (pair[1] != null) {
-                    out.push(pair[1]);
+                    seeds.push(pair[1]);
                     idx += 2;
                     continue;
                 }
-                out.push(await this._deriveSeed(salts[idx + 1], options));
+                seeds.push(await this._deriveSeed(salts[idx + 1], options));
                 idx += 2;
             } else {
-                out.push(await this._deriveSeed(salts[idx], options));
+                seeds.push(await this._deriveSeed(salts[idx], options));
                 idx += 1;
             }
         }
-        return out;
+        return { seeds, credentialId: this._lastObservedCredentialId };
     }
 
     /**

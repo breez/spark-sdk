@@ -2,9 +2,9 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, DeriveSeedsRequest, PasskeyAvailability,
-    PasskeyConfig, PasskeyError, PrfProvider, PrfProviderError, RegisterRequest, RegisterResponse,
-    RegisteredCredential, SignInRequest, SignInResponse,
+    ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, DeriveSeedsOutput, DeriveSeedsRequest,
+    PasskeyAvailability, PasskeyConfig, PasskeyError, PrfProvider, PrfProviderError, RegisterRequest,
+    RegisterResponse, RegisteredCredential, SignInRequest, SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -70,12 +70,19 @@ impl PrfProvider for CallbackPrfProvider {
     async fn derive_seeds(
         &self,
         request: DeriveSeedsRequest,
-    ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+    ) -> Result<DeriveSeedsOutput, PrfProviderError> {
         let bulk = AssertUnwindSafe((self.derive_seeds_fn)(request))
             .catch_unwind()
             .await
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
-        bulk.map_err(dart_error_to_prf)
+        let seeds = bulk.map_err(dart_error_to_prf)?;
+        // The Dart callback returns seeds only. Flutter hosts have no
+        // consumer for the asserted credential ID, so this binding does
+        // not surface one (matches the Dart `PrfProvider` contract).
+        Ok(DeriveSeedsOutput {
+            seeds,
+            credential_id: None,
+        })
     }
 
     async fn is_supported(&self) -> Result<bool, PrfProviderError> {

@@ -356,7 +356,7 @@ export class PasskeyProvider {
     salts: string[];
     allowCredentials?: Uint8Array[];
     preferImmediatelyAvailableCredentials?: boolean | null;
-  }): Promise<Uint8Array[]> {
+  }): Promise<{ seeds: Uint8Array[]; credentialId?: Uint8Array }> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('deriveSeeds');
     }
@@ -421,7 +421,14 @@ export class PasskeyProvider {
       throw mapped;
     }
 
-    return base64Results.map(b64 => base64ToUint8Array(b64));
+    // The native module surfaces seeds only; this binding does not
+    // expose the asserted credential ID to hosts (no consumer on React
+    // Native), so `credentialId` is left undefined and lowers to the
+    // SDK's `None`.
+    return {
+      seeds: base64Results.map(b64 => base64ToUint8Array(b64)),
+      credentialId: undefined,
+    };
   }
 
   /**

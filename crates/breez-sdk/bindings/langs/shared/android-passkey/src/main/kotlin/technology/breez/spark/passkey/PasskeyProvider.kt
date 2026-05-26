@@ -98,14 +98,13 @@ public class PasskeyProvider(
         activityProvider = activityProvider,
     )
 
-    override suspend fun takeLastObservedCredentialId(): ByteArray? =
-        core.takeLastObservedCredentialId()
-
     /**
      * Bulk PRF derivation backed by [CredentialManagerPrfCore.deriveSeeds].
      * Uses the WebAuthn PRF dual-salt fast path where the authenticator
      * honors `prf.eval.second`, falling back to single-salt otherwise.
-     * Output ordering matches input ordering.
+     * Output ordering matches input ordering. Returns the seeds plus the
+     * credential ID observed in the same assertion (null when none was
+     * captured, e.g. empty `salts`).
      *
      * Passes `autoRegister = false`: this provider never implicitly
      * creates a credential during derivation. Sign-up and sign-in are
@@ -114,15 +113,19 @@ public class PasskeyProvider(
      * silently minting a new passkey. (The core defaults `autoRegister`
      * to true for direct callers; the provider opts out.)
      */
-    override suspend fun deriveSeeds(request: DeriveSeedsRequest): List<ByteArray> =
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput =
         try {
-            core.deriveSeeds(
+            val seeds = core.deriveSeeds(
                 salts = request.salts,
                 autoRegister = false,
                 allowCredentials = request.allowCredentials,
                 preferImmediatelyAvailableCredentials =
                     request.preferImmediatelyAvailableCredentials ?: true,
             )
+            // The core captures the asserted credential ID during the
+            // ceremony; fold it into the result so callers get it without
+            // a separate read-and-clear call.
+            DeriveSeedsOutput(seeds, core.takeLastObservedCredentialId())
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()
         }
