@@ -14,6 +14,10 @@ pub enum ErrorKind {
     /// to a non-passkey flow or guide the user to switch credential
     /// providers (e.g. iCloud Keychain on iOS).
     PrfUnsupported,
+    /// The authenticator supports PRF but the evaluation failed. Often
+    /// transient, unlike `PrfUnsupported`: retrying the ceremony may
+    /// succeed.
+    PrfFailed,
     /// Platform / app configuration is wrong (entitlement, assetlinks,
     /// rpId scope). Not retryable until the integrator fixes setup.
     Configuration,
@@ -26,6 +30,10 @@ pub enum ErrorKind {
     /// prompt. Hosts may auto-retry or surface a re-prompt UI without
     /// treating it as user intent to abandon.
     Timeout,
+    /// The authentication ceremony failed for a security or state reason
+    /// (not a cancel, timeout, or missing credential). Surface a retry;
+    /// if it persists, the credential or RP setup may be at fault.
+    AuthFailure,
     /// Platform or library failure the caller can't act on. Surface a
     /// generic "try again" UI; diagnostic detail is in the variant
     /// payload for logs.
@@ -92,10 +100,12 @@ impl PrfProviderError {
             Self::UserCancelled => ErrorKind::Cancel,
             Self::UserTimedOut => ErrorKind::Timeout,
             Self::CredentialNotFound(_) => ErrorKind::NoCredential,
-            Self::PrfNotSupported | Self::PrfEvaluationFailed(_) => ErrorKind::PrfUnsupported,
+            Self::PrfNotSupported => ErrorKind::PrfUnsupported,
+            Self::PrfEvaluationFailed(_) => ErrorKind::PrfFailed,
             Self::Configuration(_) => ErrorKind::Configuration,
             Self::CredentialAlreadyExists(_) => ErrorKind::AlreadyExists,
-            Self::AuthenticationFailed(_) | Self::Generic(_) => ErrorKind::Internal,
+            Self::AuthenticationFailed(_) => ErrorKind::AuthFailure,
+            Self::Generic(_) => ErrorKind::Internal,
         }
     }
 }
