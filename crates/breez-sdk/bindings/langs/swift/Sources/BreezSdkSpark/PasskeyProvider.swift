@@ -162,20 +162,16 @@ public class PasskeyProvider: PrfProvider {
             return data
         }
         do {
-            let seeds = try await core.deriveSeeds(
+            let (seeds, credentialId) = try await core.deriveSeeds(
                 salts: saltDatas,
                 autoRegister: false,
                 allowCredentials: request.allowCredentials.map { Data($0) },
                 preferImmediatelyAvailableCredentials:
                     request.preferImmediatelyAvailableCredentials ?? true
             )
-            // The core captures the asserted credential ID during the
-            // ceremony; fold it into the result so callers get it without
-            // a separate read-and-clear call.
-            return DeriveSeedsOutput(
-                seeds: seeds,
-                credentialId: core.takeLastObservedCredentialId()
-            )
+            // The core observes the asserted credential ID inline and
+            // returns it alongside the seeds.
+            return DeriveSeedsOutput(seeds: seeds, credentialId: credentialId)
         } catch let err as PasskeyAssertionError {
             throw Self.toPrfProviderError(err)
         }

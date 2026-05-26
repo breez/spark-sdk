@@ -115,17 +115,16 @@ public class PasskeyProvider(
      */
     override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput =
         try {
-            val seeds = core.deriveSeeds(
+            val derivation = core.deriveSeeds(
                 salts = request.salts,
                 autoRegister = false,
                 allowCredentials = request.allowCredentials,
                 preferImmediatelyAvailableCredentials =
                     request.preferImmediatelyAvailableCredentials ?: true,
             )
-            // The core captures the asserted credential ID during the
-            // ceremony; fold it into the result so callers get it without
-            // a separate read-and-clear call.
-            DeriveSeedsOutput(seeds, core.takeLastObservedCredentialId())
+            // The core observes the asserted credential ID inline and
+            // returns it alongside the seeds.
+            DeriveSeedsOutput(derivation.seeds, derivation.credentialId)
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()
         }

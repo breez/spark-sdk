@@ -31,7 +31,6 @@ import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.concurrent.atomic.AtomicReference
 
 // =====================================================================
 // !!! SOURCE-OF-TRUTH NOTICE !!!
@@ -294,18 +293,6 @@ public class CredentialManagerPrfCore(
         }
     }
 
-    /** Credential ID asserted in the most recent ceremony; read-and-clear. */
-    private val lastObservedCredentialId = AtomicReference<ByteArray?>(null)
-
-    /**
-     * Take ownership of the credential ID captured by the most recent
-     * assertion, clearing the slot atomically. Returns `null` if no
-     * assertion has completed since the last call. Backs the binding
-     * layer's `SignInResponse.credential_id`.
-     */
-    public fun takeLastObservedCredentialId(): ByteArray? =
-        lastObservedCredentialId.getAndSet(null)
-
     /** Help suffix when the host gave no allow-list and no registry. */
     private fun helpSuffixIfApplicable(allowCredentials: List<ByteArray>): String =
         if (allowCredentials.isEmpty() && credentialRegistry == null) {
@@ -335,7 +322,7 @@ public class CredentialManagerPrfCore(
         autoRegister: Boolean = true,
         allowCredentials: List<ByteArray> = emptyList(),
         preferImmediatelyAvailableCredentials: Boolean = true,
-    ): List<ByteArray> = withContext(Dispatchers.Main) {
+    ): PrfDerivation = withContext(Dispatchers.Main) {
         // Union the caller's allow-list with the registry's stored IDs.
         var allow = allowCredentials
         credentialRegistry?.let { registry ->
@@ -343,12 +330,13 @@ public class CredentialManagerPrfCore(
                 allow, registryReadBestEffort(registry, rpId, onRegistryError),
             )
         }
-        if (salts.isEmpty()) return@withContext emptyList()
+        if (salts.isEmpty()) return@withContext PrfDerivation(emptyList(), null)
 
         // One assertion for 1-2 salts, registering + retrying once when
-        // the device holds no credential. Returns one output per salt
-        // the authenticator evaluated (a dropped `second` yields one).
-        suspend fun assertChunk(chunk: List<String>): List<ByteArray> =
+        // the device holds no credential. Returns one output per salt the
+        // authenticator evaluated (a dropped `second` yields one) plus the
+        // asserted credential ID (same value across every chunk).
+        suspend fun assertChunk(chunk: List<String>): Pair<List<ByteArray>, ByteArray?> =
             try {
                 assertPrf(chunk, allow, preferImmediatelyAvailableCredentials)
             } catch (e: NoCredentialException) {
@@ -369,19 +357,32 @@ public class CredentialManagerPrfCore(
         val startedAtMs = System.currentTimeMillis()
         try {
             val output = ArrayList<ByteArray>(salts.size)
+            // Asserted credential ID, captured inline from each ceremony
+            // (identical across chunks) and returned so the binding layer
+            // can surface it on `SignInResponse.credential_id`.
+            var observedCredentialId: ByteArray? = null
             var idx = 0
             while (idx < salts.size) {
                 if (idx + 1 < salts.size) {
-                    val outputs = assertChunk(listOf(salts[idx], salts[idx + 1]))
+                    val (outputs, credId) = assertChunk(listOf(salts[idx], salts[idx + 1]))
+                    observedCredentialId = credId
                     output.add(outputs[0])
-                    output.add(if (outputs.size > 1) outputs[1] else assertChunk(listOf(salts[idx + 1]))[0])
+                    if (outputs.size > 1) {
+                        output.add(outputs[1])
+                    } else {
+                        val (recovered, recoveredCredId) = assertChunk(listOf(salts[idx + 1]))
+                        output.add(recovered[0])
+                        observedCredentialId = recoveredCredId
+                    }
                     idx += 2
                 } else {
-                    output.add(assertChunk(listOf(salts[idx]))[0])
+                    val (single, credId) = assertChunk(listOf(salts[idx]))
+                    output.add(single[0])
+                    observedCredentialId = credId
                     idx += 1
                 }
             }
-            output
+            PrfDerivation(output, observedCredentialId)
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
         } catch (e: Exception) {
@@ -582,7 +583,7 @@ public class CredentialManagerPrfCore(
         salts: List<String>,
         allowCredentials: List<ByteArray>,
         preferImmediatelyAvailableCredentials: Boolean,
-    ): List<ByteArray> {
+    ): Pair<List<ByteArray>, ByteArray?> {
         val activity = activityProvider()
         // JSONObject (not template interpolation) so integrator-supplied
         // rpId is escaped correctly instead of breaking on quotes /
@@ -627,17 +628,15 @@ public class CredentialManagerPrfCore(
         )
         val responseJson = JSONObject(authResponseJson)
 
-        // Record the asserted credential ID into the read-and-clear slot
-        // and seed the registry (so a returning user's pre-tracking
-        // credential is captured on first assertion).
-        responseJson.optString("rawId", "").takeIf { it.isNotEmpty() }
+        // Decode the asserted credential ID and seed the registry (so a
+        // returning user's pre-tracking credential is captured on first
+        // assertion). The ID itself is returned inline below so the
+        // binding layer can surface it without a read-and-clear slot.
+        val credentialId = responseJson.optString("rawId", "").takeIf { it.isNotEmpty() }
             ?.let { decodeBase64UrlOrNull(it, "assertion rawId") }
-            ?.let { credentialId ->
-                lastObservedCredentialId.set(credentialId)
-                credentialRegistry?.let {
-                    registryAddFireAndForget(it, rpId, credentialId, onRegistryError)
-                }
-            }
+        credentialId?.let { id ->
+            credentialRegistry?.let { registryAddFireAndForget(it, rpId, id, onRegistryError) }
+        }
 
         val extensions = responseJson.optJSONObject("clientExtensionResults")
             ?: throw CredentialManagerPrfCoreException(Kind.PrfNotSupported)
@@ -659,7 +658,7 @@ public class CredentialManagerPrfCore(
                 ?.let { decodeBase64UrlOrNull(it, "prf.results.second") }
                 ?.let { out.add(it) }
         }
-        return out
+        return Pair(out, credentialId)
     }
 
     /**
@@ -962,6 +961,17 @@ public class CredentialManagerPrfCore(
         Generic,
     }
 }
+
+/**
+ * Result of [CredentialManagerPrfCore.deriveSeeds]: one 32-byte PRF
+ * output per salt (in input order) plus the credential ID observed in
+ * the same assertion. [credentialId] is `null` when no assertion ran
+ * (empty `salts`).
+ */
+public data class PrfDerivation(
+    public val seeds: List<ByteArray>,
+    public val credentialId: ByteArray?,
+)
 
 /**
  * Typed exception thrown by [CredentialManagerPrfCore]. Wrappers should

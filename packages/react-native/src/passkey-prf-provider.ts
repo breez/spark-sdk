@@ -391,9 +391,9 @@ export class PasskeyProvider {
     const allowBase64 = effectiveAllow.map(id => uint8ArrayToBase64(id));
     const preferImmediate = request.preferImmediatelyAvailableCredentials ?? null;
 
-    let base64Results: string[];
+    let result: { seeds: string[]; credentialId?: string | null };
     try {
-      base64Results = await BreezSdkSparkPasskey.deriveSeeds(
+      result = await BreezSdkSparkPasskey.deriveSeeds(
         request.salts,
         this.rpId,
         this.rpName,
@@ -403,8 +403,8 @@ export class PasskeyProvider {
         allowBase64,
         preferImmediate
       );
-      if (!Array.isArray(base64Results)) {
-        throw new PasskeyPrfException('unknown', 'deriveSeeds returned a non-array');
+      if (!result || !Array.isArray(result.seeds)) {
+        throw new PasskeyPrfException('unknown', 'deriveSeeds returned an unexpected shape');
       }
     } catch (err) {
       if (err instanceof PasskeyPrfException) {
@@ -426,13 +426,14 @@ export class PasskeyProvider {
       throw mapped;
     }
 
-    // The native module surfaces seeds only; this binding does not
-    // expose the asserted credential ID to hosts (no consumer on React
-    // Native), so `credentialId` is left undefined and lowers to the
-    // SDK's `None`.
+    // The native module returns the asserted credential ID alongside the
+    // seeds; surface it so the SDK can pin the next derive to this exact
+    // credential.
     return {
-      seeds: base64Results.map(b64 => base64ToUint8Array(b64)),
-      credentialId: undefined,
+      seeds: result.seeds.map(b64 => base64ToUint8Array(b64)),
+      credentialId: result.credentialId
+        ? base64ToUint8Array(result.credentialId)
+        : undefined,
     };
   }
 
