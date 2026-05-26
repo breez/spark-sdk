@@ -304,6 +304,13 @@ export class PasskeyProvider {
    */
   static readonly BREEZ_RP_ID: string = 'keys.breez.technology';
 
+  /**
+   * Default Relying Party name used by {@link PasskeyClientBuilder} when
+   * no `rpName` is supplied. Surfaces in some credential-manager UIs
+   * (iCloud Keychain, Google Password Manager).
+   */
+  static readonly DEFAULT_RP_NAME: string = 'Breez';
+
   private rpId: string;
   private rpName: string;
   private userName: string;
@@ -660,12 +667,19 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Relying Party name used by the zero-provider {@link PasskeyClientBuilder.build}
- * path. Surfaces in some credential-manager UIs. Apps that want their own
- * RP name build a {@link PasskeyProvider} explicitly and inject it through
- * {@link PasskeyClientBuilder.withPrfProvider}.
+ * Options for {@link PasskeyClientBuilder}. `rpId` / `rpName` configure
+ * the built-in {@link PasskeyProvider} (ignored when a provider is
+ * injected via {@link PasskeyClientBuilder.withPrfProvider}, which owns
+ * its own RP); `defaultLabel` applies as client config either way.
  */
-const DEFAULT_RP_NAME = 'Breez';
+export interface PasskeyClientOptions {
+  /** Relying Party ID. Defaults to {@link PasskeyProvider.BREEZ_RP_ID}. */
+  rpId?: string;
+  /** Relying Party name. Defaults to {@link PasskeyProvider.DEFAULT_RP_NAME}. */
+  rpName?: string;
+  /** Wallet label used when `register` / `signIn` receive no label. */
+  defaultLabel?: string;
+}
 
 /**
  * Builder for a `PasskeyClient` backed by a caller-supplied provider.
@@ -690,16 +704,20 @@ export class PasskeyClientBuilder {
   /**
    * @param breezApiKey Breez relay key for authenticated (NIP-42) label
    *   storage. Omit for public relays only.
-   * @param config Optional `PasskeyConfig` (e.g. a default label).
+   * @param options Optional `rpId` / `rpName` for the default provider
+   *   (ignored when a provider is injected via {@link withPrfProvider},
+   *   which owns its RP) plus an optional `defaultLabel`.
    */
   constructor(
     private readonly breezApiKey?: string,
-    private readonly config?: PasskeyConfig
+    private readonly options: PasskeyClientOptions = {}
   ) {}
 
   /**
    * Inject the provider the client derives seeds through. The built-in
    * {@link PasskeyProvider} or any custom implementation is accepted.
+   * Supersedes the `rpId` / `rpName` options (the injected provider owns
+   * its RP).
    */
   withPrfProvider(provider: PasskeyProvider): this {
     this.provider = provider;
@@ -708,21 +726,26 @@ export class PasskeyClientBuilder {
 
   /**
    * Construct the client. Falls back to a default {@link PasskeyProvider}
-   * on the Breez RP when no provider was injected.
+   * on the configured `rpId` / `rpName` (default: the Breez RP) when no
+   * provider was injected.
    */
   build(): SdkPasskeyClient {
     const provider =
       this.provider ??
       new PasskeyProvider({
-        rpId: PasskeyProvider.BREEZ_RP_ID,
-        rpName: DEFAULT_RP_NAME,
+        rpId: this.options.rpId ?? PasskeyProvider.BREEZ_RP_ID,
+        rpName: this.options.rpName ?? PasskeyProvider.DEFAULT_RP_NAME,
       });
+    const config: PasskeyConfig | undefined =
+      this.options.defaultLabel !== undefined
+        ? { defaultLabel: this.options.defaultLabel }
+        : undefined;
     // The hand-written PasskeyProvider conforms structurally to the
     // generated PrfProvider foreign interface.
     return new SdkPasskeyClient(
       provider as unknown as PrfProvider,
       this.breezApiKey,
-      this.config
+      config
     );
   }
 }

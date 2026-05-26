@@ -1,5 +1,5 @@
 import { PasskeyClient as SdkPasskeyClient } from '../breez_sdk_spark_wasm';
-import type { PasskeyConfig, PrfProvider } from '../breez_sdk_spark_wasm';
+import type { PrfProvider } from '../breez_sdk_spark_wasm';
 
 /**
  * Result of a domain-association verification check against the platform's
@@ -280,6 +280,13 @@ export declare class PasskeyProvider {
      */
     static readonly BREEZ_RP_ID: string;
 
+    /**
+     * Default Relying Party name used by the zero-config
+     * {@link PasskeyClient} constructor / {@link PasskeyClientBuilder}
+     * when no `rpName` is supplied.
+     */
+    static readonly DEFAULT_RP_NAME: string;
+
     constructor(options: PasskeyProviderOptions);
 
     /**
@@ -376,9 +383,11 @@ export declare class PasskeyClientBuilder {
     /**
      * @param breezApiKey - Breez relay key for authenticated (NIP-42)
      *   label storage. Omit for public relays only.
-     * @param config - Optional `PasskeyConfig` (e.g. `{ defaultLabel }`).
+     * @param options - Optional `rpId` / `rpName` for the built-in
+     *   provider (ignored when one is injected via {@link withPrfProvider})
+     *   plus an optional `defaultLabel`.
      */
-    constructor(breezApiKey?: string, config?: PasskeyConfig);
+    constructor(breezApiKey?: string, options?: PasskeyClientOptions);
 
     /**
      * Inject the `PrfProvider` the client derives seeds through. The
@@ -411,7 +420,25 @@ export declare class PasskeyClient extends SdkPasskeyClient {
     /**
      * @param breezApiKey - Breez relay key for authenticated (NIP-42)
      *   label storage. Omit for public relays only.
-     * @param config - Optional `PasskeyConfig` (e.g. `{ defaultLabel }`).
+     * @param options - Optional `rpId` / `rpName` for the built-in
+     *   provider (default: the Breez shared RP) plus an optional
+     *   `defaultLabel`.
      */
-    constructor(breezApiKey?: string, config?: PasskeyConfig);
+    constructor(breezApiKey?: string, options?: PasskeyClientOptions);
+}
+
+/**
+ * Options for the zero-config {@link PasskeyClient} constructor and
+ * {@link PasskeyClientBuilder}. `rpId` / `rpName` configure the built-in
+ * {@link PasskeyProvider} (ignored when a provider is injected via
+ * {@link PasskeyClientBuilder.withPrfProvider}, which owns its own RP);
+ * `defaultLabel` applies as client config either way.
+ */
+export interface PasskeyClientOptions {
+    /** Relying Party ID. Defaults to {@link PasskeyProvider.BREEZ_RP_ID}. */
+    rpId?: string;
+    /** Relying Party name. Defaults to {@link PasskeyProvider.DEFAULT_RP_NAME}. */
+    rpName?: string;
+    /** Wallet label used when `register` / `signIn` receive no label. */
+    defaultLabel?: string;
 }

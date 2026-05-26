@@ -180,6 +180,12 @@ class PasskeyProvider {
   /// RP domain pass their own string.
   static const String breezRpId = 'keys.breez.technology';
 
+  /// Default Relying Party name used by [PasskeyClient.builtIn] /
+  /// [PasskeyClientBuilder] when no `rpName` is supplied. Surfaces in
+  /// some credential-manager UIs (iCloud Keychain, Google Password
+  /// Manager).
+  static const String defaultRpName = 'Breez';
+
   static const _channel = MethodChannel('breez_sdk_spark_passkey');
 
   final String _rpId;

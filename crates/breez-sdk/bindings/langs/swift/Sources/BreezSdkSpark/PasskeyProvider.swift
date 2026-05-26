@@ -55,6 +55,13 @@ public class PasskeyProvider: PrfProvider {
     /// own RP domain pass their own string.
     public static let BREEZ_RP_ID: String = "keys.breez.technology"
 
+    /// Default Relying Party name used by the zero-config
+    /// ``PasskeyClient/init(breezApiKey:rpId:rpName:config:)`` and
+    /// ``PasskeyClientBuilder`` when no `rpName` is supplied. Surfaces in
+    /// some credential-manager UIs (iCloud Keychain, Google Password
+    /// Manager).
+    public static let defaultRpName: String = "Breez"
+
     private let rpId: String
     private let core: PasskeyAssertionCore
     private let credentialRegistry: CredentialRegistry?

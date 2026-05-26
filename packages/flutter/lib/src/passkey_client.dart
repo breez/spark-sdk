@@ -16,13 +16,6 @@ import 'rust/models.dart'
 import 'rust/passkey.dart' as rust;
 import 'passkey_prf_provider.dart' show PasskeyProvider, PasskeyProviderOptions;
 
-/// Relying Party name used by [PasskeyClient.builtIn] / the
-/// zero-provider [PasskeyClientBuilder.build] path. Surfaces in some
-/// credential-manager UIs. Apps that want their own RP name build a
-/// [PasskeyProvider] explicitly and inject it through
-/// [PasskeyClientBuilder.withPrfProvider].
-const String _defaultRpName = 'Breez';
-
 /// Public-facing PasskeyClient entry point for Flutter. Wraps the
 /// FRB-generated client so callers can pass a [PasskeyProvider]
 /// directly, matching the `(provider, breezApiKey, config)` shape used
@@ -75,18 +68,20 @@ class PasskeyClient {
           config: config,
         );
 
-  /// Zero-config client wired to the built-in [PasskeyProvider] on the
+  /// Client wired to the built-in [PasskeyProvider]. Defaults to the
   /// Breez shared RP (`keys.breez.technology`), so a Breez-registered
-  /// app needs only its relay key. Apps with their own RP, a credential
-  /// registry, or a custom backend build the provider themselves and
-  /// inject it via [PasskeyClientBuilder] (or use [fromCallbacks]).
-  PasskeyClient.builtIn({String? breezApiKey, PasskeyConfig? config})
-      : this(
+  /// app needs only its relay key; pass [rpId] / [rpName] to use your own
+  /// RP. Apps that need a credential registry or a custom backend build
+  /// the provider themselves and inject it via [PasskeyClientBuilder] (or
+  /// use [fromCallbacks]).
+  PasskeyClient.builtIn({
+    String? breezApiKey,
+    String rpId = PasskeyProvider.breezRpId,
+    String rpName = PasskeyProvider.defaultRpName,
+    PasskeyConfig? config,
+  }) : this(
           PasskeyProvider(
-            PasskeyProviderOptions(
-              rpId: PasskeyProvider.breezRpId,
-              rpName: _defaultRpName,
-            ),
+            PasskeyProviderOptions(rpId: rpId, rpName: rpName),
           ),
           breezApiKey: breezApiKey,
           config: config,
@@ -125,11 +120,26 @@ class PasskeyClient {
 ///     .build();
 /// ```
 class PasskeyClientBuilder {
-  PasskeyClientBuilder({this.breezApiKey, this.config});
+  PasskeyClientBuilder({
+    this.breezApiKey,
+    this.rpId = PasskeyProvider.breezRpId,
+    this.rpName = PasskeyProvider.defaultRpName,
+    this.config,
+  });
 
   /// Breez relay key for authenticated (NIP-42) label storage. Pass
   /// `null` for public relays only.
   final String? breezApiKey;
+
+  /// Relying Party ID for the default provider. Defaults to
+  /// [PasskeyProvider.breezRpId]. Ignored when a provider is injected
+  /// via [withPrfProvider].
+  final String rpId;
+
+  /// Relying Party name for the default provider. Defaults to
+  /// [PasskeyProvider.defaultRpName]. Ignored when a provider is
+  /// injected.
+  final String rpName;
 
   /// Optional [PasskeyConfig] (e.g. a default label).
   final PasskeyConfig? config;
@@ -137,21 +147,17 @@ class PasskeyClientBuilder {
   PasskeyProvider? _provider;
 
   /// Inject the [PasskeyProvider] the client derives seeds through.
+  /// Supersedes [rpId] / [rpName] (the injected provider owns its RP).
   PasskeyClientBuilder withPrfProvider(PasskeyProvider provider) {
     _provider = provider;
     return this;
   }
 
   /// Construct the client. Falls back to a default [PasskeyProvider] on
-  /// the Breez RP when no provider was injected.
+  /// the configured [rpId] / [rpName] when no provider was injected.
   PasskeyClient build() {
     final provider = _provider ??
-        PasskeyProvider(
-          PasskeyProviderOptions(
-            rpId: PasskeyProvider.breezRpId,
-            rpName: _defaultRpName,
-          ),
-        );
+        PasskeyProvider(PasskeyProviderOptions(rpId: rpId, rpName: rpName));
     return PasskeyClient(provider, breezApiKey: breezApiKey, config: config);
   }
 }
