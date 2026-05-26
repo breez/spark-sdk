@@ -878,9 +878,7 @@ impl BreezSdk {
                     .unwrap_or(DEFAULT_CONVERSION_TIMEOUT_SECS),
             )
             .await
-            .map_err(|e| {
-                SdkError::Generic(format!("Timeout waiting for conversion to complete: {e}"))
-            })?;
+            .map_err(|e| SdkError::Generic(format!("Conversion did not complete: {e}")))?;
 
         // For self-transfers, suppress the event and return
         if *conversion_purpose == ConversionPurpose::SelfTransfer {
@@ -1496,6 +1494,12 @@ impl BreezSdk {
             }
         };
         self.finalize_payment(payment.clone()).await;
+        if payment.status != PaymentStatus::Completed {
+            return Err(SdkError::Generic(format!(
+                "Incoming payment did not complete (status: {})",
+                payment.status
+            )));
+        }
         Ok(payment)
     }
 
@@ -2069,11 +2073,16 @@ impl BreezSdk {
             wallet_transfer.status
         );
         let payment: Payment = match wallet_transfer.status {
-            // Transfer has already completed. Skip the claim.
-            TransferStatus::Completed => wallet_transfer.try_into()?,
-            // Transfer is claimable. Claim the transfer and promote the
-            // transfer status to completed.
-            TransferStatus::SenderKeyTweaked => {
+            // Claim is always run so the local tree-store gets the
+            // finalized leaves. `process_transfer` is idempotent for
+            // already-claimed transfers: `claim_transfer` falls back to
+            // fetching the finalized leaves from the coordinator. This
+            // matters in client setups where the tree-store is local
+            // (in-memory / WASM-backed) and the transfer may have been
+            // claimed by another instance or a previous lifetime of this
+            // one. Server mode uses a shared SQL tree-store, so the call
+            // is harmless but redundant there.
+            TransferStatus::Completed | TransferStatus::SenderKeyTweaked => {
                 debug!("poll_then_process_spark_transfer({transfer_id}): claiming");
                 self.spark_wallet.process_transfer(&wallet_transfer).await?;
                 let mut claimed = wallet_transfer;
