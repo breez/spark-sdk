@@ -16,15 +16,15 @@ use crate::{
     events::{EventListener, SdkEvent},
     persist::ObjectCacheRepository,
     token_conversion::TokenConverter,
-    utils::{payments::get_payment_and_emit_event, run_with_shutdown},
+    utils::{
+        payments::{get_payment_and_emit_event, update_balances},
+        run_with_shutdown,
+    },
 };
 use crate::{PaymentType, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
 
 use super::{RuntimeEvent, RuntimeProfile};
-use crate::sdk::{
-    BreezSdk, SyncCoordinator, SyncRequest, SyncType,
-    helpers::{BalanceWatcher, update_balances},
-};
+use crate::sdk::{BreezSdk, SyncCoordinator, SyncRequest, SyncType, helpers::BalanceWatcher};
 
 pub(super) struct ClientRuntime;
 
@@ -121,7 +121,7 @@ fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sende
                     }
 
                     event = wallet_events.recv() => {
-                        on_wallet_event(&sdk, event).await;
+                        Box::pin(on_wallet_event(&sdk, event)).await;
                     }
 
                     sync_request = sync_requests.recv() => {
@@ -160,7 +160,7 @@ async fn on_wallet_event(sdk: &BreezSdk, event: Result<WalletEvent, broadcast::e
                 &event,
                 WalletEvent::TransferClaimed(_) | WalletEvent::TransferClaimStarting(_)
             );
-            let payment_event_emitted = handle_wallet_event(sdk, event).await;
+            let payment_event_emitted = Box::pin(handle_wallet_event(sdk, event)).await;
 
             if wallet_synced {
                 sdk.sync_coordinator

@@ -972,6 +972,7 @@ impl SdkBuilder {
             flashnet_config,
             Arc::clone(&storage),
             Arc::clone(&spark_wallet),
+            Arc::clone(&event_emitter),
             self.config.network,
             context.http_client.clone(),
         ));

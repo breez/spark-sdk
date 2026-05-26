@@ -3,10 +3,7 @@ use platform_utils::tokio;
 use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
-use super::{
-    BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType, helpers::update_balances,
-    parse_input,
-};
+use super::{BreezSdk, CLAIM_TX_SIZE_VBYTES, SYNC_PAGING_LIMIT, SyncType, parse_input};
 use crate::{
     DepositInfo, InputType, MaxFee, PaymentDetails, PaymentType,
     error::SdkError,
@@ -17,6 +14,7 @@ use crate::{
     sync::SparkSyncService,
     utils::{
         deposit_chain_syncer::{DepositChainSyncer, TxOutput},
+        payments::update_balances,
         utxo_fetcher::DetailedUtxo,
     },
 };
