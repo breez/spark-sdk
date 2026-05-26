@@ -9,7 +9,7 @@ use spark_wallet::{
 use spark_wallet::{InvoiceDescription, Preimage};
 use std::str::FromStr;
 use tokio::sync::oneshot;
-use tracing::{Instrument, debug, error, info, warn};
+use tracing::{Instrument, debug, error, info, instrument, warn};
 
 use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
@@ -415,11 +415,20 @@ impl BreezSdk {
         }
     }
 
+    #[instrument(
+        level = "info",
+        target = "breez_sdk_core::send_payment",
+        skip_all,
+        fields(payment_id = tracing::field::Empty),
+    )]
     pub async fn send_payment(
         &self,
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
         self.maybe_ensure_spark_private_mode_initialized().await?;
+        if let Some(key) = request.idempotency_key.as_deref() {
+            tracing::Span::current().record("payment_id", key);
+        }
         Box::pin(self.maybe_convert_token_send_payment(request, false, None)).await
     }
 

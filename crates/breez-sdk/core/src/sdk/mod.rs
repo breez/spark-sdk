@@ -128,13 +128,14 @@ pub async fn parse_input(
     .into())
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn init_logging(
     log_dir: Option<String>,
     app_logger: Option<Box<dyn Logger>>,
     log_filter: Option<String>,
 ) -> Result<(), SdkError> {
-    logger::init_logging(log_dir, app_logger, log_filter)
+    logger::init_logging(log_dir.as_deref(), app_logger, log_filter.as_deref())
 }
 
 /// Connects to the Spark network using the provided configuration and mnemonic.

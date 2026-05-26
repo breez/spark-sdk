@@ -125,7 +125,7 @@ impl OperatorPool {
                 ])),
                 None => auth_provider,
             };
-            let client = SparkRpcClient::new(transport, header_provider);
+            let client = SparkRpcClient::new(transport, header_provider, operator.id);
             operators.push(Operator {
                 client,
                 id: operator.id,

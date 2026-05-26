@@ -10,6 +10,8 @@ postgres = ["breez-sdk-spark/postgres"]
 # MySQL storage backend (disable for mobile builds to reduce binary size)
 mysql = ["breez-sdk-spark/mysql"]
 uniffi-cli = ["uniffi/bindgen-tests", "uniffi/cli"]
+# Bench-only: see breez-sdk-spark's `span-trace` feature.
+span-trace = ["breez-sdk-spark/span-trace"]
 
 [[bin]]
 name = "uniffi-bindgen"

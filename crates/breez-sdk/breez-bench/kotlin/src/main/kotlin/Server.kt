@@ -25,12 +25,34 @@ import io.ktor.server.routing.routing
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.UUID
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 // --- HTTP request/response shapes -----------------------------------------
+
+// Preset filter for `--bench-trace`. Targets:
+//   - `spark::tree::service=trace`           — payment-time leaf swaps
+//     (the "Swapped leaves to match target amount" log line)
+//   - `breez_sdk_core::send_payment=info`    — top-level `send_payment`
+//     span; carries `payment_id` field.
+//   - `spark::operator_rpc=info`             — every operator-RPC span
+//     (carries `operator_id`).
+//   - `spark::ssp=info`                      — every SSP-method span.
+// The three info-level targets are SDK span-trace targets — they only
+// produce close-event lines when the SDK is built with the `span-trace`
+// cargo feature (off by default, on for bench builds). `aggregate.py`
+// reads the close events to render the per-RPC slow-payment breakdown.
+// Trailing `error` keeps every other module at error-level so the file
+// surfaces real failures without unbounded growth at high RPS.
+private const val BENCH_TRACE_FILTER =
+    "spark::tree::service=trace," +
+    "breez_sdk_core::send_payment=info," +
+    "spark::operator_rpc=info," +
+    "spark::ssp=info," +
+    "error"
 
 @Serializable
 data class InfoResponse(val balanceSats: Long)
@@ -66,11 +88,30 @@ fun runServer(opts: Map<String, String>) {
     val runId = opts["run-id"] ?: defaultRunId()
     val outDir = Path.of(opts["out-dir"] ?: "out/$runId").also { Files.createDirectories(it) }
 
-    opts["log-filter"]?.let { logFilter ->
+    // Tracing wiring. Three states:
+    //   1. --bench-trace defaults to true → preset filter that turns on
+    //      leaves-swap detection + per-RPC close-event spans (consumed
+    //      by aggregate.py). Close-event capture requires the SDK to be
+    //      built with the `span-trace` cargo feature — prod builds (no
+    //      feature) contain none of that code, so these targets are
+    //      structurally inaccessible to integrators.
+    //   2. --bench-trace=false           → no SDK tracing (zero overhead;
+    //      use to A/B against (1) when measuring instrumentation cost).
+    //   3. --log-filter=<spec>           → explicit override, user takes
+    //      full control (must include the span-trace targets themselves
+    //      if they want aggregate.py to pick up swap/phase data).
+    val explicitFilter = opts["log-filter"]
+    val benchTrace = opts["bench-trace"]?.equals("true", ignoreCase = true) ?: true
+    val effectiveFilter = when {
+        explicitFilter != null -> explicitFilter
+        benchTrace -> BENCH_TRACE_FILTER
+        else -> null
+    }
+    if (effectiveFilter != null) {
         val logDir = opts["log-dir"] ?: outDir.resolve(".trace-logs").toString()
         Files.createDirectories(Path.of(logDir))
-        println("[server] init_logging dir=$logDir filter=$logFilter")
-        initLogging(logDir, null, logFilter)
+        println("[server] init_logging dir=$logDir filter=$effectiveFilter")
+        initLogging(logDir, null, effectiveFilter)
     }
 
     val handlers = runBlocking { SharedHandlers.create(mysqlUrl) }
@@ -133,11 +174,25 @@ fun runServer(opts: Map<String, String>) {
                             }
                             else -> null
                         }
+                        // Pre-supply the idempotency key so the SDK records
+                        // it as `payment_id` on the bench send_payment span
+                        // before any child RPC span closes. Lets aggregate.py
+                        // correlate per-RPC close events back to this send.
+                        val idempotencyKey = UUID.randomUUID().toString()
+                        t.paymentId = idempotencyKey
                         val tSendNs = System.nanoTime()
                         val sendResp = sdk.sendPayment(
-                            SendPaymentRequest(prepareResponse = prepared, options = sendOptions)
+                            SendPaymentRequest(
+                                prepareResponse = prepared,
+                                options = sendOptions,
+                                idempotencyKey = idempotencyKey,
+                            )
                         )
                         t.sendMs = (System.nanoTime() - tSendNs) / 1_000_000
+                        // sendResp.payment.id == idempotencyKey for the paths
+                        // exercised here (LN + spark transfer); reuse the
+                        // SDK-returned value rather than the local for the
+                        // wire response in case the SDK ever normalizes.
                         SendResult(
                             paymentId = sendResp.payment.id,
                             feeSats = feeOf(prepared.paymentMethod),
@@ -236,6 +291,7 @@ private suspend inline fun <reified T : Any> handleAndLog(
                 prepareMs = timings.prepareMs,
                 sendMs = timings.sendMs,
                 disconnectMs = timings.disconnectMs,
+                paymentId = timings.paymentId,
             )
         )
     }

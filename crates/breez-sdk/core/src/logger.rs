@@ -9,6 +9,9 @@ use tracing_subscriber::{
 
 use crate::{LogEntry, Logger, SdkError};
 
+const DEFAULT_FILTER: &str = "debug,h2=warn,rustls=warn,rustyline=warn,hyper=warn,hyper_util=warn,\
+     tower=warn,Connection=warn,tonic=warn";
+
 pub(crate) struct GlobalSdkLogger {
     /// Optional external log listener, that can receive a stream of log statements
     pub(crate) log_listener: Option<Box<dyn Logger>>,
@@ -39,13 +42,11 @@ where
 }
 
 pub(super) fn init_logging(
-    log_dir: Option<String>,
+    log_dir: Option<&str>,
     app_logger: Option<Box<dyn Logger>>,
-    log_filter: Option<String>,
+    log_filter: Option<&str>,
 ) -> Result<(), SdkError> {
-    let filter = log_filter.unwrap_or(
-        "debug,h2=warn,rustls=warn,rustyline=warn,hyper=warn,hyper_util=warn,tower=warn,Connection=warn,tonic=warn".to_string(),
-    );
+    let filter = log_filter.unwrap_or(DEFAULT_FILTER);
 
     let registry = tracing_subscriber::registry()
         .with(EnvFilter::new(filter))
@@ -59,14 +60,17 @@ pub(super) fn init_logging(
             .append(true)
             .open(format!("{log_dir}/sdk.log"))
             .map_err(|e| SdkError::Generic(e.to_string()))?;
-        registry
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_ansi(false)
-                    .with_line_number(true)
-                    .with_writer(log_file),
-            )
-            .try_init()?;
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_line_number(true)
+            .with_writer(log_file);
+        // Bench-only: render span CLOSE lines (`time.busy` / `time.idle`)
+        // so the breez-bench aggregator can attribute per-RPC latency.
+        // The user's filter (`spark::operator_rpc=info`, etc.) controls
+        // which spans actually emit.
+        #[cfg(feature = "span-trace")]
+        let fmt_layer = fmt_layer.with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
+        registry.with(fmt_layer).try_init()?;
     } else {
         registry.try_init()?;
     }

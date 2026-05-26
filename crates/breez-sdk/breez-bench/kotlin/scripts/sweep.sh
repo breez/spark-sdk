@@ -60,6 +60,13 @@ INTER_STEP_SLEEP_SECS="${INTER_STEP_SLEEP_SECS:-120}"
 # out/<id>/rps-<N>/.trace-logs/sdk.log. Scoped to the load-step server
 # only (not fund/seed) to keep volume bounded.
 LOG_FILTER="${LOG_FILTER:-}"
+# Bench-report tracing preset (leaves-swap detection + per-RPC close-event
+# spans, consumed by aggregate.py to render the "Leaves swap / optimization"
+# and "Slow payments — per-RPC breakdown" sections in RESULTS.md). The
+# preset is ON by default in the server; set BENCH_TRACE=0 here to A/B
+# the instrumentation overhead. If LOG_FILTER is also set, the explicit
+# filter wins — user retains full control.
+BENCH_TRACE="${BENCH_TRACE:-1}"
 # Per-sender fund safety buffer (so we never drain a sender during the
 # sweep) and treasurer buffer over total seeded amount.
 SEED_SAFETY="${SEED_SAFETY:-2.0}"
@@ -440,7 +447,7 @@ for raw_rps in "${RPS_LIST[@]}"; do
         --port=$PORT \
         --run-id=$SWEEP_ID/rps-$rps \
         --out-dir=$step_dir \
-        ${LOG_FILTER:+--log-filter=$LOG_FILTER}" \
+        ${LOG_FILTER:+--log-filter=$LOG_FILTER} --bench-trace=$([ "$BENCH_TRACE" = 0 ] && echo false || echo true)" \
         > "$server_log" 2>&1 &
     server_pid=$!
     # Killing gradlew alone can leak the JVM child; trap handles the SIGINT path.
