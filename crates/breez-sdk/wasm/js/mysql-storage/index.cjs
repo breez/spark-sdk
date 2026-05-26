@@ -569,13 +569,13 @@ class MysqlStorage {
   }
 
   _paymentUpdateLockName(paymentId) {
-    return `brz_payment_${crypto
+    return crypto
       .createHash("sha256")
       .update("brz_payment_update")
       .update(this.identity)
       .update(Buffer.from(paymentId))
       .digest("hex")
-      .slice(0, 32)}`;
+      .slice(0, 32);
   }
 
   _normalizePaymentStatus(status) {

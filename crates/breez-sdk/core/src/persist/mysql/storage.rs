@@ -669,7 +669,7 @@ impl MysqlStorage {
         engine.input(identity);
         engine.input(payment_id.as_bytes());
         let digest = sha256::Hash::from_engine(engine);
-        format!("brz_payment_{}", &digest.to_string()[..32])
+        digest.to_string()[..32].to_string()
     }
 
     async fn get_payment_status_in_tx(
