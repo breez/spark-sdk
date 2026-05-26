@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use bitcoin::hashes::{Hash, sha256};
+use bitcoin::hashes::{Hash, HashEngine, sha256};
 use macros::async_trait;
 use mysql_async::prelude::*;
 use mysql_async::{Params, Pool, Row, Transaction, Value};
@@ -664,10 +664,11 @@ fn from_json_string_opt<T: serde::de::DeserializeOwned>(
 
 impl MysqlStorage {
     fn payment_update_lock_name(identity: &[u8], payment_id: &str) -> String {
-        let mut lock_key = Vec::with_capacity(identity.len().saturating_add(payment_id.len()));
-        lock_key.extend_from_slice(identity);
-        lock_key.extend_from_slice(payment_id.as_bytes());
-        let digest = sha256::Hash::hash(&lock_key);
+        let mut engine = sha256::Hash::engine();
+        engine.input(b"brz_payment_update");
+        engine.input(identity);
+        engine.input(payment_id.as_bytes());
+        let digest = sha256::Hash::from_engine(engine);
         format!("brz_payment_{}", &digest.to_string()[..32])
     }
 

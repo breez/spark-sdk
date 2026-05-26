@@ -31,22 +31,6 @@ pub(crate) async fn record_payment_update(
     }
 }
 
-/// Emit a payment event based on whether storage indicated the update should
-/// produce one (new payment inserted or status transitioned).
-pub(crate) async fn emit_payment_update(
-    storage: &Arc<dyn Storage>,
-    event_emitter: &EventEmitter,
-    payment: Payment,
-    should_emit: bool,
-) -> bool {
-    if should_emit {
-        get_payment_and_emit_event(storage, event_emitter, payment).await;
-        true
-    } else {
-        false
-    }
-}
-
 /// Gets the payment from storage to include already stored metadata and conversion details.
 /// Emits the appropriate event based on its status. Falls back to the provided
 /// payment if the storage lookup fails.

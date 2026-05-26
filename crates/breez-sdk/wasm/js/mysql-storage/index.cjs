@@ -391,7 +391,7 @@ class MysqlStorage {
       await conn.beginTransaction();
       try {
         const [rows] = await conn.query(
-          "SELECT status FROM brz_payments WHERE user_id = ? AND id = ?",
+          "SELECT status FROM brz_payments WHERE user_id = ? AND id = ? FOR UPDATE",
           [this.identity, payment.id]
         );
         const stored = rows.length > 0
@@ -569,10 +569,11 @@ class MysqlStorage {
   }
 
   _paymentUpdateLockName(paymentId) {
-    const lockKey = Buffer.concat([this.identity, Buffer.from(paymentId)]);
     return `brz_payment_${crypto
       .createHash("sha256")
-      .update(lockKey)
+      .update("brz_payment_update")
+      .update(this.identity)
+      .update(Buffer.from(paymentId))
       .digest("hex")
       .slice(0, 32)}`;
   }

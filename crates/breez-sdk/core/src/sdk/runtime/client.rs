@@ -16,7 +16,7 @@ use crate::{
     events::{EventListener, SdkEvent},
     persist::ObjectCacheRepository,
     token_conversion::TokenConverter,
-    utils::{payments::emit_payment_update, run_with_shutdown},
+    utils::{payments::get_payment_and_emit_event, run_with_shutdown},
 };
 use crate::{PaymentType, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
 
@@ -297,9 +297,10 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
                 sdk.sync_single_lnurl_metadata(&mut payment).await;
 
                 // Drop this Pending event if sync already saw the transfer Completed.
-                payment_emitted =
-                    emit_payment_update(&sdk.storage, &sdk.event_emitter, payment, should_emit)
-                        .await;
+                if should_emit {
+                    get_payment_and_emit_event(&sdk.storage, &sdk.event_emitter, payment).await;
+                    payment_emitted = true;
+                }
             }
             payment_emitted
         }

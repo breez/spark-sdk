@@ -32,7 +32,7 @@ use crate::{
     },
     utils::{
         payments::{
-            emit_payment_update, get_payment_with_conversion_details, record_payment_update,
+            get_payment_and_emit_event, get_payment_with_conversion_details, record_payment_update,
         },
         polling::{PollSchedule, poll_until},
         send_payment_validation::{get_dust_limit_sats, validate_prepare_send_payment_request},
@@ -1544,14 +1544,14 @@ impl BreezSdk {
                                     info!("Polling payment completed status = {}", payment.status);
                                     break 'poll Some(payment);
                                 }
-
-                                let sleep_time = if i < 5 {
-                                    Duration::from_secs(1)
-                                } else {
-                                    Duration::from_secs(i.into())
-                                };
-                                tokio::time::sleep(sleep_time).await;
                             }
+
+                            let sleep_time = if i < 5 {
+                                Duration::from_secs(1)
+                            } else {
+                                Duration::from_secs(i.into())
+                            };
+                            tokio::time::sleep(sleep_time).await;
                         }
                     }
                 }
@@ -2026,7 +2026,12 @@ impl BreezSdk {
             );
         }
 
-        emit_payment_update(&self.storage, &self.event_emitter, payment, should_emit).await
+        if should_emit {
+            get_payment_and_emit_event(&self.storage, &self.event_emitter, payment).await;
+            true
+        } else {
+            false
+        }
     }
 
     /// Polls a single Spark transfer by id and, on terminal status, claims
