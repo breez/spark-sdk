@@ -6,20 +6,22 @@
 
 use std::collections::HashMap;
 
+use bitcoin::hashes::{Hash, HashEngine, sha256};
 use macros::async_trait;
 use mysql_async::prelude::*;
-use mysql_async::{Params, Pool, Row, Value};
+use mysql_async::{Params, Pool, Row, Transaction, Value};
 use spark_mysql::{mysql_async, tx_opts};
 use tracing::warn;
 
 use crate::{
     AssetFilter, Contact, ConversionDetails, ConversionInfo, ConversionStatus, DepositInfo,
     ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails,
-    PaymentMethod, SparkHtlcDetails, SparkHtlcStatus,
+    PaymentMethod, PaymentStatus, SparkHtlcDetails, SparkHtlcStatus,
     error::DepositClaimError,
     persist::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
         StorageListPaymentsRequest, StoragePaymentDetailsFilter, UpdateDepositPayload,
+        parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -31,6 +33,7 @@ use super::base::{Migration, SchemaRenames, map_db_error, run_migrations};
 use super::base::{MysqlStorageConfig, create_pool};
 
 const MIGRATIONS_TABLE: &str = "brz_schema_migrations";
+const PAYMENT_UPDATE_LOCK_TIMEOUT_SECS: u64 = 10;
 
 /// Pre-prefix rename map for upgrading core persist deployments.
 const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
@@ -659,6 +662,173 @@ fn from_json_string_opt<T: serde::de::DeserializeOwned>(
         .map_err(|e| StorageError::Serialization(e.to_string()))
 }
 
+impl MysqlStorage {
+    fn payment_update_lock_name(identity: &[u8], payment_id: &str) -> String {
+        let mut engine = sha256::Hash::engine();
+        engine.input(b"brz_payment_update");
+        engine.input(identity);
+        engine.input(payment_id.as_bytes());
+        let digest = sha256::Hash::from_engine(engine);
+        digest.to_string()[..32].to_string()
+    }
+
+    async fn get_payment_status_in_tx(
+        tx: &mut Transaction<'_>,
+        identity: &[u8],
+        payment_id: &str,
+    ) -> Result<Option<PaymentStatus>, StorageError> {
+        let status: Option<String> = tx
+            .exec_first(
+                "SELECT status FROM brz_payments WHERE user_id = ? AND id = ? FOR UPDATE",
+                (identity.to_vec(), payment_id),
+            )
+            .await
+            .map_err(map_db_error)?;
+
+        status
+            .map(|status| parse_payment_status(&status))
+            .transpose()
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn insert_payment_in_tx(
+        tx: &mut Transaction<'_>,
+        identity: &[u8],
+        payment: Payment,
+    ) -> Result<(), StorageError> {
+        let (withdraw_tx_id, deposit_tx_id, spark): (Option<&str>, Option<&str>, Option<bool>) =
+            match &payment.details {
+                Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None),
+                Some(PaymentDetails::Deposit { tx_id }) => (None, Some(tx_id.as_str()), None),
+                Some(PaymentDetails::Spark { .. }) => (None, None, Some(true)),
+                _ => (None, None, None),
+            };
+
+        tx.exec_drop(
+            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                    payment_type = VALUES(payment_type),
+                    status = VALUES(status),
+                    amount = VALUES(amount),
+                    fees = VALUES(fees),
+                    timestamp = VALUES(timestamp),
+                    method = VALUES(method),
+                    withdraw_tx_id = VALUES(withdraw_tx_id),
+                    deposit_tx_id = VALUES(deposit_tx_id),
+                    spark = VALUES(spark)",
+            (
+                identity.to_vec(),
+                &payment.id,
+                payment.payment_type.to_string(),
+                payment.status.to_string(),
+                payment.amount.to_string(),
+                payment.fees.to_string(),
+                i64::try_from(payment.timestamp)?,
+                Some(payment.method.to_string()),
+                withdraw_tx_id.map(str::to_string),
+                deposit_tx_id.map(str::to_string),
+                spark,
+            ),
+        )
+        .await
+        .map_err(map_db_error)?;
+
+        match payment.details {
+            Some(PaymentDetails::Spark {
+                invoice_details,
+                htlc_details,
+                ..
+            }) => {
+                if invoice_details.is_some() || htlc_details.is_some() {
+                    let invoice_json = to_json_string_opt(invoice_details.as_ref())?;
+                    let htlc_json = to_json_string_opt(htlc_details.as_ref())?;
+                    tx.exec_drop(
+                        "INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
+                             VALUES (?, ?, ?, ?)
+                             ON DUPLICATE KEY UPDATE
+                                invoice_details = COALESCE(VALUES(invoice_details), invoice_details),
+                                htlc_details = COALESCE(VALUES(htlc_details), htlc_details)",
+                        (identity.to_vec(), &payment.id, invoice_json, htlc_json),
+                    )
+                    .await
+                    .map_err(map_db_error)?;
+                }
+            }
+            Some(PaymentDetails::Token {
+                metadata,
+                tx_hash,
+                tx_type,
+                invoice_details,
+                ..
+            }) => {
+                let metadata_json = serde_json::to_string(&metadata)
+                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
+                let invoice_json = to_json_string_opt(invoice_details.as_ref())?;
+                tx.exec_drop(
+                    "INSERT INTO brz_payment_details_token (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
+                         VALUES (?, ?, ?, ?, ?, ?)
+                         ON DUPLICATE KEY UPDATE
+                            metadata = VALUES(metadata),
+                            tx_hash = VALUES(tx_hash),
+                            tx_type = VALUES(tx_type),
+                            invoice_details = COALESCE(VALUES(invoice_details), invoice_details)",
+                    (
+                        identity.to_vec(),
+                        &payment.id,
+                        metadata_json,
+                        tx_hash,
+                        tx_type.to_string(),
+                        invoice_json,
+                    ),
+                )
+                .await
+                .map_err(map_db_error)?;
+            }
+            Some(PaymentDetails::Lightning {
+                invoice,
+                destination_pubkey,
+                description,
+                htlc_details,
+                ..
+            }) => {
+                let payment_hash = htlc_details.payment_hash.clone();
+                let preimage = htlc_details.preimage.clone();
+                let htlc_status = htlc_details.status.to_string();
+                let htlc_expiry_time = i64::try_from(htlc_details.expiry_time)?;
+                tx.exec_drop(
+                    "INSERT INTO brz_payment_details_lightning (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         ON DUPLICATE KEY UPDATE
+                            invoice = VALUES(invoice),
+                            payment_hash = VALUES(payment_hash),
+                            destination_pubkey = VALUES(destination_pubkey),
+                            description = VALUES(description),
+                            preimage = COALESCE(VALUES(preimage), preimage),
+                            htlc_status = COALESCE(VALUES(htlc_status), htlc_status),
+                            htlc_expiry_time = COALESCE(VALUES(htlc_expiry_time), htlc_expiry_time)",
+                    (
+                        identity.to_vec(),
+                        &payment.id,
+                        invoice,
+                        payment_hash,
+                        destination_pubkey,
+                        description,
+                        preimage,
+                        htlc_status,
+                        htlc_expiry_time,
+                    ),
+                )
+                .await
+                .map_err(map_db_error)?;
+            }
+            Some(PaymentDetails::Withdraw { .. } | PaymentDetails::Deposit { .. }) | None => {}
+        }
+
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl Storage for MysqlStorage {
     #[allow(clippy::too_many_lines, clippy::arithmetic_side_effects)]
@@ -831,145 +1001,65 @@ impl Storage for MysqlStorage {
         Ok(payments)
     }
 
-    #[allow(clippy::too_many_lines)]
-    async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
+    async fn apply_payment_update(&self, payment: Payment) -> Result<bool, StorageError> {
         let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
-        let mut tx = conn
-            .start_transaction(tx_opts())
+        let lock_name = Self::payment_update_lock_name(&self.identity, &payment.id);
+        let acquired: Option<i64> = conn
+            .exec_first(
+                "SELECT GET_LOCK(?, ?)",
+                (lock_name.as_str(), PAYMENT_UPDATE_LOCK_TIMEOUT_SECS),
+            )
             .await
             .map_err(map_db_error)?;
-
-        let (withdraw_tx_id, deposit_tx_id, spark): (Option<&str>, Option<&str>, Option<bool>) =
-            match &payment.details {
-                Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None),
-                Some(PaymentDetails::Deposit { tx_id }) => (None, Some(tx_id.as_str()), None),
-                Some(PaymentDetails::Spark { .. }) => (None, None, Some(true)),
-                _ => (None, None, None),
-            };
-
-        tx.exec_drop(
-            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON DUPLICATE KEY UPDATE
-                    payment_type = VALUES(payment_type),
-                    status = VALUES(status),
-                    amount = VALUES(amount),
-                    fees = VALUES(fees),
-                    timestamp = VALUES(timestamp),
-                    method = VALUES(method),
-                    withdraw_tx_id = VALUES(withdraw_tx_id),
-                    deposit_tx_id = VALUES(deposit_tx_id),
-                    spark = VALUES(spark)",
-            (
-                self.identity.clone(),
-                &payment.id,
-                payment.payment_type.to_string(),
-                payment.status.to_string(),
-                payment.amount.to_string(),
-                payment.fees.to_string(),
-                i64::try_from(payment.timestamp)?,
-                Some(payment.method.to_string()),
-                withdraw_tx_id.map(str::to_string),
-                deposit_tx_id.map(str::to_string),
-                spark,
-            ),
-        )
-        .await
-        .map_err(map_db_error)?;
-
-        match payment.details {
-            Some(PaymentDetails::Spark {
-                invoice_details,
-                htlc_details,
-                ..
-            }) => {
-                if invoice_details.is_some() || htlc_details.is_some() {
-                    let invoice_json = to_json_string_opt(invoice_details.as_ref())?;
-                    let htlc_json = to_json_string_opt(htlc_details.as_ref())?;
-                    tx.exec_drop(
-                        "INSERT INTO brz_payment_details_spark (user_id, payment_id, invoice_details, htlc_details)
-                             VALUES (?, ?, ?, ?)
-                             ON DUPLICATE KEY UPDATE
-                                invoice_details = COALESCE(VALUES(invoice_details), invoice_details),
-                                htlc_details = COALESCE(VALUES(htlc_details), htlc_details)",
-                        (self.identity.clone(), &payment.id, invoice_json, htlc_json),
-                    )
-                    .await
-                    .map_err(map_db_error)?;
-                }
-            }
-            Some(PaymentDetails::Token {
-                metadata,
-                tx_hash,
-                tx_type,
-                invoice_details,
-                ..
-            }) => {
-                let metadata_json = serde_json::to_string(&metadata)
-                    .map_err(|e| StorageError::Serialization(e.to_string()))?;
-                let invoice_json = to_json_string_opt(invoice_details.as_ref())?;
-                tx.exec_drop(
-                    "INSERT INTO brz_payment_details_token (user_id, payment_id, metadata, tx_hash, tx_type, invoice_details)
-                         VALUES (?, ?, ?, ?, ?, ?)
-                         ON DUPLICATE KEY UPDATE
-                            metadata = VALUES(metadata),
-                            tx_hash = VALUES(tx_hash),
-                            tx_type = VALUES(tx_type),
-                            invoice_details = COALESCE(VALUES(invoice_details), invoice_details)",
-                    (
-                        self.identity.clone(),
-                        &payment.id,
-                        metadata_json,
-                        tx_hash,
-                        tx_type.to_string(),
-                        invoice_json,
-                    ),
-                )
-                .await
-                .map_err(map_db_error)?;
-            }
-            Some(PaymentDetails::Lightning {
-                invoice,
-                destination_pubkey,
-                description,
-                htlc_details,
-                ..
-            }) => {
-                let payment_hash = htlc_details.payment_hash.clone();
-                let preimage = htlc_details.preimage.clone();
-                let htlc_status = htlc_details.status.to_string();
-                let htlc_expiry_time = i64::try_from(htlc_details.expiry_time)?;
-                tx.exec_drop(
-                    "INSERT INTO brz_payment_details_lightning (user_id, payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                         ON DUPLICATE KEY UPDATE
-                            invoice = VALUES(invoice),
-                            payment_hash = VALUES(payment_hash),
-                            destination_pubkey = VALUES(destination_pubkey),
-                            description = VALUES(description),
-                            preimage = COALESCE(VALUES(preimage), preimage),
-                            htlc_status = COALESCE(VALUES(htlc_status), htlc_status),
-                            htlc_expiry_time = COALESCE(VALUES(htlc_expiry_time), htlc_expiry_time)",
-                    (
-                        self.identity.clone(),
-                        &payment.id,
-                        invoice,
-                        payment_hash,
-                        destination_pubkey,
-                        description,
-                        preimage,
-                        htlc_status,
-                        htlc_expiry_time,
-                    ),
-                )
-                .await
-                .map_err(map_db_error)?;
-            }
-            Some(PaymentDetails::Withdraw { .. } | PaymentDetails::Deposit { .. }) | None => {}
+        if acquired != Some(1) {
+            return Err(StorageError::Implementation(format!(
+                "Timed out acquiring payment update lock '{lock_name}'"
+            )));
         }
 
-        tx.commit().await.map_err(map_db_error)?;
-        Ok(())
+        let result = async {
+            let mut tx = conn
+                .start_transaction(tx_opts())
+                .await
+                .map_err(map_db_error)?;
+            let stored_status =
+                Self::get_payment_status_in_tx(&mut tx, &self.identity, &payment.id).await?;
+
+            // Guard against downgrading a terminal status.
+            if let Some(stored) = stored_status
+                && stored.is_final()
+                && stored != payment.status
+            {
+                warn!(
+                    "Skipping payment update (would replace terminal status): id={} stored={stored:?} new={:?}",
+                    payment.id, payment.status
+                );
+                tx.commit().await.map_err(map_db_error)?;
+                return Ok(false);
+            }
+
+            let same_status = stored_status == Some(payment.status);
+            if same_status {
+                tracing::debug!(
+                    "Skipping redundant payment event: id={} status={:?}",
+                    payment.id, payment.status
+                );
+            }
+            Self::insert_payment_in_tx(&mut tx, &self.identity, payment).await?;
+            tx.commit().await.map_err(map_db_error)?;
+            Ok(!same_status)
+        }
+        .await;
+
+        let release_result = conn
+            .exec_drop("SELECT RELEASE_LOCK(?)", (lock_name.as_str(),))
+            .await
+            .map_err(map_db_error);
+
+        match (result, release_result) {
+            (Ok(should_emit), Ok(())) => Ok(should_emit),
+            (Err(e), _) | (Ok(_), Err(e)) => Err(e),
+        }
     }
 
     async fn insert_payment_metadata(
@@ -2113,6 +2203,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_payment_terminal_status_is_not_replaced() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_payment_terminal_status_is_not_replaced(Box::new(
+            fixture.storage,
+        ))
+        .await;
+    }
+
+    #[tokio::test]
     async fn test_payment_metadata_merge() {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_payment_metadata_merge(Box::new(fixture.storage)).await;
@@ -2225,8 +2324,8 @@ mod tests {
             *destination_pubkey = "pkB".to_string();
         }
 
-        fx.a.insert_payment(pmt_a.clone()).await.unwrap();
-        fx.b.insert_payment(pmt_b.clone()).await.unwrap();
+        fx.a.apply_payment_update(pmt_a.clone()).await.unwrap();
+        fx.b.apply_payment_update(pmt_b.clone()).await.unwrap();
 
         let list_a =
             fx.a.list_payments(StorageListPaymentsRequest::default())

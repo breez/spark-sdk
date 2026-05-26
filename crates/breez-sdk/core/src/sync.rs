@@ -10,7 +10,7 @@ use crate::{
     EventEmitter, Payment, PaymentDetails, PaymentStatus, SdkError, Storage,
     persist::{CachedSyncInfo, ObjectCacheRepository, StorageListPaymentsRequest},
     utils::{
-        payments::get_payment_and_emit_event,
+        payments::record_payment_update,
         token::{token_transaction_to_payments, token_tx_inputs_are_ours},
     },
 };
@@ -95,33 +95,18 @@ impl SparkSyncService {
                 }
 
                 // Emit events for new payment statuses after initial sync, or even before initial sync if the payment is pending
-                let should_emit =
-                    if initial_sync_complete || payment.status == PaymentStatus::Pending {
-                        let maybe_existing_payment_status = self
-                            .storage
-                            .get_payment_by_id(payment.id.clone())
-                            .await
-                            .ok()
-                            .map(|p| p.status);
-                        maybe_existing_payment_status.is_none_or(|s| s != payment.status)
-                    } else {
-                        false
-                    };
-
-                // Insert payment into storage
-                if let Err(err) = self.storage.insert_payment(payment.clone()).await {
-                    error!("Failed to insert payment: {err:?}");
-                }
+                let should_emit = initial_sync_complete || payment.status == PaymentStatus::Pending;
+                record_payment_update(
+                    &self.storage,
+                    &self.event_emitter,
+                    payment.clone(),
+                    should_emit,
+                )
+                .await;
                 if payment.status == PaymentStatus::Pending {
                     pending_payments = pending_payments.saturating_add(1);
                 }
-                info!("Inserted payment: {payment:?}");
-
-                if should_emit {
-                    // Fetch the payment to include already stored metadata
-                    get_payment_and_emit_event(&self.storage, &self.event_emitter, payment.clone())
-                        .await;
-                }
+                info!("Synced payment: {payment:?}");
             }
 
             // Check if we have more transfers to fetch
@@ -219,15 +204,13 @@ impl SparkSyncService {
                 payment.id, payment.status
             );
 
-            if let Err(e) = self.storage.insert_payment(payment.clone()).await {
-                error!("Failed to update payment status during reconciliation: {e:?}");
-                continue;
-            }
-
-            if initial_sync_complete {
-                get_payment_and_emit_event(&self.storage, &self.event_emitter, payment.clone())
-                    .await;
-            }
+            record_payment_update(
+                &self.storage,
+                &self.event_emitter,
+                payment.clone(),
+                initial_sync_complete,
+            )
+            .await;
         }
     }
 
@@ -416,28 +399,16 @@ impl SparkSyncService {
         payments_to_sync.sort_by_key(|p| p.timestamp);
         for payment in &payments_to_sync {
             // Emit events for new payment statuses after initial sync, or even before initial sync if the payment is pending
-            let should_emit = if initial_sync_complete || payment.status == PaymentStatus::Pending {
-                let maybe_existing_payment_status = self
-                    .storage
-                    .get_payment_by_id(payment.id.clone())
-                    .await
-                    .ok()
-                    .map(|p| p.status);
-                maybe_existing_payment_status.is_none_or(|s| s != payment.status)
-            } else {
-                false
-            };
+            let should_emit = initial_sync_complete || payment.status == PaymentStatus::Pending;
 
-            info!("Inserting token payment: {payment:?}");
-            if let Err(e) = self.storage.insert_payment(payment.clone()).await {
-                error!("Failed to insert token payment: {e:?}");
-            }
-
-            if should_emit {
-                // Fetch the payment to include already stored metadata
-                get_payment_and_emit_event(&self.storage, &self.event_emitter, payment.clone())
-                    .await;
-            }
+            info!("Syncing token payment: {payment:?}");
+            record_payment_update(
+                &self.storage,
+                &self.event_emitter,
+                payment.clone(),
+                should_emit,
+            )
+            .await;
         }
 
         // We have synced all token transactions or found the last synced payment id.

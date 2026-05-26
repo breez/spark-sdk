@@ -122,6 +122,13 @@ async fn test_payment_details_update_persistence() {
 }
 
 #[wasm_bindgen_test]
+async fn test_payment_terminal_status_is_not_replaced() {
+    let storage = create_test_storage("my_payment_terminal_guard").await;
+    breez_sdk_spark::storage_tests::test_payment_terminal_status_is_not_replaced(Box::new(storage))
+        .await;
+}
+
+#[wasm_bindgen_test]
 async fn test_spark_htlc_status_filtering() {
     let storage = create_test_storage("my_spark_htlc_status_filtering").await;
     breez_sdk_spark::storage_tests::test_spark_htlc_status_filtering(Box::new(storage)).await;

@@ -847,31 +847,98 @@ class IndexedDBStorage {
     });
   }
 
-  async insertPayment(payment) {
+  async applyPaymentUpdate(payment) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
 
     return new Promise((resolve, reject) => {
+      let shouldEmit = false;
+      let settled = false;
       const transaction = this.db.transaction("payments", "readwrite");
       const store = transaction.objectStore("payments");
 
-      // Ensure details and method are serialized properly
-      const paymentToStore = {
-        ...payment,
-        details: payment.details ? JSON.stringify(payment.details) : null,
-        method: payment.method ? JSON.stringify(payment.method) : null,
+      const rejectOnce = (message, error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(new StorageError(message, error));
       };
 
-      const request = store.put(paymentToStore);
-      request.onsuccess = () => resolve();
-      request.onerror = () => {
-        reject(
-          new StorageError(
-            `Failed to insert payment '${payment.id}': ${request.error?.message || "Unknown error"
+      transaction.oncomplete = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(shouldEmit);
+      };
+
+      transaction.onerror = () => {
+        rejectOnce(
+          `Failed to apply payment update '${payment.id}': ${transaction.error?.message || "Unknown error"
+          }`,
+          transaction.error
+        );
+      };
+
+      transaction.onabort = () => {
+        rejectOnce(
+          `Payment update transaction aborted for '${payment.id}': ${transaction.error?.message || "Unknown error"
+          }`,
+          transaction.error
+        );
+      };
+
+      const getRequest = store.get(payment.id);
+
+      getRequest.onsuccess = () => {
+        const storedPayment = getRequest.result;
+        const stored = storedPayment
+          ? this._normalizePaymentStatus(storedPayment.status)
+          : null;
+        const next = this._normalizePaymentStatus(payment.status);
+
+        let shouldPersist;
+        if (stored == null) {
+          shouldPersist = true;
+          shouldEmit = true;
+        } else if (stored === next) {
+          console.debug(
+            `Skipping redundant payment event: id=${payment.id} status=${next}`
+          );
+          shouldPersist = true;
+          shouldEmit = false;
+        } else if (this._isFinalPaymentStatus(stored)) {
+          console.warn(
+            `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
+          );
+          shouldPersist = false;
+          shouldEmit = false;
+        } else {
+          shouldPersist = true;
+          shouldEmit = true;
+        }
+
+        if (!shouldPersist) {
+          return;
+        }
+
+        const putRequest = store.put(this._paymentToStore(payment));
+        putRequest.onerror = () => {
+          rejectOnce(
+            `Failed to persist payment update '${payment.id}': ${putRequest.error?.message || "Unknown error"
             }`,
-            request.error
-          )
+            putRequest.error
+          );
+        };
+      };
+
+      getRequest.onerror = () => {
+        rejectOnce(
+          `Failed to read payment '${payment.id}' before update: ${getRequest.error?.message || "Unknown error"
+          }`,
+          getRequest.error
         );
       };
     });
@@ -2065,6 +2132,25 @@ class IndexedDBStorage {
   }
 
   // ===== Private Helper Methods =====
+
+  _paymentToStore(payment) {
+    // Ensure details and method are serialized properly
+    return {
+      ...payment,
+      details: payment.details ? JSON.stringify(payment.details) : null,
+      method: payment.method ? JSON.stringify(payment.method) : null,
+    };
+  }
+
+  _normalizePaymentStatus(status) {
+    return typeof status === "string" ? status.toLowerCase() : status;
+  }
+
+  _isFinalPaymentStatus(status) {
+    const normalized = this._normalizePaymentStatus(status);
+    return normalized === "completed" || normalized === "failed";
+  }
+
 
   _matchesFilters(payment, request) {
     // Filter by payment type

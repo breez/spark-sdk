@@ -41,13 +41,14 @@ impl BreezSdk {
                 let payment: Payment = transfer.try_into()?;
                 // Insert the payment before returning so callers that
                 // immediately list payments see the claim.
-                self.storage.insert_payment(payment.clone()).await?;
+                let should_emit_event = self.storage.apply_payment_update(payment.clone()).await?;
                 self.storage
                     .delete_deposit(detailed_utxo.txid.to_string(), detailed_utxo.vout)
                     .await?;
                 self.event_emitter
                     .emit_runtime_event(RuntimeEvent::DepositClaimed {
                         payment: Box::new(payment.clone()),
+                        should_emit_event,
                     })
                     .await;
                 Ok(ClaimDepositResponse { payment })

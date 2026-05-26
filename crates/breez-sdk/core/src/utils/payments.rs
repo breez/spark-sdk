@@ -1,11 +1,35 @@
 use std::sync::Arc;
 
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     EventEmitter, Payment, Storage, error::SdkError, events::SdkEvent,
     models::conversion_steps_from_payments,
 };
+
+/// Insert a payment through the storage status guard and emit when requested
+/// and when the persisted status advances.
+pub(crate) async fn record_payment_update(
+    storage: &Arc<dyn Storage>,
+    event_emitter: &EventEmitter,
+    payment: Payment,
+    emit_event: bool,
+) -> bool {
+    let should_emit = match storage.apply_payment_update(payment.clone()).await {
+        Ok(should_emit) => should_emit,
+        Err(err) => {
+            error!("Failed to apply payment update {}: {err:?}", payment.id);
+            return false;
+        }
+    };
+
+    if emit_event && should_emit {
+        get_payment_and_emit_event(storage, event_emitter, payment).await;
+        true
+    } else {
+        false
+    }
+}
 
 /// Gets the payment from storage to include already stored metadata and conversion details.
 /// Emits the appropriate event based on its status. Falls back to the provided

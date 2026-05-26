@@ -789,7 +789,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
 
     // Insert all payments
     for payment in &test_payments {
-        storage.insert_payment(payment.clone()).await.unwrap();
+        storage.apply_payment_update(payment.clone()).await.unwrap();
     }
     storage
         .insert_payment_metadata(lightning_lnurl_pay_payment.id.clone(), pay_metadata)
@@ -1086,7 +1086,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
     };
 
     storage
-        .insert_payment(lightning_zap_payment.clone())
+        .apply_payment_update(lightning_zap_payment.clone())
         .await
         .unwrap();
 
@@ -1178,11 +1178,11 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
     };
 
     storage
-        .insert_payment(lightning_zap_payment2.clone())
+        .apply_payment_update(lightning_zap_payment2.clone())
         .await
         .unwrap();
     storage
-        .insert_payment(lightning_zap_payment3.clone())
+        .apply_payment_update(lightning_zap_payment3.clone())
         .await
         .unwrap();
 
@@ -1429,8 +1429,8 @@ pub async fn test_payment_type_filtering(storage: Box<dyn Storage>) {
         conversion_details: None,
     };
 
-    storage.insert_payment(send_payment).await.unwrap();
-    storage.insert_payment(receive_payment).await.unwrap();
+    storage.apply_payment_update(send_payment).await.unwrap();
+    storage.apply_payment_update(receive_payment).await.unwrap();
 
     // Test filter by Send type only
     let send_only = storage
@@ -1522,9 +1522,12 @@ pub async fn test_payment_status_filtering(storage: Box<dyn Storage>) {
         conversion_details: None,
     };
 
-    storage.insert_payment(completed_payment).await.unwrap();
-    storage.insert_payment(pending_payment).await.unwrap();
-    storage.insert_payment(failed_payment).await.unwrap();
+    storage
+        .apply_payment_update(completed_payment)
+        .await
+        .unwrap();
+    storage.apply_payment_update(pending_payment).await.unwrap();
+    storage.apply_payment_update(failed_payment).await.unwrap();
 
     // Test filter by Completed status only
     let completed_only = storage
@@ -1654,11 +1657,17 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
         conversion_details: None,
     };
 
-    storage.insert_payment(spark_payment).await.unwrap();
-    storage.insert_payment(lightning_payment).await.unwrap();
-    storage.insert_payment(token_payment).await.unwrap();
-    storage.insert_payment(withdraw_payment).await.unwrap();
-    storage.insert_payment(deposit_payment).await.unwrap();
+    storage.apply_payment_update(spark_payment).await.unwrap();
+    storage
+        .apply_payment_update(lightning_payment)
+        .await
+        .unwrap();
+    storage.apply_payment_update(token_payment).await.unwrap();
+    storage
+        .apply_payment_update(withdraw_payment)
+        .await
+        .unwrap();
+    storage.apply_payment_update(deposit_payment).await.unwrap();
 
     // Test filter by Bitcoin
     let spark_only = storage
@@ -1796,10 +1805,13 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
     };
 
     // Insert all payments
-    storage.insert_payment(htlc_waiting).await.unwrap();
-    storage.insert_payment(htlc_shared).await.unwrap();
-    storage.insert_payment(htlc_returned).await.unwrap();
-    storage.insert_payment(non_htlc_payment).await.unwrap();
+    storage.apply_payment_update(htlc_waiting).await.unwrap();
+    storage.apply_payment_update(htlc_shared).await.unwrap();
+    storage.apply_payment_update(htlc_returned).await.unwrap();
+    storage
+        .apply_payment_update(non_htlc_payment)
+        .await
+        .unwrap();
 
     // Test filter for WaitingForPreimage
     let waiting_filter = storage
@@ -1974,10 +1986,16 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         conversion_details: None,
     };
 
-    storage.insert_payment(payment_with_refund).await.unwrap();
-    storage.insert_payment(successful_conversion).await.unwrap();
     storage
-        .insert_payment(payment_without_refund)
+        .apply_payment_update(payment_with_refund)
+        .await
+        .unwrap();
+    storage
+        .apply_payment_update(successful_conversion)
+        .await
+        .unwrap();
+    storage
+        .apply_payment_update(payment_without_refund)
         .await
         .unwrap();
     storage
@@ -2159,9 +2177,9 @@ pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
         }),
         conversion_details: None,
     };
-    storage.insert_payment(payment1).await.unwrap();
-    storage.insert_payment(payment2).await.unwrap();
-    storage.insert_payment(payment3).await.unwrap();
+    storage.apply_payment_update(payment1).await.unwrap();
+    storage.apply_payment_update(payment2).await.unwrap();
+    storage.apply_payment_update(payment3).await.unwrap();
 
     // Test filter by transaction type
     let transfer_filter = storage
@@ -2260,9 +2278,9 @@ pub async fn test_timestamp_filtering(storage: Box<dyn Storage>) {
         conversion_details: None,
     };
 
-    storage.insert_payment(payment1).await.unwrap();
-    storage.insert_payment(payment2).await.unwrap();
-    storage.insert_payment(payment3).await.unwrap();
+    storage.apply_payment_update(payment1).await.unwrap();
+    storage.apply_payment_update(payment2).await.unwrap();
+    storage.apply_payment_update(payment3).await.unwrap();
 
     // Test filter by from_timestamp
     let from_2000 = storage
@@ -2358,9 +2376,9 @@ pub async fn test_combined_filters(storage: Box<dyn Storage>) {
         conversion_details: None,
     };
 
-    storage.insert_payment(payment1).await.unwrap();
-    storage.insert_payment(payment2).await.unwrap();
-    storage.insert_payment(payment3).await.unwrap();
+    storage.apply_payment_update(payment1).await.unwrap();
+    storage.apply_payment_update(payment2).await.unwrap();
+    storage.apply_payment_update(payment3).await.unwrap();
 
     // Test: Send + Completed
     let send_completed = storage
@@ -2450,9 +2468,9 @@ pub async fn test_sort_order(storage: Box<dyn Storage>) {
         conversion_details: None,
     };
 
-    storage.insert_payment(payment1).await.unwrap();
-    storage.insert_payment(payment2).await.unwrap();
-    storage.insert_payment(payment3).await.unwrap();
+    storage.apply_payment_update(payment1).await.unwrap();
+    storage.apply_payment_update(payment2).await.unwrap();
+    storage.apply_payment_update(payment3).await.unwrap();
 
     // Test default sort (descending by timestamp)
     let desc_payments = storage
@@ -2578,11 +2596,11 @@ pub async fn test_payment_details_update_persistence(storage: Box<dyn Storage>) 
     };
 
     // Insert the payment into storage
-    storage.insert_payment(payment.clone()).await.unwrap();
+    storage.apply_payment_update(payment.clone()).await.unwrap();
 
     // Simulate payment completion by updating status
     payment.status = PaymentStatus::Completed;
-    storage.insert_payment(payment.clone()).await.unwrap();
+    storage.apply_payment_update(payment.clone()).await.unwrap();
 
     // Check the payment details
     let updated_payment = storage
@@ -2609,7 +2627,8 @@ pub async fn test_payment_details_update_persistence(storage: Box<dyn Storage>) 
         }),
         conversion_info: None,
     });
-    storage.insert_payment(payment.clone()).await.unwrap();
+    let should_emit = storage.apply_payment_update(payment.clone()).await.unwrap();
+    assert!(!should_emit, "redundant same-status update should not emit");
 
     // Check the updated payment details
     let updated_payment = storage
@@ -2627,6 +2646,59 @@ pub async fn test_payment_details_update_persistence(storage: Box<dyn Storage>) 
         htlc_details.as_ref().unwrap().preimage.as_ref().unwrap(),
         "preimage_123"
     );
+}
+
+pub async fn test_payment_terminal_status_is_not_replaced(storage: Box<dyn Storage>) {
+    let mut payment = Payment {
+        id: "payment_terminal_guard".to_string(),
+        payment_type: PaymentType::Receive,
+        status: PaymentStatus::Pending,
+        amount: 15_000,
+        fees: 150,
+        timestamp: 1_234_567_890,
+        method: PaymentMethod::Spark,
+        details: Some(PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: Some(SparkHtlcDetails {
+                payment_hash: "terminal_guard_hash".to_string(),
+                preimage: None,
+                expiry_time: 1_234_567_990,
+                status: SparkHtlcStatus::WaitingForPreimage,
+            }),
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+
+    let should_emit = storage.apply_payment_update(payment.clone()).await.unwrap();
+    assert!(should_emit, "first insert should emit");
+
+    payment.status = PaymentStatus::Completed;
+    let should_emit = storage.apply_payment_update(payment.clone()).await.unwrap();
+    assert!(should_emit, "status transition should emit");
+
+    let mut stale_pending = payment.clone();
+    stale_pending.status = PaymentStatus::Pending;
+    stale_pending.amount = 1;
+    let should_emit = storage.apply_payment_update(stale_pending).await.unwrap();
+    assert!(
+        !should_emit,
+        "downgrade from terminal status should not emit"
+    );
+
+    let stored_payment = storage.get_payment_by_id(payment.id.clone()).await.unwrap();
+    assert_eq!(stored_payment.status, PaymentStatus::Completed);
+    assert_eq!(stored_payment.amount, 15_000);
+
+    let mut conflicting_final = payment.clone();
+    conflicting_final.status = PaymentStatus::Failed;
+    storage
+        .apply_payment_update(conflicting_final)
+        .await
+        .unwrap();
+
+    let stored_payment = storage.get_payment_by_id(payment.id).await.unwrap();
+    assert_eq!(stored_payment.status, PaymentStatus::Completed);
 }
 
 /// Tests that `insert_payment_metadata` preserves existing fields when updating with partial data.
@@ -2651,7 +2723,7 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
         }),
         conversion_details: None,
     };
-    storage.insert_payment(payment).await.unwrap();
+    storage.apply_payment_update(payment).await.unwrap();
 
     // Create the parent payment so get_payments_by_parent_ids works
     let parent_payment = Payment {
@@ -2665,7 +2737,7 @@ pub async fn test_payment_metadata_merge(storage: Box<dyn Storage>) {
         details: None,
         conversion_details: None,
     };
-    storage.insert_payment(parent_payment).await.unwrap();
+    storage.apply_payment_update(parent_payment).await.unwrap();
 
     // Step 1: Set metadata with only conversion_info
     let metadata1 = PaymentMetadata {
@@ -2829,13 +2901,19 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
         conversion_details: None,
     };
 
-    storage.insert_payment(htlc_waiting.clone()).await.unwrap();
-    storage.insert_payment(htlc_claimed.clone()).await.unwrap();
     storage
-        .insert_payment(regular_lightning.clone())
+        .apply_payment_update(htlc_waiting.clone())
         .await
         .unwrap();
-    storage.insert_payment(spark_payment).await.unwrap();
+    storage
+        .apply_payment_update(htlc_claimed.clone())
+        .await
+        .unwrap();
+    storage
+        .apply_payment_update(regular_lightning.clone())
+        .await
+        .unwrap();
+    storage.apply_payment_update(spark_payment).await.unwrap();
 
     // Verify htlc_details is persisted and fetched correctly
     let fetched = storage
@@ -3063,7 +3141,7 @@ pub async fn test_conversion_status_persistence(storage: Box<dyn Storage>) {
 
     for (id, status) in &variants {
         let payment = make_payment(id);
-        storage.insert_payment(payment).await.unwrap();
+        storage.apply_payment_update(payment).await.unwrap();
 
         let metadata = PaymentMetadata {
             conversion_status: Some(status.clone()),
@@ -3091,7 +3169,10 @@ pub async fn test_conversion_status_persistence(storage: Box<dyn Storage>) {
 
     // --- Test 2: Payment without conversion_status has no conversion_details ---
     let no_status_payment = make_payment("cs_none");
-    storage.insert_payment(no_status_payment).await.unwrap();
+    storage
+        .apply_payment_update(no_status_payment)
+        .await
+        .unwrap();
 
     let fetched = storage
         .get_payment_by_id("cs_none".to_string())
@@ -3104,7 +3185,10 @@ pub async fn test_conversion_status_persistence(storage: Box<dyn Storage>) {
 
     // --- Test 3: COALESCE — conversion_status preserved across partial metadata updates ---
     let coalesce_payment = make_payment("cs_coalesce");
-    storage.insert_payment(coalesce_payment).await.unwrap();
+    storage
+        .apply_payment_update(coalesce_payment)
+        .await
+        .unwrap();
 
     // Set conversion_status
     let metadata1 = PaymentMetadata {

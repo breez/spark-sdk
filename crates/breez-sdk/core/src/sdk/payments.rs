@@ -31,7 +31,9 @@ use crate::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
     utils::{
-        payments::{get_payment_and_emit_event, get_payment_with_conversion_details},
+        payments::{
+            get_payment_and_emit_event, get_payment_with_conversion_details, record_payment_update,
+        },
         polling::{PollSchedule, poll_until},
         send_payment_validation::{get_dust_limit_sats, validate_prepare_send_payment_request},
         token::{map_and_persist_token_transaction, token_transaction_to_payments},
@@ -142,7 +144,7 @@ impl BreezSdk {
         let payment: Payment = transfer.try_into()?;
 
         // Insert the payment into storage to make it immediately available for listing
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(ClaimHtlcPaymentResponse { payment })
     }
@@ -1088,7 +1090,7 @@ impl BreezSdk {
         };
 
         // Insert the payment into storage to make it immediately available for listing
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
@@ -1128,7 +1130,7 @@ impl BreezSdk {
         let payment: Payment = transfer.try_into()?;
 
         // Insert the payment into storage to make it immediately available for listing
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
@@ -1188,7 +1190,7 @@ impl BreezSdk {
         };
 
         // Insert the payment into storage to make it immediately available for listing
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
@@ -1371,7 +1373,7 @@ impl BreezSdk {
         };
 
         // Insert the payment into storage to make it immediately available for listing
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
@@ -1441,7 +1443,7 @@ impl BreezSdk {
 
         let payment: Payment = response.try_into()?;
 
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
@@ -1570,10 +1572,7 @@ impl BreezSdk {
             };
 
             let _ = tx.send(payment.clone());
-            if let Err(e) = storage.insert_payment(payment.clone()).await {
-                error!("Failed to update payment in storage: {e:?}");
-            }
-            get_payment_and_emit_event(&storage, &event_emitter, payment).await;
+            record_payment_update(&storage, &event_emitter, payment, true).await;
         }.instrument(span));
 
         rx
@@ -2003,14 +2002,6 @@ impl BreezSdk {
     /// refresh balances, and emit `PaymentSucceeded` if this is the first
     /// time we see this status. Returns whether an event was emitted.
     pub(crate) async fn finalize_payment(&self, mut payment: Payment) -> bool {
-        let existing_status = self
-            .storage
-            .get_payment_by_id(payment.id.clone())
-            .await
-            .ok()
-            .map(|p| p.status);
-        let status_changed = existing_status.is_none_or(|s| s != payment.status);
-
         let sync_service = SparkSyncService::new(
             self.spark_wallet.clone(),
             self.storage.clone(),
@@ -2026,12 +2017,16 @@ impl BreezSdk {
         // this pulls the LNURL metadata into the payment record.
         self.sync_single_lnurl_metadata(&mut payment).await;
 
-        if let Err(e) = self.storage.insert_payment(payment.clone()).await {
-            error!(
-                "finalize_payment({}): failed to insert payment: {e:?}",
-                payment.id
-            );
-        }
+        let should_emit = match self.storage.apply_payment_update(payment.clone()).await {
+            Ok(should_emit) => should_emit,
+            Err(e) => {
+                error!(
+                    "finalize_payment({}): failed to apply payment update: {e:?}",
+                    payment.id
+                );
+                return false;
+            }
+        };
 
         if let Err(e) = update_balances(self.spark_wallet.clone(), self.storage.clone()).await {
             error!(
@@ -2040,10 +2035,12 @@ impl BreezSdk {
             );
         }
 
-        if status_changed {
+        if should_emit {
             get_payment_and_emit_event(&self.storage, &self.event_emitter, payment).await;
+            true
+        } else {
+            false
         }
-        status_changed
     }
 
     /// Polls a single Spark transfer by id and, on terminal status, claims

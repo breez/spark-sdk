@@ -475,8 +475,8 @@ impl Storage for SyncedStorage {
         self.inner.list_payments(request).await
     }
 
-    async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
-        self.inner.insert_payment(payment).await
+    async fn apply_payment_update(&self, payment: Payment) -> Result<bool, StorageError> {
+        self.inner.apply_payment_update(payment).await
     }
 
     async fn insert_payment_metadata(
@@ -791,7 +791,7 @@ mod tests {
 
         // Insert a payment so we can verify metadata was NOT written
         storage
-            .insert_payment(make_test_lightning_payment("id1"))
+            .apply_payment_update(make_test_lightning_payment("id1"))
             .await
             .unwrap();
 
@@ -829,7 +829,7 @@ mod tests {
         let synced = create_test_synced_storage(Arc::clone(&storage));
 
         storage
-            .insert_payment(make_test_lightning_payment("pay1"))
+            .apply_payment_update(make_test_lightning_payment("pay1"))
             .await
             .unwrap();
 

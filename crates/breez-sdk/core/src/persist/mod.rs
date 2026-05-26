@@ -269,6 +269,13 @@ pub struct PaymentMetadata {
     pub conversion_status: Option<ConversionStatus>,
 }
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub(crate) fn parse_payment_status(value: &str) -> Result<PaymentStatus, StorageError> {
+    value
+        .parse()
+        .map_err(|e| StorageError::Implementation(format!("invalid payment status: {e}")))
+}
+
 /// Trait for persistent storage
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[async_trait]
@@ -290,16 +297,15 @@ pub trait Storage: Send + Sync {
         request: StorageListPaymentsRequest,
     ) -> Result<Vec<Payment>, StorageError>;
 
-    /// Inserts a payment into storage
+    /// Inserts or updates a payment unless it would replace a terminal status.
     ///
-    /// # Arguments
+    /// Same-status updates are still persisted so details can be enriched.
     ///
-    /// * `payment` - The payment to insert
-    ///
-    /// # Returns
-    ///
-    /// Success or a `StorageError`
-    async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError>;
+    /// Returns `true` if the caller should emit a payment event (new payment was
+    /// inserted, or status transitioned). Returns `false` for redundant
+    /// same-status updates and for rejected updates against a terminal stored
+    /// status
+    async fn apply_payment_update(&self, payment: Payment) -> Result<bool, StorageError>;
 
     /// Inserts payment metadata into storage
     ///

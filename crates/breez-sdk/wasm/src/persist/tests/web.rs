@@ -122,6 +122,14 @@ async fn test_payment_details_update_persistence() {
 }
 
 #[wasm_bindgen_test]
+async fn test_payment_terminal_status_is_not_replaced() {
+    let storage = create_test_storage("payment_terminal_guard").await;
+
+    breez_sdk_spark::storage_tests::test_payment_terminal_status_is_not_replaced(Box::new(storage))
+        .await;
+}
+
+#[wasm_bindgen_test]
 async fn test_spark_htlc_status_filtering() {
     let storage = create_test_storage("spark_htlc_status_filtering").await;
 
@@ -219,7 +227,7 @@ async fn test_migration_from_v2_to_v3() {
         conversion_details: None,
     };
 
-    breez_sdk_spark::Storage::insert_payment(&storage, new_payment.clone())
+    breez_sdk_spark::Storage::apply_payment_update(&storage, new_payment.clone())
         .await
         .expect("Failed to insert new payment");
 
@@ -351,7 +359,7 @@ async fn test_migration_from_v8_to_v9() {
         conversion_details: None,
     };
 
-    breez_sdk_spark::Storage::insert_payment(&storage, new_payment.clone())
+    breez_sdk_spark::Storage::apply_payment_update(&storage, new_payment.clone())
         .await
         .expect("Failed to insert new token payment");
 

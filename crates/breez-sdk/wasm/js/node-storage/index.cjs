@@ -313,128 +313,166 @@ class SqliteStorage {
     }
   }
 
-  insertPayment(payment) {
+  async applyPaymentUpdate(payment) {
+    if (!payment) {
+      throw new StorageError("Payment cannot be null or undefined");
+    }
+
     try {
-      if (!payment) {
-        return Promise.reject(
-          new StorageError("Payment cannot be null or undefined")
-        );
-      }
-
-      const paymentInsert = this.db.prepare(
-        `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark) 
-         VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark)
-         ON CONFLICT(id) DO UPDATE SET
-           payment_type=excluded.payment_type,
-           status=excluded.status,
-           amount=excluded.amount,
-           fees=excluded.fees,
-           timestamp=excluded.timestamp,
-           method=excluded.method,
-           withdraw_tx_id=excluded.withdraw_tx_id,
-           deposit_tx_id=excluded.deposit_tx_id,
-           spark=excluded.spark`
+      const selectStatus = this.db.prepare(
+        "SELECT status FROM payments WHERE id = ?"
       );
-      const lightningInsert = this.db.prepare(
-        `INSERT INTO payment_details_lightning
-          (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
-          VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage, @htlcStatus, @htlcExpiryTime)
-          ON CONFLICT(payment_id) DO UPDATE SET
-            invoice=excluded.invoice,
-            payment_hash=excluded.payment_hash,
-            destination_pubkey=excluded.destination_pubkey,
-            description=excluded.description,
-            preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
-            htlc_status=COALESCE(excluded.htlc_status, payment_details_lightning.htlc_status),
-            htlc_expiry_time=COALESCE(excluded.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)`
-      );
-      const tokenInsert = this.db.prepare(
-        `INSERT INTO payment_details_token 
-          (payment_id, metadata, tx_hash, tx_type, invoice_details) 
-          VALUES (@id, @metadata, @txHash, @txType, @invoiceDetails)
-          ON CONFLICT(payment_id) DO UPDATE SET
-            metadata=excluded.metadata,
-            tx_hash=excluded.tx_hash,
-            tx_type=excluded.tx_type,
-            invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details)`
-      );
-      const sparkInsert = this.db.prepare(
-        `INSERT INTO payment_details_spark 
-          (payment_id, invoice_details, htlc_details) 
-          VALUES (@id, @invoiceDetails, @htlcDetails)
-          ON CONFLICT(payment_id) DO UPDATE SET
-            invoice_details=COALESCE(excluded.invoice_details, payment_details_spark.invoice_details),
-            htlc_details=COALESCE(excluded.htlc_details, payment_details_spark.htlc_details)`
-      );
+      let shouldEmit = false;
       const transaction = this.db.transaction(() => {
-        paymentInsert.run({
-          id: payment.id,
-          paymentType: payment.paymentType,
-          status: payment.status,
-          amount: payment.amount.toString(),
-          fees: payment.fees.toString(),
-          timestamp: payment.timestamp,
-          method: payment.method ? JSON.stringify(payment.method) : null,
-          withdrawTxId:
-            payment.details?.type === "withdraw" ? payment.details.txId : null,
-          depositTxId:
-            payment.details?.type === "deposit" ? payment.details.txId : null,
-          spark: payment.details?.type === "spark" ? 1 : null,
-        });
+        const row = selectStatus.get(payment.id);
+        const stored = row
+          ? this._normalizePaymentStatus(row.status)
+          : null;
+        const next = this._normalizePaymentStatus(payment.status);
 
-        if (
-          payment.details?.type === "spark" &&
-          (payment.details.invoiceDetails != null ||
-            payment.details.htlcDetails != null)
-        ) {
-          sparkInsert.run({
-            id: payment.id,
-            invoiceDetails: payment.details.invoiceDetails
-              ? JSON.stringify(payment.details.invoiceDetails)
-              : null,
-            htlcDetails: payment.details.htlcDetails
-              ? JSON.stringify(payment.details.htlcDetails)
-              : null,
-          });
-        }
-
-        if (payment.details?.type === "lightning") {
-          lightningInsert.run({
-            id: payment.id,
-            invoice: payment.details.invoice,
-            paymentHash: payment.details.htlcDetails.paymentHash,
-            destinationPubkey: payment.details.destinationPubkey,
-            description: payment.details.description,
-            preimage: payment.details.htlcDetails?.preimage,
-            htlcStatus: payment.details.htlcDetails?.status ?? null,
-            htlcExpiryTime: payment.details.htlcDetails?.expiryTime ?? 0,
-          });
-        }
-
-        if (payment.details?.type === "token") {
-          tokenInsert.run({
-            id: payment.id,
-            metadata: JSON.stringify(payment.details.metadata),
-            txHash: payment.details.txHash,
-            txType: payment.details.txType,
-            invoiceDetails: payment.details.invoiceDetails
-              ? JSON.stringify(payment.details.invoiceDetails)
-              : null,
-          });
+        if (stored == null) {
+          this._runPaymentUpsert(payment);
+          shouldEmit = true;
+        } else if (stored === next) {
+          console.debug(
+            `Skipping redundant payment event: id=${payment.id} status=${next}`
+          );
+          this._runPaymentUpsert(payment);
+          shouldEmit = false;
+        } else if (this._isFinalPaymentStatus(stored)) {
+          console.warn(
+            `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
+          );
+          shouldEmit = false;
+        } else {
+          this._runPaymentUpsert(payment);
+          shouldEmit = true;
         }
       });
 
-      transaction();
-      return Promise.resolve();
+      transaction.immediate();
+      return shouldEmit;
     } catch (error) {
-      return Promise.reject(
-        new StorageError(
-          `Failed to insert payment '${payment.id}': ${error.message}`,
-          error
-        )
+      throw new StorageError(
+        `Failed to apply payment update '${payment.id}': ${error.message}`,
+        error
       );
     }
   }
+
+  _runPaymentUpsert(payment) {
+    const paymentInsert = this.db.prepare(
+      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+       VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark)
+       ON CONFLICT(id) DO UPDATE SET
+         payment_type=excluded.payment_type,
+         status=excluded.status,
+         amount=excluded.amount,
+         fees=excluded.fees,
+         timestamp=excluded.timestamp,
+         method=excluded.method,
+         withdraw_tx_id=excluded.withdraw_tx_id,
+         deposit_tx_id=excluded.deposit_tx_id,
+         spark=excluded.spark`
+    );
+    const lightningInsert = this.db.prepare(
+      `INSERT INTO payment_details_lightning
+        (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+        VALUES (@id, @invoice, @paymentHash, @destinationPubkey, @description, @preimage, @htlcStatus, @htlcExpiryTime)
+        ON CONFLICT(payment_id) DO UPDATE SET
+          invoice=excluded.invoice,
+          payment_hash=excluded.payment_hash,
+          destination_pubkey=excluded.destination_pubkey,
+          description=excluded.description,
+          preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
+          htlc_status=COALESCE(excluded.htlc_status, payment_details_lightning.htlc_status),
+          htlc_expiry_time=COALESCE(excluded.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)`
+    );
+    const tokenInsert = this.db.prepare(
+      `INSERT INTO payment_details_token
+        (payment_id, metadata, tx_hash, tx_type, invoice_details)
+        VALUES (@id, @metadata, @txHash, @txType, @invoiceDetails)
+        ON CONFLICT(payment_id) DO UPDATE SET
+          metadata=excluded.metadata,
+          tx_hash=excluded.tx_hash,
+          tx_type=excluded.tx_type,
+          invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details)`
+    );
+    const sparkInsert = this.db.prepare(
+      `INSERT INTO payment_details_spark
+        (payment_id, invoice_details, htlc_details)
+        VALUES (@id, @invoiceDetails, @htlcDetails)
+        ON CONFLICT(payment_id) DO UPDATE SET
+          invoice_details=COALESCE(excluded.invoice_details, payment_details_spark.invoice_details),
+          htlc_details=COALESCE(excluded.htlc_details, payment_details_spark.htlc_details)`
+    );
+
+    paymentInsert.run({
+      id: payment.id,
+      paymentType: payment.paymentType,
+      status: payment.status,
+      amount: payment.amount.toString(),
+      fees: payment.fees.toString(),
+      timestamp: payment.timestamp,
+      method: payment.method ? JSON.stringify(payment.method) : null,
+      withdrawTxId:
+        payment.details?.type === "withdraw" ? payment.details.txId : null,
+      depositTxId:
+        payment.details?.type === "deposit" ? payment.details.txId : null,
+      spark: payment.details?.type === "spark" ? 1 : null,
+    });
+
+    if (
+      payment.details?.type === "spark" &&
+      (payment.details.invoiceDetails != null ||
+        payment.details.htlcDetails != null)
+    ) {
+      sparkInsert.run({
+        id: payment.id,
+        invoiceDetails: payment.details.invoiceDetails
+          ? JSON.stringify(payment.details.invoiceDetails)
+          : null,
+        htlcDetails: payment.details.htlcDetails
+          ? JSON.stringify(payment.details.htlcDetails)
+          : null,
+      });
+    }
+
+    if (payment.details?.type === "lightning") {
+      lightningInsert.run({
+        id: payment.id,
+        invoice: payment.details.invoice,
+        paymentHash: payment.details.htlcDetails.paymentHash,
+        destinationPubkey: payment.details.destinationPubkey,
+        description: payment.details.description,
+        preimage: payment.details.htlcDetails?.preimage,
+        htlcStatus: payment.details.htlcDetails?.status ?? null,
+        htlcExpiryTime: payment.details.htlcDetails?.expiryTime ?? 0,
+      });
+    }
+
+    if (payment.details?.type === "token") {
+      tokenInsert.run({
+        id: payment.id,
+        metadata: JSON.stringify(payment.details.metadata),
+        txHash: payment.details.txHash,
+        txType: payment.details.txType,
+        invoiceDetails: payment.details.invoiceDetails
+          ? JSON.stringify(payment.details.invoiceDetails)
+          : null,
+      });
+    }
+  }
+
+  _normalizePaymentStatus(status) {
+    return typeof status === "string" ? status.toLowerCase() : status;
+  }
+
+  _isFinalPaymentStatus(status) {
+    const normalized = this._normalizePaymentStatus(status);
+    return normalized === "completed" || normalized === "failed";
+  }
+
 
   getPaymentById(id) {
     try {
