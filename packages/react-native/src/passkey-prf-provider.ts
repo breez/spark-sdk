@@ -1,4 +1,9 @@
 import { NativeModules, Platform } from 'react-native';
+import {
+  PasskeyClient as SdkPasskeyClient,
+  type PasskeyConfig,
+  type PrfProvider,
+} from './generated/breez_sdk_spark';
 
 const { BreezSdkSparkPasskey } = NativeModules;
 
@@ -651,5 +656,73 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(byte);
   }
   return btoa(binary);
+}
+
+/**
+ * Relying Party name used by the zero-provider {@link PasskeyClientBuilder.build}
+ * path. Surfaces in some credential-manager UIs. Apps that want their own
+ * RP name build a {@link PasskeyProvider} explicitly and inject it through
+ * {@link PasskeyClientBuilder.withPrfProvider}.
+ */
+const DEFAULT_RP_NAME = 'Breez';
+
+/**
+ * Builder for a `PasskeyClient` backed by a caller-supplied provider.
+ *
+ * Use this when you need a configured {@link PasskeyProvider} (custom
+ * `rpId` / `rpName`, a credential registry, rotating `userName`) or a
+ * custom PRF backend. The zero-config Breez-RP case is
+ * `new PasskeyClientBuilder(breezApiKey).build()` (no provider injected,
+ * defaults to the built-in provider on the Breez shared RP).
+ *
+ * @example
+ * ```typescript
+ * const provider = new PasskeyProvider({ rpId, rpName, credentialRegistry })
+ * const client = new PasskeyClientBuilder(breezApiKey)
+ *     .withPrfProvider(provider)
+ *     .build()
+ * ```
+ */
+export class PasskeyClientBuilder {
+  private provider?: PasskeyProvider;
+
+  /**
+   * @param breezApiKey Breez relay key for authenticated (NIP-42) label
+   *   storage. Omit for public relays only.
+   * @param config Optional `PasskeyConfig` (e.g. a default label).
+   */
+  constructor(
+    private readonly breezApiKey?: string,
+    private readonly config?: PasskeyConfig
+  ) {}
+
+  /**
+   * Inject the provider the client derives seeds through. The built-in
+   * {@link PasskeyProvider} or any custom implementation is accepted.
+   */
+  withPrfProvider(provider: PasskeyProvider): this {
+    this.provider = provider;
+    return this;
+  }
+
+  /**
+   * Construct the client. Falls back to a default {@link PasskeyProvider}
+   * on the Breez RP when no provider was injected.
+   */
+  build(): SdkPasskeyClient {
+    const provider =
+      this.provider ??
+      new PasskeyProvider({
+        rpId: PasskeyProvider.BREEZ_RP_ID,
+        rpName: DEFAULT_RP_NAME,
+      });
+    // The hand-written PasskeyProvider conforms structurally to the
+    // generated PrfProvider foreign interface.
+    return new SdkPasskeyClient(
+      provider as unknown as PrfProvider,
+      this.breezApiKey,
+      this.config
+    );
+  }
 }
 
