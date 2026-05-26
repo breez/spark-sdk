@@ -248,6 +248,11 @@ impl BreezSdk {
     /// immediately. Progress is reported via events.
     /// If optimization is already running, no new task will be started.
     pub async fn start_leaf_optimization(&self) {
+        // In server mode the forwarder is spawned lazily so SDK instances
+        // that never opt into optimization carry no background task. The
+        // call is idempotent (OnceCell-gated), so it's safe to invoke on
+        // every start.
+        self.ensure_optimization_forwarder_spawned().await;
         self.spark_wallet.start_leaf_optimization().await;
     }
 

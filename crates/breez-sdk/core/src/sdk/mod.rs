@@ -94,6 +94,11 @@ pub struct BreezSdk {
     pub(crate) initial_synced_watcher: watch::Receiver<bool>,
     pub(crate) external_input_parsers: Vec<ExternalInputParser>,
     pub(crate) spark_private_mode_initialized: Arc<OnceCell<()>>,
+    /// Tracks whether the optimization-event forwarder has been spawned. In
+    /// client mode this is set at startup; in server mode it stays empty
+    /// until the first `start_leaf_optimization` call, so an SDK instance
+    /// that never opts into optimization carries no forwarder task.
+    pub(crate) optimization_forwarder_spawned: Arc<OnceCell<()>>,
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,

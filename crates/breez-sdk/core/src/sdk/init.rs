@@ -40,6 +40,7 @@ impl BreezSdk {
             initial_synced_watcher,
             external_input_parsers,
             spark_private_mode_initialized: Arc::new(OnceCell::new()),
+            optimization_forwarder_spawned: Arc::new(OnceCell::new()),
             token_converter: params.token_converter,
             stable_balance: params.stable_balance,
             buy_bitcoin_provider: params.buy_bitcoin_provider,
@@ -51,9 +52,26 @@ impl BreezSdk {
 
     /// Starts the SDK runtime services selected during construction.
     pub(super) async fn start(&self, initial_synced_sender: watch::Sender<bool>) {
-        spawn_optimization_forwarder(self);
+        // Client mode runs auto-optimization in the background, so the
+        // forwarder must be live before any optimization can fire. Server
+        // mode defers the spawn to the first explicit `start_leaf_optimization`
+        // call — see [`Self::ensure_optimization_forwarder_spawned`].
+        if self.runtime.starts_background_services() {
+            self.ensure_optimization_forwarder_spawned().await;
+        }
         self.runtime
             .start_sdk_services(self, initial_synced_sender)
+            .await;
+    }
+
+    /// Idempotently spawns the optimization-event forwarder. Subsequent
+    /// calls are no-ops (the `OnceCell` guarantees only one task is ever
+    /// spawned per SDK instance).
+    pub(crate) async fn ensure_optimization_forwarder_spawned(&self) {
+        self.optimization_forwarder_spawned
+            .get_or_init(|| async {
+                spawn_optimization_forwarder(self);
+            })
             .await;
     }
 

@@ -1475,34 +1475,59 @@ pub async fn wait_for_synced_event(
     .map(|_| ())
 }
 
-/// Wait for leaf optimization to reach a terminal state.
+/// Wait for the full optimization lifecycle: `Started` followed by
+/// `Completed`. Designed for the manual-trigger fixtures where the wallet
+/// is guaranteed to have work to do.
 ///
-/// Succeeds on `Completed` and `Skipped` (both prove spark-wallet's
-/// dedicated optimization channel is being forwarded to
-/// `SdkEvent::Optimization`). Fails on `Failed`/`Cancelled` and on timeout —
-/// a timeout is the exact symptom of the bridge being missing.
+/// Fails on:
+/// - `Skipped` — the fixture was supposed to give the optimizer real work.
+/// - `Completed` without a prior `Started` — would indicate dropped
+///   progress events (a partial regression of the bridge).
+/// - `Failed`/`Cancelled` — optimization didn't run cleanly.
+/// - Timeout — the bridge is silent.
+///
+/// Both checks together catch regressions where *some* events flow but
+/// others get dropped, not just the all-or-nothing case.
 pub async fn wait_for_optimization_completed_event(
     event_rx: &mut mpsc::Receiver<SdkEvent>,
     timeout_secs: u64,
 ) -> Result<()> {
+    let mut started_seen = false;
     wait_for_event(
         event_rx,
         timeout_secs,
         "Optimization",
         |event| match event {
             SdkEvent::Optimization { optimization_event } => match optimization_event {
-                OptimizationEvent::Completed | OptimizationEvent::Skipped => {
-                    info!("Received Optimization terminal event: {optimization_event:?}");
-                    Ok(Some(EventResult::OptimizationFinished))
+                OptimizationEvent::Started { total_rounds } => {
+                    info!("Optimization Started with {total_rounds} rounds");
+                    started_seen = true;
+                    Ok(None)
                 }
+                OptimizationEvent::RoundCompleted {
+                    current_round,
+                    total_rounds,
+                } => {
+                    info!("Optimization round {current_round}/{total_rounds} completed");
+                    Ok(None)
+                }
+                OptimizationEvent::Completed => {
+                    if started_seen {
+                        info!("Received Optimization terminal event: Completed");
+                        Ok(Some(EventResult::OptimizationFinished))
+                    } else {
+                        Err(anyhow::anyhow!(
+                            "Received Completed without observing Started — Started event was dropped"
+                        ))
+                    }
+                }
+                OptimizationEvent::Skipped => Err(anyhow::anyhow!(
+                    "Optimization was Skipped — fixture should have had work to do"
+                )),
                 OptimizationEvent::Failed { error } => {
                     Err(anyhow::anyhow!("Optimization failed: {error}"))
                 }
                 OptimizationEvent::Cancelled => Err(anyhow::anyhow!("Optimization was cancelled")),
-                other => {
-                    info!("Optimization progress event: {other:?}");
-                    Ok(None)
-                }
             },
             other => {
                 info!("Ignored SDK event: {other:?}");
