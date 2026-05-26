@@ -96,13 +96,6 @@ export interface DeriveSeedOptions {
      * will be honored on web once that flag reaches stable browsers.
      */
     preferImmediatelyAvailableCredentials?: boolean;
-
-    /**
-     * Fired with the asserted credential's ID after a successful
-     * ceremony. Useful for migrating credential-ID tracking. Errors
-     * thrown inside are swallowed; the seed return is never blocked.
-     */
-    onCredentialId?: (credentialId: Uint8Array) => void;
 }
 
 /**

@@ -578,8 +578,8 @@ export class PasskeyProvider {
     }
 
     /**
-     * Build assertion options, run the ceremony, and fire the
-     * onCredentialId callback. Shared by single- and dual-salt paths.
+     * Build assertion options and run the ceremony. Shared by single-
+     * and dual-salt paths.
      *
      * @param {{ first: Uint8Array, second?: Uint8Array }} prfEval
      * @param {DeriveSeedOptions} options
@@ -650,13 +650,6 @@ export class PasskeyProvider {
 
         const credentialIdBytes = new Uint8Array(credential.rawId);
         this._lastObservedCredentialId = credentialIdBytes;
-        if (typeof options.onCredentialId === 'function') {
-            try {
-                options.onCredentialId(credentialIdBytes);
-            } catch {
-                // best-effort: bookkeeping must not block seed return
-            }
-        }
         if (this.credentialRegistry) {
             _registryAddFireAndForget(
                 this.credentialRegistry, this.rpId, credentialIdBytes, this.onRegistryError,
