@@ -100,7 +100,7 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 
 	// RegisteredCredential doubles as the path discriminator: non-nil
 	// when a new credential was just registered (persist CredentialId
-	// for future ExcludeCredentialIds); nil when silent sign-in
+	// for future ExcludeCredentials); nil when silent sign-in
 	// succeeded for an existing credential.
 	if response.RegisteredCredential != nil {
 		_ = response.RegisteredCredential.CredentialId
@@ -134,7 +134,7 @@ func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 		return nil, err
 	}
 
-	// Hosts SHOULD persist Credential.CredentialId (for ExcludeCredentialIds
+	// Hosts SHOULD persist Credential.CredentialId (for ExcludeCredentials
 	// bookkeeping) and Credential.UserId (for server-side correlation).
 	// The SDK generates UserId; it is never host-supplied.
 	_ = response.Credential.CredentialId
@@ -208,7 +208,7 @@ func CheckDomain() error {
 func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
 	// ANCHOR: recover-already-exists
 	// The OS rejected Register because the user's password manager
-	// already holds a credential matching `ExcludeCredentialIds`.
+	// already holds a credential matching `ExcludeCredentials`.
 	// Route the user to the sign-in path: the OS picker will surface
 	// the existing credential and the SDK's identity cache will warm
 	// up on the assertion.
@@ -218,7 +218,7 @@ func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
 	label := "personal"
 	registerResponse, err := passkey.Register(breez_sdk_spark.RegisterRequest{
 		Label: &label,
-		ExcludeCredentialIds: [][]byte{
+		ExcludeCredentials: [][]byte{
 			// app-persisted credential IDs from prior registrations
 		},
 	})

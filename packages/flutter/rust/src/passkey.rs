@@ -50,6 +50,8 @@ fn dart_error_to_prf(err: anyhow::Error) -> PrfProviderError {
     let lower = msg.to_lowercase();
     if lower.contains("usercancelled") {
         PrfProviderError::UserCancelled
+    } else if lower.contains("usertimedout") {
+        PrfProviderError::UserTimedOut
     } else if lower.contains("nocredential") {
         PrfProviderError::CredentialNotFound(msg)
     } else if lower.contains("prfnotsupported") {
