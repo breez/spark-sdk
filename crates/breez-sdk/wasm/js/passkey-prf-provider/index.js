@@ -21,12 +21,23 @@
  * ```
  */
 
+import { PasskeyClient as SdkPasskeyClient } from '../breez_sdk_spark_wasm.js';
+
 /**
  * Breez's shared `keys.breez.technology` RP ID. Exposed as
  * `PasskeyProvider.BREEZ_RP_ID` for hosts opting into the Breez-
  * managed Relying Party (only valid for Breez-registered apps).
  */
 const BREEZ_RP_ID = 'keys.breez.technology';
+
+/**
+ * Relying Party name used by the zero-config {@link PasskeyClient}
+ * constructor. Surfaces in some credential-manager UIs (iCloud
+ * Keychain, Google Password Manager). Apps that want their own RP name
+ * build a {@link PasskeyProvider} explicitly and inject it through
+ * {@link PasskeyClientBuilder}.
+ */
+const DEFAULT_RP_NAME = 'Breez';
 
 /**
  * Wall-clock threshold (ms) used to discriminate a NotAllowedError
@@ -940,5 +951,91 @@ export class PasskeyProvider {
             default:
                 return error;
         }
+    }
+}
+
+/**
+ * Builder for a {@link PasskeyClient} backed by a caller-supplied
+ * `PrfProvider`. Use this when you need a configured browser
+ * {@link PasskeyProvider} (custom `rpId` / `rpName`, a
+ * `credentialRegistry`, rotating `userName`, timeout overrides) or a
+ * fully custom PRF backend. For the zero-config Breez-RP case, use the
+ * {@link PasskeyClient} constructor directly.
+ *
+ * @example
+ * ```javascript
+ * const provider = new PasskeyProvider({ rpId, rpName, credentialRegistry })
+ * const client = new PasskeyClientBuilder(breezApiKey)
+ *     .withPrfProvider(provider)
+ *     .build()
+ * ```
+ */
+export class PasskeyClientBuilder {
+    /**
+     * @param {string} [breezApiKey] - Breez relay key for authenticated
+     *   (NIP-42) label storage. Omit for public relays only.
+     * @param {object} [config] - `PasskeyConfig` (e.g. `{ defaultLabel }`).
+     */
+    constructor(breezApiKey, config) {
+        this._breezApiKey = breezApiKey;
+        this._config = config;
+        this._provider = null;
+    }
+
+    /**
+     * Inject the `PrfProvider` the client derives seeds through. The
+     * built-in browser {@link PasskeyProvider} or any custom
+     * implementation is accepted.
+     * @param {PrfProvider} provider
+     * @returns {PasskeyClientBuilder} this, for chaining.
+     */
+    withPrfProvider(provider) {
+        this._provider = provider;
+        return this;
+    }
+
+    /**
+     * Construct the client. Falls back to a default browser
+     * {@link PasskeyProvider} on the Breez RP when no provider was
+     * injected.
+     * @returns {import('../breez_sdk_spark_wasm.js').PasskeyClient}
+     */
+    build() {
+        const provider =
+            this._provider ??
+            new PasskeyProvider({ rpId: BREEZ_RP_ID, rpName: DEFAULT_RP_NAME });
+        return new SdkPasskeyClient(provider, this._breezApiKey, this._config);
+    }
+}
+
+/**
+ * High-level passkey client. The zero-config constructor wires the
+ * built-in browser {@link PasskeyProvider} on the Breez shared RP
+ * (`keys.breez.technology`), so a Breez-registered app needs only its
+ * relay key:
+ *
+ * ```javascript
+ * const client = new PasskeyClient(breezApiKey)
+ * const { wallet } = await client.signIn({ label: 'personal' })
+ * ```
+ *
+ * Apps with their own RP, a credential registry, or a custom PRF
+ * backend build the provider themselves and inject it through
+ * {@link PasskeyClientBuilder}. The constructor returns the underlying
+ * SDK client, so the instance exposes `checkAvailability`, `register`,
+ * `signIn`, `labels()` and `credentials()` directly.
+ */
+export class PasskeyClient {
+    /**
+     * @param {string} [breezApiKey] - Breez relay key for authenticated
+     *   (NIP-42) label storage. Omit for public relays only.
+     * @param {object} [config] - `PasskeyConfig` (e.g. `{ defaultLabel }`).
+     * @returns {import('../breez_sdk_spark_wasm.js').PasskeyClient}
+     */
+    constructor(breezApiKey, config) {
+        // A constructor that returns an object yields that object from
+        // `new`, so callers get the underlying SDK client directly with
+        // no delegation layer.
+        return new PasskeyClientBuilder(breezApiKey, config).build();
     }
 }

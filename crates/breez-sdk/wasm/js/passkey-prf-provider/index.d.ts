@@ -1,3 +1,6 @@
+import { PasskeyClient as SdkPasskeyClient } from '../breez_sdk_spark_wasm';
+import type { PasskeyConfig, PrfProvider } from '../breez_sdk_spark_wasm';
+
 /**
  * Result of a domain-association verification check against the platform's
  * well-known configuration source. Mirrors the Rust `DomainAssociation`
@@ -359,4 +362,56 @@ export declare class PasskeyProvider {
      * No-op when no registry is configured.
      */
     clearKnownCredentialIds(): Promise<void>;
+}
+
+/**
+ * Builder for a {@link PasskeyClient} backed by a caller-supplied
+ * `PrfProvider`. Use this when you need a configured browser
+ * {@link PasskeyProvider} (custom `rpId` / `rpName`, a
+ * `credentialRegistry`, rotating `userName`, timeout overrides) or a
+ * fully custom PRF backend. For the zero-config Breez-RP case, use the
+ * {@link PasskeyClient} constructor directly.
+ */
+export declare class PasskeyClientBuilder {
+    /**
+     * @param breezApiKey - Breez relay key for authenticated (NIP-42)
+     *   label storage. Omit for public relays only.
+     * @param config - Optional `PasskeyConfig` (e.g. `{ defaultLabel }`).
+     */
+    constructor(breezApiKey?: string, config?: PasskeyConfig);
+
+    /**
+     * Inject the `PrfProvider` the client derives seeds through. The
+     * built-in browser {@link PasskeyProvider} or any custom
+     * implementation is accepted.
+     */
+    withPrfProvider(provider: PrfProvider): PasskeyClientBuilder;
+
+    /**
+     * Construct the client. Falls back to a default browser
+     * {@link PasskeyProvider} on the Breez RP when no provider was
+     * injected.
+     */
+    build(): SdkPasskeyClient;
+}
+
+/**
+ * High-level passkey client. The zero-config constructor wires the
+ * built-in browser {@link PasskeyProvider} on the Breez shared RP
+ * (`keys.breez.technology`), so a Breez-registered app needs only its
+ * relay key. Apps with their own RP, a credential registry, or a custom
+ * PRF backend build the provider themselves and inject it through
+ * {@link PasskeyClientBuilder}.
+ *
+ * The instance is the underlying SDK client, exposing
+ * `checkAvailability`, `register`, `signIn`, `labels()` and
+ * `credentials()` directly.
+ */
+export declare class PasskeyClient extends SdkPasskeyClient {
+    /**
+     * @param breezApiKey - Breez relay key for authenticated (NIP-42)
+     *   label storage. Omit for public relays only.
+     * @param config - Optional `PasskeyConfig` (e.g. `{ defaultLabel }`).
+     */
+    constructor(breezApiKey?: string, config?: PasskeyConfig);
 }
