@@ -99,13 +99,6 @@ class PasskeyClient {
 /// Builds a [PasskeyClient] backed by a caller-supplied [PrfProvider]. Use
 /// this when you need a configured provider (custom `rpId` / `rpName`, a
 /// credential registry, rotating `userName`).
-///
-/// ```dart
-/// final provider = PasskeyProvider(PasskeyProviderOptions(rpId: rpId, rpName: rpName));
-/// final client = PasskeyClientBuilder(breezApiKey: apiKey)
-///     .withPrfProvider(provider)
-///     .build();
-/// ```
 class PasskeyClientBuilder {
   PasskeyClientBuilder({this.breezApiKey, this.config});
 

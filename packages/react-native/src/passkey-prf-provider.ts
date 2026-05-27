@@ -581,14 +581,6 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
  * when you need a configured {@link PasskeyProvider} (custom `rpId` /
  * `rpName`, a credential registry) or a custom PRF backend; omit the provider
  * for the zero-config Breez-RP default.
- *
- * @example
- * ```typescript
- * const provider = new PasskeyProvider({ rpId, rpName, credentialRegistry })
- * const client = new PasskeyClientBuilder(breezApiKey)
- *     .withPrfProvider(provider)
- *     .build()
- * ```
  */
 export class PasskeyClientBuilder {
   private provider?: PrfProvider;
@@ -648,12 +640,6 @@ function buildPasskeyClient(
  * so a Breez-registered app needs only its relay key; set `rpId` / `rpName` on
  * the config to use your own RP. For a credential registry or custom PRF
  * backend, build the provider and inject it via {@link PasskeyClientBuilder}.
- *
- * @example
- * ```typescript
- * const client = new PasskeyClient(breezApiKey)
- * const { wallet } = await client.signIn({ label: 'personal' })
- * ```
  */
 export const PasskeyClient: {
   new (breezApiKey?: string, config?: PasskeyConfig): SdkPasskeyClient;

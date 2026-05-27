@@ -9,13 +9,6 @@ import Foundation
 /// zero-config or RP-only case, use
 /// ``PasskeyClient/init(breezApiKey:config:)`` and set `rpId` / `rpName`
 /// on the ``PasskeyConfig``.
-///
-/// ```swift
-/// let provider = PasskeyProvider(rpId: rpId, rpName: rpName, credentialRegistry: registry)
-/// let client = PasskeyClientBuilder(breezApiKey: apiKey)
-///     .withPrfProvider(provider)
-///     .build()
-/// ```
 public class PasskeyClientBuilder {
     private let breezApiKey: String?
     private let config: PasskeyConfig?

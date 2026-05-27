@@ -319,36 +319,6 @@ const PRF_PROVIDER_INTERFACE: &'static str = r#"/**
  * WebAuthn PRF extension); also implementable directly for custom
  * deterministic sources (YubiKey HMAC challenge, FIDO2 hmac-secret, on-disk
  * key material, hardware HSMs).
- *
- * @example
- * ```typescript
- * class BrowserPasskeyProvider implements PrfProvider {
- *     async deriveSeeds(salts: string[]): Promise<{ seeds: Uint8Array[]; credentialId: Uint8Array | null }> {
- *         const seeds: Uint8Array[] = [];
- *         let credentialId: Uint8Array | null = null;
- *         for (const salt of salts) {
- *             const credential = await navigator.credentials.get({
- *                 publicKey: {
- *                     challenge: new Uint8Array(32),
- *                     rpId: window.location.hostname,
- *                     allowCredentials: [],
- *                     extensions: {
- *                         prf: { eval: { first: new TextEncoder().encode(salt) } }
- *                     }
- *                 }
- *             });
- *             const ext = credential.getClientExtensionResults();
- *             seeds.push(new Uint8Array(ext.prf.results.first));
- *             credentialId = new Uint8Array(credential.rawId);
- *         }
- *         return { seeds, credentialId };
- *     }
- *
- *     async isSupported(): Promise<boolean> {
- *         return window.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable?.() ?? false;
- *     }
- * }
- * ```
  */
 export interface PrfProvider {
     /**

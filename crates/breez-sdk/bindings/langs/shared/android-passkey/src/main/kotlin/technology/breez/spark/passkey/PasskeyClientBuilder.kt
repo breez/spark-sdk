@@ -42,18 +42,6 @@ public fun PasskeyClient(
  * or a custom PRF backend. For the zero-config case use the
  * [PasskeyClient] factory above, which takes the `activityProvider`.
  *
- * ```kotlin
- * val provider = PasskeyProvider(
- *     activityProvider = { activity },
- *     rpId = rpId,
- *     rpName = rpName,
- *     credentialRegistry = registry,
- * )
- * val client = PasskeyClientBuilder(breezApiKey = apiKey)
- *     .withPrfProvider(provider)
- *     .build()
- * ```
- *
  * @param breezApiKey Breez relay key for authenticated (NIP-42) label
  *   storage. Pass `null` for public relays only.
  * @param config Passkey client config. `defaultLabel` applies as the

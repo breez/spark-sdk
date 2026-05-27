@@ -171,16 +171,7 @@ abstract class PrfProvider {
 /// Built-in Flutter passkey PRF provider using platform-native APIs
 /// (iOS AuthenticationServices, Android Credential Manager). The
 /// default [PrfProvider]; inject a configured instance through
-/// [PasskeyClientBuilder.withPrfProvider]:
-///
-/// ```dart
-/// final provider = PasskeyProvider(
-///   PasskeyProviderOptions(rpId: PasskeyProvider.breezRpId, rpName: 'My App'),
-/// );
-/// final client = PasskeyClientBuilder(breezApiKey: apiKey)
-///     .withPrfProvider(provider)
-///     .build();
-/// ```
+/// [PasskeyClientBuilder.withPrfProvider].
 class PasskeyProvider implements PrfProvider {
   /// Breez's shared `keys.breez.technology` RP. Pass as `rpId` to opt in
   /// (only valid for apps registered with Breez); apps with their own RP
