@@ -662,34 +662,15 @@ async fn run_pre_optimization(sdk: &BreezSdk) -> Result<()> {
 /// Run leaf optimization with a label and wait for completion
 async fn run_optimization(sdk: &BreezSdk, label: &str) -> Result<()> {
     info!("Starting {}...", label.to_lowercase());
-    sdk.start_leaf_optimization().await;
-
-    // Poll until optimization completes
     let start = Instant::now();
-    let timeout = Duration::from_secs(300); // 5 minute timeout
-    let poll_interval = Duration::from_millis(500);
-
-    loop {
-        let progress = sdk.get_leaf_optimization_progress();
-
-        if !progress.is_running {
-            let elapsed = start.elapsed();
-            info!("{} complete in {:.2}s", label, elapsed.as_secs_f64());
-            break;
-        }
-
-        info!(
-            "Optimization progress: round {}/{}",
-            progress.current_round, progress.total_rounds
-        );
-
-        if start.elapsed() >= timeout {
-            bail!("Timeout waiting for optimization to complete");
-        }
-
-        tokio::time::sleep(poll_interval).await;
-    }
-
+    let outcome = sdk.optimize_leaves(None).await?;
+    let elapsed = start.elapsed();
+    info!(
+        "{} complete in {:.2}s: {:?}",
+        label,
+        elapsed.as_secs_f64(),
+        outcome
+    );
     Ok(())
 }
 

@@ -1136,11 +1136,22 @@ pub struct _ClaimHtlcPaymentResponse {
     pub payment: Payment,
 }
 
-#[frb(mirror(OptimizationProgress))]
-pub struct _OptimizationProgress {
-    pub is_running: bool,
-    pub current_round: u32,
-    pub total_rounds: u32,
+#[frb(mirror(OptimizationMode))]
+pub enum _OptimizationMode {
+    Full,
+    SingleRound,
+}
+
+#[frb(mirror(OptimizeLeavesOptions))]
+pub struct _OptimizeLeavesOptions {
+    pub mode: OptimizationMode,
+}
+
+#[frb(mirror(OptimizationOutcome))]
+pub enum _OptimizationOutcome {
+    Completed { rounds_executed: u32 },
+    InProgress,
+    Skipped,
 }
 
 #[frb(mirror(ConversionEstimate))]

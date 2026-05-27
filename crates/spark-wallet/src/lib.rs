@@ -39,11 +39,11 @@ pub use spark::{
         TokenOutputsReservationId, TokensConfig,
     },
     tree::{
-        DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT, InMemoryTreeStore,
-        LeafLike, LeafOptimizationOptions, Leaves, LeavesReservation, LeavesReservationId,
-        OptimizationEvent, OptimizationProgress, ReservationPurpose, ReserveResult,
-        SelectLeavesOptions, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus,
-        TreeServiceError, TreeStore, select_leaves_by_minimum_amount,
+        AutoOptimizationEvent, DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT,
+        InMemoryTreeStore, LeafLike, LeafOptimizationOptions, Leaves, LeavesReservation,
+        LeavesReservationId, OptimizationError, OptimizationOutcome, ReservationPurpose,
+        ReserveResult, SelectLeavesOptions, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId,
+        TreeNodeStatus, TreeServiceError, TreeStore, select_leaves_by_minimum_amount,
         select_leaves_by_target_amounts,
     },
     utils::{

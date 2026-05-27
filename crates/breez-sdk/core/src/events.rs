@@ -35,9 +35,15 @@ pub enum SdkEvent {
     PaymentFailed {
         payment: Payment,
     },
-    Optimization {
+    /// Emitted while the background auto-optimizer is running.
+    ///
+    /// Only fired from the auto path (enabled via
+    /// `LeafOptimizationConfig::auto_enabled`). Manually-triggered runs
+    /// via `BreezSdk::optimize_leaves` do not emit events — they return an
+    /// `OptimizationOutcome` instead.
+    AutoOptimization {
         // Named with `optimization` prefix to avoid collision with `event` keyword in C#
-        optimization_event: OptimizationEvent,
+        optimization_event: AutoOptimizationEvent,
     },
     LightningAddressChanged {
         lightning_address: Option<LightningAddressInfo>,
@@ -76,10 +82,10 @@ impl fmt::Display for SdkEvent {
             SdkEvent::PaymentFailed { payment } => {
                 write!(f, "PaymentFailed: {payment:?}")
             }
-            SdkEvent::Optimization {
+            SdkEvent::AutoOptimization {
                 optimization_event: event,
             } => {
-                write!(f, "Optimization: {event:?}")
+                write!(f, "AutoOptimization: {event:?}")
             }
             SdkEvent::LightningAddressChanged { lightning_address } => {
                 write!(f, "LightningAddressChanged: {lightning_address:?}")
@@ -93,7 +99,7 @@ impl fmt::Display for SdkEvent {
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-pub enum OptimizationEvent {
+pub enum AutoOptimizationEvent {
     /// Optimization has started with the given number of rounds.
     Started { total_rounds: u32 },
     /// A round has completed.

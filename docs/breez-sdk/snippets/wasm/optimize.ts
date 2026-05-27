@@ -1,54 +1,75 @@
-import { type OptimizationEvent, type BreezSdk } from '@breeztech/breez-sdk-spark'
+import { type AutoOptimizationEvent, type BreezSdk } from '@breeztech/breez-sdk-spark'
 
-const exampleStartOptimization = async (sdk: BreezSdk) => {
-  // ANCHOR: start-optimization
-  await sdk.startLeafOptimization()
-  // ANCHOR_END: start-optimization
-}
+const exampleOptimizeLeavesFull = async (sdk: BreezSdk) => {
+  // ANCHOR: optimize-leaves-full
+  const outcome = await sdk.optimizeLeaves()
 
-const exampleCancelOptimization = async (sdk: BreezSdk) => {
-  // ANCHOR: cancel-optimization
-  await sdk.cancelLeafOptimization()
-  // ANCHOR_END: cancel-optimization
-}
-
-const exampleGetOptimizationProgress = async (sdk: BreezSdk) => {
-  // ANCHOR: get-optimization-progress
-  const progress = sdk.getLeafOptimizationProgress()
-
-  console.log(`Optimization is running: ${progress.isRunning}`)
-  console.log(`Current round: ${progress.currentRound}`)
-  console.log(`Total rounds: ${progress.totalRounds}`)
-  // ANCHOR_END: get-optimization-progress
-}
-
-const exampleOptimizationEvents = async (event: OptimizationEvent) => {
-  // ANCHOR: optimization-events
-  switch (event.type) {
-    case 'started': {
-      console.log(`Optimization started with ${event.totalRounds} rounds`)
-      break
-    }
-    case 'roundCompleted': {
-      console.log(`Optimization round ${event.currentRound} of ${event.totalRounds} completed`)
-      break
-    }
+  switch (outcome.type) {
     case 'completed': {
-      console.log('Optimization completed successfully')
-      break
-    }
-    case 'cancelled': {
-      console.log('Optimization was cancelled')
-      break
-    }
-    case 'failed': {
-      console.log(`Optimization failed: ${event.error}`)
+      console.log(`Optimization completed in ${outcome.roundsExecuted} rounds`)
       break
     }
     case 'skipped': {
-      console.log('Optimization was skipped because leaves are already optimal')
+      console.log('Optimization skipped — wallet already optimal')
+      break
+    }
+    case 'inProgress': {
+      // Full mode runs to completion in one call, so inProgress is
+      // not reachable here.
       break
     }
   }
-  // ANCHOR_END: optimization-events
+  // ANCHOR_END: optimize-leaves-full
+}
+
+const exampleOptimizeLeavesSingleRound = async (sdk: BreezSdk) => {
+  // ANCHOR: optimize-leaves-single-round
+  let roundsExecuted = 0
+  while (true) {
+    const outcome = await sdk.optimizeLeaves({ mode: 'singleRound' })
+
+    if (outcome.type === 'inProgress') {
+      roundsExecuted += 1
+      console.log(`Executed round ${roundsExecuted}`)
+    } else if (outcome.type === 'completed') {
+      roundsExecuted += outcome.roundsExecuted
+      console.log(`Optimization done after ${roundsExecuted} rounds`)
+      break
+    } else if (outcome.type === 'skipped') {
+      console.log('Optimization skipped — wallet already optimal')
+      break
+    }
+  }
+  // ANCHOR_END: optimize-leaves-single-round
+}
+
+const exampleAutoOptimizationEvents = async (event: AutoOptimizationEvent) => {
+  // ANCHOR: auto-optimization-events
+  switch (event.type) {
+    case 'started': {
+      console.log(`Auto-optimization started with ${event.totalRounds} rounds`)
+      break
+    }
+    case 'roundCompleted': {
+      console.log(`Auto-optimization round ${event.currentRound} of ${event.totalRounds} completed`)
+      break
+    }
+    case 'completed': {
+      console.log('Auto-optimization completed successfully')
+      break
+    }
+    case 'cancelled': {
+      console.log('Auto-optimization was cancelled')
+      break
+    }
+    case 'failed': {
+      console.log(`Auto-optimization failed: ${event.error}`)
+      break
+    }
+    case 'skipped': {
+      console.log('Auto-optimization was skipped because leaves are already optimal')
+      break
+    }
+  }
+  // ANCHOR_END: auto-optimization-events
 }

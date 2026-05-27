@@ -108,8 +108,8 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
           const failedPayment = event.payment
           break
         }
-        case 'optimization': {
-          // An optimization event occurred
+        case 'autoOptimization': {
+          // An auto-optimization event occurred
           const optimizationEvent = event.optimizationEvent
           break
         }

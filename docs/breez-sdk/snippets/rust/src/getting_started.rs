@@ -85,8 +85,8 @@ impl EventListener for SdkEventListener {
             SdkEvent::PaymentFailed { payment } => {
                 // A payment failed
             }
-            SdkEvent::Optimization { optimization_event } => {
-                // An optimization event occurred
+            SdkEvent::AutoOptimization { optimization_event } => {
+                // An auto-optimization event occurred
             }
             SdkEvent::LightningAddressChanged {
                 lightning_address,

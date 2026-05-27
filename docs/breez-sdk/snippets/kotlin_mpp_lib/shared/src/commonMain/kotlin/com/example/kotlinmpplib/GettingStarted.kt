@@ -87,8 +87,8 @@ class GettingStarted {
                     // A payment failed
                     val failedPayment = e.payment
                 }
-                is SdkEvent.Optimization -> {
-                    // An optimization event occurred
+                is SdkEvent.AutoOptimization -> {
+                    // An auto-optimization event occurred
                     val optimizationEvent = e.optimizationEvent
                 }
                 is SdkEvent.LightningAddressChanged -> {

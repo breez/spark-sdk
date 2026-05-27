@@ -1840,11 +1840,62 @@ pub struct LnurlReceiveMetadata {
     pub sender_comment: Option<String>,
 }
 
+/// Mode of a manually-triggered optimization run.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum OptimizationMode {
+    /// Run until no further optimization is productive.
+    #[default]
+    Full,
+    /// Execute a single round and return so the caller can drive progress.
+    SingleRound,
+}
+
+/// Optional configuration for [`BreezSdk::optimize_leaves`]. Callers that
+/// want the default `Full` behavior can pass `None` (or omit the argument
+/// where the binding supports it).
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct OptimizationProgress {
-    pub is_running: bool,
-    pub current_round: u32,
-    pub total_rounds: u32,
+pub struct OptimizeLeavesOptions {
+    /// Controls how much work the call performs before returning.
+    pub mode: OptimizationMode,
+}
+
+/// Outcome of a [`BreezSdk::optimize_leaves`] call.
+///
+/// `rounds_executed` on `Completed` refers to rounds run by *this call*.
+/// The SDK holds no cross-call state — callers driving a `SingleRound`
+/// loop maintain their own cumulative counter if they need one.
+///
+/// **`SingleRound` loop pattern**: terminate on anything that isn't
+/// `InProgress` — `Completed` (the planner confirmed this swap finished
+/// optimization) or `Skipped` (the wallet was already optimal at call
+/// time).
+///
+/// ```ignore
+/// loop {
+///     match sdk.optimize_leaves(SingleRound).await? {
+///         OptimizationOutcome::InProgress => continue,
+///         OptimizationOutcome::Completed { .. }
+///         | OptimizationOutcome::Skipped => break,
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum OptimizationOutcome {
+    /// All planned optimization work was executed in this call.
+    /// Returned by `Full` runs on success, and by `SingleRound` runs
+    /// whose swap was the final one needed (the planner produced a
+    /// single-swap plan with a convergence guarantee).
+    Completed { rounds_executed: u32 },
+    /// `SingleRound` only: a round ran but the planner could not
+    /// guarantee it was the last. The caller should invoke
+    /// `optimize_leaves` again.
+    InProgress,
+    /// No optimization work was performed because the wallet was already
+    /// optimal at call time. Returned by either mode on a no-op call.
+    Skipped,
 }
 
 /// A contact entry containing a name and payment identifier.

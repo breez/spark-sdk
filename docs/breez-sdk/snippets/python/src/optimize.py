@@ -1,38 +1,56 @@
 import logging
-from breez_sdk_spark import BreezSdk, OptimizationEvent
+from breez_sdk_spark import (
+    BreezSdk,
+    AutoOptimizationEvent,
+    OptimizationMode,
+    OptimizationOutcome,
+    OptimizeLeavesOptions,
+)
 
-async def start_optimization(sdk: BreezSdk):
-    # ANCHOR: start-optimization
-    await sdk.start_leaf_optimization()
-    # ANCHOR_END: start-optimization
+async def run_full_optimization(sdk: BreezSdk):
+    # ANCHOR: optimize-leaves-full
+    outcome = await sdk.optimize_leaves(None)
 
-async def cancel_optimization(sdk: BreezSdk):
-    # ANCHOR: cancel-optimization
-    await sdk.cancel_leaf_optimization()
-    # ANCHOR_END: cancel-optimization
+    if isinstance(outcome, OptimizationOutcome.COMPLETED):
+        logging.debug(f"Optimization completed in {outcome.rounds_executed} rounds")
+    elif isinstance(outcome, OptimizationOutcome.SKIPPED):
+        logging.debug("Optimization skipped — wallet already optimal")
+    elif isinstance(outcome, OptimizationOutcome.IN_PROGRESS):
+        raise AssertionError("Full mode never returns IN_PROGRESS")
+    # ANCHOR_END: optimize-leaves-full
 
-async def get_optimization_progress(sdk: BreezSdk):
-    # ANCHOR: get-optimization-progress
-    progress = sdk.get_leaf_optimization_progress()
+async def run_optimization_one_round_at_a_time(sdk: BreezSdk):
+    # ANCHOR: optimize-leaves-single-round
+    rounds_executed = 0
+    while True:
+        outcome = await sdk.optimize_leaves(
+            OptimizeLeavesOptions(mode=OptimizationMode.SINGLE_ROUND)
+        )
+        if isinstance(outcome, OptimizationOutcome.IN_PROGRESS):
+            rounds_executed += 1
+            logging.debug(f"Executed round {rounds_executed}")
+        elif isinstance(outcome, OptimizationOutcome.COMPLETED):
+            rounds_executed += outcome.rounds_executed
+            logging.debug(f"Optimization done after {rounds_executed} rounds")
+            break
+        elif isinstance(outcome, OptimizationOutcome.SKIPPED):
+            logging.debug("Optimization skipped — wallet already optimal")
+            break
+    # ANCHOR_END: optimize-leaves-single-round
 
-    logging.debug(f"Optimization is running: {progress.is_running}")
-    logging.debug(f"Current round: {progress.current_round}")
-    logging.debug(f"Total rounds: {progress.total_rounds}")
-    # ANCHOR_END: get-optimization-progress
-
-def optimization_events(optimization_event: OptimizationEvent):
-    # ANCHOR: optimization-events
-    if isinstance(optimization_event, OptimizationEvent.STARTED):
-        logging.debug(f"Optimization started with {optimization_event.total_rounds} rounds")
-    elif isinstance(optimization_event, OptimizationEvent.ROUND_COMPLETED):
-        logging.debug(f"Optimization round {optimization_event.current_round} of "
-            f"{optimization_event.total_rounds} completed")
-    elif isinstance(optimization_event, OptimizationEvent.COMPLETED):
-        logging.debug("Optimization completed successfully")
-    elif isinstance(optimization_event, OptimizationEvent.CANCELLED):
-        logging.debug("Optimization was cancelled")
-    elif isinstance(optimization_event, OptimizationEvent.FAILED):
-        logging.debug(f"Optimization failed: {optimization_event.error}")
-    elif isinstance(optimization_event, OptimizationEvent.SKIPPED):
-        logging.debug("Optimization was skipped because leaves are already optimal")
-    # ANCHOR_END: optimization-events
+def handle_auto_optimization_event(event: AutoOptimizationEvent):
+    # ANCHOR: auto-optimization-events
+    if isinstance(event, AutoOptimizationEvent.STARTED):
+        logging.debug(f"Auto-optimization started with {event.total_rounds} rounds")
+    elif isinstance(event, AutoOptimizationEvent.ROUND_COMPLETED):
+        logging.debug(f"Auto-optimization round {event.current_round} of "
+            f"{event.total_rounds} completed")
+    elif isinstance(event, AutoOptimizationEvent.COMPLETED):
+        logging.debug("Auto-optimization completed successfully")
+    elif isinstance(event, AutoOptimizationEvent.CANCELLED):
+        logging.debug("Auto-optimization was cancelled")
+    elif isinstance(event, AutoOptimizationEvent.FAILED):
+        logging.debug(f"Auto-optimization failed: {event.error}")
+    elif isinstance(event, AutoOptimizationEvent.SKIPPED):
+        logging.debug("Auto-optimization was skipped because leaves are already optimal")
+    # ANCHOR_END: auto-optimization-events
