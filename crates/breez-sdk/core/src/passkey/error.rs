@@ -1,125 +1,77 @@
 use thiserror::Error;
 
-/// Coarse classification of a passkey error: what the caller should
-/// do next. One value per distinct user/UX reaction. Map to your own
-/// presentation; the variant name carries the action, not the cause.
+/// Coarse classification of a passkey error by the UX reaction it
+/// warrants. The variant names the action to take, not the cause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ErrorKind {
-    /// The user dismissed the authenticator prompt. Do not auto-retry.
+    /// User dismissed the prompt. Do not auto-retry.
     Cancel,
-    /// No matching credential on this device. Offer to register a new one.
+    /// No matching credential on this device. Offer to register one.
     NoCredential,
-    /// The authenticator does not implement the PRF extension. Fall back
-    /// to a non-passkey flow or guide the user to switch credential
-    /// providers (e.g. iCloud Keychain on iOS).
+    /// Authenticator lacks the PRF extension. Fall back to a non-passkey
+    /// flow or guide the user to another credential provider.
     PrfUnsupported,
-    /// The authenticator supports PRF but the evaluation failed. Often
-    /// transient, unlike `PrfUnsupported`: retrying the ceremony may
-    /// succeed.
+    /// PRF is supported but evaluation failed. Often transient: retrying
+    /// the ceremony may succeed.
     PrfFailed,
-    /// Platform / app configuration is wrong (entitlement, assetlinks,
-    /// rpId scope). Not retryable until the integrator fixes setup.
+    /// Platform / app setup is wrong (entitlement, assetlinks, rpId
+    /// scope). Not retryable until the integrator fixes it.
     Configuration,
-    /// `excludeCredentials` matched an existing credential. Route the
-    /// user to the sign-in path.
+    /// An existing credential matched. Route the user to sign-in.
     AlreadyExists,
-    /// The OS biometric prompt timed out (the user did not interact
-    /// within the platform's inactivity window, typically ~55 seconds).
-    /// Distinct from `Cancel`: the user did not actively dismiss the
-    /// prompt. Hosts may auto-retry or surface a re-prompt UI without
-    /// treating it as user intent to abandon.
+    /// The prompt closed on the platform inactivity timeout with no user
+    /// action. Unlike `Cancel`, safe to auto-retry or re-prompt.
     Timeout,
-    /// The authentication ceremony failed for a security or state reason
-    /// (not a cancel, timeout, or missing credential). Surface a retry;
+    /// The ceremony failed for a security or state reason. Offer a retry;
     /// if it persists, the credential or RP setup may be at fault.
     AuthFailure,
-    /// Platform or library failure the caller can't act on. Surface a
-    /// generic "try again" UI; diagnostic detail is in the variant
-    /// payload for logs.
+    /// Failure the caller can't act on. Show a generic "try again".
     Internal,
 }
 
-/// Error type for passkey PRF operations. Platforms implement
-/// [`PrfProvider`](super::PrfProvider) and return this type.
-///
-/// # Canonical platform-error mapping
-///
-/// Every binding maps its platform's native errors onto these variants
-/// before they cross the FFI boundary, so hosts pattern-match a single
-/// taxonomy regardless of platform. The mapping code cannot be shared
-/// because the sources differ (the WASM bridge matches the typed JS
-/// error classes the browser provider throws; the Flutter bridge
-/// matches the codes the Dart side emits; React Native matches the
-/// native module's `ERR_*` codes), but every binding targets the same
-/// variants below. Use this as the reference when adding or auditing a
-/// binding's mapping:
-///
-/// - [`PrfNotSupported`](Self::PrfNotSupported): the authenticator has no PRF / hmac-secret extension.
-/// - [`UserCancelled`](Self::UserCancelled): the user actively dismissed the OS prompt.
-/// - [`UserTimedOut`](Self::UserTimedOut): the prompt closed on the platform inactivity timeout, with no user action.
-/// - [`CredentialNotFound`](Self::CredentialNotFound): no credential matched for this RP (includes the `WebAuthn` no-credential fast-fail).
-/// - [`AuthenticationFailed`](Self::AuthenticationFailed): the assertion ran but verification failed (bad PIN, security error).
-/// - [`PrfEvaluationFailed`](Self::PrfEvaluationFailed): the ceremony succeeded but produced no usable PRF output.
-/// - [`Configuration`](Self::Configuration): platform / app misconfiguration (AASA, assetlinks, RP ID scope).
-/// - [`CredentialAlreadyExists`](Self::CredentialAlreadyExists): an `excludeCredentials` entry matched a credential already on the device.
-/// - [`Generic`](Self::Generic): anything a binding cannot classify; carries the raw message.
-///
-/// A binding only maps the variants its platform can actually surface;
-/// the rest fall through to [`Generic`](Self::Generic). That is expected,
-/// not a coverage gap.
+/// Failures from a passkey PRF operation. Each platform normalizes its
+/// native errors into these variants so callers match one taxonomy
+/// everywhere; anything unclassifiable becomes [`Generic`](Self::Generic).
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum PrfProviderError {
-    /// PRF extension is not supported by the authenticator
     #[error("PRF not supported by authenticator")]
     PrfNotSupported,
 
-    /// User cancelled the authentication
     #[error("User cancelled authentication")]
     UserCancelled,
 
-    /// The OS biometric prompt timed out without user interaction.
-    /// On iOS / Android this is the platform's biometric inactivity
-    /// timeout (typically ~55 seconds): the prompt was up but the
-    /// user neither approved nor dismissed it. Distinct from
-    /// `UserCancelled`, which means the user actively dismissed the
-    /// prompt. Hosts can use this signal to auto-retry or surface a
-    /// re-prompt UI without treating it as user intent to abandon.
+    /// The prompt closed on the platform inactivity timeout, with no
+    /// user action. Unlike `UserCancelled`, safe to auto-retry.
     #[error("Authenticator timed out")]
     UserTimedOut,
 
-    /// No credential found
     #[error("Credential not found: {0}")]
     CredentialNotFound(String),
 
-    /// Authentication failed
     #[error("Authentication failed: {0}")]
     AuthenticationFailed(String),
 
-    /// PRF evaluation failed
     #[error("PRF evaluation failed: {0}")]
     PrfEvaluationFailed(String),
 
-    /// Platform or app configuration error (e.g. missing AASA entitlement,
-    /// invalid assetlinks.json, misconfigured RP ID).
+    /// Platform / app setup is wrong: missing AASA entitlement, invalid
+    /// assetlinks.json, or misconfigured RP ID.
     #[error("Configuration error: {0}")]
     Configuration(String),
 
-    /// An entry in `excludeCredentials` matched a credential
-    /// already on the device. Route the user to sign-in.
+    /// An existing credential matched. Route the user to sign-in.
     #[error("Credential already exists: {0}")]
     CredentialAlreadyExists(String),
 
-    /// Generic error
     #[error("Passkey error: {0}")]
     Generic(String),
 }
 
 impl PrfProviderError {
-    /// Coarse classification for the caller. Lets hosts branch on a
-    /// small, actionable enum instead of pattern-matching every
-    /// variant.
+    /// Coarse classification so callers branch on a small, actionable
+    /// enum instead of every variant.
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
@@ -140,49 +92,40 @@ impl PrfProviderError {
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum PasskeyError {
-    /// Error raised by the underlying [`crate::passkey::PrfProvider`].
+    /// Raised by the underlying [`crate::passkey::PrfProvider`].
     #[error("PRF error: {0}")]
     Prf(#[from] PrfProviderError),
 
-    /// Nostr relay connection failed
     #[error("Nostr relay connection failed: {0}")]
     RelayConnectionFailed(String),
 
-    /// Failed to publish to Nostr
     #[error("Nostr write failed: {0}")]
     NostrWriteFailed(String),
 
-    /// Failed to query from Nostr
     #[error("Nostr read failed: {0}")]
     NostrReadFailed(String),
 
-    /// Key derivation error
     #[error("Key derivation error: {0}")]
     KeyDerivationError(String),
 
-    /// Invalid PRF output (wrong size, etc.)
+    /// PRF output was unusable (e.g. wrong size).
     #[error("Invalid PRF output: {0}")]
     InvalidPrfOutput(String),
 
-    /// BIP39 mnemonic generation error
     #[error("Mnemonic error: {0}")]
     MnemonicError(String),
 
-    /// Invalid salt input
     #[error("Invalid salt: {0}")]
     InvalidSalt(String),
 
-    /// Generic error
     #[error("Passkey error: {0}")]
     Generic(String),
 }
 
 impl PasskeyError {
-    /// Coarse classification of the underlying failure. Non-PRF
-    /// variants (Nostr, key derivation, mnemonic) all map to
-    /// `Internal` because they're caused by SDK / network state, not
-    /// authenticator state: the caller should surface a generic
-    /// retry / "try again later" UI.
+    /// Coarse classification of the failure. Non-PRF variants map to
+    /// `Internal`: they stem from SDK / network state, not the
+    /// authenticator, so surface a generic "try again later".
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {

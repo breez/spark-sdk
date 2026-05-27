@@ -8,11 +8,9 @@ import {
 const { BreezSdkSparkPasskey } = NativeModules;
 
 /**
- * Build a diagnostic error thrown when the native passkey module isn't
- * reachable from JS. The most common cause on iOS is running on a version
- * older than iOS 18: the Swift class is marked `@available(iOS 18.0, *)`
- * so the ObjC runtime cannot load it on earlier releases. On Android the
- * native module should always load, so the fallback message blames linking.
+ * Diagnostic error for when the native passkey module isn't reachable. The
+ * common iOS cause is running below iOS 18, where the `@available(iOS 18.0, *)`
+ * Swift class cannot load; on Android a missing module means broken linking.
  */
 function passkeyModuleUnavailableError(operation: string): Error {
   if (Platform.OS === 'ios') {
@@ -46,14 +44,11 @@ function passkeyModuleUnavailableError(operation: string): Error {
 }
 
 /**
- * Authenticator data captured at registration. `aaguid` is the 16-byte
- * Authenticator Attestation GUID (provider identifier); `backupEligible`
- * is the BE flag indicating whether the credential can sync across
- * devices. Both are `null` when the attestation can't be parsed. AAGUID
- * is unverified attestation: display hint only, never a trust decision.
- *
- * `userId` is the WebAuthn user handle the native plugin minted for
- * this credential. Always returned; never host-supplied.
+ * Authenticator data captured at registration. `aaguid` identifies the
+ * provider; `backupEligible` reports whether the credential can sync across
+ * devices. Both are `null` when the attestation can't be parsed. Treat the
+ * AAGUID as a display hint only, never a trust decision: it is unverified.
+ * `userId` is the user handle minted by the native plugin (never host-supplied).
  */
 export interface RegisteredCredential {
   credentialId: Uint8Array;
@@ -64,9 +59,8 @@ export interface RegisteredCredential {
 
 
 /**
- * Result of {@link PasskeyProvider.checkDomainAssociation}. Mirrors the
- * Rust `DomainAssociation` enum shape so cross-language callers can
- * switch on `kind` regardless of which platform produced the result.
+ * Result of {@link PasskeyProvider.checkDomainAssociation}. Switch on `kind`
+ * to handle each outcome.
  */
 export type DomainAssociation =
   | { kind: 'Associated' }
@@ -74,16 +68,11 @@ export type DomainAssociation =
   | { kind: 'Skipped'; reason: string };
 
 /**
- * App-side persistent store of credential IDs registered for an RP.
- * The SDK does not ship a built-in implementation: bring your own
- * (Keychain on iOS, Block Store + SharedPreferences on Android, or
- * any custom backend). See the reference implementations in the
- * passkey guide.
- *
- * All methods are called from the SDK as best-effort optimizations:
- * failures and timeouts (3s) are swallowed and surfaced via
- * {@link PasskeyProviderOptions.onRegistryError}; they never block
- * the WebAuthn ceremony.
+ * App-side persistent store of credential IDs registered for an RP. The
+ * SDK ships no implementation: bring your own (Keychain, Block Store, etc;
+ * see the passkey guide). Calls are best-effort optimizations: failures and
+ * 3s timeouts are swallowed, reported via
+ * {@link PasskeyProviderOptions.onRegistryError}, and never block the ceremony.
  */
 export interface CredentialRegistry {
   read(rpId: string): Promise<Uint8Array[]>;
@@ -100,61 +89,45 @@ export type RegistryOperation = 'read' | 'add' | 'remove' | 'clear';
  */
 export interface PasskeyProviderOptions {
   /**
-   * Relying Party ID. Must match the domain configured for cross-platform
-   * credential sharing.
-   *
-   * Changing this after users have registered passkeys will make their
-   * existing credentials undiscoverable: they would need to create
-   * new passkeys. Pass {@link PasskeyProvider.BREEZ_RP_ID} to opt into
-   * Breez's shared `keys.breez.technology` RP (only valid for
-   * Breez-registered apps).
+   * Relying Party ID: the domain configured for credential sharing.
+   * Changing it after users register passkeys makes their existing
+   * credentials undiscoverable. Pass {@link PasskeyProvider.BREEZ_RP_ID} for
+   * the Breez-managed RP (only valid for Breez-registered apps).
    */
   rpId: string;
 
   /**
-   * Maps to the WebAuthn `rp.name`. Deprecated in WebAuthn L3 but
-   * still required by current OS prompts. Surfaces in some
-   * credential-management UIs (iCloud Keychain, Google Password
-   * Manager, 1Password); platform UIs increasingly ignore it. Only
-   * used at credential registration; changing it does not affect
-   * existing credentials.
+   * Display name shown in the OS passkey picker and credential-manager
+   * UIs. Only used at registration; changing it does not affect existing
+   * credentials.
    */
   rpName: string;
 
   /**
-   * Maps to the WebAuthn `user.name`. Treated as the user's unique
-   * identifier for the credential and shown in the account picker
-   * during sign-in. Pass a stable per-user value if each registration
-   * should surface as a distinct entry (Apple's Passwords app, in
-   * particular, dedupes credentials by `(rpId, user.name)`). Defaults
-   * to `rpName`. Only used at registration; changing it does not
-   * affect existing credentials.
+   * Per-credential identifier shown in the account picker during sign-in.
+   * Pass a stable per-user value to surface each registration distinctly
+   * (Apple's Passwords app dedupes by `(rpId, userName)`). Defaults to
+   * `rpName`. Only used at registration.
    */
   userName?: string;
 
   /**
-   * Maps to the WebAuthn `user.displayName`. The user-friendly label
-   * the OS / browser MAY (but is not required to) show in the
-   * picker; behavior varies by platform. Defaults to `userName`. Only
-   * used at registration; changing it does not affect existing
-   * credentials.
+   * User-friendly label some platforms show in the picker. Defaults to
+   * `userName`. Only used at registration.
    */
   userDisplayName?: string;
 
   /**
-   * Optional opt-in registry. When set, the JS-side wrapper merges
-   * stored IDs into `allowCredentials` before each native call and
-   * writes the asserted / created credential ID back after success.
-   * The native module never sees the registry: all bookkeeping is
-   * done in JS. All registry calls are best-effort with a 3s
-   * timeout; failures fire {@link onRegistryError} and the ceremony
-   * proceeds.
+   * Optional store of known credential IDs. When set, the SDK merges stored
+   * IDs into the assertion / registration and persists new ones after
+   * success. Best-effort with a 3s timeout: failures fire
+   * {@link onRegistryError} and the ceremony proceeds.
    */
   credentialRegistry?: CredentialRegistry;
 
   /**
-   * Fired when a {@link CredentialRegistry} call throws or times
-   * out. Best-effort: invocation never blocks ceremony progress.
+   * Fired when a {@link CredentialRegistry} call throws or times out. Never
+   * blocks the ceremony.
    */
   onRegistryError?: (operation: RegistryOperation, error: Error) => void;
 }
@@ -219,16 +192,11 @@ function _registryAddFireAndForget(
 }
 
 /**
- * Error thrown by [PasskeyProvider] when a passkey operation fails.
- * Provides a structured `code` for programmatic handling.
- *
- * `code` values: `userCancelled`, `userTimedOut`, `prfNotSupported`,
+ * Error thrown when a passkey operation fails, with a structured `code` for
+ * programmatic handling: `userCancelled`, `userTimedOut`, `prfNotSupported`,
  * `noCredential`, `configuration`, `credentialAlreadyExists`, `unknown`.
- *
- * `userTimedOut` distinguishes the OS biometric inactivity timeout
- * (~55s+ with no user interaction) from `userCancelled` (the user
- * actively dismissed the prompt). Hosts may auto-retry on
- * `userTimedOut` without treating it as user intent to abandon.
+ * `userTimedOut` is the OS biometric inactivity timeout (distinct from the
+ * user dismissing the prompt), so hosts may safely auto-retry it.
  */
 export class PasskeyPrfException extends Error {
   readonly code: string;
@@ -245,8 +213,6 @@ export class PasskeyPrfException extends Error {
  * thrown error) into a typed [PasskeyPrfException].
  */
 function mapNativeError(err: unknown): PasskeyPrfException {
-  // The RN bridge encodes the native error code as `err.code` (matching the
-  // first arg passed to `promise.reject(...)` on the native side).
   const anyErr = err as { code?: string; message?: string };
   const message = anyErr?.message ?? 'Unknown passkey error';
   switch (anyErr?.code) {
@@ -272,43 +238,21 @@ function mapNativeError(err: unknown): PasskeyPrfException {
 }
 
 /**
- * Built-in React Native passkey PRF provider using platform-native APIs.
- *
- * Implements the PrfProvider interface using:
- * - iOS: AuthenticationServices framework (iOS 18+)
- * - Android: Credential Manager API (Android 14+)
- *
- * On first use, if no credential exists for the RP ID, a new passkey is
- * automatically created (registered), then the assertion is retried.
- *
- * Requirements:
- * - iOS 18.0+ or Android 14+ (API 34)
- * - Associated Domains entitlement (iOS) or assetlinks.json (Android) for the RP domain
- *
- * @example
- * ```typescript
- * import { PasskeyClient } from '@breeztech/breez-sdk-spark-react-native'
- * import { PasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
- *
- * const prfProvider = new PasskeyProvider()
- * const passkey = new PasskeyClient(prfProvider as any, undefined)
- * const response = await passkey.signIn({ label: 'personal', extraSalts: [] })
- * ```
+ * Built-in React Native passkey PRF provider, backed by AuthenticationServices
+ * on iOS and Credential Manager on Android. The default {@link PrfProvider};
+ * inject a configured instance through {@link PasskeyClientBuilder}. Requires
+ * iOS 18+ or Android 14+ (API 34) plus the Associated Domains entitlement
+ * (iOS) or assetlinks.json (Android) for the RP domain.
  */
 export class PasskeyProvider {
   /**
-   * Constant identifying Breez's shared `keys.breez.technology` RP.
-   * Pass as `rpId` when opting into the Breez-managed Relying Party
-   * (only valid for apps registered with Breez). Apps with their own
-   * RP domain pass their own string.
+   * Breez's shared `keys.breez.technology` RP. Pass as `rpId` to opt in
+   * (only valid for apps registered with Breez); apps with their own RP
+   * domain pass their own string.
    */
   static readonly BREEZ_RP_ID: string = 'keys.breez.technology';
 
-  /**
-   * Default Relying Party name used by {@link PasskeyClientBuilder} when
-   * no `rpName` is supplied. Surfaces in some credential-manager UIs
-   * (iCloud Keychain, Google Password Manager).
-   */
+  /** Default `rpName` for the zero-config client when none is supplied. */
   static readonly DEFAULT_RP_NAME: string = 'Breez';
 
   private rpId: string;
@@ -350,19 +294,11 @@ export class PasskeyProvider {
   }
 
   /**
-   * Derive multiple 32-byte seeds from passkey PRF with the given salts in
-   * as few OS ceremonies as the platform supports (dual-salt assertion
-   * when available). The `salts.length === 1` case short-circuits to a
-   * single-salt assertion under the hood (one prompt). Used by the
-   * SDK's `setup_wallet` orchestration to collapse master + label
-   * derivation into one prompt.
-   *
-   * Accepts the SDK's `DeriveSeedsRequest` shape. Per-call
-   * `allowCredentials` (a list of credential IDs the assertion is
-   * restricted to, primary use case: reauthentication) overrides the
-   * constructor default when non-empty;
-   * `preferImmediatelyAvailableCredentials` overrides the platform
-   * default when non-null.
+   * Derive one 32-byte seed per salt from passkey PRF, in as few OS prompts
+   * as the platform supports. `allowCredentials` restricts the assertion to
+   * specific credential IDs (mainly for reauthentication) when non-empty;
+   * `preferImmediatelyAvailableCredentials` overrides the platform default
+   * when set. Returns the seeds plus the asserted credential ID.
    */
   async deriveSeeds(request: {
     salts: string[];
@@ -445,24 +381,11 @@ export class PasskeyProvider {
   }
 
   /**
-   * Create a new passkey with PRF support.
-   *
-   * Only registers the credential, no seed derivation. Triggers
-   * exactly 1 platform prompt. Use this to separate credential
-   * creation from derivation in multi-step onboarding flows.
-   *
-   * `excludeCredentials` is a list of already-registered credential
-   * IDs. Prevents registering the same device twice: when any entry
-   * matches a credential already on the device, the platform raises
-   * `CredentialAlreadyExists`. Branding fields (`userName`,
-   * `userDisplayName`) live on the constructor. `user.id` is never
-   * host-supplied: the native plugin mints a fresh random 16-byte
-   * handle per call and returns it via the result's `userId` field.
-   *
-   * @returns Credential ID, the generated user handle, plus AAGUID and
-   *   backup-eligibility parsed from the attestation object. AAGUID and
-   *   `backupEligible` are null when the attestation can't be parsed.
-   * @throws If the user cancels or PRF is not supported by the authenticator.
+   * Register a new PRF-capable passkey (one prompt, no seed derivation): use
+   * it to split credential creation from derivation in multi-step onboarding.
+   * `excludeCredentials` blocks re-registering a device that already holds a
+   * credential, surfaced as a `credentialAlreadyExists` failure. The returned
+   * user handle is minted fresh per call (never host-supplied).
    */
   async createPasskey(excludeCredentials: Uint8Array[] = []): Promise<RegisteredCredential> {
     if (!BreezSdkSparkPasskey) {
@@ -529,9 +452,8 @@ export class PasskeyProvider {
   }
 
   /**
-   * Return the credential IDs the configured {@link CredentialRegistry}
-   * has stored for the current `rpId`. Empty list when no registry is
-   * configured. Backs `PasskeyClient.credentials().get()`.
+   * Credential IDs the configured {@link CredentialRegistry} has stored for
+   * the current `rpId`. Empty when no registry is configured.
    */
   async getKnownCredentialIds(): Promise<Uint8Array[]> {
     if (!this.credentialRegistry) {
@@ -545,9 +467,8 @@ export class PasskeyProvider {
   }
 
   /**
-   * Drop a single credential ID from the configured registry. No-op
-   * when no registry is configured. Backs
-   * `PasskeyClient.credentials().remove(id)`.
+   * Drop a single credential ID from the configured registry. No-op when
+   * no registry is configured.
    */
   async removeKnownCredentialId(credentialId: Uint8Array): Promise<void> {
     if (!this.credentialRegistry) {
@@ -569,9 +490,8 @@ export class PasskeyProvider {
   }
 
   /**
-   * Clear the configured registry's persisted credential-ID list for
-   * the current `rpId`. No-op when no registry is configured. Backs
-   * `PasskeyClient.credentials().clear()`.
+   * Clear the configured registry's credential IDs for the current `rpId`.
+   * No-op when no registry is configured.
    */
   async clearKnownCredentialIds(): Promise<void> {
     if (!this.credentialRegistry) {
@@ -592,11 +512,7 @@ export class PasskeyProvider {
     }
   }
 
-  /**
-   * Check if a PRF-capable passkey is available on this device.
-   *
-   * @returns true if the platform supports passkeys with PRF extension.
-   */
+  /** Whether this device supports passkeys with the PRF extension. */
   async isSupported(): Promise<boolean> {
     if (!BreezSdkSparkPasskey) {
       return false;
@@ -606,11 +522,9 @@ export class PasskeyProvider {
   }
 
   /**
-   * Verify the configured `rpId` is a valid scope for WebAuthn from
-   * the running app's identity. Returns a typed {@link DomainAssociation}.
-   * On Android the native plugin degrades a `NotAssociated` result to
-   * `Skipped` because Credential Manager runs its own check internally
-   * with a fresher GMS-cached statement set.
+   * Verify the app is associated with the configured `rpId` for WebAuthn.
+   * Android always returns `Skipped` rather than `NotAssociated`: Credential
+   * Manager runs its own check internally against fresher data.
    */
   async checkDomainAssociation(): Promise<DomainAssociation> {
     if (!BreezSdkSparkPasskey) {
@@ -643,9 +557,7 @@ export class PasskeyProvider {
   }
 }
 
-/**
- * Decode a base64 string to Uint8Array.
- */
+/** Decode a base64 string to Uint8Array. */
 function base64ToUint8Array(base64: string): Uint8Array {
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
@@ -655,9 +567,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes;
 }
 
-/**
- * Encode a Uint8Array to base64 string.
- */
+/** Encode a Uint8Array to base64 string. */
 function uint8ArrayToBase64(bytes: Uint8Array): string {
   let binary = '';
   for (const byte of bytes) {
@@ -667,13 +577,10 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Builder for a `PasskeyClient` backed by a caller-supplied provider.
- *
- * Use this when you need a configured {@link PasskeyProvider} (custom
- * `rpId` / `rpName`, a credential registry, rotating `userName`) or a
- * custom PRF backend. The zero-config Breez-RP case is
- * `new PasskeyClientBuilder(breezApiKey).build()` (no provider injected,
- * defaults to the built-in provider on the Breez shared RP).
+ * Builds a `PasskeyClient` backed by a caller-supplied provider. Use this
+ * when you need a configured {@link PasskeyProvider} (custom `rpId` /
+ * `rpName`, a credential registry) or a custom PRF backend; omit the provider
+ * for the zero-config Breez-RP default.
  *
  * @example
  * ```typescript
@@ -737,16 +644,10 @@ function buildPasskeyClient(
 }
 
 /**
- * Zero-config passkey client wired to the built-in {@link PasskeyProvider}
- * on the Breez shared RP (`keys.breez.technology`), so a Breez-registered
- * app needs only its relay key; set `rpId` / `rpName` on the config to use
- * your own RP. Apps that need a credential registry or a custom PRF
- * backend build the provider themselves and inject it through
- * {@link PasskeyClientBuilder}.
- *
- * Matches the other bindings' `new PasskeyClient(breezApiKey, config)`
- * shape; the instance is the underlying SDK client (`checkAvailability`,
- * `register`, `signIn`, `connectWithPasskey`, `labels()`, `credentials()`).
+ * Zero-config passkey client on the Breez shared RP (`keys.breez.technology`),
+ * so a Breez-registered app needs only its relay key; set `rpId` / `rpName` on
+ * the config to use your own RP. For a credential registry or custom PRF
+ * backend, build the provider and inject it via {@link PasskeyClientBuilder}.
  *
  * @example
  * ```typescript

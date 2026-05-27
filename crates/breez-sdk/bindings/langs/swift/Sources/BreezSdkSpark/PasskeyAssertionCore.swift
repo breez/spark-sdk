@@ -12,13 +12,12 @@ import AppKit
 // MARK: - Credential registry
 
 /// App-side persistent store of credential IDs registered for an RP.
-/// The SDK does not ship a built-in implementation: bring your own via
-/// Keychain, Block Store, localStorage, or a custom backend. See the
-/// reference implementations in the passkey guide.
+/// No built-in implementation: bring your own (Keychain, Block Store,
+/// custom backend); see the passkey guide.
 ///
-/// All methods are called from the SDK as best-effort optimizations:
-/// failures and timeouts (3s) are swallowed and surfaced via
-/// `onRegistryError`; they never block the WebAuthn ceremony.
+/// All methods are best-effort optimizations: failures and timeouts (3s)
+/// are swallowed and surfaced via `onRegistryError`, never blocking the
+/// WebAuthn ceremony.
 @available(iOS 18.0, macOS 15.0, *)
 public protocol CredentialRegistry: Sendable {
     func read(rpId: String) async throws -> [Data]
@@ -27,8 +26,8 @@ public protocol CredentialRegistry: Sendable {
     func clear(rpId: String) async throws
 }
 
-/// Discriminator for [`CredentialRegistry`] callbacks. Identifies which
-/// registry method failed when the SDK swallows the underlying error.
+/// Identifies which [`CredentialRegistry`] method failed in an
+/// `onRegistryError` callback.
 @available(iOS 18.0, macOS 15.0, *)
 public enum RegistryOperation: Sendable {
     case read
@@ -46,13 +45,11 @@ private struct RegistryTimeoutError: Error {
     let operation: RegistryOperation
 }
 
-/// Run `body` with a `registryTimeout` deadline. Throws
-/// `RegistryTimeoutError` on timeout. `cancelAll()` only requests
-/// cancellation cooperatively, so a non-cooperative registry backend
-/// that ignores cancellation keeps running in the background until it
-/// finishes; its result is simply discarded. Acceptable because
-/// registry writes are advisory, but a pathological backend can leak a
-/// background task.
+/// Run `body` with a `registryTimeout` deadline, throwing
+/// `RegistryTimeoutError` on timeout. Cancellation is cooperative: a
+/// backend that ignores it keeps running (result discarded). Acceptable
+/// since registry writes are advisory, but a pathological backend can
+/// leak a background task.
 @available(iOS 18.0, macOS 15.0, *)
 private func withRegistryTimeout<T: Sendable>(
     operation: RegistryOperation,
@@ -117,25 +114,21 @@ private func registryAddBestEffort(
     }
 }
 
-/// Canonical iOS/macOS passkey PRF logic shared between the upstream
-/// Swift `PrfProvider`, the Flutter MethodChannel plugin, and the
-/// React Native `RCT_EXTERN_MODULE` bridge. All three wrap a single
-/// `PasskeyAssertionCore` instance and translate `PasskeyAssertionError`
-/// to whatever error type their layer expects.
+/// Canonical iOS/macOS passkey PRF logic. The upstream Swift
+/// `PrfProvider`, the Flutter MethodChannel plugin, and the React Native
+/// bridge each wrap one `PasskeyAssertionCore` and translate
+/// `PasskeyAssertionError` to their own error type.
 ///
-/// Mirrors the Android shared `CredentialManagerPrfCore.kt`. Synced via
+/// Mirrors Android's `CredentialManagerPrfCore.kt`. Synced via
 /// `cargo xtask sync-passkey-core`.
 
 // MARK: - Post-create grace
 
-/// A newly-registered passkey is sometimes not yet ready for the
-/// immediate post-create assertion. On Apple Passwords this manifests
-/// as a dual-salt PRF assertion returning `prf.first` but with
-/// `prf.second == nil`, forcing us to fall back to a second single-salt
-/// assertion (= 2 prompts instead of 1). On GPM the credential is
-/// briefly invisible to the picker entirely. Holding the next derive
-/// for up to 800ms after a successful create lets the OS finish
-/// indexing. Mirrors the Capacitor plugin's `PostCreateGraceTracker`.
+/// A newly-registered passkey is briefly not ready for the immediate
+/// post-create assertion: Apple Passwords drops `prf.second` from a
+/// dual-salt assertion (forcing a second single-salt prompt), and GPM
+/// hides the credential from the picker entirely. Holding the next
+/// derive up to 800ms lets the OS finish indexing.
 @available(iOS 18.0, macOS 15.0, *)
 public actor PostCreateGraceTracker {
     public static let defaultTotal: TimeInterval = 0.8
@@ -160,9 +153,8 @@ public actor PostCreateGraceTracker {
 
 // MARK: - Error type
 
-/// Layer-neutral error surface produced by `PasskeyAssertionCore`.
-/// Wrappers translate to their own typed errors (UniFFI `PrfProviderError`,
-/// `FlutterError`, RCT promise reject codes).
+/// Layer-neutral error surface. Wrappers translate to their own typed
+/// errors (UniFFI `PrfProviderError`, `FlutterError`, RCT reject codes).
 @available(iOS 18.0, macOS 15.0, *)
 public enum PasskeyAssertionError: Error {
     case userCancelled
@@ -181,12 +173,12 @@ public enum PasskeyAssertionError: Error {
 
 // MARK: - Registered credential
 
-/// Result of a successful registration. Named `Ios*` so it does not
-/// collide with the UniFFI-generated `RegisteredCredential` in the
-/// upstream Swift wrapper; that wrapper translates to the FFI type.
+/// Result of a successful registration. Named `Ios*` to avoid colliding
+/// with the UniFFI-generated `RegisteredCredential` the Swift wrapper
+/// translates to.
 ///
-/// `userId` is the WebAuthn user handle the core minted for this
-/// credential. Always populated; the SDK never lets hosts supply one.
+/// `userId` is the core-minted WebAuthn user handle: always populated,
+/// never host-supplied.
 @available(iOS 18.0, macOS 15.0, *)
 public struct IosRegisteredCredential {
     public let credentialId: Data
@@ -205,13 +197,11 @@ public struct IosRegisteredCredential {
 // MARK: - Domain association
 
 /// Result of an Apple-app-site-association probe against the AASA CDN.
-/// Layer-neutral; wrappers translate to UniFFI's `DomainAssociation`,
-/// MethodChannel maps, or RCT-friendly dictionaries.
+/// Layer-neutral; wrappers translate to their own representation.
 ///
-/// `Skipped` is the catch-all for verification-level failures: missing
-/// team ID, missing bundle ID, network errors, malformed JSON. Callers
-/// treat `Skipped` as advisory ("we couldn't tell") and proceed with
-/// the WebAuthn ceremony: the SDK never blocks on it.
+/// `Skipped` is the catch-all for verification-level failures (missing
+/// team/bundle ID, network error, malformed JSON). It is advisory: the
+/// SDK never blocks the WebAuthn ceremony on it.
 @available(iOS 18.0, macOS 15.0, *)
 public enum IosDomainAssociation {
     case associated
@@ -221,25 +211,19 @@ public enum IosDomainAssociation {
 
 // MARK: - Team ID detection
 
-/// Auto-detect the Apple Developer Team ID from the running app's
-/// signing information. Two different mechanisms per platform, both
-/// yielding the same 10-character team ID:
+/// Auto-detect the 10-character Apple Developer Team ID from the running
+/// app's signing info, by platform:
 ///
-/// - **macOS**: read the `application-identifier` entitlement via
-///   `SecTaskCopyValueForEntitlement`. Entitlement format is
-///   `<TEAM_ID>.<BUNDLE_ID>`; split on the first dot.
+/// - **macOS**: the `application-identifier` entitlement
+///   (`<TEAM_ID>.<BUNDLE_ID>`, split on the first dot) via
+///   `SecTaskCopyValueForEntitlement`.
+/// - **iOS**: `embedded.mobileprovision`, a PKCS#7-wrapped plist. The
+///   plist bytes are plain-text inside the CMS envelope, so locate the
+///   `<?xml>...</plist>` span and deserialize `TeamIdentifier`.
 ///
-/// - **iOS**: parse `embedded.mobileprovision` from the app bundle.
-///   Provisioning profiles are PKCS#7-wrapped plists. The plist bytes
-///   are plain-text inside the CMS envelope, so we locate the
-///   `<?xml>...</plist>` span and deserialize. The profile declares
-///   `TeamIdentifier` (array of one entry).
-///
-/// Simulator and unsigned builds don't ship a provisioning profile,
-/// so this returns nil and `checkDomainAssociation` reports `.skipped`.
-///
-/// Cached at first read: the team ID is stable for the lifetime of
-/// the installed binary and detection is non-trivial.
+/// Returns nil on simulator / unsigned builds (no provisioning profile),
+/// where `checkDomainAssociation` then reports `.skipped`. Cached at
+/// first read: the team ID is stable for the binary's lifetime.
 @available(iOS 18.0, macOS 15.0, *)
 public enum PasskeyTeamIdDetector {
     private static let cached: String? = {
@@ -268,15 +252,12 @@ public enum PasskeyTeamIdDetector {
 
     #if os(iOS)
     private static func detectFromProvisioningProfile() -> String? {
-        // Release / ad-hoc / TestFlight / Enterprise builds embed
-        // `embedded.mobileprovision` at the bundle root.
         guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
               let data = try? Data(contentsOf: url)
         else { return nil }
-        // The PKCS#7 CMS envelope has binary DER bytes > 127. `.ascii`
-        // rejects those; `.isoLatin1` is a 1:1 byte-to-codepoint map
-        // that always succeeds. We only use the string to locate the
-        // plist span; actual parsing uses the raw Data slice.
+        // `.isoLatin1` (not `.ascii`) because the PKCS#7 envelope has
+        // binary DER bytes > 127; it maps 1:1 and always succeeds. The
+        // string only locates the plist span; parsing uses the raw slice.
         guard let raw = String(data: data, encoding: .isoLatin1),
               let startRange = raw.range(of: "<?xml"),
               let endRange = raw.range(of: "</plist>")
@@ -358,10 +339,8 @@ public final class DefaultPasskeyPresentationAnchorProvider: PasskeyPresentation
 
 // MARK: - Core
 
-/// Reusable WebAuthn PRF logic. Holds no per-request state. Methods
-/// take an `rpId` plus credential metadata and return a typed result.
-///
-/// All ASAuthorizationController orchestration lives here:
+/// Reusable WebAuthn PRF logic; holds no per-request state. All
+/// ASAuthorizationController orchestration lives here:
 /// - one assertion ceremony for 1-2 salts (`assertPrf`)
 /// - bulk derivation walking salts in pairs (`deriveSeeds`)
 /// - registration (`register`)
@@ -433,18 +412,15 @@ public final class PasskeyAssertionCore {
                 allow.append(id)
             }
         }
-        // Wait out the post-create grace before any assertion so the
-        // immediate setup_wallet derive doesn't race the credential's
-        // PRF-readiness window (dual-salt would drop `second`, forcing
-        // a second prompt).
+        // Wait out the post-create grace so the immediate derive doesn't
+        // race the credential's PRF-readiness window (see grace tracker).
         await graceTracker.consume()
         if salts.isEmpty { return (seeds: [], credentialId: nil) }
 
-        // One assertion for 1-2 salts, registering + retrying once when
-        // the device holds no credential. Returns (first, second?,
-        // credentialId); `second` is nil when the authenticator dropped
-        // saltInput2. `credentialId` is the asserted credential, observed
-        // inline (same value across every chunk of one derive call).
+        // One assertion for 1-2 salts, registering + retrying once on no
+        // credential. Returns (first, second?, credentialId); `second` is
+        // nil when the authenticator dropped saltInput2. `credentialId` is
+        // the same across every chunk of one derive call.
         func assertChunk(_ salt1: Data, _ salt2: Data?) async throws -> (Data, Data?, Data) {
             do {
                 return try await assertPrf(
@@ -466,10 +442,9 @@ public final class PasskeyAssertionCore {
                         + "and ensure a valid provisioning profile."
                     )
                 }
-                // Retry once. A second miss (e.g. the user deleted the
-                // pinned credential from Settings) escapes as
-                // credentialNotFound for hosts to treat as deletion
-                // recovery.
+                // Retry once. A second miss (e.g. user deleted the pinned
+                // credential in Settings) escapes as credentialNotFound for
+                // hosts to treat as deletion recovery.
                 return try await assertPrf(
                     salt1: salt1, salt2: salt2, allowCredentials: allow,
                     preferImmediatelyAvailableCredentials: preferImmediatelyAvailableCredentials
@@ -478,8 +453,7 @@ public final class PasskeyAssertionCore {
         }
 
         var out: [Data] = []
-        // The asserted credential ID, captured inline from each ceremony
-        // (identical across chunks) and returned so the binding layer can
+        // Asserted credential ID, returned inline so the binding layer can
         // surface it on `SignInResponse.credential_id` without a separate
         // read-and-clear call.
         var observedCredentialId: Data?
@@ -508,25 +482,16 @@ public final class PasskeyAssertionCore {
         return (seeds: out, credentialId: observedCredentialId)
     }
 
-    /// Verify the app's bundle identifier is listed in the
-    /// `webcredentials` section of the AASA file served for `rpId`,
-    /// via Apple's app-site-association CDN
-    /// (`https://app-site-association.cdn-apple.com/a/v1/<rpId>`).
+    /// Verify the app's bundle ID is listed in `webcredentials.apps` of
+    /// the AASA file for `rpId`, via Apple's app-site-association CDN
+    /// (`https://app-site-association.cdn-apple.com/a/v1/<rpId>`). This is
+    /// the same source the OS uses for Associated Domains, queried up
+    /// front so integrators see misconfiguration before a WebAuthn
+    /// ceremony fails opaquely.
     ///
-    /// The CDN is the same source the OS uses to validate Associated
-    /// Domains, but exposed as a public HTTP endpoint so we can
-    /// proactively surface misconfiguration ("Bundle ID `<team>.<bid>`
-    /// is not in `webcredentials.apps` for `rpId`") to integrators
-    /// before a WebAuthn ceremony fires and fails opaquely.
-    ///
-    /// Resolves the team ID from `explicitTeamId` (when set) or
-    /// auto-detects from the running app's signing info via
-    /// `PasskeyTeamIdDetector`. If both fail (unsigned test builds),
-    /// returns `.skipped`.
-    ///
-    /// Never throws: verification-level failures (no bundle ID, no
-    /// team ID, network errors, malformed JSON) all map to `.skipped`
-    /// so callers have one surface to handle.
+    /// Team ID comes from `explicitTeamId` or `PasskeyTeamIdDetector`.
+    /// Never throws: every verification-level failure (no bundle/team ID,
+    /// network error, malformed JSON) maps to `.skipped`.
     public func checkDomainAssociation() async -> IosDomainAssociation {
         let bundleId = Bundle.main.bundleIdentifier ?? ""
         guard !bundleId.isEmpty else {
@@ -625,11 +590,10 @@ public final class PasskeyAssertionCore {
         }
     }
 
-    /// Run one assertion ceremony for `salt1` (+ optional `salt2`) and
-    /// return `(first, second?)`. `second` is nil when only one salt
-    /// was requested or the authenticator dropped `saltInput2`. The
-    /// ObjC helper treats a nil `salt2` as a single-salt evaluation, so
-    /// this is the only assertion entry point for both cases.
+    /// Run one assertion ceremony for `salt1` (+ optional `salt2`),
+    /// returning `(first, second?, credentialId)`. `second` is nil for a
+    /// single salt or when the authenticator dropped `saltInput2`. The
+    /// ObjC helper treats nil `salt2` as single-salt, so this serves both.
     private func assertPrf(
         salt1: Data,
         salt2: Data?,
@@ -664,14 +628,11 @@ public final class PasskeyAssertionCore {
             }
         }
 
-        // Best-effort registry seed with the asserted credential ID, so a
-        // returning user's pre-tracking credential is captured on first
-        // assertion and subsequent registrations hit the platform-level
-        // "already exists" guard via `excludeCredentials`. Detached +
-        // timeout-bounded so it neither blocks the seed return nor
-        // inherits ceremony cancellation. The credential ID itself is
-        // returned inline (third tuple element), so there is no separate
-        // delegate callback.
+        // Best-effort registry seed with the asserted credential ID so a
+        // returning user's pre-tracking credential is captured, letting
+        // later registrations hit the `excludeCredentials` guard. Detached
+        // so it neither blocks the seed return nor inherits ceremony
+        // cancellation.
         if let reg = credentialRegistry {
             let rpId = self.rpId
             let onRegistryError = self.onRegistryError
@@ -688,11 +649,10 @@ public final class PasskeyAssertionCore {
         return result
     }
 
-    /// Wraps `controller.performRequests` for assertion paths and
-    /// suppresses the OS's hybrid (cross-device QR) sign-in option.
-    /// Wallet-style integrators target only local credentials, so a
-    /// fast `.canceled` failure is preferable to a confusing QR sheet
-    /// when no passkey is on the device.
+    /// Wraps `controller.performRequests`, suppressing the hybrid
+    /// (cross-device QR) sign-in option. Wallet-style integrators target
+    /// only local credentials, so a fast `.canceled` beats a confusing QR
+    /// sheet when no passkey is on the device.
     private static func performAssertionRequest(
         _ controller: ASAuthorizationController,
         preferImmediatelyAvailableCredentials: Bool = true
@@ -705,12 +665,11 @@ public final class PasskeyAssertionCore {
     }
 
     /// Register a new passkey with PRF support (one platform prompt, no
-    /// seed derivation). The configured registry's stored IDs are
-    /// auto-merged into [excludeCredentials] so the platform refuses to
-    /// create a duplicate even after a reinstall; the new credential ID
-    /// is auto-added on success, and the post-create grace tracker is
-    /// armed. `userId` is never host-supplied: the core mints a fresh
-    /// random 16-byte value and surfaces it via the returned
+    /// seed derivation). The registry's stored IDs are auto-merged into
+    /// [excludeCredentials] so the platform refuses a duplicate even after
+    /// reinstall; the new ID is auto-added and the post-create grace
+    /// tracker armed on success. `userId` is never host-supplied: the core
+    /// mints a fresh random 16-byte value and returns it on
     /// `IosRegisteredCredential.userId`.
     @discardableResult
     public func register(
@@ -719,13 +678,10 @@ public final class PasskeyAssertionCore {
         let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: rpId)
         let challenge = Self.randomBytes(count: 32)
         let resolvedUserId = Self.randomBytes(count: 16)
-        // `ASAuthorizationPlatformPublicKeyCredentialProvider` only
-        // exposes a 3-arg overload (challenge:name:userID:) on the
-        // current iOS / macOS SDKs; the 4-arg displayName overload is
-        // security-key-only. Password managers (Apple Passwords, GPM)
-        // surface `user.name` as the primary label here, so we pass
-        // userDisplayName when callers want that label set, otherwise
-        // we fall back to userName.
+        // The platform provider only exposes the 3-arg
+        // challenge:name:userID: overload on current SDKs; the 4-arg
+        // displayName overload is security-key-only. Password managers
+        // (Apple Passwords, GPM) show `user.name` as the primary label.
         _ = userDisplayName // accepted for parity with caller signatures; not consumed by the platform overload
         let request = provider.createCredentialRegistrationRequest(
             challenge: challenge,
@@ -733,9 +689,7 @@ public final class PasskeyAssertionCore {
             userID: resolvedUserId
         )
 
-        // Auto-merge previously-registered credential IDs from the
-        // opt-in registry so the platform refuses to create a duplicate
-        // even after a reinstall (when the registry survives).
+        // Auto-merge the registry's stored IDs into the exclusions.
         var allExclusions = excludeCredentials
         var seen = Set(excludeCredentials)
         if let reg = credentialRegistry {
@@ -752,7 +706,6 @@ public final class PasskeyAssertionCore {
             }
         }
 
-        // Request PRF support during registration via ObjC helper
         PasskeyPRFHelper.setRegistrationPRFOn(request)
 
         let delegate = PasskeyDelegate()
@@ -760,10 +713,8 @@ public final class PasskeyAssertionCore {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
-        // Hand the freshly-minted user handle to the delegate so it can
-        // attach it to the returned `IosRegisteredCredential`. The
-        // platform never echoes `user.id` back through the credential
-        // object, so we surface the value we chose ourselves.
+        // The platform never echoes `user.id` back, so hand the delegate
+        // our minted handle to attach to the returned credential.
         delegate.registrationUserId = resolvedUserId
 
         let credential: IosRegisteredCredential = try await withCheckedThrowingContinuation { continuation in
@@ -775,11 +726,9 @@ public final class PasskeyAssertionCore {
             }
         }
 
-        // Record the new credential so subsequent registrations on
-        // this device auto-exclude it. Best-effort, fire-and-forget.
-        // `detached` so the write isn't cancelled when this function
-        // returns and doesn't inherit caller actor isolation; fields are
-        // copied to locals so the task captures values, not `self`.
+        // Record the new credential for future auto-exclusion.
+        // Fire-and-forget and `detached` so the write isn't cancelled on
+        // return; fields copied to locals so the task captures values.
         if let reg = credentialRegistry {
             let credentialId = credential.credentialId
             let rpId = self.rpId
@@ -793,11 +742,8 @@ public final class PasskeyAssertionCore {
                 )
             }
         }
-        // Arm the post-create grace so the SDK's immediate
-        // setup_wallet derive doesn't race the credential's
-        // PRF-readiness window. Without this, on Apple Passwords
-        // the dual-salt assertion drops `prf.second` and we fall
-        // back to a second prompt.
+        // Arm the post-create grace so the immediate derive doesn't race
+        // the credential's PRF-readiness window (see grace tracker).
         await graceTracker.arm(after: postCreateGraceTotal)
         return credential
     }
@@ -808,10 +754,9 @@ public final class PasskeyAssertionCore {
         return Data(bytes)
     }
 
-    /// Whether a `.credentialNotFound` should carry the registry help
-    /// suffix when the binding layer maps it to its own error type:
-    /// the host had no allow-list and no registry, so the SDK had no
-    /// way to populate `allowCredentials` itself.
+    /// Whether `.credentialNotFound` should carry the registry help
+    /// suffix: true when the host gave no allow-list and no registry, so
+    /// the SDK had no way to populate `allowCredentials` itself.
     public static func shouldAugmentCredentialNotFound(
         explicitAllowCredentials: [Data],
         credentialRegistry: CredentialRegistry?
@@ -820,13 +765,10 @@ public final class PasskeyAssertionCore {
     }
 }
 
-/// Module-level wrapper used inside the core. Returns
-/// `.credentialNotFound(message)` with an augmented help suffix when
-/// the host had no allow-list and no registry, plain message
-/// otherwise. The String payload travels untouched through the
-/// binding-layer mappers so every host surface (UniFFI Swift,
-/// React Native, Flutter) shows the same diagnostic without
-/// per-binding string manipulation.
+/// Returns `.credentialNotFound` with the help suffix appended when the
+/// host had no allow-list and no registry, plain message otherwise. The
+/// String payload passes untouched through binding-layer mappers so every
+/// host surface shows the same diagnostic.
 @available(iOS 18.0, macOS 15.0, *)
 fileprivate func augmentCredentialNotFound(
     explicitAllowCredentials: [Data],
@@ -853,7 +795,7 @@ public let credentialRegistryHelpSuffix: String =
 
 /// Extract AAGUID + BE flag from the attestation object's authenticator
 /// data via byte-pattern search for the "authData" CBOR key. Returns nil
-/// when the pattern isn't found or the byte string is too short.
+/// when not found or too short.
 ///
 /// authData layout when AT flag is set (always on a successful create):
 ///   [32]      flags (UP=0, UV=2, BE=3, BS=4, AT=6)
@@ -919,24 +861,19 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
     ASAuthorizationControllerPresentationContextProviding
 {
     /// Resolves `(first, second?, credentialId)`; `second` is nil for a
-    /// single-salt assertion or when the authenticator dropped
-    /// `saltInput2`. `credentialId` is the asserted credential, carried
-    /// inline so the core can return it without a separate slot.
+    /// single salt or a dropped `saltInput2`.
     var assertionContinuation: CheckedContinuation<(Data, Data?, Data), Error>?
     var registrationContinuation: CheckedContinuation<IosRegisteredCredential, Error>?
-    /// User handle the core chose for the in-flight registration. The
-    /// platform never echoes `user.id` back through the credential
-    /// object, so the delegate copies this into the returned
-    /// `IosRegisteredCredential.userId` field.
+    /// User handle the core minted for the in-flight registration; copied
+    /// into the returned `IosRegisteredCredential.userId` (the platform
+    /// never echoes `user.id` back).
     var registrationUserId: Data = Data()
     var anchor: ASPresentationAnchor = ASPresentationAnchor()
     /// `true` for assertion ceremonies, `false` for registration.
     var extractPrf = true
-    /// Wall-clock timestamp at the moment `controller.performRequests()`
-    /// fires. Used by `mapPasskeyError` to discriminate the OS biometric
-    /// inactivity timeout (~55s+, surfaced as `.canceled`) from a
-    /// user-dismissed prompt. Set on every ceremony before the controller
-    /// is started.
+    /// Set when `performRequests()` fires; `mapPasskeyError` uses the
+    /// elapsed time to tell the biometric inactivity timeout from a
+    /// user-dismissed prompt (both arrive as `.canceled`).
     var ceremonyStartedAt: Date?
 
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
@@ -961,11 +898,6 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
                 return
             }
 
-            // Resolve with the seeds plus the asserted credential ID.
-            // `second` is nil for single-salt ceremonies or when the
-            // authenticator dropped saltInput2. The caller seeds the
-            // registry from the returned credential ID; no separate
-            // callback is needed.
             assertionContinuation?.resume(
                 returning: (
                     prfFirst,
@@ -1012,27 +944,14 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
 
 /// Map an `ASAuthorizationError` to `PasskeyAssertionError`.
 ///
-/// `.canceled` covers three distinct cases that the OS collapses into
-/// the same error code (`preferImmediatelyAvailableCredentials`
-/// suppresses the QR / hybrid sheet, so there is no in-process signal
-/// to disambiguate):
-///
-///   1. No matching credential available: fast-fail before any UI is
-///      shown. Resolves in well under 300ms.
-///   2. User dismissed the visible prompt: anywhere from a fraction of
-///      a second up to a few tens of seconds, depending on user.
-///   3. OS biometric inactivity timeout: the prompt was up but the user
-///      neither approved nor dismissed. iOS tears the sheet down at
-///      ~55s and reports the same `.canceled`.
-///
-/// The wall-clock time between starting the ceremony and receiving the
-/// error tells (1) from (2 / 3), and (2) from (3). Thresholds:
-///   - `< 300ms`         → `.credentialNotFound`
-///   - `>= 55_000ms`     → `.userTimedOut`
-///   - in between        → `.userCancelled`
-///
-/// Hosts can branch on the typed variant instead of timing the call
-/// themselves.
+/// The OS collapses three distinct `.canceled` cases into one code (the
+/// suppressed QR sheet leaves no in-process signal to disambiguate): no
+/// matching credential (fast-fail before any UI), user-dismissed prompt,
+/// and the biometric inactivity timeout (sheet torn down at ~55s).
+/// Elapsed wall-clock time separates them:
+///   - `< 300ms`     -> `.credentialNotFound`
+///   - `>= 55_000ms` -> `.userTimedOut`
+///   - in between    -> `.userCancelled`
 @available(iOS 18.0, macOS 15.0, *)
 public func mapPasskeyError(
     _ error: Error,
@@ -1067,13 +986,11 @@ public func mapPasskeyError(
     return .generic(error.localizedDescription)
 }
 
-/// Wall-clock thresholds used to discriminate the three flavors of
-/// `ASAuthorizationError.canceled`. See `mapPasskeyError` for the
-/// rationale behind each cutoff.
+/// Apply the `.canceled` timing thresholds (see `mapPasskeyError`).
 @available(iOS 18.0, macOS 15.0, *)
 private func classifyCanceled(elapsedMs: Double?) -> PasskeyAssertionError {
     guard let elapsed = elapsedMs else {
-        // No timing context: preserve the historical mapping.
+        // No timing context: default to userCancelled.
         return .userCancelled
     }
     if elapsed < 300 {

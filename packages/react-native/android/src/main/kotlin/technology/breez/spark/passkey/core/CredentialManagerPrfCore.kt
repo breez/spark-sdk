@@ -35,42 +35,38 @@ import java.security.SecureRandom
 // =====================================================================
 // !!! SOURCE-OF-TRUTH NOTICE !!!
 //
-// The canonical copy of this file lives at:
+// Canonical copy:
 //   crates/breez-sdk/bindings/langs/shared/android-passkey/src/main/kotlin/
 //     technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt
 //
-// It is shared into four Android artifacts via two mechanisms:
-//   1. gradle `srcDirs`: bindings-android + breez-sdk-spark-kmp
-//   2. `cargo xtask sync-passkey-core`: packages/flutter + packages/react-native
-//
-// Never hand-edit the Flutter or React Native copies. Edit the canonical
-// file, then run `cargo xtask sync-passkey-core` and commit the diff.
-// CI will fail if a copy drifts from the canonical.
+// Shared into four Android artifacts via gradle `srcDirs`
+// (bindings-android + breez-sdk-spark-kmp) and `cargo xtask
+// sync-passkey-core` (packages/flutter + packages/react-native). Never
+// hand-edit a copy: edit this file, run the xtask, commit the diff. CI
+// fails if a copy drifts.
 // =====================================================================
 
 /**
- * Framework-agnostic helper that wraps the AndroidX Credential Manager +
- * WebAuthn PRF extension machinery for passkey-based seed derivation.
+ * Framework-agnostic helper wrapping AndroidX Credential Manager + the
+ * WebAuthn PRF extension for passkey-based seed derivation.
  *
- * Wrappers (the UniFFI `PasskeyProvider`, the Flutter MethodChannel
- * plugin, the React Native native module) delegate to this object and
- * only provide framework-specific glue on top: error mapping, activity
- * retrieval, and call-site boilerplate.
- *
- * Throws [CredentialManagerPrfCoreException] for every well-known failure
- * mode so wrappers can switch on [Kind] without peeking at WebAuthn or
- * Credential Manager internals.
+ * Wrappers (UniFFI `PasskeyProvider`, Flutter MethodChannel, React Native
+ * module) delegate here and add only framework glue: error mapping,
+ * activity retrieval, call-site boilerplate. Throws
+ * [CredentialManagerPrfCoreException] for every well-known failure so
+ * wrappers can switch on [Kind] without touching Credential Manager
+ * internals.
  */
 
 /**
  * Authenticator data captured at registration. [aaguid] is the 16-byte
  * Authenticator Attestation GUID (provider identifier); [backupEligible]
- * is the BE flag indicating whether the credential can sync across
- * devices. Both are null when the attestation can't be parsed. AAGUID is
- * unverified attestation: display hint only, never a trust decision.
+ * is the BE flag (can the credential sync across devices). Both are null
+ * when the attestation can't be parsed. AAGUID is unverified attestation:
+ * display hint only, never a trust decision.
  *
- * [userId] is the WebAuthn user handle the core minted for this
- * credential. Always populated; the SDK never lets hosts supply one.
+ * [userId] is the core-minted WebAuthn user handle: always populated,
+ * never host-supplied.
  */
 public data class RegisteredCredential(
     public val credentialId: ByteArray,
@@ -81,15 +77,12 @@ public data class RegisteredCredential(
 
 /**
  * App-side persistent store of credential IDs registered for an RP.
- * The SDK does not ship a built-in implementation: bring your own
- * (Block Store + SharedPreferences fallback, EncryptedSharedPreferences,
- * or any custom backend). See the reference implementations in the
- * passkey guide.
+ * No built-in implementation: bring your own (Block Store,
+ * EncryptedSharedPreferences, custom backend); see the passkey guide.
  *
- * All methods are called from the SDK as best-effort optimizations:
- * failures and timeouts (3 seconds) are swallowed and surfaced via the
- * core's `onRegistryError` callback; they never block the WebAuthn
- * ceremony.
+ * All methods are best-effort optimizations: failures and timeouts (3s)
+ * are swallowed and surfaced via `onRegistryError`, never blocking the
+ * WebAuthn ceremony.
  */
 public interface CredentialRegistry {
     public suspend fun read(rpId: String): List<ByteArray>
@@ -102,11 +95,10 @@ public interface CredentialRegistry {
 public enum class RegistryOperation { Read, Add, Remove, Clear }
 
 /**
- * Content-equality wrapper so credential-ID byte arrays can key a Set
- * directly. `ByteArray` uses identity equality, so the alternative is
- * a `.toList()` boxing allocation per element on every dedupe. (A
- * `value class` would be zero-cost, but custom `equals`/`hashCode` on
- * one isn't allowed on the pinned Kotlin version.)
+ * Content-equality wrapper so credential-ID byte arrays can key a Set.
+ * `ByteArray` uses identity equality; the alternative is a `.toList()`
+ * boxing allocation per dedupe. (A `value class` would be zero-cost but
+ * can't carry custom `equals`/`hashCode` on the pinned Kotlin version.)
  */
 private class ByteArrayKey(private val bytes: ByteArray) {
     override fun equals(other: Any?): Boolean =
@@ -134,11 +126,10 @@ private const val CORE_TAG = "PasskeyPrfCore"
 private const val REGISTRY_TIMEOUT_MS: Long = 3_000L
 
 /**
- * Process-lifetime scope for best-effort, fire-and-forget registry
- * writes that must outlive the ceremony coroutine (so the seed return
- * isn't blocked on the write). A single shared `SupervisorJob` keeps
- * one child's failure from cancelling siblings; deliberately not
- * cancelled (these are short, 3s-capped writes).
+ * Process-lifetime scope for fire-and-forget registry writes that must
+ * outlive the ceremony coroutine (so the seed return isn't blocked).
+ * `SupervisorJob` isolates one child's failure from siblings; never
+ * cancelled (writes are short, 3s-capped).
  */
 private val registryIoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -214,13 +205,10 @@ public const val CREDENTIAL_REGISTRY_HELP_SUFFIX: String =
 
 /**
  * Platform PRF engine: holds the relying-party identity + optional
- * registry for the lifetime of one provider, exposing `deriveSeeds`,
+ * registry for one provider's lifetime, exposing `deriveSeeds`,
  * `register`, `checkDomainAssociation`, and `isSupported`. Per-call
- * methods take only genuinely per-ceremony arguments; everything else
- * is fixed at construction.
- *
- * Each consumer (the UniFFI `PasskeyProvider`, the React Native module,
- * the Flutter plugin) constructs one instance and maps the typed
+ * methods take only per-ceremony arguments; everything else is fixed at
+ * construction. Each consumer maps the typed
  * [CredentialManagerPrfCoreException] onto its own error surface.
  *
  * @param activityProvider Resolves the current top Activity lazily on
@@ -241,9 +229,9 @@ public class CredentialManagerPrfCore(
         public const val DEFAULT_RP_ID: String = "keys.breez.technology"
 
         /**
-         * Returns `true` if this device's OS version could support passkey
-         * PRF (API 28+, Android 9+). Does NOT verify a credential provider
-         * is installed or biometrics are enrolled, only the platform version.
+         * `true` if the OS version could support passkey PRF (API 28+).
+         * Checks the platform version only, not whether a credential
+         * provider is installed or biometrics are enrolled.
          */
         public fun isSupported(): Boolean =
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
@@ -252,10 +240,9 @@ public class CredentialManagerPrfCore(
         private val secureRandom: SecureRandom by lazy { SecureRandom() }
 
         /**
-         * Cached `CredentialManager`. The factory is cheap but each call
-         * still allocates; held process-wide against the application
-         * context (lifecycle-safe across activity rotation) so per-call
-         * core instances don't each pay for it.
+         * Cached `CredentialManager`, held process-wide against the
+         * application context (lifecycle-safe across rotation) so per-call
+         * core instances don't each re-allocate it.
          */
         @Volatile
         private var cachedCredentialManager: CredentialManager? = null
@@ -274,9 +261,8 @@ public class CredentialManagerPrfCore(
             Base64.decode(s, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
 
         /**
-         * Decode URL-safe base64 from a provider response, logging and
-         * returning null on malformed input (a provider/protocol fault)
-         * rather than silently swallowing it.
+         * Decode URL-safe base64 from a provider response, logging +
+         * returning null on malformed input (a provider/protocol fault).
          */
         private fun decodeBase64UrlOrNull(s: String, what: String): ByteArray? =
             try {
@@ -310,12 +296,11 @@ public class CredentialManagerPrfCore(
      * [autoRegister] is set, the first miss registers a passkey and
      * retries. Output ordering matches input ordering.
      *
-     * Expected biometric-prompt count for the common 2-salt setup
-     * (`account-master` + label): 1 on a conformant authenticator. The
-     * worst case on a misbehaving provider that both lacks a credential
-     * AND drops `prf.second` is 3 prompts (assert-miss, register,
-     * dual-assert-that-drops-second + a single-salt recover) — register
-     * happens at most once per call, so prompts never grow unbounded.
+     * Prompt count for the common 2-salt setup: 1 on a conformant
+     * authenticator. Worst case is 3 (assert-miss, register, then a
+     * dual-assert that drops `prf.second` plus a single-salt recover) on
+     * a provider that both lacks a credential and drops `second`. Register
+     * runs at most once per call, so prompts never grow unbounded.
      */
     public suspend fun deriveSeeds(
         salts: List<String>,
@@ -332,10 +317,10 @@ public class CredentialManagerPrfCore(
         }
         if (salts.isEmpty()) return@withContext PrfDerivation(emptyList(), null)
 
-        // One assertion for 1-2 salts, registering + retrying once when
-        // the device holds no credential. Returns one output per salt the
-        // authenticator evaluated (a dropped `second` yields one) plus the
-        // asserted credential ID (same value across every chunk).
+        // One assertion for 1-2 salts, registering + retrying once on no
+        // credential. Returns one output per salt the authenticator
+        // evaluated (a dropped `second` yields one) plus the asserted
+        // credential ID (same across every chunk).
         suspend fun assertChunk(chunk: List<String>): Pair<List<ByteArray>, ByteArray?> =
             try {
                 assertPrf(chunk, allow, preferImmediatelyAvailableCredentials)
@@ -347,19 +332,17 @@ public class CredentialManagerPrfCore(
                     )
                 }
                 register()
-                // Retry once. A second miss (e.g. the user deleted the
-                // pinned credential from Settings) escapes as
-                // CredentialNotFound for hosts to treat as deletion
-                // recovery. Mirrors iOS.
+                // Retry once. A second miss (e.g. user deleted the pinned
+                // credential in Settings) escapes as CredentialNotFound for
+                // hosts to treat as deletion recovery.
                 assertPrf(chunk, allow, preferImmediatelyAvailableCredentials)
             }
 
         val startedAtMs = System.currentTimeMillis()
         try {
             val output = ArrayList<ByteArray>(salts.size)
-            // Asserted credential ID, captured inline from each ceremony
-            // (identical across chunks) and returned so the binding layer
-            // can surface it on `SignInResponse.credential_id`.
+            // Asserted credential ID, returned so the binding layer can
+            // surface it on `SignInResponse.credential_id`.
             var observedCredentialId: ByteArray? = null
             var idx = 0
             while (idx < salts.size) {
@@ -391,40 +374,23 @@ public class CredentialManagerPrfCore(
     }
 
     /**
-     * Verify the app's package identity is listed by Google's Digital Asset
-     * Links API for the given [rpId], with `get_login_creds` (WebAuthn /
-     * passkey) permission.
-     *
-     * # Why this check exists
-     *
-     * Android's Credential Manager delegates domain verification to Google
-     * Play Services, which caches assetlinks statements server-side. When
-     * the `/.well-known/assetlinks.json` file on the RP domain doesn't list
-     * your package (either because it was never added, or because Google's
-     * cache is stale), subsequent WebAuthn calls fail with opaque
-     * `GetCredentialException` / `CreateCredentialException` variants : 
-     * typically mapped to `CredentialNotFound` or a generic "cannot be
-     * validated" error. Those are indistinguishable from "no credential
-     * found" at the error layer.
-     *
-     * This check hits Google's public Digital Asset Links API directly:
+     * Verify the app is listed by Google's Digital Asset Links API for
+     * [rpId] with `get_login_creds` permission, queried up front because
+     * Credential Manager otherwise surfaces a stale or missing
+     * assetlinks.json as an opaque `CredentialNotFound` / "cannot be
+     * validated" error indistinguishable from "no credential found":
      *
      *   `GET https://digitalassetlinks.googleapis.com/v1/statements:list`
      *      `?source.web.site=https://<rpId>`
      *      `&relation=delegate_permission/common.get_login_creds`
      *
-     * and looks for an `android_app` statement matching this app's
-     * package name **and** signing-certificate SHA-256 fingerprint. Both
-     * must match: a package-only match would accept a MITM'd package
-     * signed by a different key.
+     * Requires an `android_app` statement matching this app's package name
+     * AND signing-cert SHA-256: a package-only match would accept a MITM'd
+     * package signed by a different key.
      *
-     * # Return semantics
-     *
-     * - Match found → `DomainAssociationResult.Associated`
-     * - Endpoint reachable, response parseable, no matching statement →
-     *   `DomainAssociationResult.NotAssociated`
-     * - Network error / timeout / non-200 / unparseable response →
-     *   `DomainAssociationResult.Skipped` (caller proceeds with WebAuthn)
+     * Returns `Associated` on a match, `NotAssociated` when the endpoint
+     * is reachable but no statement matches, `Skipped` on any
+     * network/timeout/non-200/parse failure (caller proceeds anyway).
      *
      * @param connectTimeoutMs HTTP connect timeout. Default 3000ms.
      * @param readTimeoutMs HTTP read timeout. Default 3000ms.
@@ -481,23 +447,15 @@ public class CredentialManagerPrfCore(
             )
         }
 
-        // Response-format note: the `.well-known/assetlinks.json` FILE
-        // format uses snake_case (`android_app`, `package_name`,
-        // `sha256_cert_fingerprints` as an array). The Digital Asset
-        // Links API response format is DIFFERENT: it's proto3 JSON
-        // with camelCase field names and de-nests each fingerprint into
-        // its own statement. A matching API statement looks like:
+        // The API response format differs from the assetlinks.json FILE:
+        // it's proto3 JSON with camelCase keys and de-nests each
+        // fingerprint into its own statement (file-format snake_case keys
+        // never match). A matching statement looks like:
         //
         //   { "target": { "androidApp": {
         //       "packageName": "technology.breez.glow",
         //       "certificate": { "sha256Fingerprint": "AA:BB:..." }
         //     } } }
-        //
-        // Arrays in the file become multiple statements in the API. The
-        // initial implementation used the file-format keys against the
-        // API response and never found a match, blocking every Android
-        // user. Verified live against
-        // digitalassetlinks.googleapis.com/v1/statements:list.
         val listedFingerprints = mutableListOf<String>()
         for (i in 0 until statements.length()) {
             val stmt = statements.optJSONObject(i) ?: continue
@@ -528,13 +486,10 @@ public class CredentialManagerPrfCore(
     }
 
     /**
-     * Compute the SHA-256 fingerprint of the app's signing certificate in
-     * colon-separated uppercase hex (the format Google Digital Asset Links
-     * uses). Returns null if the app has no signing certificate.
-     *
-     * Uses `PackageManager.GET_SIGNING_CERTIFICATES` on API 28+ (the
-     * `CredentialManagerPrfCore` contract requires API 28+ anyway, so this
-     * is always available in the contexts where this function runs).
+     * SHA-256 of the app's signing certificate in colon-separated
+     * uppercase hex (the format Digital Asset Links uses). Null if the app
+     * has no signing certificate. Uses `GET_SIGNING_CERTIFICATES`, always
+     * available given the API 28+ contract.
      */
     @Suppress("DEPRECATION")
     private fun computeSigningCertSha256(context: Context, packageName: String): String? {
@@ -543,8 +498,8 @@ public class CredentialManagerPrfCore(
                 packageName,
                 PackageManager.GET_SIGNING_CERTIFICATES,
             )
-            // Prefer apkContentsSigners (current signer), ignore past signers:
-            // assetlinks.json matches only against the current signing cert.
+            // Current signer only: assetlinks.json matches the current
+            // signing cert, not past signers.
             val signingInfo = packageInfo.signingInfo ?: return null
             if (signingInfo.hasMultipleSigners()) {
                 signingInfo.apkContentsSigners
@@ -552,8 +507,7 @@ public class CredentialManagerPrfCore(
                 signingInfo.signingCertificateHistory
             }
         } else {
-            // Pre-API 28 path: not reachable since CredentialManagerPrfCore
-            // gates on API 28, but defensively included.
+            // Defensive only: the API 28+ contract makes this unreachable.
             val packageInfo = context.packageManager.getPackageInfo(
                 packageName,
                 PackageManager.GET_SIGNATURES,
@@ -571,13 +525,12 @@ public class CredentialManagerPrfCore(
     // ------------------------------------------------------------------
 
     /**
-     * Run one assertion ceremony for [salts] (1 or 2 entries): build
-     * the WebAuthn request (cross-device hybrid suppressed unless
-     * [preferImmediatelyAvailableCredentials] is false), evaluate PRF,
-     * record the asserted credential ID (registry + capture callback),
-     * and return one 32-byte output per salt the authenticator
-     * evaluated. A 2-salt request whose authenticator drops
-     * `results.second` returns a single-element list.
+     * Run one assertion ceremony for [salts] (1 or 2): build the WebAuthn
+     * request (cross-device hybrid suppressed unless
+     * [preferImmediatelyAvailableCredentials] is false), evaluate PRF, seed
+     * the registry with the asserted credential ID, and return one 32-byte
+     * output per salt the authenticator evaluated. A dropped
+     * `results.second` yields a single-element list.
      */
     private suspend fun assertPrf(
         salts: List<String>,
@@ -585,9 +538,9 @@ public class CredentialManagerPrfCore(
         preferImmediatelyAvailableCredentials: Boolean,
     ): Pair<List<ByteArray>, ByteArray?> {
         val activity = activityProvider()
-        // JSONObject (not template interpolation) so integrator-supplied
-        // rpId is escaped correctly instead of breaking on quotes /
-        // backslashes deep inside Credential Manager.
+        // JSONObject (not string interpolation) so integrator-supplied rpId
+        // is escaped, not breaking on quotes/backslashes inside Credential
+        // Manager.
         val requestJson = JSONObject().apply {
             put("challenge", randomBase64Url(32))
             put("rpId", rpId)
@@ -628,10 +581,9 @@ public class CredentialManagerPrfCore(
         )
         val responseJson = JSONObject(authResponseJson)
 
-        // Decode the asserted credential ID and seed the registry (so a
-        // returning user's pre-tracking credential is captured on first
-        // assertion). The ID itself is returned inline below so the
-        // binding layer can surface it without a read-and-clear slot.
+        // Seed the registry with the asserted credential ID (captures a
+        // returning user's pre-tracking credential). The ID is also
+        // returned inline below for the binding layer.
         val credentialId = responseJson.optString("rawId", "").takeIf { it.isNotEmpty() }
             ?.let { decodeBase64UrlOrNull(it, "assertion rawId") }
         credentialId?.let { id ->
@@ -651,8 +603,8 @@ public class CredentialManagerPrfCore(
         }
         val out = ArrayList<ByteArray>(salts.size)
         out.add(decodeBase64Url(first))
-        // saltInput2 may be silently dropped by older Credential Manager
-        // implementations; omit it so the caller re-asserts single-salt.
+        // Older Credential Manager implementations silently drop
+        // saltInput2; omit it so the caller re-asserts single-salt.
         if (salts.size > 1) {
             results.optString("second", "").takeIf { it.isNotEmpty() }
                 ?.let { decodeBase64UrlOrNull(it, "prf.results.second") }
@@ -663,12 +615,11 @@ public class CredentialManagerPrfCore(
 
     /**
      * Register a new passkey (one platform prompt, no seed derivation).
-     * The configured registry's stored IDs are auto-merged into
-     * [excludeCredentials] so the platform refuses to register the same
-     * device twice (raising `CredentialAlreadyExists`, which callers
-     * route to sign-in). Returns the credential ID plus AAGUID /
-     * backup-eligibility parsed from the attestation (null when it
-     * can't be parsed).
+     * The registry's stored IDs are auto-merged into [excludeCredentials]
+     * so the platform refuses to register the same device twice (raising
+     * `CredentialAlreadyExists`, which callers route to sign-in). Returns
+     * the credential ID plus AAGUID / backup-eligibility from the
+     * attestation (null when unparseable).
      */
     public suspend fun register(
         excludeCredentials: List<ByteArray> = emptyList(),
@@ -676,23 +627,21 @@ public class CredentialManagerPrfCore(
         val startedAtMs = System.currentTimeMillis()
         try {
             val activity = activityProvider()
-            // Auto-merge stored IDs so the platform refuses duplicates
-            // even after a reinstall (when the registry survives).
+            // Auto-merge the registry's stored IDs into the exclusions.
             var effectiveExclude = excludeCredentials
             credentialRegistry?.let { reg ->
                 effectiveExclude = mergeUniqueCredentialIds(
                     effectiveExclude, registryReadBestEffort(reg, rpId, onRegistryError),
                 )
             }
-            // Mint a fresh random 16-byte user handle per call; the SDK
-            // never lets hosts supply one. The base64url string (JSON
-            // request) and raw bytes (RegisteredCredential.userId) come
-            // from the same buffer.
+            // Mint a fresh random 16-byte user handle per call (never
+            // host-supplied); the JSON base64url string and the raw
+            // RegisteredCredential.userId bytes share this buffer.
             val userIdBytes = ByteArray(16).also { secureRandom.nextBytes(it) }
 
-            // JSONObject (not template interpolation) so integrator
-            // strings are escaped correctly instead of breaking on
-            // quotes / backslashes deep inside Credential Manager.
+            // JSONObject (not string interpolation) so integrator strings
+            // are escaped, not breaking on quotes/backslashes inside
+            // Credential Manager.
             val requestJson = JSONObject().apply {
                 put("challenge", randomBase64Url(32))
                 put("rp", JSONObject().apply {
@@ -754,8 +703,7 @@ public class CredentialManagerPrfCore(
                     backupEligible = meta.second
                 }
             }
-            // Best-effort: persist the new credential so future ceremonies
-            // auto-discover it.
+            // Best-effort: persist for future auto-discovery.
             credentialRegistry?.let { registryAddFireAndForget(it, rpId, credentialId, onRegistryError) }
             RegisteredCredential(credentialId, userIdBytes, aaguid, backupEligible)
         } catch (e: CredentialManagerPrfCoreException) {
@@ -768,7 +716,7 @@ public class CredentialManagerPrfCore(
     /**
      * Extract AAGUID + BE flag from the attestation object's authenticator
      * data via byte-pattern search for the "authData" CBOR key. Returns
-     * null when the pattern isn't found or the byte string is too short.
+     * null when not found or too short.
      *
      * authData layout when AT flag is set (always on a successful create):
      *   [32]      flags (UP=0, UV=2, BE=3, BS=4, AT=6)
@@ -825,14 +773,11 @@ public class CredentialManagerPrfCore(
     }
 
     /**
-     * Map an arbitrary exception thrown by Credential Manager into the
-     * typed core exception. `elapsedMs` is the wall-clock time between
-     * the start of the ceremony and this error firing; when supplied,
-     * a "cancellation" that took longer than ~55s is reclassified as
-     * [Kind.UserTimedOut] (the OS biometric inactivity timeout) rather
-     * than [Kind.UserCancelled] (the user actively dismissed the
-     * prompt). Pass `null` when timing is unknown to preserve the
-     * historical mapping (`UserCancelled`).
+     * Map a Credential Manager exception into the typed core exception.
+     * `elapsedMs` is the ceremony's wall-clock duration: a cancellation
+     * beyond ~55s reclassifies to [Kind.UserTimedOut] (biometric
+     * inactivity timeout) instead of [Kind.UserCancelled]. Pass `null`
+     * when timing is unknown to default to `UserCancelled`.
      */
     private fun Exception.toCoreException(
         elapsedMs: Long? = null,
@@ -848,13 +793,10 @@ public class CredentialManagerPrfCore(
                 this,
             )
 
-        // Surface the platform's duplicate-prevention check as a typed
-        // kind so callers can route the user to the sign-in path instead
-        // of treating it as a generic registration failure. Credential
-        // Manager wraps WebAuthn DOM errors in CreatePublicKeyCredential
-        // DomException with the spec-level error in `domError`. Must be
-        // matched before the generic CreateCredentialException case
-        // since it's a subclass.
+        // Credential Manager wraps WebAuthn DOM errors here with the
+        // spec-level error in `domError`; an InvalidStateError is the
+        // duplicate-prevention check, routed to sign-in. Must precede the
+        // generic CreateCredentialException case (this is a subclass).
         is CreatePublicKeyCredentialDomException ->
             if (domError is InvalidStateError) {
                 CredentialManagerPrfCoreException(
@@ -886,9 +828,7 @@ public class CredentialManagerPrfCore(
 
         else -> {
             val raw = message ?: toString()
-            // Actionable hints for common misconfigurations. Mirror what the
-            // original Flutter plugin surfaced so existing users see the same
-            // guidance after the refactor.
+            // Actionable hints for common misconfigurations.
             val hint = when {
                 raw.contains("cannot be validated", ignoreCase = true) ->
                     "Domain verification failed. Passkeys require a physical device with " +
@@ -904,13 +844,10 @@ public class CredentialManagerPrfCore(
     }
 
     /**
-     * Discriminate between a user-dismissed prompt and the OS biometric
-     * inactivity timeout. AndroidX surfaces both as the same
-     * `*CancellationException`. The wall-clock between ceremony start
-     * and the throw is the only in-process signal available:
-     * Credential Manager tears the prompt down at the platform's
-     * biometric inactivity timeout (~55s+), so anything at or beyond
-     * that is reclassified as [Kind.UserTimedOut].
+     * Tell a user-dismissed prompt from the biometric inactivity timeout:
+     * AndroidX surfaces both as the same `*CancellationException`, so the
+     * ceremony's elapsed time is the only signal. The prompt is torn down
+     * at ~55s+, so anything beyond that is [Kind.UserTimedOut].
      */
     private fun classifyCancellation(elapsedMs: Long?): Kind {
         if (elapsedMs != null && elapsedMs >= 55_000L) {
@@ -926,11 +863,9 @@ public class CredentialManagerPrfCore(
         /** The user dismissed the passkey prompt or cancelled the operation. */
         UserCancelled,
         /**
-         * The OS biometric prompt timed out without user interaction
-         * (~55s+ inactivity). Distinct from [UserCancelled], which means
-         * the user actively dismissed the prompt; hosts may auto-retry
-         * or surface a re-prompt UI without treating this as user
-         * intent to abandon.
+         * The biometric prompt timed out without user interaction (~55s+).
+         * Distinct from [UserCancelled] (active dismissal): hosts may
+         * auto-retry or re-prompt rather than treating it as abandonment.
          */
         UserTimedOut,
         /** No credential exists for the RP and auto-registration was not attempted. */
@@ -941,20 +876,15 @@ public class CredentialManagerPrfCore(
         PrfEvaluationFailed,
         /**
          * Platform or app configuration error (e.g. missing
-         * assetlinks.json, misconfigured RP ID). Reserved for parity
-         * with the cross-platform error taxonomy (`PrfProviderException`
-         * / the iOS core's `.configuration`); the Android Credential
-         * Manager surfaces these as `AuthenticationFailed` rather than
-         * a distinct code, so this kind is mapped by hosts but not
-         * currently emitted here.
+         * assetlinks.json, misconfigured RP ID). Reserved for parity with
+         * the cross-platform taxonomy; Credential Manager reports these as
+         * `AuthenticationFailed`, so this kind is never emitted here.
          */
         Configuration,
         /**
-         * Credential registration was refused because a credential matching
-         * one of the IDs in `excludeCredentials` is already on the
-         * authenticator. Surfaces the platform's duplicate-prevention check
-         * as a typed kind so callers can route the user to the sign-in
-         * path instead of treating it as a generic registration failure.
+         * Registration refused because a credential in `excludeCredentials`
+         * is already on the authenticator. The duplicate-prevention check,
+         * surfaced as a typed kind so callers route to sign-in.
          */
         CredentialAlreadyExists,
         /** Any other unexpected error: message contains the details. */
@@ -964,9 +894,8 @@ public class CredentialManagerPrfCore(
 
 /**
  * Result of [CredentialManagerPrfCore.deriveSeeds]: one 32-byte PRF
- * output per salt (in input order) plus the credential ID observed in
- * the same assertion. [credentialId] is `null` when no assertion ran
- * (empty `salts`).
+ * output per salt (input order) plus the asserted credential ID.
+ * [credentialId] is `null` when no assertion ran (empty `salts`).
  */
 public data class PrfDerivation(
     public val seeds: List<ByteArray>,
@@ -985,8 +914,7 @@ public class CredentialManagerPrfCoreException(
 
 /**
  * Result of a domain-association check. Mirrors the Rust
- * `DomainAssociation` enum one-to-one so the provider wrapper can map
- * directly without lossy conversions.
+ * `DomainAssociation` enum one-to-one so the wrapper maps it losslessly.
  */
 public sealed class DomainAssociationResult {
     public object Associated : DomainAssociationResult()

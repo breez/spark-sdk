@@ -17,20 +17,14 @@ import 'rust/models.dart'
 import 'rust/passkey.dart' as rust;
 import 'passkey_prf_provider.dart' show PasskeyProvider, PasskeyProviderOptions, PrfProvider;
 
-/// Public-facing PasskeyClient entry point for Flutter. The default
-/// constructor wires the built-in [PasskeyProvider] on the Breez shared
-/// RP, so a Breez-registered app needs only its relay key.
-///
-/// The FRB-generated client takes six individual callbacks because
-/// `flutter_rust_bridge` cannot pass a trait object across FFI; this
-/// wrapper translates a [PrfProvider] into those callbacks once.
+/// Passkey-based wallet client. The default constructor wires the built-in
+/// [PasskeyProvider] on the Breez shared RP, so a Breez-registered app needs
+/// only its relay key.
 class PasskeyClient {
   final rust.PasskeyClient _inner;
 
-  /// Zero-config client wired to the built-in [PasskeyProvider]. Defaults
-  /// to the Breez shared RP (`keys.breez.technology`), so a
-  /// Breez-registered app needs only its relay key; set `rpId` / `rpName`
-  /// on the [config] to use your own RP.
+  /// Zero-config client on the Breez shared RP (`keys.breez.technology`); set
+  /// `rpId` / `rpName` on the [config] to use your own RP.
   PasskeyClient({String? breezApiKey, PasskeyConfig? config})
       : this._fromProvider(
           PasskeyProvider(
@@ -43,11 +37,9 @@ class PasskeyClient {
           config: config,
         );
 
-  /// Shared wiring that translates a [PrfProvider]'s six methods into the
-  /// FRB client's six callbacks. The zero-config constructor and
-  /// [PasskeyClientBuilder.build] both redirect here; public provider
-  /// injection goes through [PasskeyClientBuilder.withPrfProvider], aligning
-  /// Flutter with the other bindings (no provider-taking public constructor).
+  /// Shared wiring that adapts a [PrfProvider] to the underlying client's
+  /// callbacks. Public provider injection goes through
+  /// [PasskeyClientBuilder.withPrfProvider].
   PasskeyClient._fromProvider(
     PrfProvider provider, {
     String? breezApiKey,
@@ -104,13 +96,9 @@ class PasskeyClient {
       _inner.signIn(request: request);
 }
 
-/// Builder for a [PasskeyClient] backed by a caller-supplied
-/// [PrfProvider].
-///
-/// Use this when you need a configured provider (custom `rpId` /
-/// `rpName`, a credential registry, rotating `userName`). For the
-/// zero-config Breez-RP case, use the default [PasskeyClient] constructor;
-/// for a fully custom PRF backend, use [PasskeyClient.fromCallbacks].
+/// Builds a [PasskeyClient] backed by a caller-supplied [PrfProvider]. Use
+/// this when you need a configured provider (custom `rpId` / `rpName`, a
+/// credential registry, rotating `userName`).
 ///
 /// ```dart
 /// final provider = PasskeyProvider(PasskeyProviderOptions(rpId: rpId, rpName: rpName));
@@ -133,8 +121,8 @@ class PasskeyClientBuilder {
   PrfProvider? _provider;
 
   /// Inject the [PrfProvider] the client derives seeds through: the
-  /// built-in [PasskeyProvider] or any custom PRF backend. Supersedes
-  /// the config's `rpId` / `rpName` (the injected provider owns its RP).
+  /// built-in [PasskeyProvider] or any custom PRF backend. Supersedes the
+  /// config's `rpId` / `rpName`.
   PasskeyClientBuilder withPrfProvider(PrfProvider provider) {
     _provider = provider;
     return this;

@@ -11,19 +11,18 @@ use crate::{
 };
 
 /// Configuration for `PasskeyClient`. `rpId` / `rpName` configure the
-/// built-in browser provider built by the zero-config `PasskeyClient`
-/// constructor / `PasskeyClientBuilder` (ignored when you inject your
-/// own provider, which owns its RP).
+/// built-in provider on the zero-config path (ignored when you inject
+/// your own provider, which owns its RP).
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyConfig)]
 pub struct PasskeyConfig {
-    /// Wallet label used when `register` / `signIn` receive `label = undefined`.
-    /// `undefined` falls back to the internal default `"Default"`.
+    /// Wallet label for `register` / `signIn` when no label is given.
+    /// Unset falls back to the internal default `"Default"`.
     pub default_label: Option<String>,
-    /// Relying Party ID for the built-in provider on the zero-config
-    /// path. `undefined` falls back to the Breez shared RP.
+    /// Relying Party ID for the built-in provider. Unset uses the Breez
+    /// shared RP.
     pub rp_id: Option<String>,
-    /// Relying Party name for the built-in provider on the zero-config
-    /// path. `undefined` falls back to the SDK default (`"Breez"`).
+    /// Relying Party name for the built-in provider. Unset uses the SDK
+    /// default (`"Breez"`).
     pub rp_name: Option<String>,
 }
 
@@ -47,12 +46,11 @@ pub struct Wallet {
     pub label: String,
 }
 
-/// Authenticator metadata returned by `PasskeyClient.register`.
-/// `userId` is the WebAuthn user handle the provider generated for
-/// this credential (never host-supplied). `aaguid` (16-byte
-/// authenticator identifier) and `backupEligible` (BE flag) are
-/// best-effort: platforms that don't expose authenticator data leave
-/// them `null`.
+/// Authenticator metadata returned by `PasskeyClient.register`. `userId`
+/// is the provider-generated WebAuthn user handle (never host-supplied).
+/// `aaguid` (provider identifier) and `backupEligible` are null when the
+/// platform doesn't expose them. AAGUID is unverified attestation: a
+/// display hint only, never a trust signal.
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::RegisteredCredential)]
 pub struct RegisteredCredential {
     pub credential_id: Vec<u8>,
@@ -101,12 +99,10 @@ pub struct PasskeyClient {
 
 #[wasm_bindgen]
 impl PasskeyClient {
-    /// Create a `PasskeyClient` backed by the supplied `PrfProvider`
-    /// and the default Nostr-backed label store.
-    ///
-    /// `breezApiKey` enables authenticated (NIP-42) access to the
-    /// Breez relay for label storage. Pass `undefined` for public
-    /// relays only.
+    /// Create a `PasskeyClient` backed by the supplied `PrfProvider` and
+    /// the default Nostr-backed label store. `breezApiKey` enables
+    /// authenticated (NIP-42) relay access for label storage; omit for
+    /// public relays only.
     #[wasm_bindgen(constructor)]
     pub fn new(
         prf_provider: PrfProvider,
