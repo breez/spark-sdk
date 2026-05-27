@@ -8,9 +8,9 @@ use tracing::debug;
 
 use crate::utils::generate_nonce;
 use crate::{
-    ClawbackIntent, ClawbackRequest, ClawbackResponse, ExecuteSwapIntent, ExecuteSwapResponse,
-    GetMinAmountsRequest, GetMinAmountsResponse, ListUserSwapsRequest, ListUserSwapsResponse,
-    SignedClawbackRequest, SignedExecuteSwapResponse,
+    AssetTransfer, ClawbackIntent, ClawbackRequest, ClawbackResponse, ExecuteSwapIntent,
+    ExecuteSwapResponse, FlashnetExecuteSwapResponse, GetMinAmountsRequest, GetMinAmountsResponse,
+    ListUserSwapsRequest, ListUserSwapsResponse, SignedClawbackRequest, SignedExecuteSwapResponse,
 };
 use crate::{
     ExecuteSwapRequest, FeatureName, FeatureStatus, FlashnetError, MinAmount, PingResponse,
@@ -181,8 +181,10 @@ impl FlashnetClient {
         )
         .await?;
 
-        // Transfer the asset in to the pool
-        let transaction_identifier = self
+        // Transfer the asset in to the pool. We keep the rich wallet-side
+        // object so callers can record a `Payment` for the sent leg
+        // without re-fetching it from the operator.
+        let outbound_asset_transfer = self
             .transfer_asset(
                 request.amount_in,
                 &request.asset_in_address,
@@ -190,6 +192,7 @@ impl FlashnetClient {
                 request.transfer_id.clone(),
             )
             .await?;
+        let transaction_identifier = outbound_asset_transfer.id();
         debug!("Signing swap execution for: {transaction_identifier}");
 
         // Sign and send the execute swap request
@@ -197,10 +200,13 @@ impl FlashnetClient {
             .sign_execute_swap(request, &transaction_identifier)
             .await;
         match swap_response_res {
-            Ok(response) => Ok(ExecuteSwapResponse::from_signed_execute_swap_response(
-                response,
-                transaction_identifier,
-            )),
+            Ok(response) => Ok(ExecuteSwapResponse {
+                flashnet_response: FlashnetExecuteSwapResponse::from_signed_execute_swap_response(
+                    response,
+                    transaction_identifier,
+                ),
+                outbound_asset_transfer,
+            }),
             Err(e) => Err(FlashnetError::execution(e, Some(transaction_identifier))),
         }
     }
@@ -428,11 +434,12 @@ impl FlashnetClient {
         asset_address: &str,
         receiver_public_key: &PublicKey,
         transfer_id: Option<TransferId>,
-    ) -> Result<String, FlashnetError> {
+    ) -> Result<AssetTransfer, FlashnetError> {
         let receiver_address = SparkAddress::new(*receiver_public_key, self.config.network, None);
-        let id = if asset_address == BTC_ASSET_ADDRESS {
+        if asset_address == BTC_ASSET_ADDRESS {
             // Send a spark transfer
-            self.spark_wallet
+            let transfer = self
+                .spark_wallet
                 .transfer(
                     u64::try_from(amount).map_err(|e| {
                         FlashnetError::Generic(format!("Failed to convert amount to u64: {e}"))
@@ -440,9 +447,8 @@ impl FlashnetClient {
                     &receiver_address,
                     transfer_id,
                 )
-                .await?
-                .id
-                .to_string()
+                .await?;
+            Ok(AssetTransfer::Spark(transfer))
         } else {
             // Send a token transfer
             let asset_address_hex = hex::decode(asset_address).map_err(|e| {
@@ -450,7 +456,8 @@ impl FlashnetClient {
             })?;
             let token_id = bech32m_encode_token_id(&asset_address_hex, self.config.network)
                 .map_err(|e| FlashnetError::Generic(format!("Failed to encode token id: {e}")))?;
-            self.spark_wallet
+            let token_tx = self
+                .spark_wallet
                 .transfer_tokens(
                     vec![TransferTokenOutput {
                         token_id,
@@ -461,9 +468,8 @@ impl FlashnetClient {
                     None,
                     None,
                 )
-                .await?
-                .hash
-        };
-        Ok(id)
+                .await?;
+            Ok(AssetTransfer::Token(token_tx))
+        }
     }
 }

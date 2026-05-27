@@ -1,20 +1,25 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::secp256k1::PublicKey;
 use flashnet::{
-    BTC_ASSET_ADDRESS, CacheStore, ClawbackRequest, ClawbackResponse, ExecuteSwapRequest,
-    FlashnetClient, FlashnetConfig, FlashnetError, GetMinAmountsRequest, ListPoolsRequest,
-    PoolSortOrder, SimulateSwapRequest,
+    AssetTransfer, BTC_ASSET_ADDRESS, CacheStore, ClawbackRequest, ClawbackResponse,
+    ExecuteSwapRequest, ExecuteSwapResponse, FlashnetClient, FlashnetConfig, FlashnetError,
+    GetMinAmountsRequest, ListPoolsRequest, PoolSortOrder, SimulateSwapRequest,
 };
 use spark_wallet::{SparkWallet, TransferId};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    AmountAdjustmentReason, Network, Payment, PaymentDetails, PaymentMetadata, Storage,
+    AmountAdjustmentReason, EventEmitter, Network, Payment, PaymentDetails, PaymentMetadata,
+    Storage,
     persist::{ObjectCacheRepository, StorageListPaymentsRequest, StoragePaymentDetailsFilter},
     token_conversion::{ConversionAmount, DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS},
-    utils::token::token_transaction_to_payments,
+    utils::{
+        payments::{fetch_and_process_payment, insert_payment_with_metadata},
+        polling::{PollSchedule, poll_until},
+        token::token_transaction_to_payments,
+    },
 };
 
 use super::{
@@ -22,6 +27,14 @@ use super::{
     ConversionStatus, ConversionType, FeeSplit, FetchConversionLimitsRequest,
     FetchConversionLimitsResponse, TokenConversionPool, TokenConversionResponse, TokenConverter,
 };
+
+// Polling cadence for the received leg of a freshly-completed conversion.
+// The pool typically takes 1-3 seconds to advance its outbound transfer to
+// the claimable state, so we keep the timeout modest — beyond that, the
+// host's next sync_wallet picks up the leg.
+const RECEIVED_LEG_POLL_INITIAL_DELAY_MS: u64 = 500;
+const RECEIVED_LEG_POLL_MAX_DELAY_MS: u64 = 2000;
+const RECEIVED_LEG_POLL_TIMEOUT_SECS: u64 = 15;
 
 /// Flashnet-based implementation of the `TokenConverter` trait.
 ///
@@ -31,6 +44,7 @@ pub(crate) struct FlashnetTokenConverter {
     flashnet_client: Arc<FlashnetClient>,
     storage: Arc<dyn Storage>,
     spark_wallet: Arc<SparkWallet>,
+    event_emitter: Arc<EventEmitter>,
     network: Network,
     refund_trigger: broadcast::Sender<()>,
     integrator_fee_bps: u32,
@@ -42,11 +56,14 @@ impl FlashnetTokenConverter {
     /// # Arguments
     /// * `storage` - Storage for payment lookups and metadata updates
     /// * `spark_wallet` - Spark wallet for transfer/transaction lookups
+    /// * `event_emitter` - Event emitter used when persisting conversion-leg
+    ///   payment records after a successful swap
     /// * `network` - The network configuration
     pub fn new(
         flashnet_config: FlashnetConfig,
         storage: Arc<dyn Storage>,
         spark_wallet: Arc<SparkWallet>,
+        event_emitter: Arc<EventEmitter>,
         network: Network,
         http_client: Arc<dyn platform_utils::HttpClient>,
     ) -> Self {
@@ -68,6 +85,7 @@ impl FlashnetTokenConverter {
             flashnet_client,
             storage,
             spark_wallet,
+            event_emitter,
             network,
             refund_trigger,
             integrator_fee_bps,
@@ -602,6 +620,123 @@ impl FlashnetTokenConverter {
             estimate.amount_adjustment,
         ))
     }
+
+    /// Insert local `Payment` records for both legs of a completed swap so
+    /// the conversion's `from`/`to` are immediately visible to callers
+    /// without waiting for the next `sync_wallet`.
+    ///
+    /// The sent leg uses the rich `AssetTransfer` that
+    /// [`FlashnetClient::execute_swap`] hands back — no extra RPC. The
+    /// received leg is fetched by id (the pool created it server-side, so
+    /// we don't yet have it locally); for spark transfers we also claim
+    /// them so the resulting Payment is terminal.
+    async fn process_conversion_payments(
+        &self,
+        outbound_asset_transfer: AssetTransfer,
+        sent_payment_id: &str,
+        received_payment_id: &str,
+    ) {
+        // Sent leg: we just produced this transfer ourselves, so the local
+        // spark/token wallet state is already current — no claim needed.
+        // Build the Payment directly and insert it even if the operator-side
+        // status hasn't reached terminal yet; the next sync will promote it
+        // to Completed.
+        let sent_payment = self
+            .build_sent_conversion_payment(outbound_asset_transfer, sent_payment_id)
+            .await;
+        if let Some(payment) = sent_payment {
+            insert_payment_with_metadata(
+                self.spark_wallet.clone(),
+                self.storage.clone(),
+                self.event_emitter.clone(),
+                payment,
+            )
+            .await;
+        }
+
+        // Received leg: look up by id (the pool created it server-side).
+        let received_payment = self
+            .fetch_received_conversion_payment(received_payment_id)
+            .await;
+        if let Some(payment) = received_payment {
+            insert_payment_with_metadata(
+                self.spark_wallet.clone(),
+                self.storage.clone(),
+                self.event_emitter.clone(),
+                payment,
+            )
+            .await;
+        }
+    }
+
+    /// Builds the `Payment` record for the sent leg of a conversion
+    /// using the response we already have from `execute_swap`.
+    async fn build_sent_conversion_payment(
+        &self,
+        outbound_asset_transfer: AssetTransfer,
+        sent_payment_id: &str,
+    ) -> Option<Payment> {
+        match outbound_asset_transfer {
+            AssetTransfer::Spark(transfer) => match Payment::try_from(transfer) {
+                Ok(payment) => Some(payment),
+                Err(e) => {
+                    warn!(
+                        "Failed to build Payment from sent spark transfer for conversion {sent_payment_id}: {e:?}"
+                    );
+                    None
+                }
+            },
+            AssetTransfer::Token(token_tx) => {
+                let object_repository = ObjectCacheRepository::new(self.storage.clone());
+                match token_transaction_to_payments(
+                    &self.spark_wallet,
+                    &object_repository,
+                    &token_tx,
+                    true,
+                )
+                .await
+                {
+                    Ok(payments) => payments.into_iter().find(|p| p.id == sent_payment_id),
+                    Err(e) => {
+                        warn!(
+                            "Failed to convert sent token tx to payments for conversion {sent_payment_id}: {e:?}"
+                        );
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fetches the received leg of a conversion by its payment id and processes
+    /// the transfer/token. Spark transfers are claimed locally before
+    /// being returned; token outputs are already terminal once the
+    /// tx is visible on operators.
+    ///
+    /// Polls briefly because the pool's outbound transfer typically arrives
+    /// in `SenderInitiated`/`SenderKeyTweakPending` and only becomes
+    /// claimable a moment later. If we're not able to fetch and process the
+    /// payment, it will be done so downstream or in the next `sync_wallet` call.
+    async fn fetch_received_conversion_payment(&self, payment_id: &str) -> Option<Payment> {
+        let schedule = PollSchedule {
+            initial_delay: Duration::from_millis(RECEIVED_LEG_POLL_INITIAL_DELAY_MS),
+            max_delay: Duration::from_millis(RECEIVED_LEG_POLL_MAX_DELAY_MS),
+            timeout: Duration::from_secs(RECEIVED_LEG_POLL_TIMEOUT_SECS),
+        };
+        let result = poll_until(schedule, None, || {
+            fetch_and_process_payment(&self.spark_wallet, self.storage.clone(), payment_id, false)
+        })
+        .await;
+        match result {
+            Ok(payment) => Some(payment),
+            Err(e) => {
+                warn!(
+                    "Failed to fetch received conversion payment {payment_id} within timeout: {e:?}"
+                );
+                None
+            }
+        }
+    }
 }
 
 #[macros::async_trait]
@@ -649,15 +784,20 @@ impl TokenConverter for FlashnetTokenConverter {
             .await;
 
         match response_res {
-            Ok(response) => {
+            Ok(ExecuteSwapResponse {
+                flashnet_response,
+                outbound_asset_transfer,
+            }) => {
                 debug!(
                     "Conversion executed: accepted {}, error {:?}, fee_amount: {:?}",
-                    response.accepted, response.error, response.fee_amount,
+                    flashnet_response.accepted,
+                    flashnet_response.error,
+                    flashnet_response.fee_amount,
                 );
-                // Fee from ExecuteSwapResponse is denominated in the non-BTC asset (token units).
-                // Route to the token-side payment: sent if asset_in is the token, received if
-                // asset_in is BTC (meaning the token is on the received side).
-                let fee_split = response.fee_amount.map(|fee| {
+                // Fee from FlashnetExecuteSwapResponse is denominated in the non-BTC asset
+                // (token units). Route to the token-side payment: sent if asset_in is the token,
+                // received if asset_in is BTC (meaning the token is on the received side).
+                let fee_split = flashnet_response.fee_amount.map(|fee| {
                     if conversion_pool.asset_in_address == BTC_ASSET_ADDRESS {
                         FeeSplit::Received(fee)
                     } else {
@@ -668,9 +808,9 @@ impl TokenConverter for FlashnetTokenConverter {
                 let (sent_payment_id, received_payment_id) = self
                     .update_payment_conversion_info(
                         &pool_id,
-                        response.transfer_id,
-                        response.outbound_transfer_id,
-                        response.refund_transfer_id,
+                        flashnet_response.transfer_id,
+                        flashnet_response.outbound_transfer_id,
+                        flashnet_response.refund_transfer_id,
                         fee_split,
                         purpose,
                         amount_adjustment.clone(),
@@ -678,14 +818,20 @@ impl TokenConverter for FlashnetTokenConverter {
                     .await?;
 
                 if let Some(received_payment_id) = received_payment_id
-                    && response.accepted
+                    && flashnet_response.accepted
                 {
+                    self.process_conversion_payments(
+                        outbound_asset_transfer,
+                        &sent_payment_id,
+                        &received_payment_id,
+                    )
+                    .await;
                     Ok(TokenConversionResponse {
                         sent_payment_id,
                         received_payment_id,
                     })
                 } else {
-                    let error_message = response
+                    let error_message = flashnet_response
                         .error
                         .unwrap_or("Conversion not accepted".to_string());
                     Err(ConversionError::ConversionFailed(format!(
