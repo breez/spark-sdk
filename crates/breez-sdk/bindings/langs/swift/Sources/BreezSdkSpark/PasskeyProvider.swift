@@ -169,7 +169,7 @@ public class PasskeyProvider: PrfProvider {
             return data
         }
         do {
-            let (seeds, credentialId) = try await core.deriveSeeds(
+            let derivation = try await core.deriveSeeds(
                 salts: saltDatas,
                 autoRegister: false,
                 allowCredentials: request.allowCredentials.map { Data($0) },
@@ -178,7 +178,7 @@ public class PasskeyProvider: PrfProvider {
             )
             // The core observes the asserted credential ID inline and
             // returns it alongside the seeds.
-            return DeriveSeedsOutput(seeds: seeds, credentialId: credentialId)
+            return DeriveSeedsOutput(seeds: derivation.seeds, credentialId: derivation.credentialId)
         } catch let err as PasskeyAssertionError {
             throw Self.toPrfProviderError(err)
         }

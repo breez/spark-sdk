@@ -194,6 +194,19 @@ public struct IosRegisteredCredential {
     }
 }
 
+/// Result of `deriveSeeds`: one 32-byte PRF output per salt (input
+/// order) plus the asserted credential ID. `credentialId` is `nil` when
+/// no assertion ran (empty `salts`).
+public struct PrfDerivation {
+    public let seeds: [Data]
+    public let credentialId: Data?
+
+    public init(seeds: [Data], credentialId: Data?) {
+        self.seeds = seeds
+        self.credentialId = credentialId
+    }
+}
+
 // MARK: - Domain association
 
 /// Result of an Apple-app-site-association probe against the AASA CDN.
@@ -402,7 +415,7 @@ public final class PasskeyAssertionCore {
         autoRegister: Bool,
         allowCredentials: [Data] = [],
         preferImmediatelyAvailableCredentials: Bool = true
-    ) async throws -> (seeds: [Data], credentialId: Data?) {
+    ) async throws -> PrfDerivation {
         // Union the caller's allow-list with the registry's stored IDs.
         var allow = allowCredentials
         if let reg = credentialRegistry {
@@ -415,7 +428,7 @@ public final class PasskeyAssertionCore {
         // Wait out the post-create grace so the immediate derive doesn't
         // race the credential's PRF-readiness window (see grace tracker).
         await graceTracker.consume()
-        if salts.isEmpty { return (seeds: [], credentialId: nil) }
+        if salts.isEmpty { return PrfDerivation(seeds: [], credentialId: nil) }
 
         // One assertion for 1-2 salts, registering + retrying once on no
         // credential. Returns (first, second?, credentialId); `second` is
@@ -479,7 +492,7 @@ public final class PasskeyAssertionCore {
                 i += 1
             }
         }
-        return (seeds: out, credentialId: observedCredentialId)
+        return PrfDerivation(seeds: out, credentialId: observedCredentialId)
     }
 
     /// Verify the app's bundle ID is listed in `webcredentials.apps` of

@@ -114,15 +114,15 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         )
         Task { @MainActor in
             do {
-                let (seeds, credentialId) = try await core.deriveSeeds(
+                let derivation = try await core.deriveSeeds(
                     salts: saltDatas,
                     autoRegister: autoRegister,
                     allowCredentials: allowCredentials,
                     preferImmediatelyAvailableCredentials: preferImmediate ?? true
                 )
                 result([
-                    "seeds": seeds.map { $0.base64EncodedString() },
-                    "credentialId": credentialId.map { $0.base64EncodedString() } ?? NSNull(),
+                    "seeds": derivation.seeds.map { $0.base64EncodedString() },
+                    "credentialId": derivation.credentialId.map { $0.base64EncodedString() } ?? NSNull(),
                 ])
             } catch let err as PasskeyAssertionError {
                 result(Self.flutterError(from: err))
