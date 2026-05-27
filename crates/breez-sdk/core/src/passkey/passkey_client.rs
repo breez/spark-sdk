@@ -565,6 +565,7 @@ mod tests {
             None,
             Some(PasskeyConfig {
                 default_label: Some("my-app".to_string()),
+                ..Default::default()
             }),
         );
         let response = client

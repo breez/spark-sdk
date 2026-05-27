@@ -81,6 +81,14 @@ public class PasskeyProvider(
          */
         public const val BREEZ_RP_ID: String = CredentialManagerPrfCore.DEFAULT_RP_ID
 
+        /**
+         * Default Relying Party name used by the zero-config
+         * [PasskeyClient] factory / [PasskeyClientBuilder] when no
+         * `rpName` is supplied. Surfaces in some credential-manager UIs
+         * (Google Password Manager).
+         */
+        public const val DEFAULT_RP_NAME: String = "Breez"
+
         private const val TAG = "PasskeyProvider"
     }
 

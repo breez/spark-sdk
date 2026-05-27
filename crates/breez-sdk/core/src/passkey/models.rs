@@ -84,7 +84,16 @@ pub struct RegisteredCredential {
     pub backup_eligible: Option<bool>,
 }
 
-/// Optional configuration for [`crate::passkey::PasskeyClient::new`].
+/// Configuration for the passkey client. Carries the label-store
+/// default plus the Relying Party identity used by the binding-level
+/// zero-config `PasskeyClient` constructors.
+///
+/// `rp_id` / `rp_name` are consumed only when a binding builds the
+/// built-in provider for you (the zero-config constructor / builder
+/// without an injected provider). When you construct a `PasskeyProvider`
+/// yourself, that provider owns its RP and these fields are ignored; the
+/// core [`crate::passkey::PasskeyClient`] likewise ignores them because
+/// it receives a ready-made provider and only reads `default_label`.
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PasskeyConfig {
@@ -92,4 +101,17 @@ pub struct PasskeyConfig {
     /// `label = None`. `None` ⇒ internal `DEFAULT_LABEL` (`"Default"`).
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub default_label: Option<String>,
+
+    /// Relying Party ID for the built-in provider on the zero-config
+    /// path. `None` falls back to the Breez shared RP
+    /// (`keys.breez.technology`). Ignored when a provider is supplied
+    /// directly.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub rp_id: Option<String>,
+
+    /// Relying Party name for the built-in provider on the zero-config
+    /// path. `None` falls back to the SDK default (`"Breez"`). Ignored
+    /// when a provider is supplied directly.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub rp_name: Option<String>,
 }

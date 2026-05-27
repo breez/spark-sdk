@@ -667,21 +667,6 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Options for {@link PasskeyClientBuilder}. `rpId` / `rpName` configure
- * the built-in {@link PasskeyProvider} (ignored when a provider is
- * injected via {@link PasskeyClientBuilder.withPrfProvider}, which owns
- * its own RP); `defaultLabel` applies as client config either way.
- */
-export interface PasskeyClientOptions {
-  /** Relying Party ID. Defaults to {@link PasskeyProvider.BREEZ_RP_ID}. */
-  rpId?: string;
-  /** Relying Party name. Defaults to {@link PasskeyProvider.DEFAULT_RP_NAME}. */
-  rpName?: string;
-  /** Wallet label used when `register` / `signIn` receive no label. */
-  defaultLabel?: string;
-}
-
-/**
  * Builder for a `PasskeyClient` backed by a caller-supplied provider.
  *
  * Use this when you need a configured {@link PasskeyProvider} (custom
@@ -704,19 +689,20 @@ export class PasskeyClientBuilder {
   /**
    * @param breezApiKey Breez relay key for authenticated (NIP-42) label
    *   storage. Omit for public relays only.
-   * @param options Optional `rpId` / `rpName` for the default provider
-   *   (ignored when a provider is injected via {@link withPrfProvider},
-   *   which owns its RP) plus an optional `defaultLabel`.
+   * @param config Passkey client config. `rpId` / `rpName` configure the
+   *   default provider (ignored when a provider is injected via
+   *   {@link withPrfProvider}, which owns its RP); `defaultLabel` is the
+   *   label-store default.
    */
   constructor(
     private readonly breezApiKey?: string,
-    private readonly options: PasskeyClientOptions = {}
+    private readonly config?: PasskeyConfig
   ) {}
 
   /**
    * Inject the provider the client derives seeds through. The built-in
    * {@link PasskeyProvider} or any custom implementation is accepted.
-   * Supersedes the `rpId` / `rpName` options (the injected provider owns
+   * Supersedes the config's `rpId` / `rpName` (the injected provider owns
    * its RP).
    */
   withPrfProvider(provider: PasskeyProvider): this {
@@ -726,27 +712,55 @@ export class PasskeyClientBuilder {
 
   /**
    * Construct the client. Falls back to a default {@link PasskeyProvider}
-   * on the configured `rpId` / `rpName` (default: the Breez RP) when no
+   * on the config's `rpId` / `rpName` (default: the Breez RP) when no
    * provider was injected.
    */
   build(): SdkPasskeyClient {
     const provider =
       this.provider ??
       new PasskeyProvider({
-        rpId: this.options.rpId ?? PasskeyProvider.BREEZ_RP_ID,
-        rpName: this.options.rpName ?? PasskeyProvider.DEFAULT_RP_NAME,
+        rpId: this.config?.rpId ?? PasskeyProvider.BREEZ_RP_ID,
+        rpName: this.config?.rpName ?? PasskeyProvider.DEFAULT_RP_NAME,
       });
-    const config: PasskeyConfig | undefined =
-      this.options.defaultLabel !== undefined
-        ? { defaultLabel: this.options.defaultLabel }
-        : undefined;
     // The hand-written PasskeyProvider conforms structurally to the
     // generated PrfProvider foreign interface.
     return new SdkPasskeyClient(
       provider as unknown as PrfProvider,
       this.breezApiKey,
-      config
+      this.config
     );
   }
 }
+
+/** @internal Builds the zero-config client; exposed via {@link PasskeyClient}. */
+function buildPasskeyClient(
+  breezApiKey?: string,
+  config?: PasskeyConfig
+): SdkPasskeyClient {
+  return new PasskeyClientBuilder(breezApiKey, config).build();
+}
+
+/**
+ * Zero-config passkey client wired to the built-in {@link PasskeyProvider}
+ * on the Breez shared RP (`keys.breez.technology`), so a Breez-registered
+ * app needs only its relay key; set `rpId` / `rpName` on the config to use
+ * your own RP. Apps that need a credential registry or a custom PRF
+ * backend build the provider themselves and inject it through
+ * {@link PasskeyClientBuilder}.
+ *
+ * Matches the other bindings' `new PasskeyClient(breezApiKey, config)`
+ * shape; the instance is the underlying SDK client (`checkAvailability`,
+ * `register`, `signIn`, `connectWithPasskey`, `labels()`, `credentials()`).
+ *
+ * @example
+ * ```typescript
+ * const client = new PasskeyClient(breezApiKey)
+ * const { wallet } = await client.signIn({ label: 'personal' })
+ * ```
+ */
+export const PasskeyClient: {
+  new (breezApiKey?: string, config?: PasskeyConfig): SdkPasskeyClient;
+} = buildPasskeyClient as unknown as {
+  new (breezApiKey?: string, config?: PasskeyConfig): SdkPasskeyClient;
+};
 

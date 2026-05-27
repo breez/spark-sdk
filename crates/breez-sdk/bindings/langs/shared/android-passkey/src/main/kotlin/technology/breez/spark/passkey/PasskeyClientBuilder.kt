@@ -1,18 +1,49 @@
 package technology.breez.spark.passkey
 
+import android.app.Activity
 import breez_sdk_spark.PasskeyClient
 import breez_sdk_spark.PasskeyConfig
 import breez_sdk_spark.PrfProvider
 
 /**
- * Builder for a [PasskeyClient] backed by a caller-supplied
- * [PrfProvider].
+ * Zero-config [PasskeyClient] wired to the built-in [PasskeyProvider].
+ * Defaults to the Breez shared RP (`keys.breez.technology`), so a
+ * Breez-registered app needs only its relay key; set `rpId` / `rpName`
+ * on [config] to use your own RP.
  *
- * Unlike the web and iOS clients, Android has no zero-config
- * convenience constructor: the built-in [PasskeyProvider] needs an
- * `Activity` (via its `activityProvider`) to drive Credential Manager,
- * so there is no provider the builder can default to. Always inject a
- * provider through [withPrfProvider] before calling [build].
+ * Android's variant takes an [activityProvider] because the platform
+ * Credential Manager needs an `Activity` to present its UI. The web /
+ * iOS clients omit it because their default path resolves the
+ * presentation context internally; Android has no such ambient source,
+ * so the foreground activity is supplied here. Apps that need a
+ * credential registry or a custom PRF backend build the provider
+ * themselves and inject it through [PasskeyClientBuilder].
+ *
+ * @param breezApiKey Breez relay key for authenticated (NIP-42) label
+ *   storage. Pass `null` for public relays only.
+ * @param activityProvider Called lazily on every ceremony to obtain the
+ *   foreground [Activity] that drives Credential Manager.
+ * @param config Passkey client config (`rpId` / `rpName` / `defaultLabel`).
+ */
+public fun PasskeyClient(
+    breezApiKey: String? = null,
+    activityProvider: () -> Activity,
+    config: PasskeyConfig? = null,
+): PasskeyClient {
+    val provider = PasskeyProvider(
+        activityProvider = activityProvider,
+        rpId = config?.rpId ?: PasskeyProvider.BREEZ_RP_ID,
+        rpName = config?.rpName ?: PasskeyProvider.DEFAULT_RP_NAME,
+    )
+    return PasskeyClient(provider, breezApiKey, config)
+}
+
+/**
+ * Builder for a [PasskeyClient] backed by a caller-supplied
+ * [PrfProvider]. Use this when you need a [PasskeyProvider] configured
+ * beyond `rpId` / `rpName` (a `credentialRegistry`, rotating `userName`)
+ * or a custom PRF backend. For the zero-config case use the
+ * [PasskeyClient] factory above, which takes the `activityProvider`.
  *
  * ```kotlin
  * val provider = PasskeyProvider(
@@ -28,7 +59,9 @@ import breez_sdk_spark.PrfProvider
  *
  * @param breezApiKey Breez relay key for authenticated (NIP-42) label
  *   storage. Pass `null` for public relays only.
- * @param config Optional [PasskeyConfig] (e.g. a default label).
+ * @param config Passkey client config. `defaultLabel` applies as the
+ *   label-store default; `rpId` / `rpName` are owned by the injected
+ *   provider.
  */
 class PasskeyClientBuilder(
     private val breezApiKey: String? = null,
@@ -46,15 +79,17 @@ class PasskeyClientBuilder(
     }
 
     /**
-     * Construct the client. Requires a provider to have been injected
-     * via [withPrfProvider]; throws otherwise (the platform provider
-     * cannot be defaulted without an `Activity`).
+     * Construct the client. Requires a provider to have been injected via
+     * [withPrfProvider]; throws otherwise. For the zero-config built-in
+     * provider, use `PasskeyClient(breezApiKey, activityProvider, config)`
+     * instead (the platform provider cannot be defaulted without an
+     * `Activity`).
      */
     fun build(): PasskeyClient {
         val resolved = requireNotNull(provider) {
-            "PasskeyClientBuilder requires a PrfProvider on Android: the platform " +
-                "PasskeyProvider needs an Activity, so there is no zero-config default. " +
-                "Call withPrfProvider(...) before build()."
+            "PasskeyClientBuilder requires a PrfProvider: call withPrfProvider(...) " +
+                "before build(). For the built-in provider, use " +
+                "PasskeyClient(breezApiKey, activityProvider, config)."
         }
         return PasskeyClient(resolved, breezApiKey, config)
     }
