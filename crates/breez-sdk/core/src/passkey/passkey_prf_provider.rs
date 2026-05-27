@@ -82,7 +82,7 @@ pub trait PrfProvider: Send + Sync {
     /// can ignore them.
     ///
     /// Returns the seeds plus the credential ID observed in the same
-    /// assertion ([`DeriveSeedsOutput`]); the credential ID is `None`
+    /// assertion ([`DeriveSeedsOutput`]); the credential ID is absent
     /// when the provider does not surface it.
     async fn derive_seeds(
         &self,

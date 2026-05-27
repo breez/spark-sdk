@@ -13,8 +13,7 @@ use crate::{
 /// Configuration for `PasskeyClient`. `rpId` / `rpName` configure the
 /// built-in browser provider built by the zero-config `PasskeyClient`
 /// constructor / `PasskeyClientBuilder` (ignored when you inject your
-/// own provider, which owns its RP). Other provider-scoped knobs
-/// (`credentialRegistry`, `userName`, etc.) live on `PasskeyProvider`.
+/// own provider, which owns its RP).
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyConfig)]
 pub struct PasskeyConfig {
     /// Wallet label used when `register` / `signIn` receive `label = undefined`.

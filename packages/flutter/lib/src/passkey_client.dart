@@ -18,15 +18,11 @@ import 'passkey_prf_provider.dart' show PasskeyProvider, PasskeyProviderOptions;
 
 /// Public-facing PasskeyClient entry point for Flutter. The default
 /// constructor wires the built-in [PasskeyProvider] on the Breez shared
-/// RP, matching the zero-config `PasskeyClient(breezApiKey, config)`
-/// shape used by the other bindings (Swift, RN, WASM).
+/// RP, so a Breez-registered app needs only its relay key.
 ///
-/// The FRB-generated client requires six individual callbacks because
-/// `flutter_rust_bridge` cannot pass a trait object across FFI. This
-/// wrapper translates a [PasskeyProvider] into those callbacks once,
-/// instead of asking every call site to repeat the wiring. Provider
-/// injection lives on [PasskeyClient.withProvider] / [PasskeyClientBuilder];
-/// fully custom PRF backends use [PasskeyClient.fromCallbacks].
+/// The FRB-generated client takes six individual callbacks because
+/// `flutter_rust_bridge` cannot pass a trait object across FFI; this
+/// wrapper translates a [PasskeyProvider] into those callbacks once.
 class PasskeyClient {
   final rust.PasskeyClient _inner;
 

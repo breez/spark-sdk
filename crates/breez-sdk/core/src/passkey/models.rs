@@ -51,8 +51,8 @@ pub struct WalletSetup {
 }
 
 /// Output of [`crate::passkey::PrfProvider::derive_seeds`]: the derived
-/// seeds plus the credential ID observed in the same assertion.
-/// `credential_id` is `None` when the provider does not surface it
+/// seeds plus the credential ID observed in the same assertion. The
+/// credential ID is absent when the provider does not surface it
 /// (CLI / hardware backends).
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -97,20 +97,20 @@ pub struct RegisteredCredential {
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PasskeyConfig {
-    /// Wallet label used when `register` / `sign_in` receive
-    /// `label = None`. `None` ⇒ internal `DEFAULT_LABEL` (`"Default"`).
+    /// Wallet label used when `register` / `sign_in` receive no label.
+    /// Unset uses the internal `DEFAULT_LABEL` (`"Default"`).
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub default_label: Option<String>,
 
     /// Relying Party ID for the built-in provider on the zero-config
-    /// path. `None` falls back to the Breez shared RP
+    /// path. Unset falls back to the Breez shared RP
     /// (`keys.breez.technology`). Ignored when a provider is supplied
     /// directly.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub rp_id: Option<String>,
 
     /// Relying Party name for the built-in provider on the zero-config
-    /// path. `None` falls back to the SDK default (`"Breez"`). Ignored
+    /// path. Unset falls back to the SDK default (`"Breez"`). Ignored
     /// when a provider is supplied directly.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub rp_name: Option<String>,
