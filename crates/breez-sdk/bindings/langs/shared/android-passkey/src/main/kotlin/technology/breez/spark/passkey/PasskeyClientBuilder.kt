@@ -11,13 +11,10 @@ import breez_sdk_spark.PrfProvider
  * Breez-registered app needs only its relay key; set `rpId` / `rpName`
  * on [config] to use your own RP.
  *
- * Android's variant takes an [activityProvider] because the platform
- * Credential Manager needs an `Activity` to present its UI. The web /
- * iOS clients omit it because their default path resolves the
- * presentation context internally; Android has no such ambient source,
- * so the foreground activity is supplied here. Apps that need a
- * credential registry or a custom PRF backend build the provider
- * themselves and inject it through [PasskeyClientBuilder].
+ * Takes an [activityProvider] because the platform Credential Manager
+ * needs an `Activity` to present its UI. Apps that need a credential
+ * registry or a custom PRF backend build the provider themselves and
+ * inject it through [PasskeyClientBuilder].
  *
  * @param breezApiKey Breez relay key for authenticated (NIP-42) label
  *   storage. Pass `null` for public relays only.

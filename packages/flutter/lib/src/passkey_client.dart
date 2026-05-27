@@ -23,7 +23,7 @@ import 'passkey_prf_provider.dart' show PasskeyProvider, PasskeyProviderOptions,
 ///
 /// The FRB-generated client takes six individual callbacks because
 /// `flutter_rust_bridge` cannot pass a trait object across FFI; this
-/// wrapper translates a [PasskeyProvider] into those callbacks once.
+/// wrapper translates a [PrfProvider] into those callbacks once.
 class PasskeyClient {
   final rust.PasskeyClient _inner;
 
@@ -105,7 +105,7 @@ class PasskeyClient {
 }
 
 /// Builder for a [PasskeyClient] backed by a caller-supplied
-/// [PasskeyProvider].
+/// [PrfProvider].
 ///
 /// Use this when you need a configured provider (custom `rpId` /
 /// `rpName`, a credential registry, rotating `userName`). For the
