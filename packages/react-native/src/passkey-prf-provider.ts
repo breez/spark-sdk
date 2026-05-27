@@ -684,7 +684,7 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
  * ```
  */
 export class PasskeyClientBuilder {
-  private provider?: PasskeyProvider;
+  private provider?: PrfProvider;
 
   /**
    * @param breezApiKey Breez relay key for authenticated (NIP-42) label
@@ -700,12 +700,12 @@ export class PasskeyClientBuilder {
   ) {}
 
   /**
-   * Inject the provider the client derives seeds through. The built-in
-   * {@link PasskeyProvider} or any custom implementation is accepted.
+   * Inject the provider the client derives seeds through: the built-in
+   * {@link PasskeyProvider} or any custom `PrfProvider` implementation.
    * Supersedes the config's `rpId` / `rpName` (the injected provider owns
    * its RP).
    */
-  withPrfProvider(provider: PasskeyProvider): this {
+  withPrfProvider(provider: PrfProvider): this {
     this.provider = provider;
     return this;
   }
@@ -716,19 +716,15 @@ export class PasskeyClientBuilder {
    * provider was injected.
    */
   build(): SdkPasskeyClient {
-    const provider =
-      this.provider ??
-      new PasskeyProvider({
-        rpId: this.config?.rpId ?? PasskeyProvider.BREEZ_RP_ID,
-        rpName: this.config?.rpName ?? PasskeyProvider.DEFAULT_RP_NAME,
-      });
     // The hand-written PasskeyProvider conforms structurally to the
     // generated PrfProvider foreign interface.
-    return new SdkPasskeyClient(
-      provider as unknown as PrfProvider,
-      this.breezApiKey,
-      this.config
-    );
+    const provider: PrfProvider =
+      this.provider ??
+      (new PasskeyProvider({
+        rpId: this.config?.rpId ?? PasskeyProvider.BREEZ_RP_ID,
+        rpName: this.config?.rpName ?? PasskeyProvider.DEFAULT_RP_NAME,
+      }) as unknown as PrfProvider);
+    return new SdkPasskeyClient(provider, this.breezApiKey, this.config);
   }
 }
 

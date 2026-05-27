@@ -158,32 +158,67 @@ class PasskeyPrfException implements Exception {
   String toString() => 'PasskeyPrfException($code): $message';
 }
 
-/// Flutter passkey PRF provider using platform-native APIs (iOS
-/// AuthenticationServices, Android Credential Manager). Wires directly
-/// into the [PasskeyClient] constructor:
+/// PRF backend a [PasskeyClient] derives wallet seeds through. The
+/// built-in [PasskeyProvider] implements this with platform passkeys;
+/// custom backends (hardware key, FIDO2 transport, on-disk key
+/// material) implement it directly. Inject an implementation via
+/// `PasskeyClientBuilder.withPrfProvider`.
+///
+/// The six methods map one-to-one onto the callbacks the FRB-generated
+/// client expects; the wrapper wires them so a `PrfProvider` plugs in
+/// without listing each callback by hand.
+abstract class PrfProvider {
+  /// Derive one 32-byte seed per salt in as few OS ceremonies as the
+  /// platform supports, plus the credential ID observed in the same
+  /// assertion (absent when the backend does not surface one).
+  Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request);
+
+  /// Whether this device can produce PRF outputs. Hosts gate UX on it.
+  Future<bool> isSupported();
+
+  /// Register a new PRF-capable credential. `excludeCredentials`
+  /// prevents registering the same device twice by surfacing duplicates
+  /// as a `credentialAlreadyExists` failure.
+  Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentials);
+
+  /// Credential IDs the provider has persisted for the current RP.
+  /// Empty when the provider keeps no registry. Backs
+  /// `PasskeyClient.credentials().get()`.
+  Future<List<Uint8List>> getKnownCredentialIds();
+
+  /// Drop a single credential ID from the provider's persisted set.
+  /// Backs `PasskeyClient.credentials().remove(id)`.
+  Future<void> removeKnownCredentialId(Uint8List credentialId);
+
+  /// Clear the provider's persisted credential-ID set for the current
+  /// RP. Backs `PasskeyClient.credentials().clear()`.
+  Future<void> clearKnownCredentialIds();
+}
+
+/// Built-in Flutter passkey PRF provider using platform-native APIs
+/// (iOS AuthenticationServices, Android Credential Manager). The
+/// default [PrfProvider]; inject a configured instance through
+/// [PasskeyClientBuilder.withPrfProvider]:
 ///
 /// ```dart
-/// final provider = PasskeyProvider();
-/// final client = PasskeyClient(
-///   deriveSeeds: provider.deriveSeeds,
-///   isSupported: provider.isSupported,
-///   createPasskey: provider.createPasskey,
-///   getKnownCredentialIds: provider.getKnownCredentialIds,
-///   removeKnownCredentialId: provider.removeKnownCredentialId,
-///   clearKnownCredentialIds: provider.clearKnownCredentialIds,
+/// final provider = PasskeyProvider(
+///   PasskeyProviderOptions(rpId: PasskeyProvider.breezRpId, rpName: 'My App'),
 /// );
+/// final client = PasskeyClientBuilder(breezApiKey: apiKey)
+///     .withPrfProvider(provider)
+///     .build();
 /// ```
-class PasskeyProvider {
+class PasskeyProvider implements PrfProvider {
   /// Constant identifying Breez's shared `keys.breez.technology` RP.
   /// Pass as `rpId` when opting into the Breez-managed Relying Party
   /// (only valid for apps registered with Breez). Apps with their own
   /// RP domain pass their own string.
   static const String breezRpId = 'keys.breez.technology';
 
-  /// Default Relying Party name used by [PasskeyClient.builtIn] /
-  /// [PasskeyClientBuilder] when no `rpName` is supplied. Surfaces in
-  /// some credential-manager UIs (iCloud Keychain, Google Password
-  /// Manager).
+  /// Default Relying Party name used by the zero-config [PasskeyClient]
+  /// constructor / [PasskeyClientBuilder] when no `rpName` is supplied.
+  /// Surfaces in some credential-manager UIs (iCloud Keychain, Google
+  /// Password Manager).
   static const String defaultRpName = 'Breez';
 
   static const _channel = MethodChannel('breez_sdk_spark_passkey');
@@ -213,6 +248,7 @@ class PasskeyProvider {
   /// Returns the seeds plus the credential ID observed in the same
   /// assertion (absent when no assertion ran), so the SDK can pin a
   /// subsequent derive to the same credential.
+  @override
   Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request) async {
     final args = <String, Object?>{
       'salts': request.salts,
@@ -286,6 +322,7 @@ class PasskeyProvider {
   /// random 16-byte handle per call and surfaces it via
   /// [RegisteredCredential.userId]. Throws [PasskeyPrfException] on
   /// failure.
+  @override
   Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentials) async {
     final args = <String, Object?>{
       'rpId': _rpId,
@@ -336,6 +373,7 @@ class PasskeyProvider {
   /// Read the credential IDs the configured [CredentialRegistry] has
   /// stored for the current `rpId`. Empty list when no registry is
   /// configured. Backs `PasskeyClient.credentials().get()`.
+  @override
   Future<List<Uint8List>> getKnownCredentialIds() async {
     final registry = _credentialRegistry;
     if (registry == null) return const [];
@@ -345,6 +383,7 @@ class PasskeyProvider {
   /// Drop a single credential ID from the configured registry. No-op
   /// when no registry is configured. Backs
   /// `PasskeyClient.credentials().remove(id)`.
+  @override
   Future<void> removeKnownCredentialId(Uint8List credentialId) async {
     final registry = _credentialRegistry;
     if (registry == null) return;
@@ -358,6 +397,7 @@ class PasskeyProvider {
   /// Clear the configured registry's persisted credential-ID list for
   /// the current `rpId`. No-op when no registry is configured. Backs
   /// `PasskeyClient.credentials().clear()`.
+  @override
   Future<void> clearKnownCredentialIds() async {
     final registry = _credentialRegistry;
     if (registry == null) return;
@@ -369,6 +409,7 @@ class PasskeyProvider {
   }
 
   /// Whether this device supports passkey PRF.
+  @override
   Future<bool> isSupported() async {
     final result = await _channel.invokeMethod<bool>('isSupported');
     return result ?? false;
