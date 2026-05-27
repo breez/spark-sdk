@@ -5,6 +5,7 @@ import 'rust/models.dart'
     show
         ConnectWithPasskeyRequest,
         ConnectWithPasskeyResponse,
+        DeriveSeedsOutput,
         DeriveSeedsRequest,
         PasskeyAvailability,
         PasskeyConfig,
@@ -64,7 +65,7 @@ class PasskeyClient {
   /// [PasskeyProvider] doesn't fit (hardware key, FIDO2 transport,
   /// air-gapped backup file, etc.).
   PasskeyClient.fromCallbacks({
-    required FutureOr<List<Uint8List>> Function(DeriveSeedsRequest) deriveSeeds,
+    required FutureOr<DeriveSeedsOutput> Function(DeriveSeedsRequest) deriveSeeds,
     required FutureOr<bool> Function() isSupported,
     required FutureOr<RegisteredCredential> Function(List<Uint8List>) createPasskey,
     required FutureOr<List<Uint8List>> Function() getKnownCredentialIds,

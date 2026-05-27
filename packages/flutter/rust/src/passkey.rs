@@ -27,9 +27,11 @@ struct CallbackPrfProvider {
     /// that support the WebAuthn dual-salt fast path (saltInput1 +
     /// saltInput2 on iOS, prfFirst + prfSecond on Android); the Dart
     /// side internally falls back to looping per-salt where the
-    /// platform doesn't expose the fast path.
-    derive_seeds_fn:
-        Arc<dyn Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>> + Send + Sync>,
+    /// platform doesn't expose the fast path. Returns the seeds plus
+    /// the credential ID observed in the same assertion.
+    derive_seeds_fn: Arc<
+        dyn Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<DeriveSeedsOutput>> + Send + Sync,
+    >,
     is_supported_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync>,
     create_passkey_fn: Arc<
         dyn Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<RegisteredCredential>> + Send + Sync,
@@ -71,18 +73,14 @@ impl PrfProvider for CallbackPrfProvider {
         &self,
         request: DeriveSeedsRequest,
     ) -> Result<DeriveSeedsOutput, PrfProviderError> {
-        let bulk = AssertUnwindSafe((self.derive_seeds_fn)(request))
+        let output = AssertUnwindSafe((self.derive_seeds_fn)(request))
             .catch_unwind()
             .await
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
-        let seeds = bulk.map_err(dart_error_to_prf)?;
-        // The Dart callback returns seeds only. Flutter hosts have no
-        // consumer for the asserted credential ID, so this binding does
-        // not surface one (matches the Dart `PrfProvider` contract).
-        Ok(DeriveSeedsOutput {
-            seeds,
-            credential_id: None,
-        })
+        // The Dart callback returns the derived seeds plus the credential
+        // ID observed in the same assertion (absent when the backend does
+        // not surface one), matching the other bindings.
+        output.map_err(dart_error_to_prf)
     }
 
     async fn is_supported(&self) -> Result<bool, PrfProviderError> {
@@ -145,7 +143,7 @@ impl PasskeyClient {
     /// hosts without a registry can return empty / no-op.
     #[frb(sync)]
     pub fn new(
-        derive_seeds: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
+        derive_seeds: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<DeriveSeedsOutput>>
         + Send
         + Sync
         + 'static,
@@ -286,7 +284,7 @@ mod tests {
     }
 
     fn make_provider(
-        derive_bulk: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
+        derive_bulk: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<DeriveSeedsOutput>>
         + Send
         + Sync
         + 'static,
@@ -316,11 +314,19 @@ mod tests {
         let expected = vec![42u8; 32];
         let expected_clone = expected.clone();
         let provider = make_provider(
-            move |_request| ready(Ok(vec![expected_clone.clone()])),
+            move |_request| {
+                ready(Ok(DeriveSeedsOutput {
+                    seeds: vec![expected_clone.clone()],
+                    credential_id: Some(vec![7u8; 16]),
+                }))
+            },
             || ready(Ok(true)),
         );
-        let seeds = provider.derive_seeds(req(&["test"])).await.unwrap();
-        assert_eq!(seeds, vec![expected]);
+        let output = provider.derive_seeds(req(&["test"])).await.unwrap();
+        assert_eq!(output.seeds, vec![expected]);
+        // The asserted credential ID threads through from the Dart
+        // callback into DeriveSeedsOutput.
+        assert_eq!(output.credential_id, Some(vec![7u8; 16]));
     }
 
     #[tokio::test]
@@ -355,14 +361,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_supported_success() {
-        let provider = make_provider(|_request| ready(Ok(vec![])), || ready(Ok(false)));
+        let provider = make_provider(
+            |_request| {
+                ready(Ok(DeriveSeedsOutput {
+                    seeds: vec![],
+                    credential_id: None,
+                }))
+            },
+            || ready(Ok(false)),
+        );
         assert!(!provider.is_supported().await.unwrap());
     }
 
     #[tokio::test]
     async fn test_is_supported_panic_caught() {
         let provider = make_provider(
-            |_request| ready(Ok(vec![])),
+            |_request| {
+                ready(Ok(DeriveSeedsOutput {
+                    seeds: vec![],
+                    credential_id: None,
+                }))
+            },
             || panicking("device check failed"),
         );
         let err = provider.is_supported().await.unwrap_err();

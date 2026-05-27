@@ -149,8 +149,6 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
         scope.launch {
             try {
                 graceTracker.consume()
-                // Flutter's Dart PrfProvider contract returns seeds only;
-                // the asserted credential ID is not surfaced to Dart hosts.
                 val derivation = CredentialManagerPrfCore(
                     rpId = rpId,
                     rpName = rpName,
@@ -163,10 +161,14 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
                     allowCredentials = allowIds,
                     preferImmediatelyAvailableCredentials = preferImmediate ?: true,
                 )
-                // Encode each seed as base64 so MethodChannel can carry
-                // it as a List<String>. Dart side base64-decodes back
-                // to Uint8List.
-                result.success(derivation.seeds.map { Base64.encodeToString(it, Base64.NO_WRAP) })
+                // Encode each seed as base64 so MethodChannel can carry it.
+                // The asserted credential ID rides alongside (null when no
+                // assertion ran) so the Dart side surfaces it via
+                // DeriveSeedsOutput, matching the other bindings.
+                result.success(mapOf(
+                    "seeds" to derivation.seeds.map { Base64.encodeToString(it, Base64.NO_WRAP) },
+                    "credentialId" to derivation.credentialId?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
+                ))
             } catch (e: CredentialManagerPrfCoreException) {
                 result.error(e.errorCode, e.message ?: e.defaultMessage, null)
             } catch (e: Exception) {

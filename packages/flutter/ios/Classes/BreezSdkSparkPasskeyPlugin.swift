@@ -114,15 +114,16 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         )
         Task { @MainActor in
             do {
-                // Flutter's Dart PrfProvider contract returns seeds only;
-                // the asserted credential ID is not surfaced to Dart hosts.
-                let (seeds, _) = try await core.deriveSeeds(
+                let (seeds, credentialId) = try await core.deriveSeeds(
                     salts: saltDatas,
                     autoRegister: autoRegister,
                     allowCredentials: allowCredentials,
                     preferImmediatelyAvailableCredentials: preferImmediate ?? true
                 )
-                result(seeds.map { $0.base64EncodedString() })
+                result([
+                    "seeds": seeds.map { $0.base64EncodedString() },
+                    "credentialId": credentialId.map { $0.base64EncodedString() } ?? NSNull(),
+                ])
             } catch let err as PasskeyAssertionError {
                 result(Self.flutterError(from: err))
             } catch {

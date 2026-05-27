@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
-import 'rust/models.dart' show DeriveSeedsRequest, RegisteredCredential;
+import 'rust/models.dart' show DeriveSeedsOutput, DeriveSeedsRequest, RegisteredCredential;
 
 /// Result of a domain-association verification check against the
 /// platform's well-known configuration source. Mirrors the Rust
@@ -209,7 +209,11 @@ class PasskeyProvider {
   /// native plugin short-circuits to a single-salt assertion (one
   /// prompt). Used by the SDK's `setup_wallet` orchestration to collapse
   /// master + label derivation into one prompt.
-  Future<List<Uint8List>> deriveSeeds(DeriveSeedsRequest request) async {
+  ///
+  /// Returns the seeds plus the credential ID observed in the same
+  /// assertion (absent when no assertion ran), so the SDK can pin a
+  /// subsequent derive to the same credential.
+  Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request) async {
     final args = <String, Object?>{
       'salts': request.salts,
       'rpId': _rpId,
@@ -246,14 +250,20 @@ class PasskeyProvider {
       args['preferImmediatelyAvailableCredentials'] = preferImmediate;
     }
     try {
-      final result = await _channel.invokeMethod<List<Object?>>('deriveSeeds', args);
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>('deriveSeeds', args);
       if (result == null) {
         throw const PasskeyPrfException(
           code: 'unknown',
           message: 'deriveSeeds returned null',
         );
       }
-      return result.cast<String>().map((b64) => base64Decode(b64)).toList();
+      final rawSeeds = (result['seeds'] as List<Object?>?) ?? const <Object?>[];
+      final seeds = rawSeeds.cast<String>().map(base64Decode).toList();
+      final credentialIdB64 = result['credentialId'] as String?;
+      return DeriveSeedsOutput(
+        seeds: seeds,
+        credentialId: credentialIdB64 == null ? null : base64Decode(credentialIdB64),
+      );
     } on PlatformException catch (e) {
       var mapped = _mapPlatformException(e);
       // Augment CredentialNotFound when host had no allow-list and no
