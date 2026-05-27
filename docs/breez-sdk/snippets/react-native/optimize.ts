@@ -5,9 +5,11 @@ const exampleOptimizeLeavesFull = async (sdk: BreezSdk) => {
   const outcome = await sdk.optimizeLeaves(undefined)
 
   if (outcome.tag === OptimizationOutcome_Tags.Completed) {
-    console.log(`Optimization completed in ${outcome.inner.roundsExecuted} rounds`)
-  } else if (outcome.tag === OptimizationOutcome_Tags.Skipped) {
-    console.log('Optimization skipped — wallet already optimal')
+    if (outcome.inner.roundsExecuted === 0) {
+      console.log('Optimization skipped — wallet already optimal')
+    } else {
+      console.log(`Optimization completed in ${outcome.inner.roundsExecuted} rounds`)
+    }
   } else if (outcome.tag === OptimizationOutcome_Tags.InProgress) {
     // Full mode runs to completion in one call, so InProgress is
     // not reachable here.
@@ -26,10 +28,11 @@ const exampleOptimizeLeavesSingleRound = async (sdk: BreezSdk) => {
       console.log(`Executed round ${roundsExecuted}`)
     } else if (outcome.tag === OptimizationOutcome_Tags.Completed) {
       roundsExecuted += outcome.inner.roundsExecuted
-      console.log(`Optimization done after ${roundsExecuted} rounds`)
-      break
-    } else if (outcome.tag === OptimizationOutcome_Tags.Skipped) {
-      console.log('Optimization skipped — wallet already optimal')
+      if (roundsExecuted === 0) {
+        console.log('Optimization skipped — wallet already optimal')
+      } else {
+        console.log(`Optimization done after ${roundsExecuted} rounds`)
+      }
       break
     }
   }

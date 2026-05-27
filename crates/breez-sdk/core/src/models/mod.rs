@@ -1867,17 +1867,19 @@ pub struct OptimizeLeavesOptions {
 /// The SDK holds no cross-call state — callers driving a `SingleRound`
 /// loop maintain their own cumulative counter if they need one.
 ///
+/// A `Completed { rounds_executed: 0 }` outcome means the wallet was
+/// already optimal at call time (no swap was needed).
+///
 /// **`SingleRound` loop pattern**: terminate on anything that isn't
-/// `InProgress` — `Completed` (the planner confirmed this swap finished
-/// optimization) or `Skipped` (the wallet was already optimal at call
-/// time).
+/// `InProgress`. `Completed` covers both the final swap of a productive
+/// run and the "already optimal" no-op case (the latter as
+/// `rounds_executed: 0`).
 ///
 /// ```ignore
 /// loop {
 ///     match sdk.optimize_leaves(SingleRound).await? {
 ///         OptimizationOutcome::InProgress => continue,
-///         OptimizationOutcome::Completed { .. }
-///         | OptimizationOutcome::Skipped => break,
+///         OptimizationOutcome::Completed { .. } => break,
 ///     }
 /// }
 /// ```
@@ -1888,14 +1890,13 @@ pub enum OptimizationOutcome {
     /// Returned by `Full` runs on success, and by `SingleRound` runs
     /// whose swap was the final one needed (the planner produced a
     /// single-swap plan with a convergence guarantee).
+    /// `rounds_executed == 0` means the wallet was already optimal —
+    /// no work was performed.
     Completed { rounds_executed: u32 },
     /// `SingleRound` only: a round ran but the planner could not
     /// guarantee it was the last. The caller should invoke
     /// `optimize_leaves` again.
     InProgress,
-    /// No optimization work was performed because the wallet was already
-    /// optimal at call time. Returned by either mode on a no-op call.
-    Skipped,
 }
 
 /// A contact entry containing a name and payment identifier.

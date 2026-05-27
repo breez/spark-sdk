@@ -6,11 +6,11 @@ const exampleOptimizeLeavesFull = async (sdk: BreezSdk) => {
 
   switch (outcome.type) {
     case 'completed': {
-      console.log(`Optimization completed in ${outcome.roundsExecuted} rounds`)
-      break
-    }
-    case 'skipped': {
-      console.log('Optimization skipped — wallet already optimal')
+      if (outcome.roundsExecuted === 0) {
+        console.log('Optimization skipped — wallet already optimal')
+      } else {
+        console.log(`Optimization completed in ${outcome.roundsExecuted} rounds`)
+      }
       break
     }
     case 'inProgress': {
@@ -33,10 +33,11 @@ const exampleOptimizeLeavesSingleRound = async (sdk: BreezSdk) => {
       console.log(`Executed round ${roundsExecuted}`)
     } else if (outcome.type === 'completed') {
       roundsExecuted += outcome.roundsExecuted
-      console.log(`Optimization done after ${roundsExecuted} rounds`)
-      break
-    } else if (outcome.type === 'skipped') {
-      console.log('Optimization skipped — wallet already optimal')
+      if (roundsExecuted === 0) {
+        console.log('Optimization skipped — wallet already optimal')
+      } else {
+        console.log(`Optimization done after ${roundsExecuted} rounds`)
+      }
       break
     }
   }

@@ -6,10 +6,11 @@ Future<void> runFullOptimization(BreezSdk sdk) async {
 
   switch (outcome) {
     case OptimizationOutcome_Completed(:final roundsExecuted):
-      print("Optimization completed in $roundsExecuted rounds");
-      break;
-    case OptimizationOutcome_Skipped():
-      print("Optimization skipped — wallet already optimal");
+      if (roundsExecuted == 0) {
+        print("Optimization skipped — wallet already optimal");
+      } else {
+        print("Optimization completed in $roundsExecuted rounds");
+      }
       break;
     case OptimizationOutcome_InProgress():
       // Full mode runs to completion in one call, so InProgress is
@@ -32,10 +33,11 @@ Future<void> runOptimizationOneRoundAtATime(BreezSdk sdk) async {
         break;
       case OptimizationOutcome_Completed(roundsExecuted: var n):
         roundsExecuted += n;
-        print("Optimization done after $roundsExecuted rounds");
-        return;
-      case OptimizationOutcome_Skipped():
-        print("Optimization skipped — wallet already optimal");
+        if (roundsExecuted == 0) {
+          print("Optimization skipped — wallet already optimal");
+        } else {
+          print("Optimization done after $roundsExecuted rounds");
+        }
         return;
     }
   }

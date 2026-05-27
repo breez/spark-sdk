@@ -8,10 +8,11 @@ async fn run_full_optimization(sdk: &BreezSdk) -> Result<()> {
 
     match outcome {
         OptimizationOutcome::Completed { rounds_executed } => {
-            info!("Optimization completed in {} rounds", rounds_executed);
-        }
-        OptimizationOutcome::Skipped => {
-            info!("Optimization skipped — wallet already optimal");
+            if rounds_executed == 0 {
+                info!("Optimization skipped — wallet already optimal");
+            } else {
+                info!("Optimization completed in {} rounds", rounds_executed);
+            }
         }
         OptimizationOutcome::InProgress => {
             // Full mode runs to completion in one call, so InProgress is
@@ -39,11 +40,11 @@ async fn run_optimization_one_round_at_a_time(sdk: &BreezSdk) -> Result<()> {
                 rounds_executed: this_round,
             } => {
                 rounds_executed += this_round;
-                info!("Optimization done after {} rounds", rounds_executed);
-                break;
-            }
-            OptimizationOutcome::Skipped => {
-                info!("Optimization skipped — wallet already optimal");
+                if rounds_executed == 0 {
+                    info!("Optimization skipped — wallet already optimal");
+                } else {
+                    info!("Optimization done after {} rounds", rounds_executed);
+                }
                 break;
             }
         }

@@ -6,9 +6,11 @@ func runFullOptimization(sdk: BreezSdk) async throws {
 
     switch outcome {
     case .completed(let roundsExecuted):
-        print("Optimization completed in \(roundsExecuted) rounds")
-    case .skipped:
-        print("Optimization skipped — wallet already optimal")
+        if roundsExecuted == 0 {
+            print("Optimization skipped — wallet already optimal")
+        } else {
+            print("Optimization completed in \(roundsExecuted) rounds")
+        }
     case .inProgress:
         // Full mode runs to completion in one call, so InProgress is
         // not reachable here.
@@ -29,10 +31,11 @@ func runOptimizationOneRoundAtATime(sdk: BreezSdk) async throws {
             print("Executed round \(roundsExecuted)")
         case .completed(let thisRound):
             roundsExecuted += thisRound
-            print("Optimization done after \(roundsExecuted) rounds")
-            break loop
-        case .skipped:
-            print("Optimization skipped — wallet already optimal")
+            if roundsExecuted == 0 {
+                print("Optimization skipped — wallet already optimal")
+            } else {
+                print("Optimization done after \(roundsExecuted) rounds")
+            }
             break loop
         }
     }

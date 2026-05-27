@@ -544,7 +544,6 @@ impl From<spark_wallet::OptimizationOutcome> for OptimizationOutcome {
                 Self::Completed { rounds_executed }
             }
             spark_wallet::OptimizationOutcome::InProgress => Self::InProgress,
-            spark_wallet::OptimizationOutcome::Skipped => Self::Skipped,
         }
     }
 }

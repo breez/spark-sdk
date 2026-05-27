@@ -20,9 +20,11 @@ func RunFullOptimization(sdk *breez_sdk_spark.BreezSdk) error {
 
 	switch o := outcome.(type) {
 	case breez_sdk_spark.OptimizationOutcomeCompleted:
-		log.Printf("Optimization completed in %v rounds", o.RoundsExecuted)
-	case breez_sdk_spark.OptimizationOutcomeSkipped:
-		log.Printf("Optimization skipped — wallet already optimal")
+		if o.RoundsExecuted == 0 {
+			log.Printf("Optimization skipped — wallet already optimal")
+		} else {
+			log.Printf("Optimization completed in %v rounds", o.RoundsExecuted)
+		}
 	case breez_sdk_spark.OptimizationOutcomeInProgress:
 		// Full mode runs to completion in one call, so InProgress is
 		// not reachable here.
@@ -53,10 +55,11 @@ func RunOptimizationOneRoundAtATime(sdk *breez_sdk_spark.BreezSdk) error {
 			log.Printf("Executed round %v", roundsExecuted)
 		case breez_sdk_spark.OptimizationOutcomeCompleted:
 			roundsExecuted += o.RoundsExecuted
-			log.Printf("Optimization done after %v rounds", roundsExecuted)
-			return nil
-		case breez_sdk_spark.OptimizationOutcomeSkipped:
-			log.Printf("Optimization skipped — wallet already optimal")
+			if roundsExecuted == 0 {
+				log.Printf("Optimization skipped — wallet already optimal")
+			} else {
+				log.Printf("Optimization done after %v rounds", roundsExecuted)
+			}
 			return nil
 		}
 	}

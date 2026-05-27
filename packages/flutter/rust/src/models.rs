@@ -1151,7 +1151,6 @@ pub struct _OptimizeLeavesOptions {
 pub enum _OptimizationOutcome {
     Completed { rounds_executed: u32 },
     InProgress,
-    Skipped,
 }
 
 #[frb(mirror(ConversionEstimate))]

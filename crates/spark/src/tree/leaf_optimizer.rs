@@ -99,18 +99,19 @@ pub trait AutoOptimizationEventHandler: Send + Sync {
 /// `rounds_executed` always refers to rounds executed *by this call*. The
 /// optimizer holds no cross-call state — callers driving a capped loop
 /// maintain their own cumulative counter if they want one.
+///
+/// A `Completed { rounds_executed: 0 }` outcome means the wallet was
+/// already optimal at call time (no swap was needed).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub enum OptimizationOutcome {
     /// All planned optimization work was executed. Returned by uncapped
     /// runs on success, and by capped runs that executed what the planner
-    /// classified as the final round.
+    /// classified as the final round. `rounds_executed == 0` means the
+    /// wallet was already optimal — no work was performed.
     Completed { rounds_executed: u32 },
     /// A round ran but more rounds remain. Only emitted by capped runs;
     /// the caller should invoke [`LeafOptimizer::run`] again to continue.
     InProgress,
-    /// No optimization work was performed because the wallet was already
-    /// optimal at call time.
-    Skipped,
 }
 
 /// Errors returned by [`LeafOptimizer::run`].
@@ -269,9 +270,9 @@ impl LeafOptimizer {
     ///
     /// Returns:
     /// - [`OptimizationOutcome::Completed`] if all planned work was done
-    ///   (uncapped run, or capped run after the final round).
+    ///   (uncapped run, or capped run after the final round). A
+    ///   `rounds_executed` of `0` means no work was needed.
     /// - [`OptimizationOutcome::InProgress`] if a round ran but more remain.
-    /// - [`OptimizationOutcome::Skipped`] if no work was needed.
     ///
     /// Errors:
     /// - [`OptimizationError::AlreadyRunning`] if another run (auto or
@@ -442,16 +443,15 @@ impl LeafOptimizer {
             if emit_events {
                 self.emit_event(AutoOptimizationEvent::Skipped);
             }
-            Ok(OptimizationOutcome::Skipped)
         } else {
             info!("Leaf optimization completed successfully ({rounds_this_call} rounds executed)");
             if emit_events {
                 self.emit_event(AutoOptimizationEvent::Completed);
             }
-            Ok(OptimizationOutcome::Completed {
-                rounds_executed: rounds_this_call,
-            })
         }
+        Ok(OptimizationOutcome::Completed {
+            rounds_executed: rounds_this_call,
+        })
     }
 
     /// Cancels the ongoing optimization and waits for it to fully stop.

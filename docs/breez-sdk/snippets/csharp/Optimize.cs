@@ -12,10 +12,14 @@ namespace BreezSdkSnippets
             switch (outcome)
             {
                 case OptimizationOutcome.Completed { roundsExecuted: var roundsExecuted }:
-                    Console.WriteLine($"Optimization completed in {roundsExecuted} rounds");
-                    break;
-                case OptimizationOutcome.Skipped:
-                    Console.WriteLine("Optimization skipped — wallet already optimal");
+                    if (roundsExecuted == 0)
+                    {
+                        Console.WriteLine("Optimization skipped — wallet already optimal");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Optimization completed in {roundsExecuted} rounds");
+                    }
                     break;
                 case OptimizationOutcome.InProgress:
                     // Full mode runs to completion in one call, so InProgress is
@@ -41,12 +45,14 @@ namespace BreezSdkSnippets
                 else if (outcome is OptimizationOutcome.Completed { roundsExecuted: var n })
                 {
                     roundsExecuted += n;
-                    Console.WriteLine($"Optimization done after {roundsExecuted} rounds");
-                    break;
-                }
-                else if (outcome is OptimizationOutcome.Skipped)
-                {
-                    Console.WriteLine("Optimization skipped — wallet already optimal");
+                    if (roundsExecuted == 0)
+                    {
+                        Console.WriteLine("Optimization skipped — wallet already optimal");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Optimization done after {roundsExecuted} rounds");
+                    }
                     break;
                 }
             }

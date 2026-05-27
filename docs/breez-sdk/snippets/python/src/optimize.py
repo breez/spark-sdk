@@ -12,9 +12,10 @@ async def run_full_optimization(sdk: BreezSdk):
     outcome = await sdk.optimize_leaves(None)
 
     if isinstance(outcome, OptimizationOutcome.COMPLETED):
-        logging.debug(f"Optimization completed in {outcome.rounds_executed} rounds")
-    elif isinstance(outcome, OptimizationOutcome.SKIPPED):
-        logging.debug("Optimization skipped — wallet already optimal")
+        if outcome.rounds_executed == 0:
+            logging.debug("Optimization skipped — wallet already optimal")
+        else:
+            logging.debug(f"Optimization completed in {outcome.rounds_executed} rounds")
     elif isinstance(outcome, OptimizationOutcome.IN_PROGRESS):
         raise AssertionError("Full mode never returns IN_PROGRESS")
     # ANCHOR_END: optimize-leaves-full
@@ -31,10 +32,10 @@ async def run_optimization_one_round_at_a_time(sdk: BreezSdk):
             logging.debug(f"Executed round {rounds_executed}")
         elif isinstance(outcome, OptimizationOutcome.COMPLETED):
             rounds_executed += outcome.rounds_executed
-            logging.debug(f"Optimization done after {rounds_executed} rounds")
-            break
-        elif isinstance(outcome, OptimizationOutcome.SKIPPED):
-            logging.debug("Optimization skipped — wallet already optimal")
+            if rounds_executed == 0:
+                logging.debug("Optimization skipped — wallet already optimal")
+            else:
+                logging.debug(f"Optimization done after {rounds_executed} rounds")
             break
     # ANCHOR_END: optimize-leaves-single-round
 

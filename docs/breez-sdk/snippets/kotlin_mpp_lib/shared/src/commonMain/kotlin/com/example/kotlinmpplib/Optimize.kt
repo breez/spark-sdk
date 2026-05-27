@@ -9,10 +9,11 @@ class Optimize {
 
         when (outcome) {
             is OptimizationOutcome.Completed -> {
-                // Log.v("Breez", "Optimization completed in ${outcome.roundsExecuted} rounds")
-            }
-            is OptimizationOutcome.Skipped -> {
-                // Log.v("Breez", "Optimization skipped — wallet already optimal")
+                if (outcome.roundsExecuted == 0u) {
+                    // Log.v("Breez", "Optimization skipped — wallet already optimal")
+                } else {
+                    // Log.v("Breez", "Optimization completed in ${outcome.roundsExecuted} rounds")
+                }
             }
             is OptimizationOutcome.InProgress -> {
                 // Full mode runs to completion in one call, so InProgress is
@@ -35,11 +36,11 @@ class Optimize {
                 }
                 is OptimizationOutcome.Completed -> {
                     roundsExecuted += outcome.roundsExecuted
-                    // Log.v("Breez", "Optimization done after $roundsExecuted rounds")
-                    break
-                }
-                is OptimizationOutcome.Skipped -> {
-                    // Log.v("Breez", "Optimization skipped — wallet already optimal")
+                    if (roundsExecuted == 0u) {
+                        // Log.v("Breez", "Optimization skipped — wallet already optimal")
+                    } else {
+                        // Log.v("Breez", "Optimization done after $roundsExecuted rounds")
+                    }
                     break
                 }
             }

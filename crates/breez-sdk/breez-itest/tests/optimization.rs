@@ -134,8 +134,8 @@ async fn test_optimize_leaves_rejects_concurrent_calls(
 /// Drives a `SingleRound` loop to completion, returning the cumulative
 /// round count observed. The SDK signals the final round by returning
 /// `Completed` in the same call (when the planner reports a
-/// single-swap, fully-converging plan). `Skipped` only fires when the
-/// very first call sees an already-optimal wallet.
+/// single-swap, fully-converging plan). `Completed { rounds_executed: 0 }`
+/// only fires when the call sees an already-optimal wallet.
 async fn drive_single_round_loop(alice: &SdkInstance) -> Result<u32> {
     let mut total = 0u32;
     let mut saw_in_progress = false;
@@ -153,23 +153,22 @@ async fn drive_single_round_loop(alice: &SdkInstance) -> Result<u32> {
                 saw_in_progress = true;
                 info!("SingleRound iteration {iteration}: round {total} (InProgress)");
             }
+            OptimizationOutcome::Completed { rounds_executed: 0 } => {
+                assert!(
+                    !saw_in_progress,
+                    "Completed{{0}} after seeing InProgress — convergence hint should have caused Completed{{1}} instead"
+                );
+                info!("SingleRound iteration {iteration}: Completed (wallet already optimal)");
+                return Ok(0);
+            }
             OptimizationOutcome::Completed { rounds_executed } => {
                 assert_eq!(
                     rounds_executed, 1,
-                    "SingleRound mode should always execute exactly one round per call"
+                    "SingleRound mode should execute at most one round per call"
                 );
                 total += rounds_executed;
                 info!("SingleRound iteration {iteration}: round {total} (Completed)");
                 return Ok(total);
-            }
-            OptimizationOutcome::Skipped => {
-                if !saw_in_progress {
-                    info!("SingleRound iteration {iteration}: Skipped (wallet already optimal)");
-                    return Ok(0);
-                }
-                panic!(
-                    "Skipped after seeing InProgress — convergence hint should have caused Completed instead"
-                );
             }
         }
     }

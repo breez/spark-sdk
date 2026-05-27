@@ -1310,7 +1310,6 @@ pub struct OptimizeLeavesOptions {
 pub enum OptimizationOutcome {
     Completed { rounds_executed: u32 },
     InProgress,
-    Skipped,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionEstimate)]
