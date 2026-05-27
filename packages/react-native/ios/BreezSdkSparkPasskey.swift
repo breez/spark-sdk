@@ -52,13 +52,16 @@ class BreezSdkSparkPasskey: NSObject {
         )
         Task { @MainActor in
             do {
-                let seeds = try await core.deriveSeeds(
+                let derivation = try await core.deriveSeeds(
                     salts: saltDatas,
                     autoRegister: autoRegister,
                     allowCredentials: allowIds,
                     preferImmediatelyAvailableCredentials: preferImmediate ?? true
                 )
-                resolve(seeds.map { $0.base64EncodedString() })
+                resolve([
+                    "seeds": derivation.seeds.map { $0.base64EncodedString() },
+                    "credentialId": derivation.credentialId.map { $0.base64EncodedString() } ?? NSNull(),
+                ])
             } catch let err as PasskeyAssertionError {
                 Self.reject(err, reject: reject, defaultMessage: "User cancelled authentication")
             } catch {

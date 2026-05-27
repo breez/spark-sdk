@@ -130,7 +130,7 @@ class BreezSdkSparkPasskeyModule(
         scope.launch {
             try {
                 graceTracker.consume()
-                val seeds = CredentialManagerPrfCore(
+                val derivation = CredentialManagerPrfCore(
                     rpId = rpId,
                     rpName = rpName,
                     userName = userName,
@@ -142,14 +142,22 @@ class BreezSdkSparkPasskeyModule(
                     allowCredentials = allowIds,
                     preferImmediatelyAvailableCredentials = preferImmediatelyAvailableCredentials ?: true,
                 )
-                // Encode each seed as base64 so the React bridge can carry it
-                // as an array of strings. JS side base64-decodes back to
-                // Uint8Array.
-                val arr = Arguments.createArray()
-                for (seed in seeds) {
-                    arr.pushString(Base64.encodeToString(seed, Base64.NO_WRAP))
+                // Encode each seed as base64 so the React bridge can carry
+                // them as an array of strings, plus the asserted credential
+                // ID. JS side base64-decodes back to Uint8Array.
+                val seedsArr = Arguments.createArray()
+                for (seed in derivation.seeds) {
+                    seedsArr.pushString(Base64.encodeToString(seed, Base64.NO_WRAP))
                 }
-                promise.resolve(arr)
+                val result = Arguments.createMap()
+                result.putArray("seeds", seedsArr)
+                val credentialId = derivation.credentialId
+                if (credentialId != null) {
+                    result.putString("credentialId", Base64.encodeToString(credentialId, Base64.NO_WRAP))
+                } else {
+                    result.putNull("credentialId")
+                }
+                promise.resolve(result)
             } catch (e: CredentialManagerPrfCoreException) {
                 promise.reject(e.errorCode, e.message ?: e.defaultMessage)
             } catch (e: Exception) {

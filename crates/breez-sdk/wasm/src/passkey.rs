@@ -10,13 +10,20 @@ use crate::{
     },
 };
 
-/// Optional configuration for `PasskeyClient`. Provider-scoped knobs
-/// (`rpId`, `credentialRegistry`, etc.) live on `PasskeyProvider`.
+/// Configuration for `PasskeyClient`. `rpId` / `rpName` configure the
+/// built-in provider on the zero-config path (ignored when you inject
+/// your own provider, which owns its RP).
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyConfig)]
 pub struct PasskeyConfig {
-    /// Wallet label used when `register` / `signIn` receive `label = undefined`.
-    /// `undefined` falls back to the internal default `"Default"`.
+    /// Wallet label for `register` / `signIn` when no label is given.
+    /// Unset falls back to the internal default `"Default"`.
     pub default_label: Option<String>,
+    /// Relying Party ID for the built-in provider. Unset uses the Breez
+    /// shared RP.
+    pub rp_id: Option<String>,
+    /// Relying Party name for the built-in provider. Unset uses the SDK
+    /// default (`"Breez"`).
+    pub rp_name: Option<String>,
 }
 
 /// One-shot capability + configuration probe returned by

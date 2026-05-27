@@ -19,7 +19,7 @@ import {
 // deriveSeeds for derivation, isSupported for the capability probe;
 // createPasskey for registration is optional.
 class CustomPrfProvider {
-  deriveSeeds = async (_salts: string[]): Promise<Uint8Array[]> => {
+  deriveSeeds = async (_request: { salts: string[] }): Promise<{ seeds: Uint8Array[]; credentialId?: Uint8Array }> => {
     // Call platform passkey API with PRF extension. Returns one 32-byte
     // output per salt in input order.
     throw new Error('Implement using WebAuthn or native passkey APIs')

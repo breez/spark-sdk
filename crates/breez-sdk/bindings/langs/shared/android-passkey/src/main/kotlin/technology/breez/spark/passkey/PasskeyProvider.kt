@@ -81,6 +81,14 @@ public class PasskeyProvider(
          */
         public const val BREEZ_RP_ID: String = CredentialManagerPrfCore.DEFAULT_RP_ID
 
+        /**
+         * Default Relying Party name used by the zero-config
+         * [PasskeyClient] factory / [PasskeyClientBuilder] when no
+         * `rpName` is supplied. Surfaces in some credential-manager UIs
+         * (Google Password Manager).
+         */
+        public const val DEFAULT_RP_NAME: String = "Breez"
+
         private const val TAG = "PasskeyProvider"
     }
 
@@ -98,14 +106,13 @@ public class PasskeyProvider(
         activityProvider = activityProvider,
     )
 
-    override suspend fun takeLastObservedCredentialId(): ByteArray? =
-        core.takeLastObservedCredentialId()
-
     /**
      * Bulk PRF derivation backed by [CredentialManagerPrfCore.deriveSeeds].
      * Uses the WebAuthn PRF dual-salt fast path where the authenticator
      * honors `prf.eval.second`, falling back to single-salt otherwise.
-     * Output ordering matches input ordering.
+     * Output ordering matches input ordering. Returns the seeds plus the
+     * credential ID observed in the same assertion (null when none was
+     * captured, e.g. empty `salts`).
      *
      * Passes `autoRegister = false`: this provider never implicitly
      * creates a credential during derivation. Sign-up and sign-in are
@@ -114,15 +121,18 @@ public class PasskeyProvider(
      * silently minting a new passkey. (The core defaults `autoRegister`
      * to true for direct callers; the provider opts out.)
      */
-    override suspend fun deriveSeeds(request: DeriveSeedsRequest): List<ByteArray> =
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput =
         try {
-            core.deriveSeeds(
+            val derivation = core.deriveSeeds(
                 salts = request.salts,
                 autoRegister = false,
                 allowCredentials = request.allowCredentials,
                 preferImmediatelyAvailableCredentials =
                     request.preferImmediatelyAvailableCredentials ?: true,
             )
+            // The core observes the asserted credential ID inline and
+            // returns it alongside the seeds.
+            DeriveSeedsOutput(derivation.seeds, derivation.credentialId)
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()
         }

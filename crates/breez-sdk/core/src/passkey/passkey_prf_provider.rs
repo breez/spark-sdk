@@ -1,5 +1,5 @@
 use super::error::PrfProviderError;
-use super::models::RegisteredCredential;
+use super::models::{DeriveSeedsOutput, RegisteredCredential};
 
 /// Per-call inputs for [`PrfProvider::derive_seeds`]. Hosts that
 /// don't need per-ceremony overrides fall back to [`Default`]
@@ -80,10 +80,14 @@ pub trait PrfProvider: Send + Sync {
     /// platform ceremony for this single call. Custom providers that
     /// don't model those concepts (file-backed, `YubiKey` HMAC, etc.)
     /// can ignore them.
+    ///
+    /// Returns the seeds plus the credential ID observed in the same
+    /// assertion ([`DeriveSeedsOutput`]); the credential ID is absent
+    /// when the provider does not surface it.
     async fn derive_seeds(
         &self,
         request: DeriveSeedsRequest,
-    ) -> Result<Vec<Vec<u8>>, PrfProviderError>;
+    ) -> Result<DeriveSeedsOutput, PrfProviderError>;
 
     /// Whether this provider can produce PRF outputs on the current
     /// device. Hosts gate UX on the result.
@@ -126,19 +130,6 @@ pub trait PrfProvider: Send + Sync {
         Ok(DomainAssociation::Skipped {
             reason: "Provider does not verify domain association".to_string(),
         })
-    }
-
-    /// Take ownership of the credential ID observed during the most
-    /// recent assertion ceremony, clearing the slot. Returns `None` if
-    /// no assertion has completed since the last call OR if the
-    /// provider does not surface this signal (the trait default).
-    ///
-    /// Built-in platform passkey providers (iOS, Android, Web JS)
-    /// override this so [`PasskeyClient::sign_in`] can populate
-    /// [`SignInResponse::credential_id`]. CLI / hardware providers
-    /// (file-backed, FIDO2, `YubiKey`) inherit the `None` default.
-    async fn take_last_observed_credential_id(&self) -> Option<Vec<u8>> {
-        None
     }
 
     /// List credential IDs the provider has persisted for the current

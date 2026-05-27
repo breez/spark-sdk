@@ -9,7 +9,7 @@ namespace BreezSdkSnippets
     // CreatePasskey for registration is optional.
     class CustomPrfProvider : PrfProvider
     {
-        public async Task<List<byte[]>> DeriveSeeds(List<string> salts)
+        public async Task<DeriveSeedsOutput> DeriveSeeds(DeriveSeedsRequest request)
         {
             throw new NotImplementedException("Implement using WebAuthn or native passkey APIs");
         }

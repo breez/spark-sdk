@@ -55,18 +55,17 @@ public class PasskeyProvider: PrfProvider {
     /// own RP domain pass their own string.
     public static let BREEZ_RP_ID: String = "keys.breez.technology"
 
+    /// Default Relying Party name used by the zero-config
+    /// ``PasskeyClient/init(breezApiKey:rpId:rpName:config:)`` and
+    /// ``PasskeyClientBuilder`` when no `rpName` is supplied. Surfaces in
+    /// some credential-manager UIs (iCloud Keychain, Google Password
+    /// Manager).
+    public static let defaultRpName: String = "Breez"
+
     private let rpId: String
     private let core: PasskeyAssertionCore
     private let credentialRegistry: CredentialRegistry?
     private let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
-
-    /// Take ownership of the credential ID captured by the most recent
-    /// successful assertion. Returns nil if no assertion has completed
-    /// since the last call. Used by binding-layer code that wants to
-    /// surface the credential ID to a higher-level response type.
-    public func takeLastObservedCredentialId() -> Data? {
-        core.takeLastObservedCredentialId()
-    }
 
     /// Protocol for providing a presentation anchor for the authorization controller.
     public typealias PresentationAnchorProvider = PasskeyPresentationAnchorProvider
@@ -157,7 +156,7 @@ public class PasskeyProvider: PrfProvider {
     /// missing credential surfaces as `.credentialNotFound` rather than
     /// silently minting a new passkey. (The core defaults `autoRegister`
     /// to true for direct callers; the provider opts out.)
-    public func deriveSeeds(request: DeriveSeedsRequest) async throws -> [Data] {
+    public func deriveSeeds(request: DeriveSeedsRequest) async throws -> DeriveSeedsOutput {
         // Map (not compactMap) so a salt that somehow can't UTF-8 encode
         // fails loudly with its position rather than being dropped and
         // detected after the fact by a count mismatch.
@@ -168,13 +167,16 @@ public class PasskeyProvider: PrfProvider {
             return data
         }
         do {
-            return try await core.deriveSeeds(
+            let derivation = try await core.deriveSeeds(
                 salts: saltDatas,
                 autoRegister: false,
                 allowCredentials: request.allowCredentials.map { Data($0) },
                 preferImmediatelyAvailableCredentials:
                     request.preferImmediatelyAvailableCredentials ?? true
             )
+            // The core observes the asserted credential ID inline and
+            // returns it alongside the seeds.
+            return DeriveSeedsOutput(seeds: derivation.seeds, credentialId: derivation.credentialId)
         } catch let err as PasskeyAssertionError {
             throw Self.toPrfProviderError(err)
         }

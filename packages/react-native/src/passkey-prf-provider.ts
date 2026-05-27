@@ -1,13 +1,16 @@
 import { NativeModules, Platform } from 'react-native';
+import {
+  PasskeyClient as SdkPasskeyClient,
+  type PasskeyConfig,
+  type PrfProvider,
+} from './generated/breez_sdk_spark';
 
 const { BreezSdkSparkPasskey } = NativeModules;
 
 /**
- * Build a diagnostic error thrown when the native passkey module isn't
- * reachable from JS. The most common cause on iOS is running on a version
- * older than iOS 18: the Swift class is marked `@available(iOS 18.0, *)`
- * so the ObjC runtime cannot load it on earlier releases. On Android the
- * native module should always load, so the fallback message blames linking.
+ * Diagnostic error for when the native passkey module isn't reachable. The
+ * common iOS cause is running below iOS 18, where the `@available(iOS 18.0, *)`
+ * Swift class cannot load; on Android a missing module means broken linking.
  */
 function passkeyModuleUnavailableError(operation: string): Error {
   if (Platform.OS === 'ios') {
@@ -267,37 +270,22 @@ function mapNativeError(err: unknown): PasskeyPrfException {
 }
 
 /**
- * Built-in React Native passkey PRF provider using platform-native APIs.
- *
- * Implements the PrfProvider interface using:
- * - iOS: AuthenticationServices framework (iOS 18+)
- * - Android: Credential Manager API (Android 14+)
- *
- * On first use, if no credential exists for the RP ID, a new passkey is
- * automatically created (registered), then the assertion is retried.
- *
- * Requirements:
- * - iOS 18.0+ or Android 14+ (API 34)
- * - Associated Domains entitlement (iOS) or assetlinks.json (Android) for the RP domain
- *
- * @example
- * ```typescript
- * import { PasskeyClient } from '@breeztech/breez-sdk-spark-react-native'
- * import { PasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
- *
- * const prfProvider = new PasskeyProvider()
- * const passkey = new PasskeyClient(prfProvider as any, undefined)
- * const response = await passkey.signIn({ label: 'personal', extraSalts: [] })
- * ```
+ * Built-in React Native passkey PRF provider, backed by AuthenticationServices
+ * on iOS and Credential Manager on Android. The default {@link PrfProvider};
+ * inject a configured instance through {@link PasskeyClientBuilder}. Requires
+ * iOS 18+ or Android 14+ (API 34) plus the Associated Domains entitlement
+ * (iOS) or assetlinks.json (Android) for the RP domain.
  */
 export class PasskeyProvider {
   /**
-   * Constant identifying Breez's shared `keys.breez.technology` RP.
-   * Pass as `rpId` when opting into the Breez-managed Relying Party
-   * (only valid for apps registered with Breez). Apps with their own
-   * RP domain pass their own string.
+   * Breez's shared `keys.breez.technology` RP. Pass as `rpId` to opt in
+   * (only valid for apps registered with Breez); apps with their own RP
+   * domain pass their own string.
    */
   static readonly BREEZ_RP_ID: string = 'keys.breez.technology';
+
+  /** Default `rpName` for the zero-config client when none is supplied. */
+  static readonly DEFAULT_RP_NAME: string = 'Breez';
 
   private rpId: string;
   private rpName: string;
@@ -338,25 +326,17 @@ export class PasskeyProvider {
   }
 
   /**
-   * Derive multiple 32-byte seeds from passkey PRF with the given salts in
-   * as few OS ceremonies as the platform supports (dual-salt assertion
-   * when available). The `salts.length === 1` case short-circuits to a
-   * single-salt assertion under the hood (one prompt). Used by the
-   * SDK's `setup_wallet` orchestration to collapse master + label
-   * derivation into one prompt.
-   *
-   * Accepts the SDK's `DeriveSeedsRequest` shape. Per-call
-   * `allowCredentials` (a list of credential IDs the assertion is
-   * restricted to, primary use case: reauthentication) overrides the
-   * constructor default when non-empty;
-   * `preferImmediatelyAvailableCredentials` overrides the platform
-   * default when non-null.
+   * Derive one 32-byte seed per salt from passkey PRF, in as few OS prompts
+   * as the platform supports. `allowCredentials` restricts the assertion to
+   * specific credential IDs (mainly for reauthentication) when non-empty;
+   * `preferImmediatelyAvailableCredentials` overrides the platform default
+   * when set. Returns the seeds plus the asserted credential ID.
    */
   async deriveSeeds(request: {
     salts: string[];
     allowCredentials?: Uint8Array[];
     preferImmediatelyAvailableCredentials?: boolean | null;
-  }): Promise<Uint8Array[]> {
+  }): Promise<{ seeds: Uint8Array[]; credentialId?: Uint8Array }> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('deriveSeeds');
     }
@@ -386,9 +366,9 @@ export class PasskeyProvider {
     const allowBase64 = effectiveAllow.map(id => uint8ArrayToBase64(id));
     const preferImmediate = request.preferImmediatelyAvailableCredentials ?? null;
 
-    let base64Results: string[];
+    let result: { seeds: string[]; credentialId?: string | null };
     try {
-      base64Results = await BreezSdkSparkPasskey.deriveSeeds(
+      result = await BreezSdkSparkPasskey.deriveSeeds(
         request.salts,
         this.rpId,
         this.rpName,
@@ -398,8 +378,8 @@ export class PasskeyProvider {
         allowBase64,
         preferImmediate
       );
-      if (!Array.isArray(base64Results)) {
-        throw new PasskeyPrfException('unknown', 'deriveSeeds returned a non-array');
+      if (!result || !Array.isArray(result.seeds)) {
+        throw new PasskeyPrfException('unknown', 'deriveSeeds returned an unexpected shape');
       }
     } catch (err) {
       if (err instanceof PasskeyPrfException) {
@@ -421,28 +401,23 @@ export class PasskeyProvider {
       throw mapped;
     }
 
-    return base64Results.map(b64 => base64ToUint8Array(b64));
+    // The native module returns the asserted credential ID alongside the
+    // seeds; surface it so the SDK can pin the next derive to this exact
+    // credential.
+    return {
+      seeds: result.seeds.map(b64 => base64ToUint8Array(b64)),
+      credentialId: result.credentialId
+        ? base64ToUint8Array(result.credentialId)
+        : undefined,
+    };
   }
 
   /**
-   * Create a new passkey with PRF support.
-   *
-   * Only registers the credential, no seed derivation. Triggers
-   * exactly 1 platform prompt. Use this to separate credential
-   * creation from derivation in multi-step onboarding flows.
-   *
-   * `excludeCredentials` is a list of already-registered credential
-   * IDs. Prevents registering the same device twice: when any entry
-   * matches a credential already on the device, the platform raises
-   * `CredentialAlreadyExists`. Branding fields (`userName`,
-   * `userDisplayName`) live on the constructor. `user.id` is never
-   * host-supplied: the native plugin mints a fresh random 16-byte
-   * handle per call and returns it via the result's `userId` field.
-   *
-   * @returns Credential ID, the generated user handle, plus AAGUID and
-   *   backup-eligibility parsed from the attestation object. AAGUID and
-   *   `backupEligible` are null when the attestation can't be parsed.
-   * @throws If the user cancels or PRF is not supported by the authenticator.
+   * Register a new PRF-capable passkey (one prompt, no seed derivation): use
+   * it to split credential creation from derivation in multi-step onboarding.
+   * `excludeCredentials` blocks re-registering a device that already holds a
+   * credential, surfaced as a `credentialAlreadyExists` failure. The returned
+   * user handle is minted fresh per call (never host-supplied).
    */
   async createPasskey(excludeCredentials: Uint8Array[] = []): Promise<RegisteredCredential> {
     if (!BreezSdkSparkPasskey) {
@@ -645,4 +620,75 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   }
   return btoa(binary);
 }
+
+/**
+ * Builds a `PasskeyClient` backed by a caller-supplied provider. Use this
+ * when you need a configured {@link PasskeyProvider} (custom `rpId` /
+ * `rpName`, a credential registry) or a custom PRF backend; omit the provider
+ * for the zero-config Breez-RP default.
+ */
+export class PasskeyClientBuilder {
+  private provider?: PrfProvider;
+
+  /**
+   * @param breezApiKey Breez relay key for authenticated (NIP-42) label
+   *   storage. Omit for public relays only.
+   * @param config Passkey client config. `rpId` / `rpName` configure the
+   *   default provider (ignored when a provider is injected via
+   *   {@link withPrfProvider}, which owns its RP); `defaultLabel` is the
+   *   label-store default.
+   */
+  constructor(
+    private readonly breezApiKey?: string,
+    private readonly config?: PasskeyConfig
+  ) {}
+
+  /**
+   * Inject the provider the client derives seeds through: the built-in
+   * {@link PasskeyProvider} or any custom `PrfProvider` implementation.
+   * Supersedes the config's `rpId` / `rpName` (the injected provider owns
+   * its RP).
+   */
+  withPrfProvider(provider: PrfProvider): this {
+    this.provider = provider;
+    return this;
+  }
+
+  /**
+   * Construct the client. Falls back to a default {@link PasskeyProvider}
+   * on the config's `rpId` / `rpName` (default: the Breez RP) when no
+   * provider was injected.
+   */
+  build(): SdkPasskeyClient {
+    // The hand-written PasskeyProvider conforms structurally to the
+    // generated PrfProvider foreign interface.
+    const provider: PrfProvider =
+      this.provider ??
+      (new PasskeyProvider({
+        rpId: this.config?.rpId ?? PasskeyProvider.BREEZ_RP_ID,
+        rpName: this.config?.rpName ?? PasskeyProvider.DEFAULT_RP_NAME,
+      }) as unknown as PrfProvider);
+    return new SdkPasskeyClient(provider, this.breezApiKey, this.config);
+  }
+}
+
+/** @internal Builds the zero-config client; exposed via {@link PasskeyClient}. */
+function buildPasskeyClient(
+  breezApiKey?: string,
+  config?: PasskeyConfig
+): SdkPasskeyClient {
+  return new PasskeyClientBuilder(breezApiKey, config).build();
+}
+
+/**
+ * Zero-config passkey client on the Breez shared RP (`keys.breez.technology`),
+ * so a Breez-registered app needs only its relay key; set `rpId` / `rpName` on
+ * the config to use your own RP. For a credential registry or custom PRF
+ * backend, build the provider and inject it via {@link PasskeyClientBuilder}.
+ */
+export const PasskeyClient: {
+  new (breezApiKey?: string, config?: PasskeyConfig): SdkPasskeyClient;
+} = buildPasskeyClient as unknown as {
+  new (breezApiKey?: string, config?: PasskeyConfig): SdkPasskeyClient;
+};
 

@@ -2,12 +2,10 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
-import 'rust/models.dart' show DeriveSeedsRequest, RegisteredCredential;
+import 'rust/models.dart' show DeriveSeedsOutput, DeriveSeedsRequest, RegisteredCredential;
 
-/// Result of a domain-association verification check against the
-/// platform's well-known configuration source. Mirrors the Rust
-/// `DomainAssociation` enum shape one-to-one so callers can switch
-/// on `kind` regardless of which native plugin produced the result.
+/// Result of verifying that the app is associated with its RP domain.
+/// Switch on the subtype to handle each outcome.
 sealed class DomainAssociation {
   const DomainAssociation();
 }
@@ -158,27 +156,48 @@ class PasskeyPrfException implements Exception {
   String toString() => 'PasskeyPrfException($code): $message';
 }
 
-/// Flutter passkey PRF provider using platform-native APIs (iOS
-/// AuthenticationServices, Android Credential Manager). Wires directly
-/// into the [PasskeyClient] constructor:
-///
-/// ```dart
-/// final provider = PasskeyProvider();
-/// final client = PasskeyClient(
-///   deriveSeeds: provider.deriveSeeds,
-///   isSupported: provider.isSupported,
-///   createPasskey: provider.createPasskey,
-///   getKnownCredentialIds: provider.getKnownCredentialIds,
-///   removeKnownCredentialId: provider.removeKnownCredentialId,
-///   clearKnownCredentialIds: provider.clearKnownCredentialIds,
-/// );
-/// ```
-class PasskeyProvider {
-  /// Constant identifying Breez's shared `keys.breez.technology` RP.
-  /// Pass as `rpId` when opting into the Breez-managed Relying Party
-  /// (only valid for apps registered with Breez). Apps with their own
-  /// RP domain pass their own string.
+/// PRF backend a [PasskeyClient] derives wallet seeds through. The built-in
+/// [PasskeyProvider] implements this with platform passkeys; custom backends
+/// (hardware key, FIDO2 transport, on-disk key material) implement it
+/// directly. Inject an implementation via
+/// `PasskeyClientBuilder.withPrfProvider`.
+abstract class PrfProvider {
+  /// Derive one 32-byte seed per salt in as few OS ceremonies as the
+  /// platform supports, plus the credential ID observed in the same
+  /// assertion (absent when the backend surfaces none).
+  Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request);
+
+  /// Whether this device can produce PRF outputs. Hosts gate UX on it.
+  Future<bool> isSupported();
+
+  /// Register a new PRF-capable credential. `excludeCredentials` blocks
+  /// re-registering the same device, surfaced as a
+  /// `credentialAlreadyExists` failure.
+  Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentials);
+
+  /// Credential IDs the provider has persisted for the current RP. Empty
+  /// when the provider keeps no registry.
+  Future<List<Uint8List>> getKnownCredentialIds();
+
+  /// Drop a single credential ID from the provider's persisted set.
+  Future<void> removeKnownCredentialId(Uint8List credentialId);
+
+  /// Clear the provider's persisted credential-ID set for the current RP.
+  Future<void> clearKnownCredentialIds();
+}
+
+/// Built-in Flutter passkey PRF provider using platform-native APIs
+/// (iOS AuthenticationServices, Android Credential Manager). The
+/// default [PrfProvider]; inject a configured instance through
+/// [PasskeyClientBuilder.withPrfProvider].
+class PasskeyProvider implements PrfProvider {
+  /// Breez's shared `keys.breez.technology` RP. Pass as `rpId` to opt in
+  /// (only valid for apps registered with Breez); apps with their own RP
+  /// domain pass their own string.
   static const String breezRpId = 'keys.breez.technology';
+
+  /// Default `rpName` for the zero-config client when none is supplied.
+  static const String defaultRpName = 'Breez';
 
   static const _channel = MethodChannel('breez_sdk_spark_passkey');
 
@@ -197,13 +216,12 @@ class PasskeyProvider {
       _credentialRegistry = options.credentialRegistry,
       _onRegistryError = options.onRegistryError;
 
-  /// Derive multiple 32-byte seeds from passkey PRF with the given salts
-  /// in as few OS ceremonies as the platform supports (dual-salt
-  /// assertion where available). For the `salts.length == 1` case the
-  /// native plugin short-circuits to a single-salt assertion (one
-  /// prompt). Used by the SDK's `setup_wallet` orchestration to collapse
-  /// master + label derivation into one prompt.
-  Future<List<Uint8List>> deriveSeeds(DeriveSeedsRequest request) async {
+  /// Derive one 32-byte seed per salt from passkey PRF, in as few OS prompts
+  /// as the platform supports. Returns the seeds plus the credential ID
+  /// observed in the same assertion (absent when none ran), so a subsequent
+  /// derive can be pinned to the same credential.
+  @override
+  Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request) async {
     final args = <String, Object?>{
       'salts': request.salts,
       'rpId': _rpId,
@@ -240,14 +258,20 @@ class PasskeyProvider {
       args['preferImmediatelyAvailableCredentials'] = preferImmediate;
     }
     try {
-      final result = await _channel.invokeMethod<List<Object?>>('deriveSeeds', args);
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>('deriveSeeds', args);
       if (result == null) {
         throw const PasskeyPrfException(
           code: 'unknown',
           message: 'deriveSeeds returned null',
         );
       }
-      return result.cast<String>().map((b64) => base64Decode(b64)).toList();
+      final rawSeeds = (result['seeds'] as List<Object?>?) ?? const <Object?>[];
+      final seeds = rawSeeds.cast<String>().map(base64Decode).toList();
+      final credentialIdB64 = result['credentialId'] as String?;
+      return DeriveSeedsOutput(
+        seeds: seeds,
+        credentialId: credentialIdB64 == null ? null : base64Decode(credentialIdB64),
+      );
     } on PlatformException catch (e) {
       var mapped = _mapPlatformException(e);
       // Augment CredentialNotFound when host had no allow-list and no
@@ -262,14 +286,11 @@ class PasskeyProvider {
     }
   }
 
-  /// Register a new passkey with PRF support. `excludeCredentials`
-  /// is the only per-call knob: branding fields (`userName`,
-  /// `userDisplayName`) live on the constructor.
-  ///
-  /// `user.id` is never host-supplied: the native plugin mints a fresh
-  /// random 16-byte handle per call and surfaces it via
-  /// [RegisteredCredential.userId]. Throws [PasskeyPrfException] on
-  /// failure.
+  /// Register a new passkey with PRF support. `excludeCredentials` blocks
+  /// re-registering a device already holding a credential. The user handle
+  /// is minted fresh per call (never host-supplied) and returned via
+  /// [RegisteredCredential.userId]. Throws [PasskeyPrfException] on failure.
+  @override
   Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentials) async {
     final args = <String, Object?>{
       'rpId': _rpId,
@@ -317,18 +338,18 @@ class PasskeyProvider {
     }
   }
 
-  /// Read the credential IDs the configured [CredentialRegistry] has
-  /// stored for the current `rpId`. Empty list when no registry is
-  /// configured. Backs `PasskeyClient.credentials().get()`.
+  /// Credential IDs the configured [CredentialRegistry] has stored for the
+  /// current `rpId`. Empty when no registry is configured.
+  @override
   Future<List<Uint8List>> getKnownCredentialIds() async {
     final registry = _credentialRegistry;
     if (registry == null) return const [];
     return _registryReadBestEffort(registry, _rpId, _onRegistryError);
   }
 
-  /// Drop a single credential ID from the configured registry. No-op
-  /// when no registry is configured. Backs
-  /// `PasskeyClient.credentials().remove(id)`.
+  /// Drop a single credential ID from the configured registry. No-op when
+  /// no registry is configured.
+  @override
   Future<void> removeKnownCredentialId(Uint8List credentialId) async {
     final registry = _credentialRegistry;
     if (registry == null) return;
@@ -339,9 +360,9 @@ class PasskeyProvider {
     }
   }
 
-  /// Clear the configured registry's persisted credential-ID list for
-  /// the current `rpId`. No-op when no registry is configured. Backs
-  /// `PasskeyClient.credentials().clear()`.
+  /// Clear the configured registry's credential IDs for the current
+  /// `rpId`. No-op when no registry is configured.
+  @override
   Future<void> clearKnownCredentialIds() async {
     final registry = _credentialRegistry;
     if (registry == null) return;
@@ -353,19 +374,16 @@ class PasskeyProvider {
   }
 
   /// Whether this device supports passkey PRF.
+  @override
   Future<bool> isSupported() async {
     final result = await _channel.invokeMethod<bool>('isSupported');
     return result ?? false;
   }
 
-  /// Verify the configured `rpId` is a valid scope for WebAuthn from
-  /// the running app's identity. Returns a typed [DomainAssociation]:
-  /// `Associated` when verification succeeded, `NotAssociated` with a
-  /// concrete reason when it fails (iOS only; Android degrades to
-  /// `Skipped`), or `Skipped` when the probe couldn't complete (no
-  /// network, no signing certificate, etc.).
-  ///
-  /// The SDK never gates internally; hosts pick their own policy.
+  /// Verify the app is associated with the configured `rpId` for WebAuthn.
+  /// Returns [DomainAssociationNotAssociated] only on iOS (Android degrades
+  /// to [DomainAssociationSkipped]). The SDK never gates on the result;
+  /// hosts pick their own policy.
   Future<DomainAssociation> checkDomainAssociation() async {
     try {
       final result = await _channel.invokeMethod<Map<Object?, Object?>>(

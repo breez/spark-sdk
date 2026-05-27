@@ -2,7 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
-use breez_sdk_spark::passkey::{DeriveSeedsRequest, PrfProvider, PrfProviderError};
+use breez_sdk_spark::passkey::{
+    DeriveSeedsOutput, DeriveSeedsRequest, PrfProvider, PrfProviderError,
+};
 use rand::{RngCore, thread_rng};
 
 /// File name for the seed restore secret.
@@ -87,11 +89,14 @@ impl PrfProvider for FilePrfProvider {
     async fn derive_seeds(
         &self,
         request: DeriveSeedsRequest,
-    ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+    ) -> Result<DeriveSeedsOutput, PrfProviderError> {
         // File-backed derivation has no concept of an OS picker; the
         // per-call allow-list and immediate-mediation hint are no-ops
-        // here.
-        Ok(request.salts.iter().map(|s| self.derive_one(s)).collect())
+        // here. No credential ID exists for a file-backed secret.
+        Ok(DeriveSeedsOutput {
+            seeds: request.salts.iter().map(|s| self.derive_one(s)).collect(),
+            credential_id: None,
+        })
     }
 
     async fn is_supported(&self) -> Result<bool, PrfProviderError> {

@@ -202,16 +202,27 @@ public struct IosRegisteredCredential {
     }
 }
 
+/// Result of `deriveSeeds`: one 32-byte PRF output per salt (input
+/// order) plus the asserted credential ID. `credentialId` is `nil` when
+/// no assertion ran (empty `salts`).
+public struct PrfDerivation {
+    public let seeds: [Data]
+    public let credentialId: Data?
+
+    public init(seeds: [Data], credentialId: Data?) {
+        self.seeds = seeds
+        self.credentialId = credentialId
+    }
+}
+
 // MARK: - Domain association
 
 /// Result of an Apple-app-site-association probe against the AASA CDN.
-/// Layer-neutral; wrappers translate to UniFFI's `DomainAssociation`,
-/// MethodChannel maps, or RCT-friendly dictionaries.
+/// Layer-neutral; wrappers translate to their own representation.
 ///
-/// `Skipped` is the catch-all for verification-level failures: missing
-/// team ID, missing bundle ID, network errors, malformed JSON. Callers
-/// treat `Skipped` as advisory ("we couldn't tell") and proceed with
-/// the WebAuthn ceremony: the SDK never blocks on it.
+/// `Skipped` is the catch-all for verification-level failures (missing
+/// team/bundle ID, network error, malformed JSON). It is advisory: the
+/// SDK never blocks the WebAuthn ceremony on it.
 @available(iOS 18.0, macOS 15.0, *)
 public enum IosDomainAssociation {
     case associated
@@ -383,12 +394,6 @@ public final class PasskeyAssertionCore {
     private let graceTracker: PostCreateGraceTracker
     private let postCreateGraceTotal: TimeInterval
 
-    /// Most recent credential ID observed during assertion. Captured for
-    /// the binding-layer `SignInResponse.credential_id` field. Cleared
-    /// before every ceremony.
-    private var lastObservedCredentialId: Data?
-    private let lastObservedLock = NSLock()
-
     public init(
         rpId: String,
         rpName: String,
@@ -415,23 +420,6 @@ public final class PasskeyAssertionCore {
         self.postCreateGraceTotal = postCreateGraceTotal
     }
 
-    /// Take ownership of the credential ID captured by the most recent
-    /// assertion, clearing the slot. Returns `nil` if no assertion has
-    /// completed since the last call.
-    public func takeLastObservedCredentialId() -> Data? {
-        lastObservedLock.lock()
-        defer { lastObservedLock.unlock() }
-        let value = lastObservedCredentialId
-        lastObservedCredentialId = nil
-        return value
-    }
-
-    private func recordObservedCredentialId(_ id: Data) {
-        lastObservedLock.lock()
-        defer { lastObservedLock.unlock() }
-        lastObservedCredentialId = id
-    }
-
     // MARK: Public entry points
 
     /// Derive one 32-byte PRF output per salt in as few authenticator
@@ -446,7 +434,7 @@ public final class PasskeyAssertionCore {
         autoRegister: Bool,
         allowCredentials: [Data] = [],
         preferImmediatelyAvailableCredentials: Bool = true
-    ) async throws -> [Data] {
+    ) async throws -> PrfDerivation {
         // Union the caller's allow-list with the registry's stored IDs.
         var allow = allowCredentials
         if let reg = credentialRegistry {
@@ -456,17 +444,16 @@ public final class PasskeyAssertionCore {
                 allow.append(id)
             }
         }
-        // Wait out the post-create grace before any assertion so the
-        // immediate setup_wallet derive doesn't race the credential's
-        // PRF-readiness window (dual-salt would drop `second`, forcing
-        // a second prompt).
+        // Wait out the post-create grace so the immediate derive doesn't
+        // race the credential's PRF-readiness window (see grace tracker).
         await graceTracker.consume()
-        if salts.isEmpty { return [] }
+        if salts.isEmpty { return PrfDerivation(seeds: [], credentialId: nil) }
 
-        // One assertion for 1-2 salts, registering + retrying once when
-        // the device holds no credential. Returns (first, second?);
-        // `second` is nil when the authenticator dropped saltInput2.
-        func assertChunk(_ salt1: Data, _ salt2: Data?) async throws -> (Data, Data?) {
+        // One assertion for 1-2 salts, registering + retrying once on no
+        // credential. Returns (first, second?, credentialId); `second` is
+        // nil when the authenticator dropped saltInput2. `credentialId` is
+        // the same across every chunk of one derive call.
+        func assertChunk(_ salt1: Data, _ salt2: Data?) async throws -> (Data, Data?, Data) {
             do {
                 return try await assertPrf(
                     salt1: salt1, salt2: salt2, allowCredentials: allow,
@@ -499,45 +486,45 @@ public final class PasskeyAssertionCore {
         }
 
         var out: [Data] = []
+        // Asserted credential ID, returned inline so the binding layer can
+        // surface it on `SignInResponse.credential_id` without a separate
+        // read-and-clear call.
+        var observedCredentialId: Data?
         var i = 0
         while i < salts.count {
             if i + 1 < salts.count {
-                let (first, second) = try await assertChunk(salts[i], salts[i + 1])
+                let (first, second, credId) = try await assertChunk(salts[i], salts[i + 1])
+                observedCredentialId = credId
                 out.append(first)
                 if let second = second {
                     out.append(second)
                 } else {
                     // Authenticator dropped `second`: single-salt recover.
-                    out.append(try await assertChunk(salts[i + 1], nil).0)
+                    let (recovered, _, recoveredCredId) = try await assertChunk(salts[i + 1], nil)
+                    out.append(recovered)
+                    observedCredentialId = recoveredCredId
                 }
                 i += 2
             } else {
-                out.append(try await assertChunk(salts[i], nil).0)
+                let (single, _, credId) = try await assertChunk(salts[i], nil)
+                out.append(single)
+                observedCredentialId = credId
                 i += 1
             }
         }
-        return out
+        return PrfDerivation(seeds: out, credentialId: observedCredentialId)
     }
 
-    /// Verify the app's bundle identifier is listed in the
-    /// `webcredentials` section of the AASA file served for `rpId`,
-    /// via Apple's app-site-association CDN
-    /// (`https://app-site-association.cdn-apple.com/a/v1/<rpId>`).
+    /// Verify the app's bundle ID is listed in `webcredentials.apps` of
+    /// the AASA file for `rpId`, via Apple's app-site-association CDN
+    /// (`https://app-site-association.cdn-apple.com/a/v1/<rpId>`). This is
+    /// the same source the OS uses for Associated Domains, queried up
+    /// front so integrators see misconfiguration before a WebAuthn
+    /// ceremony fails opaquely.
     ///
-    /// The CDN is the same source the OS uses to validate Associated
-    /// Domains, but exposed as a public HTTP endpoint so we can
-    /// proactively surface misconfiguration ("Bundle ID `<team>.<bid>`
-    /// is not in `webcredentials.apps` for `rpId`") to integrators
-    /// before a WebAuthn ceremony fires and fails opaquely.
-    ///
-    /// Resolves the team ID from `explicitTeamId` (when set) or
-    /// auto-detects from the running app's signing info via
-    /// `PasskeyTeamIdDetector`. If both fail (unsigned test builds),
-    /// returns `.skipped`.
-    ///
-    /// Never throws: verification-level failures (no bundle ID, no
-    /// team ID, network errors, malformed JSON) all map to `.skipped`
-    /// so callers have one surface to handle.
+    /// Team ID comes from `explicitTeamId` or `PasskeyTeamIdDetector`.
+    /// Never throws: every verification-level failure (no bundle/team ID,
+    /// network error, malformed JSON) maps to `.skipped`.
     public func checkDomainAssociation() async -> IosDomainAssociation {
         let bundleId = Bundle.main.bundleIdentifier ?? ""
         guard !bundleId.isEmpty else {
@@ -636,17 +623,16 @@ public final class PasskeyAssertionCore {
         }
     }
 
-    /// Run one assertion ceremony for `salt1` (+ optional `salt2`) and
-    /// return `(first, second?)`. `second` is nil when only one salt
-    /// was requested or the authenticator dropped `saltInput2`. The
-    /// ObjC helper treats a nil `salt2` as a single-salt evaluation, so
-    /// this is the only assertion entry point for both cases.
+    /// Run one assertion ceremony for `salt1` (+ optional `salt2`),
+    /// returning `(first, second?, credentialId)`. `second` is nil for a
+    /// single salt or when the authenticator dropped `saltInput2`. The
+    /// ObjC helper treats nil `salt2` as single-salt, so this serves both.
     private func assertPrf(
         salt1: Data,
         salt2: Data?,
         allowCredentials: [Data],
         preferImmediatelyAvailableCredentials: Bool = true
-    ) async throws -> (Data, Data?) {
+    ) async throws -> (Data, Data?, Data) {
         let request = makeAssertionRequest(
             rpId: rpId,
             explicitAllowCredentials: allowCredentials
@@ -661,10 +647,9 @@ public final class PasskeyAssertionCore {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
-        delegate.onAssertionCredentialId = makeCaptureCallback()
 
         let preferImmediate = preferImmediatelyAvailableCredentials
-        return try await withCheckedThrowingContinuation { continuation in
+        let result = try await withCheckedThrowingContinuation { continuation in
             delegate.assertionContinuation = continuation
             delegate.extractPrf = true
             delegate.ceremonyStartedAt = Date()
@@ -675,46 +660,32 @@ public final class PasskeyAssertionCore {
                 )
             }
         }
-    }
 
-    /// Build the per-assertion credential-ID callback. Two concerns:
-    ///
-    /// 1. Record the credential ID under the core's
-    ///    `lastObservedCredentialId` slot so the binding layer can
-    ///    surface it on `SignInResponse.credential_id`.
-    /// 2. Best-effort `registry.add(...)` when a registry is supplied,
-    ///    so a returning user's pre-tracking credential gets seeded
-    ///    on first assertion and subsequent registrations hit the
-    ///    platform-level "already exists" guard via `excludedCredentials`.
-    private func makeCaptureCallback() -> (Data) -> Void {
-        let rpId = self.rpId
-        let credentialRegistry = self.credentialRegistry
-        let onRegistryError = self.onRegistryError
-        return { [weak self] credentialId in
-            self?.recordObservedCredentialId(credentialId)
-            if let reg = credentialRegistry {
-                // `detached` is deliberate: this callback fires on the
-                // ASAuthorization delegate (main), and the best-effort
-                // write must neither inherit MainActor isolation nor be
-                // cancelled when the ceremony returns. It's already 3s
-                // timeout-bounded inside registryAddBestEffort.
-                Task.detached {
-                    await registryAddBestEffort(
-                        registry: reg,
-                        rpId: rpId,
-                        credentialId: credentialId,
-                        onRegistryError: onRegistryError
-                    )
-                }
+        // Best-effort registry seed with the asserted credential ID so a
+        // returning user's pre-tracking credential is captured, letting
+        // later registrations hit the `excludeCredentials` guard. Detached
+        // so it neither blocks the seed return nor inherits ceremony
+        // cancellation.
+        if let reg = credentialRegistry {
+            let rpId = self.rpId
+            let onRegistryError = self.onRegistryError
+            let credentialId = result.2
+            Task.detached {
+                await registryAddBestEffort(
+                    registry: reg,
+                    rpId: rpId,
+                    credentialId: credentialId,
+                    onRegistryError: onRegistryError
+                )
             }
         }
+        return result
     }
 
-    /// Wraps `controller.performRequests` for assertion paths and
-    /// suppresses the OS's hybrid (cross-device QR) sign-in option.
-    /// Wallet-style integrators target only local credentials, so a
-    /// fast `.canceled` failure is preferable to a confusing QR sheet
-    /// when no passkey is on the device.
+    /// Wraps `controller.performRequests`, suppressing the hybrid
+    /// (cross-device QR) sign-in option. Wallet-style integrators target
+    /// only local credentials, so a fast `.canceled` beats a confusing QR
+    /// sheet when no passkey is on the device.
     private static func performAssertionRequest(
         _ controller: ASAuthorizationController,
         preferImmediatelyAvailableCredentials: Bool = true
@@ -940,28 +911,20 @@ public func extractRegistrationMetadata(from attestation: Data) -> (aaguid: Data
 private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate,
     ASAuthorizationControllerPresentationContextProviding
 {
-    /// Resolves `(first, second?)`; `second` is nil for a single-salt
-    /// assertion or when the authenticator dropped `saltInput2`.
-    var assertionContinuation: CheckedContinuation<(Data, Data?), Error>?
+    /// Resolves `(first, second?, credentialId)`; `second` is nil for a
+    /// single salt or a dropped `saltInput2`.
+    var assertionContinuation: CheckedContinuation<(Data, Data?, Data), Error>?
     var registrationContinuation: CheckedContinuation<IosRegisteredCredential, Error>?
-    /// User handle the core chose for the in-flight registration. The
-    /// platform never echoes `user.id` back through the credential
-    /// object, so the delegate copies this into the returned
-    /// `IosRegisteredCredential.userId` field.
+    /// User handle the core minted for the in-flight registration; copied
+    /// into the returned `IosRegisteredCredential.userId` (the platform
+    /// never echoes `user.id` back).
     var registrationUserId: Data = Data()
     var anchor: ASPresentationAnchor = ASPresentationAnchor()
     /// `true` for assertion ceremonies, `false` for registration.
     var extractPrf = true
-    /// Invoked with the credential ID from a successful assertion. Set
-    /// by the core so hosts can record which credential was used. No-op
-    /// on registration (the credential ID flows out via the
-    /// registrationContinuation).
-    var onAssertionCredentialId: ((Data) -> Void)?
-    /// Wall-clock timestamp at the moment `controller.performRequests()`
-    /// fires. Used by `mapPasskeyError` to discriminate the OS biometric
-    /// inactivity timeout (~55s+, surfaced as `.canceled`) from a
-    /// user-dismissed prompt. Set on every ceremony before the controller
-    /// is started.
+    /// Set when `performRequests()` fires; `mapPasskeyError` uses the
+    /// elapsed time to tell the biometric inactivity timeout from a
+    /// user-dismissed prompt (both arrive as `.canceled`).
     var ceremonyStartedAt: Date?
 
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
@@ -986,13 +949,12 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
                 return
             }
 
-            // Surface the credential ID before resolving so hosts can
-            // record it. Failures here are best-effort and must not
-            // block the seed return. `second` is nil for single-salt
-            // ceremonies or when the authenticator dropped saltInput2.
-            onAssertionCredentialId?(credential.credentialID)
             assertionContinuation?.resume(
-                returning: (prfFirst, PasskeyPRFHelper.extractSecondPRFOutput(from: credential)))
+                returning: (
+                    prfFirst,
+                    PasskeyPRFHelper.extractSecondPRFOutput(from: credential),
+                    credential.credentialID
+                ))
         } else {
             guard let credential = authorization.credential
                 as? ASAuthorizationPlatformPublicKeyCredentialRegistration

@@ -1,5 +1,7 @@
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_spark::passkey::{DeriveSeedsRequest, PrfProvider, PrfProviderError};
+use breez_sdk_spark::passkey::{
+    DeriveSeedsOutput, DeriveSeedsRequest, PrfProvider, PrfProviderError,
+};
 use challenge_response::ChallengeResponse;
 use challenge_response::config::{Config, Mode, Slot};
 
@@ -70,19 +72,22 @@ impl PrfProvider for YubiKeyPrfProvider {
     async fn derive_seeds(
         &self,
         request: DeriveSeedsRequest,
-    ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+    ) -> Result<DeriveSeedsOutput, PrfProviderError> {
         // YubiKey HMAC-SHA1 challenge-response has no platform picker;
         // the per-call allow-list and immediate-mediation hint are
-        // no-ops here.
-        let mut out = Vec::with_capacity(request.salts.len());
+        // no-ops here, and there is no credential ID to surface.
+        let mut seeds = Vec::with_capacity(request.salts.len());
         for salt in request.salts {
             eprintln!("Touch your YubiKey (if configured)...");
             let seed = tokio::task::spawn_blocking(move || Self::derive_one_blocking(&salt))
                 .await
                 .map_err(|e| PrfProviderError::Generic(format!("Task join error: {e}")))??;
-            out.push(seed);
+            seeds.push(seed);
         }
-        Ok(out)
+        Ok(DeriveSeedsOutput {
+            seeds,
+            credential_id: None,
+        })
     }
 
     async fn is_supported(&self) -> Result<bool, PrfProviderError> {

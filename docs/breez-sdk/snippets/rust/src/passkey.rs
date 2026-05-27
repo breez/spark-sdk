@@ -1,6 +1,6 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
-    ConnectWithPasskeyRequest, DeriveSeedsRequest, DomainAssociation, ErrorKind,
+    ConnectWithPasskeyRequest, DeriveSeedsOutput, DeriveSeedsRequest, DomainAssociation, ErrorKind,
     PasskeyAvailability, PasskeyClient, PrfProvider, PrfProviderError,
     RegisterRequest, RegisteredCredential, SignInRequest, SignInResponse, Wallet,
 };
@@ -20,7 +20,7 @@ impl PrfProvider for CustomPrfProvider {
     async fn derive_seeds(
         &self,
         _request: DeriveSeedsRequest,
-    ) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+    ) -> Result<DeriveSeedsOutput, PrfProviderError> {
         // Call platform passkey API with PRF extension. Use the dual-salt
         // ceremony when the authenticator supports it (one OS prompt for
         // N salts) and fall back to per-salt assertions otherwise.
@@ -95,6 +95,7 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
     let response = passkey
         .connect_with_passkey(ConnectWithPasskeyRequest {
             label: Some("personal".to_string()),
+            allow_credentials: vec![],
             exclude_credentials: vec![],
         })
         .await?;

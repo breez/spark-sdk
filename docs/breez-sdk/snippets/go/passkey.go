@@ -14,7 +14,7 @@ import (
 // CreatePasskey for registration is optional.
 type CustomPrfProvider struct{}
 
-func (p *CustomPrfProvider) DeriveSeeds(salts []string) ([][]byte, error) {
+func (p *CustomPrfProvider) DeriveSeeds(request breez_sdk_spark.DeriveSeedsRequest) (breez_sdk_spark.DeriveSeedsOutput, error) {
 	// Call platform passkey API with PRF extension. Use the dual-salt
 	// ceremony when the authenticator supports it (one OS prompt for
 	// N salts) and fall back to per-salt assertions otherwise.

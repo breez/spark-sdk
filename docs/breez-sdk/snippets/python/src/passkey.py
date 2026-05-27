@@ -2,6 +2,8 @@
 from breez_sdk_spark import (
     ConnectRequest,
     ConnectWithPasskeyRequest,
+    DeriveSeedsOutput,
+    DeriveSeedsRequest,
     DomainAssociation,
     Network,
     PasskeyAvailability,
@@ -22,7 +24,7 @@ from breez_sdk_spark import (
 # derive_seeds for derivation, is_supported for the capability probe;
 # create_passkey for registration is optional.
 class CustomPrfProvider(PrfProvider):
-    async def derive_seeds(self, salts: list[str]) -> list[bytes]:
+    async def derive_seeds(self, request: DeriveSeedsRequest) -> DeriveSeedsOutput:
         # Call platform passkey API with PRF extension. Use the dual-salt
         # ceremony when the authenticator supports it (one OS prompt for
         # N salts) and fall back to per-salt assertions otherwise.
