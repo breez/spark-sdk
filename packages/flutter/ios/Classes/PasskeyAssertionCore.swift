@@ -650,10 +650,9 @@ public final class PasskeyAssertionCore {
         controller.delegate = delegate
         controller.presentationContextProvider = delegate
         delegate.anchor = anchor.presentationAnchor()
-        delegate.onAssertionCredentialId = makeCaptureCallback()
 
         let preferImmediate = preferImmediatelyAvailableCredentials
-        return try await withCheckedThrowingContinuation { continuation in
+        let result = try await withCheckedThrowingContinuation { continuation in
             delegate.assertionContinuation = continuation
             delegate.extractPrf = true
             delegate.ceremonyStartedAt = Date()
@@ -664,36 +663,29 @@ public final class PasskeyAssertionCore {
                 )
             }
         }
-    }
 
-    /// Build the per-assertion credential-ID callback. Best-effort
-    /// `registry.add(...)` when a registry is supplied, so a returning
-    /// user's pre-tracking credential gets seeded on first assertion and
-    /// subsequent registrations hit the platform-level "already exists"
-    /// guard via `excludedCredentials`. The credential ID itself is
-    /// returned inline from [`deriveSeeds`]; this callback only seeds the
-    /// registry.
-    private func makeCaptureCallback() -> (Data) -> Void {
-        let rpId = self.rpId
-        let credentialRegistry = self.credentialRegistry
-        let onRegistryError = self.onRegistryError
-        return { credentialId in
-            if let reg = credentialRegistry {
-                // `detached` is deliberate: this callback fires on the
-                // ASAuthorization delegate (main), and the best-effort
-                // write must neither inherit MainActor isolation nor be
-                // cancelled when the ceremony returns. It's already 3s
-                // timeout-bounded inside registryAddBestEffort.
-                Task.detached {
-                    await registryAddBestEffort(
-                        registry: reg,
-                        rpId: rpId,
-                        credentialId: credentialId,
-                        onRegistryError: onRegistryError
-                    )
-                }
+        // Best-effort registry seed with the asserted credential ID, so a
+        // returning user's pre-tracking credential is captured on first
+        // assertion and subsequent registrations hit the platform-level
+        // "already exists" guard via `excludeCredentials`. Detached +
+        // timeout-bounded so it neither blocks the seed return nor
+        // inherits ceremony cancellation. The credential ID itself is
+        // returned inline (third tuple element), so there is no separate
+        // delegate callback.
+        if let reg = credentialRegistry {
+            let rpId = self.rpId
+            let onRegistryError = self.onRegistryError
+            let credentialId = result.2
+            Task.detached {
+                await registryAddBestEffort(
+                    registry: reg,
+                    rpId: rpId,
+                    credentialId: credentialId,
+                    onRegistryError: onRegistryError
+                )
             }
         }
+        return result
     }
 
     /// Wraps `controller.performRequests` for assertion paths and
@@ -940,11 +932,6 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
     var anchor: ASPresentationAnchor = ASPresentationAnchor()
     /// `true` for assertion ceremonies, `false` for registration.
     var extractPrf = true
-    /// Invoked with the credential ID from a successful assertion. Set
-    /// by the core so hosts can record which credential was used. No-op
-    /// on registration (the credential ID flows out via the
-    /// registrationContinuation).
-    var onAssertionCredentialId: ((Data) -> Void)?
     /// Wall-clock timestamp at the moment `controller.performRequests()`
     /// fires. Used by `mapPasskeyError` to discriminate the OS biometric
     /// inactivity timeout (~55s+, surfaced as `.canceled`) from a
@@ -974,11 +961,11 @@ private final class PasskeyDelegate: NSObject, ASAuthorizationControllerDelegate
                 return
             }
 
-            // Surface the credential ID before resolving so hosts can
-            // record it. Failures here are best-effort and must not
-            // block the seed return. `second` is nil for single-salt
-            // ceremonies or when the authenticator dropped saltInput2.
-            onAssertionCredentialId?(credential.credentialID)
+            // Resolve with the seeds plus the asserted credential ID.
+            // `second` is nil for single-salt ceremonies or when the
+            // authenticator dropped saltInput2. The caller seeds the
+            // registry from the returned credential ID; no separate
+            // callback is needed.
             assertionContinuation?.resume(
                 returning: (
                     prfFirst,
