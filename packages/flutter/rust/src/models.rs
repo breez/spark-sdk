@@ -1298,6 +1298,8 @@ pub struct _UnregisterWebhookRequest {
 #[frb(mirror(PasskeyConfig))]
 pub struct _PasskeyConfig {
     pub default_label: Option<String>,
+    pub rp_id: Option<String>,
+    pub rp_name: Option<String>,
 }
 
 #[frb(mirror(PasskeyAvailability))]
@@ -1348,6 +1350,12 @@ pub struct _DeriveSeedsRequest {
     pub prefer_immediately_available_credentials: Option<bool>,
 }
 
+#[frb(mirror(DeriveSeedsOutput))]
+pub struct _DeriveSeedsOutput {
+    pub seeds: Vec<Vec<u8>>,
+    pub credential_id: Option<Vec<u8>>,
+}
+
 #[frb(mirror(SignInResponse))]
 pub struct _SignInResponse {
     pub wallet: Wallet,
@@ -1358,6 +1366,7 @@ pub struct _SignInResponse {
 #[frb(mirror(ConnectWithPasskeyRequest))]
 pub struct _ConnectWithPasskeyRequest {
     pub label: Option<String>,
+    pub allow_credentials: Vec<Vec<u8>>,
     pub exclude_credentials: Vec<Vec<u8>>,
 }
 
