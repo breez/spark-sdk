@@ -126,10 +126,8 @@ impl From<std::num::TryFromIntError> for StorageError {
 pub enum StoragePaymentDetailsFilter {
     Spark {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        conversion_refund_needed: Option<bool>,
     },
     Token {
-        conversion_refund_needed: Option<bool>,
         tx_hash: Option<String>,
         tx_type: Option<TokenTransactionType>,
     },
@@ -141,22 +139,12 @@ pub enum StoragePaymentDetailsFilter {
 impl From<PaymentDetailsFilter> for StoragePaymentDetailsFilter {
     fn from(filter: PaymentDetailsFilter) -> Self {
         match filter {
-            PaymentDetailsFilter::Spark {
-                htlc_status,
-                conversion_refund_needed,
-            } => StoragePaymentDetailsFilter::Spark {
-                htlc_status,
-                conversion_refund_needed,
-            },
-            PaymentDetailsFilter::Token {
-                conversion_refund_needed,
-                tx_hash,
-                tx_type,
-            } => StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed,
-                tx_hash,
-                tx_type,
-            },
+            PaymentDetailsFilter::Spark { htlc_status } => {
+                StoragePaymentDetailsFilter::Spark { htlc_status }
+            }
+            PaymentDetailsFilter::Token { tx_hash, tx_type } => {
+                StoragePaymentDetailsFilter::Token { tx_hash, tx_type }
+            }
             PaymentDetailsFilter::Lightning { htlc_status } => {
                 StoragePaymentDetailsFilter::Lightning { htlc_status }
             }
@@ -167,22 +155,12 @@ impl From<PaymentDetailsFilter> for StoragePaymentDetailsFilter {
 impl From<StoragePaymentDetailsFilter> for PaymentDetailsFilter {
     fn from(filter: StoragePaymentDetailsFilter) -> Self {
         match filter {
-            StoragePaymentDetailsFilter::Spark {
-                htlc_status,
-                conversion_refund_needed,
-            } => PaymentDetailsFilter::Spark {
-                htlc_status,
-                conversion_refund_needed,
-            },
-            StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed,
-                tx_hash,
-                tx_type,
-            } => PaymentDetailsFilter::Token {
-                conversion_refund_needed,
-                tx_hash,
-                tx_type,
-            },
+            StoragePaymentDetailsFilter::Spark { htlc_status } => {
+                PaymentDetailsFilter::Spark { htlc_status }
+            }
+            StoragePaymentDetailsFilter::Token { tx_hash, tx_type } => {
+                PaymentDetailsFilter::Token { tx_hash, tx_type }
+            }
             StoragePaymentDetailsFilter::Lightning { htlc_status } => {
                 PaymentDetailsFilter::Lightning { htlc_status }
             }

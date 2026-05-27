@@ -144,13 +144,6 @@ async fn test_lightning_htlc_details_and_status_filtering() {
 }
 
 #[wasm_bindgen_test]
-async fn test_conversion_refund_needed_filtering() {
-    let storage = create_test_storage("my_conversion_refund_needed_filtering").await;
-    breez_sdk_spark::storage_tests::test_conversion_refund_needed_filtering(Box::new(storage))
-        .await;
-}
-
-#[wasm_bindgen_test]
 async fn test_token_transaction_type_filtering() {
     let storage = create_test_storage("my_token_tx_type_filtering").await;
     breez_sdk_spark::storage_tests::test_token_transaction_type_filtering(Box::new(storage)).await;

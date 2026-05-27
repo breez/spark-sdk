@@ -423,15 +423,13 @@ public static class Commands
                     .Select(s => Enum.Parse<SparkHtlcStatus>(s.Trim(), ignoreCase: true))
                     .ToArray();
                 paymentDetailsFilterList.Add(new PaymentDetailsFilter.Spark(
-                    htlcStatus: statuses,
-                    conversionRefundNeeded: null
+                    htlcStatus: statuses
                 ));
             }
 
             if (txHash != null)
             {
                 paymentDetailsFilterList.Add(new PaymentDetailsFilter.Token(
-                    conversionRefundNeeded: null,
                     txType: null,
                     txHash: txHash
                 ));
@@ -441,7 +439,6 @@ public static class Commands
             {
                 var txType = Enum.Parse<TokenTransactionType>(txTypeStr, ignoreCase: true);
                 paymentDetailsFilterList.Add(new PaymentDetailsFilter.Token(
-                    conversionRefundNeeded: null,
                     txType: txType,
                     txHash: null
                 ));

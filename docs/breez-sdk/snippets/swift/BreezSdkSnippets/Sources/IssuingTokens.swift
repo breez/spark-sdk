@@ -72,13 +72,13 @@ func listMintBurnPayments(tokenIssuer: TokenIssuer) async throws {
     // Provide one or multiple of the following filters to
     // the `paymentDetailsFilter` field when listing payments
     let paymentDetailsTransferFilter = PaymentDetailsFilter.token(
-        conversionRefundNeeded: nil, txHash: nil,
+        txHash: nil,
         txType: TokenTransactionType.transfer)
     let paymentDetailsMintFilter = PaymentDetailsFilter.token(
-        conversionRefundNeeded: nil, txHash: nil,
+        txHash: nil,
         txType: TokenTransactionType.mint)
     let paymentDetailsBurnFilter = PaymentDetailsFilter.token(
-        conversionRefundNeeded: nil, txHash: nil,
+        txHash: nil,
         txType: TokenTransactionType.burn)
     // ANCHOR_END: list-mint-burn-payments
 }

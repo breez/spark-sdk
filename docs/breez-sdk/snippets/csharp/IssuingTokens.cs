@@ -84,18 +84,15 @@ namespace BreezSdkSnippets
             // the `paymentDetailsFilter` field when listing payments
             var paymentDefailsTransferFilter = new PaymentDetailsFilter.Token(
                 txType: TokenTransactionType.Transfer,
-                txHash: null,
-                conversionRefundNeeded: null
+                txHash: null
             );
             var paymentDefailsMintFilter = new PaymentDetailsFilter.Token(
                 txType: TokenTransactionType.Mint,
-                txHash: null,
-                conversionRefundNeeded: null
+                txHash: null
             );
             var paymentDefailsBurnFilter = new PaymentDetailsFilter.Token(
                 txType: TokenTransactionType.Burn,
-                txHash: null,
-                conversionRefundNeeded: null
+                txHash: null
             );
             // ANCHOR_END: list-mint-burn-payments
         }

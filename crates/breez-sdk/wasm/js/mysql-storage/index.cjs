@@ -283,25 +283,6 @@ class MysqlStorage {
           }
 
           if (
-            (paymentDetailsFilter.type === "spark" ||
-              paymentDetailsFilter.type === "token") &&
-            paymentDetailsFilter.conversionRefundNeeded !== undefined
-          ) {
-            const typeCheck =
-              paymentDetailsFilter.type === "spark"
-                ? "p.spark = 1"
-                : "p.spark IS NULL";
-            const refundNeeded =
-              paymentDetailsFilter.conversionRefundNeeded === true
-                ? "= 'refundNeeded'"
-                : "!= 'refundNeeded'";
-            paymentDetailsClauses.push(
-              `${typeCheck} AND pm.conversion_info IS NOT NULL AND
-               JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.status')) ${refundNeeded}`
-            );
-          }
-
-          if (
             paymentDetailsFilter.type === "token" &&
             paymentDetailsFilter.txHash !== undefined
           ) {

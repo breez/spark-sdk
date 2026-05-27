@@ -101,18 +101,15 @@ async def list_mint_burn_payments():
     # the `payment_details_filter` field when listing payments
     payment_details_transfer_filter = PaymentDetailsFilter.TOKEN(
         tx_type=TokenTransactionType.TRANSFER,
-        tx_hash=None,
-        conversion_refund_needed=None
+        tx_hash=None
     )
     payment_details_mint_filter = PaymentDetailsFilter.TOKEN(
         tx_type=TokenTransactionType.MINT,
-        tx_hash=None,
-        conversion_refund_needed=None
+        tx_hash=None
     )
     payment_details_burn_filter = PaymentDetailsFilter.TOKEN(
         tx_type=TokenTransactionType.BURN,
-        tx_hash=None,
-        conversion_refund_needed=None
+        tx_hash=None
     )
     # ANCHOR_END: list-mint-burn-payments
 

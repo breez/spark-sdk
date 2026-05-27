@@ -203,12 +203,12 @@ async def _handle_list_payments(sdk, _token_issuer, _session, args):
         statuses = [_parse_htlc_status(s) for s in args.spark_htlc_status_filter if _parse_htlc_status(s)]
         if statuses:
             payment_details_filter.append(
-                PaymentDetailsFilter.SPARK(htlc_status=statuses, conversion_refund_needed=None)
+                PaymentDetailsFilter.SPARK(htlc_status=statuses)
             )
     if args.tx_hash:
         payment_details_filter.append(
             PaymentDetailsFilter.TOKEN(
-                conversion_refund_needed=None, tx_type=None, tx_hash=args.tx_hash,
+                tx_type=None, tx_hash=args.tx_hash,
             )
         )
     if args.tx_type:
@@ -216,7 +216,7 @@ async def _handle_list_payments(sdk, _token_issuer, _session, args):
         if tx_type:
             payment_details_filter.append(
                 PaymentDetailsFilter.TOKEN(
-                    conversion_refund_needed=None, tx_type=tx_type, tx_hash=None,
+                    tx_type=tx_type, tx_hash=None,
                 )
             )
 

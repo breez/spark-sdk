@@ -606,29 +606,6 @@ impl Storage for SqliteStorage {
                         params.push(Box::new(htlc_status.to_string()));
                     }
                 }
-                // Filter by conversion info presence
-                let conversion_filter = match payment_details_filter {
-                    StoragePaymentDetailsFilter::Spark {
-                        conversion_refund_needed: Some(v),
-                        ..
-                    } => Some((v, "p.spark = 1")),
-                    StoragePaymentDetailsFilter::Token {
-                        conversion_refund_needed: Some(v),
-                        ..
-                    } => Some((v, "p.spark IS NULL")),
-                    _ => None,
-                };
-                if let Some((conversion_refund_needed, type_check)) = conversion_filter {
-                    let refund_needed = if *conversion_refund_needed {
-                        "= 'RefundNeeded'"
-                    } else {
-                        "!= 'RefundNeeded'"
-                    };
-                    payment_details_clauses.push(format!(
-                        "{type_check} AND pm.conversion_info IS NOT NULL AND
-                         json_extract(pm.conversion_info, '$.status') {refund_needed}"
-                    ));
-                }
                 // Filter by token transaction hash
                 if let StoragePaymentDetailsFilter::Token {
                     tx_hash: Some(tx_hash),
@@ -1837,14 +1814,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_conversion_refund_needed_filtering() {
-        let temp_dir = create_temp_dir("sqlite_storage_conversion_refund_needed_filter");
-        let storage = SqliteStorage::new(&temp_dir).unwrap();
-
-        crate::persist::tests::test_conversion_refund_needed_filtering(Box::new(storage)).await;
-    }
-
-    #[tokio::test]
     async fn test_token_transaction_type_filtering() {
         let temp_dir = create_temp_dir("sqlite_storage_token_transaction_type_filter");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
@@ -2092,7 +2061,6 @@ mod tests {
             status_filter: None,
             asset_filter: None,
             payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed: None,
                 tx_hash: None,
                 tx_type: Some(TokenTransactionType::Transfer),
             }]),

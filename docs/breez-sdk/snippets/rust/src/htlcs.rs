@@ -77,7 +77,6 @@ async fn list_claimable_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
         payment_details_filter: Some(vec![
             PaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
-                conversion_refund_needed: None,
             },
             PaymentDetailsFilter::Lightning {
                 htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),

@@ -402,19 +402,16 @@ pub(crate) async fn execute_command(
             if let Some(statuses) = spark_htlc_status_filter {
                 payment_details_filter.push(PaymentDetailsFilter::Spark {
                     htlc_status: Some(statuses),
-                    conversion_refund_needed: None,
                 });
             }
             if let Some(tx_hash) = tx_hash {
                 payment_details_filter.push(PaymentDetailsFilter::Token {
-                    conversion_refund_needed: None,
                     tx_type: None,
                     tx_hash: Some(tx_hash),
                 });
             }
             if let Some(tx_type) = tx_type {
                 payment_details_filter.push(PaymentDetailsFilter::Token {
-                    conversion_refund_needed: None,
                     tx_type: Some(tx_type),
                     tx_hash: None,
                 });

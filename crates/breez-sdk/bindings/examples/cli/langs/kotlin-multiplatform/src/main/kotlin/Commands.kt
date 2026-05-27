@@ -241,13 +241,11 @@ suspend fun handleListPayments(sdk: BreezSdk, reader: LineReader, args: List<Str
             SparkHtlcStatus.valueOf(s.trim().uppercase())
         }
         paymentDetailsFilter.add(PaymentDetailsFilter.Spark(
-            htlcStatus = statuses,
-            conversionRefundNeeded = null
+            htlcStatus = statuses
         ))
     }
     if (txHash != null) {
         paymentDetailsFilter.add(PaymentDetailsFilter.Token(
-            conversionRefundNeeded = null,
             txType = null,
             txHash = txHash
         ))
@@ -255,7 +253,6 @@ suspend fun handleListPayments(sdk: BreezSdk, reader: LineReader, args: List<Str
     if (txTypeStr != null) {
         val txType = TokenTransactionType.valueOf(txTypeStr.trim().uppercase())
         paymentDetailsFilter.add(PaymentDetailsFilter.Token(
-            conversionRefundNeeded = null,
             txType = txType,
             txHash = null
         ))

@@ -273,13 +273,13 @@ func handleListPayments(_ sdk: BreezSdk, _ args: [String]) async throws {
     var paymentDetailsFilter: [PaymentDetailsFilter] = []
     if let htlcStatusRaw = fp.get("spark-htlc-status-filter") {
         let statuses = htlcStatusRaw.split(separator: ",").compactMap { parseSparkHtlcStatus(String($0)) }
-        paymentDetailsFilter.append(.spark(htlcStatus: statuses, conversionRefundNeeded: nil))
+        paymentDetailsFilter.append(.spark(htlcStatus: statuses))
     }
     if let txHash = fp.get("tx-hash") {
-        paymentDetailsFilter.append(.token(conversionRefundNeeded: nil, txHash: txHash, txType: nil))
+        paymentDetailsFilter.append(.token(txHash: txHash, txType: nil))
     }
     if let txTypeRaw = fp.get("tx-type"), let txType = parseTokenTransactionType(txTypeRaw) {
-        paymentDetailsFilter.append(.token(conversionRefundNeeded: nil, txHash: nil, txType: txType))
+        paymentDetailsFilter.append(.token(txHash: nil, txType: txType))
     }
 
     let result = try await sdk.listPayments(request: ListPaymentsRequest(

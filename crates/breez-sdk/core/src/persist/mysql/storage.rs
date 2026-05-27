@@ -918,28 +918,6 @@ impl Storage for MysqlStorage {
                         params.push(Value::from(htlc_status.to_string()));
                     }
                 }
-                let conversion_filter = match payment_details_filter {
-                    StoragePaymentDetailsFilter::Spark {
-                        conversion_refund_needed: Some(v),
-                        ..
-                    } => Some((v, "p.spark = 1")),
-                    StoragePaymentDetailsFilter::Token {
-                        conversion_refund_needed: Some(v),
-                        ..
-                    } => Some((v, "p.spark IS NULL")),
-                    _ => None,
-                };
-                if let Some((conversion_refund_needed, type_check)) = conversion_filter {
-                    let refund_needed = if *conversion_refund_needed {
-                        "= 'RefundNeeded'"
-                    } else {
-                        "!= 'RefundNeeded'"
-                    };
-                    payment_details_clauses.push(format!(
-                        "{type_check} AND pm.conversion_info IS NOT NULL AND
-                         JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.status')) {refund_needed}"
-                    ));
-                }
                 if let StoragePaymentDetailsFilter::Token {
                     tx_hash: Some(tx_hash),
                     ..
@@ -2167,13 +2145,6 @@ mod tests {
             fixture.storage,
         ))
         .await;
-    }
-
-    #[tokio::test]
-    async fn test_conversion_refund_needed_filtering() {
-        let fixture = MysqlTestFixture::new().await;
-        crate::persist::tests::test_conversion_refund_needed_filtering(Box::new(fixture.storage))
-            .await;
     }
 
     #[tokio::test]

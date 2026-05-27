@@ -157,14 +157,6 @@ async fn test_lightning_htlc_details_and_status_filtering() {
 }
 
 #[wasm_bindgen_test]
-async fn test_conversion_refund_needed_filtering() {
-    let storage = create_test_storage("test_conversion_refund_needed_filtering").await;
-
-    breez_sdk_spark::storage_tests::test_conversion_refund_needed_filtering(Box::new(storage))
-        .await;
-}
-
-#[wasm_bindgen_test]
 async fn test_token_transaction_type_filtering() {
     let storage = create_test_storage("token_tx_type_filtering").await;
 
@@ -373,7 +365,6 @@ async fn test_migration_from_v17_to_v18() {
         status_filter: None,
         asset_filter: None,
         payment_details_filter: Some(vec![breez_sdk_spark::StoragePaymentDetailsFilter::Token {
-            conversion_refund_needed: None,
             tx_hash: None,
             tx_type: Some(breez_sdk_spark::TokenTransactionType::Transfer),
         }]),

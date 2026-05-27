@@ -91,7 +91,8 @@ impl crate::events::RuntimeEventHandler for ServerRuntimeEventHandler {
                     .await;
                 }
             }
-            RuntimeEvent::StableBalanceConversionCompleted => {}
+            RuntimeEvent::StableBalanceConversionCompleted
+            | RuntimeEvent::ConversionRecoveryNeeded { .. } => {}
         }
     }
 }

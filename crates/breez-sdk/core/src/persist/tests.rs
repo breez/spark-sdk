@@ -1818,7 +1818,6 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
-                conversion_refund_needed: None,
             }]),
             ..Default::default()
         })
@@ -1832,7 +1831,6 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::PreimageShared]),
-                conversion_refund_needed: None,
             }]),
             ..Default::default()
         })
@@ -1846,7 +1844,6 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
                 htlc_status: Some(vec![SparkHtlcStatus::Returned]),
-                conversion_refund_needed: None,
             }]),
             ..Default::default()
         })
@@ -1863,7 +1860,6 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
                     SparkHtlcStatus::WaitingForPreimage,
                     SparkHtlcStatus::PreimageShared,
                 ]),
-                conversion_refund_needed: None,
             }]),
             ..Default::default()
         })
@@ -1882,7 +1878,6 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
                     SparkHtlcStatus::PreimageShared,
                     SparkHtlcStatus::Returned,
                 ]),
-                conversion_refund_needed: None,
             }]),
             ..Default::default()
         })
@@ -1890,227 +1885,6 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
         .unwrap();
     assert_eq!(all_htlc_filter.len(), 3);
     assert!(all_htlc_filter.iter().all(|p| p.id != "non_htlc"));
-}
-
-#[allow(clippy::too_many_lines)]
-pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) {
-    // Create payments with and without conversion info
-    let payment_with_refund_metadata = PaymentMetadata {
-        conversion_info: Some(crate::ConversionInfo {
-            pool_id: "pool1".to_string(),
-            conversion_id: "with_refund".to_string(),
-            status: crate::ConversionStatus::Refunded,
-            fee: None,
-            purpose: None,
-            amount_adjustment: None,
-        }),
-        ..Default::default()
-    };
-    let payment_with_refund = Payment {
-        id: "with_refund".to_string(),
-        payment_type: PaymentType::Send,
-        status: PaymentStatus::Completed,
-        amount: 10_000_000,
-        fees: 0,
-        timestamp: 1000,
-        method: PaymentMethod::Token,
-        details: Some(PaymentDetails::Token {
-            metadata: crate::TokenMetadata {
-                identifier: "token1".to_string(),
-                issuer_public_key: "pubkey1".to_string(),
-                name: "Test Token".to_string(),
-                ticker: "TTK".to_string(),
-                decimals: 8,
-                max_supply: 1_000_000_000,
-                is_freezable: false,
-            },
-            tx_hash: "txhash1".to_string(),
-            tx_type: TokenTransactionType::Transfer,
-            invoice_details: None,
-            conversion_info: None,
-        }),
-        conversion_details: None,
-    };
-
-    let successful_conversion_metadata = PaymentMetadata {
-        conversion_info: Some(crate::ConversionInfo {
-            pool_id: "pool1".to_string(),
-            conversion_id: "successful_conversion".to_string(),
-            status: crate::ConversionStatus::Completed,
-            fee: Some(100),
-            purpose: None,
-            amount_adjustment: None,
-        }),
-        ..Default::default()
-    };
-    let successful_conversion = Payment {
-        id: "successful_conversion".to_string(),
-        payment_type: PaymentType::Send,
-        status: PaymentStatus::Completed,
-        amount: 20_000,
-        fees: 0,
-        timestamp: 2000,
-        method: PaymentMethod::Spark,
-        details: Some(PaymentDetails::Spark {
-            invoice_details: None,
-            htlc_details: None,
-            conversion_info: None,
-        }),
-        conversion_details: None,
-    };
-
-    let payment_without_refund_metadata = PaymentMetadata {
-        conversion_info: Some(crate::ConversionInfo {
-            pool_id: "pool1".to_string(),
-            conversion_id: "without_refund".to_string(),
-            status: crate::ConversionStatus::RefundNeeded,
-            fee: None,
-            purpose: None,
-            amount_adjustment: None,
-        }),
-        ..Default::default()
-    };
-    let payment_without_refund = Payment {
-        id: "without_refund".to_string(),
-        payment_type: PaymentType::Send,
-        status: PaymentStatus::Completed,
-        amount: 10_000,
-        fees: 0,
-        timestamp: 3000,
-        method: PaymentMethod::Spark,
-        details: Some(PaymentDetails::Spark {
-            invoice_details: None,
-            htlc_details: None,
-            conversion_info: None,
-        }),
-        conversion_details: None,
-    };
-
-    storage
-        .apply_payment_update(payment_with_refund)
-        .await
-        .unwrap();
-    storage
-        .apply_payment_update(successful_conversion)
-        .await
-        .unwrap();
-    storage
-        .apply_payment_update(payment_without_refund)
-        .await
-        .unwrap();
-    storage
-        .insert_payment_metadata("with_refund".to_string(), payment_with_refund_metadata)
-        .await
-        .unwrap();
-    storage
-        .insert_payment_metadata(
-            "successful_conversion".to_string(),
-            successful_conversion_metadata,
-        )
-        .await
-        .unwrap();
-    storage
-        .insert_payment_metadata(
-            "without_refund".to_string(),
-            payment_without_refund_metadata,
-        )
-        .await
-        .unwrap();
-
-    let payments = storage
-        .list_payments(StorageListPaymentsRequest::default())
-        .await
-        .unwrap();
-    assert_eq!(payments.len(), 3);
-
-    // Test filter for payments missing transfer refund info
-    let missing_refund_filter = storage
-        .list_payments(StorageListPaymentsRequest {
-            payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
-                htlc_status: None,
-                conversion_refund_needed: Some(true),
-            }]),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(missing_refund_filter.len(), 1);
-    assert_eq!(missing_refund_filter[0].id, "without_refund");
-
-    // Test filter for payments with transfer refund info present
-    let present_refund_filter = storage
-        .list_payments(StorageListPaymentsRequest {
-            payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed: Some(false),
-                tx_hash: None,
-                tx_type: None,
-            }]),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(present_refund_filter.len(), 1);
-    assert_eq!(present_refund_filter[0].id, "with_refund");
-
-    // Test multiple payment detail filters
-    let multiple_filters = storage
-        .list_payments(StorageListPaymentsRequest {
-            payment_details_filter: Some(vec![
-                crate::StoragePaymentDetailsFilter::Spark {
-                    htlc_status: None,
-                    conversion_refund_needed: Some(true),
-                },
-                crate::StoragePaymentDetailsFilter::Token {
-                    conversion_refund_needed: Some(false),
-                    tx_hash: None,
-                    tx_type: None,
-                },
-            ]),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(multiple_filters.len(), 2);
-
-    // Test filter for token payments missing transfer refund info
-    let token_no_refund_filter = storage
-        .list_payments(StorageListPaymentsRequest {
-            payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed: Some(true),
-                tx_hash: None,
-                tx_type: None,
-            }]),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(token_no_refund_filter.len(), 0);
-
-    // Test filter for spark payments with transfer refund info present
-    let spark_with_refund_filter = storage
-        .list_payments(StorageListPaymentsRequest {
-            payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
-                htlc_status: None,
-                conversion_refund_needed: Some(false),
-            }]),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(spark_with_refund_filter.len(), 1);
-
-    // Test filter for all payments regardless of transfer refund info
-    let all_payments_filter = storage
-        .list_payments(StorageListPaymentsRequest {
-            payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Spark {
-                htlc_status: None,
-                conversion_refund_needed: None,
-            }]),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(all_payments_filter.len(), 3);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2187,7 +1961,6 @@ pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Token {
                 tx_type: Some(TokenTransactionType::Transfer),
                 tx_hash: None,
-                conversion_refund_needed: None,
             }]),
             ..Default::default()
         })
@@ -2203,7 +1976,6 @@ pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Token {
                 tx_type: Some(TokenTransactionType::Mint),
                 tx_hash: None,
-                conversion_refund_needed: None,
             }]),
             ..Default::default()
         })
@@ -2218,7 +1990,6 @@ pub async fn test_token_transaction_type_filtering(storage: Box<dyn Storage>) {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Token {
                 tx_type: Some(TokenTransactionType::Burn),
                 tx_hash: None,
-                conversion_refund_needed: None,
             }]),
             ..Default::default()
         })

@@ -82,8 +82,7 @@ namespace BreezSdkSnippets
                     new PaymentDetailsFilter.Spark(
                         htlcStatus: new SparkHtlcStatus[] {
                             SparkHtlcStatus.WaitingForPreimage
-                        },
-                        conversionRefundNeeded: null
+                        }
                     ),
                     new PaymentDetailsFilter.Lightning(
                         htlcStatus: new SparkHtlcStatus[] {

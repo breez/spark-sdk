@@ -237,8 +237,7 @@ async def server_mode_provisioning(sdk: BreezSdk):
 
 async def refund_pending_conversions(sdk: BreezSdk):
     # ANCHOR: refund-pending-conversions
-    # The flashnet conversion refunder doesn't run in the background in server
-    # mode. Call this from your own scheduler (e.g. once per minute) to issue
-    # pending refunds for failed conversions.
+    # The returned response reports how many were refunded and how many were
+    # skipped (too young to recover).
     await sdk.refund_pending_conversions()
     # ANCHOR_END: refund-pending-conversions

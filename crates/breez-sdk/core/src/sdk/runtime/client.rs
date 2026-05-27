@@ -23,6 +23,10 @@ use crate::{
 };
 use crate::{PaymentType, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
 
+/// Fixed retry interval for recovery operations. Both the startup `FullScan`
+/// and the per-conversion targeted recovery use this delay between attempts.
+const CONVERSION_RECOVERY_RETRY_SECS: u64 = 30;
+
 use super::{RuntimeEvent, RuntimeProfile};
 use crate::sdk::{BreezSdk, SyncCoordinator, SyncRequest, SyncType, helpers::BalanceWatcher};
 
@@ -205,6 +209,29 @@ impl crate::events::RuntimeEventHandler for ClientRuntimeEventHandler {
                     error!("Failed to refresh balances after claim_deposit: {e:?}");
                 }
             }
+            RuntimeEvent::ConversionRecoveryNeeded {
+                clawback_id,
+                pool_id,
+            } => {
+                let converter = Arc::clone(&self.sdk.token_converter);
+                let shutdown = self.sdk.shutdown_sender.subscribe();
+                tokio::spawn(async move {
+                    run_recover_conversion_with_retry(shutdown, move || {
+                        let converter = Arc::clone(&converter);
+                        let clawback_id = clawback_id.clone();
+                        async move {
+                            // Either terminal outcome (Refunded or ServerRejected) ends the
+                            // retry loop; only retryable HTTP/storage errors restart it.
+                            converter
+                                .refund_conversion(&clawback_id, pool_id)
+                                .await
+                                .map(|_| ())
+                                .map_err(Into::into)
+                        }
+                    })
+                    .await;
+                });
+            }
         }
     }
 }
@@ -360,7 +387,6 @@ async fn token_tx_inputs_are_ours_cached_or_query(
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Token {
                 tx_hash: Some(transaction.hash.clone()),
-                conversion_refund_needed: None,
                 tx_type: None,
             }]),
             limit: Some(1),
@@ -441,43 +467,71 @@ impl EventListener for ClientSyncListener {
 
 fn spawn_conversion_refunder(
     token_converter: Arc<dyn TokenConverter>,
-    mut shutdown_receiver: watch::Receiver<()>,
+    shutdown_receiver: watch::Receiver<()>,
 ) {
-    let mut refund_requests = token_converter.subscribe_refund_requests();
     let span = tracing::Span::current();
-
     tokio::spawn(
         async move {
-            loop {
-                if let Err(e) = token_converter.refund_pending().await {
-                    error!("Failed to refund failed conversions: {e:?}");
-                }
-
-                match refund_requests.as_mut() {
-                    Some(trigger_receiver) => {
-                        select! {
-                            _ = shutdown_receiver.changed() => {
-                                info!("Conversion refunder shutdown signal received");
-                                return;
-                            }
-                            _ = trigger_receiver.recv() => {
-                                debug!("Conversion refunder triggered");
-                            }
-                            () = tokio::time::sleep(Duration::from_secs(150)) => {}
-                        }
+            run_recover_conversion_with_retry(shutdown_receiver, move || {
+                let converter = Arc::clone(&token_converter);
+                async move {
+                    let report = converter.refund_pending().await?;
+                    if report.refunded > 0 || report.skipped > 0 {
+                        info!(
+                            "Startup recovery scan: refunded={}, skipped={}",
+                            report.refunded, report.skipped
+                        );
                     }
-                    None => {
-                        select! {
-                            _ = shutdown_receiver.changed() => {
-                                info!("Conversion refunder shutdown signal received");
-                                return;
-                            }
-                            () = tokio::time::sleep(Duration::from_secs(150)) => {}
-                        }
+                    // Mid-scan per-transfer retryable failures (HTTP 5xx /
+                    // storage glitch) surface as an Err so the retry loop runs
+                    // another pass in 30s. Without this, a Flashnet blip during
+                    // a multi-transfer scan would silently strand those
+                    // transfers until the next SDK start.
+                    if report.failed_retryable > 0 {
+                        return Err(SdkError::Generic(format!(
+                            "{} retryable per-transfer failures during startup recovery scan; retrying",
+                            report.failed_retryable
+                        )));
                     }
+                    Ok(())
                 }
-            }
+            })
+            .await;
         }
         .instrument(span),
     );
+}
+
+/// Retries every 30s until it returns `Ok(())` or shutdown fires.
+/// The shutdown receiver is the only thing that terminates the loop — there's
+/// no bounded timeout because recovery is something we want to keep attempting
+/// for as long as the SDK is alive.
+async fn run_recover_conversion_with_retry<F, Fut>(
+    mut shutdown: watch::Receiver<()>,
+    mut recover_fn: F,
+) where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), SdkError>>,
+{
+    loop {
+        // Bias toward shutdown so a signal racing with a finishing probe always wins.
+        let outcome = tokio::select! {
+            biased;
+            _ = shutdown.changed() => return,
+            result = recover_fn() => result,
+        };
+
+        match outcome {
+            Ok(()) => return,
+            Err(e) => {
+                debug!("Recovery failed: {e:?}; retrying in {CONVERSION_RECOVERY_RETRY_SECS}s");
+            }
+        }
+
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => return,
+            () = tokio::time::sleep(Duration::from_secs(CONVERSION_RECOVERY_RETRY_SECS)) => {}
+        }
+    }
 }

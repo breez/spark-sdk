@@ -22,8 +22,8 @@ use crate::{
     models::{
         ConversionStatus, ListPaymentsRequest, ListPaymentsResponse, Payment, PaymentDetails,
         PrepareSendPaymentRequest, PrepareSendPaymentResponse, ReceivePaymentMethod,
-        ReceivePaymentRequest, ReceivePaymentResponse, SendPaymentRequest, SendPaymentResponse,
-        conversion_steps_from_payments,
+        ReceivePaymentRequest, ReceivePaymentResponse, RefundPendingConversionsResponse,
+        SendPaymentRequest, SendPaymentResponse, conversion_steps_from_payments,
     },
     persist::PaymentMetadata,
     token_conversion::{
@@ -452,11 +452,14 @@ impl BreezSdk {
     /// disabled the periodic refunder does not run, and this method is the
     /// explicit entry point for driving the pass; when background tasks are
     /// enabled, it can be called to force an immediate refund pass.
-    pub async fn refund_pending_conversions(&self) -> Result<(), SdkError> {
-        self.token_converter
-            .refund_pending()
-            .await
-            .map_err(Into::into)
+    pub async fn refund_pending_conversions(
+        &self,
+    ) -> Result<RefundPendingConversionsResponse, SdkError> {
+        let report = self.token_converter.refund_pending().await?;
+        Ok(RefundPendingConversionsResponse {
+            refunded: report.refunded,
+            skipped: report.skipped,
+        })
     }
 
     /// Lists payments from the storage with pagination

@@ -93,20 +93,17 @@ class IssuingTokens {
         val paymentDetailsTransferFilter =
                 PaymentDetailsFilter.Token(
                         txType = TokenTransactionType.TRANSFER,
-                        txHash = null,
-                        conversionRefundNeeded = null
+                        txHash = null
                 )
         val paymentDetailsMintFilter =
                 PaymentDetailsFilter.Token(
                         txType = TokenTransactionType.MINT,
-                        txHash = null,
-                        conversionRefundNeeded = null
+                        txHash = null
                 )
         val paymentDetailsBurnFilter =
                 PaymentDetailsFilter.Token(
                         txType = TokenTransactionType.BURN,
-                        txHash = null,
-                        conversionRefundNeeded = null
+                        txHash = null
                 )
         // ANCHOR_END: list-mint-burn-payments
     }

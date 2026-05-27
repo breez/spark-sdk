@@ -2223,26 +2223,6 @@ class IndexedDBStorage {
             continue;
           }
         }
-        // Filter by token conversion info presence
-        if (
-          (paymentDetailsFilter.type === "spark" ||
-            paymentDetailsFilter.type === "token") &&
-          paymentDetailsFilter.conversionRefundNeeded != null
-        ) {
-          if (
-            details.type !== paymentDetailsFilter.type ||
-            !details.conversionInfo
-          ) {
-            continue;
-          }
-
-          if (
-            paymentDetailsFilter.conversionRefundNeeded ===
-            (details.conversionInfo.status !== "refundNeeded")
-          ) {
-            continue;
-          }
-        }
         // Filter by token transaction hash
         if (
           paymentDetailsFilter.type === "token" &&

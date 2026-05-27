@@ -1114,6 +1114,16 @@ pub struct GetInfoRequest {
     pub ensure_synced: Option<bool>,
 }
 
+/// Response from refunding pending conversions.
+#[derive(Debug, Clone, Serialize, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct RefundPendingConversionsResponse {
+    /// Pending conversions refunded.
+    pub refunded: u32,
+    /// Pending conversions skipped.
+    pub skipped: u32,
+}
+
 /// Response containing the balance of the wallet
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1499,12 +1509,8 @@ pub enum PaymentDetailsFilter {
     Spark {
         /// Filter specific Spark HTLC statuses
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        /// Filter conversion payments with refund information
-        conversion_refund_needed: Option<bool>,
     },
     Token {
-        /// Filter conversion payments with refund information
-        conversion_refund_needed: Option<bool>,
         /// Filter by transaction hash
         tx_hash: Option<String>,
         /// Filter by transaction type

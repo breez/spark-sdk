@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use bitcoin::secp256k1::PublicKey;
 use tokio::sync::watch;
 
 use crate::{GetInfoRequest, GetInfoResponse, error::SdkError, models::Config};
@@ -24,6 +25,10 @@ pub(crate) enum RuntimeEvent {
     DepositClaimed {
         payment: Box<crate::models::Payment>,
         should_emit_event: bool,
+    },
+    ConversionRecoveryNeeded {
+        clawback_id: String,
+        pool_id: PublicKey,
     },
 }
 

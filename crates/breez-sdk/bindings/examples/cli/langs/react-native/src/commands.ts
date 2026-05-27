@@ -395,14 +395,12 @@ async function handleListPayments(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
       }).filter((v): v is SparkHtlcStatus => v !== undefined)
       paymentDetailsFilter.push(new PaymentDetailsFilter.Spark({
         htlcStatus: htlcStatuses.length > 0 ? htlcStatuses : undefined,
-        conversionRefundNeeded: undefined,
       }))
     }
     if (txHash) {
       paymentDetailsFilter.push(new PaymentDetailsFilter.Token({
         txHash,
         txType: undefined,
-        conversionRefundNeeded: undefined,
       }))
     }
     if (txType) {
@@ -416,7 +414,6 @@ async function handleListPayments(sdk: BreezSdkInterface, _tokenIssuer: TokenIss
       paymentDetailsFilter.push(new PaymentDetailsFilter.Token({
         txType: parsedTxType,
         txHash: undefined,
-        conversionRefundNeeded: undefined,
       }))
     }
   }

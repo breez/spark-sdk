@@ -73,6 +73,8 @@ If [{{#name stable_balance_config}}](./config.md#stable-balance-configuration) i
 
 The flashnet conversion refunder doesn't run in the background in server mode. If you do use tokens, your host needs to drive {{#name refund_pending_conversions}} per affected wallet so failed conversions get refunded. A practical pattern is to track which wallets have pending conversions (e.g. by recording them when a conversion fails) and to run the refund pass for just those wallets on a cadence you control — not to spin up an SDK per wallet every minute regardless.
 
+{{#tabs sdk_building:refund-pending-conversions}}
+
 ### One-time setup: Spark private mode
 
 The client-mode SDK applies [{{#name private_enabled_default}}](./config.md#private-mode-enabled-by-default) on first startup. Server-mode SDKs do not — each per-request SDK would otherwise pay a redundant storage read to check the flag. At provisioning time (when a new wallet is first registered), call {{#name update_user_settings}} with {{#name spark_private_mode_enabled}} set to `true`. See [User settings](user_settings.md).

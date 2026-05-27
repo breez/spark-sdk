@@ -249,9 +249,9 @@ func ServerModeProvisioning(sdk *breez_sdk_spark.BreezSdk) error {
 
 func RefundPendingConversions(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: refund-pending-conversions
-	// The flashnet conversion refunder doesn't run in the background in server
-	// mode. Call this from your own scheduler (e.g. once per minute) to issue
-	// pending refunds for failed conversions.
-	return sdk.RefundPendingConversions()
+	// The returned response reports how many were refunded and how many were
+	// skipped (too young to recover).
+	_, err := sdk.RefundPendingConversions()
+	return err
 	// ANCHOR_END: refund-pending-conversions
 }

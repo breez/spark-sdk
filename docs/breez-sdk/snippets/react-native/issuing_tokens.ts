@@ -81,18 +81,15 @@ const listMintBurnPayments = async (): Promise<void> => {
   // the `paymentDetailsFilter` field when listing payments
   const paymentDetailsTransferFilter = new PaymentDetailsFilter.Token({
     txType: TokenTransactionType.Transfer,
-    txHash: undefined,
-    conversionRefundNeeded: undefined
+    txHash: undefined
   })
   const paymentDetailsMintFilter = new PaymentDetailsFilter.Token({
     txType: TokenTransactionType.Mint,
-    txHash: undefined,
-    conversionRefundNeeded: undefined
+    txHash: undefined
   })
   const paymentDetailsBurnFilter = new PaymentDetailsFilter.Token({
     txType: TokenTransactionType.Burn,
-    txHash: undefined,
-    conversionRefundNeeded: undefined
+    txHash: undefined
   })
   // ANCHOR_END: list-mint-burn-payments
 }

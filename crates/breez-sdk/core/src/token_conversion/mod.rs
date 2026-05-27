@@ -8,8 +8,21 @@ pub(crate) use flashnet::FlashnetTokenConverter;
 pub(crate) use middleware::TokenConversionMiddleware;
 pub use models::*;
 
+use bitcoin::secp256k1::PublicKey;
 use spark_wallet::TransferId;
-use tokio::sync::broadcast;
+
+/// Counts from a single recovery pass.
+#[derive(Debug, Default, Clone)]
+pub struct RefundPendingConversionsResponse {
+    /// Transfers clawed back this pass.
+    pub refunded: u32,
+    /// Transfers skipped.
+    pub skipped: u32,
+    /// Retryable per-transfer failures.
+    pub(crate) failed_retryable: u32,
+    /// Server-rejected clawbacks.
+    pub(crate) failed_terminal: u32,
+}
 
 /// Trait for conversion implementations.
 ///
@@ -64,17 +77,15 @@ pub(crate) trait TokenConverter: Send + Sync {
         request: &FetchConversionLimitsRequest,
     ) -> Result<FetchConversionLimitsResponse, ConversionError>;
 
-    /// Process any conversions whose pending refunds need to be issued.
-    ///
-    /// Iterates over payments marked as needing a refund and attempts to
-    /// refund each one. Surfaced through `BreezSdk::refund_pending_conversions`
-    /// so partners can drive this explicitly — required in server mode (where
-    /// no periodic refunder runs) and available in client mode as a way to
-    /// force an immediate refund pass instead of waiting for the next tick.
-    async fn refund_pending(&self) -> Result<(), ConversionError>;
+    /// Lists every clawbackable transfer for this identity,
+    /// then claws back anything past the implementation's safety
+    /// threshold.
+    async fn refund_pending(&self) -> Result<RefundPendingConversionsResponse, ConversionError>;
 
-    /// Optional signal that wakes the client-mode periodic refunder.
-    fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<()>> {
-        None
-    }
+    /// Refund one specific conversion.
+    async fn refund_conversion(
+        &self,
+        clawback_id: &str,
+        pool_id: PublicKey,
+    ) -> Result<bool, ConversionError>;
 }

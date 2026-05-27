@@ -10,7 +10,8 @@ use crate::utils::generate_nonce;
 use crate::{
     AssetTransfer, ClawbackIntent, ClawbackRequest, ClawbackResponse, ExecuteSwapIntent,
     ExecuteSwapResponse, FlashnetExecuteSwapResponse, GetMinAmountsRequest, GetMinAmountsResponse,
-    ListUserSwapsRequest, ListUserSwapsResponse, SignedClawbackRequest, SignedExecuteSwapResponse,
+    ListClawbackTransfersRequest, ListClawbackTransfersResponse, ListUserSwapsRequest,
+    ListUserSwapsResponse, SignedClawbackRequest, SignedExecuteSwapResponse,
 };
 use crate::{
     ExecuteSwapRequest, FeatureName, FeatureStatus, FlashnetError, MinAmount, PingResponse,
@@ -67,6 +68,15 @@ impl FlashnetClient {
         self.ensure_ping_ok().await?;
 
         self.sign_clawback(request).await
+    }
+
+    pub async fn list_clawback_transfers(
+        &self,
+        request: ListClawbackTransfersRequest,
+    ) -> Result<ListClawbackTransfersResponse, FlashnetError> {
+        debug!("List clawback transfers request: {request:?}");
+        self.get_request("v1/clawback-transfers/list", Some(request))
+            .await
     }
 
     pub async fn get_min_amounts(

@@ -736,6 +736,12 @@ pub struct GetInfoResponse {
     pub token_balances: HashMap<String, TokenBalance>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::RefundPendingConversionsResponse)]
+pub struct RefundPendingConversionsResponse {
+    pub refunded: u32,
+    pub skipped: u32,
+}
+
 #[macros::extern_wasm_bindgen(breez_sdk_spark::TokenBalance)]
 pub struct TokenBalance {
     pub balance: u128,
@@ -959,10 +965,8 @@ pub struct SendPaymentResponse {
 pub enum PaymentDetailsFilter {
     Spark {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        conversion_refund_needed: Option<bool>,
     },
     Token {
-        conversion_refund_needed: Option<bool>,
         tx_hash: Option<String>,
         tx_type: Option<TokenTransactionType>,
     },
@@ -975,10 +979,8 @@ pub enum PaymentDetailsFilter {
 pub enum StoragePaymentDetailsFilter {
     Spark {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        conversion_refund_needed: Option<bool>,
     },
     Token {
-        conversion_refund_needed: Option<bool>,
         tx_hash: Option<String>,
         tx_type: Option<TokenTransactionType>,
     },

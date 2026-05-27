@@ -78,17 +78,14 @@ async fn list_mint_burn_payments() -> Result<Vec<PaymentDetailsFilter>> {
     let payment_details_transfer_filter = PaymentDetailsFilter::Token {
         tx_type: Some(TokenTransactionType::Transfer),
         tx_hash: None,
-        conversion_refund_needed: None,
     };
     let payment_details_mint_filter = PaymentDetailsFilter::Token {
         tx_type: Some(TokenTransactionType::Mint),
         tx_hash: None,
-        conversion_refund_needed: None,
     };
     let payment_details_burn_filter = PaymentDetailsFilter::Token {
         tx_type: Some(TokenTransactionType::Burn),
         tx_hash: None,
-        conversion_refund_needed: None,
     };
     // ANCHOR_END: list-mint-burn-payments
     Ok(vec![

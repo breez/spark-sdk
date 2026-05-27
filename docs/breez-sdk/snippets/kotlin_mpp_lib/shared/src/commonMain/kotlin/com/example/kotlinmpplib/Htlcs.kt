@@ -96,8 +96,7 @@ class Htlcs {
                 statusFilter = listOf(PaymentStatus.PENDING),
                 paymentDetailsFilter = listOf(
                     PaymentDetailsFilter.Spark(
-                        htlcStatus = listOf(SparkHtlcStatus.WAITING_FOR_PREIMAGE),
-                        conversionRefundNeeded = null
+                        htlcStatus = listOf(SparkHtlcStatus.WAITING_FOR_PREIMAGE)
                     ),
                     PaymentDetailsFilter.Lightning(
                         htlcStatus = listOf(SparkHtlcStatus.WAITING_FOR_PREIMAGE)

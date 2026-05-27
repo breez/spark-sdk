@@ -194,6 +194,12 @@ pub struct _GetInfoResponse {
     pub token_balances: HashMap<String, TokenBalance>,
 }
 
+#[frb(mirror(RefundPendingConversionsResponse))]
+pub struct _RefundPendingConversionsResponse {
+    pub refunded: u32,
+    pub skipped: u32,
+}
+
 #[frb(mirror(TokenBalance))]
 pub struct _TokenBalance {
     pub balance: u128,
@@ -243,10 +249,8 @@ pub enum _InputType {
 pub enum _PaymentDetailsFilter {
     Spark {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        conversion_refund_needed: Option<bool>,
     },
     Token {
-        conversion_refund_needed: Option<bool>,
         tx_hash: Option<String>,
         tx_type: Option<TokenTransactionType>,
     },
