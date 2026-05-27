@@ -18,7 +18,7 @@ public final class KeychainCredentialRegistry: CredentialRegistry {
 // derivation, isSupported for the capability probe; createPasskey for
 // registration is optional.
 class CustomPrfProvider: PrfProvider {
-    func deriveSeeds(salts: [String]) async throws -> [Data] {
+    func deriveSeeds(request: DeriveSeedsRequest) async throws -> DeriveSeedsOutput {
         // Call platform passkey API with PRF extension. Use the dual-salt
         // ceremony when the authenticator supports it (one OS prompt for
         // N salts) and fall back to per-salt assertions otherwise.

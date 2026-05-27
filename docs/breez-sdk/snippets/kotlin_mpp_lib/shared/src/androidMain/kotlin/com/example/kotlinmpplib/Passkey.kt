@@ -20,7 +20,7 @@ class BlockStoreCredentialRegistry : CredentialRegistry {
 // deriveSeeds for derivation, isSupported for the capability probe;
 // createPasskey for registration is optional.
 class CustomPrfProvider : PrfProvider {
-    override suspend fun deriveSeeds(request: DeriveSeedsRequest): List<ByteArray> {
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput {
         // Call platform passkey API with PRF extension. Use the dual-salt
         // ceremony when the authenticator supports it (one OS prompt for
         // N salts) and fall back to per-salt assertions otherwise.

@@ -15,7 +15,7 @@ import {
 // derivation, isSupported for the capability probe; createPasskey for
 // registration is optional.
 class CustomPrfProvider {
-  deriveSeeds = async (salts: string[]): Promise<Uint8Array[]> => {
+  deriveSeeds = async (salts: string[]): Promise<{ seeds: Uint8Array[]; credentialId: Uint8Array | null }> => {
     // Call platform passkey API with PRF extension. Use the dual-salt
     // ceremony when the authenticator supports it (one OS prompt for N
     // salts) and fall back to per-salt assertions otherwise. Returns

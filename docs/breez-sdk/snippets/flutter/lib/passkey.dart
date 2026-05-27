@@ -5,7 +5,7 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 // Implement custom callbacks if the built-in PasskeyProvider doesn't
 // fit your needs. Pass them to PasskeyClient.fromCallbacks instead
 // of the regular PasskeyClient(provider, ...) constructor.
-Future<List<Uint8List>> deriveSeeds(DeriveSeedsRequest request) async {
+Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request) async {
   // Call platform passkey API with PRF extension. Use the dual-salt
   // ceremony when the authenticator supports it (one OS prompt for N
   // salts) and fall back to per-salt assertions otherwise. Returns
@@ -77,7 +77,7 @@ Future<BreezSdk> connectWithPasskey() async {
   final passkey = PasskeyClient(prfProvider, breezApiKey: config.apiKey);
 
   final response = await passkey.connectWithPasskey(
-    request: ConnectWithPasskeyRequest(label: 'personal', excludeCredentials: const []),
+    request: ConnectWithPasskeyRequest(label: 'personal', allowCredentials: const [], excludeCredentials: const []),
   );
 
   // `registeredCredential` is the path discriminator (null on sign-in).
