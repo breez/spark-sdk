@@ -1,7 +1,9 @@
+import { PasskeyClient as SdkPasskeyClient } from '../breez_sdk_spark_wasm';
+import type { PasskeyConfig, PrfProvider } from '../breez_sdk_spark_wasm';
+
 /**
- * Result of a domain-association verification check against the platform's
- * well-known configuration source. Mirrors the Rust `DomainAssociation`
- * enum shape so cross-language callers can handle it uniformly.
+ * Outcome of a domain-association check: whether `rpId` is a valid
+ * WebAuthn scope for the current origin.
  */
 export type DomainAssociation =
     | { kind: 'Associated' }
@@ -9,191 +11,309 @@ export type DomainAssociation =
     | { kind: 'Skipped'; reason: string };
 
 /**
- * Thrown when `createPasskey` asks the platform to register a new
- * passkey but it refuses because an entry in `excludeCredentialIds`
- * matches a credential already on the device. Hosts should route the
- * user to the sign-in path instead of treating this as a generic
- * registration failure.
+ * Authenticator data captured at registration. `userId` is the
+ * provider-generated WebAuthn user handle (never host-supplied).
+ * `aaguid` (provider identifier) and `backupEligible` (can sync across
+ * devices) are null when the platform doesn't expose them. AAGUID is
+ * unverified attestation: a display hint only, never a trust signal.
+ */
+export interface RegisteredCredential {
+    credentialId: Uint8Array;
+    userId: Uint8Array;
+    aaguid: Uint8Array | null;
+    backupEligible: boolean | null;
+}
+
+/**
+ * Result of {@link PasskeyProvider.deriveSeeds}: the 32-byte outputs in
+ * input order plus the credential ID observed in the same assertion
+ * (null when `salts` was empty).
+ */
+export interface DeriveSeedsResult {
+    seeds: Uint8Array[];
+    credentialId: Uint8Array | null;
+}
+
+/**
+ * Thrown by `createPasskey` when an entry in `excludeCredentials`
+ * matches a credential already on the device. Route the user to
+ * sign-in rather than treating it as a generic registration failure.
  */
 export declare class PasskeyAlreadyExistsError extends Error {
     constructor(message?: string);
 }
 
 /**
- * Options for constructing a PasskeyProvider.
+ * Thrown when the OS biometric prompt times out (around 55s) before
+ * any user interaction. Distinct from a cancel: hosts may auto-retry
+ * since the user did not deliberately abandon the flow.
+ */
+export declare class PasskeyTimedOutError extends Error {
+    constructor(message?: string);
+}
+
+/**
+ * Thrown when `deriveSeeds` cannot match a credential for this RP on
+ * the device. `message` carries diagnostic detail and may append a
+ * `CredentialRegistry` hint when no allow-list and no registry were
+ * configured.
+ */
+export declare class PasskeyCredentialNotFoundError extends Error {
+    constructor(message?: string);
+}
+
+/**
+ * Thrown when the user actively dismisses the OS passkey prompt.
+ * Distinct from `PasskeyTimedOutError`: hosts should not auto-retry a
+ * deliberate cancel.
+ */
+export declare class PasskeyUserCancelledError extends Error {
+    constructor(message?: string);
+}
+
+/** Per-call options for {@link PasskeyProvider.deriveSeeds}. */
+export interface DeriveSeedOptions {
+    /**
+     * Credential IDs the assertion is restricted to, for
+     * reauthenticating a known user without an account picker. Empty or
+     * unset lets the browser pick any matching credential for this RP.
+     */
+    allowCredentials?: Uint8Array[];
+
+    /**
+     * Requests fast-fail when no local credential is available. Ignored
+     * by the web provider: the WebAuthn flag it maps to is still
+     * experimental, so the standard browser picker is always shown.
+     */
+    preferImmediatelyAvailableCredentials?: boolean;
+}
+
+/**
+ * App-supplied persistent store of credential IDs for an RP (the SDK
+ * ships no implementation: back it with localStorage, IndexedDB, etc).
+ * All calls are best-effort: failures and 3s timeouts are swallowed and
+ * surfaced via {@link PasskeyProviderOptions.onRegistryError}, never
+ * blocking the WebAuthn ceremony. IDs are raw `Uint8Array`s.
+ */
+export interface CredentialRegistry {
+    read(rpId: string): Promise<Uint8Array[]>;
+    add(rpId: string, credentialId: Uint8Array): Promise<void>;
+    remove(rpId: string, credentialId: Uint8Array): Promise<void>;
+    clear(rpId: string): Promise<void>;
+}
+
+/** Discriminator for {@link PasskeyProviderOptions.onRegistryError}. */
+export type RegistryOperation = 'read' | 'add' | 'remove' | 'clear';
+
+/**
+ * Options for constructing a PasskeyProvider. `rpId` is required: pass
+ * {@link PasskeyProvider.BREEZ_RP_ID} to opt into Breez's shared RP.
  */
 export interface PasskeyProviderOptions {
     /**
-     * Relying Party ID. Must match the domain hosting your passkeys. On native
-     * platforms this corresponds to the AASA / assetlinks.json domain. On web,
-     * rpId must be a registrable suffix of window.location.hostname
-     * for cross-platform credential sharing.
-     *
-     * Changing this after users have registered passkeys will make their existing
-     * credentials undiscoverable, they would need to create new passkeys.
-     * @default 'keys.breez.technology'
+     * Relying Party ID, the domain hosting your passkeys. On web it must
+     * be a registrable suffix of `window.location.hostname` or equal to
+     * it. Changing it after users register makes existing credentials
+     * undiscoverable. Pass {@link PasskeyProvider.BREEZ_RP_ID} to use
+     * Breez's shared RP (Breez-registered apps only).
      */
-    rpId?: string;
+    rpId: string;
 
     /**
-     * RP display name shown during credential registration. Only used when
-     * creating new passkeys; changing it does not affect existing credentials.
-     * @default 'Breez SDK'
+     * WebAuthn `rp.name`, shown in some credential-manager UIs (iCloud
+     * Keychain, Google Password Manager). Deprecated in L3 but still
+     * required by current browsers, so an empty string is rejected at
+     * construction. Used only at registration.
      */
-    rpName?: string;
+    rpName: string;
 
     /**
-     * User name stored with the credential, shown as a secondary label in some
-     * passkey managers. Defaults to rpName. Only used during registration;
-     * changing it does not affect existing credentials.
+     * WebAuthn `user.name`, shown in the sign-in account picker. Apple's
+     * Passwords app dedupes by `(rpId, user.name)`, so pass a stable
+     * per-user value if each registration should be a distinct entry.
+     * Defaults to `rpName`. Used only at registration.
      */
     userName?: string;
 
     /**
-     * User display name shown as the primary label in the passkey picker.
-     * Defaults to userName. Only used during registration; changing it does
-     * not affect existing credentials.
+     * WebAuthn `user.displayName`, a user-friendly label the browser may
+     * show in the picker (behavior varies by platform). Defaults to
+     * `userName`. Used only at registration.
      */
     userDisplayName?: string;
 
     /**
-     * When true (default), `derivePrfSeed` automatically creates a new passkey
-     * if none exists for this RP ID, then retries the assertion. When false,
-     * throws an error instead, letting the caller control registration
-     * separately via `createPasskey()`.
-     * @default true
+     * Narrows the create-time chooser to one authenticator class.
+     * `'platform'` allows only the local authenticator (Touch ID, Face
+     * ID, Windows Hello, iCloud Keychain); `'cross-platform'` only
+     * roaming keys (USB, NFC, BLE, hybrid). Unset shows all.
      */
-    autoRegister?: boolean;
+    authenticatorAttachment?: 'platform' | 'cross-platform';
 
     /**
-     * When non-empty, restricts assertion (sign-in) to one of the listed
-     * credential IDs. The browser refuses any other credential for this
-     * RP, even if it matches the RP. Use this to bind sign-in to a
-     * specific passkey the caller has registered, instead of letting
-     * the browser pick any sibling credential that happens to share the
-     * RP. Critical for deterministic seed derivation when multiple
-     * credentials might exist for the same RP. When empty (default),
-     * the browser picks any credential matching the RP.
-     * @default []
+     * WebAuthn L3 priority hints applied to both create and get,
+     * ordering the authenticator classes a supporting browser offers
+     * first (ignored otherwise). Pass `['client-device']` to favor the
+     * platform authenticator. This is the only standards-track lever for
+     * the sign-in picker, where `authenticatorAttachment` is not allowed.
      */
-    allowCredentialIds?: Uint8Array[];
+    hints?: ('client-device' | 'security-key' | 'hybrid')[];
+
+    /**
+     * Default WebAuthn `timeout` (ms) for every create and get. A hint
+     * only: platforms cap around 60s. Set it 5 to 10s under the cap so a
+     * host-side "looks like a timeout" heuristic can fire before the OS
+     * tears the prompt down. Unset uses the platform default.
+     */
+    defaultTimeoutMs?: number;
+
+    /**
+     * Opt-in registry. When set, the provider auto-merges stored IDs
+     * into `excludeCredentials` on create and `allowCredentials` on
+     * assert, and adds new IDs after success. Unset disables
+     * auto-population. The constructor throws if `read`/`add`/`remove`/
+     * `clear` are missing, so misconfiguration surfaces at startup.
+     */
+    credentialRegistry?: CredentialRegistry;
+
+    /**
+     * Fired when a {@link CredentialRegistry} call throws or times
+     * out. Best-effort: invocation never blocks ceremony progress.
+     */
+    onRegistryError?: (operation: RegistryOperation, error: Error) => void;
 }
 
 /**
- * Built-in passkey-based PRF provider for browser environments.
- *
- * Implements the PrfProvider interface using the WebAuthn API with the PRF
- * extension (navigator.credentials.create/get).
- *
- * Uses discoverable credentials (resident keys) so no credential storage is needed.
- * On first use, if no credential exists for the RP ID, a new passkey is
- * automatically created (registered), then the assertion is retried.
+ * Built-in browser PRF provider: implements `PrfProvider` over the
+ * WebAuthn PRF extension, using discoverable credentials so no
+ * credential storage is needed.
  *
  * @example
  * ```typescript
- * import { Passkey } from '@breeztech/breez-sdk-spark'
+ * import { PasskeyClient } from '@breeztech/breez-sdk-spark'
  * import { PasskeyProvider } from '@breeztech/breez-sdk-spark/passkey-prf-provider'
  *
- * const prfProvider = new PasskeyProvider()
- * const passkey = new Passkey(prfProvider, undefined)
- * const wallet = await passkey.getWallet('personal')
+ * const provider = new PasskeyProvider()
+ * const client = new PasskeyClient(provider)
+ * const { wallet } = await client.signIn({ label: 'personal' })
  * ```
  */
 export declare class PasskeyProvider {
-    constructor(options?: PasskeyProviderOptions);
-
     /**
-     * List of base64 credential IDs to constrain assertion to. Mirrors
-     * the `allowCredentialIds` constructor option but is also settable
-     * at runtime so callers can re-target sign-in to a refreshed list
-     * (e.g. after a synced-storage hydrate) without reconstructing the
-     * provider. Empty list (default) lets the platform pick any
-     * credential matching the RP.
+     * Breez's shared `keys.breez.technology` RP. Pass as `rpId` to opt
+     * in (Breez-registered apps only); other apps pass their own domain.
      */
-    allowCredentialIds: Uint8Array[];
+    static readonly BREEZ_RP_ID: string;
 
     /**
-     * Optional callback fired with the credential ID returned by every
-     * successful WebAuthn assertion (sign-in path). Hosts can set this
-     * to record which credential was just used so they can populate
-     * `excludeCredentialIds` and `allowCredentialIds` on subsequent
-     * requests.
-     *
-     * Useful for migrating users whose passkey predates the host's own
-     * credential-ID tracking: the first successful sign-in surfaces
-     * the credential ID, after which the host's records are correct
-     * and the platform-level "already exists" check can fire on
-     * future create attempts.
-     *
-     * Set before calling `derivePrfSeed`. Not invoked on registration
-     * (see `createPasskey`'s return value for that).
+     * Default `rpName` for the zero-config {@link PasskeyClient} /
+     * {@link PasskeyClientBuilder} path.
      */
-    onAssertionCredentialId?: (credentialId: Uint8Array) => void;
+    static readonly DEFAULT_RP_NAME: string;
+
+    constructor(options: PasskeyProviderOptions);
 
     /**
-     * Derive a 32-byte seed from passkey PRF with the given salt.
+     * Derive one 32-byte PRF output per salt (in input order), pairing
+     * salts into a single ceremony where the authenticator supports it.
+     * Worst case is one prompt per salt.
      *
-     * Authenticates the user via a platform passkey and evaluates the PRF extension.
-     * If no credential exists for this RP ID, a new passkey is created automatically.
-     *
-     * @param salt - The salt string to use for PRF evaluation.
-     * @returns The 32-byte PRF output.
      * @throws If authentication fails, PRF is not supported, or the user cancels.
      */
-    derivePrfSeed(salt: string): Promise<Uint8Array>;
+    deriveSeeds(salts: string[], options?: DeriveSeedOptions): Promise<DeriveSeedsResult>;
 
     /**
-     * Create a new passkey with PRF support.
+     * Create a new PRF-capable passkey. Pass `excludeCredentials`
+     * (already-registered IDs) to prevent re-registering the same
+     * device. The `user.id` is provider-minted and returned as `userId`.
      *
-     * Only registers the credential, no seed derivation. Triggers exactly
-     * 1 WebAuthn prompt. Use this to separate credential creation from
-     * derivation in multi-step onboarding flows.
-     *
-     * @param excludeCredentialIds - Optional list of credential IDs to exclude.
-     *   Pass previously created credential IDs to prevent the authenticator
-     *   from creating a duplicate on the same device.
-     * @returns The credential ID of the newly created passkey.
-     * @throws {PasskeyAlreadyExistsError} If an entry in `excludeCredentialIds`
-     *   matches a credential already on the device.
-     * @throws If the user cancels or PRF is not supported by the authenticator.
+     * @throws {PasskeyAlreadyExistsError} If an entry in
+     *   `excludeCredentials` already exists on the device.
+     * @throws If the user cancels or PRF is not supported.
      */
-    createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<Uint8Array>;
+    createPasskey(excludeCredentials?: Uint8Array[]): Promise<RegisteredCredential>;
 
     /**
      * Check if a PRF-capable passkey is available on this device.
      *
      * @returns true if WebAuthn with PRF extension is likely supported.
      */
-    isPrfAvailable(): Promise<boolean>;
+    isSupported(): Promise<boolean>;
 
     /**
-     * Verify the configured `rpId` is a valid scope for WebAuthn from the
-     * current document's origin.
+     * Check whether the configured `rpId` is a valid WebAuthn scope for
+     * the current origin (must be a registrable suffix of
+     * `window.location.hostname`, or equal to it). Mirrors the browser's
+     * own rule so a misconfigured `rpId` is diagnosed with a concrete
+     * reason instead of an opaque `SecurityError` at ceremony time.
      *
-     * Browsers validate `rp.id` locally at `navigator.credentials.get / create`
-     * time: `rpId` must be a registrable suffix of `window.location.hostname`,
-     * or equal to it. There is no AASA / assetlinks equivalent on the web,
-     * no external file, no TTL, no caching.
-     *
-     * This method mirrors that browser-side rule so a misconfigured `rpId`
-     * (e.g., a staging build pointed at `keys.breez.technology` while hosted
-     * at `staging.example.com`) can be diagnosed with a concrete reason
-     * before the first WebAuthn ceremony, instead of the opaque
-     * `SecurityError` the browser would otherwise throw.
-     *
-     * @returns `Associated` when the rpId is in scope, `NotAssociated` with
-     *   a concrete reason when it isn't, or `Skipped` when the check can't
-     *   run (SSR / no `window.location`).
+     * @returns `Associated` when in scope, `NotAssociated` with a reason
+     *   when not, or `Skipped` when no `window.location` is available.
      */
     checkDomainAssociation(): Promise<DomainAssociation>;
+
+    /**
+     * Credential IDs the configured registry has stored for the current
+     * `rpId`. Empty when no registry is configured. Backs
+     * `PasskeyClient.credentials().get()`.
+     */
+    getKnownCredentialIds(): Promise<Uint8Array[]>;
+
+    /**
+     * Drop one credential ID from the registry. No-op when no registry
+     * is configured. Backs `PasskeyClient.credentials().remove(id)`.
+     */
+    removeKnownCredentialId(credentialId: Uint8Array): Promise<void>;
+
+    /**
+     * Clear the registry's stored IDs for the current `rpId`. No-op when
+     * no registry is configured. Backs `PasskeyClient.credentials().clear()`.
+     */
+    clearKnownCredentialIds(): Promise<void>;
 }
 
 /**
- * @deprecated Use PasskeyProviderOptions instead. This alias will be removed in a future release.
+ * Builder for a {@link PasskeyClient} with a caller-supplied
+ * `PrfProvider`. Use it when you need a configured {@link PasskeyProvider}
+ * (custom `rpId`/`rpName`, a `credentialRegistry`, timeout overrides) or
+ * a custom PRF backend. For the zero-config Breez-RP case, use the
+ * {@link PasskeyClient} constructor directly.
  */
-export type PasskeyPrfProviderOptions = PasskeyProviderOptions;
+export declare class PasskeyClientBuilder {
+    /**
+     * @param breezApiKey - Breez relay key for authenticated (NIP-42)
+     *   label storage. Omit for public relays only.
+     * @param config - `rpId` / `rpName` configure the built-in provider
+     *   (ignored when one is injected via {@link withPrfProvider});
+     *   `defaultLabel` is the label-store default.
+     */
+    constructor(breezApiKey?: string, config?: PasskeyConfig);
+
+    /** Inject the `PrfProvider` the client derives seeds through. */
+    withPrfProvider(provider: PrfProvider): PasskeyClientBuilder;
+
+    /**
+     * Build the client, defaulting to a browser {@link PasskeyProvider}
+     * on the Breez RP when no provider was injected.
+     */
+    build(): SdkPasskeyClient;
+}
 
 /**
- * @deprecated Use PasskeyProvider instead. This alias will be removed in a future release.
+ * High-level passkey client. The zero-config constructor wires the
+ * built-in browser {@link PasskeyProvider} on the Breez shared RP, so a
+ * Breez-registered app needs only its relay key. Apps with their own RP,
+ * a credential registry, or a custom PRF backend inject their own
+ * provider through {@link PasskeyClientBuilder}. The instance is the
+ * underlying SDK client (`checkAvailability`, `register`, `signIn`,
+ * `labels()`, `credentials()`).
  */
-export { PasskeyProvider as PasskeyPrfProvider };
+export declare class PasskeyClient extends SdkPasskeyClient {
+    /**
+     * @param breezApiKey - Breez relay key for authenticated (NIP-42)
+     *   label storage. Omit for public relays only.
+     * @param config - Optional `rpId` / `rpName` for the built-in
+     *   provider (default: the Breez shared RP) plus `defaultLabel`.
+     */
+    constructor(breezApiKey?: string, config?: PasskeyConfig);
+}
