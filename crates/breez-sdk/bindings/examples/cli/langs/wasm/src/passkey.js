@@ -150,11 +150,11 @@ class NotYetSupportedProvider {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a PasskeyPrfProvider for the given provider type.
+ * Create a PrfProvider for the given provider type.
  *
  * @param {string} provider - The provider name (file, yubikey, fido2)
  * @param {string} dataDir - The data directory
- * @returns {object} A PasskeyPrfProvider implementation
+ * @returns {object} A PrfProvider implementation
  */
 function buildPrfProvider(provider, dataDir, rpid) {
   switch (provider) {
@@ -198,7 +198,7 @@ function promptStdin(prompt) {
  * Derive a wallet seed using the given PRF provider, matching the Rust CLI's
  * resolve_passkey_seed logic.
  *
- * @param {object} provider - A PasskeyPrfProvider implementation
+ * @param {object} provider - A PrfProvider implementation
  * @param {string|undefined} breezApiKey - Optional Breez API key
  * @param {string|undefined} label - Optional label for seed derivation
  * @param {boolean} listLabels - Whether to list and select from labels on Nostr
