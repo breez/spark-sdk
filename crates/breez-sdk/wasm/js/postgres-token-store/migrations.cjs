@@ -337,6 +337,27 @@ class TokenStoreMigrationManager {
              ADD PRIMARY KEY (user_id)`,
         ],
       },
+      {
+        // Mirrors Rust migration 3 in spark-postgres/src/token_store.rs.
+        // Re-keys brz_token_spent_outputs by (prev_tx_hash, prev_tx_vout) instead
+        // of the operator-issued output id. v3 FinalTokenOutput carries no id
+        // field, so post-broadcast spent markers only have an outpoint to work
+        // with. Existing output_id-keyed rows can't be backfilled (no outpoint
+        // stored alongside them), so the table is wiped on upgrade — spent
+        // markers are short-lived (5 minute cleanup window) so wiping is
+        // equivalent to letting them age out.
+        name: "Re-key spent outputs by (prev_tx_hash, prev_tx_vout)",
+        sql: [
+          `DROP TABLE IF EXISTS brz_token_spent_outputs`,
+          `CREATE TABLE brz_token_spent_outputs (
+             user_id BYTEA NOT NULL,
+             prev_tx_hash TEXT NOT NULL,
+             prev_tx_vout INTEGER NOT NULL,
+             spent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+             PRIMARY KEY (user_id, prev_tx_hash, prev_tx_vout)
+           )`,
+        ],
+      },
     ];
   }
 }

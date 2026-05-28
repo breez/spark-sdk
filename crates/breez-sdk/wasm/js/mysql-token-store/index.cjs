@@ -226,10 +226,12 @@ class MysqlTokenStore {
         );
 
         const [spentRows] = await conn.query(
-          "SELECT output_id FROM brz_token_spent_outputs WHERE user_id = ? AND spent_at >= ?",
+          "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs WHERE user_id = ? AND spent_at >= ?",
           [this.identity, refreshTimestamp]
         );
-        const spentIds = new Set(spentRows.map((r) => r.output_id));
+        const spentOutpoints = new Set(
+          spentRows.map((r) => `${r.prev_tx_hash}:${r.prev_tx_vout}`)
+        );
 
         await conn.query(
           "DELETE FROM brz_token_outputs WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
@@ -332,9 +334,10 @@ class MysqlTokenStore {
           await this._upsertMetadata(conn, to.metadata);
 
           for (const output of to.outputs) {
+            const outpoint = `${output.prevTxHash}:${output.prevTxVout}`;
             if (
               reservedOutputIds.has(output.output.id) ||
-              spentIds.has(output.output.id)
+              spentOutpoints.has(outpoint)
             ) {
               continue;
             }
@@ -547,19 +550,14 @@ class MysqlTokenStore {
         // 1. Remove spent outputs and mark as spent.
         if (outputsToRemove && outputsToRemove.length > 0) {
           for (const [txHash, vout] of outputsToRemove) {
-            const [rows] = await conn.query(
-              "SELECT id FROM brz_token_outputs WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
+            const [result] = await conn.query(
+              "DELETE FROM brz_token_outputs WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
               [this.identity, txHash, vout]
             );
-            if (rows.length > 0) {
-              const outputId = rows[0].id;
+            if (result.affectedRows > 0) {
               await conn.query(
-                "DELETE FROM brz_token_outputs WHERE user_id = ? AND id = ?",
-                [this.identity, outputId]
-              );
-              await conn.query(
-                "INSERT IGNORE INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES (?, ?, NOW())",
-                [this.identity, outputId]
+                "INSERT IGNORE INTO brz_token_spent_outputs (user_id, prev_tx_hash, prev_tx_vout, spent_at) VALUES (?, ?, ?, NOW())",
+                [this.identity, txHash, vout]
               );
             }
           }
@@ -569,12 +567,17 @@ class MysqlTokenStore {
         if (outputsToAdd) {
           await this._upsertMetadata(conn, outputsToAdd.metadata);
 
-          const outputIds = outputsToAdd.outputs.map((o) => o.output.id);
-          if (outputIds.length > 0) {
-            const placeholders = buildPlaceholders(outputIds.length);
+          if (outputsToAdd.outputs.length > 0) {
+            const pairPlaceholders = outputsToAdd.outputs
+              .map(() => "(?, ?)")
+              .join(", ");
+            const params = [this.identity];
+            for (const o of outputsToAdd.outputs) {
+              params.push(o.prevTxHash, o.prevTxVout);
+            }
             await conn.query(
-              `DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND output_id IN (${placeholders})`,
-              [this.identity, ...outputIds]
+              `DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN (${pairPlaceholders})`,
+              params
             );
           }
 
@@ -794,23 +797,22 @@ class MysqlTokenStore {
         const isSwap = reservationRows[0].purpose === "Swap";
 
         const [reservedRows] = await conn.query(
-          "SELECT id FROM brz_token_outputs WHERE user_id = ? AND reservation_id = ?",
+          "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs WHERE user_id = ? AND reservation_id = ?",
           [this.identity, id]
         );
-        const reservedOutputIds = reservedRows.map((r) => r.id);
 
-        if (reservedOutputIds.length > 0) {
-          const valueClauses = new Array(reservedOutputIds.length)
-            .fill("(?, ?)")
+        if (reservedRows.length > 0) {
+          const valueClauses = new Array(reservedRows.length)
+            .fill("(?, ?, ?)")
             .join(", ");
           const params = [];
-          for (const outputId of reservedOutputIds) {
-            params.push(this.identity, outputId);
+          for (const row of reservedRows) {
+            params.push(this.identity, row.prev_tx_hash, row.prev_tx_vout);
           }
           // Suppress duplicate-PK errors only.
           await conn.query(
-            `INSERT INTO brz_token_spent_outputs (user_id, output_id) VALUES ${valueClauses}
-             ON DUPLICATE KEY UPDATE output_id = output_id`,
+            `INSERT INTO brz_token_spent_outputs (user_id, prev_tx_hash, prev_tx_vout) VALUES ${valueClauses}
+             ON DUPLICATE KEY UPDATE prev_tx_hash = prev_tx_hash`,
             params
           );
         }

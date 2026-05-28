@@ -289,19 +289,19 @@ impl TokenOutputStore for PostgresTokenStore {
         // Clean up old spent markers
         self.cleanup_spent_markers(&tx, refresh_timestamp).await?;
 
-        // Get recent spent output IDs (spent_at >= refresh_timestamp).
+        // Get recent spent outpoints (spent_at >= refresh_timestamp).
         // Older spent markers are ignored - if the refresh started after the spend,
         // operators had time to process it.
-        let spent_ids: HashSet<String> = {
+        let spent_outpoints: HashSet<(String, i32)> = {
             let rows = tx
                 .query(
-                    "SELECT output_id FROM brz_token_spent_outputs \
+                    "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs \
                      WHERE user_id = $1 AND spent_at >= $2",
                     &[&self.identity, &refresh_timestamp],
                 )
                 .await
                 .map_err(map_err)?;
-            rows.iter().map(|r| r.get(0)).collect()
+            rows.iter().map(|r| (r.get(0), r.get(1))).collect()
         };
 
         // Delete non-reserved outputs added BEFORE the refresh started.
@@ -446,8 +446,9 @@ impl TokenOutputStore for PostgresTokenStore {
 
             // Insert outputs that aren't currently reserved or spent
             for output in &to.outputs {
+                let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
                 if reserved_output_ids.contains(&output.output.id)
-                    || spent_ids.contains(&output.output.id)
+                    || spent_outpoints.contains(&outpoint)
                 {
                     continue;
                 }
@@ -646,22 +647,21 @@ impl TokenOutputStore for PostgresTokenStore {
         // 1. Remove spent outputs and mark them as spent.
         for (tx_hash, vout) in outputs_to_remove {
             let vout_i32 = (*vout).cast_signed();
-            let row = tx
-                .query_opt(
+            let deleted = tx
+                .execute(
                     "DELETE FROM brz_token_outputs \
-                     WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3 \
-                     RETURNING id",
+                     WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3",
                     &[&self.identity, tx_hash, &vout_i32],
                 )
                 .await
                 .map_err(map_err)?;
 
-            if let Some(row) = row {
-                let output_id: String = row.get(0);
+            if deleted > 0 {
                 tx.execute(
-                    "INSERT INTO brz_token_spent_outputs (user_id, output_id, spent_at) \
-                     VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING",
-                    &[&self.identity, &output_id],
+                    "INSERT INTO brz_token_spent_outputs \
+                       (user_id, prev_tx_hash, prev_tx_vout, spent_at) \
+                     VALUES ($1, $2, $3, NOW()) ON CONFLICT DO NOTHING",
+                    &[&self.identity, tx_hash, &vout_i32],
                 )
                 .await
                 .map_err(map_err)?;
@@ -673,15 +673,24 @@ impl TokenOutputStore for PostgresTokenStore {
             self.upsert_metadata(&tx, &token_outputs.metadata).await?;
 
             // Clear spent status for outputs being (re-)added.
-            let output_ids: Vec<String> = token_outputs
+            let tx_hashes: Vec<String> = token_outputs
                 .outputs
                 .iter()
-                .map(|o| o.output.id.clone())
+                .map(|o| o.prev_tx_hash.clone())
                 .collect();
-            if !output_ids.is_empty() {
+            let vouts: Vec<i32> = token_outputs
+                .outputs
+                .iter()
+                .map(|o| o.prev_tx_vout as i32)
+                .collect();
+            if !tx_hashes.is_empty() {
                 tx.execute(
-                    "DELETE FROM brz_token_spent_outputs WHERE user_id = $1 AND output_id = ANY($2)",
-                    &[&self.identity, &output_ids],
+                    "DELETE FROM brz_token_spent_outputs \
+                     WHERE user_id = $1 \
+                       AND (prev_tx_hash, prev_tx_vout) IN ( \
+                         SELECT * FROM UNNEST($2::text[], $3::int[]) \
+                       )",
+                    &[&self.identity, &tx_hashes, &vouts],
                 )
                 .await
                 .map_err(map_err)?;
@@ -916,25 +925,29 @@ impl TokenOutputStore for PostgresTokenStore {
 
         let is_swap = reservation_row.get::<_, String>("purpose") == "Swap";
 
-        // Get reserved output IDs and mark them as spent
-        let reserved_output_ids: Vec<String> = {
+        // Get reserved outpoints and mark them as spent
+        let reserved_outpoints: Vec<(String, i32)> = {
             let rows = tx
                 .query(
-                    "SELECT id FROM brz_token_outputs WHERE user_id = $1 AND reservation_id = $2",
+                    "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs \
+                     WHERE user_id = $1 AND reservation_id = $2",
                     &[&self.identity, id],
                 )
                 .await
                 .map_err(map_err)?;
-            rows.iter().map(|r| r.get(0)).collect()
+            rows.iter().map(|r| (r.get(0), r.get(1))).collect()
         };
 
         // Batch insert spent output markers
-        if !reserved_output_ids.is_empty() {
+        if !reserved_outpoints.is_empty() {
+            let tx_hashes: Vec<String> =
+                reserved_outpoints.iter().map(|(h, _)| h.clone()).collect();
+            let vouts: Vec<i32> = reserved_outpoints.iter().map(|(_, v)| *v).collect();
             tx.execute(
-                r"INSERT INTO brz_token_spent_outputs (user_id, output_id)
-                  SELECT $2, output_id FROM UNNEST($1::text[]) AS t(output_id)
+                r"INSERT INTO brz_token_spent_outputs (user_id, prev_tx_hash, prev_tx_vout)
+                  SELECT $3, h, v FROM UNNEST($1::text[], $2::int[]) AS t(h, v)
                   ON CONFLICT DO NOTHING",
-                &[&reserved_output_ids, &self.identity],
+                &[&tx_hashes, &vouts, &self.identity],
             )
             .await
             .map_err(map_err)?;
@@ -1109,6 +1122,25 @@ impl PostgresTokenStore {
             // leakage), backfills with the connecting tenant, and rewrites primary
             // keys / FKs / indexes to lead with user_id.
             token_store_multi_tenant_migration(identity),
+            // Migration 3: Re-key brz_token_spent_outputs by (prev_tx_hash,
+            // prev_tx_vout) instead of the operator-issued output id. v3
+            // FinalTokenOutput carries no id field, so post-broadcast spent
+            // markers only have an outpoint to work with. The existing
+            // output_id-keyed rows can't be backfilled (no outpoint stored
+            // alongside them), so the table is wiped on upgrade — spent
+            // markers are short-lived (5 minute cleanup window) so wiping is
+            // equivalent to letting them age out.
+            vec![
+                "DROP TABLE IF EXISTS brz_token_spent_outputs".to_string(),
+                "CREATE TABLE brz_token_spent_outputs (
+                    user_id BYTEA NOT NULL,
+                    prev_tx_hash TEXT NOT NULL,
+                    prev_tx_vout INTEGER NOT NULL,
+                    spent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (user_id, prev_tx_hash, prev_tx_vout)
+                )"
+                .to_string(),
+            ],
         ]
     }
 

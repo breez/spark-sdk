@@ -201,12 +201,14 @@ class PostgresTokenStore {
           [this.identity, cleanupCutoff]
         );
 
-        // Get recent spent output IDs (spent_at >= refresh_timestamp)
+        // Get recent spent outpoints (spent_at >= refresh_timestamp)
         const spentResult = await client.query(
-          "SELECT output_id FROM brz_token_spent_outputs WHERE user_id = $1 AND spent_at >= $2",
+          "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs WHERE user_id = $1 AND spent_at >= $2",
           [this.identity, refreshTimestamp]
         );
-        const spentIds = new Set(spentResult.rows.map((r) => r.output_id));
+        const spentOutpoints = new Set(
+          spentResult.rows.map((r) => `${r.prev_tx_hash}:${r.prev_tx_vout}`)
+        );
 
         // Delete non-reserved outputs added BEFORE the refresh started
         await client.query(
@@ -318,7 +320,8 @@ class PostgresTokenStore {
           await this._upsertMetadata(client, to.metadata);
 
           for (const output of to.outputs) {
-            if (reservedOutputIds.has(output.output.id) || spentIds.has(output.output.id)) {
+            const outpoint = `${output.prevTxHash}:${output.prevTxVout}`;
+            if (reservedOutputIds.has(output.output.id) || spentOutpoints.has(outpoint)) {
               continue;
             }
             await this._insertSingleOutput(
@@ -546,14 +549,13 @@ class PostgresTokenStore {
         if (outputsToRemove && outputsToRemove.length > 0) {
           for (const [txHash, vout] of outputsToRemove) {
             const result = await client.query(
-              "DELETE FROM brz_token_outputs WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3 RETURNING id",
+              "DELETE FROM brz_token_outputs WHERE user_id = $1 AND prev_tx_hash = $2 AND prev_tx_vout = $3",
               [this.identity, txHash, vout]
             );
-            if (result.rows.length > 0) {
-              const outputId = result.rows[0].id;
+            if (result.rowCount > 0) {
               await client.query(
-                "INSERT INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING",
-                [this.identity, outputId]
+                "INSERT INTO brz_token_spent_outputs (user_id, prev_tx_hash, prev_tx_vout, spent_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT DO NOTHING",
+                [this.identity, txHash, vout]
               );
             }
           }
@@ -563,11 +565,16 @@ class PostgresTokenStore {
         if (outputsToAdd) {
           await this._upsertMetadata(client, outputsToAdd.metadata);
 
-          const outputIds = outputsToAdd.outputs.map((o) => o.output.id);
-          if (outputIds.length > 0) {
+          if (outputsToAdd.outputs.length > 0) {
+            const txHashes = outputsToAdd.outputs.map((o) => o.prevTxHash);
+            const vouts = outputsToAdd.outputs.map((o) => o.prevTxVout);
             await client.query(
-              "DELETE FROM brz_token_spent_outputs WHERE user_id = $1 AND output_id = ANY($2)",
-              [this.identity, outputIds]
+              `DELETE FROM brz_token_spent_outputs
+               WHERE user_id = $1
+                 AND (prev_tx_hash, prev_tx_vout) IN (
+                   SELECT * FROM UNNEST($2::text[], $3::int[])
+                 )`,
+              [this.identity, txHashes, vouts]
             );
           }
 
@@ -810,19 +817,20 @@ class PostgresTokenStore {
         }
         const isSwap = reservationResult.rows[0].purpose === "Swap";
 
-        // Get reserved output IDs and mark them as spent
+        // Get reserved outpoints and mark them as spent
         const reservedOutputsResult = await client.query(
-          "SELECT id FROM brz_token_outputs WHERE user_id = $1 AND reservation_id = $2",
+          "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs WHERE user_id = $1 AND reservation_id = $2",
           [this.identity, id]
         );
-        const reservedOutputIds = reservedOutputsResult.rows.map((r) => r.id);
 
-        if (reservedOutputIds.length > 0) {
+        if (reservedOutputsResult.rows.length > 0) {
+          const txHashes = reservedOutputsResult.rows.map((r) => r.prev_tx_hash);
+          const vouts = reservedOutputsResult.rows.map((r) => r.prev_tx_vout);
           await client.query(
-            `INSERT INTO brz_token_spent_outputs (user_id, output_id)
-             SELECT $2, output_id FROM UNNEST($1::text[]) AS t(output_id)
+            `INSERT INTO brz_token_spent_outputs (user_id, prev_tx_hash, prev_tx_vout)
+             SELECT $3, h, v FROM UNNEST($1::text[], $2::int[]) AS t(h, v)
              ON CONFLICT DO NOTHING`,
-            [reservedOutputIds, this.identity]
+            [txHashes, vouts, this.identity]
           );
         }
 

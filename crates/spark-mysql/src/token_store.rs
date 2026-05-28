@@ -503,31 +503,24 @@ impl TokenOutputStore for MysqlTokenStore {
 
         // 1. Remove spent outputs and mark them as spent.
         for (tx_hash, vout) in outputs_to_remove {
-            let row: Option<Row> = tx
-                .exec_first(
-                    "SELECT id FROM brz_token_outputs \
+            let vout_i32 = (*vout).cast_signed();
+            let mut deleted = tx
+                .exec_iter(
+                    "DELETE FROM brz_token_outputs \
                      WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
-                    (
-                        self.identity.as_slice(),
-                        tx_hash.as_str(),
-                        (*vout).cast_signed(),
-                    ),
+                    (self.identity.as_slice(), tx_hash.as_str(), vout_i32),
                 )
                 .await
                 .map_err(map_err)?;
+            let affected = deleted.affected_rows();
+            let _: Vec<Row> = deleted.collect().await.map_err(map_err)?;
 
-            if let Some(row) = row {
-                let output_id: String = row.get(0).unwrap_or_default();
+            if affected > 0 {
                 tx.exec_drop(
-                    "DELETE FROM brz_token_outputs WHERE user_id = ? AND id = ?",
-                    (self.identity.as_slice(), output_id.as_str()),
-                )
-                .await
-                .map_err(map_err)?;
-                tx.exec_drop(
-                    "INSERT IGNORE INTO brz_token_spent_outputs (user_id, output_id, spent_at) \
-                     VALUES (?, ?, NOW())",
-                    (self.identity.as_slice(), output_id.as_str()),
+                    "INSERT IGNORE INTO brz_token_spent_outputs \
+                       (user_id, prev_tx_hash, prev_tx_vout, spent_at) \
+                     VALUES (?, ?, ?, NOW())",
+                    (self.identity.as_slice(), tx_hash.as_str(), vout_i32),
                 )
                 .await
                 .map_err(map_err)?;
@@ -540,19 +533,24 @@ impl TokenOutputStore for MysqlTokenStore {
                 .await?;
 
             // Clear spent status for outputs being (re-)added.
-            let output_ids: Vec<String> = token_outputs
-                .outputs
-                .iter()
-                .map(|o| o.output.id.clone())
-                .collect();
-            if !output_ids.is_empty() {
-                let placeholders = build_placeholders(output_ids.len());
+            if !token_outputs.outputs.is_empty() {
+                let pair_placeholders = vec!["(?, ?)"; token_outputs.outputs.len()].join(", ");
                 let sql = format!(
-                    "DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND output_id IN ({placeholders})"
+                    "DELETE FROM brz_token_spent_outputs \
+                     WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
                 );
-                let mut params: Vec<Value> = Vec::with_capacity(output_ids.len().saturating_add(1));
+                let mut params: Vec<Value> = Vec::with_capacity(
+                    token_outputs
+                        .outputs
+                        .len()
+                        .saturating_mul(2)
+                        .saturating_add(1),
+                );
                 params.push(Value::from(self.identity.clone()));
-                params.extend(output_ids.iter().cloned().map(Value::from));
+                for output in &token_outputs.outputs {
+                    params.push(Value::from(output.prev_tx_hash.clone()));
+                    params.push(Value::from(output.prev_tx_vout as i32));
+                }
                 tx.exec_drop(&sql, Params::Positional(params))
                     .await
                     .map_err(map_err)?;
@@ -781,6 +779,26 @@ impl MysqlTokenStore {
             initial,
             // Migration 2: Multi-tenant scoping.
             token_store_multi_tenant_migration(identity, foreign_key_mode),
+            // Migration 3: Re-key brz_token_spent_outputs by (prev_tx_hash,
+            // prev_tx_vout) instead of the operator-issued output id. v3
+            // FinalTokenOutput carries no id field, so post-broadcast spent
+            // markers only have an outpoint to work with. Existing
+            // output_id-keyed rows can't be backfilled (no outpoint stored
+            // alongside them), so the table is wiped on upgrade — spent
+            // markers are short-lived (5 minute cleanup window) so wiping is
+            // equivalent to letting them age out.
+            vec![
+                Migration::sql("DROP TABLE IF EXISTS brz_token_spent_outputs"),
+                Migration::sql(
+                    "CREATE TABLE brz_token_spent_outputs (
+                        user_id VARBINARY(33) NOT NULL,
+                        prev_tx_hash VARCHAR(255) NOT NULL,
+                        prev_tx_vout INT NOT NULL,
+                        spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                        PRIMARY KEY (user_id, prev_tx_hash, prev_tx_vout)
+                    )",
+                ),
+            ],
         ]
     }
 
@@ -849,14 +867,15 @@ impl MysqlTokenStore {
         self.cleanup_spent_markers(&mut tx, refresh_timestamp)
             .await?;
 
-        let spent_rows: Vec<String> = tx
+        let spent_rows: Vec<(String, i32)> = tx
             .exec(
-                "SELECT output_id FROM brz_token_spent_outputs WHERE user_id = ? AND spent_at >= ?",
+                "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs \
+                 WHERE user_id = ? AND spent_at >= ?",
                 (self.identity.clone(), refresh_timestamp.naive_utc()),
             )
             .await
             .map_err(map_err)?;
-        let spent_ids: HashSet<String> = spent_rows.into_iter().collect();
+        let spent_outpoints: HashSet<(String, i32)> = spent_rows.into_iter().collect();
 
         tx.exec_drop(
             "DELETE FROM brz_token_outputs WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
@@ -1001,8 +1020,9 @@ impl MysqlTokenStore {
             self.upsert_metadata(&mut tx, &to.metadata).await?;
 
             for output in &to.outputs {
+                let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
                 if reserved_output_ids.contains(&output.output.id)
-                    || spent_ids.contains(&output.output.id)
+                    || spent_outpoints.contains(&outpoint)
                 {
                     continue;
                 }
@@ -1202,29 +1222,32 @@ impl MysqlTokenStore {
 
         let is_swap = purpose == "Swap";
 
-        let reserved_output_ids: Vec<String> = tx
+        let reserved_outpoints: Vec<(String, i32)> = tx
             .exec(
-                "SELECT id FROM brz_token_outputs WHERE user_id = ? AND reservation_id = ?",
+                "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs \
+                 WHERE user_id = ? AND reservation_id = ?",
                 (self.identity.clone(), id),
             )
             .await
             .map_err(map_err)?;
 
-        if !reserved_output_ids.is_empty() {
-            let mut sql =
-                String::from("INSERT INTO brz_token_spent_outputs (user_id, output_id) VALUES ");
+        if !reserved_outpoints.is_empty() {
+            let mut sql = String::from(
+                "INSERT INTO brz_token_spent_outputs (user_id, prev_tx_hash, prev_tx_vout) VALUES ",
+            );
             let mut params: Vec<Value> =
-                Vec::with_capacity(reserved_output_ids.len().saturating_mul(2));
-            for (i, oid) in reserved_output_ids.iter().enumerate() {
+                Vec::with_capacity(reserved_outpoints.len().saturating_mul(3));
+            for (i, (tx_hash, vout)) in reserved_outpoints.iter().enumerate() {
                 if i > 0 {
                     sql.push_str(", ");
                 }
-                sql.push_str("(?, ?)");
+                sql.push_str("(?, ?, ?)");
                 params.push(Value::from(self.identity.clone()));
-                params.push(Value::from(oid.clone()));
+                params.push(Value::from(tx_hash.clone()));
+                params.push(Value::from(*vout));
             }
             // Suppress duplicate-PK errors only.
-            sql.push_str(" ON DUPLICATE KEY UPDATE output_id = output_id");
+            sql.push_str(" ON DUPLICATE KEY UPDATE prev_tx_hash = prev_tx_hash");
             tx.exec_drop(&sql, Params::Positional(params))
                 .await
                 .map_err(map_err)?;
