@@ -183,6 +183,88 @@ The **Rust CLI** (`crates/breez-sdk/cli/`) can be modified freely as it is the s
 - Release builds use LTO and `opt-level = "z"` for size optimization
 - Uses `cargo xtask` for build automation (aliased in `.cargo/config.toml`)
 
+## Comment Style
+
+Comments are for the reader, not the writer. Apply these rules to any new or modified comment, including doc-comments and module headers.
+
+### 0. No em-dashes or en-dashes
+
+Do not use em-dashes (`—`) or en-dashes (`–`) anywhere in the codebase: code, comments, doc-comments, commit messages, PR descriptions, guide markdown, snippets. Use the punctuation that fits the relationship between clauses:
+
+- Explanatory aside: colon. `X is not supported: Y is the reason.`
+- Two independent clauses: period. `Do A. Do B.`
+- Contrast: comma + conjunction. `A is true, but B is also true.`
+- Parenthetical: parentheses. `A (which is the reason) ...`
+- Numeric range: "to". `3 to 5 lines`, not `3–5 lines`.
+
+This applies before every rule that follows.
+
+### 1. Cut what the code already says
+
+Default to writing no comment. Add one only when the WHY is non-obvious: a hidden constraint, a workaround for a specific bug, a subtle invariant, behavior that would surprise a reader. If removing the comment wouldn't confuse a future reader, delete it. A long comment block is a code smell: it usually means the underlying code wants to be split into smaller, better-named units instead.
+
+**Audit attached docs when signatures change.** When you remove or rename a parameter, struct field, or enum variant, also grep nearby `@param`, `///`, `/**`, JSDoc, KDoc blocks for the old name. A stale `@param autoRegister` describing a parameter that no longer exists is worse than no doc: it lies about the current signature. Same for `excludeCredentialIds` that became per-call instead of per-instance: the constructor doc has to follow.
+
+### 2. Compact what stays
+
+Genuinely-necessary detail: target 3 to 5 lines. If you can't, the comment is doing the job of a separate doc: link out instead of inlining a whole essay. No multi-paragraph docstrings. One short sentence beats a tight paragraph beats a sprawling block.
+
+### 3. Calibrate to the reader
+
+Different surfaces have different audiences. Match the language:
+
+| Surface | Audience | Pitch |
+|---|---|---|
+| Public API doc-comments (`///`, `/**`, Dart `///`, Swift `///`) | App developers integrating the SDK | What it does + why the caller cares. Skip platform-internal jargon. |
+| Internal `//` comments | Engineers maintaining this file | Why the code is shaped this way (constraints, gotchas, references). Spec-level detail is fine. |
+| Guide markdown (`docs/breez-sdk/src/guide/`) | Integrators reading the website | Conceptual, task-oriented. No implementation details unless they leak into the public API. |
+| Snippets (`docs/breez-sdk/snippets/`) | Copy-paste starters | Minimal inline explanation; let the code speak. Long context belongs in the guide. |
+| Commit messages / PR descriptions | Reviewers + future code-archaeologists | What changed and why. Not what the code looks like. |
+
+When a comment is technically accurate but reads like a kernel-debug log to anyone outside the SDK team, rewrite it for the surface's audience. Pattern: "Simpler, non-tech version of: <original>" → answer *what* this does and *why* it's necessary, not *how* it works at the byte level.
+
+### 4. Don't leak internal-looking specifics
+
+Real production identifiers (Apple Team IDs, internal infra hostnames, employee names, customer IDs) don't belong in example comments. Use a placeholder (`<TEAM_ID>`, `your-app.com`, `<your api key>`). Same for stack-trace excerpts, error strings that contain user data, debugging breadcrumbs from one-off investigations: strip before committing.
+
+**Don't leak language-specific type sugar in cross-language API docs either.** Public API docs cross language boundaries: UniFFI generates Swift / Kotlin, wasm-bindgen generates TypeScript, FRB generates Dart. A Rust doc that enumerates `Some(true)` / `Some(false)` / `None` on an `Option<bool>` field reads as gibberish to the Swift caller who sees `Bool?`, or the TS caller who sees `boolean | undefined`. Use plain values plus "unset" / "absent" / "missing": *"`true` restricts X. `false` allows Y. Unset uses the provider default."* Same for `Result<T, E>::Err(...)`, `Vec<u8>`, etc. The doc is read on every target, not just Rust.
+
+### 5. Strip narrative; keep implementation facts
+
+Comments describe the code that exists, not the history of how it got there. Implementation-focused only. Strip:
+
+- **Development history**: "we used to do X, now we do Y because…", "originally returned Z but switched after…"
+- **Step-by-step decision narrative**: "first we tried A, then B, finally C"
+- **Credit-the-PR comments**: "added for #1234", "per design review", "recently fixed in PR #5678"
+- **TODOs about the past**: "this used to be wrong, now corrected"
+- **Chronicling intermediate choices**: alternatives considered, why they were rejected
+
+The *only* acceptable narrative is a concise sketch (1 to 3 sentences) of a non-obvious **problem**, **why it couldn't be solved directly**, and the **workaround applied**. Frame this as a present-tense fact about the code, not a story:
+
+> ✘ "We tried using `foo()` here but it deadlocks when called from the main thread, so we switched to `bar()`."
+>
+> ✓ "Uses `bar()` instead of `foo()`: `foo()` deadlocks on the main thread."
+
+#### Pointers to active external context are fine
+
+The "no PR/ticket context" rule is about crediting the PR that *added* the code, not about linking to the source of truth a workaround depends on. Link out when the comment would otherwise have to repeat detail that lives somewhere else:
+
+- **An open upstream bug your workaround depends on**: `// Workaround for tokio-rs/tokio#1234 (open).`
+- **A spec / RFC the implementation is reading**: `// CBOR major-type-2 byte string; see RFC 8949 §3.1.`
+- **A design doc or PR description with the long-form analysis**: `// Rationale: github.com/our-org/our-repo/pull/5678.`
+
+Rule of thumb: if the link disappeared, would a future reader lose information they need to maintain the code? If yes, keep it. If it's just a chronicle of who wrote it, drop it.
+
+Durable reasoning (a constraint, invariant, or contract) belongs in the comment as a fact. Decision *history* belongs in the commit message.
+
+### 6. Frame what something IS, not what happens or what isn't
+
+A doc-comment answers "what is this thing and what is it for", not "what happens downstream when you use it" and not "what other things live elsewhere."
+
+- **Lead with meaning, not consequence.** *"Restrict the assertion to credentials already on this device"* beats *"Suppresses the cross-device picker"*: the first describes what the field IS, the second only describes what HAPPENS when you set it. Consequences are useful, but they come after the meaning, not before it.
+- **Don't document absence.** Sentences like *"Provider-scoped knobs (`rp_id`, `credentialRegistry`) live on the platform constructor"* on a struct that doesn't carry those knobs describe what *isn't* here. They're usually leftover artifacts of a refactor that moved fields out: they pollute the doc of the thing that *is* present, and the reader who needs `rp_id` will search for it anyway.
+- **Don't restate the type.** `pub label: Option<String>` doesn't need *"An optional string label"* on top; the signature already says that. Document why the field is optional, what `None` means at the domain level, what the default is.
+
 ---
 
 ## SDK Usage Guide (For Integrators)
