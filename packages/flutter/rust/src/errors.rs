@@ -62,6 +62,8 @@ pub enum _PasskeyPrfError {
     CredentialNotFound,
     AuthenticationFailed(String),
     PrfEvaluationFailed(String),
+    Configuration(String),
+    CredentialAlreadyExists(String),
     Generic(String),
 }
 

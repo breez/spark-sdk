@@ -2,7 +2,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    NostrRelayConfig, PasskeyPrfError, PasskeyPrfProvider, PasskeyError,
+    NostrRelayConfig, PasskeyPrfError, PrfProvider, PasskeyError,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -15,7 +15,7 @@ fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "Dart callback panicked".to_string())
 }
 
-/// Callback-based implementation of `PasskeyPrfProvider` for Flutter.
+/// Callback-based implementation of `PrfProvider` for Flutter.
 ///
 /// This struct wraps Dart callbacks to implement the PRF provider trait,
 /// allowing Flutter to provide the passkey PRF implementation.
@@ -25,7 +25,7 @@ struct CallbackPrfProvider {
 }
 
 #[async_trait::async_trait]
-impl PasskeyPrfProvider for CallbackPrfProvider {
+impl PrfProvider for CallbackPrfProvider {
     async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
         AssertUnwindSafe((self.derive_prf_seed_fn)(salt))
             .catch_unwind()
