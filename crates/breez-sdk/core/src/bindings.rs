@@ -46,7 +46,7 @@ impl SdkBuilder {
     /// [`default_storage`](crate::default_storage),
     /// [`postgres_storage`](crate::postgres_storage),
     /// [`mysql_storage`](crate::mysql_storage) or
-    /// [`create_storage_backend`](crate::create_storage_backend).
+    /// [`custom_storage`](crate::custom_storage).
     /// Arguments:
     /// - `storage`: The storage backend to be used.
     pub async fn with_storage_backend(&self, storage: Arc<dyn StorageBackend>) {
@@ -56,7 +56,7 @@ impl SdkBuilder {
 
     /// **Deprecated.** Use
     /// [`with_storage_backend`](SdkBuilder::with_storage_backend) with
-    /// [`create_storage_backend`](crate::create_storage_backend).
+    /// [`custom_storage`](crate::custom_storage).
     /// Arguments:
     /// - `storage`: The storage implementation to be used.
     #[allow(deprecated)]

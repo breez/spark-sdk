@@ -79,7 +79,7 @@ pub struct SdkContextConfig {
     /// [`default_storage`](crate::default_storage),
     /// [`postgres_storage`](crate::postgres_storage),
     /// [`mysql_storage`](crate::mysql_storage) or
-    /// [`create_storage_backend`](crate::create_storage_backend).
+    /// [`custom_storage`](crate::custom_storage).
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub storage: Option<Arc<dyn StorageBackend>>,
 }
