@@ -61,10 +61,13 @@ pub struct WasmSdkContextConfig {
 /// Constructs a [`WasmSdkContext`] from a `WasmSdkContextConfig`.
 #[wasm_bindgen(js_name = "newSharedSdkContext")]
 pub async fn new_shared_sdk_context(config: WasmSdkContextConfig) -> WasmResult<WasmSdkContext> {
+    // WASM storage is JS-backed and threaded through `WasmSdkContext` below, so
+    // the core context carries no storage.
     let inner = breez_sdk_spark::new_shared_sdk_context(breez_sdk_spark::SdkContextConfig {
         network: config.network.into(),
         api_key: config.api_key,
         connections_per_operator: config.connections_per_operator,
+        storage: None,
     })
     .await?;
 

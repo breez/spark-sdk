@@ -12,8 +12,8 @@ use platform_utils::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 
 use crate::{
-    Fee, Network, OnchainConfirmationSpeed, OptimizationProgress, Payment, PaymentDetails,
-    PaymentMethod, PaymentStatus, PaymentType, SdkError, SendOnchainFeeQuote,
+    AutoOptimizationEvent, Fee, Network, OnchainConfirmationSpeed, OptimizationOutcome, Payment,
+    PaymentDetails, PaymentMethod, PaymentStatus, PaymentType, SdkError, SendOnchainFeeQuote,
     SendOnchainSpeedFeeQuote, SparkHtlcDetails, SparkHtlcStatus, SparkInvoicePaymentDetails,
     TokenBalance, TokenMetadata,
 };
@@ -516,12 +516,34 @@ impl From<PreimageRequestStatus> for SparkHtlcStatus {
     }
 }
 
-impl From<spark_wallet::OptimizationProgress> for OptimizationProgress {
-    fn from(value: spark_wallet::OptimizationProgress) -> Self {
-        Self {
-            is_running: value.is_running,
-            current_round: value.current_round,
-            total_rounds: value.total_rounds,
+impl From<spark_wallet::AutoOptimizationEvent> for AutoOptimizationEvent {
+    fn from(value: spark_wallet::AutoOptimizationEvent) -> Self {
+        match value {
+            spark_wallet::AutoOptimizationEvent::Started { total_rounds } => {
+                Self::Started { total_rounds }
+            }
+            spark_wallet::AutoOptimizationEvent::RoundCompleted {
+                current_round,
+                total_rounds,
+            } => Self::RoundCompleted {
+                current_round,
+                total_rounds,
+            },
+            spark_wallet::AutoOptimizationEvent::Completed => Self::Completed,
+            spark_wallet::AutoOptimizationEvent::Cancelled => Self::Cancelled,
+            spark_wallet::AutoOptimizationEvent::Failed { error } => Self::Failed { error },
+            spark_wallet::AutoOptimizationEvent::Skipped => Self::Skipped,
+        }
+    }
+}
+
+impl From<spark_wallet::OptimizationOutcome> for OptimizationOutcome {
+    fn from(value: spark_wallet::OptimizationOutcome) -> Self {
+        match value {
+            spark_wallet::OptimizationOutcome::Completed { rounds_executed } => {
+                Self::Completed { rounds_executed }
+            }
+            spark_wallet::OptimizationOutcome::InProgress => Self::InProgress,
         }
     }
 }

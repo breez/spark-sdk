@@ -11,18 +11,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
-/**
- * Lightspark regtest faucet client. Ports breez-bench/js/faucet.js.
- *
- * Reads FAUCET_URL (default api.lightspark.com/graphql/spark/rc),
- * FAUCET_USERNAME, FAUCET_PASSWORD from the environment. The faucet
- * sends Bitcoin to an on-chain regtest address; the SDK then claims the
- * deposit into the wallet's Spark balance once the block is mined.
- *
- * Quirks worth remembering: the faucet enforces a per-call cap (50_000
- * sats) and a per-call floor (1_000 sats); larger top-ups are split
- * into chunks by the caller.
- */
+// Lightspark regtest faucet client. Reads FAUCET_URL / FAUCET_USERNAME / FAUCET_PASSWORD
+// from the env. Per-call cap 50_000 / floor 1_000 sats — callers chunk larger top-ups.
 object Faucet {
     private const val DEFAULT_URL = "https://api.lightspark.com/graphql/spark/rc"
     private const val MUTATION =

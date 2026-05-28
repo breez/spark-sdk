@@ -5,8 +5,8 @@ Using the SDK Builder gives you more control over the initialization and modular
 The shared-pool, shared-chain-service, and shared-connection-manager components on this page are designed for multi-tenant server deployments — they're most useful in combination with the [Server mode](server_mode.md) SDK profile.
 
 - [Storage](#with-storage) to manage stored data
-- [PostgreSQL Connection Pool](#with-postgres-connection-pool) as an alternative storage backend
-- [MySQL Connection Pool](#with-mysql-connection-pool) as an alternative storage backend
+- [PostgreSQL Backend](#with-postgres-backend) as an alternative storage backend
+- [MySQL Backend](#with-mysql-backend) as an alternative storage backend
 - [Bitcoin Chain Service](#with-chain-service) to provide network data
 - [Shared REST Chain Service](#with-shared-rest-chain-service) to share the chain service HTTP client across SDK instances
 - [LNURL Client](#with-lnurl-client) to make REST requests
@@ -26,14 +26,14 @@ When using the SDK Builder, you either have to provide a Storage implementation 
 
 **Note:** Flutter currently only supports using the default storage.
 
-<h2 id="with-postgres-connection-pool">
-    <a class="header" href="#with-postgres-connection-pool">With PostgreSQL Connection Pool</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_postgres_connection_pool">API docs</a>
+<h2 id="with-postgres-backend">
+    <a class="header" href="#with-postgres-backend">With PostgreSQL Backend</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_storage_backend">API docs</a>
 </h2>
 
-The SDK includes a PostgreSQL backend as an alternative to file-based storage. Construct a connection pool once with {{#name create_postgres_connection_pool}} and pass it to the builder via {{#name with_postgres_connection_pool}} — this configures PostgreSQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. The same pool can be shared across multiple `SdkBuilder` instances; per-tenant scoping (rows isolated by seed identity) is preserved.
+The SDK includes a PostgreSQL backend as an alternative to file-based storage. Build a storage config with {{#name postgres_storage}} and pass it to the builder via {{#name with_storage_backend}} — this configures PostgreSQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. To share a single connection pool across multiple SDK instances, supply the same config through a [Shared SDK Context](#with-shared-context); per-tenant scoping (rows isolated by seed identity) is preserved either way.
 
-If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config before creating the pool. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
+If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
 
 **Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 
@@ -48,14 +48,14 @@ The PostgreSQL tree store can use the same or a separate PostgreSQL database as 
 
 </div>
 
-<h2 id="with-mysql-connection-pool">
-    <a class="header" href="#with-mysql-connection-pool">With MySQL Connection Pool</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_mysql_connection_pool">API docs</a>
+<h2 id="with-mysql-backend">
+    <a class="header" href="#with-mysql-backend">With MySQL Backend</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_storage_backend">API docs</a>
 </h2>
 
-The SDK includes a MySQL backend (MySQL 8.0+) as an alternative to file-based storage. Construct a connection pool once with {{#name create_mysql_connection_pool}} and pass it to the builder via {{#name with_mysql_connection_pool}} — this configures MySQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. The same pool can be shared across multiple `SdkBuilder` instances; per-tenant scoping (rows isolated by seed identity) is preserved.
+The SDK includes a MySQL backend (MySQL 8.0+) as an alternative to file-based storage. Build a storage config with {{#name mysql_storage}} and pass it to the builder via {{#name with_storage_backend}} — this configures MySQL for all stores (storage, tree store, and token store), which is suitable for server-side deployments with horizontal scaling. To share a single connection pool across multiple SDK instances, supply the same config through a [Shared SDK Context](#with-shared-context); per-tenant scoping (rows isolated by seed identity) is preserved either way.
 
-If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config before creating the pool. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
+If your service owns the database schema and applies SDK-compatible migrations externally, set {{#name run_migration}} to `false` on the storage config. The SDK will trust the existing schema and skip all migration runs, including writes to schema migration tables.
 
 **Note:** Not available for React Native or Flutter. For JavaScript/TypeScript, only supported in Node.js (not in the browser).
 

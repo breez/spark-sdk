@@ -23,7 +23,7 @@ use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 #[derive(Clone, Default)]
 pub struct QueryNodesPaginatedRequest {
@@ -45,16 +45,27 @@ pub struct QueryAllTokenOutputsRequest {
 pub struct SparkRpcClient {
     transport: Transport,
     header_provider: Arc<dyn HeaderProvider>,
+    /// Operator index in the pool (0..N). Surfaced as a span field by
+    /// the per-method `#[instrument]` attributes on the
+    /// `spark::operator_rpc` target, so a downstream subscriber can
+    /// attribute a slow RPC to a specific operator.
+    operator_id: usize,
 }
 
 impl SparkRpcClient {
-    pub fn new(channel: Transport, header_provider: Arc<dyn HeaderProvider>) -> Self {
+    pub fn new(
+        channel: Transport,
+        header_provider: Arc<dyn HeaderProvider>,
+        operator_id: usize,
+    ) -> Self {
         Self {
             transport: channel,
             header_provider,
+            operator_id,
         }
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn finalize_node_signatures_v2(
         &self,
         req: FinalizeNodeSignaturesRequest,
@@ -71,6 +82,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn generate_deposit_address(
         &self,
         req: GenerateDepositAddressRequest,
@@ -84,6 +96,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_unused_deposit_addresses(
         &self,
         req: QueryUnusedDepositAddressesRequest,
@@ -100,6 +113,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn start_deposit_tree_creation(
         &self,
         req: StartDepositTreeCreationRequest,
@@ -116,6 +130,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn start_transfer_v2(
         &self,
         req: StartTransferRequest,
@@ -129,6 +144,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn finalize_transfer_with_transfer_package(
         &self,
         req: FinalizeTransferWithTransferPackageRequest,
@@ -145,6 +161,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_pending_transfers(
         &self,
         req: TransferFilter,
@@ -158,6 +175,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_all_transfers(&self, req: TransferFilter) -> Result<QueryTransfersResponse> {
         debug!("Calling query_all_transfers with filter: {:?}", req);
         Ok(self
@@ -168,6 +186,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn claim_transfer_tweak_keys(
         &self,
         req: ClaimTransferTweakKeysRequest,
@@ -181,6 +200,7 @@ impl SparkRpcClient {
         Ok(())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn claim_transfer_sign_refunds_v2(
         &self,
         req: ClaimTransferSignRefundsRequest,
@@ -197,6 +217,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn store_preimage_share(&self, req: StorePreimageShareRequest) -> Result<()> {
         debug!("Calling store_preimage_share with request: {:?}", req);
         self.spark_service_client()
@@ -207,6 +228,7 @@ impl SparkRpcClient {
         Ok(())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn store_preimage_share_v2(&self, req: StorePreimageShareV2Request) -> Result<()> {
         debug!("Calling store_preimage_share_v2 with request: {:?}", req);
         self.spark_service_client()
@@ -217,6 +239,7 @@ impl SparkRpcClient {
         Ok(())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn get_signing_commitments(
         &self,
         req: GetSigningCommitmentsRequest,
@@ -230,6 +253,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn cooperative_exit_v2(
         &self,
         req: CooperativeExitRequest,
@@ -243,6 +267,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn initiate_preimage_swap_v3(
         &self,
         req: InitiatePreimageSwapRequest,
@@ -256,6 +281,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn provide_preimage(
         &self,
         req: ProvidePreimageRequest,
@@ -269,6 +295,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn start_leaf_swap_v2(
         &self,
         req: StartTransferRequest,
@@ -282,6 +309,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn initiate_swap_primary_transfer(
         &self,
         req: InitiateSwapPrimaryTransferRequest,
@@ -298,6 +326,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn renew_leaf(
         &self,
         req: RenewLeafRequest,
@@ -314,6 +343,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn get_signing_operator_list(&self) -> Result<GetSigningOperatorListResponse> {
         debug!("Calling get_signing_operator_list");
         Ok(self
@@ -324,6 +354,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_nodes(&self, req: QueryNodesRequest) -> Result<QueryNodesResponse> {
         debug!("Calling query_nodes with request: {:?}", req);
         Ok(self
@@ -338,6 +369,7 @@ impl SparkRpcClient {
     ///
     /// If `req.paging` is `Some`, returns a single page according to the filter.
     /// If `req.paging` is `None`, fetches all pages automatically.
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_nodes_paginated(
         &self,
         req: QueryNodesPaginatedRequest,
@@ -381,6 +413,7 @@ impl SparkRpcClient {
         })
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_balance(&self, req: QueryBalanceRequest) -> Result<QueryBalanceResponse> {
         debug!("Calling query_balance with request: {:?}", req);
         Ok(self
@@ -391,6 +424,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_user_signed_refunds(
         &self,
         req: QueryUserSignedRefundsRequest,
@@ -404,6 +438,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn freeze_tokens(
         &self,
         req: spark_token::FreezeTokensRequest,
@@ -417,6 +452,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_token_outputs(
         &self,
         req: spark_token::QueryTokenOutputsRequest,
@@ -431,6 +467,7 @@ impl SparkRpcClient {
     }
 
     /// Query all token outputs by automatically fetching all pages.
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_all_token_outputs(
         &self,
         req: QueryAllTokenOutputsRequest,
@@ -472,6 +509,7 @@ impl SparkRpcClient {
         Ok(all_items)
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_token_metadata(
         &self,
         req: spark_token::QueryTokenMetadataRequest,
@@ -485,6 +523,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_token_transactions(
         &self,
         req: spark_token::QueryTokenTransactionsRequest,
@@ -498,6 +537,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_spark_invoices(
         &self,
         req: QuerySparkInvoicesRequest,
@@ -511,6 +551,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_htlc(&self, req: QueryHtlcRequest) -> Result<QueryHtlcResponse> {
         debug!("Calling query_htlc with request: {:?}", req);
         Ok(self
@@ -521,6 +562,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn start_transaction(
         &self,
         req: StartTransactionRequest,
@@ -534,6 +576,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn commit_transaction(
         &self,
         req: CommitTransactionRequest,
@@ -547,6 +590,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn broadcast_transaction(
         &self,
         req: BroadcastTransactionRequest,
@@ -560,6 +604,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn generate_static_deposit_address(
         &self,
         req: GenerateStaticDepositAddressRequest,
@@ -576,6 +621,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn rotate_static_deposit_address(
         &self,
         req: RotateStaticDepositAddressRequest,
@@ -592,6 +638,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_static_deposit_addresses(
         &self,
         req: QueryStaticDepositAddressesRequest,
@@ -608,6 +655,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn get_utxos_for_identity(
         &self,
         req: GetUtxosForIdentityRequest,
@@ -621,6 +669,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn initiate_static_deposit_utxo_refund(
         &self,
         req: InitiateStaticDepositUtxoRefundRequest,
@@ -637,6 +686,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn subscribe_to_events(
         &self,
         req: SubscribeToEventsRequest,
@@ -650,6 +700,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn update_wallet_setting(
         &self,
         req: UpdateWalletSettingRequest,
@@ -663,6 +714,7 @@ impl SparkRpcClient {
             .into_inner())
     }
 
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_wallet_setting(&self) -> Result<QueryWalletSettingResponse> {
         debug!("Calling query_wallet_setting");
         Ok(self

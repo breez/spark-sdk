@@ -1,4 +1,4 @@
-//! Session persistence test against the PostgreSQL `SessionManager`.
+//! Session persistence test against the PostgreSQL `SessionStore`.
 //!
 //! Builds two SDK instances bound to the same Postgres testcontainer with a
 //! shared seed and delegates to the backend-agnostic scenario in
@@ -20,7 +20,7 @@ struct SessionPersistenceFixture {
     connection_string: String,
     shared_seed: [u8; 32],
     /// 33-byte serialized identity public key derived from `shared_seed`.
-    /// The persistent session manager scopes every row by this `user_id`.
+    /// The persistent session store scopes every row by this `user_id`.
     identity: Vec<u8>,
 }
 

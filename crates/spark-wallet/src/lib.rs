@@ -17,14 +17,14 @@ pub use spark::{
     operator::rpc::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager},
     services::{
         CoopExitFeeQuote, CoopExitSpeedFeeQuote, CpfpUtxo, ExitSpeed, Fee,
-        FreezeIssuerTokenResponse, InvoiceDescription, LightningSendPayment, LightningSendStatus,
-        Preimage, PreimageRequestStatus, ReceiverTokenOutput, ServiceError,
-        SingleUseDepositAddress, StaticDepositAddress, TokenInputs, TokenMintInput,
-        TokenOutputToSpend, TokenTransaction, TokenTransactionStatus, TokenTransferInput,
-        TransferId, TransferObserver, TransferObserverError, TransferStatus, TransferTokenOutput,
-        TransferType, Utxo,
+        FreezeIssuerTokenResponse, InvoiceDescription, LightningReceivePayment,
+        LightningSendPayment, LightningSendStatus, Preimage, PreimageRequestStatus,
+        ReceiverTokenOutput, ServiceError, SingleUseDepositAddress, StaticDepositAddress,
+        TokenInputs, TokenMintInput, TokenOutputToSpend, TokenTransaction, TokenTransactionStatus,
+        TokenTransferInput, TransferId, TransferObserver, TransferObserverError, TransferStatus,
+        TransferTokenOutput, TransferType, Utxo,
     },
-    session_manager::*,
+    session_store::*,
     signer::{
         AggregateFrostRequest, DefaultSigner, DefaultSignerError, EncryptedSecret,
         FrostSigningCommitmentsWithNonces, KeySet, KeySetType, SecretShare, SecretSource,
@@ -39,11 +39,11 @@ pub use spark::{
         TokenOutputsReservationId, TokensConfig,
     },
     tree::{
-        DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT, InMemoryTreeStore,
-        LeafLike, LeafOptimizationOptions, Leaves, LeavesReservation, LeavesReservationId,
-        OptimizationEvent, OptimizationProgress, ReservationPurpose, ReserveResult,
-        SelectLeavesOptions, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus,
-        TreeServiceError, TreeStore, select_leaves_by_minimum_amount,
+        AutoOptimizationEvent, DEFAULT_MAX_CONCURRENT_RESERVATIONS, DEFAULT_RESERVATION_TIMEOUT,
+        InMemoryTreeStore, LeafLike, LeafOptimizationOptions, Leaves, LeavesReservation,
+        LeavesReservationId, OptimizationError, OptimizationOutcome, ReservationPurpose,
+        ReserveResult, SelectLeavesOptions, SigningKeyshare, TargetAmounts, TreeNode, TreeNodeId,
+        TreeNodeStatus, TreeServiceError, TreeStore, select_leaves_by_minimum_amount,
         select_leaves_by_target_amounts,
     },
     utils::{
@@ -55,7 +55,7 @@ pub use wallet::SparkWallet;
 pub use wallet_builder::WalletBuilder;
 
 #[cfg(feature = "test-utils")]
-pub use spark::session_manager::tests as session_manager_tests;
+pub use spark::session_store::tests as session_store_tests;
 #[cfg(feature = "test-utils")]
 pub use spark::tree::tests as tree_store_tests;
 

@@ -457,6 +457,35 @@ class MigrationManager {
           }
         }
       },
+      {
+        // Recovery migration for the missing "contacts" object store.
+        //
+        // The original "Create contacts store" migration above was INSERTED into
+        // the middle of this array (at index 12) instead of being appended, in
+        // SDK 0.11.0. That index was already occupied by the "Clear cached
+        // lightning address for LnurlInfo schema change" migration, which had
+        // shipped one release earlier in SDK 0.10.0 (dbVersion 13).
+        //
+        // Migration array indices map 1:1 to DB version transitions, so any
+        // database that ran 0.10.0 reached version 13 and, on upgrading to
+        // 0.11.0+ (dbVersion 14), ran only migrations[13] — permanently skipping
+        // the newly-inserted migrations[12]. Those databases never got a
+        // "contacts" object store, so every contact operation fails with
+        // NotFoundError.
+        //
+        // This migration is correctly appended and idempotently (re)creates the
+        // store, so affected databases recover on their next upgrade while
+        // unaffected databases treat it as a no-op. Keep the original migration
+        // in place; do not delete or reorder it.
+        name: "Create contacts store (recovery for skipped migration)",
+        upgrade: (db) => {
+          if (!db.objectStoreNames.contains("contacts")) {
+            const contactsStore = db.createObjectStore("contacts", { keyPath: "id" });
+            contactsStore.createIndex("name_identifier", ["name", "paymentIdentifier"], { unique: false });
+            contactsStore.createIndex("name", "name", { unique: false });
+          }
+        }
+      },
     ];
   }
 }
@@ -480,7 +509,12 @@ class IndexedDBStorage {
     this.db = null;
     this.migrationManager = null;
     this.logger = logger;
-    this.dbVersion = 15; // Current schema version
+    // IMPORTANT: the migrations array in MigrationManager is append-only. The
+    // migration at array index N is the upgrade step from DB version N to N+1,
+    // so existing databases depend on indices never shifting. Never insert,
+    // reorder, or delete a migration — only append. dbVersion MUST equal the
+    // number of migrations (enforced by the guard in initialize()).
+    this.dbVersion = 17; // Current schema version (= migration count)
   }
 
   /**
@@ -493,6 +527,17 @@ class IndexedDBStorage {
 
     if (typeof window === "undefined" || !window.indexedDB) {
       throw new StorageError("IndexedDB is not available in this environment");
+    }
+
+    // Guard: dbVersion must equal the migration count. If they drift apart, the
+    // upgrade loop either skips the trailing migration(s) or requests a version
+    // no migration fills in. Fail fast — this is a programming error.
+    const migrationCount = new MigrationManager(null, StorageError).migrations.length;
+    if (this.dbVersion !== migrationCount) {
+      throw new StorageError(
+        `dbVersion (${this.dbVersion}) must equal the migration count (${migrationCount}). ` +
+        `Migrations are append-only: append a new migration and bump dbVersion to match.`
+      );
     }
 
     return new Promise((resolve, reject) => {
@@ -802,31 +847,98 @@ class IndexedDBStorage {
     });
   }
 
-  async insertPayment(payment) {
+  async applyPaymentUpdate(payment) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
 
     return new Promise((resolve, reject) => {
+      let shouldEmit = false;
+      let settled = false;
       const transaction = this.db.transaction("payments", "readwrite");
       const store = transaction.objectStore("payments");
 
-      // Ensure details and method are serialized properly
-      const paymentToStore = {
-        ...payment,
-        details: payment.details ? JSON.stringify(payment.details) : null,
-        method: payment.method ? JSON.stringify(payment.method) : null,
+      const rejectOnce = (message, error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(new StorageError(message, error));
       };
 
-      const request = store.put(paymentToStore);
-      request.onsuccess = () => resolve();
-      request.onerror = () => {
-        reject(
-          new StorageError(
-            `Failed to insert payment '${payment.id}': ${request.error?.message || "Unknown error"
+      transaction.oncomplete = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(shouldEmit);
+      };
+
+      transaction.onerror = () => {
+        rejectOnce(
+          `Failed to apply payment update '${payment.id}': ${transaction.error?.message || "Unknown error"
+          }`,
+          transaction.error
+        );
+      };
+
+      transaction.onabort = () => {
+        rejectOnce(
+          `Payment update transaction aborted for '${payment.id}': ${transaction.error?.message || "Unknown error"
+          }`,
+          transaction.error
+        );
+      };
+
+      const getRequest = store.get(payment.id);
+
+      getRequest.onsuccess = () => {
+        const storedPayment = getRequest.result;
+        const stored = storedPayment
+          ? this._normalizePaymentStatus(storedPayment.status)
+          : null;
+        const next = this._normalizePaymentStatus(payment.status);
+
+        let shouldPersist;
+        if (stored == null) {
+          shouldPersist = true;
+          shouldEmit = true;
+        } else if (stored === next) {
+          console.debug(
+            `Skipping redundant payment event: id=${payment.id} status=${next}`
+          );
+          shouldPersist = true;
+          shouldEmit = false;
+        } else if (this._isFinalPaymentStatus(stored)) {
+          console.warn(
+            `Skipping payment update (would replace terminal status): id=${payment.id} stored=${stored} new=${next}`
+          );
+          shouldPersist = false;
+          shouldEmit = false;
+        } else {
+          shouldPersist = true;
+          shouldEmit = true;
+        }
+
+        if (!shouldPersist) {
+          return;
+        }
+
+        const putRequest = store.put(this._paymentToStore(payment));
+        putRequest.onerror = () => {
+          rejectOnce(
+            `Failed to persist payment update '${payment.id}': ${putRequest.error?.message || "Unknown error"
             }`,
-            request.error
-          )
+            putRequest.error
+          );
+        };
+      };
+
+      getRequest.onerror = () => {
+        rejectOnce(
+          `Failed to read payment '${payment.id}' before update: ${getRequest.error?.message || "Unknown error"
+          }`,
+          getRequest.error
         );
       };
     });
@@ -2020,6 +2132,25 @@ class IndexedDBStorage {
   }
 
   // ===== Private Helper Methods =====
+
+  _paymentToStore(payment) {
+    // Ensure details and method are serialized properly
+    return {
+      ...payment,
+      details: payment.details ? JSON.stringify(payment.details) : null,
+      method: payment.method ? JSON.stringify(payment.method) : null,
+    };
+  }
+
+  _normalizePaymentStatus(status) {
+    return typeof status === "string" ? status.toLowerCase() : status;
+  }
+
+  _isFinalPaymentStatus(status) {
+    const normalized = this._normalizePaymentStatus(status);
+    return normalized === "completed" || normalized === "failed";
+  }
+
 
   _matchesFilters(payment, request) {
     // Filter by payment type

@@ -47,7 +47,7 @@ test: cargo-test wasm-test
 cargo-test:
 	cargo xtask test
 
-wasm-test: wasm-test-browser wasm-test-node
+wasm-test: wasm-test-browser wasm-test-node wasm-test-mysql-timezone
 
 wasm-test-browser:
 	cargo xtask wasm-test
@@ -55,11 +55,26 @@ wasm-test-browser:
 wasm-test-node:
 	cargo xtask wasm-test --node
 
+# Regression test for the JS mysql-{token,tree}-store TZ-handling bug. Runs
+# the spent-marker / spent-leaf scenarios under several host TZs (positive
+# and negative offsets) so the bug surfaces on any CI runner regardless of
+# system clock. Depends on wasm-test-node for the upstream `npm install` of
+# mysql-storage / mysql-{token,tree}-store deps that these tests reuse.
+wasm-test-mysql-timezone: wasm-test-node
+	cd crates/breez-sdk/wasm/js/mysql-token-store && npm test
+	cd crates/breez-sdk/wasm/js/mysql-tree-store && npm test
+
 flutter-check:
 	cargo xtask flutter-check
 
 itest:
 	cargo xtask itest
+
+spark-itest-pg:
+	USE_POSTGRES_BACKEND=true cargo xtask itest
+
+spark-itest-mysql:
+	USE_MYSQL_BACKEND=true cargo xtask itest
 
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8

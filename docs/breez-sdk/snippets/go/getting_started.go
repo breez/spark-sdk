@@ -105,8 +105,8 @@ func (SdkListener) OnEvent(e breez_sdk_spark.SdkEvent) {
 		// A payment failed
 		failedPayment := event.Payment
 		_ = failedPayment
-	case breez_sdk_spark.SdkEventOptimization:
-		// An optimization event occurred
+	case breez_sdk_spark.SdkEventAutoOptimization:
+		// An auto-optimization event occurred
 		optimizationEvent := event.OptimizationEvent
 		_ = optimizationEvent
 	case breez_sdk_spark.SdkEventLightningAddressChanged:

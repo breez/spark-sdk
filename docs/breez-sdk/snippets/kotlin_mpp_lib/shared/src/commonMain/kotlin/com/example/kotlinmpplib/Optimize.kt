@@ -3,54 +3,73 @@ package com.example.kotlinmpplib
 import breez_sdk_spark.*
 
 class Optimize {
-    suspend fun startOptimization(sdk: BreezSdk) {
-        // ANCHOR: start-optimization
-        sdk.startLeafOptimization()
-        // ANCHOR_END: start-optimization
-    }
+    suspend fun runFullOptimization(sdk: BreezSdk) {
+        // ANCHOR: optimize-leaves-full
+        val outcome = sdk.optimizeLeaves(OptimizeLeavesRequest(mode = OptimizationMode.FULL)).outcome
 
-    suspend fun cancelOptimization(sdk: BreezSdk) {
-        // ANCHOR: cancel-optimization
-        try {
-            sdk.cancelLeafOptimization()
-        } catch (e: Exception) {
-            // handle error
+        when (outcome) {
+            is OptimizationOutcome.Completed -> {
+                if (outcome.roundsExecuted == 0u) {
+                    // Log.v("Breez", "Optimization skipped — wallet already optimal")
+                } else {
+                    // Log.v("Breez", "Optimization completed in ${outcome.roundsExecuted} rounds")
+                }
+            }
+            is OptimizationOutcome.InProgress -> {
+                // Full mode runs to completion in one call, so InProgress is
+                // not reachable here.
+                throw IllegalStateException("Full mode never returns InProgress")
+            }
         }
-        // ANCHOR_END: cancel-optimization
+        // ANCHOR_END: optimize-leaves-full
     }
 
-    fun getOptimizationProgress(sdk: BreezSdk) {
-        // ANCHOR: get-optimization-progress
-        val progress = sdk.getLeafOptimizationProgress()
-
-        println("Optimization is running: ${progress.isRunning}")
-        println("Current round: ${progress.currentRound}")
-        println("Total rounds: ${progress.totalRounds}")
-        // ANCHOR_END: get-optimization-progress
+    suspend fun runOptimizationOneRoundAtATime(sdk: BreezSdk) {
+        // ANCHOR: optimize-leaves-single-round
+        var roundsExecuted: UInt = 0u
+        while (true) {
+            val outcome = sdk.optimizeLeaves(OptimizeLeavesRequest(mode = OptimizationMode.SINGLE_ROUND)).outcome
+            when (outcome) {
+                is OptimizationOutcome.InProgress -> {
+                    roundsExecuted += 1u
+                    // Log.v("Breez", "Executed round $roundsExecuted")
+                }
+                is OptimizationOutcome.Completed -> {
+                    roundsExecuted += outcome.roundsExecuted
+                    if (roundsExecuted == 0u) {
+                        // Log.v("Breez", "Optimization skipped — wallet already optimal")
+                    } else {
+                        // Log.v("Breez", "Optimization done after $roundsExecuted rounds")
+                    }
+                    break
+                }
+            }
+        }
+        // ANCHOR_END: optimize-leaves-single-round
     }
 
-    fun optimizationEvents(optimizationEvent: OptimizationEvent) {
-        // ANCHOR: optimization-events
+    fun handleAutoOptimizationEvent(optimizationEvent: AutoOptimizationEvent) {
+        // ANCHOR: auto-optimization-events
         when (optimizationEvent) {
-            is OptimizationEvent.Started -> {
-                // Log.v("Breez", "Optimization started with ${optimizationEvent.totalRounds} rounds")
+            is AutoOptimizationEvent.Started -> {
+                // Log.v("Breez", "Auto-optimization started with ${optimizationEvent.totalRounds} rounds")
             }
-            is OptimizationEvent.RoundCompleted -> {
-                // Log.v("Breez", "Optimization round ${optimizationEvent.currentRound} of ${optimizationEvent.totalRounds} completed")
+            is AutoOptimizationEvent.RoundCompleted -> {
+                // Log.v("Breez", "Auto-optimization round ${optimizationEvent.currentRound} of ${optimizationEvent.totalRounds} completed")
             }
-            is OptimizationEvent.Completed -> {
-                // Log.v("Breez", "Optimization completed successfully")
+            is AutoOptimizationEvent.Completed -> {
+                // Log.v("Breez", "Auto-optimization completed successfully")
             }
-            is OptimizationEvent.Cancelled -> {
-                // Log.v("Breez", "Optimization was cancelled")
+            is AutoOptimizationEvent.Cancelled -> {
+                // Log.v("Breez", "Auto-optimization was cancelled")
             }
-            is OptimizationEvent.Failed -> {
-                // Log.v("Breez", "Optimization failed: ${optimizationEvent.error}")
+            is AutoOptimizationEvent.Failed -> {
+                // Log.v("Breez", "Auto-optimization failed: ${optimizationEvent.error}")
             }
-            is OptimizationEvent.Skipped -> {
-                // Log.v("Breez", "Optimization was skipped because leaves are already optimal")
+            is AutoOptimizationEvent.Skipped -> {
+                // Log.v("Breez", "Auto-optimization was skipped because leaves are already optimal")
             }
         }
-        // ANCHOR_END: optimization-events
+        // ANCHOR_END: auto-optimization-events
     }
 }

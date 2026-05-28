@@ -4,6 +4,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -26,12 +27,14 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class LogEntry(
     val ts: Long,                 // unix millis
-    val op: String,               // "info" | "send" | "receive"
+    val op: String,               // "info" | "send" | "send_spark" | "send_ln" | "receive" | "receive_spark" | "receive_ln"
     @SerialName("user_id") val userId: String,
     @SerialName("status_code") val statusCode: Int? = null,
     @SerialName("duration_ms") val durationMs: Long? = null,
     val error: String? = null,
     val dropped: Boolean = false,  // true if dispatch was skipped due to in-flight cap
+    // For send_ln only: index into the invoice pool, used by audit-bolt11.
+    @SerialName("invoice_idx") val invoiceIdx: Int? = null,
 )
 
 // --- samplers -------------------------------------------------------------
@@ -105,6 +108,22 @@ private class OpSampler(mix: List<Pair<String, Double>>) {
     }
 }
 
+// --- op-kind vocabulary ---------------------------------------------------
+
+enum class OpKind { INFO, SEND_SPARK, SEND_LN, RECEIVE_SPARK, RECEIVE_LN }
+
+fun opKindOf(label: String): OpKind = when (label.lowercase()) {
+    "info" -> OpKind.INFO
+    "send", "send_spark" -> OpKind.SEND_SPARK
+    "send_ln", "send_lightning", "send_bolt11" -> OpKind.SEND_LN
+    "receive", "receive_spark" -> OpKind.RECEIVE_SPARK
+    "receive_ln", "receive_lightning", "receive_bolt11" -> OpKind.RECEIVE_LN
+    else -> error(
+        "unknown op label '$label'. Valid: info, send (alias send_spark), send_ln, " +
+            "receive (alias receive_spark), receive_ln"
+    )
+}
+
 // --- arg parsing helpers --------------------------------------------------
 
 /** Parse e.g. "info=70,receive=20,send=10" → [("info",70),("receive",20),("send",10)]. */
@@ -155,9 +174,17 @@ private fun receiveReq(baseUrl: String, userId: String): HttpRequest =
         .POST(HttpRequest.BodyPublishers.ofString("{}"))
         .build()
 
+private fun receiveLnReq(baseUrl: String, userId: String, amountSats: Long): HttpRequest {
+    val body = """{"method":"bolt11","amountSats":$amountSats}"""
+    return HttpRequest.newBuilder()
+        .uri(URI.create("$baseUrl/users/$userId/receive"))
+        .timeout(Duration.ofSeconds(60))
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(body))
+        .build()
+}
+
 private fun sendReq(baseUrl: String, userId: String, destination: String, amountSats: Long): HttpRequest {
-    // SendBody is the on-wire shape from Main.kt; encode minimal JSON by hand
-    // to avoid coupling LoadGen to the server's @Serializable type.
     val body = """{"destination":"$destination","amountSats":$amountSats}"""
     return HttpRequest.newBuilder()
         .uri(URI.create("$baseUrl/users/$userId/send"))
@@ -189,7 +216,12 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
     val users = opts["users"]?.toIntOrNull() ?: 10_000
     require(users > 0) { "--users must be > 0" }
     val mixSpec = opts["mix"] ?: "info=40,receive=30,send=30"
-    val opSampler = OpSampler(parseMix(mixSpec))
+    val parsedMix = parseMix(mixSpec)
+    // Validate every label up front so a typo fails fast (before the
+    // treasurer-bootstrap / pool-load latency) rather than surfacing as
+    // an "unknown op" mid-run.
+    val mixKinds: Set<OpKind> = parsedMix.map { opKindOf(it.first) }.toSet()
+    val opSampler = OpSampler(parsedMix)
     val distribution = opts["user-distribution"] ?: "uniform"
     val zipfSkew = opts["zipf-skew"]?.toDoubleOrNull() ?: 1.0
     val userSampler = makeUserSampler(distribution, users, zipfSkew)
@@ -209,17 +241,46 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
         .connectTimeout(Duration.ofSeconds(10))
         .build()
 
-    // Treasurer Spark address: prefer the caller-provided value (sweep
-    // driver caches it once per master secret to avoid paying treasurer
-    // SDK cold-start sync on every per-step server restart). Fall back
-    // to fetching via /receive only if not provided — useful for ad-hoc
-    // single-step runs but ill-suited to a sweep where the cold-start
-    // can take many minutes.
-    val treasurerAddr = opts["treasurer-spark-addr"]?.takeIf { it.isNotBlank() } ?: run {
-        println("[loadgen] fetching treasurer Spark address from $baseUrl …")
-        fetchTreasurerSparkAddress(httpClient, baseUrl)
+    // Only needed when a spark-send op is in the mix.
+    val treasurerAddr: String? = if (OpKind.SEND_SPARK in mixKinds) {
+        opts["treasurer-spark-addr"]?.takeIf { it.isNotBlank() } ?: run {
+            println("[loadgen] fetching treasurer Spark address from $baseUrl …")
+            fetchTreasurerSparkAddress(httpClient, baseUrl)
+        }.also { println("[loadgen] treasurer destination: $it") }
+    } else {
+        println("[loadgen] mix has no spark-send op — skipping treasurer addr fetch")
+        null
     }
-    println("[loadgen] treasurer destination: $treasurerAddr")
+
+    // Required iff mix has send_ln. Cursor persists across sweep steps so single-use invoices aren't reused.
+    val invoicePoolPath: String? = opts["invoice-pool"]?.takeIf { it.isNotBlank() }
+    val invoiceCursorPath: Path? = invoicePoolPath?.let { Path.of("$it.cursor") }
+    val invoiceStartCursor: Int = invoiceCursorPath?.let {
+        if (Files.exists(it)) {
+            val v = Files.readString(it).trim().toIntOrNull() ?: 0
+            println("[loadgen] resuming invoice pool at cursor=$v (from ${it.fileName})")
+            v
+        } else 0
+    } ?: 0
+    val invoicePool: List<String>? = if (OpKind.SEND_LN in mixKinds) {
+        val poolPath = invoicePoolPath
+            ?: error("--invoice-pool=<file> is required when the mix has send_ln")
+        val pool = Files.readAllLines(Path.of(poolPath))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        require(pool.isNotEmpty()) { "invoice pool $poolPath is empty" }
+        require(invoiceStartCursor <= pool.size) {
+            "invoice cursor ($invoiceStartCursor) exceeds pool size (${pool.size})"
+        }
+        println("[loadgen] loaded ${pool.size} invoices from $poolPath (cursor starts at $invoiceStartCursor, " +
+            "${pool.size - invoiceStartCursor} unspent)")
+        pool
+    } else {
+        if (opts["invoice-pool"]?.isNotBlank() == true) {
+            println("[loadgen] --invoice-pool set but mix has no send_ln — ignoring")
+        }
+        null
+    }
 
     val writer = JsonlWriter(outDir.resolve("latency.jsonl"), LogEntry.serializer())
     val rng = Random.Default
@@ -233,6 +294,9 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
     var dispatched = 0L
     var dropped = 0L
     var senderCursor = 0
+    var invoiceCursor = invoiceStartCursor
+    // Hoisted: read after coroutineScope to drive a non-zero exit.
+    var poolExhausted = false
 
     coroutineScope {
         // 5s progress tick.
@@ -259,7 +323,7 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
         }
 
         var nextDispatchNs = startNs
-        while (System.nanoTime() < endNs) {
+        while (System.nanoTime() < endNs && !poolExhausted) {
             val now = System.nanoTime()
             if (now < nextDispatchNs) {
                 val sleepMs = (nextDispatchNs - now) / 1_000_000
@@ -269,21 +333,64 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
             val op = opSampler.sample(rng)
             val userId: String
             val request: HttpRequest
-            when (op) {
-                "info" -> {
+            // Only set on send_ln; threaded into LogEntry so the post-run
+            // audit can map this dispatch to a specific invoice.
+            var dispatchInvoiceIdx: Int? = null
+            when (opKindOf(op)) {
+                OpKind.INFO -> {
                     userId = "u${userSampler.sample(rng)}"
                     request = infoReq(baseUrl, userId)
                 }
-                "receive" -> {
+                OpKind.RECEIVE_SPARK -> {
                     userId = "u${userSampler.sample(rng)}"
                     request = receiveReq(baseUrl, userId)
                 }
-                "send" -> {
+                OpKind.RECEIVE_LN -> {
+                    userId = "u${userSampler.sample(rng)}"
+                    request = receiveLnReq(baseUrl, userId, paymentSats)
+                }
+                OpKind.SEND_SPARK -> {
+                    val dest = treasurerAddr ?: error("send_spark in mix but no treasurer addr — bug?")
                     userId = senderUserId(senderCursor)
                     senderCursor = (senderCursor + 1) % senderCount
-                    request = sendReq(baseUrl, userId, treasurerAddr, paymentSats)
+                    request = sendReq(baseUrl, userId, dest, paymentSats)
                 }
-                else -> error("Unknown op from sampler: $op")
+                OpKind.SEND_LN -> {
+                    val pool = invoicePool ?: error("send_ln in mix but no invoice pool — bug?")
+                    if (invoiceCursor >= pool.size) {
+                        // Hard-stop: pool was undersized — results from here are noise.
+                        System.err.println(
+                            "[loadgen] invoice pool exhausted at ${pool.size} send_ln dispatches — stopping"
+                        )
+                        writer.submit(LogEntry(
+                            ts = System.currentTimeMillis(),
+                            op = op,
+                            userId = senderUserId(senderCursor),
+                            error = "invoice_pool_exhausted",
+                            dropped = true,
+                        ))
+                        dropped++
+                        poolExhausted = true
+                        continue
+                    }
+                    dispatchInvoiceIdx = invoiceCursor
+                    val invoice = pool[invoiceCursor]
+                    invoiceCursor++
+                    // Persist per-dispatch with atomic rename; a lost cursor re-dispatches paid invoices.
+                    if (invoiceCursorPath != null) {
+                        val tmp = invoiceCursorPath.resolveSibling("${invoiceCursorPath.fileName}.tmp")
+                        Files.writeString(tmp, invoiceCursor.toString())
+                        Files.move(
+                            tmp,
+                            invoiceCursorPath,
+                            StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING,
+                        )
+                    }
+                    userId = senderUserId(senderCursor)
+                    senderCursor = (senderCursor + 1) % senderCount
+                    request = sendReq(baseUrl, userId, invoice, paymentSats)
+                }
             }
 
             if (inFlight.get() >= maxInFlight) {
@@ -292,10 +399,12 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
                     op = op,
                     userId = userId,
                     dropped = true,
+                    invoiceIdx = dispatchInvoiceIdx,
                 ))
                 dropped++
             } else {
                 inFlight.incrementAndGet()
+                val invoiceIdxAtDispatch = dispatchInvoiceIdx
                 launch(Dispatchers.IO) {
                     val tStart = System.nanoTime()
                     try {
@@ -312,6 +421,7 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
                             statusCode = resp.statusCode(),
                             durationMs = durMs,
                             error = if (ok) null else "http_${resp.statusCode()}",
+                            invoiceIdx = invoiceIdxAtDispatch,
                         ))
                     } catch (e: Throwable) {
                         val durMs = (System.nanoTime() - tStart) / 1_000_000
@@ -322,6 +432,7 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
                             userId = userId,
                             durationMs = durMs,
                             error = "${e::class.simpleName}: ${e.message}",
+                            invoiceIdx = invoiceIdxAtDispatch,
                         ))
                     } finally {
                         inFlight.decrementAndGet()
@@ -346,7 +457,20 @@ fun runLoadGen(opts: Map<String, String>) = runBlocking {
     }
 
     writer.close()  // drains the queue + closes the file (blocks up to 10s)
+    if (invoiceCursorPath != null && invoicePool != null) {
+        println("[loadgen] invoice cursor at $invoiceCursor / ${invoicePool.size} " +
+            "(persisted per-dispatch to ${invoiceCursorPath.fileName})")
+    }
     println("[loadgen] dispatched=$dispatched  dropped=$dropped  " +
         "actual_rps=${"%.2f".format(dispatched.toDouble() * 1e9 / (System.nanoTime() - startNs))}")
+    if (poolExhausted) {
+        System.err.println(
+            "[loadgen] FAILED: invoice pool exhausted before duration elapsed " +
+                "(consumed $invoiceCursor/${invoicePool?.size}). The pool was undersized " +
+                "vs the offered load; results from this step are not a valid measurement. " +
+                "Re-mint a larger pool (sweep driver computes the count)."
+        )
+        kotlin.system.exitProcess(1)
+    }
     println("[loadgen] OK  out=$outDir")
 }

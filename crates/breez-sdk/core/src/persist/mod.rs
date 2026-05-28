@@ -1,16 +1,24 @@
-#[cfg(all(
-    feature = "mysql",
-    not(all(target_family = "wasm", target_os = "unknown"))
-))]
+pub(crate) mod backend;
+#[cfg(feature = "mysql")]
 pub mod mysql;
 pub(crate) mod path;
-#[cfg(all(
-    feature = "postgres",
-    not(all(target_family = "wasm", target_os = "unknown"))
-))]
+#[cfg(feature = "postgres")]
 pub mod postgres;
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg(feature = "sqlite")]
 pub(crate) mod sqlite;
+
+// The `sqlite`, `postgres` and `mysql` storage backends use native-only Rust
+// drivers and cannot be built for the wasm32 target. WASM builds use a
+// JS-backed storage backend instead, so none of these features apply there.
+#[cfg(all(
+    any(feature = "sqlite", feature = "postgres", feature = "mysql"),
+    target_family = "wasm",
+    target_os = "unknown"
+))]
+compile_error!(
+    "the `sqlite`, `postgres` and `mysql` storage features are native-only and \
+     cannot be enabled for the wasm32 target"
+);
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -269,6 +277,13 @@ pub struct PaymentMetadata {
     pub conversion_status: Option<ConversionStatus>,
 }
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub(crate) fn parse_payment_status(value: &str) -> Result<PaymentStatus, StorageError> {
+    value
+        .parse()
+        .map_err(|e| StorageError::Implementation(format!("invalid payment status: {e}")))
+}
+
 /// Trait for persistent storage
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[async_trait]
@@ -290,16 +305,15 @@ pub trait Storage: Send + Sync {
         request: StorageListPaymentsRequest,
     ) -> Result<Vec<Payment>, StorageError>;
 
-    /// Inserts a payment into storage
+    /// Inserts or updates a payment unless it would replace a terminal status.
     ///
-    /// # Arguments
+    /// Same-status updates are still persisted so details can be enriched.
     ///
-    /// * `payment` - The payment to insert
-    ///
-    /// # Returns
-    ///
-    /// Success or a `StorageError`
-    async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError>;
+    /// Returns `true` if the caller should emit a payment event (new payment was
+    /// inserted, or status transitioned). Returns `false` for redundant
+    /// same-status updates and for rejected updates against a terminal stored
+    /// status
+    async fn apply_payment_update(&self, payment: Payment) -> Result<bool, StorageError>;
 
     /// Inserts payment metadata into storage
     ///

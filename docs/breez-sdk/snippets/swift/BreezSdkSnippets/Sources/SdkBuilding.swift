@@ -100,14 +100,12 @@ func initSdkPostgres() async throws -> BreezSdk {
     // If your service owns SDK-compatible schema migrations:
     postgresConfig.runMigration = false
 
-    // Construct the connection pool. The same pool can be passed to
-    // multiple SdkBuilders to share connections across SDKs; per-tenant
-    // scoping (rows isolated by seed identity) is preserved.
-    let pool = try createPostgresConnectionPool(config: postgresConfig)
-
-    // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
+    // Build the SDK with the PostgreSQL storage backend (storage, tree store,
+    // and token store). Per-tenant scoping (rows isolated by seed identity)
+    // is applied automatically.
     let builder = SdkBuilder(config: config, seed: seed)
-    await builder.withPostgresConnectionPool(pool: pool)
+    await builder.withStorageBackend(
+        storage: try postgresStorage(config: postgresConfig))
     let sdk = try await builder.build()
     // ANCHOR_END: init-sdk-postgres
 
@@ -136,14 +134,12 @@ func initSdkMysql() async throws -> BreezSdk {
     // Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
     // mysqlConfig.rootCaPem = "-----BEGIN CERTIFICATE-----\n..."
 
-    // Construct the connection pool. The same pool can be passed to
-    // multiple SdkBuilders to share connections across SDKs; per-tenant
-    // scoping (rows isolated by seed identity) is preserved.
-    let pool = try createMysqlConnectionPool(config: mysqlConfig)
-
-    // Build the SDK with MySQL backend (storage, tree store, and token store)
+    // Build the SDK with the MySQL storage backend (storage, tree store, and
+    // token store). Per-tenant scoping (rows isolated by seed identity) is
+    // applied automatically.
     let builder = SdkBuilder(config: config, seed: seed)
-    await builder.withMysqlConnectionPool(pool: pool)
+    await builder.withStorageBackend(
+        storage: try mysqlStorage(config: mysqlConfig))
     let sdk = try await builder.build()
     // ANCHOR_END: init-sdk-mysql
 

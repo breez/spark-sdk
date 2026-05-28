@@ -89,7 +89,7 @@ class MysqlMigrationManager {
         await conn.query(`
           CREATE TABLE IF NOT EXISTS brz_schema_migrations (
             version INT PRIMARY KEY,
-            applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))
           )
         `);
 
@@ -121,7 +121,7 @@ class MysqlMigrationManager {
           }
 
           await conn.query(
-            "INSERT INTO brz_schema_migrations (version) VALUES (?)",
+            "INSERT INTO brz_schema_migrations (version, applied_at) VALUES (?, UTC_TIMESTAMP(6))",
             [version]
           );
         }
@@ -495,6 +495,17 @@ class MysqlMigrationManager {
           `DROP INDEX brz_idx_sync_incoming_revision ON brz_sync_incoming`,
           `CREATE INDEX brz_idx_sync_incoming_user_revision
              ON brz_sync_incoming(user_id, revision)`,
+        ],
+      },
+      {
+        // Pin the migration-tracking table's `applied_at` default to UTC.
+        // The migration manager already passes `UTC_TIMESTAMP(6)` explicitly
+        // on INSERT, but aligning the default keeps `SHOW CREATE TABLE`
+        // output consistent with the token-store / tree-store migrations
+        // table and avoids future mistakes if a callsite omits the column.
+        name: "Pin schema-migrations applied_at default to UTC",
+        sql: [
+          `ALTER TABLE brz_schema_migrations MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
         ],
       },
     ];

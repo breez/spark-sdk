@@ -70,10 +70,21 @@ pub fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> Tok
     TokenOutputs { metadata, outputs }
 }
 
-/// Returns a future `SystemTime`, ensuring that outputs added "now" are
-/// treated as old relative to this refresh start.
-pub fn future_refresh_start() -> SystemTime {
-    SystemTime::now() + Duration::from_secs(10)
+/// Returns a refresh start 10s in the future relative to the store's clock,
+/// ensuring that outputs added "now" are treated as old relative to it.
+///
+/// Sourced from `store.now()` rather than `SystemTime::now()` so the boundary
+/// shares a clock with the DB-stamped timestamps it is compared against (the
+/// application and DB-server clocks can differ, e.g. a Docker VM clock).
+pub async fn future_refresh_start(store: &dyn TokenOutputStore) -> SystemTime {
+    store.now().await.unwrap() + Duration::from_secs(10)
+}
+
+/// Returns a refresh start 60s in the past relative to the store's clock,
+/// ensuring that outputs/spends recorded "now" are treated as new relative to
+/// it. See [`future_refresh_start`] for why this uses `store.now()`.
+pub async fn past_refresh_start(store: &dyn TokenOutputStore) -> SystemTime {
+    store.now().await.unwrap() - Duration::from_secs(60)
 }
 
 pub async fn test_set_tokens_outputs(store: &dyn TokenOutputStore) {
@@ -81,7 +92,10 @@ pub async fn test_set_tokens_outputs(store: &dyn TokenOutputStore) {
     let token2 = create_token_outputs(2, vec![500, 1000]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &[token1.clone(), token2.clone()],
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -94,7 +108,10 @@ pub async fn test_get_token_outputs(store: &dyn TokenOutputStore) {
     let token2 = create_token_outputs(2, vec![500, 1000]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &[token1.clone(), token2.clone()],
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -136,7 +153,10 @@ pub async fn test_set_tokens_outputs_with_update(store: &dyn TokenOutputStore) {
     let token2 = create_token_outputs(2, vec![500, 1000]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &[token1.clone(), token2.clone()],
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -146,7 +166,10 @@ pub async fn test_set_tokens_outputs_with_update(store: &dyn TokenOutputStore) {
     // Update with new token outputs (overwrite)
     let token1_updated = create_token_outputs(1, vec![150, 250]);
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1_updated), future_refresh_start())
+        .set_tokens_outputs(
+            slice::from_ref(&token1_updated),
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -173,7 +196,7 @@ pub async fn test_insert_token_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -220,7 +243,10 @@ pub async fn test_reserve_token_outputs(store: &dyn TokenOutputStore) {
     let token2 = create_token_outputs(2, vec![500, 1000]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &[token1.clone(), token2.clone()],
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -251,7 +277,10 @@ pub async fn test_reserve_token_outputs_and_cancel(store: &dyn TokenOutputStore)
     let token2 = create_token_outputs(2, vec![500, 1000]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &[token1.clone(), token2.clone()],
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -291,7 +320,10 @@ pub async fn test_reserve_token_outputs_and_finalize(store: &dyn TokenOutputStor
     let token2 = create_token_outputs(2, vec![500, 1000]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &[token1.clone(), token2.clone()],
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -331,7 +363,10 @@ pub async fn test_reserve_token_outputs_and_set_add_output(store: &dyn TokenOutp
     let token2 = create_token_outputs(2, vec![500, 1000]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &[token1.clone(), token2.clone()],
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -356,7 +391,10 @@ pub async fn test_reserve_token_outputs_and_set_add_output(store: &dyn TokenOutp
     // Set new token outputs, simulating an external update
     let token1_updated = create_token_outputs(1, vec![100, 200, 300, 400]);
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1_updated), future_refresh_start())
+        .set_tokens_outputs(
+            slice::from_ref(&token1_updated),
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -376,7 +414,10 @@ pub async fn test_reserve_token_outputs_and_set_remove_reserved_output(
     let token2 = create_token_outputs(2, vec![500, 1000]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &[token1.clone(), token2.clone()],
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -401,7 +442,10 @@ pub async fn test_reserve_token_outputs_and_set_remove_reserved_output(
     // Set new token outputs without the reserved output
     let token1_updated = create_token_outputs(1, vec![100, 200, 400]);
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1_updated), future_refresh_start())
+        .set_tokens_outputs(
+            slice::from_ref(&token1_updated),
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
@@ -418,7 +462,7 @@ pub async fn test_multiple_parallel_reservations(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300, 400, 500]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -503,7 +547,7 @@ pub async fn test_reserve_with_preferred_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300, 400, 500]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -558,7 +602,7 @@ pub async fn test_reserve_insufficient_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -582,7 +626,7 @@ pub async fn test_reserve_nonexistent_token(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -606,7 +650,7 @@ pub async fn test_reserve_exact_amount_match(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![50, 100, 150, 200, 250]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -638,7 +682,7 @@ pub async fn test_reserve_multiple_outputs_combination(store: &dyn TokenOutputSt
     let token1 = create_token_outputs(1, vec![10, 20, 30, 40, 50]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -667,7 +711,7 @@ pub async fn test_reserve_all_available_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -695,7 +739,7 @@ pub async fn test_reserve_with_preferred_outputs_insufficient(store: &dyn TokenO
     let token1 = create_token_outputs(1, vec![100, 200, 300, 400, 500]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -736,7 +780,7 @@ pub async fn test_reserve_zero_amount(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -756,7 +800,7 @@ pub async fn test_cancel_nonexistent_reservation(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -770,7 +814,7 @@ pub async fn test_finalize_nonexistent_reservation(store: &dyn TokenOutputStore)
     let token1 = create_token_outputs(1, vec![100, 200]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -785,11 +829,16 @@ pub async fn test_set_removes_all_tokens(store: &dyn TokenOutputStore) {
     let token2 = create_token_outputs(2, vec![300, 400]);
 
     let result = store
-        .set_tokens_outputs(&[token1.clone(), token2.clone()], future_refresh_start())
+        .set_tokens_outputs(
+            &[token1.clone(), token2.clone()],
+            future_refresh_start(store).await,
+        )
         .await;
     assert!(result.is_ok());
 
-    let result = store.set_tokens_outputs(&[], future_refresh_start()).await;
+    let result = store
+        .set_tokens_outputs(&[], future_refresh_start(store).await)
+        .await;
     assert!(result.is_ok());
 
     let stored_outputs = store.list_tokens_outputs().await.unwrap();
@@ -800,7 +849,7 @@ pub async fn test_reserve_single_large_output(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![10, 20, 1000]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -822,7 +871,7 @@ pub async fn test_get_token_outputs_none_found(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -842,7 +891,7 @@ pub async fn test_set_reconciles_reservation_with_empty_outputs(store: &dyn Toke
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -858,7 +907,9 @@ pub async fn test_set_reconciles_reservation_with_empty_outputs(store: &dyn Toke
         .unwrap();
 
     // Set token outputs to empty list (all outputs removed)
-    let result = store.set_tokens_outputs(&[], future_refresh_start()).await;
+    let result = store
+        .set_tokens_outputs(&[], future_refresh_start(store).await)
+        .await;
     assert!(result.is_ok());
 
     // Verify no outputs remain
@@ -872,7 +923,7 @@ pub async fn test_reserve_token_outputs_selection_strategy_smallest_first(
     let token1 = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -918,7 +969,7 @@ pub async fn test_reserve_token_outputs_selection_strategy_largest_first(
     let token1 = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
 
     let result = store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await;
     assert!(result.is_ok());
 
@@ -958,7 +1009,7 @@ pub async fn test_reserve_token_outputs_selection_strategy_largest_first(
 pub async fn test_reserve_max_output_count_smallest_first(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start())
+        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -999,7 +1050,7 @@ pub async fn test_reserve_max_output_count_smallest_first(store: &dyn TokenOutpu
 pub async fn test_reserve_max_output_count_largest_first(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![50, 100, 150, 200, 500]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start())
+        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1040,7 +1091,7 @@ pub async fn test_reserve_max_output_count_largest_first(store: &dyn TokenOutput
 pub async fn test_reserve_max_output_count_more_than_available(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![50, 100, 150]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start())
+        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1074,7 +1125,7 @@ pub async fn test_reserve_max_output_count_more_than_available(store: &dyn Token
 pub async fn test_reserve_max_output_count_zero_rejected(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start())
+        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1096,7 +1147,7 @@ pub async fn test_reserve_max_output_count_zero_rejected(store: &dyn TokenOutput
 pub async fn test_reserve_for_payment_affects_balance(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start())
+        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1150,7 +1201,7 @@ pub async fn test_get_token_balances_includes_zero_spendable(store: &dyn TokenOu
     // balance 0.
     let token_outputs = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start())
+        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1176,7 +1227,7 @@ pub async fn test_get_token_balances_includes_zero_spendable(store: &dyn TokenOu
 pub async fn test_reserve_for_swap_does_not_affect_balance(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start())
+        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1222,7 +1273,7 @@ pub async fn test_reserve_for_swap_does_not_affect_balance(store: &dyn TokenOutp
 pub async fn test_mixed_reservation_purposes_balance(store: &dyn TokenOutputStore) {
     let token_outputs = create_token_outputs(1, vec![100, 200, 300, 400, 500]);
     store
-        .set_tokens_outputs(&[token_outputs], future_refresh_start())
+        .set_tokens_outputs(&[token_outputs], future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1290,7 +1341,7 @@ pub async fn test_mixed_reservation_purposes_balance(store: &dyn TokenOutputStor
 pub async fn test_set_tokens_outputs_skipped_during_active_swap(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1309,7 +1360,10 @@ pub async fn test_set_tokens_outputs_skipped_during_active_swap(store: &dyn Toke
     // Try to set new outputs while swap is active - should be skipped
     let token1_updated = create_token_outputs(1, vec![500]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1_updated), future_refresh_start())
+        .set_tokens_outputs(
+            slice::from_ref(&token1_updated),
+            future_refresh_start(store).await,
+        )
         .await
         .unwrap();
 
@@ -1327,7 +1381,7 @@ pub async fn test_set_tokens_outputs_skipped_after_swap_completes_during_refresh
 ) {
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1379,7 +1433,7 @@ pub async fn test_insert_outputs_preserved_by_set_tokens_outputs(store: &dyn Tok
     // Add initial outputs
     let token1 = create_token_outputs(1, vec![100]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1424,7 +1478,7 @@ pub async fn test_insert_outputs_preserved_by_set_tokens_outputs(store: &dyn Tok
 pub async fn test_spent_outputs_not_restored_by_set_tokens_outputs(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1452,7 +1506,7 @@ pub async fn test_spent_outputs_not_restored_by_set_tokens_outputs(store: &dyn T
     assert_eq!(stored.available[0].output.token_amount, 200);
 
     // Simulate a stale refresh that tries to bring back the spent output
-    let refresh_start = SystemTime::now() - Duration::from_secs(60);
+    let refresh_start = past_refresh_start(store).await;
     let token1_stale = create_token_outputs(1, vec![100, 200, 300]);
     store
         .set_tokens_outputs(slice::from_ref(&token1_stale), refresh_start)
@@ -1481,7 +1535,7 @@ pub async fn test_spent_outputs_not_restored_by_set_tokens_outputs(store: &dyn T
 pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1516,7 +1570,7 @@ pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn To
     assert_eq!(stored.available[0].output.token_amount, 600);
 
     // A refresh that started before the swap should be skipped
-    let old_refresh = SystemTime::now() - Duration::from_secs(60);
+    let old_refresh = past_refresh_start(store).await;
     let token1_stale = create_token_outputs(1, vec![100, 200, 300]);
     store
         .set_tokens_outputs(slice::from_ref(&token1_stale), old_refresh)
@@ -1535,7 +1589,7 @@ pub async fn test_finalize_swap_marks_spent_and_tracks_completion(store: &dyn To
 pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1568,7 +1622,7 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
     assert_eq!(stored.available[0].output.token_amount, 100);
 
     // Now a stale refresh should not remove it (spent status was cleared)
-    let old_refresh = SystemTime::now() - Duration::from_secs(60);
+    let old_refresh = past_refresh_start(store).await;
     let token1_refresh = create_token_outputs(1, vec![100, 200]);
     store
         .set_tokens_outputs(slice::from_ref(&token1_refresh), old_refresh)
@@ -1585,7 +1639,7 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
 pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputStore) {
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1610,11 +1664,11 @@ pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputSto
     assert_eq!(amounts, vec![100, 300]);
 }
 
-pub async fn test_remove_token_outputs_prevents_refresh_readd(store: &dyn TokenOutputStore) {
+pub async fn test_remove_token_outputs_prevents_refresh_re_add(store: &dyn TokenOutputStore) {
     // Insert outputs
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
-        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start())
+        .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
@@ -1626,7 +1680,7 @@ pub async fn test_remove_token_outputs_prevents_refresh_readd(store: &dyn TokenO
 
     // A refresh whose start time is before the removal should not re-add it,
     // because the spent marker is newer than the refresh start.
-    let old_refresh = SystemTime::now() - Duration::from_secs(60);
+    let old_refresh = past_refresh_start(store).await;
     let token1_refresh = create_token_outputs(1, vec![100, 200]);
     store
         .set_tokens_outputs(slice::from_ref(&token1_refresh), old_refresh)

@@ -76,10 +76,21 @@ pub async fn reserve_leaves(
     }
 }
 
-/// Returns a future `SystemTime`, ensuring that leaves added "now" are
-/// treated as old relative to this refresh start.
-fn future_refresh_start() -> SystemTime {
-    SystemTime::now() + Duration::from_secs(10)
+/// Returns a refresh start 10s in the future relative to the store's clock,
+/// ensuring that leaves added "now" are treated as old relative to it.
+///
+/// Sourced from `store.now()` rather than `SystemTime::now()` so the boundary
+/// shares a clock with the DB-stamped `added_at` values it is compared against
+/// (the application and DB-server clocks can differ, e.g. a Docker VM clock).
+async fn future_refresh_start(store: &dyn TreeStore) -> SystemTime {
+    store.now().await.unwrap() + Duration::from_secs(10)
+}
+
+/// Returns a refresh start 60s in the past relative to the store's clock,
+/// ensuring that leaves/spends recorded "now" are treated as new relative to
+/// it. See [`future_refresh_start`] for why this uses `store.now()`.
+async fn past_refresh_start(store: &dyn TreeStore) -> SystemTime {
+    store.now().await.unwrap() - Duration::from_secs(60)
 }
 
 /// Asserts that `get_leaves()` returns `expected` available leaves.
@@ -143,7 +154,7 @@ pub async fn test_set_leaves(store: &dyn TreeStore) {
     let initial = vec![create_test_tree_node("node1", 100)];
     store.add_leaves(&initial).await.unwrap();
 
-    let refresh_start = future_refresh_start();
+    let refresh_start = future_refresh_start(store).await;
     let new_leaves = vec![
         create_test_tree_node("node2", 200),
         create_test_tree_node("node3", 300),
@@ -178,7 +189,7 @@ pub async fn test_set_leaves_with_reservations(store: &dyn TreeStore) {
     .await
     .unwrap();
 
-    let refresh_start = future_refresh_start();
+    let refresh_start = future_refresh_start(store).await;
 
     // Update leaves with new data (including updated versions of reserved leaves)
     let non_existing_operator_leaf = create_test_tree_node("node7", 1000);
@@ -221,7 +232,7 @@ pub async fn test_set_leaves_preserves_reservations_for_in_flight_swaps(store: &
     .await
     .unwrap();
 
-    let refresh_start = future_refresh_start();
+    let refresh_start = future_refresh_start(store).await;
 
     // Set new leaves that don't include the reserved ones
     let new_leaves = vec![create_test_tree_node("node3", 300)];
@@ -951,7 +962,7 @@ pub async fn test_spent_leaves_not_restored_by_set_leaves(store: &dyn TreeStore)
     assert!(!available.iter().any(|l| l.id.to_string() == "node1"));
 
     // Simulate a refresh that started BEFORE the finalize completed.
-    let refresh_start = SystemTime::now() - Duration::from_secs(60);
+    let refresh_start = past_refresh_start(store).await;
     let stale_leaves = vec![
         create_test_tree_node("node1", 100), // This was spent!
         create_test_tree_node("node2", 200),
@@ -992,7 +1003,7 @@ pub async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh(store: &dyn Tre
         .unwrap();
 
     // First refresh with refresh_start BEFORE spent_at
-    let refresh_start = SystemTime::now() - Duration::from_secs(60);
+    let refresh_start = past_refresh_start(store).await;
     let stale_leaves = vec![create_test_tree_node("node1", 100)];
     store
         .set_leaves(&stale_leaves, &[], refresh_start)
@@ -1002,7 +1013,7 @@ pub async fn test_spent_ids_cleaned_up_when_no_longer_in_refresh(store: &dyn Tre
     assert!(get_available(store).await.is_empty());
 
     // Second refresh with refresh_start AFTER spent_at
-    let refresh_start2 = future_refresh_start();
+    let refresh_start2 = future_refresh_start(store).await;
     let fresh_leaves = vec![create_test_tree_node("node2", 200)];
     store
         .set_leaves(&fresh_leaves, &[], refresh_start2)
@@ -1020,7 +1031,7 @@ pub async fn test_add_leaves_not_deleted_by_set_leaves(store: &dyn TreeStore) {
     store.add_leaves(&initial).await.unwrap();
 
     // Refresh starts at T1
-    let refresh_start = SystemTime::now();
+    let refresh_start = store.now().await.unwrap();
 
     // Small delay to ensure the new leaf is added AFTER refresh_start
     platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1055,7 +1066,7 @@ pub async fn test_old_leaves_deleted_by_set_leaves(store: &dyn TreeStore) {
     store.add_leaves(&initial).await.unwrap();
 
     // Use a future refresh_start so existing leaves are considered "old"
-    let refresh_start = future_refresh_start();
+    let refresh_start = future_refresh_start(store).await;
 
     // Refresh completes without node2
     let refresh_data = vec![create_test_tree_node("node1", 100)];
@@ -1090,7 +1101,7 @@ pub async fn test_change_leaves_from_swap_protected(store: &dyn TreeStore) {
     .unwrap();
 
     // Refresh starts
-    let refresh_start = SystemTime::now();
+    let refresh_start = store.now().await.unwrap();
 
     // Small delay
     platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1134,7 +1145,7 @@ pub async fn test_finalize_with_new_leaves_protected(store: &dyn TreeStore) {
     .unwrap();
 
     // Refresh starts
-    let refresh_start = SystemTime::now();
+    let refresh_start = store.now().await.unwrap();
 
     // Small delay
     platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1228,7 +1239,7 @@ pub async fn test_set_leaves_skipped_during_active_swap(store: &dyn TreeStore) {
     .unwrap();
 
     // Simulate refresh starting while swap is in progress
-    let refresh_start = SystemTime::now();
+    let refresh_start = store.now().await.unwrap();
 
     platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
 
@@ -1264,7 +1275,7 @@ pub async fn test_set_leaves_skipped_after_swap_completes_during_refresh(store: 
     .unwrap();
 
     // Refresh starts at T0
-    let refresh_start = SystemTime::now();
+    let refresh_start = store.now().await.unwrap();
 
     // Small delay to ensure swap completes AFTER refresh started
     platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1326,7 +1337,7 @@ pub async fn test_set_leaves_proceeds_after_swap_when_refresh_starts_later(store
     platform_utils::tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Refresh starts AFTER swap completed
-    let refresh_start = future_refresh_start();
+    let refresh_start = future_refresh_start(store).await;
 
     // set_leaves with fresh data
     let fresh_refresh_data = vec![
@@ -1368,7 +1379,7 @@ pub async fn test_payment_reservation_does_not_block_set_leaves(store: &dyn Tree
     .await
     .unwrap();
 
-    let refresh_start = future_refresh_start();
+    let refresh_start = future_refresh_start(store).await;
 
     // set_leaves should proceed (payment reservation doesn't block)
     let new_leaves = vec![
@@ -1573,7 +1584,7 @@ pub async fn test_get_leaves_missing_operators_filters_spent(store: &dyn TreeSto
         .unwrap();
 
     // Call set_leaves with refresh_start BEFORE the spend, so spent marker is preserved
-    let refresh_start = SystemTime::now() - Duration::from_secs(60);
+    let refresh_start = past_refresh_start(store).await;
     let missing = vec![
         create_test_tree_node("node1", 100), // was spent
         create_test_tree_node("node3", 300), // new
@@ -1600,7 +1611,7 @@ pub async fn test_get_leaves_missing_operators_filters_spent(store: &dyn TreeSto
 }
 
 pub async fn test_missing_operators_replaced_on_set_leaves(store: &dyn TreeStore) {
-    let refresh_start1 = future_refresh_start();
+    let refresh_start1 = future_refresh_start(store).await;
     let missing1 = vec![create_test_tree_node("missing1", 100)];
     store
         .set_leaves(&[], &missing1, refresh_start1)
@@ -1617,7 +1628,7 @@ pub async fn test_missing_operators_replaced_on_set_leaves(store: &dyn TreeStore
     );
 
     // Second set_leaves replaces with missing2
-    let refresh_start2 = future_refresh_start();
+    let refresh_start2 = future_refresh_start(store).await;
     let missing2 = vec![create_test_tree_node("missing2", 200)];
     store
         .set_leaves(&[], &missing2, refresh_start2)
@@ -1757,7 +1768,7 @@ pub async fn test_full_payment_cycle(store: &dyn TreeStore) {
 }
 
 pub async fn test_set_leaves_replaces_fully(store: &dyn TreeStore) {
-    let refresh_start1 = future_refresh_start();
+    let refresh_start1 = future_refresh_start(store).await;
     let initial = vec![
         create_test_tree_node("node1", 100),
         create_test_tree_node("node2", 200),
@@ -1769,7 +1780,7 @@ pub async fn test_set_leaves_replaces_fully(store: &dyn TreeStore) {
     assert_available_count(store, 2).await;
 
     // Second set_leaves with only node3
-    let refresh_start2 = future_refresh_start();
+    let refresh_start2 = future_refresh_start(store).await;
     let replacement = vec![create_test_tree_node("node3", 300)];
     store
         .set_leaves(&replacement, &[], refresh_start2)

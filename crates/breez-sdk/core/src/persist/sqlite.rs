@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use macros::async_trait;
 use rusqlite::{
-    Connection, Row, ToSql, TransactionBehavior, params,
+    Connection, Row, ToSql, Transaction, TransactionBehavior, params,
     types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
 };
 use rusqlite_migration::{M, Migrations, SchemaVersion};
@@ -10,11 +10,11 @@ use rusqlite_migration::{M, Migrations, SchemaVersion};
 use crate::{
     AssetFilter, Contact, ConversionDetails, ConversionInfo, ConversionStatus, DepositInfo,
     ListContactsRequest, LnurlPayInfo, LnurlReceiveMetadata, LnurlWithdrawInfo, PaymentDetails,
-    PaymentMethod, SparkHtlcDetails, SparkHtlcStatus, TokenTransactionType,
+    PaymentMethod, PaymentStatus, SparkHtlcDetails, SparkHtlcStatus, TokenTransactionType,
     error::DepositClaimError,
     persist::{
         PaymentMetadata, SetLnurlMetadataItem, StorageListPaymentsRequest,
-        StoragePaymentDetailsFilter, UpdateDepositPayload,
+        StoragePaymentDetailsFilter, UpdateDepositPayload, parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -360,6 +360,144 @@ impl From<rusqlite_migration::Error> for StorageError {
     }
 }
 
+impl SqliteStorage {
+    fn get_payment_status_in_tx(
+        tx: &Transaction<'_>,
+        payment_id: &str,
+    ) -> Result<Option<PaymentStatus>, StorageError> {
+        match tx.query_row(
+            "SELECT status FROM payments WHERE id = ?",
+            params![payment_id],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(status) => Ok(Some(parse_payment_status(&status)?)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn insert_payment_in_tx(tx: &Transaction<'_>, payment: Payment) -> Result<(), StorageError> {
+        // Compute detail columns for the main payments row
+        let (withdraw_tx_id, deposit_tx_id, spark): (Option<&str>, Option<&str>, Option<bool>) =
+            match &payment.details {
+                Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None),
+                Some(PaymentDetails::Deposit { tx_id }) => (None, Some(tx_id.as_str()), None),
+                Some(PaymentDetails::Spark { .. }) => (None, None, Some(true)),
+                _ => (None, None, None),
+            };
+
+        // Insert or update main payment record (including detail columns atomically)
+        tx.execute(
+            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                payment_type=excluded.payment_type,
+                status=excluded.status,
+                amount=excluded.amount,
+                fees=excluded.fees,
+                timestamp=excluded.timestamp,
+                method=excluded.method,
+                withdraw_tx_id=excluded.withdraw_tx_id,
+                deposit_tx_id=excluded.deposit_tx_id,
+                spark=excluded.spark",
+            params![
+                payment.id,
+                payment.payment_type.to_string(),
+                payment.status.to_string(),
+                U128SqlWrapper(payment.amount),
+                U128SqlWrapper(payment.fees),
+                payment.timestamp,
+                payment.method,
+                withdraw_tx_id,
+                deposit_tx_id,
+                spark,
+            ],
+        )?;
+
+        match payment.details {
+            Some(PaymentDetails::Spark {
+                invoice_details,
+                htlc_details,
+                ..
+            }) => {
+                if invoice_details.is_some() || htlc_details.is_some() {
+                    // Upsert both details together and avoid overwriting existing data with NULLs
+                    tx.execute(
+                        "INSERT INTO payment_details_spark (payment_id, invoice_details, htlc_details)
+                         VALUES (?, ?, ?)
+                         ON CONFLICT(payment_id) DO UPDATE SET
+                            invoice_details=COALESCE(excluded.invoice_details, payment_details_spark.invoice_details),
+                            htlc_details=COALESCE(excluded.htlc_details, payment_details_spark.htlc_details)",
+                        params![
+                            payment.id,
+                            invoice_details.as_ref().map(serde_json::to_string).transpose()?,
+                            htlc_details.as_ref().map(serde_json::to_string).transpose()?,
+                        ],
+                    )?;
+                }
+            }
+            Some(PaymentDetails::Token {
+                metadata,
+                tx_hash,
+                tx_type,
+                invoice_details,
+                ..
+            }) => {
+                tx.execute(
+                    "INSERT INTO payment_details_token (payment_id, metadata, tx_hash, tx_type, invoice_details)
+                     VALUES (?, ?, ?, ?, ?)
+                     ON CONFLICT(payment_id) DO UPDATE SET
+                        metadata=excluded.metadata,
+                        tx_hash=excluded.tx_hash,
+                        tx_type=excluded.tx_type,
+                        invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details)",
+                    params![
+                        payment.id,
+                        serde_json::to_string(&metadata)?,
+                        tx_hash,
+                        tx_type.to_string(),
+                        invoice_details.as_ref().map(serde_json::to_string).transpose()?,
+                    ],
+                )?;
+            }
+            Some(PaymentDetails::Lightning {
+                invoice,
+                destination_pubkey,
+                description,
+                htlc_details,
+                ..
+            }) => {
+                tx.execute(
+                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(payment_id) DO UPDATE SET
+                        invoice=excluded.invoice,
+                        payment_hash=excluded.payment_hash,
+                        destination_pubkey=excluded.destination_pubkey,
+                        description=excluded.description,
+                        preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
+                        htlc_status=COALESCE(excluded.htlc_status, payment_details_lightning.htlc_status),
+                        htlc_expiry_time=COALESCE(excluded.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)",
+                    params![
+                        payment.id,
+                        invoice,
+                        htlc_details.payment_hash,
+                        destination_pubkey,
+                        description,
+                        htlc_details.preimage,
+                        htlc_details.status.to_string(),
+                        htlc_details.expiry_time,
+                    ],
+                )?;
+            }
+            Some(PaymentDetails::Withdraw { .. } | PaymentDetails::Deposit { .. }) | None => {}
+        }
+
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl Storage for SqliteStorage {
     #[allow(clippy::too_many_lines)]
@@ -554,129 +692,35 @@ impl Storage for SqliteStorage {
         Ok(payments)
     }
 
-    #[allow(clippy::too_many_lines)]
-    async fn insert_payment(&self, payment: Payment) -> Result<(), StorageError> {
+    async fn apply_payment_update(&self, payment: Payment) -> Result<bool, StorageError> {
         let mut connection = self.get_connection()?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let stored_status = Self::get_payment_status_in_tx(&tx, &payment.id)?;
 
-        // Compute detail columns for the main payments row
-        let (withdraw_tx_id, deposit_tx_id, spark): (Option<&str>, Option<&str>, Option<bool>) =
-            match &payment.details {
-                Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None),
-                Some(PaymentDetails::Deposit { tx_id }) => (None, Some(tx_id.as_str()), None),
-                Some(PaymentDetails::Spark { .. }) => (None, None, Some(true)),
-                _ => (None, None, None),
-            };
-
-        // Insert or update main payment record (including detail columns atomically)
-        tx.execute(
-            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-                payment_type=excluded.payment_type,
-                status=excluded.status,
-                amount=excluded.amount,
-                fees=excluded.fees,
-                timestamp=excluded.timestamp,
-                method=excluded.method,
-                withdraw_tx_id=excluded.withdraw_tx_id,
-                deposit_tx_id=excluded.deposit_tx_id,
-                spark=excluded.spark",
-            params![
-                payment.id,
-                payment.payment_type.to_string(),
-                payment.status.to_string(),
-                U128SqlWrapper(payment.amount),
-                U128SqlWrapper(payment.fees),
-                payment.timestamp,
-                payment.method,
-                withdraw_tx_id,
-                deposit_tx_id,
-                spark,
-            ],
-        )?;
-
-        match payment.details {
-            Some(PaymentDetails::Spark {
-                invoice_details,
-                htlc_details,
-                ..
-            }) => {
-                if invoice_details.is_some() || htlc_details.is_some() {
-                    // Upsert both details together and avoid overwriting existing data with NULLs
-                    tx.execute(
-                        "INSERT INTO payment_details_spark (payment_id, invoice_details, htlc_details)
-                         VALUES (?, ?, ?)
-                         ON CONFLICT(payment_id) DO UPDATE SET
-                            invoice_details=COALESCE(excluded.invoice_details, payment_details_spark.invoice_details),
-                            htlc_details=COALESCE(excluded.htlc_details, payment_details_spark.htlc_details)",
-                        params![
-                            payment.id,
-                            invoice_details.as_ref().map(serde_json::to_string).transpose()?,
-                            htlc_details.as_ref().map(serde_json::to_string).transpose()?,
-                        ],
-                    )?;
-                }
-            }
-            Some(PaymentDetails::Token {
-                metadata,
-                tx_hash,
-                tx_type,
-                invoice_details,
-                ..
-            }) => {
-                tx.execute(
-                    "INSERT INTO payment_details_token (payment_id, metadata, tx_hash, tx_type, invoice_details)
-                     VALUES (?, ?, ?, ?, ?)
-                     ON CONFLICT(payment_id) DO UPDATE SET 
-                        metadata=excluded.metadata,
-                        tx_hash=excluded.tx_hash,
-                        tx_type=excluded.tx_type,
-                        invoice_details=COALESCE(excluded.invoice_details, payment_details_token.invoice_details)",
-                    params![
-                        payment.id,
-                        serde_json::to_string(&metadata)?,
-                        tx_hash,
-                        tx_type.to_string(),
-                        invoice_details.as_ref().map(serde_json::to_string).transpose()?,
-                    ],
-                )?;
-            }
-            Some(PaymentDetails::Lightning {
-                invoice,
-                destination_pubkey,
-                description,
-                htlc_details,
-                ..
-            }) => {
-                tx.execute(
-                    "INSERT INTO payment_details_lightning (payment_id, invoice, payment_hash, destination_pubkey, description, preimage, htlc_status, htlc_expiry_time)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                     ON CONFLICT(payment_id) DO UPDATE SET
-                        invoice=excluded.invoice,
-                        payment_hash=excluded.payment_hash,
-                        destination_pubkey=excluded.destination_pubkey,
-                        description=excluded.description,
-                        preimage=COALESCE(excluded.preimage, payment_details_lightning.preimage),
-                        htlc_status=COALESCE(excluded.htlc_status, payment_details_lightning.htlc_status),
-                        htlc_expiry_time=COALESCE(excluded.htlc_expiry_time, payment_details_lightning.htlc_expiry_time)",
-                    params![
-                        payment.id,
-                        invoice,
-                        htlc_details.payment_hash,
-                        destination_pubkey,
-                        description,
-                        htlc_details.preimage,
-                        htlc_details.status.to_string(),
-                        htlc_details.expiry_time,
-                    ],
-                )?;
-            }
-            Some(PaymentDetails::Withdraw { .. } | PaymentDetails::Deposit { .. }) | None => {}
+        // Guard against downgrading a terminal status.
+        if let Some(stored) = stored_status
+            && stored.is_final()
+            && stored != payment.status
+        {
+            warn!(
+                "Skipping payment update (would replace terminal status): id={} stored={stored:?} new={:?}",
+                payment.id, payment.status
+            );
+            tx.commit()?;
+            return Ok(false);
         }
 
+        let same_status = stored_status == Some(payment.status);
+        if same_status {
+            tracing::debug!(
+                "Skipping redundant payment event: id={} status={:?}",
+                payment.id,
+                payment.status
+            );
+        }
+        Self::insert_payment_in_tx(&tx, payment)?;
         tx.commit()?;
-        Ok(())
+        Ok(!same_status)
     }
 
     async fn insert_payment_metadata(
@@ -1841,6 +1885,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_payment_terminal_status_is_not_replaced() {
+        let temp_dir = create_temp_dir("sqlite_storage_payment_terminal_guard");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_payment_terminal_status_is_not_replaced(Box::new(storage))
+            .await;
+    }
+
+    #[tokio::test]
     async fn test_sync_storage() {
         let temp_dir = create_temp_dir("sqlite_sync_storage");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
@@ -1991,7 +2044,7 @@ mod tests {
             conversion_details: None,
         };
 
-        storage.insert_payment(new_payment).await.unwrap();
+        storage.apply_payment_update(new_payment).await.unwrap();
 
         // Step 6: List all payments
         let request = StorageListPaymentsRequest {

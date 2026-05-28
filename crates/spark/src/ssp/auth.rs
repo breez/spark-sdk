@@ -7,7 +7,7 @@ use platform_utils::HttpClient;
 use tracing::{debug, error};
 
 use crate::header_provider::{HeaderProvider, HeaderProviderError};
-use crate::session_manager::{Session, SessionManager, SessionManagerError};
+use crate::session_store::{Session, SessionStore, SessionStoreError};
 use crate::signer::Signer;
 use crate::ssp::graphql::client::post_graphql_query;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
@@ -16,13 +16,13 @@ use crate::ssp::graphql::queries::{self, get_challenge, verify_challenge};
 /// Header provider that authenticates with the Spark Service Provider via
 /// challenge-response and emits an `Authorization: Bearer <token>` header.
 ///
-/// Sessions are cached in the user-supplied [`SessionManager`] keyed by the
+/// Sessions are cached in the user-supplied [`SessionStore`] keyed by the
 /// SSP's identity public key.
 pub struct SspAuthHeaderProvider {
     client: Arc<dyn HttpClient>,
     full_url: String,
     signer: Arc<dyn Signer>,
-    session_manager: Arc<dyn SessionManager>,
+    session_store: Arc<dyn SessionStore>,
     ssp_identity_public_key: PublicKey,
 }
 
@@ -32,7 +32,7 @@ impl SspAuthHeaderProvider {
         schema_endpoint: Option<&str>,
         client: Arc<dyn HttpClient>,
         signer: Arc<dyn Signer>,
-        session_manager: Arc<dyn SessionManager>,
+        session_store: Arc<dyn SessionStore>,
         ssp_identity_public_key: PublicKey,
     ) -> Self {
         let schema_endpoint = schema_endpoint.unwrap_or("graphql/spark/2025-03-19");
@@ -40,28 +40,28 @@ impl SspAuthHeaderProvider {
             client,
             full_url: format!("{base_url}/{schema_endpoint}"),
             signer,
-            session_manager,
+            session_store,
             ssp_identity_public_key,
         }
     }
 
     async fn get_or_authenticate(&self) -> GraphQLResult<Session> {
         let cached = self
-            .session_manager
+            .session_store
             .get_session(&self.ssp_identity_public_key)
             .await;
         match cached {
             Ok(session) if session.is_valid() => return Ok(session),
             Ok(_) => debug!("SSP session expired, authenticating"),
-            Err(SessionManagerError::NotFound) => {
+            Err(SessionStoreError::NotFound) => {
                 debug!("SSP session not found, authenticating")
             }
-            Err(SessionManagerError::Generic(e)) => {
-                error!("Failed to get SSP session from session manager: {}", e)
+            Err(SessionStoreError::Generic(e)) => {
+                error!("Failed to get SSP session from session store: {}", e)
             }
         }
         let session = self.authenticate().await?;
-        self.session_manager
+        self.session_store
             .set_session(&self.ssp_identity_public_key, session.clone())
             .await?;
         Ok(session)

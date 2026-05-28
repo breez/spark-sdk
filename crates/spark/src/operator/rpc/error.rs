@@ -1,7 +1,7 @@
 use thiserror::Error;
 use tonic::Status;
 
-use crate::session_manager::SessionManagerError;
+use crate::session_store::SessionStoreError;
 
 #[derive(Error, Debug, Clone)]
 pub enum OperatorRpcError {
@@ -36,8 +36,8 @@ impl From<Status> for OperatorRpcError {
     }
 }
 
-impl From<SessionManagerError> for OperatorRpcError {
-    fn from(err: SessionManagerError) -> Self {
+impl From<SessionStoreError> for OperatorRpcError {
+    fn from(err: SessionStoreError) -> Self {
         OperatorRpcError::Authentication(err.to_string())
     }
 }

@@ -2,12 +2,10 @@ pub mod chain_service;
 mod error;
 pub mod fiat_service;
 pub mod issuer;
-pub mod mysql_pool;
 pub mod passkey_prf_provider;
 pub mod payment_observer;
-pub mod postgres_pool;
 pub mod rest_client;
-pub mod session_manager;
+pub mod session_store;
 
 use std::collections::HashMap;
 
@@ -79,8 +77,8 @@ pub enum SdkEvent {
     PaymentFailed {
         payment: Payment,
     },
-    Optimization {
-        optimization_event: OptimizationEvent,
+    AutoOptimization {
+        optimization_event: AutoOptimizationEvent,
     },
     LightningAddressChanged {
         lightning_address: Option<LightningAddressInfo>,
@@ -90,8 +88,8 @@ pub enum SdkEvent {
     },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationEvent)]
-pub enum OptimizationEvent {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AutoOptimizationEvent)]
+pub enum AutoOptimizationEvent {
     Started {
         total_rounds: u32,
     },
@@ -1164,8 +1162,8 @@ pub struct Session {
     pub expiration: u64,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::SessionManagerError)]
-pub enum SessionManagerError {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::SessionStoreError)]
+pub enum SessionStoreError {
     NotFound,
     Generic(String),
 }
@@ -1301,11 +1299,26 @@ pub struct LnurlReceiveMetadata {
     pub sender_comment: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationProgress)]
-pub struct OptimizationProgress {
-    pub is_running: bool,
-    pub current_round: u32,
-    pub total_rounds: u32,
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationMode)]
+pub enum OptimizationMode {
+    Full,
+    SingleRound,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizeLeavesRequest)]
+pub struct OptimizeLeavesRequest {
+    pub mode: OptimizationMode,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationOutcome)]
+pub enum OptimizationOutcome {
+    Completed { rounds_executed: u32 },
+    InProgress,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizeLeavesResponse)]
+pub struct OptimizeLeavesResponse {
+    pub outcome: OptimizationOutcome,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionEstimate)]

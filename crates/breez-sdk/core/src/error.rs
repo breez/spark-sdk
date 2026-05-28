@@ -60,6 +60,16 @@ pub enum SdkError {
     #[error("Signer error: {0}")]
     Signer(String),
 
+    /// `optimize_leaves` was called while another optimization run (auto or
+    /// manual) was already in flight.
+    #[error("Optimization is already in progress")]
+    OptimizationAlreadyRunning,
+
+    /// `optimize_leaves` was preempted by the SDK to free leaves for a
+    /// higher-priority operation (typically a payment).
+    #[error("Optimization was cancelled by the SDK to free leaves")]
+    OptimizationCancelled,
+
     #[error("Error: {0}")]
     Generic(String),
 }
@@ -176,6 +186,16 @@ impl From<SparkWalletError> for SdkError {
                 SdkError::InvalidInput(msg)
             }
             _ => SdkError::SparkError(e.to_string()),
+        }
+    }
+}
+
+impl From<spark_wallet::OptimizationError> for SdkError {
+    fn from(e: spark_wallet::OptimizationError) -> Self {
+        match e {
+            spark_wallet::OptimizationError::AlreadyRunning => SdkError::OptimizationAlreadyRunning,
+            spark_wallet::OptimizationError::Cancelled => SdkError::OptimizationCancelled,
+            spark_wallet::OptimizationError::Tree(inner) => SdkError::SparkError(inner.to_string()),
         }
     }
 }

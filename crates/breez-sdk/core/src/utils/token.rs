@@ -219,7 +219,7 @@ pub(crate) async fn map_and_persist_token_transaction(
         token_transaction_to_payments(spark_wallet, &object_repository, token_transaction, true)
             .await?;
     for payment in &payments {
-        storage.insert_payment(payment.clone()).await?;
+        storage.apply_payment_update(payment.clone()).await?;
     }
 
     payments

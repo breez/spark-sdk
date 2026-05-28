@@ -4918,6 +4918,8 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "spark-mysql",
+ "spark-postgres",
  "spark-wallet",
  "test-log",
  "testcontainers",

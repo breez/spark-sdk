@@ -197,14 +197,8 @@ private class LinuxProcessMetricsCollector : ProcessMetricsCollector {
         return if (sawAny) count else -1
     }
 
-    /**
-     * `/proc/net/tcp{,6}` writes each address as a sequence of u32s in
-     * the host's native byte order. On x86/ARM (LE) that means each
-     * u32's hex string has the low byte first; we recover the raw
-     * network bytes by reading each u32, then writing it out little-
-     * endian. From there [InetAddress.isLoopbackAddress] gives a
-     * correct answer for both IPv4 and IPv4-mapped/native IPv6.
-     */
+    // /proc/net/tcp{,6} writes addresses as native-byte-order u32s; reverse to
+    // network order before handing to InetAddress.
     private fun isLoopbackProcAddr(hex: String): Boolean {
         val bytes = decodeProcAddr(hex) ?: return false
         return try {
@@ -231,20 +225,7 @@ private class LinuxProcessMetricsCollector : ProcessMetricsCollector {
     }
 }
 
-/**
- * macOS collector. RSS is cheap (`ps -o rss=`). Socket count is not
- * sampled here: there is no JVM API that returns this process's TCP
- * socket count (only FDs, via [UnixOperatingSystemMXBean]), and the
- * only PID-filtered tool on macOS is `lsof`, which slows to multi-
- * second-per-call once the process accumulates a few hundred FDs.
- * Same reason we don't use `lsof` for FDs on macOS in the first place.
- *
- * So [remoteTcpSocketCount] returns -1 on macOS. `fd_count` is a
- * reasonable proxy for outbound-connection saturation under load (it
- * misses only TIME_WAIT, which has no FD). Partner-facing measurements
- * should be taken on Linux, where `/proc/self/net/tcp{,6}` gives the
- * full picture sub-ms per sample.
- */
+// RSS via `ps -o rss=`; no socket count on macOS (no JVM API). Use Linux for measurements.
 private class MacosProcessMetricsCollector(private val pid: Long) : ProcessMetricsCollector {
     override fun rssKb(): Long {
         val output = runCommand(listOf("ps", "-o", "rss=", "-p", pid.toString()), timeoutSecs = 5)

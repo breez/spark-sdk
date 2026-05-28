@@ -3,7 +3,7 @@ pub mod faucet;
 pub mod fixtures;
 pub mod helpers;
 mod log;
-pub mod session_manager_scenarios;
+pub mod session_store_scenarios;
 
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
 pub use rand;
-pub use session_manager_scenarios::{SessionRow, run_session_persistence_across_restart};
+pub use session_store_scenarios::{SessionRow, run_session_persistence_across_restart};
 pub use tempfile;
 
 use anyhow::Result;

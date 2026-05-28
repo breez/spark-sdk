@@ -21,7 +21,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // Build the SDK using the config, seed and default storage
     let builder = SdkBuilder::new(config, seed).with_default_storage("./.data".to_string());
     // You can also pass your custom implementations:
-    // let builder = builder.with_storage(<your storage implementation>)
+    // let builder = builder.with_storage_backend(custom_storage(<your storage implementation>))
     // let builder = builder.with_chain_service(<your chain service implementation>)
     // let builder = builder.with_rest_client(<your rest client implementation>)
     // let builder = builder.with_key_set(KeySetConfig { key_set_type: <your key set type>, use_address_index: <use address index>, account_number: <account number> })
@@ -119,14 +119,11 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     // If your service owns SDK-compatible schema migrations:
     postgres_config.run_migration = false;
 
-    // Construct the connection pool. The same `Arc<PostgresConnectionPool>`
-    // can be passed to multiple SdkBuilders to share connections across SDKs;
-    // per-tenant scoping (rows isolated by seed identity) is preserved.
-    let pool = create_postgres_connection_pool(&postgres_config)?;
-
-    // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
+    // Build the SDK with the PostgreSQL storage backend (storage, tree store,
+    // and token store). Per-tenant scoping (rows isolated by seed identity) is
+    // applied automatically.
     let sdk = SdkBuilder::new(config, seed)
-        .with_postgres_connection_pool(pool)
+        .with_storage_backend(postgres_storage(postgres_config)?)
         .build()
         .await?;
     // ANCHOR_END: init-sdk-postgres
@@ -159,14 +156,11 @@ pub(crate) async fn init_sdk_mysql() -> Result<BreezSdk> {
     // Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
     // mysql_config.root_ca_pem = Some("-----BEGIN CERTIFICATE-----\n...".to_string());
 
-    // Construct the connection pool. The same `Arc<MysqlConnectionPool>`
-    // can be passed to multiple SdkBuilders to share connections across SDKs;
-    // per-tenant scoping (rows isolated by seed identity) is preserved.
-    let pool = create_mysql_connection_pool(&mysql_config)?;
-
-    // Build the SDK with MySQL backend (storage, tree store, and token store)
+    // Build the SDK with the MySQL storage backend (storage, tree store, and
+    // token store). Per-tenant scoping (rows isolated by seed identity) is
+    // applied automatically.
     let sdk = SdkBuilder::new(config, seed)
-        .with_mysql_connection_pool(pool)
+        .with_storage_backend(mysql_storage(mysql_config)?)
         .build()
         .await?;
     // ANCHOR_END: init-sdk-mysql

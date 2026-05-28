@@ -102,15 +102,12 @@ class SdkBuilding {
         // If your service owns SDK-compatible schema migrations:
         postgresConfig.runMigration = false
 
-        // Construct the connection pool. The same pool can be passed to
-        // multiple SdkBuilders to share connections across SDKs; per-tenant
-        // scoping (rows isolated by seed identity) is preserved.
-        val pool = createPostgresConnectionPool(postgresConfig)
-
         try {
-            // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
+            // Build the SDK with the PostgreSQL storage backend (storage, tree
+            // store, and token store). Per-tenant scoping (rows isolated by
+            // seed identity) is applied automatically.
             val builder = SdkBuilder(config, seed)
-            builder.withPostgresConnectionPool(pool)
+            builder.withStorageBackend(postgresStorage(postgresConfig))
             val sdk = builder.build()
         } catch (e: Exception) {
             // handle error
@@ -136,15 +133,12 @@ class SdkBuilding {
         mysqlConfig.maxPoolSize = 8u // Max connections in pool
         mysqlConfig.recycleTimeoutSecs = 60u // Recycle idle connections after this many seconds
 
-        // Construct the connection pool. The same pool can be passed to
-        // multiple SdkBuilders to share connections across SDKs; per-tenant
-        // scoping (rows isolated by seed identity) is preserved.
-        val pool = createMysqlConnectionPool(mysqlConfig)
-
         try {
-            // Build the SDK with MySQL backend (storage, tree store, and token store)
+            // Build the SDK with the MySQL storage backend (storage, tree
+            // store, and token store). Per-tenant scoping (rows isolated by
+            // seed identity) is applied automatically.
             val builder = SdkBuilder(config, seed)
-            builder.withMysqlConnectionPool(pool)
+            builder.withStorageBackend(mysqlStorage(mysqlConfig))
             val sdk = builder.build()
         } catch (e: Exception) {
             // handle error

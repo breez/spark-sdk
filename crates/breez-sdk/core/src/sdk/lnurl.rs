@@ -8,9 +8,7 @@ use crate::{
     WaitForPaymentIdentifier,
     error::SdkError,
     events::SdkEvent,
-    models::{
-        PrepareSendPaymentResponse, ReceivePaymentMethod, ReceivePaymentRequest, SendPaymentRequest,
-    },
+    models::{PrepareSendPaymentResponse, SendPaymentRequest},
     persist::{ObjectCacheRepository, PaymentMetadata},
 };
 use breez_sdk_common::lnurl::withdraw::execute_lnurl_withdraw;
@@ -336,18 +334,18 @@ impl BreezSdk {
             ));
         }
 
-        // Generate a Lightning invoice for the withdraw
-        let payment_request = self
-            .receive_payment(ReceivePaymentRequest {
-                payment_method: ReceivePaymentMethod::Bolt11Invoice {
-                    description: withdraw_request.default_description.clone(),
-                    amount_sats: Some(amount_sats),
-                    expiry_secs: None,
-                    payment_hash: None,
-                },
-            })
-            .await?
-            .payment_request;
+        // Generate a Lightning invoice for the withdraw, keeping the SSP-side
+        // receive id for the targeted wait below.
+        let receive = self
+            .receive_bolt11_invoice_inner(
+                withdraw_request.default_description.clone(),
+                Some(amount_sats),
+                None,
+                None,
+            )
+            .await?;
+        let payment_request = receive.invoice.clone();
+        let ssp_receive_id = receive.id;
 
         // Store the LNURL withdraw metadata before executing the withdraw
         let cache = ObjectCacheRepository::new(self.storage.clone());
@@ -387,10 +385,13 @@ impl BreezSdk {
             }
         };
 
-        // Wait for the payment to be completed
+        // Wait for the LNURL service to pay the invoice
         let payment = self
-            .wait_for_payment(
-                WaitForPaymentIdentifier::PaymentRequest(payment_request.clone()),
+            .wait_for_incoming_payment(
+                WaitForPaymentIdentifier::LightningReceive {
+                    invoice: payment_request.clone(),
+                    ssp_id: ssp_receive_id,
+                },
                 completion_timeout_secs,
             )
             .await

@@ -4,7 +4,6 @@ use breez_sdk_common::lnurl::{
     error::LnurlError,
     pay::{AesSuccessActionDataResult, SuccessAction, SuccessActionProcessed},
 };
-use platform_utils::time::Instant;
 use spark_wallet::SparkWallet;
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc;
@@ -17,38 +16,27 @@ use crate::{
     error::SdkError,
     events::{EventListener, SdkEvent},
     models::Payment,
-    persist::{CachedAccountInfo, ObjectCacheRepository, Storage},
+    persist::Storage,
+    utils::payments::update_balances,
 };
 
-pub(crate) fn is_payment_match(payment: &Payment, identifier: &WaitForPaymentIdentifier) -> bool {
+/// Looks up the payment matching `identifier` from storage, if present.
+///
+/// Used as a fast-path check by `wait_for_incoming_payment` — if the
+/// payment is already there and complete, callers can short-circuit
+/// before starting a poll loop.
+/// Returns `Ok(None)` when the row doesn't exist; surfaces real storage
+/// errors so callers can bubble them rather than mask them.
+pub(crate) async fn maybe_get_payment_from_storage(
+    storage: &dyn Storage,
+    identifier: &WaitForPaymentIdentifier,
+) -> Result<Option<Payment>, SdkError> {
     match identifier {
-        WaitForPaymentIdentifier::PaymentId(payment_id) => payment.id == *payment_id,
-        WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
-            if let Some(details) = &payment.details {
-                match details {
-                    PaymentDetails::Lightning { invoice, .. } => {
-                        invoice.to_lowercase() == payment_request.to_lowercase()
-                    }
-                    PaymentDetails::Spark {
-                        invoice_details: invoice,
-                        ..
-                    }
-                    | PaymentDetails::Token {
-                        invoice_details: invoice,
-                        ..
-                    } => {
-                        if let Some(invoice) = invoice {
-                            invoice.invoice.to_lowercase() == payment_request.to_lowercase()
-                        } else {
-                            false
-                        }
-                    }
-                    PaymentDetails::Withdraw { tx_id: _ }
-                    | PaymentDetails::Deposit { tx_id: _ } => false,
-                }
-            } else {
-                false
-            }
+        WaitForPaymentIdentifier::PaymentId(payment_id) => {
+            Ok(storage.get_payment_by_id(payment_id.clone()).await.ok())
+        }
+        WaitForPaymentIdentifier::LightningReceive { invoice, .. } => {
+            Ok(storage.get_payment_by_invoice(invoice.clone()).await?)
         }
     }
 }
@@ -80,50 +68,6 @@ impl EventListener for BalanceWatcher {
             _ => {}
         }
     }
-}
-
-pub(crate) async fn update_balances(
-    spark_wallet: Arc<SparkWallet>,
-    storage: Arc<dyn Storage>,
-) -> Result<(), SdkError> {
-    let total_start = Instant::now();
-
-    let t = Instant::now();
-    let balance_sats = spark_wallet.get_balance().await?;
-    let get_balance_dt = t.elapsed();
-
-    let t = Instant::now();
-    let token_balances_raw = spark_wallet.get_token_balances().await?;
-    let get_token_balances_dt = t.elapsed();
-    let token_balances_count = token_balances_raw.len();
-    let token_balances = token_balances_raw
-        .into_iter()
-        .map(|(k, v)| (k, v.into()))
-        .collect();
-
-    let object_repository = ObjectCacheRepository::new(storage.clone());
-
-    let t = Instant::now();
-    object_repository
-        .save_account_info(&CachedAccountInfo {
-            balance_sats,
-            token_balances,
-        })
-        .await?;
-    let save_dt = t.elapsed();
-
-    let identity_public_key = spark_wallet.get_identity_public_key();
-    info!(
-        "Balance updated successfully {} for identity {} (total: {:?}, get_balance: {:?}, get_token_balances[{}]: {:?}, save_account_info: {:?})",
-        balance_sats,
-        identity_public_key,
-        total_start.elapsed(),
-        get_balance_dt,
-        token_balances_count,
-        get_token_balances_dt,
-        save_dt
-    );
-    Ok(())
 }
 
 pub(crate) struct InternalEventListener {

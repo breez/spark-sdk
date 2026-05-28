@@ -1,7 +1,7 @@
 //! `PostgreSQL` storage implementations for the Spark protocol.
 //!
 //! This crate provides `PostgreSQL`-backed implementations of the `TreeStore`,
-//! `TokenOutputStore`, and `SessionManager` traits from `spark-wallet`,
+//! `TokenOutputStore`, and `SessionStore` traits from `spark-wallet`,
 //! suitable for server-side or multi-instance deployments.
 //!
 //! It also exposes shared `PostgreSQL` infrastructure (connection pooling, TLS
@@ -13,16 +13,15 @@ pub mod config;
 pub mod error;
 pub mod migrations;
 pub mod pool;
-mod session_manager;
+mod session_store;
 mod token_store;
 mod tree_store;
 
 // Re-export main public API
 pub use config::{PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config};
 pub use error::PostgresError;
-pub use session_manager::{
-    PostgresSessionManager, create_postgres_session_manager,
-    create_postgres_session_manager_from_pool,
+pub use session_store::{
+    PostgresSessionStore, create_postgres_session_store, create_postgres_session_store_from_pool,
 };
 pub use token_store::{
     PostgresTokenStore, create_postgres_token_store, create_postgres_token_store_from_pool,

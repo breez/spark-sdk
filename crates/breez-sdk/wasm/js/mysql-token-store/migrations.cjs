@@ -109,7 +109,7 @@ class MysqlTokenStoreMigrationManager {
         await conn.query(`
           CREATE TABLE IF NOT EXISTS \`${TOKEN_MIGRATIONS_TABLE}\` (
             version INT PRIMARY KEY,
-            applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))
           )
         `);
 
@@ -132,7 +132,7 @@ class MysqlTokenStoreMigrationManager {
             await runMigrationStep(conn, step);
           }
           await conn.query(
-            `INSERT INTO \`${TOKEN_MIGRATIONS_TABLE}\` (version) VALUES (?)`,
+            `INSERT INTO \`${TOKEN_MIGRATIONS_TABLE}\` (version, applied_at) VALUES (?, UTC_TIMESTAMP(6))`,
             [version]
           );
         }
@@ -448,7 +448,20 @@ class MysqlTokenStoreMigrationManager {
         ],
       },
       {
-        // Mirrors Rust migration 3 in spark-mysql/src/token_store.rs.
+        // Pin DATETIME defaults to UTC. Server-side INSERTs already pass
+        // `UTC_TIMESTAMP(6)` explicitly; this migration makes the column
+        // default match, so any future callsite that omits the column also
+        // gets a UTC value rather than a session-TZ-dependent one.
+        name: "Pin DATETIME defaults to UTC",
+        sql: [
+          `ALTER TABLE brz_token_outputs            MODIFY COLUMN added_at   DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_token_reservations       MODIFY COLUMN created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_token_spent_outputs      MODIFY COLUMN spent_at   DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_token_schema_migrations  MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+        ],
+      },
+      {
+        // Mirrors Rust migration 4 in spark-mysql/src/token_store.rs.
         // Re-keys brz_token_spent_outputs by (prev_tx_hash, prev_tx_vout) instead
         // of the operator-issued output id. v3 FinalTokenOutput carries no id
         // field, so post-broadcast spent markers only have an outpoint to work
@@ -463,7 +476,7 @@ class MysqlTokenStoreMigrationManager {
              user_id VARBINARY(33) NOT NULL,
              prev_tx_hash VARCHAR(255) NOT NULL,
              prev_tx_vout INT NOT NULL,
-             spent_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+             spent_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
              PRIMARY KEY (user_id, prev_tx_hash, prev_tx_vout)
            )`,
         ],

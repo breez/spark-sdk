@@ -1,4 +1,5 @@
 use std::slice;
+use std::time::Duration;
 
 use super::*;
 use macros::async_test_all;
@@ -12,8 +13,11 @@ fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> TokenOu
     shared_tests::create_token_outputs(identifier_no, output_amounts)
 }
 
+// The in-memory store has no DB clock — its `now()` is just `SystemTime::now()`
+// — so there is no host/DB clock skew to guard against and we can build the
+// refresh boundary from the host clock directly.
 fn future_refresh_start() -> SystemTime {
-    shared_tests::future_refresh_start()
+    SystemTime::now() + Duration::from_secs(10)
 }
 
 // ==================== InMemory-specific tests ====================
@@ -448,7 +452,7 @@ async fn test_remove_token_outputs_by_prev_tx_ref() {
 }
 
 #[async_test_all]
-async fn test_remove_token_outputs_prevents_refresh_readd() {
+async fn test_remove_token_outputs_prevents_refresh_re_add() {
     let store = InMemoryTokenOutputStore::default();
-    shared_tests::test_remove_token_outputs_prevents_refresh_readd(&store).await;
+    shared_tests::test_remove_token_outputs_prevents_refresh_re_add(&store).await;
 }

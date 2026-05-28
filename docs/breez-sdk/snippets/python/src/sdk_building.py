@@ -5,9 +5,9 @@ from breez_sdk_spark import (
     default_config,
     default_server_config,
     default_postgres_storage_config,
-    create_postgres_connection_pool,
     default_mysql_storage_config,
-    create_mysql_connection_pool,
+    postgres_storage,
+    mysql_storage,
     Network,
     PaymentIdUpdate,
     ProvisionalPayment,
@@ -121,15 +121,14 @@ async def init_sdk_postgres():
     # If your service owns SDK-compatible schema migrations:
     postgres_config.run_migration = False
 
-    # Construct the connection pool. The same pool can be passed to multiple
-    # SdkBuilders to share connections across SDKs; per-tenant scoping (rows
-    # isolated by seed identity) is preserved.
-    pool = create_postgres_connection_pool(config=postgres_config)
-
     try:
-        # Build the SDK with PostgreSQL backend (storage, tree store, and token store)
+        # Build the SDK with the PostgreSQL storage backend (storage, tree
+        # store, and token store). Per-tenant scoping (rows isolated by seed
+        # identity) is applied automatically.
         builder = SdkBuilder(config=config, seed=seed)
-        await builder.with_postgres_connection_pool(pool=pool)
+        await builder.with_storage_backend(
+            storage=postgres_storage(config=postgres_config)
+        )
         sdk = await builder.build()
         return sdk
     except Exception as error:
@@ -160,15 +159,14 @@ async def init_sdk_mysql():
     # Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
     # mysql_config.root_ca_pem = "-----BEGIN CERTIFICATE-----\n..."
 
-    # Construct the connection pool. The same pool can be passed to multiple
-    # SdkBuilders to share connections across SDKs; per-tenant scoping (rows
-    # isolated by seed identity) is preserved.
-    pool = create_mysql_connection_pool(config=mysql_config)
-
     try:
-        # Build the SDK with MySQL backend (storage, tree store, and token store)
+        # Build the SDK with the MySQL storage backend (storage, tree store,
+        # and token store). Per-tenant scoping (rows isolated by seed identity)
+        # is applied automatically.
         builder = SdkBuilder(config=config, seed=seed)
-        await builder.with_mysql_connection_pool(pool=pool)
+        await builder.with_storage_backend(
+            storage=mysql_storage(config=mysql_config)
+        )
         sdk = await builder.build()
         return sdk
     except Exception as error:

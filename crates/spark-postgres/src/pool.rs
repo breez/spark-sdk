@@ -303,6 +303,7 @@ pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError
             let manager = deadpool_postgres::Manager::new(pg_config, tokio_postgres::NoTls);
             Pool::builder(manager)
                 .config(pool_config)
+                .runtime(deadpool::Runtime::Tokio1)
                 .build()
                 .map_err(|e| PostgresError::Initialization(e.to_string()))
         }
@@ -312,6 +313,7 @@ pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError
             let manager = deadpool_postgres::Manager::new(pg_config, tls);
             Pool::builder(manager)
                 .config(pool_config)
+                .runtime(deadpool::Runtime::Tokio1)
                 .build()
                 .map_err(|e| PostgresError::Initialization(e.to_string()))
         }
@@ -321,6 +323,7 @@ pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError
             let manager = deadpool_postgres::Manager::new(pg_config, tls);
             Pool::builder(manager)
                 .config(pool_config)
+                .runtime(deadpool::Runtime::Tokio1)
                 .build()
                 .map_err(|e| PostgresError::Initialization(e.to_string()))
         }
@@ -330,6 +333,7 @@ pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError
             let manager = deadpool_postgres::Manager::new(pg_config, tls);
             Pool::builder(manager)
                 .config(pool_config)
+                .runtime(deadpool::Runtime::Tokio1)
                 .build()
                 .map_err(|e| PostgresError::Initialization(e.to_string()))
         }
@@ -472,6 +476,24 @@ mod tests {
         assert!(
             result.is_err(),
             "Expected TLS config with invalid CA to fail"
+        );
+    }
+
+    /// Regression: deadpool's `Pool::builder(...).build()` synchronously rejects
+    /// timeouts unless `.runtime(...)` was set on the builder. It does not
+    /// detect an ambient tokio runtime, so the explicit call must stay even
+    /// when `create_pool` is invoked from within a tokio context.
+    #[test]
+    fn create_pool_with_timeout_succeeds() {
+        let mut cfg = crate::config::PostgresStorageConfig::with_defaults(
+            "postgres://postgres:password@127.0.0.1:5432/postgres".to_string(),
+        );
+        cfg.recycle_timeout_secs = Some(300);
+        let pool = create_pool(&cfg);
+        assert!(
+            pool.is_ok(),
+            "create_pool with a timeout should build; got: {:?}",
+            pool.err(),
         );
     }
 }

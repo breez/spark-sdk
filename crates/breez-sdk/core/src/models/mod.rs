@@ -1761,7 +1761,7 @@ pub struct SparkStatus {
 
 pub(crate) enum WaitForPaymentIdentifier {
     PaymentId(String),
-    PaymentRequest(String),
+    LightningReceive { invoice: String, ssp_id: String },
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -1840,11 +1840,71 @@ pub struct LnurlReceiveMetadata {
     pub sender_comment: Option<String>,
 }
 
+/// Mode of a manually-triggered optimization run.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum OptimizationMode {
+    /// Run until no further optimization is productive.
+    #[default]
+    Full,
+    /// Execute a single round and return so the caller can drive progress.
+    SingleRound,
+}
+
+/// Request for [`BreezSdk::optimize_leaves`]. Defaults to
+/// [`OptimizationMode::Full`].
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct OptimizationProgress {
-    pub is_running: bool,
-    pub current_round: u32,
-    pub total_rounds: u32,
+pub struct OptimizeLeavesRequest {
+    /// Controls how much work the call performs before returning.
+    pub mode: OptimizationMode,
+}
+
+/// Response from a [`BreezSdk::optimize_leaves`] call.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct OptimizeLeavesResponse {
+    /// The outcome of the optimization run.
+    pub outcome: OptimizationOutcome,
+}
+
+/// Outcome of a [`BreezSdk::optimize_leaves`] call.
+///
+/// `rounds_executed` on `Completed` refers to rounds run by *this call*.
+/// The SDK holds no cross-call state — callers driving a `SingleRound`
+/// loop maintain their own cumulative counter if they need one.
+///
+/// A `Completed { rounds_executed: 0 }` outcome means the wallet was
+/// already optimal at call time (no swap was needed).
+///
+/// **`SingleRound` loop pattern**: terminate on anything that isn't
+/// `InProgress`. `Completed` covers both the final swap of a productive
+/// run and the "already optimal" no-op case (the latter as
+/// `rounds_executed: 0`).
+///
+/// ```ignore
+/// loop {
+///     let request = OptimizeLeavesRequest { mode: OptimizationMode::SingleRound };
+///     match sdk.optimize_leaves(request).await?.outcome {
+///         OptimizationOutcome::InProgress => continue,
+///         OptimizationOutcome::Completed { .. } => break,
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum OptimizationOutcome {
+    /// All planned optimization work was executed in this call.
+    /// Returned by `Full` runs on success, and by `SingleRound` runs
+    /// whose swap was the final one needed (the planner produced a
+    /// single-swap plan with a convergence guarantee).
+    /// `rounds_executed == 0` means the wallet was already optimal —
+    /// no work was performed.
+    Completed { rounds_executed: u32 },
+    /// `SingleRound` only: a round ran but the planner could not
+    /// guarantee it was the last. The caller should invoke
+    /// `optimize_leaves` again.
+    InProgress,
 }
 
 /// A contact entry containing a name and payment identifier.

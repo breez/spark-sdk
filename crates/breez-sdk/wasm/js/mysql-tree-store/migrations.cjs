@@ -98,7 +98,7 @@ class MysqlTreeStoreMigrationManager {
         await conn.query(`
           CREATE TABLE IF NOT EXISTS \`${TREE_MIGRATIONS_TABLE}\` (
             version INT PRIMARY KEY,
-            applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))
           )
         `);
 
@@ -121,7 +121,7 @@ class MysqlTreeStoreMigrationManager {
             await runMigrationStep(conn, step);
           }
           await conn.query(
-            `INSERT INTO \`${TREE_MIGRATIONS_TABLE}\` (version) VALUES (?)`,
+            `INSERT INTO \`${TREE_MIGRATIONS_TABLE}\` (version, applied_at) VALUES (?, UTC_TIMESTAMP(6))`,
             [version]
           );
         }
@@ -365,6 +365,20 @@ class MysqlTreeStoreMigrationManager {
           `UPDATE brz_tree_swap_status SET user_id = ${idLit} WHERE user_id IS NULL`,
           `ALTER TABLE brz_tree_swap_status MODIFY COLUMN user_id VARBINARY(33) NOT NULL`,
           `ALTER TABLE brz_tree_swap_status ADD PRIMARY KEY (user_id)`,
+        ],
+      },
+      {
+        // Pin DATETIME defaults to UTC. Server-side INSERTs already pass
+        // `UTC_TIMESTAMP(6)` explicitly; this migration makes the column
+        // default match, so any future callsite that omits the column also
+        // gets a UTC value rather than a session-TZ-dependent one.
+        name: "Pin DATETIME defaults to UTC",
+        sql: [
+          `ALTER TABLE brz_tree_reservations      MODIFY COLUMN created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_tree_leaves            MODIFY COLUMN created_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_tree_leaves            MODIFY COLUMN added_at   DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_tree_spent_leaves      MODIFY COLUMN spent_at   DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
+          `ALTER TABLE brz_tree_schema_migrations MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
         ],
       },
     ];

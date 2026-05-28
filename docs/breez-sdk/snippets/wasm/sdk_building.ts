@@ -3,9 +3,9 @@ import {
   defaultConfig,
   defaultServerConfig,
   defaultPostgresStorageConfig,
-  createPostgresConnectionPool,
+  postgresStorage,
   defaultMysqlStorageConfig,
-  createMysqlConnectionPool
+  mysqlStorage
 } from '@breeztech/breez-sdk-spark'
 import type {
   BreezSdk,
@@ -80,14 +80,11 @@ const exampleWithPostgresStorage = async () => {
   // If your service owns SDK-compatible schema migrations:
   pgConfig.runMigration = false
 
-  // Construct the connection pool. The same pool handle can be passed to
-  // multiple SdkBuilders to share connections across SDKs; per-tenant
-  // scoping (rows isolated by seed identity) is preserved.
-  const pool = createPostgresConnectionPool(pgConfig)
-
-  // Build the SDK with PostgreSQL backend (storage, tree store, and token store)
+  // Build the SDK with the PostgreSQL storage backend (storage, tree store,
+  // and token store). Per-tenant scoping (rows isolated by seed identity) is
+  // applied automatically.
   let builder = SdkBuilder.new(config, seed)
-  builder = builder.withPostgresConnectionPool(pool)
+  builder = builder.withStorageBackend(postgresStorage(pgConfig))
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-postgres
 }
@@ -111,14 +108,11 @@ const exampleWithMysqlStorage = async () => {
   mysqlConfig.createTimeoutSecs = 30 // Timeout for establishing a new connection
   mysqlConfig.recycleTimeoutSecs = 60 // Recycle idle connections after this many seconds
 
-  // Construct the connection pool. The same pool handle can be passed to
-  // multiple SdkBuilders to share connections across SDKs; per-tenant
-  // scoping (rows isolated by seed identity) is preserved.
-  const pool = createMysqlConnectionPool(mysqlConfig)
-
-  // Build the SDK with MySQL backend (storage, tree store, and token store)
+  // Build the SDK with the MySQL storage backend (storage, tree store, and
+  // token store). Per-tenant scoping (rows isolated by seed identity) is
+  // applied automatically.
   let builder = SdkBuilder.new(config, seed)
-  builder = builder.withMysqlConnectionPool(pool)
+  builder = builder.withStorageBackend(mysqlStorage(mysqlConfig))
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-mysql
 }

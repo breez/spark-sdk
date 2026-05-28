@@ -9,7 +9,6 @@ use tokio::{
 };
 use tracing::{Instrument, debug, error, info, trace};
 
-use crate::sync::SparkSyncService;
 use crate::utils::token::{token_transaction_to_payments, token_tx_inputs_are_ours};
 use crate::{
     GetInfoRequest, GetInfoResponse, Payment,
@@ -17,15 +16,15 @@ use crate::{
     events::{EventListener, SdkEvent},
     persist::ObjectCacheRepository,
     token_conversion::TokenConverter,
-    utils::{payments::get_payment_and_emit_event, run_with_shutdown},
+    utils::{
+        payments::{get_payment_and_emit_event, update_balances},
+        run_with_shutdown,
+    },
 };
 use crate::{PaymentType, StorageListPaymentsRequest, StoragePaymentDetailsFilter};
 
 use super::{RuntimeEvent, RuntimeProfile};
-use crate::sdk::{
-    BreezSdk, SyncCoordinator, SyncRequest, SyncType,
-    helpers::{BalanceWatcher, update_balances},
-};
+use crate::sdk::{BreezSdk, SyncCoordinator, SyncRequest, SyncType, helpers::BalanceWatcher};
 
 pub(super) struct ClientRuntime;
 
@@ -122,7 +121,7 @@ fn spawn_client_runtime_loop(sdk: &BreezSdk, initial_synced_sender: watch::Sende
                     }
 
                     event = wallet_events.recv() => {
-                        on_wallet_event(&sdk, event).await;
+                        Box::pin(on_wallet_event(&sdk, event)).await;
                     }
 
                     sync_request = sync_requests.recv() => {
@@ -161,7 +160,7 @@ async fn on_wallet_event(sdk: &BreezSdk, event: Result<WalletEvent, broadcast::e
                 &event,
                 WalletEvent::TransferClaimed(_) | WalletEvent::TransferClaimStarting(_)
             );
-            let payment_event_emitted = handle_wallet_event(sdk, event).await;
+            let payment_event_emitted = Box::pin(handle_wallet_event(sdk, event)).await;
 
             if wallet_synced {
                 sdk.sync_coordinator
@@ -270,42 +269,38 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
         }
         WalletEvent::TransferClaimed(transfer) => {
             info!("Transfer claimed");
-            let mut payment_emitted = false;
             // Drop any unclaimed-deposit record for this outpoint independently
             // of payment ingestion, so conversion failures do not leave it stale.
             if let Some((tx_id, vout)) = claim_static_deposit_outpoint(&transfer) {
                 cleanup_claimed_deposit(sdk, &tx_id, vout).await;
             }
-            if let Ok(mut payment) = Payment::try_from(transfer) {
-                if let Err(e) = sdk.storage.insert_payment(payment.clone()).await {
-                    error!("Failed to insert succeeded payment: {e:?}");
-                }
-
-                // This was already requested at TransferClaimStarting, but it
-                // might still be racing, so ensure metadata before emitting.
-                sdk.sync_single_lnurl_metadata(&mut payment).await;
-
-                if let Err(e) = update_balances(sdk.spark_wallet.clone(), sdk.storage.clone()).await
-                {
-                    error!("Failed to update balances before PaymentSucceeded event: {e:?}");
-                }
-
-                get_payment_and_emit_event(&sdk.storage, &sdk.event_emitter, payment).await;
-                payment_emitted = true;
+            if let Ok(payment) = Payment::try_from(transfer) {
+                sdk.finalize_payment(payment).await
+            } else {
+                false
             }
-            payment_emitted
         }
         WalletEvent::TransferClaimStarting(transfer) => {
             info!("Transfer claim starting");
             let mut payment_emitted = false;
             if let Ok(mut payment) = Payment::try_from(transfer) {
-                if let Err(e) = sdk.storage.insert_payment(payment.clone()).await {
-                    error!("Failed to insert pending payment: {e:?}");
-                }
+                // Persist before syncing metadata so the Pending payment is not
+                // delayed by the metadata fetch.
+                let should_emit = match sdk.storage.apply_payment_update(payment.clone()).await {
+                    Ok(should_emit) => should_emit,
+                    Err(e) => {
+                        error!("Failed to apply pending payment update: {e:?}");
+                        return false;
+                    }
+                };
 
                 sdk.sync_single_lnurl_metadata(&mut payment).await;
-                get_payment_and_emit_event(&sdk.storage, &sdk.event_emitter, payment).await;
-                payment_emitted = true;
+
+                // Drop this Pending event if sync already saw the transfer Completed.
+                if should_emit {
+                    get_payment_and_emit_event(&sdk.storage, &sdk.event_emitter, payment).await;
+                    payment_emitted = true;
+                }
             }
             payment_emitted
         }
@@ -318,8 +313,16 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
                     false
                 })
         }
-        WalletEvent::Optimization(event) => {
-            info!("Optimization event: {:?}", event);
+        WalletEvent::AutoOptimization(event) => {
+            info!("AutoOptimization event: {:?}", event);
+            // Only the background auto-optimizer reaches this branch;
+            // manually-triggered optimize_leaves calls return their result
+            // directly and never produce wallet-level optimization events.
+            sdk.event_emitter
+                .emit(&SdkEvent::AutoOptimization {
+                    optimization_event: event.into(),
+                })
+                .await;
             false
         }
     }
@@ -343,38 +346,9 @@ async fn process_token_transaction_event(
         return Ok(false);
     }
 
-    // Update balances before emitting events so listeners can immediately
-    // query the new balance.
-    if let Err(e) = update_balances(sdk.spark_wallet.clone(), sdk.storage.clone()).await {
-        error!("Failed to update balances before token transaction event: {e:?}");
-    }
-
-    let sync_service = SparkSyncService::new(
-        sdk.spark_wallet.clone(),
-        sdk.storage.clone(),
-        sdk.event_emitter.clone(),
-    );
     let mut payment_emitted = false;
     for payment in payments {
-        let existing_status = sdk
-            .storage
-            .get_payment_by_id(payment.id.clone())
-            .await
-            .ok()
-            .map(|p| p.status);
-        let status_changed = existing_status.is_none_or(|s| s != payment.status);
-
-        if let Err(e) = sync_service.apply_payment_metadata(&payment).await {
-            error!("Failed to apply payment metadata for token payment: {e:?}");
-        }
-
-        if let Err(e) = sdk.storage.insert_payment(payment.clone()).await {
-            error!("Failed to insert token payment: {e:?}");
-            continue;
-        }
-
-        if status_changed {
-            get_payment_and_emit_event(&sdk.storage, &sdk.event_emitter, payment).await;
+        if sdk.finalize_payment(payment).await {
             payment_emitted = true;
         }
     }

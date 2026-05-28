@@ -1,6 +1,6 @@
 use spark::operator::OperatorConfig;
 use spark::operator::rpc::ConnectionManager;
-use spark::session_manager::InMemorySessionManager;
+use spark::session_store::InMemorySessionStore;
 use spark::ssp::ServiceProvider;
 use spark_wallet::DefaultSigner;
 use std::{collections::HashSet, sync::Arc};
@@ -22,7 +22,7 @@ pub struct State<DB> {
     pub connection_manager: Arc<dyn ConnectionManager>,
     pub coordinator: OperatorConfig,
     pub signer: Arc<DefaultSigner>,
-    pub session_manager: Arc<InMemorySessionManager>,
+    pub session_store: Arc<InMemorySessionStore>,
     pub service_provider: Arc<ServiceProvider>,
     pub subscribed_keys: Arc<Mutex<HashSet<String>>>,
     pub invoice_paid_trigger: watch::Sender<()>,
@@ -50,7 +50,7 @@ where
             connection_manager: self.connection_manager.clone(),
             coordinator: self.coordinator.clone(),
             signer: self.signer.clone(),
-            session_manager: self.session_manager.clone(),
+            session_store: self.session_store.clone(),
             service_provider: self.service_provider.clone(),
             subscribed_keys: Arc::clone(&self.subscribed_keys),
             invoice_paid_trigger: self.invoice_paid_trigger.clone(),

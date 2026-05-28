@@ -430,7 +430,7 @@ class MysqlTreeStore {
         // (and thus has no row) gets one created lazily.
         if (isSwap && newLeaves && newLeaves.length > 0) {
           await conn.query(
-            `INSERT INTO brz_tree_swap_status (user_id, last_completed_at) VALUES (?, NOW(6))
+            `INSERT INTO brz_tree_swap_status (user_id, last_completed_at) VALUES (?, UTC_TIMESTAMP(6))
              ON DUPLICATE KEY UPDATE last_completed_at = VALUES(last_completed_at)`,
             [this.identity]
           );
@@ -581,7 +581,7 @@ class MysqlTreeStore {
 
   async now() {
     try {
-      const [rows] = await this.pool.query("SELECT NOW(6) AS now");
+      const [rows] = await this.pool.query("SELECT UTC_TIMESTAMP(6) AS now");
       const value = rows[0].now;
       // mysql2 typically returns DATETIME as a JS Date when dateStrings is false (default).
       if (value instanceof Date) return value.getTime();
@@ -809,7 +809,7 @@ class MysqlTreeStore {
 
   async _createReservation(conn, reservationId, leaves, purpose, pendingChange) {
     await conn.query(
-      "INSERT INTO brz_tree_reservations (user_id, id, purpose, pending_change_amount) VALUES (?, ?, ?, ?)",
+      "INSERT INTO brz_tree_reservations (user_id, id, purpose, pending_change_amount, created_at) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(6))",
       [this.identity, reservationId, purpose, pendingChange]
     );
 
@@ -827,7 +827,7 @@ class MysqlTreeStore {
     if (filtered.length === 0) return;
 
     const valueClauses = new Array(filtered.length)
-      .fill("(?, ?, ?, ?, ?, ?, NOW(6))")
+      .fill("(?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))")
       .join(", ");
     const params = [];
     for (const leaf of filtered) {
@@ -849,7 +849,7 @@ class MysqlTreeStore {
          is_missing_from_operators = VALUES(is_missing_from_operators),
          data = VALUES(data),
          value = VALUES(value),
-         added_at = NOW(6)`,
+         added_at = UTC_TIMESTAMP(6)`,
       params
     );
   }
@@ -867,7 +867,9 @@ class MysqlTreeStore {
   async _batchInsertSpentLeaves(conn, leafIds) {
     if (leafIds.length === 0) return;
 
-    const valueClauses = new Array(leafIds.length).fill("(?, ?)").join(", ");
+    const valueClauses = new Array(leafIds.length)
+      .fill("(?, ?, UTC_TIMESTAMP(6))")
+      .join(", ");
     const params = [];
     for (const id of leafIds) {
       params.push(this.identity, id);
@@ -876,7 +878,7 @@ class MysqlTreeStore {
     // problems (FK violations, NOT NULL violations, type errors) still
     // propagate.
     await conn.query(
-      `INSERT INTO brz_tree_spent_leaves (user_id, leaf_id) VALUES ${valueClauses}
+      `INSERT INTO brz_tree_spent_leaves (user_id, leaf_id, spent_at) VALUES ${valueClauses}
        ON DUPLICATE KEY UPDATE leaf_id = leaf_id`,
       params
     );
@@ -904,14 +906,14 @@ class MysqlTreeStore {
            SELECT id FROM (
              SELECT id FROM brz_tree_reservations
              WHERE user_id = ?
-               AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)
+               AND created_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)
            ) AS stale
          )`,
       [this.identity, this.identity, RESERVATION_TIMEOUT_SECS]
     );
     await conn.query(
       `DELETE FROM brz_tree_reservations
-       WHERE user_id = ? AND created_at < DATE_SUB(NOW(6), INTERVAL ? SECOND)`,
+       WHERE user_id = ? AND created_at < DATE_SUB(UTC_TIMESTAMP(6), INTERVAL ? SECOND)`,
       [this.identity, RESERVATION_TIMEOUT_SECS]
     );
   }
@@ -936,6 +938,10 @@ function createMysqlPool(config) {
     connectTimeout: (config.createTimeoutSecs || 0) * 1000 || 10000,
     idleTimeout: (config.recycleTimeoutSecs || 0) * 1000 || 10000,
     waitForConnections: true,
+    // Serialize JS `Date` parameters as UTC strings rather than host-local
+    // time. Paired with explicit `UTC_TIMESTAMP(6)` on the server side, this
+    // keeps timestamp comparisons consistent regardless of the host TZ.
+    timezone: "Z",
   });
 }
 

@@ -8,7 +8,7 @@ use serde_with::{DisplayFromStr, serde_as};
 use crate::{
     header_provider::{CombinedHeaderProvider, HeaderProvider},
     operator::rpc::{ConnectionManager, OperatorRpcError, SoAuthHeaderProvider, SparkRpcClient},
-    session_manager::SessionManager,
+    session_store::SessionStore,
     signer::Signer,
 };
 
@@ -105,7 +105,7 @@ impl OperatorPool {
     pub async fn connect(
         config: &OperatorPoolConfig,
         connection_manager: Arc<dyn ConnectionManager>,
-        session_manager: Arc<dyn SessionManager>,
+        session_store: Arc<dyn SessionStore>,
         signer: Arc<dyn Signer>,
         extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     ) -> Result<Self, OperatorRpcError> {
@@ -115,7 +115,7 @@ impl OperatorPool {
             let auth_provider = Arc::new(SoAuthHeaderProvider::new(
                 transport.clone(),
                 Arc::clone(&signer),
-                session_manager.clone(),
+                session_store.clone(),
                 operator.identity_public_key,
             ));
             let header_provider: Arc<dyn HeaderProvider> = match &extra_header_provider {
@@ -125,7 +125,7 @@ impl OperatorPool {
                 ])),
                 None => auth_provider,
             };
-            let client = SparkRpcClient::new(transport, header_provider);
+            let client = SparkRpcClient::new(transport, header_provider, operator.id);
             operators.push(Operator {
                 client,
                 id: operator.id,

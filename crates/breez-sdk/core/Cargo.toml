@@ -9,6 +9,8 @@ uniffi = ["dep:uniffi"]
 test-utils = ["spark-wallet/test-utils"]
 # Passkey functionality
 passkey = ["dep:nostr", "dep:nostr-sdk"]
+# SQLite storage backend (optional). File-based; native-only.
+sqlite = ["dep:rusqlite", "dep:rusqlite_migration"]
 # PostgreSQL storage backend (optional, for server-side use cases)
 postgres = [
     "dep:spark-postgres",
@@ -17,6 +19,12 @@ postgres = [
 mysql = [
     "dep:spark-mysql",
 ]
+# Bench-only: installs an extra tracing layer in `init_logging` that
+# captures span CLOSE events for the instrumented `send_payment`,
+# `spark::operator_rpc`, and `spark::ssp` targets. Off by default — prod
+# binaries built without this feature contain none of the bench-layer
+# setup code.
+span-trace = []
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -45,6 +53,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 spark-mysql = { workspace = true, optional = true }
 spark-postgres = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true }
+rusqlite_migration = { workspace = true, optional = true }
 spark-wallet.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -59,8 +69,6 @@ k256 = { workspace = true, features = ["arithmetic"] }
 # Non-Wasm dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-rusqlite.workspace = true
-rusqlite_migration.workspace = true
 
 # WASM dependencies
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
@@ -74,7 +82,7 @@ breez-sdk-spark = { workspace = true, features = ["test-utils"] }
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
 testcontainers.workspace = true
 testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }
-breez-sdk-spark = { workspace = true, features = ["postgres", "mysql"] }
+breez-sdk-spark = { workspace = true, features = ["sqlite", "postgres", "mysql"] }
 rcgen.workspace = true
 
 # WASM dev dependencies

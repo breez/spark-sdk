@@ -40,70 +40,98 @@ friction in Kotlin/JVM.
 Each request runs the same flow:
 
 ```
-1. Acquire per-userId lock
-2. Derive seed: HMAC-SHA512(MASTER_SECRET, userId) → 64 bytes
-3. SdkBuilder(config, Seed.Entropy(…))
-     .withMysqlConnectionPool(SHARED_POOL)
-     .withSspConnectionManager(SHARED_SSP)
-     .withConnectionManager(SHARED_OPERATORS)
-     .build()
-4. sdk.<op>(…)
-5. sdk.disconnect()
-6. Release lock; respond
+1. Derive seed: HMAC-SHA512(MASTER_SECRET, userId) → 64 bytes
+2. SdkBuilder(defaultServerConfig(REGTEST), Seed.Entropy(…))
+     .withSharedContext(SHARED_CONTEXT)   // DB pool + SSP/LNURL/JWT/chain HTTP + operator gRPC + Breez gRPC
+     .build()                             // chain service unset → built over the context HTTP client
+3. sdk.<op>(…)
+4. sdk.disconnect()
+5. Respond
 ```
 
-Three process-wide handlers (`MysqlConnectionPool`, `SspConnectionManager`,
-`ConnectionManager`) are constructed once at server startup and threaded
-into every `SdkBuilder` call. Without sharing them, each request would
-open its own MySQL pool, redo TCP+TLS+HTTP/2 to the SSP, and dial every
-operator from scratch — multiplied by per-request SDK build, that
-dominates latency and exhausts FDs / ephemeral ports under load.
+All requests run fully in parallel, including concurrent ones for the
+same `userId` (no per-user lock — see [No per-userId lock](#no-per-userid-lock-it-was-an-artifact-removed)).
 
-Multi-tenancy in the SDK scopes each instance to its own identity inside
-the DB even when the underlying pool is shared.
+The bench builds with **`defaultServerConfig`** (server mode). That sets
+`backgroundTasksEnabled = false`: no per-request periodic sync loop, Spark
+background processor, RT-sync websocket, lightning-address recovery, or
+private-mode init read — all wasted on a build → one op → disconnect
+lifecycle. The trade: `ensureSynced=true` is rejected; the host syncs
+explicitly (see [Where syncs happen](#where-syncs-happen)).
 
-This is still the **worst case** for SDK lifecycle: every request pays
-cold-start (SDK build + initial sync + per-tenant migration check).
-Pinning this baseline gives a defensible **lower bound for capacity,
-upper bound for latency**. An in-process SDK pool would push these
-numbers further; the shared transports are the floor that pool-bench
-results sit on top of.
+One process-wide **`SdkContext`** (`newSharedSdkContext`) is built once at
+startup and threaded into every `SdkBuilder`. It bundles the shared HTTP
+client (SSP, LNURL, JWT, chain service), the operator gRPC channels, the
+Breez-backend gRPC client, and the MySQL pool.
 
-## Per-userId lock (multi-tenancy safety)
+Without this sharing, each request would open its own MySQL pool, redo
+TCP+TLS+HTTP/2 to the SSP, and redial every operator — that dominates
+latency and exhausts FDs / ephemeral ports under load. Multi-tenancy
+still scopes each instance to its own identity inside the shared DB.
 
-Two concurrent requests for the same `userId` would build two SDK
-instances with the same seed, racing reads/writes against the same
-multi-tenant MySQL identity rows. The bench serializes per user with
-a `ConcurrentHashMap<String, Mutex>`; different user-ids run in
-parallel, same user-id calls serialize.
+## No per-userId lock (it was an artifact, removed)
 
-Implication for skewed user distributions (zipf): hot user-ids
-serialize, so *delivered* RPS at the server is lower than offered
-RPS. The headline reads as capacity under realistic skew, not raw
-parallel throughput.
+An earlier version serialized same-`userId` requests through a
+`ConcurrentHashMap<String, Mutex>`, on the assumption that two
+concurrent SDK instances with the same seed would race the shared
+MySQL identity rows. **That serialization is gone — it was never a
+correctness requirement and it dominated/distorted the measurement.**
+
+Concurrent same-wallet instances are safe without it: operators
+enforce single-spend via 2-of-3 FROST co-signing, the SDK's claim path
+retries on the race, and the MySQL tree store writes idempotently and
+reconciles against the coordinator on every fresh build.
+
+With the lock, the bulk of `/send` latency was threads queued on the
+per-sender mutex — an artifact of routing all sends through a small
+reserved set, not real per-pod cost. Without it, concurrent same-sender
+sends instead contend on that wallet's leaves at the operators: with
+enough leaves they parallelize; with few they fail/retry on contention.
+That is a *workload* property (how many distinct sender identities, how
+many leaves each holds), now visible instead of hidden behind a lock.
 
 ## Endpoints — semantics worth pinning
 
 | Endpoint | Op | Notes |
 |---|---|---|
-| `GET /users/{userId}/info` | `getInfo({ ensureSynced: true })` | Sync forced — see below. |
+| `GET /users/{userId}/info` | `getInfo({ ensureSynced: false })` | Pure local read, no sync — see below. |
 | `POST /users/{userId}/send` | `prepareSendPayment` + `sendPayment` | Reported as a single number. |
 | `POST /users/{userId}/receive` | `receivePayment(SparkAddress)` | **Address generation only.** |
 
-- `/info` always uses `ensureSynced=true`. A fresh per-request SDK
-  has no cached state; without forcing a sync, the returned balance
-  would be meaningless.
-- `/send` latency includes both `prepareSendPayment` and
-  `sendPayment`. Single number matches what a real handler does.
+- `/info` is a **pure local balance read** — no sync. `getInfo` reads
+  from the spark wallet (loaded from the tree store on build); a real
+  server-mode deployment never syncs defensively on a read (incoming
+  syncs are webhook-driven, see [Where syncs happen](#where-syncs-happen)).
+  The headline `/info` number is per-request **build + local read** — the
+  real steady-state server cost, not a forced cold sync.
+- `/send` latency includes both `prepareSendPayment` and `sendPayment`,
+  one number, matching a real handler. No pre-sync: the sender only sends
+  (never receives) mid-run, and `transfer` self-refreshes leaves from
+  operators on contention — so concurrent same-sender requests (now
+  unserialized) reconcile against the operators rather than needing a
+  pre-sync, at the cost of contention when a sender has few leaves.
 - `/receive` is **address generation only** — `receivePayment` returns
   a Spark address; nothing actually arrives during the measurement
   window. The number is the cost of producing a deposit destination,
   not end-to-end receive cost. `RESULTS.md` should flag this.
 
-**Payment method:** both `/send` and `/receive` use Spark transfers
-(Spark address as destination). Closed-loop on regtest, deterministic,
-no Lightning routing dependencies (regtest's Lightning network is
-limited), and matches the SDK's most efficient payment path.
+## Where syncs happen
+
+Server mode makes sync explicit, so it's worth pinning.
+
+**During an RPS step: never.** `/info` is a local read, `/receive` is
+address generation, `/send` is the payment round-trip itself. The only
+sync a real server would do here is webhook-driven on an incoming
+payment, and the bench's closed loop has no wallet that is both receiving
+and balance-read mid-run (senders only send; the treasurer only
+accumulates and is never read during the window) — so the absent webhook
+plane costs no fidelity.
+
+**Out of band: explicit `syncWallet()`.** The `fund`, `seed-senders`,
+and `trace-sync` steps need real incoming/on-chain state, so they use the
+`syncedInfo()` helper (`syncWallet()` + local `getInfo`). Same `Full`
+forced sync `ensureSynced=true` used to trigger — including the
+treasurer's known multi-minute backlog — so funding timing is unchanged.
 
 ## Open-loop load generator
 
@@ -165,13 +193,136 @@ The Lightspark regtest faucet enforces a 50_000-sat per-call cap and
 a 1_000-sat floor; `fund` mode chunks larger top-ups and waits for
 each on-chain deposit to be claimed before requesting the next.
 
+## Lightning support
+
+Optional, opt-in via the mix. The whole layer is disabled when the mix
+contains no `*_ln` label — pure-spark sweeps are byte-identical to the
+pre-Lightning bench.
+
+### Op-mix vocabulary carries the method
+
+`OpSampler` already accepts arbitrary weighted keys, so the percentage
+control is just the mix weights — no separate `--ln-ratio` flag. Labels:
+
+| Label | Endpoint | Behavior |
+|---|---|---|
+| `info` | `GET /info` | Pure local read, no sync. |
+| `send` (alias `send_spark`) | `POST /send` | Spark transfer → treasurer Spark addr. Zero-fee, closed-loop. |
+| `send_ln` | `POST /send` | Pay a pre-minted bolt11 invoice via real LN (`preferSpark=false`). SSP-routed; non-zero fee; not sat-conserving. |
+| `receive` (alias `receive_spark`) | `POST /receive` | Local Spark-address generation, no SSP roundtrip. |
+| `receive_ln` | `POST /receive` | Mint a real bolt11 invoice on the user's wallet (one SSP roundtrip + Shamir preimage-share with operators). |
+
+Bare `send` / `receive` keep meaning the spark variants so the documented
+default `info=40,receive=30,send=30` and every legacy sweep config are
+unchanged. The server infers spark-vs-LN per request from
+`prepared.paymentMethod` — no wire-shape change to `SendBody`.
+
+### Why bolt11 doesn't slot into the spark loop
+
+`send_spark` works because the treasurer's Spark address is a static,
+reusable destination — fetched once, every send reuses it. **bolt11
+invoices are single-use**: every LN send needs a fresh invoice the
+receiver actively minted. That pulls a minting wallet into the hot path
+of every send.
+
+### Pre-minted invoice pool
+
+Solution: pre-mint the entire run's worth of invoices in a setup step
+(`mint-invoices` mode), one file, one invoice per line. The loadgen
+consumes one invoice per `send_ln` dispatch; **pool exhaustion is a
+hard-stop** (the sweep driver sizes the pool from `total_send_ln ×
+SEED_SAFETY`, so running out means the bench was undersized and the
+data is noise — fail loudly with a non-zero exit, don't silently
+degrade).
+
+Minting throughput is the constraint. One SDK serially can't keep up
+with sweep-scale pools (each mint = one SSP roundtrip + Shamir
+preimage-share storage with operators, ~hundreds of ms each;
+hundreds of thousands at top-of-sweep). Two parallelism layers:
+
+1. **Bank pool.** `BANKS` reserved `__bank_n__` wallets — distinct
+   identities so concurrent `receivePayment` calls don't serialize on
+   a single MySQL identity.
+2. **Bounded concurrency.** `MINT_PARALLELISM` in-flight mints (default
+   20). The SSP is the actual bottleneck; banks just keep MySQL from
+   being the bottleneck.
+
+Bank wallets need **no funding** (receiving requires no balance).
+Unpaid bolt11 invoices are **sync-inert** — they don't trigger the O(N)
+slow-sync pathology that paid/received transfers do. So holding a
+large pre-minted pool is cheap regardless of bank count. Payments that
+do land on a bank during the run accumulate as unclaimed transfers,
+never claimed during the measurement, written off at end of run.
+
+### Real LN routing, immediate return, non-zero fees
+
+`send_ln` uses `SendPaymentOptions.Bolt11Invoice(preferSpark=false,
+completionTimeoutSecs=0u)`:
+
+- **`preferSpark=false`** — real Lightning routing via the SSP, not the
+  Spark fast-path. This is what the partner deploys in production; the
+  Spark fast-path is an optimization, not the measurement target.
+- **`completionTimeoutSecs=0u`** — `sendPayment` returns immediately
+  with `Pending`. Same dispatch-latency semantics as the spark `/send`
+  (which also returns immediately for spark-address transfers), so the
+  numbers are directly comparable. Actual LN settlement happens async
+  and is not measured here.
+
+Expect `send_ln` to be meaningfully slower than `send_spark` (extra
+SSP roundtrips on both prepare and send); surfaced as its own table
+row, not blended.
+
+### Fees, funding, and the broken closed loop
+
+Real LN fees are non-zero (SSP-determined; ~few sats on regtest in
+practice). The closed-loop "system sats constant" invariant **does not
+hold** for LN — senders drain by `payment_sats + ln_fee` per send;
+receivers accumulate the full `payment_sats`, which they never claim 
+within the measurement. The bench:
+
+1. **Probes the SSP fee once at setup.** `mint-invoices` mints one
+   extra invoice and runs `prepareSendPayment` between two bank
+   wallets — never calls `sendPayment`, so the probe invoice stays
+   unpaid. The quoted `lightningFeeSats` is written to `<out>.fee`
+   and printed as `[mint] ln_fee_sats=<N>`.
+2. **Sizes sender prefunding from the probed fee.**
+   `compute_funding.py --ln-fee-sats=N` adds
+   `total_send_ln × (payment_sats + N) × SAFETY` to the per-sender
+   drain. The sweep driver scales the probed fee by `LN_FEE_SAFETY`
+   (default 1.5) before passing it in — headroom for SSP fee drift
+   mid-run.
+3. **Doesn't try to recycle.** Funds stranded on bank/treasurer
+   wallets at end of run aren't reclaimed within a sweep. The faucet
+   replenishes net leakage between runs on the next `make fund`.
+   Post-run recovery tooling is out of v1 scope.
+
+### Synthetic send-class rollup for the headline
+
+The headline `max_safe_rps` is defined on client-side `p99(send)`.
+With split labels the literal `send` bucket may be absent. The
+aggregator emits a synthetic `_send_rollup` = union of all `send*`
+durations (and `_receive_rollup` likewise) and `derive_p99_doubling`
+prefers the rollup, falling back to literal `send` for legacy data. The
+per-op table iterates only literal labels — distinct payment paths
+render as distinct rows (a `send_ln` blended into a single `send`
+percentile would be bimodal junk).
+
 ## Output layout
 
-Everything is written to `out/<sweep-id>/` (gitignored):
+Everything for one sweep is written to `out/<sweep-id>/` (gitignored).
+
+**Sweep-id rule** (enforced loosely by `sweep.sh`):
+
+```
+<sweep-id> = <UTC-ISO-8601-timestamp>[-<kebab-slug>]
+e.g.  2026-05-20T11-45-00Z
+      2026-05-20T11-45-00Z-mysql-recycle      (LABEL=mysql-recycle make run)
+```
 
 ```
 out/<sweep-id>/
-  manifest.json            sweep config + host info + funding budget
+  manifest.json            sweep config + host info + funding budget + MASTER_SECRET (out/ is gitignored)
+  driver.log               live [sweep]/[fund]/[seed]/[loadgen] output (tee'd by `make run`)
   RESULTS.md               headline tables (read this)
   summary.json             full structured per-step breakdown
   fund.log seed.log        pre-sweep step output (skipped if no-op)
@@ -239,13 +390,10 @@ harness development.
   p99(send) is < 2× the lowest stable p99(send). "Stable" requires
   ≥30 samples. Threshold-doubling, not an absolute SLA, so the bench
   characterizes the host without hard-coding a target.
-- Errors bucketed into named categories (`mysql_pool_exhausted`,
-  `port_exhaustion`, `connect_timeout`, `operator_unreachable`,
-  `operator_other`, `storage_other`, `request_timeout`,
-  `connect_refused`, `http_5xx`, `http_4xx`, `other`). Pattern order
-  matters: root-cause patterns are checked before wrapper exception
-  types, so "Too many connections" inside a `StorageException` is
-  attributed to `mysql_pool_exhausted`, not `storage_other`.
+- Errors bucketed by category (mysql / operator / transport / http);
+  root-cause patterns are checked before wrapper exception types so a
+  "Too many connections" buried inside a `StorageException` resolves
+  to `mysql_pool_exhausted`, not `storage_other`.
 
 Stdlib only — no numpy / pandas / matplotlib.
 
@@ -272,10 +420,3 @@ fallback after a 15s grace.
 - **Idempotency keys.** `SendPaymentRequest.idempotencyKey` is left
   null (one fresh key per SDK call), so the SDK doesn't dedupe sends
   to the same destination across the load run.
-- **JSONL writer.** A daemon thread per file drains an unbounded
-  `LinkedBlockingQueue`; per-write flush keeps the file readable
-  mid-run. Bench volume (≤ a few thousand records/sec, small records)
-  makes the unbounded queue free.
-- **Run-id format.** Filesystem-safe ISO-8601 (`2026-05-08T15-23-45`
-  — `-` instead of `:`). `:` is path-hostile on Windows and confusing
-  on macOS.

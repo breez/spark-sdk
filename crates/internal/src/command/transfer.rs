@@ -43,10 +43,7 @@ pub async fn handle_command(
     match command {
         TransferCommand::ClaimPending => {
             let transfers = wallet.claim_pending_transfers().await?;
-            println!(
-                "Claimed transfers: {}",
-                serde_json::to_string_pretty(&transfers)?
-            );
+            println!("Claimed transfers: {transfers:#?}");
         }
         TransferCommand::List { limit, offset } => {
             let paging = if limit.is_some() || offset.is_some() {
@@ -61,10 +58,8 @@ pub async fn handle_command(
                     ..Default::default()
                 })
                 .await?;
-            println!(
-                "Transfers: {}",
-                serde_json::to_string_pretty(&transfers.items)?
-            );
+            let items = &transfers.items;
+            println!("Transfers: {items:#?}");
         }
         TransferCommand::ListPending { limit, offset } => {
             let paging = if limit.is_some() || offset.is_some() {
@@ -74,17 +69,15 @@ pub async fn handle_command(
             };
 
             let transfers = wallet.list_pending_transfers(paging).await?;
-            println!(
-                "Pending transfers: {}",
-                serde_json::to_string_pretty(&transfers.items)?
-            );
+            let items = &transfers.items;
+            println!("Pending transfers: {items:#?}");
         }
         TransferCommand::Transfer {
             amount_sat,
             receiver_address,
         } => {
             let result = wallet.transfer(amount_sat, &receiver_address, None).await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            println!("{result:#?}");
         }
     }
 

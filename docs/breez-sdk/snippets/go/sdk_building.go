@@ -112,17 +112,15 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	// If your service owns SDK-compatible schema migrations:
 	postgresConfig.RunMigration = false
 
-	// Construct the connection pool. The same pool can be passed to multiple
-	// SdkBuilders to share connections across SDKs; per-tenant scoping (rows
-	// isolated by seed identity) is preserved.
-	pool, err := breez_sdk_spark.CreatePostgresConnectionPool(postgresConfig)
+	// Build the SDK with the PostgreSQL storage backend (storage, tree store,
+	// and token store). Per-tenant scoping (rows isolated by seed identity)
+	// is applied automatically.
+	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+	storageBackend, err := breez_sdk_spark.PostgresStorage(postgresConfig)
 	if err != nil {
 		return nil, err
 	}
-
-	// Build the SDK with PostgreSQL backend (storage, tree store, and token store)
-	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithPostgresConnectionPool(pool)
+	builder.WithStorageBackend(storageBackend)
 	sdk, err := builder.Build()
 	if err != nil {
 		return nil, err
@@ -158,17 +156,15 @@ func InitSdkMysql() (*breez_sdk_spark.BreezSdk, error) {
 	// rootCa := "-----BEGIN CERTIFICATE-----\n..."
 	// mysqlConfig.RootCaPem = &rootCa
 
-	// Construct the connection pool. The same pool can be passed to multiple
-	// SdkBuilders to share connections across SDKs; per-tenant scoping (rows
-	// isolated by seed identity) is preserved.
-	pool, err := breez_sdk_spark.CreateMysqlConnectionPool(mysqlConfig)
+	// Build the SDK with the MySQL storage backend (storage, tree store, and
+	// token store). Per-tenant scoping (rows isolated by seed identity) is
+	// applied automatically.
+	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
+	storageBackend, err := breez_sdk_spark.MysqlStorage(mysqlConfig)
 	if err != nil {
 		return nil, err
 	}
-
-	// Build the SDK with MySQL backend (storage, tree store, and token store)
-	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
-	builder.WithMysqlConnectionPool(pool)
+	builder.WithStorageBackend(storageBackend)
 	sdk, err := builder.Build()
 	if err != nil {
 		return nil, err

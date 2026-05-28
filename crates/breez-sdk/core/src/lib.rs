@@ -16,7 +16,7 @@ mod realtime_sync;
 mod sdk;
 mod sdk_builder;
 mod sdk_context;
-mod session_manager;
+mod session_store;
 pub mod signer;
 mod stable_balance;
 mod sync;
@@ -31,44 +31,40 @@ pub use chain::{
 pub use common::rest::{RestClient, RestResponse};
 pub use common::{fiat::*, models::*, sync_storage};
 pub use error::{DepositClaimError, SdkError, SignerError};
-pub use events::{EventEmitter, EventListener, OptimizationEvent, SdkEvent};
+pub use events::{AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent};
 pub use issuer::*;
 pub use models::*;
 pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, StorageListPaymentsRequest,
-    StoragePaymentDetailsFilter, UpdateDepositPayload, path::default_storage_path,
+    StoragePaymentDetailsFilter, UpdateDepositPayload,
+    backend::{PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage},
+    path::default_storage_path,
 };
 pub use sdk::{
     BreezSdk, default_config, default_server_config, get_spark_status, init_logging, parse_input,
 };
 pub use sdk_builder::SdkBuilder;
 pub use sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context};
-pub use session_manager::{Session, SessionManager, SessionManagerError};
+pub use session_store::{Session, SessionStore, SessionStoreAdapter, SessionStoreError};
 pub use spark_wallet::{
     CombinedHeaderProvider, HeaderProvider, HeaderProviderError, KeySet, PublicKey,
 };
 
-#[cfg(all(
-    feature = "postgres",
-    not(all(target_family = "wasm", target_os = "unknown"))
-))]
-pub use persist::postgres::{
-    PoolQueueMode, PostgresConnectionPool, PostgresStorageConfig, create_postgres_connection_pool,
-    default_postgres_storage_config,
+#[cfg(feature = "postgres")]
+pub use persist::{
+    backend::postgres_storage,
+    postgres::{PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config},
 };
 
-#[cfg(all(
-    feature = "mysql",
-    not(all(target_family = "wasm", target_os = "unknown"))
-))]
-pub use persist::mysql::{
-    MysqlConnectionPool, MysqlForeignKeyMode, MysqlStorageConfig, create_mysql_connection_pool,
-    default_mysql_storage_config,
+#[cfg(feature = "mysql")]
+pub use persist::{
+    backend::mysql_storage,
+    mysql::{MysqlForeignKeyMode, MysqlStorageConfig, default_mysql_storage_config},
 };
 
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg(feature = "sqlite")]
 pub use {
-    persist::sqlite::SqliteStorage,
+    persist::{backend::default_storage, sqlite::SqliteStorage},
     sdk::{connect, connect_with_signer},
 };
 

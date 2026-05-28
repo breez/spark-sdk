@@ -5,10 +5,46 @@ use serde::{Deserialize, Serialize};
 use serde_with::DisplayFromStr;
 use serde_with::serde_as;
 use spark::Network;
-use spark_wallet::{PublicKey, TransferId};
+use spark_wallet::{PublicKey, TokenTransaction, TransferId, WalletTransfer};
 
 use crate::utils::decode_token_identifier;
 use crate::{BTC_ASSET_ADDRESS, FlashnetError};
+
+/// The asset transfer produced when we send the swap's "in" asset to the
+/// pool. Carries the rich wallet-side object so callers can record a
+/// `Payment` for the sent leg without re-fetching it from the operator.
+///
+/// `Spark` is the larger variant; we don't box it because instances are
+/// short-lived (constructed once per swap, consumed by the caller almost
+/// immediately) and adding indirection would only complicate consumers.
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
+pub enum AssetTransfer {
+    Spark(WalletTransfer),
+    Token(TokenTransaction),
+}
+
+impl AssetTransfer {
+    /// Returns the operator-side identifier for this transfer — a Spark
+    /// `transfer_id` or a token transaction hash, matching what the swap
+    /// signing flow uses.
+    #[must_use]
+    pub fn id(&self) -> String {
+        match self {
+            AssetTransfer::Spark(t) => t.id.to_string(),
+            AssetTransfer::Token(t) => t.hash.clone(),
+        }
+    }
+}
+
+/// Response returned by [`FlashnetClient::execute_swap`](crate::FlashnetClient::execute_swap):
+/// the wire-shaped fields from Flashnet plus the rich `AssetTransfer` we
+/// produced locally when sending the asset into the pool.
+#[derive(Debug, Clone)]
+pub struct ExecuteSwapResponse {
+    pub flashnet_response: FlashnetExecuteSwapResponse,
+    pub outbound_asset_transfer: AssetTransfer,
+}
 
 #[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -131,7 +167,7 @@ pub(crate) struct ExecuteSwapIntent {
 #[serde_as]
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ExecuteSwapResponse {
+pub struct FlashnetExecuteSwapResponse {
     pub transfer_id: String,
     pub request_id: String,
     pub accepted: bool,
@@ -151,7 +187,7 @@ pub struct ExecuteSwapResponse {
     pub refund_transfer_id: Option<String>,
 }
 
-impl ExecuteSwapResponse {
+impl FlashnetExecuteSwapResponse {
     pub(crate) fn from_signed_execute_swap_response(
         response: SignedExecuteSwapResponse,
         transfer_id: String,

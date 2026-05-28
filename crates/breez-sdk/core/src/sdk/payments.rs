@@ -2,12 +2,13 @@ use bitcoin::hashes::sha256;
 use bitcoin::secp256k1::PublicKey;
 use platform_utils::time::{Duration, SystemTime};
 use platform_utils::tokio;
-use spark_wallet::{ExitSpeed, SparkAddress, TransferId, TransferTokenOutput};
+use spark_wallet::{
+    ExitSpeed, LightningReceivePayment, SparkAddress, TransferId, TransferTokenOutput,
+};
 use spark_wallet::{InvoiceDescription, Preimage};
 use std::str::FromStr;
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::timeout;
-use tracing::{Instrument, error, info, warn};
+use tokio::sync::oneshot;
+use tracing::{Instrument, debug, error, info, instrument, warn};
 
 use crate::{
     BitcoinAddressDetails, Bolt11InvoiceDetails, ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse,
@@ -29,7 +30,11 @@ use crate::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
     utils::{
-        payments::{get_payment_and_emit_event, get_payment_with_conversion_details},
+        payments::{
+            fetch_and_process_payment, get_payment_with_conversion_details,
+            insert_payment_with_metadata, record_payment_update,
+        },
+        polling::{PollSchedule, poll_until},
         send_payment_validation::{get_dust_limit_sats, validate_prepare_send_payment_request},
         token::map_and_persist_token_transaction,
     },
@@ -37,8 +42,12 @@ use crate::{
 
 use super::{
     BreezSdk,
-    helpers::{InternalEventListener, get_deposit_address, is_payment_match},
+    helpers::{get_deposit_address, maybe_get_payment_from_storage},
 };
+
+// Polling cadence for wait_for_incoming_payment.
+const WAIT_FOR_INCOMING_PAYMENT_INITIAL_DELAY_MS: u64 = 500;
+const WAIT_FOR_INCOMING_PAYMENT_MAX_DELAY_MS: u64 = 2000;
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -134,7 +143,7 @@ impl BreezSdk {
         let payment: Payment = transfer.try_into()?;
 
         // Insert the payment into storage to make it immediately available for listing
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(ClaimHtlcPaymentResponse { payment })
     }
@@ -407,11 +416,20 @@ impl BreezSdk {
         }
     }
 
+    #[instrument(
+        level = "info",
+        target = "breez_sdk_core::send_payment",
+        skip_all,
+        fields(payment_id = tracing::field::Empty),
+    )]
     pub async fn send_payment(
         &self,
         request: SendPaymentRequest,
     ) -> Result<SendPaymentResponse, SdkError> {
         self.maybe_ensure_spark_private_mode_initialized().await?;
+        if let Some(key) = request.idempotency_key.as_deref() {
+            tracing::Span::current().record("payment_id", key);
+        }
         Box::pin(self.maybe_convert_token_send_payment(request, false, None)).await
     }
 
@@ -510,7 +528,27 @@ impl BreezSdk {
         expiry_secs: Option<u32>,
         payment_hash: Option<String>,
     ) -> Result<ReceivePaymentResponse, SdkError> {
-        let invoice = if let Some(payment_hash_hex) = payment_hash {
+        let receive = self
+            .receive_bolt11_invoice_inner(description, amount_sats, expiry_secs, payment_hash)
+            .await?;
+        Ok(ReceivePaymentResponse {
+            payment_request: receive.invoice,
+            fee: 0,
+        })
+    }
+
+    /// Internal variant of [`Self::receive_bolt11_invoice`] that keeps the
+    /// full SSP receive object (id + invoice + status + …). Used by
+    /// `lnurl_withdraw` to get the SSP id for the synchronous wait via
+    /// `WaitForPaymentIdentifier::LightningReceive`.
+    pub(crate) async fn receive_bolt11_invoice_inner(
+        &self,
+        description: String,
+        amount_sats: Option<u64>,
+        expiry_secs: Option<u32>,
+        payment_hash: Option<String>,
+    ) -> Result<LightningReceivePayment, SdkError> {
+        let receive = if let Some(payment_hash_hex) = payment_hash {
             let hash = sha256::Hash::from_str(&payment_hash_hex)
                 .map_err(|e| SdkError::InvalidInput(format!("Invalid payment hash: {e}")))?;
             self.spark_wallet
@@ -522,7 +560,6 @@ impl BreezSdk {
                     expiry_secs,
                 )
                 .await?
-                .invoice
         } else {
             self.spark_wallet
                 .create_lightning_invoice(
@@ -533,12 +570,8 @@ impl BreezSdk {
                     self.config.prefer_spark_over_lightning,
                 )
                 .await?
-                .invoice
         };
-        Ok(ReceivePaymentResponse {
-            payment_request: invoice,
-            fee: 0,
-        })
+        Ok(receive)
     }
 
     pub(super) async fn maybe_convert_token_send_payment(
@@ -837,7 +870,7 @@ impl BreezSdk {
     ) -> Result<SendPaymentResponse, SdkError> {
         // Wait for the received conversion payment to complete
         let payment = self
-            .wait_for_payment(
+            .wait_for_incoming_payment(
                 WaitForPaymentIdentifier::PaymentId(
                     conversion_response.received_payment_id.clone(),
                 ),
@@ -1056,7 +1089,7 @@ impl BreezSdk {
         };
 
         // Insert the payment into storage to make it immediately available for listing
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
@@ -1096,7 +1129,7 @@ impl BreezSdk {
         let payment: Payment = transfer.try_into()?;
 
         // Insert the payment into storage to make it immediately available for listing
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
@@ -1156,7 +1189,7 @@ impl BreezSdk {
         };
 
         // Insert the payment into storage to make it immediately available for listing
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
@@ -1339,7 +1372,7 @@ impl BreezSdk {
         };
 
         // Insert the payment into storage to make it immediately available for listing
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
@@ -1409,69 +1442,47 @@ impl BreezSdk {
 
         let payment: Payment = response.try_into()?;
 
-        self.storage.insert_payment(payment.clone()).await?;
+        self.storage.apply_payment_update(payment.clone()).await?;
 
         Ok(SendPaymentResponse { payment })
     }
 
-    pub(super) async fn wait_for_payment(
+    pub(crate) async fn wait_for_incoming_payment(
         &self,
         identifier: WaitForPaymentIdentifier,
         completion_timeout_secs: u32,
     ) -> Result<Payment, SdkError> {
-        let (tx, mut rx) = mpsc::channel(20);
-        // Use internal listener to see raw events before middleware processing.
-        // This is critical because TokenConversionMiddleware suppresses conversion
-        // child events, but wait_for_payment needs to see them.
-        let id = self
-            .event_emitter
-            .add_internal_listener(Box::new(InternalEventListener::new(tx)))
-            .await;
-
-        // Run the main logic in a closure so cleanup always happens,
-        // even if an early `?` exits (e.g. get_payment_by_invoice failure).
-        let result = async {
-            // First check if we already have the completed payment in storage
-            let payment = match &identifier {
-                WaitForPaymentIdentifier::PaymentId(payment_id) => self
-                    .storage
-                    .get_payment_by_id(payment_id.clone())
-                    .await
-                    .ok(),
-                WaitForPaymentIdentifier::PaymentRequest(payment_request) => {
-                    self.storage
-                        .get_payment_by_invoice(payment_request.clone())
-                        .await?
-                }
-            };
-            if let Some(payment) = payment
-                && payment.status == PaymentStatus::Completed
-            {
-                return Ok(payment);
-            }
-
-            timeout(Duration::from_secs(completion_timeout_secs.into()), async {
-                loop {
-                    let Some(event) = rx.recv().await else {
-                        return Err(SdkError::Generic("Event channel closed".to_string()));
-                    };
-
-                    let SdkEvent::PaymentSucceeded { payment } = event else {
-                        continue;
-                    };
-
-                    if is_payment_match(&payment, &identifier) {
-                        return Ok(payment);
-                    }
-                }
-            })
-            .await
-            .map_err(|_| SdkError::Generic("Timeout waiting for payment".to_string()))?
+        // Fast path: completed payment already in storage.
+        if let Some(payment) =
+            maybe_get_payment_from_storage(self.storage.as_ref(), &identifier).await?
+            && payment.status == PaymentStatus::Completed
+        {
+            return Ok(payment);
         }
-        .await;
 
-        self.event_emitter.remove_internal_listener(&id).await;
-        result
+        let schedule = PollSchedule {
+            initial_delay: Duration::from_millis(WAIT_FOR_INCOMING_PAYMENT_INITIAL_DELAY_MS),
+            max_delay: Duration::from_millis(WAIT_FOR_INCOMING_PAYMENT_MAX_DELAY_MS),
+            timeout: Duration::from_secs(completion_timeout_secs.into()),
+        };
+        let shutdown = Some(self.shutdown_sender.subscribe());
+
+        let payment = match identifier {
+            WaitForPaymentIdentifier::PaymentId(pid) => {
+                poll_until(schedule, shutdown, || {
+                    fetch_and_process_payment(&self.spark_wallet, self.storage.clone(), &pid, false)
+                })
+                .await?
+            }
+            WaitForPaymentIdentifier::LightningReceive { ssp_id, .. } => {
+                poll_until(schedule, shutdown, || {
+                    self.poll_then_process_lightning_receive(&ssp_id)
+                })
+                .await?
+            }
+        };
+        self.finalize_payment(payment.clone()).await;
+        Ok(payment)
     }
 
     /// Spawns the background poll that watches an outgoing Lightning send to
@@ -1545,10 +1556,7 @@ impl BreezSdk {
             };
 
             let _ = tx.send(payment.clone());
-            if let Err(e) = storage.insert_payment(payment.clone()).await {
-                error!("Failed to update payment in storage: {e:?}");
-            }
-            get_payment_and_emit_event(&storage, &event_emitter, payment).await;
+            record_payment_update(&storage, &event_emitter, payment, true).await;
         }.instrument(span));
 
         rx
@@ -1971,5 +1979,56 @@ impl BreezSdk {
             )
             .await
             .map_err(Into::into)
+    }
+
+    /// Wraps `insert_payment_with_metadata` with the LNURL-receive
+    /// metadata refresh, so an LNURL-receive payment lands in storage with
+    /// its sender metadata attached. Returns whether a status event was
+    /// emitted.
+    pub(crate) async fn finalize_payment(&self, mut payment: Payment) -> bool {
+        // No-op for non-Lightning-receive payments; for LNURL receives
+        // this pulls the LNURL metadata into the payment record.
+        self.sync_single_lnurl_metadata(&mut payment).await;
+
+        insert_payment_with_metadata(
+            self.spark_wallet.clone(),
+            self.storage.clone(),
+            self.event_emitter.clone(),
+            payment,
+        )
+        .await
+    }
+
+    /// Polls an inbound Lightning payment by SSP id. The receive object
+    /// only carries the transfer id once the SSP has forwarded the payment
+    /// via Spark. Once present, defers to [`fetch_and_process_payment`] to
+    /// fetch the Spark transfer, claim it, and produce a terminal Payment.
+    async fn poll_then_process_lightning_receive(
+        &self,
+        ssp_id: &str,
+    ) -> Result<Option<Payment>, SdkError> {
+        let Some(receive) = self
+            .spark_wallet
+            .fetch_lightning_receive_payment(ssp_id)
+            .await?
+        else {
+            debug!("poll_then_process_lightning_receive({ssp_id}): SSP returned no receive yet");
+            return Ok(None);
+        };
+        debug!(
+            "poll_then_process_lightning_receive({ssp_id}): SSP status={:?}, transfer_id={:?}",
+            receive.status, receive.transfer_id
+        );
+        let Some(transfer_id) = receive.transfer_id else {
+            return Ok(None);
+        };
+        // Lightning receives are spark transfers from our perspective.
+        fetch_and_process_payment(
+            &self.spark_wallet,
+            self.storage.clone(),
+            &transfer_id.to_string(),
+            false,
+        )
+        .await
     }
 }

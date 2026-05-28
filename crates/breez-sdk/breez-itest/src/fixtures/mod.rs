@@ -3,7 +3,10 @@ pub mod docker;
 pub mod lnurl;
 
 use anyhow::Result;
-use breez_sdk_spark::{MaxFee, Network, StableBalanceConfig, StableBalanceToken, default_config};
+use breez_sdk_spark::{
+    LeafOptimizationConfig, MaxFee, Network, StableBalanceConfig, StableBalanceToken,
+    default_config, default_server_config,
+};
 use rand::RngCore;
 use rstest::fixture;
 use tracing::info;
@@ -73,6 +76,47 @@ pub async fn bob_strict_fee_sdk() -> Result<SdkInstance> {
 
     let mut cfg = default_config(Network::Regtest);
     cfg.max_deposit_claim_fee = Some(MaxFee::Fixed { amount: 0 });
+    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
+}
+
+/// Fixture: Alice's SDK with leaf optimization in manual-trigger mode and a
+/// high target multiplicity. Used to drive a deterministic optimization run
+/// (no background optimizer racing the test; enough work that the planner
+/// produces real swaps).
+#[fixture]
+pub async fn alice_sdk_manual_opt() -> Result<SdkInstance> {
+    let dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-manual-opt")
+        .tempdir()?;
+    let path = dir.path().to_string_lossy().to_string();
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut cfg = default_config(Network::Regtest);
+    cfg.leaf_optimization_config = LeafOptimizationConfig {
+        auto_enabled: false,
+        multiplicity: 15,
+    };
+    build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
+}
+
+/// Server-mode variant of [`alice_sdk_manual_opt`]. Same manual-trigger
+/// shape, but with `background_tasks_enabled = false` so the test exercises
+/// the manual optimization path on the server runtime.
+#[fixture]
+pub async fn alice_server_sdk_manual_opt() -> Result<SdkInstance> {
+    let dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-server-manual-opt")
+        .tempdir()?;
+    let path = dir.path().to_string_lossy().to_string();
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut cfg = default_server_config(Network::Regtest);
+    cfg.leaf_optimization_config = LeafOptimizationConfig {
+        auto_enabled: false,
+        multiplicity: 15,
+    };
     build_sdk_with_custom_config(path, seed, cfg, Some(dir), true).await
 }
 

@@ -2,8 +2,8 @@
 //!
 //! Conversion operations (stable balance, ongoing sends) create child payments
 //! (send sats→Flashnet, receive tokens). These child events are internal plumbing
-//! and should not reach external listeners. Internal listeners (like `wait_for_payment`)
-//! bypass middleware and still see them.
+//! and should not reach external listeners. Internal listeners (like
+//! `ClientSyncListener`) bypass middleware and still see them.
 
 use tracing::info;
 

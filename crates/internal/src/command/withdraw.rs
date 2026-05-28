@@ -121,7 +121,7 @@ pub async fn handle_command(
                     None,
                 )
                 .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            println!("{result:#?}");
         }
         WithdrawCommand::UnilateralExit {
             fee_rate,

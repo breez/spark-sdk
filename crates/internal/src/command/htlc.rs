@@ -44,7 +44,7 @@ pub async fn handle_command(
             let htlcs = wallet
                 .list_claimable_htlc_transfers(Some(PagingFilter::new(limit, offset, None)))
                 .await?;
-            println!("HTLC transfers: {}", serde_json::to_string_pretty(&htlcs)?);
+            println!("HTLC transfers: {htlcs:#?}");
         }
         HtlcCommand::Create {
             amount_sat,
@@ -80,12 +80,12 @@ pub async fn handle_command(
                     None,
                 )
                 .await?;
-            println!("Transfer: {}", serde_json::to_string_pretty(&transfer)?);
+            println!("Transfer: {transfer:#?}");
         }
         HtlcCommand::Claim { preimage } => {
             let preimage = Preimage::from_hex(&preimage)?;
             let transfer = wallet.claim_htlc(&preimage).await?;
-            println!("Transfer: {}", serde_json::to_string_pretty(&transfer)?);
+            println!("Transfer: {transfer:#?}");
         }
     }
     Ok(())

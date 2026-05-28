@@ -1,5 +1,5 @@
 use spark::signer::SignerError;
-use spark_wallet::SessionManagerError;
+use spark_wallet::SessionStoreError;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
@@ -15,7 +15,7 @@ pub enum FlashnetError {
     },
 
     #[error("Session: {0}")]
-    Session(#[from] SessionManagerError),
+    Session(#[from] SessionStoreError),
 
     #[error("Signer: {0}")]
     Signer(#[from] SignerError),

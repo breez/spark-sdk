@@ -128,13 +128,14 @@ pub async fn parse_input(
     .into())
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn init_logging(
     log_dir: Option<String>,
     app_logger: Option<Box<dyn Logger>>,
     log_filter: Option<String>,
 ) -> Result<(), SdkError> {
-    logger::init_logging(log_dir, app_logger, log_filter)
+    logger::init_logging(log_dir.as_deref(), app_logger, log_filter.as_deref())
 }
 
 /// Connects to the Spark network using the provided configuration and mnemonic.
@@ -146,7 +147,7 @@ pub fn init_logging(
 /// # Returns
 ///
 /// Result containing either the initialized `BreezSdk` or an `SdkError`
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg(feature = "sqlite")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkError> {
     let builder = super::sdk_builder::SdkBuilder::new(request.config, request.seed)
@@ -167,7 +168,7 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 /// # Returns
 ///
 /// Result containing either the initialized `BreezSdk` or an `SdkError`
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg(feature = "sqlite")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn connect_with_signer(
     request: crate::ConnectWithSignerRequest,

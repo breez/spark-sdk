@@ -2,56 +2,87 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use log::info;
 
-async fn start_optimization(sdk: &BreezSdk) {
-    // ANCHOR: start-optimization
-    sdk.start_leaf_optimization().await;
-    // ANCHOR_END: start-optimization
-}
+async fn run_full_optimization(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: optimize-leaves-full
+    let outcome = sdk
+        .optimize_leaves(OptimizeLeavesRequest::default())
+        .await?
+        .outcome;
 
-async fn cancel_optimization(sdk: &BreezSdk) -> Result<()> {
-    // ANCHOR: cancel-optimization
-    sdk.cancel_leaf_optimization().await?;
-    // ANCHOR_END: cancel-optimization
+    match outcome {
+        OptimizationOutcome::Completed { rounds_executed } => {
+            if rounds_executed == 0 {
+                info!("Optimization skipped — wallet already optimal");
+            } else {
+                info!("Optimization completed in {} rounds", rounds_executed);
+            }
+        }
+        OptimizationOutcome::InProgress => {
+            // Full mode runs to completion in one call, so InProgress is
+            // not reachable here.
+            unreachable!("Full mode never returns InProgress");
+        }
+    }
+    // ANCHOR_END: optimize-leaves-full
     Ok(())
 }
 
-fn get_optimization_progress(sdk: &BreezSdk) {
-    // ANCHOR: get-optimization-progress
-    let progress = sdk.get_leaf_optimization_progress();
-
-    info!("Optimization is running: {}", progress.is_running);
-    info!("Current round: {}", progress.current_round);
-    info!("Total rounds: {}", progress.total_rounds);
-    // ANCHOR_END: get-optimization-progress
+async fn run_optimization_one_round_at_a_time(sdk: &BreezSdk) -> Result<()> {
+    // ANCHOR: optimize-leaves-single-round
+    let mut rounds_executed = 0u32;
+    loop {
+        let request = OptimizeLeavesRequest {
+            mode: OptimizationMode::SingleRound,
+        };
+        match sdk.optimize_leaves(request).await?.outcome {
+            OptimizationOutcome::InProgress => {
+                rounds_executed += 1;
+                info!("Executed round {}", rounds_executed);
+            }
+            OptimizationOutcome::Completed {
+                rounds_executed: this_round,
+            } => {
+                rounds_executed += this_round;
+                if rounds_executed == 0 {
+                    info!("Optimization skipped — wallet already optimal");
+                } else {
+                    info!("Optimization done after {} rounds", rounds_executed);
+                }
+                break;
+            }
+        }
+    }
+    // ANCHOR_END: optimize-leaves-single-round
+    Ok(())
 }
 
-fn optimization_events(event: OptimizationEvent) {
-    // ANCHOR: optimization-events
+fn handle_auto_optimization_event(event: AutoOptimizationEvent) {
+    // ANCHOR: auto-optimization-events
     match event {
-        OptimizationEvent::Started { total_rounds } => {
-            info!("Optimization started with {} rounds", total_rounds);
+        AutoOptimizationEvent::Started { total_rounds } => {
+            info!("Auto-optimization started with {} rounds", total_rounds);
         }
-        OptimizationEvent::RoundCompleted {
+        AutoOptimizationEvent::RoundCompleted {
             current_round,
             total_rounds,
         } => {
             info!(
-                "Optimization round {} of {} completed",
+                "Auto-optimization round {} of {} completed",
                 current_round, total_rounds
             );
         }
-        OptimizationEvent::Completed => {
-            info!("Optimization completed successfully");
+        AutoOptimizationEvent::Completed => {
+            info!("Auto-optimization completed successfully");
         }
-        OptimizationEvent::Cancelled => {
-            info!("Optimization was cancelled");
+        AutoOptimizationEvent::Cancelled => {
+            info!("Auto-optimization was cancelled");
         }
-        OptimizationEvent::Failed { error } => {
-            info!("Optimization failed: {}", error);
+        AutoOptimizationEvent::Failed { error } => {
+            info!("Auto-optimization failed: {}", error);
         }
-        OptimizationEvent::Skipped => {
-            info!("Optimization was skipped because leaves are already optimal");
+        AutoOptimizationEvent::Skipped => {
+            info!("Auto-optimization was skipped because leaves are already optimal");
         }
     }
-    // ANCHOR_END: optimization-events
+    // ANCHOR_END: auto-optimization-events
 }

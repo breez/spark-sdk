@@ -34,10 +34,10 @@ bindings-swift: build-release
 	cargo run --features=uniffi-cli --bin uniffi-bindgen generate --library $(BIN_PATH) --no-format --language swift -o $(FFI_DIR)swift
 
 build-release:
-	cargo build --release
+	cargo build --release $(if $(CARGO_FEATURES),--features $(CARGO_FEATURES))
 
 build-release-target-%: install-target-%
-	cargo build --release --target $*
+	cargo build --release --target $* $(if $(CARGO_FEATURES),--features $(CARGO_FEATURES))
 
 install-uniffi-bindgen-cs:
 	$(INSTALL_PREFIX) cargo install uniffi-bindgen-cs --git https://github.com/breez/uniffi-bindgen-cs --branch v0.29.4-with-fixes

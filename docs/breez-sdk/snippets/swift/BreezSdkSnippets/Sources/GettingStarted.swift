@@ -74,8 +74,8 @@ class SdkEventListener: EventListener {
         case .paymentFailed(let paymentFailed):
             // A payment failed
             let _ = paymentFailed
-        case .optimization(let optimizationEvent):
-            // An optimization event occurred
+        case .autoOptimization(let optimizationEvent):
+            // An auto-optimization event occurred
             let _ = optimizationEvent
         case .lightningAddressChanged(let lightningAddress):
             // The lightning address has changed
