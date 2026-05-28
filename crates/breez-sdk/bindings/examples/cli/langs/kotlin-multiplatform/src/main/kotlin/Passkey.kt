@@ -83,18 +83,33 @@ class FilePrfProvider(dataDir: String) : PrfProvider {
         }
     }
 
-    override suspend fun derivePrfSeed(salt: String): ByteArray {
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(secret, "HmacSHA256"))
-        return mac.doFinal(salt.toByteArray(Charsets.UTF_8))
+        val seeds = request.salts.map { salt ->
+            mac.reset()
+            mac.doFinal(salt.toByteArray(Charsets.UTF_8))
+        }
+        return DeriveSeedsOutput(seeds = seeds, credentialId = null)
     }
 
-    override suspend fun isPrfAvailable(): Boolean {
-        return true
+    override suspend fun isSupported(): Boolean = true
+
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential {
+        throw UnsupportedOperationException(
+            "File-backed PRF provider does not implement create-credential; " +
+                "use sign-in by label instead."
+        )
     }
 
     override suspend fun checkDomainAssociation(): DomainAssociation =
         DomainAssociation.Skipped("FilePrfProvider does not verify domain association")
+
+    // CredentialRegistry hooks are no-ops: this provider doesn't track
+    // credential IDs (no real WebAuthn ceremonies happen here).
+    override suspend fun getKnownCredentialIds(): List<ByteArray> = emptyList()
+    override suspend fun removeKnownCredentialId(id: ByteArray) = Unit
+    override suspend fun clearKnownCredentialIds() = Unit
 }
 
 // ---------------------------------------------------------------------------
@@ -105,16 +120,21 @@ class FilePrfProvider(dataDir: String) : PrfProvider {
  * Stub provider for hardware-dependent backends that are not yet supported.
  */
 class NotYetSupportedProvider(private val name: String) : PrfProvider {
-    override suspend fun derivePrfSeed(salt: String): ByteArray {
+    private fun notYet(): Nothing =
         throw UnsupportedOperationException("$name passkey provider is not yet supported in the Kotlin CLI")
-    }
 
-    override suspend fun isPrfAvailable(): Boolean {
-        throw UnsupportedOperationException("$name passkey provider is not yet supported in the Kotlin CLI")
-    }
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput = notYet()
+
+    override suspend fun isSupported(): Boolean = notYet()
+
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential = notYet()
 
     override suspend fun checkDomainAssociation(): DomainAssociation =
         DomainAssociation.Skipped("$name does not verify domain association")
+
+    override suspend fun getKnownCredentialIds(): List<ByteArray> = emptyList()
+    override suspend fun removeKnownCredentialId(id: ByteArray) = Unit
+    override suspend fun clearKnownCredentialIds() = Unit
 }
 
 // ---------------------------------------------------------------------------
@@ -147,20 +167,19 @@ suspend fun resolvePasskeySeed(
     listLabels: Boolean,
     storeLabel: Boolean,
 ): Seed {
-    val relayConfig = NostrRelayConfig(breezApiKey = breezApiKey)
-    val passkey = Passkey(provider, relayConfig)
+    val passkey = PasskeyClient(prfProvider = provider, breezApiKey = breezApiKey, config = null)
 
     // --store-label: publish the label to Nostr
     if (storeLabel && label != null) {
         println("Publishing label '$label' to Nostr...")
-        passkey.storeLabel(label)
+        passkey.labels().store(label)
         println("Label '$label' published successfully.")
     }
 
     // --list-labels: query Nostr and prompt user to select
     val resolvedName: String? = if (listLabels) {
         println("Querying Nostr for available labels...")
-        val labels = passkey.listLabels()
+        val labels = passkey.labels().list()
 
         if (labels.isEmpty()) {
             throw IllegalStateException("No labels found on Nostr for this identity")
@@ -185,6 +204,6 @@ suspend fun resolvePasskeySeed(
         label
     }
 
-    val wallet = passkey.getWallet(resolvedName)
-    return wallet.seed
+    val response = passkey.signIn(SignInRequest(label = resolvedName))
+    return response.wallet.seed
 }

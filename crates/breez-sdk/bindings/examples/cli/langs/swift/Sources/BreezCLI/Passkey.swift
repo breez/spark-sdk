@@ -39,7 +39,7 @@ class FilePrfProvider: PrfProvider {
         if fm.fileExists(atPath: secretPath) {
             let bytes = try Data(contentsOf: URL(fileURLWithPath: secretPath))
             guard bytes.count == 32 else {
-                throw PasskeyPrfError.Generic( "Invalid secret file: expected 32 bytes, got \(bytes.count)")
+                throw PrfProviderError.Generic( "Invalid secret file: expected 32 bytes, got \(bytes.count)")
             }
             self.secret = bytes
         } else {
@@ -47,7 +47,7 @@ class FilePrfProvider: PrfProvider {
             var randomBytes = [UInt8](repeating: 0, count: 32)
             let status = SecRandomCopyBytes(kSecRandomDefault, 32, &randomBytes)
             guard status == errSecSuccess else {
-                throw PasskeyPrfError.Generic( "Failed to generate random secret")
+                throw PrfProviderError.Generic( "Failed to generate random secret")
             }
 
             // Ensure data directory exists
@@ -60,30 +60,45 @@ class FilePrfProvider: PrfProvider {
         }
     }
 
-    func derivePrfSeed(salt: String) async throws -> Data {
-        // HMAC-SHA256(secret, salt)
+    private func hmac(salt: String) -> Data {
         let saltData = Data(salt.utf8)
-        var hmac = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        var out = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
         secret.withUnsafeBytes { secretPtr in
             saltData.withUnsafeBytes { saltPtr in
                 CCHmac(
                     CCHmacAlgorithm(kCCHmacAlgSHA256),
                     secretPtr.baseAddress, secret.count,
                     saltPtr.baseAddress, saltData.count,
-                    &hmac
+                    &out
                 )
             }
         }
-        return Data(hmac)
+        return Data(out)
     }
 
-    func isPrfAvailable() async throws -> Bool {
-        true
+    func deriveSeeds(request: DeriveSeedsRequest) async throws -> DeriveSeedsOutput {
+        let seeds = request.salts.map { hmac(salt: $0) }
+        return DeriveSeedsOutput(seeds: seeds, credentialId: nil)
+    }
+
+    func isSupported() async throws -> Bool { true }
+
+    func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
+        throw PrfProviderError.Generic(
+            "File-backed PRF provider does not implement create-credential; " +
+            "use sign-in by label instead."
+        )
     }
 
     func checkDomainAssociation() async throws -> DomainAssociation {
         .skipped(reason: "FilePrfProvider does not verify domain association")
     }
+
+    // CredentialRegistry hooks are no-ops: this provider doesn't track
+    // credential IDs (no real WebAuthn ceremonies happen here).
+    func getKnownCredentialIds() async throws -> [Data] { [] }
+    func removeKnownCredentialId(id: Data) async throws {}
+    func clearKnownCredentialIds() async throws {}
 }
 
 // MARK: - YubiKey PRF provider (skeleton)
@@ -93,20 +108,30 @@ class FilePrfProvider: PrfProvider {
 /// This is a skeleton implementation. A full implementation would require
 /// a Swift YubiKey library (e.g., YubiKit from Yubico).
 class YubiKeyPrfProvider: PrfProvider {
-    func derivePrfSeed(salt: String) async throws -> Data {
-        throw PasskeyPrfError.Generic(
+    private func notYet() -> PrfProviderError {
+        .Generic(
             "YubiKey PRF provider is not yet supported in the Swift CLI. " +
-                "See the Rust CLI for a reference implementation using yubico-manager."
+            "See the Rust CLI for a reference implementation using yubico-manager."
         )
     }
 
-    func isPrfAvailable() async throws -> Bool {
-        false
+    func deriveSeeds(request: DeriveSeedsRequest) async throws -> DeriveSeedsOutput {
+        throw notYet()
+    }
+
+    func isSupported() async throws -> Bool { false }
+
+    func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
+        throw notYet()
     }
 
     func checkDomainAssociation() async throws -> DomainAssociation {
         .skipped(reason: "YubiKeyPrfProvider does not verify domain association")
     }
+
+    func getKnownCredentialIds() async throws -> [Data] { [] }
+    func removeKnownCredentialId(id: Data) async throws {}
+    func clearKnownCredentialIds() async throws {}
 }
 
 // MARK: - FIDO2 PRF provider (skeleton)
@@ -116,20 +141,30 @@ class YubiKeyPrfProvider: PrfProvider {
 /// This is a skeleton implementation. A full implementation would require
 /// a Swift FIDO2/CTAP2 library with HID transport support.
 class Fido2PrfProvider: PrfProvider {
-    func derivePrfSeed(salt: String) async throws -> Data {
-        throw PasskeyPrfError.Generic(
+    private func notYet() -> PrfProviderError {
+        .Generic(
             "FIDO2 PRF provider is not yet supported in the Swift CLI. " +
-                "See the Rust CLI for a reference implementation using ctap-hid-fido2."
+            "See the Rust CLI for a reference implementation using ctap-hid-fido2."
         )
     }
 
-    func isPrfAvailable() async throws -> Bool {
-        false
+    func deriveSeeds(request: DeriveSeedsRequest) async throws -> DeriveSeedsOutput {
+        throw notYet()
+    }
+
+    func isSupported() async throws -> Bool { false }
+
+    func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
+        throw notYet()
     }
 
     func checkDomainAssociation() async throws -> DomainAssociation {
         .skipped(reason: "Fido2PrfProvider does not verify domain association")
     }
+
+    func getKnownCredentialIds() async throws -> [Data] { [] }
+    func removeKnownCredentialId(id: Data) async throws {}
+    func clearKnownCredentialIds() async throws {}
 }
 
 // MARK: - Provider factory
@@ -143,7 +178,7 @@ func createPrfProvider(type: PasskeyProviderType, dataDir: String, rpId: String?
                 rpName: "Breez SDK"
             )
         } else {
-            throw PasskeyPrfError.Generic(
+            throw PrfProviderError.Generic(
                 "Platform passkey PRF requires iOS 18.0+ or macOS 15.0+"
             )
         }
@@ -165,13 +200,12 @@ func resolvePasskeySeed(
     listLabels: Bool,
     storeLabel: Bool
 ) async throws -> Seed {
-    let relayConfig = NostrRelayConfig(breezApiKey: breezApiKey)
-    let passkey = Passkey(prfProvider: provider, relayConfig: relayConfig)
+    let passkey = PasskeyClient(prfProvider: provider, breezApiKey: breezApiKey, config: nil)
 
     // --store-label: publish the label to Nostr
     if storeLabel, let label {
         print("Publishing label '\(label)' to Nostr...")
-        try await passkey.storeLabel(label: label)
+        try await passkey.labels().store(label: label)
         print("Label '\(label)' published successfully.")
     }
 
@@ -179,10 +213,10 @@ func resolvePasskeySeed(
     let resolvedName: String?
     if listLabels {
         print("Querying Nostr for available labels...")
-        let labels = try await passkey.listLabels()
+        let labels = try await passkey.labels().list()
 
         if labels.isEmpty {
-            throw PasskeyPrfError.Generic(
+            throw PrfProviderError.Generic(
                 "No labels found on Nostr for this identity"
             )
         }
@@ -193,10 +227,10 @@ func resolvePasskeySeed(
         }
 
         guard let line = readlinePrompt("Select label (1-\(labels.count)): "),
-              let idx = Int(line.trimmingCharacters(in: .whitespaces)),
+              let idx = Int(line.trimmingCharacters(in: CharacterSet.whitespaces)),
               idx >= 1, idx <= labels.count
         else {
-            throw PasskeyPrfError.Generic( "Invalid selection")
+            throw PrfProviderError.Generic( "Invalid selection")
         }
 
         resolvedName = labels[idx - 1]
@@ -204,6 +238,6 @@ func resolvePasskeySeed(
         resolvedName = label
     }
 
-    let wallet = try await passkey.getWallet(label: resolvedName)
-    return wallet.seed
+    let response = try await passkey.signIn(request: SignInRequest(label: resolvedName))
+    return response.wallet.seed
 }

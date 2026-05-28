@@ -17,7 +17,7 @@ import {
   type PrfProvider,
   type NostrRelayConfig,
 } from '@breeztech/breez-sdk-spark-react-native'
-import { PasskeyProvider as BuiltinPasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
+import { PasskeyProvider as PlatformPasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
 import RNFS from 'react-native-fs'
 import { generateRandomBytes, hmacSha256 } from './crypto_utils'
 
@@ -229,7 +229,7 @@ export async function buildPrfProvider(
 ): Promise<{ derivePrfSeed: (salt: string) => Promise<ArrayBuffer>; isPrfAvailable: () => Promise<boolean> }> {
   switch (provider) {
     case PasskeyProvider.Platform:
-      return new BuiltinPasskeyProvider()
+      return new PlatformPasskeyProvider()
     case PasskeyProvider.File:
       return FilePrfProvider.create(dataDir)
     case PasskeyProvider.YubiKey:
@@ -267,7 +267,7 @@ function isPasskeyCreationNeeded(error: unknown): boolean {
  * Nostr label storage / discovery, matching the WASM, Go, Python, and Rust CLIs.
  *
  * For Platform providers: if the user cancels or has no credential, this
- * automatically calls createPasskey() and retries — matching the glow-web
+ * automatically calls createPasskey() and retries: matching the glow-web
  * onboarding flow.
  *
  * @param provider - The PRF provider to use
@@ -282,7 +282,7 @@ export async function resolvePasskeySeed(
   provider: {
     derivePrfSeed: (salt: string) => Promise<ArrayBuffer>
     isPrfAvailable: () => Promise<boolean>
-    createPasskey?: (excludeCredentialIds?: Uint8Array[]) => Promise<Uint8Array>
+    createPasskey?: (excludeCredentials?: Uint8Array[]) => Promise<unknown>
   },
   breezApiKey: string | undefined,
   label: string | undefined,

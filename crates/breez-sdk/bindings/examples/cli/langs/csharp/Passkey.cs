@@ -20,7 +20,7 @@ public enum PasskeyProvider
 /// <summary>
 /// Configuration for passkey seed derivation.
 /// </summary>
-public class PasskeyConfig
+public class CliPasskeyConfig
 {
     /// <summary>The PRF provider to use.</summary>
     public PasskeyProvider Provider { get; init; }
@@ -125,24 +125,38 @@ public class FilePrfProvider : PrfProvider
         }
     }
 
-    public async Task<byte[]> DerivePrfSeed(string salt)
+    public Task<DeriveSeedsOutput> DeriveSeeds(DeriveSeedsRequest request)
     {
         using var hmac = new HMACSHA256(_secret);
-        var result = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(salt));
-        return await Task.FromResult(result);
+        var seeds = new byte[request.salts.Length][];
+        for (int i = 0; i < request.salts.Length; i++)
+        {
+            seeds[i] = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(request.salts[i]));
+        }
+        return Task.FromResult(new DeriveSeedsOutput(seeds, credentialId: null));
     }
 
-    public async Task<bool> IsPrfAvailable()
+    public Task<bool> IsSupported() => Task.FromResult(true);
+
+    public Task<RegisteredCredential> CreatePasskey(byte[][] excludeCredentials)
     {
-        // File-based PRF is always available once initialized
-        return await Task.FromResult(true);
+        throw new NotSupportedException(
+            "File-backed PRF provider does not implement create-credential; " +
+            "use sign-in by label instead.");
     }
 
-    public async Task<DomainAssociation> CheckDomainAssociation()
-    {
-        return await Task.FromResult<DomainAssociation>(
+    public Task<DomainAssociation> CheckDomainAssociation() =>
+        Task.FromResult<DomainAssociation>(
             new DomainAssociation.Skipped("FilePrfProvider does not verify domain association"));
-    }
+
+    // CredentialRegistry hooks are no-ops: this provider doesn't track
+    // credential IDs (no real WebAuthn ceremonies happen here).
+    public Task<byte[][]> GetKnownCredentialIds() =>
+        Task.FromResult(Array.Empty<byte[]>());
+
+    public Task RemoveKnownCredentialId(byte[] credentialId) => Task.CompletedTask;
+
+    public Task ClearKnownCredentialIds() => Task.CompletedTask;
 }
 
 // ---------------------------------------------------------------------------
@@ -161,23 +175,24 @@ public class NotYetSupportedProvider : PrfProvider
         _name = name;
     }
 
-    public Task<byte[]> DerivePrfSeed(string salt)
-    {
-        throw new NotSupportedException(
-            $"{_name} passkey provider is not yet supported in the C# CLI");
-    }
+    private NotSupportedException NotYet() =>
+        new($"{_name} passkey provider is not yet supported in the C# CLI");
 
-    public Task<bool> IsPrfAvailable()
-    {
-        throw new NotSupportedException(
-            $"{_name} passkey provider is not yet supported in the C# CLI");
-    }
+    public Task<DeriveSeedsOutput> DeriveSeeds(DeriveSeedsRequest request) => throw NotYet();
 
-    public Task<DomainAssociation> CheckDomainAssociation()
-    {
-        return Task.FromResult<DomainAssociation>(
+    public Task<bool> IsSupported() => throw NotYet();
+
+    public Task<RegisteredCredential> CreatePasskey(byte[][] excludeCredentials) => throw NotYet();
+
+    public Task<DomainAssociation> CheckDomainAssociation() =>
+        Task.FromResult<DomainAssociation>(
             new DomainAssociation.Skipped($"{_name} does not verify domain association"));
-    }
+
+    public Task<byte[][]> GetKnownCredentialIds() => Task.FromResult(Array.Empty<byte[]>());
+
+    public Task RemoveKnownCredentialId(byte[] credentialId) => Task.CompletedTask;
+
+    public Task ClearKnownCredentialIds() => Task.CompletedTask;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,8 +202,8 @@ public class NotYetSupportedProvider : PrfProvider
 public static class PasskeyResolver
 {
     /// <summary>
-    /// Derives a wallet seed using the given PRF provider,
-    /// matching the Rust CLI's resolve_passkey_seed logic.
+    /// Derives a wallet seed using the given PRF provider, matching the Rust
+    /// CLI's resolve_passkey_seed logic.
     /// </summary>
     public static async Task<Seed> ResolvePasskeySeed(
         PrfProvider provider,
@@ -197,16 +212,13 @@ public static class PasskeyResolver
         bool listLabels,
         bool storeLabel)
     {
-        var relayConfig = new NostrRelayConfig(
-            breezApiKey: breezApiKey
-        );
-        var passkey = new Passkey(provider, relayConfig);
+        var passkey = new PasskeyClient(provider, breezApiKey, config: null);
 
         // --store-label: publish to Nostr
         if (storeLabel && label != null)
         {
             Console.WriteLine($"Publishing label '{label}' to Nostr...");
-            await passkey.StoreLabel(label);
+            await passkey.Labels().Store(label);
             Console.WriteLine($"Label '{label}' published successfully.");
         }
 
@@ -215,7 +227,7 @@ public static class PasskeyResolver
         if (listLabels)
         {
             Console.WriteLine("Querying Nostr for available labels...");
-            var labels = await passkey.ListLabels();
+            var labels = await passkey.Labels().List();
 
             if (labels.Length == 0)
             {
@@ -245,7 +257,7 @@ public static class PasskeyResolver
             resolvedName = labels[idx - 1];
         }
 
-        var wallet = await passkey.GetWallet(label: resolvedName);
-        return wallet.seed;
+        var response = await passkey.SignIn(new SignInRequest(label: resolvedName));
+        return response.wallet.seed;
     }
 }

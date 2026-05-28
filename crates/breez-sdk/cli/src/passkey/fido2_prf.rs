@@ -1,5 +1,7 @@
 use bitcoin::hashes::{Hash, sha256};
-use breez_sdk_spark::passkey::{PasskeyPrfError, PrfProvider};
+use breez_sdk_spark::passkey::{
+    DeriveSeedsOutput, DeriveSeedsRequest, PrfProvider, PrfProviderError,
+};
 use ctap_hid_fido2::fidokey::get_assertion::get_assertion_params::{
     Extension as GetExtension, GetAssertionArgsBuilder,
 };
@@ -74,7 +76,7 @@ impl Fido2PrfProvider {
     }
 
     /// Get PIN from cache, environment variable, or interactive prompt.
-    fn get_pin(cache: &Arc<Mutex<CachedState>>) -> Result<String, PasskeyPrfError> {
+    fn get_pin(cache: &Arc<Mutex<CachedState>>) -> Result<String, PrfProviderError> {
         // Check cached PIN first
         if let Some(pin) = cache.lock().unwrap().pin.as_ref() {
             return Ok(pin.clone());
@@ -89,7 +91,7 @@ impl Fido2PrfProvider {
         // Interactive prompt
         eprint!("Enter FIDO2 PIN: ");
         let pin = rpassword::read_password()
-            .map_err(|e| PasskeyPrfError::Generic(format!("Failed to read PIN: {e}")))?;
+            .map_err(|e| PrfProviderError::Generic(format!("Failed to read PIN: {e}")))?;
 
         // Cache for session
         cache.lock().unwrap().pin = Some(pin.clone());
@@ -102,11 +104,11 @@ impl Fido2PrfProvider {
         rp_id: &str,
         rp_name: &str,
         pin: &str,
-    ) -> Result<(), PasskeyPrfError> {
+    ) -> Result<(), PrfProviderError> {
         eprintln!("Creating new passkey for {rp_id}. Touch your authenticator...");
 
         let device = FidoKeyHidFactory::create(&fido2_cfg())
-            .map_err(|e| PasskeyPrfError::Generic(format!("No FIDO2 device found: {e}")))?;
+            .map_err(|e| PrfProviderError::Generic(format!("No FIDO2 device found: {e}")))?;
 
         // Random challenge (not used for verification, just required by protocol)
         let challenge: [u8; 32] = rand::random();
@@ -135,7 +137,7 @@ impl Fido2PrfProvider {
             .any(|ext| matches!(ext, MakeExtension::HmacSecret(Some(true))));
 
         if !hmac_enabled {
-            return Err(PasskeyPrfError::PrfNotSupported);
+            return Err(PrfProviderError::PrfNotSupported);
         }
 
         eprintln!("Passkey created successfully with PRF support.");
@@ -150,9 +152,9 @@ impl Fido2PrfProvider {
         rp_id: &str,
         transformed_salt: [u8; 32],
         pin: &str,
-    ) -> Result<Vec<u8>, PasskeyPrfError> {
+    ) -> Result<Vec<u8>, PrfProviderError> {
         let device = FidoKeyHidFactory::create(&fido2_cfg())
-            .map_err(|e| PasskeyPrfError::Generic(format!("No FIDO2 device found: {e}")))?;
+            .map_err(|e| PrfProviderError::Generic(format!("No FIDO2 device found: {e}")))?;
 
         eprintln!("Touch your authenticator...");
         let challenge: [u8; 32] = rand::random();
@@ -168,9 +170,9 @@ impl Fido2PrfProvider {
             .get_assertion_with_args(&args)
             .map_err(|e| map_fido2_error(e, "PRF assertion failed"))?;
 
-        let assertion = assertions
-            .first()
-            .ok_or(PasskeyPrfError::CredentialNotFound)?;
+        let assertion = assertions.first().ok_or_else(|| {
+            PrfProviderError::CredentialNotFound("FIDO2 device returned no assertion".to_string())
+        })?;
 
         // Extract hmac-secret output from extensions
         for ext in &assertion.extensions {
@@ -179,49 +181,61 @@ impl Fido2PrfProvider {
             }
         }
 
-        Err(PasskeyPrfError::PrfNotSupported)
+        Err(PrfProviderError::PrfNotSupported)
     }
 }
 
-#[async_trait::async_trait]
-impl PrfProvider for Fido2PrfProvider {
-    async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
+impl Fido2PrfProvider {
+    async fn derive_one(&self, salt: String) -> Result<Vec<u8>, PrfProviderError> {
         let rp_id = self.rp_id.clone();
         let rp_name = self.rp_name.clone();
         let cache = Arc::clone(&self.cache);
-
-        // Transform salt for WebAuthn compatibility
         let transformed_salt = Self::transform_salt(salt.as_bytes());
 
-        // Use spawn_blocking for HID operations
         tokio::task::spawn_blocking(move || {
             let pin = Self::get_pin(&cache)?;
-
-            // Try to get assertion first (credential may already exist)
             match Self::get_assertion_with_prf(&rp_id, transformed_salt, &pin) {
                 Ok(output) => Ok(output),
-                Err(PasskeyPrfError::CredentialNotFound) => {
-                    // No credential for this rpId - register one
+                Err(PrfProviderError::CredentialNotFound(_)) => {
                     eprintln!("No passkey found for {rp_id}.");
                     Self::register_discoverable_credential(&rp_id, &rp_name, &pin)?;
-                    // Now try again
                     Self::get_assertion_with_prf(&rp_id, transformed_salt, &pin)
                 }
                 Err(e) => Err(e),
             }
         })
         .await
-        .map_err(|e| PasskeyPrfError::Generic(format!("Task join error: {e}")))?
+        .map_err(|e| PrfProviderError::Generic(format!("Task join error: {e}")))?
+    }
+}
+
+#[async_trait::async_trait]
+impl PrfProvider for Fido2PrfProvider {
+    async fn derive_seeds(
+        &self,
+        request: DeriveSeedsRequest,
+    ) -> Result<DeriveSeedsOutput, PrfProviderError> {
+        // FIDO2 hmac-secret has no platform picker; the per-call
+        // allow-list and immediate-mediation hint are no-ops here. The
+        // discoverable credential ID is not surfaced through this path.
+        let mut seeds = Vec::with_capacity(request.salts.len());
+        for salt in request.salts {
+            seeds.push(self.derive_one(salt).await?);
+        }
+        Ok(DeriveSeedsOutput {
+            seeds,
+            credential_id: None,
+        })
     }
 
-    async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
+    async fn is_supported(&self) -> Result<bool, PrfProviderError> {
         // Check if a FIDO2 device is connected
         match FidoKeyHidFactory::create(&fido2_cfg()) {
             Ok(device) => {
                 // Check device supports hmac-secret
                 let info = device
                     .get_info()
-                    .map_err(|e| PasskeyPrfError::Generic(e.to_string()))?;
+                    .map_err(|e| PrfProviderError::Generic(e.to_string()))?;
                 Ok(info.extensions.iter().any(|ext| ext == "hmac-secret"))
             }
             Err(_) => Ok(false),
@@ -229,22 +243,22 @@ impl PrfProvider for Fido2PrfProvider {
     }
 }
 
-/// Map ctap-hid-fido2 errors to `PasskeyPrfError`.
-fn map_fido2_error(e: impl std::fmt::Display, context: &str) -> PasskeyPrfError {
+/// Map ctap-hid-fido2 errors to `PrfProviderError`.
+fn map_fido2_error(e: impl std::fmt::Display, context: &str) -> PrfProviderError {
     let msg = format!("{e}");
 
     if msg.contains("NO_CREDENTIALS") || msg.contains("no credential") {
-        PasskeyPrfError::CredentialNotFound
+        PrfProviderError::CredentialNotFound(format!("{context}: {e}"))
     } else if msg.contains("PIN") && (msg.contains("invalid") || msg.contains("Invalid")) {
-        PasskeyPrfError::AuthenticationFailed("Invalid PIN".into())
+        PrfProviderError::AuthenticationFailed("Invalid PIN".into())
     } else if msg.contains("PIN") && msg.contains("blocked") {
-        PasskeyPrfError::AuthenticationFailed("PIN blocked - reset required".into())
+        PrfProviderError::AuthenticationFailed("PIN blocked - reset required".into())
     } else if msg.contains("cancel") || msg.contains("Cancel") {
-        PasskeyPrfError::UserCancelled
+        PrfProviderError::UserCancelled
     } else if msg.contains("hmac-secret") && msg.contains("not supported") {
-        PasskeyPrfError::PrfNotSupported
+        PrfProviderError::PrfNotSupported
     } else {
-        PasskeyPrfError::PrfEvaluationFailed(format!("{context}: {e}"))
+        PrfProviderError::PrfEvaluationFailed(format!("{context}: {e}"))
     }
 }
 

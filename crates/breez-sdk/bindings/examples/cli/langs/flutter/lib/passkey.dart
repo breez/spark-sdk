@@ -13,7 +13,7 @@ const _secretFileName = 'seedless-restore-secret';
 ///
 /// Uses HMAC-SHA256 with a secret stored in a file. The secret is generated
 /// randomly on first use and persisted to disk.
-class FilePrfProvider {
+class FilePrfProvider implements PrfProvider {
   final Uint8List _secret;
 
   FilePrfProvider._(this._secret);
@@ -44,24 +44,50 @@ class FilePrfProvider {
     return FilePrfProvider._(secret);
   }
 
-  Future<Uint8List> derivePrfSeed(String salt) async {
+  Uint8List _hmac(String salt) {
     final hmacSha256 = Hmac(sha256, _secret);
     final digest = hmacSha256.convert(salt.codeUnits);
     return Uint8List.fromList(digest.bytes);
   }
 
-  Future<bool> isPrfAvailable() async => true;
+  @override
+  Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request) async {
+    final seeds = request.salts.map(_hmac).toList();
+    return DeriveSeedsOutput(seeds: seeds, credentialId: null);
+  }
+
+  @override
+  Future<bool> isSupported() async => true;
+
+  @override
+  Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentials) async {
+    throw Exception(
+      'File-backed PRF provider does not implement create-credential; '
+      'use sign-in by label instead.',
+    );
+  }
+
+  // CredentialRegistry hooks are no-ops: this provider doesn't track
+  // credential IDs (no real WebAuthn ceremonies happen here).
+  @override
+  Future<List<Uint8List>> getKnownCredentialIds() async => const [];
+
+  @override
+  Future<void> removeKnownCredentialId(Uint8List id) async {}
+
+  @override
+  Future<void> clearKnownCredentialIds() async {}
 }
 
 /// Configuration for passkey seed derivation.
-class PasskeyConfig {
+class CliPasskeyConfig {
   final String provider;
   final String? label;
   final bool listLabels;
   final bool storeLabel;
   final String? rpid;
 
-  PasskeyConfig({
+  CliPasskeyConfig({
     required this.provider,
     this.label,
     this.listLabels = false,
@@ -73,7 +99,7 @@ class PasskeyConfig {
 /// Resolve the seed using a passkey PRF provider.
 ///
 /// Mirrors the Rust CLI's `resolve_passkey_seed` function.
-Future<Seed> resolvePasskeySeed(PasskeyConfig config, String dataDir, String? breezApiKey) async {
+Future<Seed> resolvePasskeySeed(CliPasskeyConfig config, String dataDir, String? breezApiKey) async {
   if (config.provider != 'file') {
     throw Exception(
       'Passkey provider "${config.provider}" is not yet supported in the Flutter CLI. '
@@ -82,18 +108,12 @@ Future<Seed> resolvePasskeySeed(PasskeyConfig config, String dataDir, String? br
   }
 
   final filePrf = FilePrfProvider.create(dataDir);
-
-  final relayConfig = NostrRelayConfig(breezApiKey: breezApiKey);
-  final passkey = Passkey(
-    derivePrfSeed: filePrf.derivePrfSeed,
-    isPrfAvailable: filePrf.isPrfAvailable,
-    relayConfig: relayConfig,
-  );
+  final passkey = PasskeyClientBuilder(breezApiKey: breezApiKey).withPrfProvider(filePrf).build();
 
   // --store-label: publish the label to Nostr
   if (config.storeLabel && config.label != null) {
     print("Publishing label '${config.label}' to Nostr...");
-    await passkey.storeLabel(label: config.label!);
+    await passkey.labels().store(label: config.label!);
     print("Label '${config.label}' published successfully.");
   }
 
@@ -101,7 +121,7 @@ Future<Seed> resolvePasskeySeed(PasskeyConfig config, String dataDir, String? br
   String? label;
   if (config.listLabels) {
     print('Querying Nostr for available labels...');
-    final labels = await passkey.listLabels();
+    final labels = await passkey.labels().list();
 
     if (labels.isEmpty) {
       throw Exception('No labels found on Nostr for this identity');
@@ -122,6 +142,6 @@ Future<Seed> resolvePasskeySeed(PasskeyConfig config, String dataDir, String? br
     label = config.label;
   }
 
-  final wallet = await passkey.getWallet(label: label);
-  return wallet.seed;
+  final response = await passkey.signIn(request: SignInRequest(label: label, allowCredentials: const []));
+  return response.wallet.seed;
 }
