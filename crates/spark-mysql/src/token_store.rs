@@ -499,71 +499,16 @@ impl TokenOutputStore for MysqlTokenStore {
         outputs_to_add: Option<&TokenOutputs>,
     ) -> Result<(), TokenOutputServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
-
-        // 1. Remove spent outputs and mark them as spent.
-        for (tx_hash, vout) in outputs_to_remove {
-            let vout_i32 = (*vout).cast_signed();
-            let mut deleted = tx
-                .exec_iter(
-                    "DELETE FROM brz_token_outputs \
-                     WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
-                    (self.identity.as_slice(), tx_hash.as_str(), vout_i32),
-                )
-                .await
-                .map_err(map_err)?;
-            let affected = deleted.affected_rows();
-            let _: Vec<Row> = deleted.collect().await.map_err(map_err)?;
-
-            if affected > 0 {
-                tx.exec_drop(
-                    "INSERT IGNORE INTO brz_token_spent_outputs \
-                       (user_id, prev_tx_hash, prev_tx_vout, spent_at) \
-                     VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
-                    (self.identity.as_slice(), tx_hash.as_str(), vout_i32),
-                )
-                .await
-                .map_err(map_err)?;
-            }
-        }
-
-        // 2. Insert new outputs.
-        if let Some(token_outputs) = outputs_to_add {
-            self.upsert_metadata(&mut tx, &token_outputs.metadata)
-                .await?;
-
-            // Clear spent status for outputs being (re-)added.
-            if !token_outputs.outputs.is_empty() {
-                let pair_placeholders = vec!["(?, ?)"; token_outputs.outputs.len()].join(", ");
-                let sql = format!(
-                    "DELETE FROM brz_token_spent_outputs \
-                     WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
-                );
-                let mut params: Vec<Value> = Vec::with_capacity(
-                    token_outputs
-                        .outputs
-                        .len()
-                        .saturating_mul(2)
-                        .saturating_add(1),
-                );
-                params.push(Value::from(self.identity.clone()));
-                for output in &token_outputs.outputs {
-                    params.push(Value::from(output.prev_tx_hash.clone()));
-                    params.push(Value::from(output.prev_tx_vout as i32));
-                }
-                tx.exec_drop(&sql, Params::Positional(params))
-                    .await
-                    .map_err(map_err)?;
-            }
-
-            for output in &token_outputs.outputs {
-                self.insert_single_output(&mut tx, &token_outputs.metadata.identifier, output)
-                    .await?;
-            }
-        }
-
-        tx.commit().await.map_err(map_err)?;
-        Ok(())
+        // Serialize against `set_tokens_outputs`. Without this lock, a refresh
+        // could insert operator-id rows for the same outpoints we're about to
+        // insert with synthetic ids, leaving duplicate (id, outpoint) rows
+        // that later trigger TOKEN_RULES_VIOLATION at the operator.
+        self.acquire_write_lock(&mut conn).await?;
+        let result = self
+            .update_token_outputs_inner(&mut conn, outputs_to_remove, outputs_to_add)
+            .await;
+        self.release_write_lock_quiet(&mut conn).await;
+        result
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1138,6 +1083,14 @@ impl MysqlTokenStore {
             .map(Self::output_from_row)
             .collect::<Result<Vec<_>, _>>()?;
 
+        // Defensive: dedup by outpoint. brz_token_outputs is keyed by id, so a
+        // race between an inline insert (synthetic id) and a concurrent refresh
+        // (operator id) can land two rows for the same outpoint. Listing both
+        // as inputs to a transaction would trigger TOKEN_RULES_VIOLATION at
+        // the operator ("duplicate output to spend").
+        let mut seen: HashSet<(String, u32)> = HashSet::new();
+        outputs.retain(|o| seen.insert((o.prev_tx_hash.clone(), o.prev_tx_vout)));
+
         if let Some(ref preferred) = preferred_outputs {
             let preferred_ids: HashSet<&str> =
                 preferred.iter().map(|p| p.output.id.as_str()).collect();
@@ -1251,6 +1204,99 @@ impl MysqlTokenStore {
         )
         .await
         .map_err(map_err)?;
+
+        tx.commit().await.map_err(map_err)?;
+        Ok(())
+    }
+
+    #[allow(clippy::cast_possible_wrap)]
+    async fn update_token_outputs_inner(
+        &self,
+        conn: &mut Conn,
+        outputs_to_remove: &[(String, u32)],
+        outputs_to_add: Option<&TokenOutputs>,
+    ) -> Result<(), TokenOutputServiceError> {
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
+
+        // 1. Remove spent outputs and mark them as spent.
+        for (tx_hash, vout) in outputs_to_remove {
+            let vout_i32 = (*vout).cast_signed();
+            let mut deleted = tx
+                .exec_iter(
+                    "DELETE FROM brz_token_outputs \
+                     WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
+                    (self.identity.as_slice(), tx_hash.as_str(), vout_i32),
+                )
+                .await
+                .map_err(map_err)?;
+            let affected = deleted.affected_rows();
+            let _: Vec<Row> = deleted.collect().await.map_err(map_err)?;
+
+            if affected > 0 {
+                tx.exec_drop(
+                    "INSERT IGNORE INTO brz_token_spent_outputs \
+                       (user_id, prev_tx_hash, prev_tx_vout, spent_at) \
+                     VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
+                    (self.identity.as_slice(), tx_hash.as_str(), vout_i32),
+                )
+                .await
+                .map_err(map_err)?;
+            }
+        }
+
+        // 2. Insert new outputs.
+        if let Some(token_outputs) = outputs_to_add {
+            self.upsert_metadata(&mut tx, &token_outputs.metadata)
+                .await?;
+
+            // Clear spent status for outputs being (re-)added.
+            if !token_outputs.outputs.is_empty() {
+                let pair_placeholders = vec!["(?, ?)"; token_outputs.outputs.len()].join(", ");
+                let sql = format!(
+                    "DELETE FROM brz_token_spent_outputs \
+                     WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
+                );
+                let mut params: Vec<Value> = Vec::with_capacity(
+                    token_outputs
+                        .outputs
+                        .len()
+                        .saturating_mul(2)
+                        .saturating_add(1),
+                );
+                params.push(Value::from(self.identity.clone()));
+                for output in &token_outputs.outputs {
+                    params.push(Value::from(output.prev_tx_hash.clone()));
+                    params.push(Value::from(output.prev_tx_vout as i32));
+                }
+                tx.exec_drop(&sql, Params::Positional(params))
+                    .await
+                    .map_err(map_err)?;
+            }
+
+            // Collect existing outpoints so we skip re-inserting outpoints
+            // already present (e.g. from a concurrent refresh that landed
+            // operator-id rows). Without this, the synthetic-id row from
+            // this inline insert would coexist with the operator-id row
+            // and surface as a duplicate input at reserve time.
+            let existing_outpoints: HashSet<(String, i32)> = tx
+                .exec(
+                    "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs WHERE user_id = ?",
+                    (self.identity.clone(),),
+                )
+                .await
+                .map_err(map_err)?
+                .into_iter()
+                .collect();
+
+            for output in &token_outputs.outputs {
+                let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
+                if existing_outpoints.contains(&outpoint) {
+                    continue;
+                }
+                self.insert_single_output(&mut tx, &token_outputs.metadata.identifier, output)
+                    .await?;
+            }
+        }
 
         tx.commit().await.map_err(map_err)?;
         Ok(())

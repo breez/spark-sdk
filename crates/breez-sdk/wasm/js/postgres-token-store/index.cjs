@@ -570,7 +570,12 @@ class PostgresTokenStore {
    */
   async updateTokenOutputs(outputsToRemove, outputsToAdd) {
     try {
-      await this._withTransaction(async (client) => {
+      // Serialize against setTokensOutputs. Without the write lock, a
+      // concurrent refresh could insert operator-id rows for the same
+      // outpoints we're about to insert with synthetic ids, leaving
+      // duplicate (id, outpoint) rows that later trigger
+      // TOKEN_RULES_VIOLATION at the operator.
+      await this._withWriteTransaction(async (client) => {
         // 1. Remove spent outputs and mark as spent.
         if (outputsToRemove && outputsToRemove.length > 0) {
           for (const [txHash, vout] of outputsToRemove) {
@@ -604,7 +609,24 @@ class PostgresTokenStore {
             );
           }
 
+          // Collect existing outpoints so we skip re-inserting outpoints
+          // already present (e.g. from a concurrent refresh that landed
+          // operator-id rows). Without this, the synthetic-id row from this
+          // inline insert would coexist with the operator-id row and surface
+          // as a duplicate input at reserve time.
+          const existingResult = await client.query(
+            "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs WHERE user_id = $1",
+            [this.identity]
+          );
+          const existingOutpoints = new Set(
+            existingResult.rows.map((r) => `${r.prev_tx_hash}:${r.prev_tx_vout}`)
+          );
+
           for (const output of outputsToAdd.outputs) {
+            const outpoint = `${output.prevTxHash}:${output.prevTxVout}`;
+            if (existingOutpoints.has(outpoint)) {
+              continue;
+            }
             await this._insertSingleOutput(
               client,
               outputsToAdd.metadata.identifier,
@@ -680,6 +702,20 @@ class PostgresTokenStore {
         );
 
         let outputs = outputRows.rows.map((row) => this._outputFromRow(row));
+
+        // Defensive: dedup by outpoint. brz_token_outputs is keyed by id, so a
+        // race between an inline insert (synthetic id) and a concurrent refresh
+        // (operator id) can land two rows for the same outpoint. Listing both
+        // as inputs would trigger TOKEN_RULES_VIOLATION at the operator.
+        {
+          const seen = new Set();
+          outputs = outputs.filter((o) => {
+            const key = `${o.prevTxHash}:${o.prevTxVout}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        }
 
         // Filter by preferred if provided
         if (preferredOutputs && preferredOutputs.length > 0) {

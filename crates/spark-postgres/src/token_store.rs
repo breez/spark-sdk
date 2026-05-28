@@ -673,6 +673,12 @@ impl TokenOutputStore for PostgresTokenStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
+        // Serialize against `set_tokens_outputs`. Without this lock, a refresh
+        // could insert operator-id rows for the same outpoints we're about to
+        // insert with synthetic ids, leaving duplicate (id, outpoint) rows
+        // that later trigger TOKEN_RULES_VIOLATION at the operator.
+        self.acquire_write_lock(&tx).await?;
+
         // 1. Remove spent outputs and mark them as spent.
         for (tx_hash, vout) in outputs_to_remove {
             let vout_i32 = (*vout).cast_signed();
@@ -725,7 +731,28 @@ impl TokenOutputStore for PostgresTokenStore {
                 .map_err(map_err)?;
             }
 
+            // Collect existing outpoints so we skip re-inserting outpoints
+            // already present (e.g. from a concurrent refresh that landed
+            // operator-id rows). Without this, the synthetic-id row from
+            // this inline insert would coexist with the operator-id row
+            // and surface as a duplicate input at reserve time.
+            let existing_outpoints: HashSet<(String, i32)> = {
+                let rows = tx
+                    .query(
+                        "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs \
+                         WHERE user_id = $1",
+                        &[&self.identity],
+                    )
+                    .await
+                    .map_err(map_err)?;
+                rows.iter().map(|r| (r.get(0), r.get(1))).collect()
+            };
+
             for output in &token_outputs.outputs {
+                let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
+                if existing_outpoints.contains(&outpoint) {
+                    continue;
+                }
                 self.insert_single_output(&tx, &token_outputs.metadata.identifier, output)
                     .await?;
             }
@@ -801,6 +828,14 @@ impl TokenOutputStore for PostgresTokenStore {
             .iter()
             .map(Self::output_from_row)
             .collect::<Result<Vec<_>, _>>()?;
+
+        // Defensive: dedup by outpoint. brz_token_outputs is keyed by id, so a
+        // race between an inline insert (synthetic id) and a concurrent refresh
+        // (operator id) can land two rows for the same outpoint. Listing both
+        // as inputs to a transaction would trigger TOKEN_RULES_VIOLATION at
+        // the operator ("duplicate output to spend").
+        let mut seen: HashSet<(String, u32)> = HashSet::new();
+        outputs.retain(|o| seen.insert((o.prev_tx_hash.clone(), o.prev_tx_vout)));
 
         // Filter by preferred if provided
         if let Some(ref preferred) = preferred_outputs {
