@@ -2020,7 +2020,10 @@ mod tests {
         let token_outputs = shared_tests::create_token_outputs(1, vec![100, 200]);
         fixture
             .store
-            .set_tokens_outputs(&[token_outputs], shared_tests::future_refresh_start())
+            .set_tokens_outputs(
+                &[token_outputs],
+                shared_tests::future_refresh_start(&fixture.store).await,
+            )
             .await
             .unwrap();
         let reservation = fixture
@@ -2084,7 +2087,7 @@ mod tests {
             .store
             .set_tokens_outputs(
                 std::slice::from_ref(&token1),
-                shared_tests::future_refresh_start(),
+                shared_tests::future_refresh_start(&fixture.store).await,
             )
             .await
             .unwrap();
@@ -2127,7 +2130,7 @@ mod tests {
             .store
             .set_tokens_outputs(
                 std::slice::from_ref(&token1_refresh),
-                shared_tests::future_refresh_start(),
+                shared_tests::future_refresh_start(&fixture.store).await,
             )
             .await
             .unwrap();
@@ -2227,13 +2230,13 @@ mod tests {
 
         fx.a.set_tokens_outputs(
             std::slice::from_ref(&a_token1),
-            shared_tests::future_refresh_start(),
+            shared_tests::future_refresh_start(&fx.a).await,
         )
         .await
         .unwrap();
         fx.b.set_tokens_outputs(
             &[b_token1, b_only_token2],
-            shared_tests::future_refresh_start(),
+            shared_tests::future_refresh_start(&fx.b).await,
         )
         .await
         .unwrap();
