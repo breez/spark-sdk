@@ -1,21 +1,24 @@
 package technology.breez.spark.passkey
 
 import android.app.Activity
+import android.util.Log
+import breez_sdk_spark.DeriveSeedsOutput
+import breez_sdk_spark.DeriveSeedsRequest
 import breez_sdk_spark.DomainAssociation
-import breez_sdk_spark.PasskeyPrfException
 import breez_sdk_spark.PrfProvider
+import breez_sdk_spark.PrfProviderException
+import breez_sdk_spark.RegisteredCredential
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
+import technology.breez.spark.passkey.core.CredentialRegistry
 import technology.breez.spark.passkey.core.DomainAssociationResult
+import technology.breez.spark.passkey.core.RegistryOperation
 
 /**
  * Built-in [PrfProvider] that uses the AndroidX Credential Manager +
  * WebAuthn PRF extension to derive deterministic 32-byte seeds from platform
  * passkeys. A thin wrapper around [CredentialManagerPrfCore] that adapts the
- * core's exceptions into the UniFFI-generated [PasskeyPrfException] variants.
- *
- * On first use, if no credential exists for the Relying Party, a new passkey
- * is automatically created (registered), then the assertion is retried.
+ * core's exceptions into the UniFFI-generated [PrfProviderException] variants.
  *
  * ## Requirements
  *
@@ -25,102 +28,121 @@ import technology.breez.spark.passkey.core.DomainAssociationResult
  * - A physical device: emulators cannot complete the WebAuthn registration
  *   handshake.
  *
- * ## Example
- *
- * ```kotlin
- * val prfProvider = PasskeyProvider(
- *     activityProvider = { MainActivity.currentInstance!! },
- * )
- * val passkey = Passkey(prfProvider, relayConfig = null)
- * val wallet = passkey.getWallet("personal")
- * ```
- *
- * @param activityProvider Called lazily on every PRF / registration request
- *   to obtain the current top Activity. Using a lambda (rather than a direct
- *   Activity reference) avoids holding a stale instance across configuration
- *   changes.
+ * @param activityProvider Called lazily on every request to obtain the
+ *   current top Activity. Using a lambda (rather than a direct Activity
+ *   reference) avoids holding a stale instance across configuration
+ *   changes. Credential Manager is lifecycle-sensitive, so the lambda
+ *   MUST return the foreground, RESUMED, non-finishing Activity at call
+ *   time (it shows system UI on top of it) and MUST NOT return a
+ *   destroyed or cached background instance. Returning the wrong
+ *   Activity surfaces as opaque Credential Manager failures.
  * @param rpId Relying Party ID. Must match the domain configured for
- *   cross-platform credential sharing. Changing this after users have
- *   registered passkeys will make their existing credentials undiscoverable.
- * @param rpName Display name for the RP, shown during credential registration.
- *   Only used when creating new passkeys.
- * @param userName User name stored with the credential. Defaults to [rpName].
- *   Only used during registration.
- * @param userDisplayName User display name shown in the passkey picker.
- *   Defaults to [userName] (or [rpName] if [userName] is null). Only used
- *   during registration.
- * @param autoRegister When `true` (default), [derivePrfSeed] automatically
- *   creates a new passkey if none exists for this RP ID, then retries the
- *   assertion. When `false`, [derivePrfSeed] throws
- *   [PasskeyPrfException.CredentialNotFound] instead, letting the caller
- *   control registration separately via [createPasskey].
- * @param allowCredentialIds When non-empty, restricts assertion (sign-in)
- *   to one of the listed credential IDs. The platform refuses any other
- *   credential for this RP. Use this to bind sign-in to a specific
- *   passkey the caller has registered, instead of letting the platform
- *   pick any sibling credential that happens to share the RP. Critical
- *   for deterministic seed derivation when multiple credentials might
- *   exist for the same RP. When empty (default), the platform picks any
- *   credential matching the RP.
+ *   cross-platform credential sharing.
+ * @param rpName Maps to the WebAuthn `rp.name`. Deprecated in
+ *   WebAuthn L3 but still required by current Credential Manager
+ *   prompts. Surfaces in some credential-management UIs (Google
+ *   Password Manager, 1Password); platform UIs increasingly ignore
+ *   it. Only used at credential registration; changing it does not
+ *   affect existing credentials.
+ * @param userName Maps to the WebAuthn `user.name`. Treated as the
+ *   user's unique identifier for the credential and shown in the
+ *   account picker during sign-in. Pass a stable per-user value if
+ *   each registration should surface as a distinct entry. Defaults
+ *   to [rpName]. Only used at registration; changing it does not
+ *   affect existing credentials.
+ * @param userDisplayName Maps to the WebAuthn `user.displayName`.
+ *   The user-friendly label the OS / browser MAY (but is not
+ *   required to) show in the picker; behavior varies by Credential
+ *   Manager backend. Defaults to [userName] (or [rpName] if
+ *   [userName] is null). Only used at registration; changing it
+ *   does not affect existing credentials.
+ * @param credentialRegistry Opt-in app-side store of known credential
+ *   IDs. When supplied, the SDK auto-merges stored IDs into
+ *   `allowCredentials` / `excludeCredentials` and writes new IDs
+ *   back after success.
+ * @param onRegistryError Best-effort callback for registry failures;
+ *   never blocks the ceremony.
  */
 public class PasskeyProvider(
     private val activityProvider: () -> Activity,
-    private val rpId: String = CredentialManagerPrfCore.DEFAULT_RP_ID,
-    private val rpName: String = CredentialManagerPrfCore.DEFAULT_RP_NAME,
+    private val rpId: String,
+    private val rpName: String,
     userName: String? = null,
     userDisplayName: String? = null,
-    private val autoRegister: Boolean = true,
-    private val allowCredentialIds: List<ByteArray> = emptyList(),
+    private val credentialRegistry: CredentialRegistry? = null,
+    private val onRegistryError: ((RegistryOperation, Throwable) -> Unit)? = null,
 ) : PrfProvider {
 
-    private val userName: String = userName ?: rpName
-    private val userDisplayName: String = userDisplayName ?: (userName ?: rpName)
+    public companion object {
+        /**
+         * Constant identifying Breez's shared `keys.breez.technology` RP.
+         * Pass as `rpId` when opting into the Breez-managed Relying Party
+         * (only valid for apps registered with Breez). Apps with their
+         * own RP domain pass their own string.
+         */
+        public const val BREEZ_RP_ID: String = CredentialManagerPrfCore.DEFAULT_RP_ID
 
-    /**
-     * Optional callback fired with the credential ID returned by every
-     * successful WebAuthn assertion (sign-in path). Hosts can set this
-     * to record which credential was just used so they can populate
-     * `excludeCredentialIds` and [allowCredentialIds] on subsequent
-     * requests.
-     *
-     * Useful for migrating users whose passkey predates the host's own
-     * credential-ID tracking: the first successful sign-in surfaces the
-     * credential ID, after which the host's records are correct and the
-     * platform-level "already exists" check can fire on future create
-     * attempts.
-     *
-     * Set before calling [derivePrfSeed]. Not invoked on registration
-     * (see [createPasskey]'s return value for that).
-     */
-    public var onAssertionCredentialId: ((ByteArray) -> Unit)? = null
+        /**
+         * Default Relying Party name used by the zero-config
+         * [PasskeyClient] factory / [PasskeyClientBuilder] when no
+         * `rpName` is supplied. Surfaces in some credential-manager UIs
+         * (Google Password Manager).
+         */
+        public const val DEFAULT_RP_NAME: String = "Breez"
 
-    override suspend fun derivePrfSeed(salt: String): ByteArray {
-        try {
-            return CredentialManagerPrfCore.deriveSeedOrRegister(
-                activity = activityProvider(),
-                salt = salt,
-                rpId = rpId,
-                rpName = rpName,
-                userName = userName,
-                userDisplayName = userDisplayName,
-                autoRegister = autoRegister,
-                allowCredentialIds = allowCredentialIds,
-                onAssertionCredentialId = onAssertionCredentialId,
-            )
-        } catch (e: CredentialManagerPrfCoreException) {
-            throw e.toPasskeyPrfException()
-        }
+        private const val TAG = "PasskeyProvider"
     }
 
-    override suspend fun isPrfAvailable(): Boolean =
-        CredentialManagerPrfCore.isPrfAvailable()
+    private val resolvedUserName: String = userName ?: rpName
+    private val resolvedUserDisplayName: String = userDisplayName ?: resolvedUserName
+
+    /** The configured PRF engine; holds rp identity + registry. */
+    private val core = CredentialManagerPrfCore(
+        rpId = rpId,
+        rpName = rpName,
+        userName = resolvedUserName,
+        userDisplayName = resolvedUserDisplayName,
+        credentialRegistry = credentialRegistry,
+        onRegistryError = onRegistryError,
+        activityProvider = activityProvider,
+    )
+
+    /**
+     * Bulk PRF derivation backed by [CredentialManagerPrfCore.deriveSeeds].
+     * Uses the WebAuthn PRF dual-salt fast path where the authenticator
+     * honors `prf.eval.second`, falling back to single-salt otherwise.
+     * Output ordering matches input ordering. Returns the seeds plus the
+     * credential ID observed in the same assertion (null when none was
+     * captured, e.g. empty `salts`).
+     *
+     * Passes `autoRegister = false`: this provider never implicitly
+     * creates a credential during derivation. Sign-up and sign-in are
+     * explicit (the host calls [createPasskey] for registration), so a
+     * missing credential surfaces as `CredentialNotFound` rather than
+     * silently minting a new passkey. (The core defaults `autoRegister`
+     * to true for direct callers; the provider opts out.)
+     */
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput =
+        try {
+            val derivation = core.deriveSeeds(
+                salts = request.salts,
+                autoRegister = false,
+                allowCredentials = request.allowCredentials,
+                preferImmediatelyAvailableCredentials =
+                    request.preferImmediatelyAvailableCredentials ?: true,
+            )
+            // The core observes the asserted credential ID inline and
+            // returns it alongside the seeds.
+            DeriveSeedsOutput(derivation.seeds, derivation.credentialId)
+        } catch (e: CredentialManagerPrfCoreException) {
+            throw e.toPrfProviderException()
+        }
+
+    override suspend fun isSupported(): Boolean =
+        CredentialManagerPrfCore.isSupported()
 
     override suspend fun checkDomainAssociation(): DomainAssociation {
-        val activity = activityProvider()
-        val result = CredentialManagerPrfCore.checkDomainAssociation(
-            context = activity.applicationContext,
-            rpId = rpId,
-        )
+        val result = core.checkDomainAssociation()
         return when (result) {
             is DomainAssociationResult.Associated ->
                 DomainAssociation.Associated
@@ -140,7 +162,7 @@ public class PasskeyProvider(
             // (NoCredentialException, GetCredentialProviderConfiguration
             // Exception, etc.) that the subsequent CredentialManager call
             // produces a recognizable error when the credential truly
-            // can't be used. iOS has the opposite property —
+            // can't be used. iOS has the opposite property : 
             // ASAuthorizationError collapses AASA failures into
             // `CredentialNotFound`, so iOS keeps NotAssociated as a
             // hard-block (that's the whole point of the pre-check there).
@@ -165,48 +187,78 @@ public class PasskeyProvider(
     }
 
     /**
-     * Register a new passkey without deriving a seed.
+     * Register a new passkey with PRF support. One ceremony, no seed
+     * derivation.
      *
-     * Triggers exactly one platform prompt. Use this to separate credential
-     * creation from derivation in multi-step onboarding flows.
+     * `user.id` is never host-supplied: the core mints a fresh random
+     * 16-byte handle per call and surfaces it via
+     * [RegisteredCredential.userId]. Branding fields (`userName`,
+     * `userDisplayName`) live on this provider's constructor.
      *
-     * @param excludeCredentialIds Optional list of credential IDs to exclude.
-     *   Pass previously created credential IDs to prevent the authenticator
-     *   from creating a duplicate on the same device.
-     * @return The credential ID of the newly created passkey.
+     * When the provider was constructed with a `credentialRegistry`,
+     * the registry's stored IDs are auto-merged into
+     * `excludeCredentials` and the new credential ID is auto-added
+     * on success.
      */
-    public suspend fun createPasskey(excludeCredentialIds: List<ByteArray> = emptyList()): ByteArray {
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential {
         try {
-            return CredentialManagerPrfCore.createCredential(
-                activity = activityProvider(),
-                rpId = rpId,
-                rpName = rpName,
-                userName = userName,
-                userDisplayName = userDisplayName,
-                excludeCredentialIds = excludeCredentialIds,
-            )
+            val c = core.register(excludeCredentials)
+            return RegisteredCredential(c.credentialId, c.userId, c.aaguid, c.backupEligible)
         } catch (e: CredentialManagerPrfCoreException) {
-            throw e.toPasskeyPrfException()
+            throw e.toPrfProviderException()
         }
     }
 
-    private fun CredentialManagerPrfCoreException.toPasskeyPrfException(): PasskeyPrfException =
+    override suspend fun getKnownCredentialIds(): List<ByteArray> {
+        val reg = credentialRegistry ?: return emptyList()
+        return try {
+            reg.read(rpId)
+        } catch (t: Throwable) {
+            Log.w(TAG, "CredentialRegistry.read failed", t)
+            onRegistryError?.invoke(RegistryOperation.Read, t)
+            emptyList()
+        }
+    }
+
+    override suspend fun removeKnownCredentialId(id: ByteArray) {
+        val reg = credentialRegistry ?: return
+        try {
+            reg.remove(rpId, id)
+        } catch (t: Throwable) {
+            Log.w(TAG, "CredentialRegistry.remove failed", t)
+            onRegistryError?.invoke(RegistryOperation.Remove, t)
+        }
+    }
+
+    override suspend fun clearKnownCredentialIds() {
+        val reg = credentialRegistry ?: return
+        try {
+            reg.clear(rpId)
+        } catch (t: Throwable) {
+            Log.w(TAG, "CredentialRegistry.clear failed", t)
+            onRegistryError?.invoke(RegistryOperation.Clear, t)
+        }
+    }
+
+    private fun CredentialManagerPrfCoreException.toPrfProviderException(): PrfProviderException =
         when (kind) {
             CredentialManagerPrfCore.Kind.PrfNotSupported ->
-                PasskeyPrfException.PrfNotSupported()
+                PrfProviderException.PrfNotSupported()
             CredentialManagerPrfCore.Kind.UserCancelled ->
-                PasskeyPrfException.UserCancelled()
+                PrfProviderException.UserCancelled()
+            CredentialManagerPrfCore.Kind.UserTimedOut ->
+                PrfProviderException.UserTimedOut()
             CredentialManagerPrfCore.Kind.CredentialNotFound ->
-                PasskeyPrfException.CredentialNotFound()
+                PrfProviderException.CredentialNotFound(message ?: "Credential not found")
             CredentialManagerPrfCore.Kind.AuthenticationFailed ->
-                PasskeyPrfException.AuthenticationFailed(message ?: "")
+                PrfProviderException.AuthenticationFailed(message ?: "")
             CredentialManagerPrfCore.Kind.PrfEvaluationFailed ->
-                PasskeyPrfException.PrfEvaluationFailed(message ?: "")
+                PrfProviderException.PrfEvaluationFailed(message ?: "")
             CredentialManagerPrfCore.Kind.Configuration ->
-                PasskeyPrfException.Configuration(message ?: "")
+                PrfProviderException.Configuration(message ?: "")
             CredentialManagerPrfCore.Kind.CredentialAlreadyExists ->
-                PasskeyPrfException.CredentialAlreadyExists(message ?: "")
+                PrfProviderException.CredentialAlreadyExists(message ?: "")
             CredentialManagerPrfCore.Kind.Generic ->
-                PasskeyPrfException.Generic(message ?: "")
+                PrfProviderException.Generic(message ?: "")
         }
 }
