@@ -126,23 +126,6 @@ impl SparkRpcClient {
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
-    pub async fn finalize_transfer_with_transfer_package(
-        &self,
-        req: FinalizeTransferWithTransferPackageRequest,
-    ) -> Result<FinalizeTransferResponse> {
-        debug!(
-            "Calling finalize_transfer_with_transfer_package with request: {:?}",
-            req
-        );
-        Ok(self
-            .spark_service_client()
-            .await?
-            .finalize_transfer_with_transfer_package(req)
-            .await?
-            .into_inner())
-    }
-
-    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn claim_transfer(
         &self,
         req: ClaimTransferRequest,
@@ -179,17 +162,6 @@ impl SparkRpcClient {
             .query_all_transfers(req)
             .await?
             .into_inner())
-    }
-
-    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
-    pub async fn store_preimage_share(&self, req: StorePreimageShareRequest) -> Result<()> {
-        debug!("Calling store_preimage_share with request: {:?}", req);
-        self.spark_service_client()
-            .await?
-            .store_preimage_share(req)
-            .await?
-            .into_inner();
-        Ok(())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
@@ -255,20 +227,6 @@ impl SparkRpcClient {
             .spark_service_client()
             .await?
             .provide_preimage(req)
-            .await?
-            .into_inner())
-    }
-
-    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
-    pub async fn start_leaf_swap_v2(
-        &self,
-        req: StartTransferRequest,
-    ) -> Result<StartTransferResponse> {
-        debug!("Calling start_leaf_swap_v2 with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .start_leaf_swap_v2(req)
             .await?
             .into_inner())
     }

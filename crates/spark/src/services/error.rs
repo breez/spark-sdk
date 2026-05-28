@@ -20,8 +20,6 @@ pub enum ServiceError {
     MissingUtxo,
     #[error("missing deposit address proof")]
     MissingDepositAddressProof,
-    #[error("missing signing keyshare")]
-    MissingSigningKeyshare,
     #[error("missing tree signatures")]
     MissingTreeSignatures,
     #[error("missing leaf id")]
