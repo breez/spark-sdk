@@ -659,7 +659,7 @@ impl Storage for SyncedStorage {
     }
 }
 
-#[cfg(all(test, not(all(target_family = "wasm", target_os = "unknown"))))]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
     use crate::{SparkHtlcDetails, persist::sqlite::SqliteStorage};

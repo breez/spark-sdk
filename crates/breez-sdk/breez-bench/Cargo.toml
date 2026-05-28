@@ -32,7 +32,7 @@ path = "src/bin/pool_share_perf.rs"
 breez-sdk-itest = { path = "../breez-itest" }
 
 # SDK under test
-breez-sdk-spark = { workspace = true }
+breez-sdk-spark = { workspace = true, features = ["sqlite", "postgres", "mysql"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }

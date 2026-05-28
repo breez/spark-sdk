@@ -586,8 +586,14 @@ pub enum _Network {
     Regtest,
 }
 
-#[frb(mirror(SdkContextConfig))]
-pub struct _SdkContextConfig {
+/// Flutter-side counterpart of
+/// [`breez_sdk_spark::SdkContextConfig`](breez_sdk_spark::SdkContextConfig).
+///
+/// Not a mirror: the upstream type carries an `Arc<dyn StorageBackend>` that
+/// the Flutter bridge doesn't bridge today. Storage is configured per-SDK via
+/// [`SdkBuilder::with_default_storage`](crate::sdk_builder::SdkBuilder::with_default_storage)
+/// instead.
+pub struct SdkContextConfig {
     pub network: Network,
     pub api_key: Option<String>,
     pub connections_per_operator: Option<u32>,

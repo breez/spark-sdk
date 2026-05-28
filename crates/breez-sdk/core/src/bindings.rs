@@ -4,7 +4,8 @@ use tokio::sync::Mutex;
 
 use crate::{
     BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
-    RestClient, SdkContext, SdkError, Seed, Storage, chain::rest_client::ChainApiType,
+    RestClient, SdkContext, SdkError, Seed, Storage, StorageBackend,
+    chain::rest_client::ChainApiType,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -33,14 +34,32 @@ impl SdkBuilder {
     /// default implementations.
     /// Arguments:
     /// - `storage_dir`: The data directory for storage.
+    #[cfg(feature = "sqlite")]
     pub async fn with_default_storage(&self, storage_dir: String) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_default_storage(storage_dir);
     }
 
-    /// Sets the storage implementation to be used by the SDK.
+    /// Sets the storage backend to be used by the SDK.
+    ///
+    /// Build the [`StorageBackend`](crate::StorageBackend) via
+    /// [`default_storage`](crate::default_storage),
+    /// [`postgres_storage`](crate::postgres_storage),
+    /// [`mysql_storage`](crate::mysql_storage) or
+    /// [`custom_storage`](crate::custom_storage).
+    /// Arguments:
+    /// - `storage`: The storage backend to be used.
+    pub async fn with_storage_backend(&self, storage: Arc<dyn StorageBackend>) {
+        let mut builder = self.inner.lock().await;
+        *builder = builder.clone().with_storage_backend(storage);
+    }
+
+    /// **Deprecated.** Use
+    /// [`with_storage_backend`](SdkBuilder::with_storage_backend) with
+    /// [`custom_storage`](crate::custom_storage).
     /// Arguments:
     /// - `storage`: The storage implementation to be used.
+    #[allow(deprecated)]
     pub async fn with_storage(&self, storage: Arc<dyn Storage>) {
         let mut builder = self.inner.lock().await;
         *builder = builder.clone().with_storage(storage);
@@ -117,29 +136,11 @@ impl SdkBuilder {
     }
 }
 
-#[cfg(all(
-    feature = "postgres",
-    not(all(target_family = "wasm", target_os = "unknown"))
-))]
+#[cfg(feature = "postgres")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl SdkBuilder {
-    /// Sets a shared `PostgreSQL` connection pool as the backend for all
-    /// stores (storage, tree store, and token store). Construct the pool
-    /// via [`create_postgres_connection_pool`](crate::create_postgres_connection_pool) and pass the
-    /// same `Arc` to multiple builders to share connections across SDKs.
-    ///
-    /// If the same builder also receives an [`SdkContext`](crate::SdkContext)
-    /// carrying a Postgres pool, `build()` will error — pick one source.
-    pub async fn with_postgres_connection_pool(
-        &self,
-        pool: Arc<crate::persist::postgres::PostgresConnectionPool>,
-    ) {
-        let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_postgres_connection_pool(pool);
-    }
-
-    /// **Deprecated.** Call `create_postgres_connection_pool(&config)` and
-    /// `with_postgres_connection_pool(pool)` instead.
+    /// **Deprecated.** Use [`with_storage`](SdkBuilder::with_storage) with
+    /// [`postgres_storage`](crate::postgres_storage).
     #[allow(deprecated)]
     pub async fn with_postgres_backend(
         &self,
@@ -151,29 +152,11 @@ impl SdkBuilder {
     }
 }
 
-#[cfg(all(
-    feature = "mysql",
-    not(all(target_family = "wasm", target_os = "unknown"))
-))]
+#[cfg(feature = "mysql")]
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl SdkBuilder {
-    /// Sets a shared `MySQL` connection pool as the backend for all stores
-    /// (storage, tree store, and token store). Construct the pool via
-    /// [`create_mysql_connection_pool`](crate::create_mysql_connection_pool) and pass the same `Arc`
-    /// to multiple builders to share connections across SDKs.
-    ///
-    /// If the same builder also receives an [`SdkContext`](crate::SdkContext)
-    /// carrying a `MySQL` pool, `build()` will error — pick one source.
-    pub async fn with_mysql_connection_pool(
-        &self,
-        pool: Arc<crate::persist::mysql::MysqlConnectionPool>,
-    ) {
-        let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_mysql_connection_pool(pool);
-    }
-
-    /// **Deprecated.** Call `create_mysql_connection_pool(&config)` and
-    /// `with_mysql_connection_pool(pool)` instead.
+    /// **Deprecated.** Use [`with_storage`](SdkBuilder::with_storage) with
+    /// [`mysql_storage`](crate::mysql_storage).
     #[allow(deprecated)]
     pub async fn with_mysql_backend(
         &self,

@@ -29,7 +29,7 @@ mod encrypting;
 use bitcoin::secp256k1::PublicKey;
 use thiserror::Error;
 
-pub(crate) use adapter::SessionStoreAdapter;
+pub use adapter::SessionStoreAdapter;
 pub(crate) use caching::CachingSessionStore;
 pub(crate) use encrypting::EncryptingSessionStore;
 

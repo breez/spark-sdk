@@ -119,7 +119,7 @@ impl BreezSdk {
 }
 
 #[cfg(test)]
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg(feature = "sqlite")]
 mod tests {
     use std::{path::PathBuf, sync::Arc};
 

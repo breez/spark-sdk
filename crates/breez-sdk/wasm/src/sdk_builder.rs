@@ -27,7 +27,7 @@ use crate::{
     tree_store::WasmTreeStore,
 };
 use bitcoin::secp256k1::PublicKey;
-use breez_sdk_spark::KeySet;
+use breez_sdk_spark::{KeySet, PrebuiltBackend, SessionStoreAdapter, StorageBackend};
 use wasm_bindgen::prelude::*;
 
 /// Configuration for PostgreSQL storage connection pool.
@@ -138,21 +138,64 @@ pub fn default_mysql_storage_config(connection_string: &str) -> MysqlStorageConf
     }
 }
 
+/// The built-in storage backend a [`SdkBuilder`] uses.
+enum WasmStorageConfigKind {
+    /// File-based storage rooted at `storage_dir` (IndexedDB in the browser,
+    /// SQLite under Node.js).
+    Default { storage_dir: String },
+    /// `PostgreSQL`-backed storage.
+    Postgres { config: PostgresStorageConfig },
+    /// `MySQL`-backed storage.
+    Mysql { config: MysqlStorageConfig },
+}
+
+/// Selects one of the SDK's built-in storage backends.
+///
+/// Construct it via `defaultStorage`, `postgresStorage` or `mysqlStorage` and
+/// pass it to `SdkBuilder.withStorageBackend`.
+#[wasm_bindgen]
+pub struct WasmStorageConfig {
+    kind: WasmStorageConfigKind,
+}
+
+/// File-based storage rooted at `storageDir` — IndexedDB in the browser,
+/// SQLite under Node.js.
+#[wasm_bindgen(js_name = "defaultStorage")]
+#[must_use]
+pub fn default_storage_config(storage_dir: String) -> WasmStorageConfig {
+    WasmStorageConfig {
+        kind: WasmStorageConfigKind::Default { storage_dir },
+    }
+}
+
+/// `PostgreSQL`-backed storage built from `config`.
+#[wasm_bindgen(js_name = "postgresStorage")]
+#[must_use]
+pub fn postgres_storage(config: PostgresStorageConfig) -> WasmStorageConfig {
+    WasmStorageConfig {
+        kind: WasmStorageConfigKind::Postgres { config },
+    }
+}
+
+/// `MySQL`-backed storage built from `config`.
+#[wasm_bindgen(js_name = "mysqlStorage")]
+#[must_use]
+pub fn mysql_storage(config: MysqlStorageConfig) -> WasmStorageConfig {
+    WasmStorageConfig {
+        kind: WasmStorageConfigKind::Mysql { config },
+    }
+}
+
 #[wasm_bindgen]
 pub struct SdkBuilder {
     builder: breez_sdk_spark::SdkBuilder,
     network: breez_sdk_spark::Network,
     seed: breez_sdk_spark::Seed,
-    default_storage_dir: Option<String>,
+    /// Storage backend selected via `withDefaultStorage` / `withStorageBackend`.
+    storage_config: Option<WasmStorageConfig>,
     storage: Option<Storage>,
-    /// JS Postgres pool supplied via `withPostgresConnectionPool` /
-    /// `withPostgresBackend`.
-    explicit_postgres_pool: Option<(Rc<JsPool>, bool)>,
     /// JS Postgres pool supplied via `withSharedContext(ctx_with_pool)`.
     context_postgres_pool: Option<(Rc<JsPool>, bool)>,
-    /// JS MySQL pool supplied via `withMysqlConnectionPool` /
-    /// `withMysqlBackend`.
-    explicit_mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
     /// JS MySQL pool supplied via `withSharedContext(ctx_with_pool)`.
     context_mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
     key_set_type: breez_sdk_spark::KeySetType,
@@ -171,11 +214,9 @@ impl SdkBuilder {
             network: config.network,
             seed: seed.clone(),
             builder: breez_sdk_spark::SdkBuilder::new(config, seed),
-            default_storage_dir: None,
+            storage_config: None,
             storage: None,
-            explicit_postgres_pool: None,
             context_postgres_pool: None,
-            explicit_mysql_pool: None,
             context_mysql_pool: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
@@ -196,11 +237,9 @@ impl SdkBuilder {
             network: config_core.network,
             seed: breez_sdk_spark::Seed::Entropy(vec![]), // Placeholder, won't be used
             builder: breez_sdk_spark::SdkBuilder::new_with_signer(config_core, signer_adapter),
-            default_storage_dir: None,
+            storage_config: None,
             storage: None,
-            explicit_postgres_pool: None,
             context_postgres_pool: None,
-            explicit_mysql_pool: None,
             context_mysql_pool: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
@@ -210,7 +249,7 @@ impl SdkBuilder {
 
     #[wasm_bindgen(js_name = "withDefaultStorage")]
     pub async fn with_default_storage(mut self, storage_dir: String) -> WasmResult<Self> {
-        self.default_storage_dir = Some(storage_dir);
+        self.storage_config = Some(default_storage_config(storage_dir));
         Ok(self)
     }
 
@@ -218,6 +257,30 @@ impl SdkBuilder {
     pub fn with_storage(mut self, storage: Storage) -> Self {
         self.storage = Some(storage);
         self
+    }
+
+    /// Sets one of the SDK's built-in storage backends.
+    ///
+    /// Construct the [`WasmStorageConfig`] via `defaultStorage`,
+    /// `postgresStorage` or `mysqlStorage`.
+    #[wasm_bindgen(js_name = "withStorageBackend")]
+    pub fn with_storage_backend(mut self, config: WasmStorageConfig) -> Self {
+        self.storage_config = Some(config);
+        self
+    }
+
+    /// **Deprecated.** Use `withStorageBackend(postgresStorage(config))`.
+    #[wasm_bindgen(js_name = "withPostgresBackend")]
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn with_postgres_backend(self, config: PostgresStorageConfig) -> WasmResult<Self> {
+        Ok(self.with_storage_backend(postgres_storage(config)))
+    }
+
+    /// **Deprecated.** Use `withStorageBackend(mysqlStorage(config))`.
+    #[wasm_bindgen(js_name = "withMysqlBackend")]
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn with_mysql_backend(self, config: MysqlStorageConfig) -> WasmResult<Self> {
+        Ok(self.with_storage_backend(mysql_storage(config)))
     }
 
     /// Threads a shared [`WasmSdkContext`] into the builder.
@@ -231,57 +294,6 @@ impl SdkBuilder {
         self.context_postgres_pool = context.postgres_pool.clone();
         self.context_mysql_pool = context.mysql_pool.clone();
         self
-    }
-
-    /// Sets a shared Postgres connection pool as the backend for all stores.
-    ///
-    /// If the same builder also receives a `WasmSdkContext` carrying a
-    /// Postgres pool, `build()` returns an error — pick one source.
-    #[wasm_bindgen(js_name = "withPostgresConnectionPool")]
-    pub fn with_postgres_connection_pool(
-        mut self,
-        pool: &crate::models::postgres_pool::PostgresConnectionPool,
-    ) -> Self {
-        self.explicit_postgres_pool = Some((pool.cloned_inner(), pool.run_migration()));
-        self
-    }
-
-    /// Sets a shared `MySQL` connection pool as the backend for all stores.
-    ///
-    /// If the same builder also receives a `WasmSdkContext` carrying a MySQL
-    /// pool, `build()` returns an error — pick one source.
-    #[wasm_bindgen(js_name = "withMysqlConnectionPool")]
-    pub fn with_mysql_connection_pool(
-        mut self,
-        pool: &crate::models::mysql_pool::MysqlConnectionPool,
-    ) -> Self {
-        self.explicit_mysql_pool = Some((
-            pool.cloned_inner(),
-            pool.run_migration(),
-            pool.foreign_key_mode(),
-        ));
-        self
-    }
-
-    /// **Deprecated.** Call `createPostgresConnectionPool(config)` and
-    /// `withPostgresConnectionPool(pool)` instead.
-    #[wasm_bindgen(js_name = "withPostgresBackend")]
-    pub fn with_postgres_backend(mut self, config: PostgresStorageConfig) -> WasmResult<Self> {
-        let run_migration = config.run_migration;
-        let pool = create_postgres_pool(config)?;
-        self.explicit_postgres_pool = Some((Rc::new(pool), run_migration));
-        Ok(self)
-    }
-
-    /// **Deprecated.** Call `createMysqlConnectionPool(config)` and
-    /// `withMysqlConnectionPool(pool)` instead.
-    #[wasm_bindgen(js_name = "withMysqlBackend")]
-    pub fn with_mysql_backend(mut self, config: MysqlStorageConfig) -> WasmResult<Self> {
-        let run_migration = config.run_migration;
-        let foreign_key_mode = config.foreign_key_mode;
-        let pool = create_mysql_pool(config)?;
-        self.explicit_mysql_pool = Some((Rc::new(pool), run_migration, foreign_key_mode));
-        Ok(self)
     }
 
     #[wasm_bindgen(js_name = "withKeySet")]
@@ -349,195 +361,152 @@ impl SdkBuilder {
 
     #[wasm_bindgen(js_name = "build")]
     pub async fn build(mut self) -> WasmResult<BreezSdk> {
-        // Resolve the Postgres pool from at most one source. Same for MySQL.
-        let postgres_pool: Option<(Rc<JsPool>, bool)> = match (
-            self.explicit_postgres_pool,
+        // Derive the tenant identity from the seed. The JS-side stores use it
+        // to scope every read/write by `user_id`.
+        let identity_bytes = KeySet::new(
+            &self.seed.to_bytes()?,
+            self.network.into(),
+            self.key_set_type.into(),
+            self.use_address_index,
+            self.account_number,
+        )
+        .map_err(WasmError::new)?
+        .identity_key_pair
+        .public_key()
+        .serialize();
+
+        let custom_storage = match (
+            self.storage_config,
+            self.storage,
             self.context_postgres_pool,
-        ) {
-            (Some(_), Some(_)) => {
-                return Err(WasmError::new(
-                    "multiple postgres pools configured: passed both via withPostgresConnectionPool and SdkContext",
-                ));
-            }
-            (Some(p), None) | (None, Some(p)) => Some(p),
-            (None, None) => None,
-        };
-        let mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)> = match (
-            self.explicit_mysql_pool,
             self.context_mysql_pool,
         ) {
-            (Some(_), Some(_)) => {
-                return Err(WasmError::new(
-                    "multiple mysql pools configured: passed both via withMysqlConnectionPool and SdkContext",
-                ));
+            (Some(config), None, None, None) => {
+                resolve_storage_config(config, &identity_bytes, &self.network).await?
             }
-            (Some(p), None) | (None, Some(p)) => Some(p),
-            (None, None) => None,
-        };
-
-        match (
-            self.default_storage_dir,
-            self.storage,
-            &postgres_pool,
-            &mysql_pool,
-        ) {
-            (Some(storage_dir), None, None, None) => {
-                // Create key set to get identity_pub_key for WASM-compatible storage
-                let key_set = KeySet::new(
-                    &self.seed.to_bytes()?,
-                    self.network.into(),
-                    self.key_set_type.into(),
-                    self.use_address_index,
-                    self.account_number,
-                )
-                .map_err(WasmError::new)?;
-
-                let identity_pub_key = key_set.identity_key_pair.public_key();
-
-                let storage = Arc::new(WasmStorage {
-                    storage: default_storage(&storage_dir, &self.network, &identity_pub_key)
-                        .await?,
-                });
-                self.builder = self.builder.with_storage(storage);
-            }
-            (None, Some(storage), None, None) => {
-                let storage_arc = Arc::new(WasmStorage { storage });
-                self.builder = self.builder.with_storage(storage_arc);
-            }
+            (None, Some(storage), None, None) => Arc::new(PrebuiltBackend::new(
+                Arc::new(WasmStorage { storage }),
+                None,
+                None,
+                None,
+            )),
             (None, None, Some((pool_rc, run_migration)), None) => {
-                let pool: &JsPool = pool_rc;
-                let logger_ref = get_wasm_logger_ref();
-
-                // Derive tenant identity from the seed and pass to the JS storage so it
-                // can scope every read/write by `user_id`.
-                let key_set = KeySet::new(
-                    &self.seed.to_bytes()?,
-                    self.network.into(),
-                    self.key_set_type.into(),
-                    self.use_address_index,
-                    self.account_number,
-                )
-                .map_err(WasmError::new)?;
-                let identity_pub_key = key_set.identity_key_pair.public_key();
-                let identity_bytes = identity_pub_key.serialize();
-
-                let storage = Arc::new(WasmStorage {
-                    storage: create_postgres_storage_with_pool(
-                        pool,
-                        &identity_bytes,
-                        logger_ref,
-                        *run_migration,
-                    )
-                    .await?,
-                });
-                self.builder = self.builder.with_storage(storage);
-
-                let tree_store_js = create_postgres_tree_store_with_pool(
-                    pool,
-                    &identity_bytes,
-                    logger_ref,
-                    *run_migration,
-                )
-                .await?;
-                let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
-                self.builder = self.builder.with_tree_store(tree_store);
-
-                let token_store_js = create_postgres_token_store_with_pool(
-                    pool,
-                    &identity_bytes,
-                    logger_ref,
-                    *run_migration,
-                )
-                .await?;
-                let token_store = Arc::new(WasmTokenStore::new(token_store_js));
-                self.builder = self.builder.with_token_output_store(token_store);
-
-                let session_store_js = create_postgres_session_store_with_pool(
-                    pool,
-                    &identity_bytes,
-                    logger_ref,
-                    *run_migration,
-                )
-                .await?;
-                let session_store = Arc::new(WasmSessionStore {
-                    session_store: session_store_js,
-                });
-                self.builder = self.builder.with_session_store(session_store);
+                build_postgres_storage(&pool_rc, &identity_bytes, run_migration).await?
             }
             (None, None, None, Some((pool_rc, run_migration, foreign_key_mode))) => {
-                let pool: &JsPool = pool_rc;
-                let run_migration = *run_migration;
-                let foreign_key_mode = *foreign_key_mode;
-                let logger_ref = get_wasm_logger_ref();
-
-                // Derive tenant identity from the seed and pass to the JS
-                // stores so they can scope every read/write by `user_id`.
-                let key_set = KeySet::new(
-                    &self.seed.to_bytes()?,
-                    self.network.into(),
-                    self.key_set_type.into(),
-                    self.use_address_index,
-                    self.account_number,
-                )
-                .map_err(WasmError::new)?;
-                let identity_pub_key = key_set.identity_key_pair.public_key();
-                let identity_bytes = identity_pub_key.serialize();
-
-                let storage = Arc::new(WasmStorage {
-                    storage: create_mysql_storage_with_pool(
-                        pool,
-                        &identity_bytes,
-                        logger_ref,
-                        run_migration,
-                    )
-                    .await?,
-                });
-                self.builder = self.builder.with_storage(storage);
-
-                let tree_store_js = create_mysql_tree_store_with_pool(
-                    pool,
-                    &identity_bytes,
-                    foreign_key_mode,
-                    logger_ref,
-                    run_migration,
-                )
-                .await?;
-                let tree_store = Arc::new(WasmTreeStore::new(tree_store_js));
-                self.builder = self.builder.with_tree_store(tree_store);
-
-                let token_store_js = create_mysql_token_store_with_pool(
-                    pool,
-                    &identity_bytes,
-                    foreign_key_mode,
-                    logger_ref,
-                    run_migration,
-                )
-                .await?;
-                let token_store = Arc::new(WasmTokenStore::new(token_store_js));
-                self.builder = self.builder.with_token_output_store(token_store);
-
-                let session_store_js = create_mysql_session_store_with_pool(
-                    pool,
-                    &identity_bytes,
-                    logger_ref,
-                    run_migration,
-                )
-                .await?;
-                let session_store = Arc::new(WasmSessionStore {
-                    session_store: session_store_js,
-                });
-                self.builder = self.builder.with_session_store(session_store);
+                build_mysql_storage(&pool_rc, &identity_bytes, foreign_key_mode, run_migration)
+                    .await?
             }
             _ => {
                 return Err(WasmError::new(
-                    "Exactly one of default storage directory, storage, postgres pool, or mysql pool must be set",
+                    "Exactly one storage source must be set: a storage backend (default, PostgreSQL or MySQL), a custom storage, or a shared context carrying a database pool",
                 ));
             }
-        }
+        };
 
+        self.builder = self.builder.with_storage_backend(custom_storage);
         let sdk = self.builder.build().await?;
         Ok(BreezSdk { sdk: Rc::new(sdk) })
     }
+}
+
+/// Resolves a [`WasmStorageConfig`] into a [`StorageBackend`], opening a fresh
+/// database pool for the PostgreSQL / MySQL backends.
+async fn resolve_storage_config(
+    config: WasmStorageConfig,
+    identity: &[u8],
+    network: &breez_sdk_spark::Network,
+) -> WasmResult<Arc<dyn StorageBackend>> {
+    match config.kind {
+        WasmStorageConfigKind::Default { storage_dir } => {
+            let identity_pub_key = PublicKey::from_slice(identity).map_err(WasmError::new)?;
+            let storage = Arc::new(WasmStorage {
+                storage: default_storage(&storage_dir, network, &identity_pub_key).await?,
+            });
+            Ok(Arc::new(PrebuiltBackend::new(storage, None, None, None)))
+        }
+        WasmStorageConfigKind::Postgres { config } => {
+            let run_migration = config.run_migration;
+            let pool = create_postgres_pool(config)?;
+            build_postgres_storage(&pool, identity, run_migration).await
+        }
+        WasmStorageConfigKind::Mysql { config } => {
+            let run_migration = config.run_migration;
+            let foreign_key_mode = config.foreign_key_mode;
+            let pool = create_mysql_pool(config)?;
+            build_mysql_storage(&pool, identity, foreign_key_mode, run_migration).await
+        }
+    }
+}
+
+/// Builds the four PostgreSQL-backed JS stores over `pool`.
+async fn build_postgres_storage(
+    pool: &JsPool,
+    identity: &[u8],
+    run_migration: bool,
+) -> WasmResult<Arc<dyn StorageBackend>> {
+    let logger_ref = get_wasm_logger_ref();
+    let storage = Arc::new(WasmStorage {
+        storage: create_postgres_storage_with_pool(pool, identity, logger_ref, run_migration)
+            .await?,
+    });
+    let tree_store_js =
+        create_postgres_tree_store_with_pool(pool, identity, logger_ref, run_migration).await?;
+    let token_store_js =
+        create_postgres_token_store_with_pool(pool, identity, logger_ref, run_migration).await?;
+    let session_store_js =
+        create_postgres_session_store_with_pool(pool, identity, logger_ref, run_migration).await?;
+    Ok(Arc::new(PrebuiltBackend::new(
+        storage,
+        Some(Arc::new(WasmTreeStore::new(tree_store_js))),
+        Some(Arc::new(WasmTokenStore::new(token_store_js))),
+        Some(Arc::new(SessionStoreAdapter::new(Arc::new(
+            WasmSessionStore {
+                session_store: session_store_js,
+            },
+        )))),
+    )))
+}
+
+/// Builds the four MySQL-backed JS stores over `pool`.
+async fn build_mysql_storage(
+    pool: &JsPool,
+    identity: &[u8],
+    foreign_key_mode: MysqlForeignKeyMode,
+    run_migration: bool,
+) -> WasmResult<Arc<dyn StorageBackend>> {
+    let logger_ref = get_wasm_logger_ref();
+    let storage = Arc::new(WasmStorage {
+        storage: create_mysql_storage_with_pool(pool, identity, logger_ref, run_migration).await?,
+    });
+    let tree_store_js = create_mysql_tree_store_with_pool(
+        pool,
+        identity,
+        foreign_key_mode,
+        logger_ref,
+        run_migration,
+    )
+    .await?;
+    let token_store_js = create_mysql_token_store_with_pool(
+        pool,
+        identity,
+        foreign_key_mode,
+        logger_ref,
+        run_migration,
+    )
+    .await?;
+    let session_store_js =
+        create_mysql_session_store_with_pool(pool, identity, logger_ref, run_migration).await?;
+    Ok(Arc::new(PrebuiltBackend::new(
+        storage,
+        Some(Arc::new(WasmTreeStore::new(tree_store_js))),
+        Some(Arc::new(WasmTokenStore::new(token_store_js))),
+        Some(Arc::new(SessionStoreAdapter::new(Arc::new(
+            WasmSessionStore {
+                session_store: session_store_js,
+            },
+        )))),
+    )))
 }
 
 /// Returns a `'static` reference to the thread-local WASM logger.

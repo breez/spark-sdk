@@ -1,16 +1,24 @@
-#[cfg(all(
-    feature = "mysql",
-    not(all(target_family = "wasm", target_os = "unknown"))
-))]
+pub(crate) mod backend;
+#[cfg(feature = "mysql")]
 pub mod mysql;
 pub(crate) mod path;
-#[cfg(all(
-    feature = "postgres",
-    not(all(target_family = "wasm", target_os = "unknown"))
-))]
+#[cfg(feature = "postgres")]
 pub mod postgres;
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg(feature = "sqlite")]
 pub(crate) mod sqlite;
+
+// The `sqlite`, `postgres` and `mysql` storage backends use native-only Rust
+// drivers and cannot be built for the wasm32 target. WASM builds use a
+// JS-backed storage backend instead, so none of these features apply there.
+#[cfg(all(
+    any(feature = "sqlite", feature = "postgres", feature = "mysql"),
+    target_family = "wasm",
+    target_os = "unknown"
+))]
+compile_error!(
+    "the `sqlite`, `postgres` and `mysql` storage features are native-only and \
+     cannot be enabled for the wasm32 target"
+);
 
 use std::{collections::HashMap, sync::Arc};
 

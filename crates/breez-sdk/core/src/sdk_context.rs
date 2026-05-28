@@ -5,15 +5,9 @@ use platform_utils::{HttpClient, create_http_client};
 
 use spark_wallet::{BalancedConnectionManager, ConnectionManager, DefaultConnectionManager};
 
-use crate::{Network, SdkError, default_user_agent, jwt_header_provider::BreezJwtHeaderProvider};
-
-#[cfg(feature = "mysql")]
-use crate::persist::mysql::{
-    MysqlConnectionPool, MysqlStorageConfig, create_mysql_connection_pool,
-};
-#[cfg(feature = "postgres")]
-use crate::persist::postgres::{
-    PostgresConnectionPool, PostgresStorageConfig, create_postgres_connection_pool,
+use crate::{
+    Network, SdkError, default_user_agent, jwt_header_provider::BreezJwtHeaderProvider,
+    persist::backend::StorageBackend,
 };
 
 /// Process-shared resources that can back many `BreezSdk` instances.
@@ -21,14 +15,17 @@ use crate::persist::postgres::{
 /// Construct one with [`new_shared_sdk_context`] and pass the same `Arc` to every
 /// [`SdkBuilder`](crate::SdkBuilder) whose SDKs should share those resources
 /// (a single HTTP client across SSP / chain / LNURL / JWT / etc., a gRPC
-/// channel pool to the Spark operators, the Breez backend gRPC client, a
-/// database connection pool, …). Useful for multi-tenant servers that load
-/// many wallets in one process.
+/// channel pool to the Spark operators, the Breez backend gRPC client, …).
+/// Useful for multi-tenant servers that load many wallets in one process.
+///
+/// To share a database connection pool across SDKs, pass a
+/// [`StorageBackend`](crate::StorageBackend) as
+/// [`SdkContextConfig::storage`]: every SDK built from the context reuses it.
 ///
 /// The struct is intentionally opaque — all fields are crate-private. There
 /// is no way to inject pre-built sub-components: the factory builds them
-/// from settings so callers don't need to know about session stores,
-/// connection-manager wiring, or pool plumbing.
+/// from settings so callers don't need to know about session stores or
+/// connection-manager wiring.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SdkContext {
     /// Single shared HTTP client used for every reqwest-based call out of the
@@ -49,10 +46,9 @@ pub struct SdkContext {
     /// can cross-check against `Config.api_key` and refuse a mismatch.
     pub(crate) api_key: Option<String>,
     pub(crate) connection_manager: Arc<dyn ConnectionManager>,
-    #[cfg(feature = "postgres")]
-    pub(crate) postgres_pool: Option<Arc<PostgresConnectionPool>>,
-    #[cfg(feature = "mysql")]
-    pub(crate) mysql_pool: Option<Arc<MysqlConnectionPool>>,
+    /// The storage backend SDKs built from this context share. `None` when the
+    /// context carries no storage; each `SdkBuilder` then supplies its own.
+    pub(crate) storage_backend: Option<Arc<dyn StorageBackend>>,
 }
 
 /// Settings for [`new_shared_sdk_context`]. All fields are optional; the defaults
@@ -77,25 +73,21 @@ pub struct SdkContextConfig {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub connections_per_operator: Option<u32>,
 
-    /// `PostgreSQL` backend configuration. When set, the context builds a
-    /// shared connection pool and SDKs constructed with this context store
-    /// their data in `PostgreSQL`.
-    #[cfg(feature = "postgres")]
+    /// Shared storage backend for SDKs built from this context. When set,
+    /// every SDK built from the context reuses it (and its database
+    /// connection pool). Construct via
+    /// [`default_storage`](crate::default_storage),
+    /// [`postgres_storage`](crate::postgres_storage),
+    /// [`mysql_storage`](crate::mysql_storage) or
+    /// [`custom_storage`](crate::custom_storage).
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub postgres_config: Option<PostgresStorageConfig>,
-
-    /// `MySQL` backend configuration. When set, the context builds a shared
-    /// connection pool and SDKs constructed with this context store their
-    /// data in `MySQL`.
-    #[cfg(feature = "mysql")]
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub mysql_config: Option<MysqlStorageConfig>,
+    pub storage: Option<Arc<dyn StorageBackend>>,
 }
 
 impl SdkContextConfig {
     /// Config with the given network and every other field defaulted. Use
     /// directly for the bare case, or with struct update syntax to override
-    /// specific fields: `SdkContextConfig { postgres_config: Some(cfg),
+    /// specific fields: `SdkContextConfig { storage: Some(storage),
     /// ..SdkContextConfig::new(network) }`.
     #[must_use]
     pub fn new(network: Network) -> Self {
@@ -103,34 +95,20 @@ impl SdkContextConfig {
             network,
             api_key: None,
             connections_per_operator: None,
-            #[cfg(feature = "postgres")]
-            postgres_config: None,
-            #[cfg(feature = "mysql")]
-            mysql_config: None,
+            storage: None,
         }
     }
 }
 
 /// Constructs an [`SdkContext`] from a `SdkContextConfig`.
 ///
-/// The returned `Arc` is cheap to clone and can back many SDK instances.
-/// `SdkContextConfig::new(network)` yields an in-memory, single-tenant setup;
-/// supply a DB config to back the SDKs with a shared `PostgreSQL` or `MySQL`
-/// pool.
+/// The returned `Arc` is cheap to clone and can back many SDK instances,
+/// sharing their HTTP client and operator gRPC channels.
 // Async-on-tokio so UniFFI runs it on the managed runtime: building the
 // shared resources `tokio::spawn`s internally (gRPC channel; mainnet JWT
 // task) and aborts off-runtime, despite no `.await` here.
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkContext>, SdkError> {
-    // Mirror the storage-config conflict check in `SdkBuilder::build()` —
-    // fail before opening either pool rather than after.
-    #[cfg(all(feature = "postgres", feature = "mysql"))]
-    if config.postgres_config.is_some() && config.mysql_config.is_some() {
-        return Err(SdkError::Generic(
-            "Multiple storage configurations provided".to_string(),
-        ));
-    }
-
     let user_agent = default_user_agent();
     let http_client = create_http_client(Some(&user_agent));
     let breez_server = Arc::new(
@@ -162,17 +140,9 @@ pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkC
         _ => Arc::new(DefaultConnectionManager::new()),
     };
 
-    #[cfg(feature = "postgres")]
-    let postgres_pool = match config.postgres_config {
-        Some(cfg) => Some(create_postgres_connection_pool(&cfg)?),
-        None => None,
-    };
-
-    #[cfg(feature = "mysql")]
-    let mysql_pool = match config.mysql_config {
-        Some(cfg) => Some(create_mysql_connection_pool(&cfg)?),
-        None => None,
-    };
+    // Every SDK built from this context shares the one storage backend (and
+    // its database connection pool).
+    let storage_backend = config.storage;
 
     Ok(Arc::new(SdkContext {
         http_client,
@@ -181,10 +151,7 @@ pub async fn new_shared_sdk_context(config: SdkContextConfig) -> Result<Arc<SdkC
         network: config.network,
         api_key,
         connection_manager,
-        #[cfg(feature = "postgres")]
-        postgres_pool,
-        #[cfg(feature = "mysql")]
-        mysql_pool,
+        storage_backend,
     }))
 }
 
@@ -206,10 +173,7 @@ mod tests {
         // Network and api_key are stored verbatim for the builder cross-check.
         assert_eq!(ctx.network, Network::Regtest);
         assert!(ctx.api_key.is_none());
-        #[cfg(feature = "postgres")]
-        assert!(ctx.postgres_pool.is_none());
-        #[cfg(feature = "mysql")]
-        assert!(ctx.mysql_pool.is_none());
+        assert!(ctx.storage_backend.is_none());
     }
 
     #[tokio::test]

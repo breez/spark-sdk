@@ -167,12 +167,11 @@ func main() {
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
 	if *postgresConnectionString != "" {
 		pgConfig := breez_sdk_spark.DefaultPostgresStorageConfig(*postgresConnectionString)
-		pool, err := breez_sdk_spark.CreatePostgresConnectionPool(pgConfig)
+		storage, err := breez_sdk_spark.PostgresStorage(pgConfig)
 		if err != nil {
-			fmt.Printf("Failed to create postgres connection pool: %v\n", err)
-			os.Exit(1)
+			log.Fatalf("Failed to create postgres storage: %v", err)
 		}
-		builder.WithPostgresConnectionPool(pool)
+		builder.WithStorageBackend(storage)
 	} else {
 		builder.WithDefaultStorage(resolvedDir)
 	}

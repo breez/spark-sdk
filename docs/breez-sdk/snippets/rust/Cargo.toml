@@ -9,6 +9,7 @@ edition = "2021"
 anyhow = "1"
 async-trait = "0.1.89"
 breez-sdk-spark = { path = "../../../../crates/breez-sdk/core", features = [
+    "sqlite",
     "postgres",
     "mysql",
     "passkey",

@@ -2,10 +2,8 @@ pub mod chain_service;
 mod error;
 pub mod fiat_service;
 pub mod issuer;
-pub mod mysql_pool;
 pub mod passkey_prf_provider;
 pub mod payment_observer;
-pub mod postgres_pool;
 pub mod rest_client;
 pub mod session_store;
 
