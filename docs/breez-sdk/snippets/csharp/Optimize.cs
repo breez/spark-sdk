@@ -7,7 +7,7 @@ namespace BreezSdkSnippets
         async Task RunFullOptimization(BreezSdk sdk)
         {
             // ANCHOR: optimize-leaves-full
-            var outcome = await sdk.OptimizeLeaves(null);
+            var outcome = (await sdk.OptimizeLeaves(new OptimizeLeavesRequest(OptimizationMode.Full))).outcome;
 
             switch (outcome)
             {
@@ -35,7 +35,7 @@ namespace BreezSdkSnippets
             uint roundsExecuted = 0;
             while (true)
             {
-                var outcome = await sdk.OptimizeLeaves(new OptimizeLeavesOptions(OptimizationMode.SingleRound));
+                var outcome = (await sdk.OptimizeLeaves(new OptimizeLeavesRequest(OptimizationMode.SingleRound))).outcome;
 
                 if (outcome is OptimizationOutcome.InProgress)
                 {

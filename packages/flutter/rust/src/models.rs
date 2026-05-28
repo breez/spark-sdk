@@ -1142,8 +1142,8 @@ pub enum _OptimizationMode {
     SingleRound,
 }
 
-#[frb(mirror(OptimizeLeavesOptions))]
-pub struct _OptimizeLeavesOptions {
+#[frb(mirror(OptimizeLeavesRequest))]
+pub struct _OptimizeLeavesRequest {
     pub mode: OptimizationMode,
 }
 
@@ -1151,6 +1151,11 @@ pub struct _OptimizeLeavesOptions {
 pub enum _OptimizationOutcome {
     Completed { rounds_executed: u32 },
     InProgress,
+}
+
+#[frb(mirror(OptimizeLeavesResponse))]
+pub struct _OptimizeLeavesResponse {
+    pub outcome: OptimizationOutcome,
 }
 
 #[frb(mirror(ConversionEstimate))]

@@ -1851,14 +1851,21 @@ pub enum OptimizationMode {
     SingleRound,
 }
 
-/// Optional configuration for [`BreezSdk::optimize_leaves`]. Callers that
-/// want the default `Full` behavior can pass `None` (or omit the argument
-/// where the binding supports it).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Request for [`BreezSdk::optimize_leaves`]. Defaults to
+/// [`OptimizationMode::Full`].
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct OptimizeLeavesOptions {
+pub struct OptimizeLeavesRequest {
     /// Controls how much work the call performs before returning.
     pub mode: OptimizationMode,
+}
+
+/// Response from a [`BreezSdk::optimize_leaves`] call.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct OptimizeLeavesResponse {
+    /// The outcome of the optimization run.
+    pub outcome: OptimizationOutcome,
 }
 
 /// Outcome of a [`BreezSdk::optimize_leaves`] call.
@@ -1877,7 +1884,8 @@ pub struct OptimizeLeavesOptions {
 ///
 /// ```ignore
 /// loop {
-///     match sdk.optimize_leaves(SingleRound).await? {
+///     let request = OptimizeLeavesRequest { mode: OptimizationMode::SingleRound };
+///     match sdk.optimize_leaves(request).await?.outcome {
 ///         OptimizationOutcome::InProgress => continue,
 ///         OptimizationOutcome::Completed { .. } => break,
 ///     }

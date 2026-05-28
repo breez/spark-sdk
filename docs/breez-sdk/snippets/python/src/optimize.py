@@ -4,12 +4,13 @@ from breez_sdk_spark import (
     AutoOptimizationEvent,
     OptimizationMode,
     OptimizationOutcome,
-    OptimizeLeavesOptions,
+    OptimizeLeavesRequest,
 )
 
 async def run_full_optimization(sdk: BreezSdk):
     # ANCHOR: optimize-leaves-full
-    outcome = await sdk.optimize_leaves(None)
+    response = await sdk.optimize_leaves(OptimizeLeavesRequest(mode=OptimizationMode.FULL))
+    outcome = response.outcome
 
     if isinstance(outcome, OptimizationOutcome.COMPLETED):
         if outcome.rounds_executed == 0:
@@ -24,9 +25,10 @@ async def run_optimization_one_round_at_a_time(sdk: BreezSdk):
     # ANCHOR: optimize-leaves-single-round
     rounds_executed = 0
     while True:
-        outcome = await sdk.optimize_leaves(
-            OptimizeLeavesOptions(mode=OptimizationMode.SINGLE_ROUND)
+        response = await sdk.optimize_leaves(
+            OptimizeLeavesRequest(mode=OptimizationMode.SINGLE_ROUND)
         )
+        outcome = response.outcome
         if isinstance(outcome, OptimizationOutcome.IN_PROGRESS):
             rounds_executed += 1
             logging.debug(f"Executed round {rounds_executed}")

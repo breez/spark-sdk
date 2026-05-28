@@ -7,9 +7,10 @@ use breez_sdk_common::buy::cashapp::CashAppProvider;
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
     GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, Network, OptimizationMode, OptimizationOutcome, OptimizeLeavesOptions,
-    RegisterWebhookRequest, RegisterWebhookResponse, SignMessageRequest, SignMessageResponse,
-    UnregisterWebhookRequest, UpdateUserSettingsRequest, UserSettings, Webhook,
+    ListFiatRatesResponse, Network, OptimizationMode, OptimizeLeavesRequest,
+    OptimizeLeavesResponse, RegisterWebhookRequest, RegisterWebhookResponse, SignMessageRequest,
+    SignMessageResponse, UnregisterWebhookRequest, UpdateUserSettingsRequest, UserSettings,
+    Webhook,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -245,11 +246,11 @@ impl BreezSdk {
     /// Manually drives leaf optimization, blocking until the requested work
     /// is done.
     ///
-    /// Pass `None` (or omit the argument in bindings that support it) for
-    /// the default behavior: run the entire optimization in a single call.
-    /// Pass `Some(OptimizeLeavesOptions { mode: OptimizationMode::SingleRound })`
-    /// to execute one round and return — the caller drives the loop by
-    /// inspecting the [`OptimizationOutcome`] and calling again until
+    /// With [`OptimizationMode::Full`] (the default) the call runs the entire
+    /// optimization in a single invocation. With
+    /// [`OptimizationMode::SingleRound`] it executes one round and returns —
+    /// the caller drives the loop by inspecting the
+    /// [`OptimizeLeavesResponse::outcome`] and calling again until
     /// `InProgress` no longer appears.
     ///
     /// Returns an error if another optimization run (auto or manual) is
@@ -259,17 +260,16 @@ impl BreezSdk {
     ///
     /// Manual runs do not emit events; events ([`SdkEvent::AutoOptimization`])
     /// are reserved for the background auto-optimizer.
-    #[cfg_attr(feature = "uniffi", uniffi::method(default(options = None)))]
     pub async fn optimize_leaves(
         &self,
-        options: Option<OptimizeLeavesOptions>,
-    ) -> Result<OptimizationOutcome, SdkError> {
-        let mode = options.map(|o| o.mode).unwrap_or_default();
-        let max_rounds = match mode {
+        request: OptimizeLeavesRequest,
+    ) -> Result<OptimizeLeavesResponse, SdkError> {
+        let max_rounds = match request.mode {
             OptimizationMode::Full => None,
             OptimizationMode::SingleRound => Some(1),
         };
-        Ok(self.spark_wallet.optimize_leaves(max_rounds).await?.into())
+        let outcome = self.spark_wallet.optimize_leaves(max_rounds).await?.into();
+        Ok(OptimizeLeavesResponse { outcome })
     }
 
     /// Registers a webhook to receive notifications for wallet events.

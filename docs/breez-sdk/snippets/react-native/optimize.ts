@@ -2,7 +2,7 @@ import { type AutoOptimizationEvent, AutoOptimizationEvent_Tags, OptimizationMod
 
 const exampleOptimizeLeavesFull = async (sdk: BreezSdk) => {
   // ANCHOR: optimize-leaves-full
-  const outcome = await sdk.optimizeLeaves(undefined)
+  const outcome = (await sdk.optimizeLeaves({ mode: OptimizationMode.Full })).outcome
 
   if (outcome.tag === OptimizationOutcome_Tags.Completed) {
     if (outcome.inner.roundsExecuted === 0) {
@@ -21,7 +21,7 @@ const exampleOptimizeLeavesSingleRound = async (sdk: BreezSdk) => {
   // ANCHOR: optimize-leaves-single-round
   let roundsExecuted = 0
   while (true) {
-    const outcome: OptimizationOutcome = await sdk.optimizeLeaves({ mode: OptimizationMode.SingleRound })
+    const outcome: OptimizationOutcome = (await sdk.optimizeLeaves({ mode: OptimizationMode.SingleRound })).outcome
 
     if (outcome.tag === OptimizationOutcome_Tags.InProgress) {
       roundsExecuted += 1

@@ -18,8 +18,9 @@ use breez_sdk_itest::{
     PostgresTreeStore, RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database,
 };
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest, default_config,
+    BreezSdk, GetInfoRequest, Network, OptimizeLeavesRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent, SendPaymentRequest, SyncWalletRequest,
+    default_config,
 };
 
 use breez_bench::events::{wait_for_claimed_event, wait_for_synced_event};
@@ -663,7 +664,9 @@ async fn run_pre_optimization(sdk: &BreezSdk) -> Result<()> {
 async fn run_optimization(sdk: &BreezSdk, label: &str) -> Result<()> {
     info!("Starting {}...", label.to_lowercase());
     let start = Instant::now();
-    let outcome = sdk.optimize_leaves(None).await?;
+    let outcome = sdk
+        .optimize_leaves(OptimizeLeavesRequest::default())
+        .await?;
     let elapsed = start.elapsed();
     info!(
         "{} complete in {:.2}s: {:?}",

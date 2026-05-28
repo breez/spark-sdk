@@ -1,7 +1,7 @@
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::{
-    OptimizationMode, OptimizationOutcome, OptimizeLeavesOptions, SdkError, SdkEvent,
+    OptimizationMode, OptimizationOutcome, OptimizeLeavesRequest, SdkError, SdkEvent,
 };
 use rstest::*;
 use tokio::sync::mpsc;
@@ -21,9 +21,12 @@ async fn test_optimize_leaves_full_client_mode(
     ensure_funded(&mut alice, 50_000).await?;
     clear_event_receiver(&mut alice.events).await;
 
-    // `None` selects the default mode (Full). Demonstrates the
-    // no-arg-style call that bindings expose to other languages.
-    let outcome = alice.sdk.optimize_leaves(None).await?;
+    // The default request selects Full mode.
+    let outcome = alice
+        .sdk
+        .optimize_leaves(OptimizeLeavesRequest::default())
+        .await?
+        .outcome;
 
     match outcome {
         OptimizationOutcome::Completed { rounds_executed } => {
@@ -79,7 +82,11 @@ async fn test_optimize_leaves_full_server_mode(
     ensure_funded_via_polling(&mut alice, 50_000).await?;
     clear_event_receiver(&mut alice.events).await;
 
-    let outcome = alice.sdk.optimize_leaves(None).await?;
+    let outcome = alice
+        .sdk
+        .optimize_leaves(OptimizeLeavesRequest::default())
+        .await?
+        .outcome;
 
     match outcome {
         OptimizationOutcome::Completed { rounds_executed } => {
@@ -109,8 +116,8 @@ async fn test_optimize_leaves_rejects_concurrent_calls(
     clear_event_receiver(&mut alice.events).await;
 
     let (r1, r2) = tokio::join!(
-        alice.sdk.optimize_leaves(None),
-        alice.sdk.optimize_leaves(None),
+        alice.sdk.optimize_leaves(OptimizeLeavesRequest::default()),
+        alice.sdk.optimize_leaves(OptimizeLeavesRequest::default()),
     );
 
     let ok_count = [&r1, &r2].iter().filter(|r| r.is_ok()).count();
@@ -143,10 +150,11 @@ async fn drive_single_round_loop(alice: &SdkInstance) -> Result<u32> {
     for iteration in 0..50 {
         let outcome = alice
             .sdk
-            .optimize_leaves(Some(OptimizeLeavesOptions {
+            .optimize_leaves(OptimizeLeavesRequest {
                 mode: OptimizationMode::SingleRound,
-            }))
-            .await?;
+            })
+            .await?
+            .outcome;
         match outcome {
             OptimizationOutcome::InProgress => {
                 total += 1;

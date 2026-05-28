@@ -9,7 +9,7 @@ import (
 
 func RunFullOptimization(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: optimize-leaves-full
-	outcome, err := sdk.OptimizeLeaves(nil)
+	response, err := sdk.OptimizeLeaves(breez_sdk_spark.OptimizeLeavesRequest{Mode: breez_sdk_spark.OptimizationModeFull})
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {
@@ -18,7 +18,7 @@ func RunFullOptimization(sdk *breez_sdk_spark.BreezSdk) error {
 		return err
 	}
 
-	switch o := outcome.(type) {
+	switch o := response.Outcome.(type) {
 	case breez_sdk_spark.OptimizationOutcomeCompleted:
 		if o.RoundsExecuted == 0 {
 			log.Printf("Optimization skipped — wallet already optimal")
@@ -38,7 +38,7 @@ func RunOptimizationOneRoundAtATime(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: optimize-leaves-single-round
 	var roundsExecuted uint32 = 0
 	for {
-		outcome, err := sdk.OptimizeLeaves(&breez_sdk_spark.OptimizeLeavesOptions{
+		response, err := sdk.OptimizeLeaves(breez_sdk_spark.OptimizeLeavesRequest{
 			Mode: breez_sdk_spark.OptimizationModeSingleRound,
 		})
 		if err != nil {
@@ -49,7 +49,7 @@ func RunOptimizationOneRoundAtATime(sdk *breez_sdk_spark.BreezSdk) error {
 			return err
 		}
 
-		switch o := outcome.(type) {
+		switch o := response.Outcome.(type) {
 		case breez_sdk_spark.OptimizationOutcomeInProgress:
 			roundsExecuted += 1
 			log.Printf("Executed round %v", roundsExecuted)

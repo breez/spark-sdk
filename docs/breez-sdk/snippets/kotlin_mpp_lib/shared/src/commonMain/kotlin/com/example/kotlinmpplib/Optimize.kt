@@ -5,7 +5,7 @@ import breez_sdk_spark.*
 class Optimize {
     suspend fun runFullOptimization(sdk: BreezSdk) {
         // ANCHOR: optimize-leaves-full
-        val outcome = sdk.optimizeLeaves(null)
+        val outcome = sdk.optimizeLeaves(OptimizeLeavesRequest(mode = OptimizationMode.FULL)).outcome
 
         when (outcome) {
             is OptimizationOutcome.Completed -> {
@@ -28,7 +28,7 @@ class Optimize {
         // ANCHOR: optimize-leaves-single-round
         var roundsExecuted: UInt = 0u
         while (true) {
-            val outcome = sdk.optimizeLeaves(OptimizeLeavesOptions(mode = OptimizationMode.SINGLE_ROUND))
+            val outcome = sdk.optimizeLeaves(OptimizeLeavesRequest(mode = OptimizationMode.SINGLE_ROUND)).outcome
             when (outcome) {
                 is OptimizationOutcome.InProgress -> {
                     roundsExecuted += 1u

@@ -236,9 +236,9 @@ impl BreezSdk {
 
     pub async fn optimize_leaves(
         &self,
-        options: Option<OptimizeLeavesOptions>,
-    ) -> Result<OptimizationOutcome, SdkError> {
-        self.inner.optimize_leaves(options).await
+        request: OptimizeLeavesRequest,
+    ) -> Result<OptimizeLeavesResponse, SdkError> {
+        self.inner.optimize_leaves(request).await
     }
 
 

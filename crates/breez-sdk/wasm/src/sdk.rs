@@ -323,13 +323,9 @@ impl BreezSdk {
     #[wasm_bindgen(js_name = "optimizeLeaves")]
     pub async fn optimize_leaves(
         &self,
-        options: Option<OptimizeLeavesOptions>,
-    ) -> WasmResult<OptimizationOutcome> {
-        Ok(self
-            .sdk
-            .optimize_leaves(options.map(Into::into))
-            .await?
-            .into())
+        request: OptimizeLeavesRequest,
+    ) -> WasmResult<OptimizeLeavesResponse> {
+        Ok(self.sdk.optimize_leaves(request.into()).await?.into())
     }
 
     #[wasm_bindgen(js_name = "fetchConversionLimits")]

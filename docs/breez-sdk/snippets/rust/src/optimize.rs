@@ -4,7 +4,10 @@ use log::info;
 
 async fn run_full_optimization(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: optimize-leaves-full
-    let outcome = sdk.optimize_leaves(None).await?;
+    let outcome = sdk
+        .optimize_leaves(OptimizeLeavesRequest::default())
+        .await?
+        .outcome;
 
     match outcome {
         OptimizationOutcome::Completed { rounds_executed } => {
@@ -28,10 +31,10 @@ async fn run_optimization_one_round_at_a_time(sdk: &BreezSdk) -> Result<()> {
     // ANCHOR: optimize-leaves-single-round
     let mut rounds_executed = 0u32;
     loop {
-        let options = OptimizeLeavesOptions {
+        let request = OptimizeLeavesRequest {
             mode: OptimizationMode::SingleRound,
         };
-        match sdk.optimize_leaves(Some(options)).await? {
+        match sdk.optimize_leaves(request).await?.outcome {
             OptimizationOutcome::InProgress => {
                 rounds_executed += 1;
                 info!("Executed round {}", rounds_executed);

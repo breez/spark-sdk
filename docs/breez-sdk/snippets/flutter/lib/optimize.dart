@@ -2,7 +2,7 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<void> runFullOptimization(BreezSdk sdk) async {
   // ANCHOR: optimize-leaves-full
-  final outcome = await sdk.optimizeLeaves();
+  final outcome = (await sdk.optimizeLeaves(request: OptimizeLeavesRequest(mode: OptimizationMode.full))).outcome;
 
   switch (outcome) {
     case OptimizationOutcome_Completed(:final roundsExecuted):
@@ -24,8 +24,8 @@ Future<void> runOptimizationOneRoundAtATime(BreezSdk sdk) async {
   // ANCHOR: optimize-leaves-single-round
   var roundsExecuted = 0;
   while (true) {
-    final outcome = await sdk.optimizeLeaves(
-        options: OptimizeLeavesOptions(mode: OptimizationMode.singleRound));
+    final outcome = (await sdk.optimizeLeaves(
+        request: OptimizeLeavesRequest(mode: OptimizationMode.singleRound))).outcome;
     switch (outcome) {
       case OptimizationOutcome_InProgress():
         roundsExecuted += 1;

@@ -41,7 +41,7 @@ By default, the SDK automatically triggers optimization after each payment (sent
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.optimize_leaves">API docs</a>
 </h3>
 
-Call {{#name optimize_leaves}} with no options to run optimization until no further work is productive. The call blocks for the duration of the run and returns an {{#name OptimizationOutcome}}: {{#enum OptimizationOutcome::Completed}} with the number of rounds executed. A `rounds_executed` of `0` means the wallet was already optimal at call time.
+Call {{#name optimize_leaves}} with an {{#name OptimizeLeavesRequest}} using the default {{#enum OptimizationMode::Full}} mode to run optimization until no further work is productive. The call blocks for the duration of the run and returns an {{#name OptimizeLeavesResponse}} whose {{#name outcome}} is {{#enum OptimizationOutcome::Completed}} with the number of rounds executed. A `rounds_executed` of `0` means the wallet was already optimal at call time.
 
 {{#tabs optimize:optimize-leaves-full}}
 
@@ -50,7 +50,7 @@ Call {{#name optimize_leaves}} with no options to run optimization until no furt
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.optimize_leaves">API docs</a>
 </h3>
 
-To display progress or cancel between rounds, pass an {{#name OptimizeLeavesOptions}} with {{#enum OptimizationMode::SingleRound}}. Each call executes one round and returns {{#enum OptimizationOutcome::InProgress}} (more work remains) or {{#enum OptimizationOutcome::Completed}} (terminal — either the planner confirmed this swap finished optimization, or `rounds_executed == 0` indicating the wallet was already optimal). Cancel between rounds simply by stopping the loop.
+To display progress or cancel between rounds, pass an {{#name OptimizeLeavesRequest}} with {{#enum OptimizationMode::SingleRound}}. Each call executes one round and the response {{#name outcome}} is {{#enum OptimizationOutcome::InProgress}} (more work remains) or {{#enum OptimizationOutcome::Completed}} (terminal — either the planner confirmed this swap finished optimization, or `rounds_executed == 0` indicating the wallet was already optimal). Cancel between rounds simply by stopping the loop.
 
 {{#tabs optimize:optimize-leaves-single-round}}
 

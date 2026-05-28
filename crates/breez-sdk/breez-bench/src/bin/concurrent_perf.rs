@@ -14,10 +14,10 @@ use breez_sdk_itest::{
     drop_mysql_database, drop_postgres_database,
 };
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, SdkContext, SdkContextConfig, SdkEvent, SendPaymentRequest,
-    SyncWalletRequest, default_mysql_storage_config, default_postgres_storage_config,
-    default_server_config, new_shared_sdk_context,
+    BreezSdk, GetInfoRequest, Network, OptimizeLeavesRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, SdkContext, SdkContextConfig, SdkEvent,
+    SendPaymentRequest, SyncWalletRequest, default_mysql_storage_config,
+    default_postgres_storage_config, default_server_config, new_shared_sdk_context,
 };
 
 use breez_bench::stats::DurationStats;
@@ -768,7 +768,9 @@ async fn build_extra_sender(
 async fn run_optimization(sdk: &BreezSdk, label: &str) -> Result<Duration> {
     info!("Starting {}...", label.to_lowercase());
     let start = Instant::now();
-    let outcome = sdk.optimize_leaves(None).await?;
+    let outcome = sdk
+        .optimize_leaves(OptimizeLeavesRequest::default())
+        .await?;
     let elapsed = start.elapsed();
     info!(
         "{} complete in {:.2}s: {:?}",

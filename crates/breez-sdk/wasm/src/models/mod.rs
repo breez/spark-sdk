@@ -1301,8 +1301,8 @@ pub enum OptimizationMode {
     SingleRound,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizeLeavesOptions)]
-pub struct OptimizeLeavesOptions {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizeLeavesRequest)]
+pub struct OptimizeLeavesRequest {
     pub mode: OptimizationMode,
 }
 
@@ -1310,6 +1310,11 @@ pub struct OptimizeLeavesOptions {
 pub enum OptimizationOutcome {
     Completed { rounds_executed: u32 },
     InProgress,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizeLeavesResponse)]
+pub struct OptimizeLeavesResponse {
+    pub outcome: OptimizationOutcome,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionEstimate)]

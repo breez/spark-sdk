@@ -2,7 +2,7 @@ import BreezSdkSpark
 
 func runFullOptimization(sdk: BreezSdk) async throws {
     // ANCHOR: optimize-leaves-full
-    let outcome = try await sdk.optimizeLeaves(options: nil)
+    let outcome = try await sdk.optimizeLeaves(request: OptimizeLeavesRequest(mode: .full)).outcome
 
     switch outcome {
     case .completed(let roundsExecuted):
@@ -23,7 +23,7 @@ func runOptimizationOneRoundAtATime(sdk: BreezSdk) async throws {
     // ANCHOR: optimize-leaves-single-round
     var roundsExecuted: UInt32 = 0
     loop: while true {
-        let outcome = try await sdk.optimizeLeaves(options: OptimizeLeavesOptions(mode: .singleRound))
+        let outcome = try await sdk.optimizeLeaves(request: OptimizeLeavesRequest(mode: .singleRound)).outcome
 
         switch outcome {
         case .inProgress:
