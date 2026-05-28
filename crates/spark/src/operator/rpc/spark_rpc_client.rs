@@ -266,17 +266,6 @@ impl SparkRpcClient {
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
-    pub async fn get_signing_operator_list(&self) -> Result<GetSigningOperatorListResponse> {
-        debug!("Calling get_signing_operator_list");
-        Ok(self
-            .spark_service_client()
-            .await?
-            .get_signing_operator_list(())
-            .await?
-            .into_inner())
-    }
-
-    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn query_nodes(&self, req: QueryNodesRequest) -> Result<QueryNodesResponse> {
         debug!("Calling query_nodes with request: {:?}", req);
         Ok(self
@@ -333,31 +322,6 @@ impl SparkRpcClient {
             items,
             next: if has_next { Some(pf.next()) } else { None },
         })
-    }
-
-    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
-    pub async fn query_balance(&self, req: QueryBalanceRequest) -> Result<QueryBalanceResponse> {
-        debug!("Calling query_balance with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .query_balance(req)
-            .await?
-            .into_inner())
-    }
-
-    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
-    pub async fn query_user_signed_refunds(
-        &self,
-        req: QueryUserSignedRefundsRequest,
-    ) -> Result<QueryUserSignedRefundsResponse> {
-        debug!("Calling query_user_signed_refunds with request: {:?}", req);
-        Ok(self
-            .spark_service_client()
-            .await?
-            .query_user_signed_refunds(req)
-            .await?
-            .into_inner())
     }
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
