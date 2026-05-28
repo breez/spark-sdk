@@ -912,6 +912,35 @@ impl MysqlTokenStore {
         .await
         .map_err(map_err)?;
 
+        // Also delete any non-reserved row whose outpoint is in the incoming
+        // refresh data. The refresh is authoritative for that outpoint, so we
+        // drop a previously-inline-inserted synthetic-id row to make room. This
+        // mirrors the in-memory store's outpoint-keyed semantics where a refresh
+        // overwrites a post-refresh insert for the same outpoint, preventing
+        // duplicate (id, outpoint) rows that would later be selected together
+        // and trigger TOKEN_RULES_VIOLATION at the operator.
+        let total_incoming: usize = token_outputs.iter().map(|to| to.outputs.len()).sum();
+        if total_incoming > 0 {
+            let pair_placeholders = vec!["(?, ?)"; total_incoming].join(", ");
+            let sql = format!(
+                "DELETE FROM brz_token_outputs \
+                 WHERE user_id = ? AND reservation_id IS NULL \
+                   AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
+            );
+            let mut params: Vec<Value> =
+                Vec::with_capacity(total_incoming.saturating_mul(2).saturating_add(1));
+            params.push(Value::from(self.identity.clone()));
+            for to in token_outputs {
+                for o in &to.outputs {
+                    params.push(Value::from(o.prev_tx_hash.clone()));
+                    params.push(Value::from(o.prev_tx_vout as i32));
+                }
+            }
+            tx.exec_drop(&sql, Params::Positional(params))
+                .await
+                .map_err(map_err)?;
+        }
+
         let incoming_output_ids: HashSet<String> = token_outputs
             .iter()
             .flat_map(|to| to.outputs.iter().map(|o| o.output.id.clone()))

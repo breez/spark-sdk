@@ -216,6 +216,32 @@ class PostgresTokenStore {
           [this.identity, refreshTimestamp]
         );
 
+        // Also delete any non-reserved row whose outpoint is in the incoming
+        // refresh data. The refresh is authoritative for that outpoint, so we
+        // drop a previously-inline-inserted synthetic-id row to make room.
+        // Mirrors the in-memory store's outpoint-keyed semantics and prevents
+        // duplicate (id, outpoint) rows that would later trigger
+        // TOKEN_RULES_VIOLATION at the operator.
+        const incomingTxHashes = [];
+        const incomingVouts = [];
+        for (const to of tokenOutputs) {
+          for (const o of to.outputs) {
+            incomingTxHashes.push(o.prevTxHash);
+            incomingVouts.push(o.prevTxVout);
+          }
+        }
+        if (incomingTxHashes.length > 0) {
+          await client.query(
+            `DELETE FROM brz_token_outputs
+             WHERE user_id = $1
+               AND reservation_id IS NULL
+               AND (prev_tx_hash, prev_tx_vout) IN (
+                 SELECT * FROM UNNEST($2::text[], $3::int[])
+               )`,
+            [this.identity, incomingTxHashes, incomingVouts]
+          );
+        }
+
         // Build a set of all incoming output IDs for reconciliation
         const incomingOutputIds = new Set();
         for (const to of tokenOutputs) {

@@ -238,6 +238,32 @@ class MysqlTokenStore {
           [this.identity, refreshTimestamp]
         );
 
+        // Also delete any non-reserved row whose outpoint is in the incoming
+        // refresh data. The refresh is authoritative for that outpoint, so we
+        // drop a previously-inline-inserted synthetic-id row to make room.
+        // Mirrors the in-memory store's outpoint-keyed semantics and prevents
+        // duplicate (id, outpoint) rows that would later trigger
+        // TOKEN_RULES_VIOLATION at the operator.
+        const incomingOutpoints = [];
+        for (const to of tokenOutputs) {
+          for (const o of to.outputs) {
+            incomingOutpoints.push([o.prevTxHash, o.prevTxVout]);
+          }
+        }
+        if (incomingOutpoints.length > 0) {
+          const pairPlaceholders = incomingOutpoints.map(() => "(?, ?)").join(", ");
+          const params = [this.identity];
+          for (const [h, v] of incomingOutpoints) {
+            params.push(h, v);
+          }
+          await conn.query(
+            `DELETE FROM brz_token_outputs
+             WHERE user_id = ? AND reservation_id IS NULL
+               AND (prev_tx_hash, prev_tx_vout) IN (${pairPlaceholders})`,
+            params
+          );
+        }
+
         const incomingOutputIds = new Set();
         for (const to of tokenOutputs) {
           for (const o of to.outputs) {

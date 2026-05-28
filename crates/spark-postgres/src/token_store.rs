@@ -314,6 +314,35 @@ impl TokenOutputStore for PostgresTokenStore {
         .await
         .map_err(map_err)?;
 
+        // Also delete any non-reserved row whose outpoint is in the incoming
+        // refresh data. The refresh is authoritative for that outpoint, so we
+        // drop a previously-inline-inserted synthetic-id row to make room. This
+        // mirrors the in-memory store's outpoint-keyed semantics where a refresh
+        // overwrites a post-refresh insert for the same outpoint, preventing
+        // duplicate (id, outpoint) rows that would later be selected together
+        // and trigger TOKEN_RULES_VIOLATION at the operator.
+        let incoming_tx_hashes: Vec<String> = token_outputs
+            .iter()
+            .flat_map(|to| to.outputs.iter().map(|o| o.prev_tx_hash.clone()))
+            .collect();
+        let incoming_vouts: Vec<i32> = token_outputs
+            .iter()
+            .flat_map(|to| to.outputs.iter().map(|o| o.prev_tx_vout as i32))
+            .collect();
+        if !incoming_tx_hashes.is_empty() {
+            tx.execute(
+                "DELETE FROM brz_token_outputs \
+                 WHERE user_id = $1 \
+                   AND reservation_id IS NULL \
+                   AND (prev_tx_hash, prev_tx_vout) IN ( \
+                     SELECT * FROM UNNEST($2::text[], $3::int[]) \
+                   )",
+                &[&self.identity, &incoming_tx_hashes, &incoming_vouts],
+            )
+            .await
+            .map_err(map_err)?;
+        }
+
         // Build a set of all incoming output IDs for reconciliation
         let incoming_output_ids: HashSet<String> = token_outputs
             .iter()
