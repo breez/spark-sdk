@@ -331,6 +331,7 @@ pub async fn build_sdk_with_custom_config_and_backend(
         config.lnurl_domain = None;
     }
 
+    let background_tasks_enabled = config.background_tasks_enabled;
     let seed = Seed::Entropy(seed_bytes.to_vec());
 
     let builder = SdkBuilder::new(config, seed);
@@ -345,12 +346,17 @@ pub async fn build_sdk_with_custom_config_and_backend(
     let event_listener = Box::new(ChannelEventListener { tx });
     let _listener_id = sdk.add_event_listener(event_listener).await;
 
-    // Ensure initial sync completes
-    let _ = sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(true),
-        })
-        .await?;
+    // Ensure initial sync completes. Server mode rejects `ensure_synced=true`
+    // (there's no background sync to await), so drive it explicitly instead.
+    if background_tasks_enabled {
+        let _ = sdk
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(true),
+            })
+            .await?;
+    } else {
+        sdk.sync_wallet(SyncWalletRequest {}).await?;
+    }
 
     Ok(SdkInstance {
         sdk,

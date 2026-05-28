@@ -313,8 +313,16 @@ async fn handle_wallet_event(sdk: &BreezSdk, event: WalletEvent) -> bool {
                     false
                 })
         }
-        WalletEvent::Optimization(event) => {
-            info!("Optimization event: {:?}", event);
+        WalletEvent::AutoOptimization(event) => {
+            info!("AutoOptimization event: {:?}", event);
+            // Only the background auto-optimizer reaches this branch;
+            // manually-triggered optimize_leaves calls return their result
+            // directly and never produce wallet-level optimization events.
+            sdk.event_emitter
+                .emit(&SdkEvent::AutoOptimization {
+                    optimization_event: event.into(),
+                })
+                .await;
             false
         }
     }

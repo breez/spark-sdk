@@ -82,8 +82,8 @@ const exampleAddEventListener = async (sdk: BreezSdk) => {
       } else if (event.tag === SdkEvent_Tags.PaymentFailed) {
         // A payment failed
         const failedPayment = event.inner.payment
-      } else if (event.tag === SdkEvent_Tags.Optimization) {
-        // An optimization event occurred
+      } else if (event.tag === SdkEvent_Tags.AutoOptimization) {
+        // An auto-optimization event occurred
         const optimizationEvent = event.inner.optimizationEvent
       } else if (event.tag === SdkEvent_Tags.LightningAddressChanged) {
         // The lightning address has changed

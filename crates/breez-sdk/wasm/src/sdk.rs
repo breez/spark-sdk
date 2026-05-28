@@ -320,19 +320,12 @@ impl BreezSdk {
         }
     }
 
-    #[wasm_bindgen(js_name = "startLeafOptimization")]
-    pub async fn start_leaf_optimization(&self) {
-        self.sdk.start_leaf_optimization().await;
-    }
-
-    #[wasm_bindgen(js_name = "cancelLeafOptimization")]
-    pub async fn cancel_leaf_optimization(&self) -> WasmResult<()> {
-        Ok(self.sdk.cancel_leaf_optimization().await?)
-    }
-
-    #[wasm_bindgen(js_name = "getLeafOptimizationProgress")]
-    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
-        self.sdk.get_leaf_optimization_progress().into()
+    #[wasm_bindgen(js_name = "optimizeLeaves")]
+    pub async fn optimize_leaves(
+        &self,
+        request: OptimizeLeavesRequest,
+    ) -> WasmResult<OptimizeLeavesResponse> {
+        Ok(self.sdk.optimize_leaves(request.into()).await?.into())
     }
 
     #[wasm_bindgen(js_name = "fetchConversionLimits")]

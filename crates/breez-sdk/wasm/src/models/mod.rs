@@ -79,8 +79,8 @@ pub enum SdkEvent {
     PaymentFailed {
         payment: Payment,
     },
-    Optimization {
-        optimization_event: OptimizationEvent,
+    AutoOptimization {
+        optimization_event: AutoOptimizationEvent,
     },
     LightningAddressChanged {
         lightning_address: Option<LightningAddressInfo>,
@@ -90,8 +90,8 @@ pub enum SdkEvent {
     },
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationEvent)]
-pub enum OptimizationEvent {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AutoOptimizationEvent)]
+pub enum AutoOptimizationEvent {
     Started {
         total_rounds: u32,
     },
@@ -1295,11 +1295,26 @@ pub struct LnurlReceiveMetadata {
     pub sender_comment: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationProgress)]
-pub struct OptimizationProgress {
-    pub is_running: bool,
-    pub current_round: u32,
-    pub total_rounds: u32,
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationMode)]
+pub enum OptimizationMode {
+    Full,
+    SingleRound,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizeLeavesRequest)]
+pub struct OptimizeLeavesRequest {
+    pub mode: OptimizationMode,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizationOutcome)]
+pub enum OptimizationOutcome {
+    Completed { rounds_executed: u32 },
+    InProgress,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::OptimizeLeavesResponse)]
+pub struct OptimizeLeavesResponse {
+    pub outcome: OptimizationOutcome,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::ConversionEstimate)]

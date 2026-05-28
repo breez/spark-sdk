@@ -42,9 +42,10 @@ use spark::{
         TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut, TokenService,
     },
     tree::{
-        InMemoryTreeStore, LeafOptimizer, OptimizationEvent, OptimizationEventHandler,
-        OptimizationProgress, SelectLeavesOptions, SynchronousTreeService, TargetAmounts, TreeNode,
-        TreeNodeId, TreeService, TreeStore, select_leaves_by_target_amounts, with_reserved_leaves,
+        AutoOptimizationEvent, AutoOptimizationEventHandler, InMemoryTreeStore, LeafOptimizer,
+        OptimizationError, OptimizationOutcome, SelectLeavesOptions, SynchronousTreeService,
+        TargetAmounts, TreeNode, TreeNodeId, TreeService, TreeStore,
+        select_leaves_by_target_amounts, with_reserved_leaves,
     },
     utils::paging::{PagingFilter, PagingResult},
 };
@@ -355,8 +356,8 @@ impl SparkWallet {
 
         let event_manager = Arc::new(EventManager::new());
 
-        // Create optimization event handler that bridges to WalletEvent
-        let optimization_event_handler = Arc::new(WalletOptimizationEventHandler {
+        // Create auto-optimization event handler that bridges to WalletEvent
+        let auto_optimization_event_handler = Arc::new(WalletAutoOptimizationEventHandler {
             event_manager: Arc::clone(&event_manager),
         });
 
@@ -364,7 +365,7 @@ impl SparkWallet {
             config.leaf_optimization_options.clone(),
             Arc::clone(&swap_service),
             Arc::clone(&tree_service),
-            Some(optimization_event_handler),
+            Some(auto_optimization_event_handler),
         ));
 
         // Use external cancellation token if provided, otherwise create an internal one
@@ -1642,23 +1643,23 @@ impl SparkWallet {
         Ok(())
     }
 
-    /// Starts leaf optimization in the background.
-    pub async fn start_leaf_optimization(&self) {
-        self.leaf_optimizer.start().await;
-    }
-
-    /// Cancels the ongoing leaf optimization.
+    /// Manually drives leaf optimization, blocking until the requested work
+    /// is done.
     ///
-    /// This sets a cancellation flag that is checked between rounds.
-    /// The current round will complete before stopping.
-    pub async fn cancel_leaf_optimization(&self) -> Result<(), SparkWalletError> {
-        self.leaf_optimizer.cancel().await?;
-        Ok(())
-    }
-
-    /// Returns the current optimization progress snapshot.
-    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
-        self.leaf_optimizer.progress()
+    /// - `max_rounds = None`: run until no further optimization is productive.
+    /// - `max_rounds = Some(n)`: execute up to `n` rounds and return.
+    ///
+    /// Manual runs do not emit `AutoOptimizationEvent`s — only the background
+    /// auto-optimizer produces events. Use the return value to track outcome.
+    ///
+    /// Returns [`OptimizationError::AlreadyRunning`] if another run (auto or
+    /// manual) is in flight, or [`OptimizationError::Cancelled`] if the run
+    /// was cancelled while in progress.
+    pub async fn optimize_leaves(
+        &self,
+        max_rounds: Option<u32>,
+    ) -> Result<OptimizationOutcome, OptimizationError> {
+        self.leaf_optimizer.run(max_rounds).await
     }
 
     /// Optimizes token outputs by consolidating them when there are more than the configured threshold.
@@ -2028,15 +2029,15 @@ async fn claim_transfer(
     Ok(result_nodes)
 }
 
-/// Event handler that bridges OptimizationEvent to WalletEvent.
-struct WalletOptimizationEventHandler {
+/// Event handler that bridges AutoOptimizationEvent to WalletEvent.
+struct WalletAutoOptimizationEventHandler {
     event_manager: Arc<EventManager>,
 }
 
-impl OptimizationEventHandler for WalletOptimizationEventHandler {
-    fn on_optimization_event(&self, event: OptimizationEvent) {
+impl AutoOptimizationEventHandler for WalletAutoOptimizationEventHandler {
+    fn on_auto_optimization_event(&self, event: AutoOptimizationEvent) {
         self.event_manager
-            .notify_listeners(WalletEvent::Optimization(event));
+            .notify_listeners(WalletEvent::AutoOptimization(event));
     }
 }
 

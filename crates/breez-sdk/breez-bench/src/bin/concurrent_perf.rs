@@ -14,10 +14,10 @@ use breez_sdk_itest::{
     drop_mysql_database, drop_postgres_database,
 };
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, Network, PrepareSendPaymentRequest, ReceivePaymentMethod,
-    ReceivePaymentRequest, SdkContext, SdkContextConfig, SdkEvent, SendPaymentRequest,
-    SyncWalletRequest, default_mysql_storage_config, default_postgres_storage_config,
-    default_server_config, new_shared_sdk_context,
+    BreezSdk, GetInfoRequest, Network, OptimizeLeavesRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, SdkContext, SdkContextConfig, SdkEvent,
+    SendPaymentRequest, SyncWalletRequest, default_mysql_storage_config,
+    default_postgres_storage_config, default_server_config, new_shared_sdk_context,
 };
 
 use breez_bench::stats::DurationStats;
@@ -767,28 +767,18 @@ async fn build_extra_sender(
 
 async fn run_optimization(sdk: &BreezSdk, label: &str) -> Result<Duration> {
     info!("Starting {}...", label.to_lowercase());
-    sdk.start_leaf_optimization().await;
-
     let start = Instant::now();
-    let timeout = Duration::from_secs(900);
-    let poll_interval = Duration::from_millis(500);
-
-    loop {
-        let progress = sdk.get_leaf_optimization_progress();
-        if !progress.is_running {
-            let elapsed = start.elapsed();
-            info!("{} complete in {:.2}s", label, elapsed.as_secs_f64());
-            return Ok(elapsed);
-        }
-        info!(
-            "Optimization progress: round {}/{}",
-            progress.current_round, progress.total_rounds
-        );
-        if start.elapsed() >= timeout {
-            bail!("Timeout waiting for optimization to complete");
-        }
-        tokio::time::sleep(poll_interval).await;
-    }
+    let outcome = sdk
+        .optimize_leaves(OptimizeLeavesRequest::default())
+        .await?;
+    let elapsed = start.elapsed();
+    info!(
+        "{} complete in {:.2}s: {:?}",
+        label,
+        elapsed.as_secs_f64(),
+        outcome
+    );
+    Ok(elapsed)
 }
 
 async fn fund_via_faucet(

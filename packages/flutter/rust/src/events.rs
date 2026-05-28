@@ -1,6 +1,6 @@
 use crate::frb_generated::StreamSink;
 use breez_sdk_spark::{DepositInfo, EventListener, LightningAddressInfo, Payment};
-pub use breez_sdk_spark::{OptimizationEvent, SdkEvent};
+pub use breez_sdk_spark::{AutoOptimizationEvent, SdkEvent};
 use flutter_rust_bridge::frb;
 
 #[frb(mirror(SdkEvent))]
@@ -21,8 +21,8 @@ pub enum _SdkEvent {
     PaymentFailed {
         payment: Payment,
     },
-    Optimization {
-        optimization_event: OptimizationEvent,
+    AutoOptimization {
+        optimization_event: AutoOptimizationEvent,
     },
     LightningAddressChanged {
         lightning_address: Option<LightningAddressInfo>,
@@ -32,8 +32,8 @@ pub enum _SdkEvent {
     },
 }
 
-#[frb(mirror(OptimizationEvent))]
-pub enum _OptimizationEvent {
+#[frb(mirror(AutoOptimizationEvent))]
+pub enum _AutoOptimizationEvent {
     Started {
         total_rounds: u32,
     },

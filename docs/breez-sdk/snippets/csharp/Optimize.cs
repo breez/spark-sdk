@@ -4,55 +4,86 @@ namespace BreezSdkSnippets
 {
     class Optimize
     {
-        async Task StartOptimization(BreezSdk sdk)
+        async Task RunFullOptimization(BreezSdk sdk)
         {
-            // ANCHOR: start-optimization
-            await sdk.StartLeafOptimization();
-            // ANCHOR_END: start-optimization
+            // ANCHOR: optimize-leaves-full
+            var outcome = (await sdk.OptimizeLeaves(new OptimizeLeavesRequest(OptimizationMode.Full))).outcome;
+
+            switch (outcome)
+            {
+                case OptimizationOutcome.Completed { roundsExecuted: var roundsExecuted }:
+                    if (roundsExecuted == 0)
+                    {
+                        Console.WriteLine("Optimization skipped — wallet already optimal");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Optimization completed in {roundsExecuted} rounds");
+                    }
+                    break;
+                case OptimizationOutcome.InProgress:
+                    // Full mode runs to completion in one call, so InProgress is
+                    // not reachable here.
+                    throw new InvalidOperationException("Full mode never returns InProgress");
+            }
+            // ANCHOR_END: optimize-leaves-full
         }
 
-        async Task CancelOptimization(BreezSdk sdk)
+        async Task RunOptimizationOneRoundAtATime(BreezSdk sdk)
         {
-            // ANCHOR: cancel-optimization
-            await sdk.CancelLeafOptimization();
-            // ANCHOR_END: cancel-optimization
+            // ANCHOR: optimize-leaves-single-round
+            uint roundsExecuted = 0;
+            while (true)
+            {
+                var outcome = (await sdk.OptimizeLeaves(new OptimizeLeavesRequest(OptimizationMode.SingleRound))).outcome;
+
+                if (outcome is OptimizationOutcome.InProgress)
+                {
+                    roundsExecuted += 1;
+                    Console.WriteLine($"Executed round {roundsExecuted}");
+                }
+                else if (outcome is OptimizationOutcome.Completed { roundsExecuted: var n })
+                {
+                    roundsExecuted += n;
+                    if (roundsExecuted == 0)
+                    {
+                        Console.WriteLine("Optimization skipped — wallet already optimal");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Optimization done after {roundsExecuted} rounds");
+                    }
+                    break;
+                }
+            }
+            // ANCHOR_END: optimize-leaves-single-round
         }
 
-        void GetOptimizationProgress(BreezSdk sdk)
+        void HandleAutoOptimizationEvent(AutoOptimizationEvent optimizationEvent)
         {
-            // ANCHOR: get-optimization-progress
-            var progress = sdk.GetLeafOptimizationProgress();
-
-            Console.WriteLine($"Optimization is running: {progress.isRunning}");
-            Console.WriteLine($"Current round: {progress.currentRound}");
-            Console.WriteLine($"Total rounds: {progress.totalRounds}");
-            // ANCHOR_END: get-optimization-progress
-        }
-
-        void OptimizationEvents(OptimizationEvent optimizationEvent)
-        {
-            // ANCHOR: optimization-events
+            // ANCHOR: auto-optimization-events
             switch (optimizationEvent)
             {
-                case OptimizationEvent.Started { totalRounds: var totalRounds }:
-                    Console.WriteLine($"Optimization started with {totalRounds} rounds");
+                case AutoOptimizationEvent.Started { totalRounds: var totalRounds }:
+                    Console.WriteLine($"Auto-optimization started with {totalRounds} rounds");
                     break;
-                case OptimizationEvent.RoundCompleted { currentRound: var currentRound, totalRounds: var totalRounds }:
-                    Console.WriteLine($"Optimization round {currentRound} of {totalRounds} completed");
+                case AutoOptimizationEvent.RoundCompleted { currentRound: var currentRound, totalRounds: var totalRounds }:
+                    Console.WriteLine($"Auto-optimization round {currentRound} of {totalRounds} completed");
                     break;
-                case OptimizationEvent.Completed:
-                    Console.WriteLine("Optimization completed successfully");
+                case AutoOptimizationEvent.Completed:
+                    Console.WriteLine("Auto-optimization completed successfully");
                     break;
-                case OptimizationEvent.Cancelled:
-                    Console.WriteLine("Optimization was cancelled");
+                case AutoOptimizationEvent.Cancelled:
+                    Console.WriteLine("Auto-optimization was cancelled");
                     break;
-                case OptimizationEvent.Failed { error: var error }:
-                    Console.WriteLine($"Optimization failed: {error}");
+                case AutoOptimizationEvent.Failed { error: var error }:
+                    Console.WriteLine($"Auto-optimization failed: {error}");
                     break;
-                case OptimizationEvent.Skipped:
-                    Console.WriteLine("Optimization was skipped because leaves are already optimal");
+                case AutoOptimizationEvent.Skipped:
+                    Console.WriteLine("Auto-optimization was skipped because leaves are already optimal");
                     break;
             }
+            // ANCHOR_END: auto-optimization-events
         }
     }
 }

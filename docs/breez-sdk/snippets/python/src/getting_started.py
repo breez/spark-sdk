@@ -93,8 +93,8 @@ class SdkListener(EventListener):
         elif isinstance(event, SdkEvent.PAYMENT_FAILED):
             # A payment failed
             failed_payment = event.payment
-        elif isinstance(event, SdkEvent.OPTIMIZATION):
-            # An optimization event occurred
+        elif isinstance(event, SdkEvent.AUTO_OPTIMIZATION):
+            # An auto-optimization event occurred
             optimization_event = event.optimization_event
         elif isinstance(event, SdkEvent.LIGHTNING_ADDRESS_CHANGED):
             # The lightning address has changed

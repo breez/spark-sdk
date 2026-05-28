@@ -142,8 +142,8 @@ class BreezSdkSpark {
           // A payment failed
           final _ = payment;
           break;
-        case SdkEvent_Optimization(:final optimizationEvent):
-          // An optimization event occurred
+        case SdkEvent_AutoOptimization(:final optimizationEvent):
+          // An auto-optimization event occurred
           final _ = optimizationEvent;
           break;
         case SdkEvent_LightningAddressChanged(:final lightningAddress):

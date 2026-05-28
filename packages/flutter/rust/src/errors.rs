@@ -42,6 +42,8 @@ pub enum _SdkError {
     },
     LnurlError(String),
     Signer(String),
+    OptimizationAlreadyRunning,
+    OptimizationCancelled,
     Generic(String),
 }
 

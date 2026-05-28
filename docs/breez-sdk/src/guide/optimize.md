@@ -32,46 +32,37 @@ Keep multiplicity as low as possible while meeting your performance requirements
 
 ## Controlling optimization timing
 
-The optimization process runs as a background task that reorganizes leaves by swapping them to achieve optimal denominations. During this process, funds in leaves being swapped become temporarily unavailable for payments, which can delay transaction processing.
+The optimization process reorganizes leaves by swapping them to achieve optimal denominations. During this process, funds in leaves being swapped become temporarily unavailable for payments, which can delay transaction processing.
 
-By default, the SDK automatically triggers optimization after each payment (sent or received). For applications requiring more control, you can disable automatic optimization in the [configuration](./config.md#optimization-configuration) and manage it manually as described below.
+By default, the SDK automatically triggers optimization after each payment (sent or received). For applications requiring more control, you can disable automatic optimization in the [configuration](./config.md#optimization-configuration) and drive it manually using {{#name optimize_leaves}}.
 
-<h3 id="start-optimization">
-    <a class="header" href="#start-optimization">Start optimization</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.start_leaf_optimization">API docs</a>
+<h3 id="optimize-leaves-full">
+    <a class="header" href="#optimize-leaves-full">Run optimization to completion</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.optimize_leaves">API docs</a>
 </h3>
 
-You can manually trigger the optimization task to start running in the background. If optimization is already running, no new task will be started.
+Call {{#name optimize_leaves}} with an {{#name OptimizeLeavesRequest}} using the default {{#enum OptimizationMode::Full}} mode to run optimization until no further work is productive. The call blocks for the duration of the run and returns an {{#name OptimizeLeavesResponse}} whose {{#name outcome}} is {{#enum OptimizationOutcome::Completed}} with the number of rounds executed. A {{#name rounds_executed}} of `0` means the wallet was already optimal at call time.
 
-{{#tabs optimize:start-optimization}}
+{{#tabs optimize:optimize-leaves-full}}
 
-<h3 id="cancel-optimization">
-    <a class="header" href="#cancel-optimization">Cancel optimization</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.cancel_leaf_optimization">API docs</a>
+<h3 id="optimize-leaves-single-round">
+    <a class="header" href="#optimize-leaves-single-round">Run optimization one round at a time</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.optimize_leaves">API docs</a>
 </h3>
 
-You can cancel an ongoing optimization task and wait for it to stop completely. Optimization is done in rounds, and the current round will complete before stopping.
+To display progress or cancel between rounds, pass an {{#name OptimizeLeavesRequest}} with {{#enum OptimizationMode::SingleRound}}. Each call executes one round and the response {{#name outcome}} is {{#enum OptimizationOutcome::InProgress}} (more work remains) or {{#enum OptimizationOutcome::Completed}} (terminal — either the planner confirmed this swap finished optimization, or a {{#name rounds_executed}} of `0` indicates the wallet was already optimal). Cancel between rounds simply by stopping the loop.
 
-{{#tabs optimize:cancel-optimization}}
+{{#tabs optimize:optimize-leaves-single-round}}
 
 <div class="warning">
 <h4>Developer note</h4>
 
-The SDK automatically cancels optimization when it would block an immediate payment. Use manual cancellation only when anticipating upcoming payment activity, not when there is an immediate need to make a payment.
+If {{#name optimize_leaves}} is invoked while another optimization run (auto or manual) is already in flight, it returns {{#enum SdkError::OptimizationAlreadyRunning}}. The SDK may also preempt a manual run to free leaves for a higher-priority payment, in which case the call returns {{#enum SdkError::OptimizationCancelled}}.
 
 </div>
 
-<h3 id="get-optimization-progress">
-    <a class="header" href="#get-optimization-progress">Get optimization progress</a>
-    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.BreezSdk.html#method.get_leaf_optimization_progress">API docs</a>
-</h3>
+## Auto-optimization events
 
-You can retrieve the current optimization progress to monitor the optimization task.
+When automatic optimization is enabled, the SDK emits {{#enum SdkEvent::AutoOptimization}} events so your application can track the background optimizer's progress. Manual {{#name optimize_leaves}} calls do not emit these events — inspect their return value instead. See [Listening to events](./events.md) for subscription instructions.
 
-{{#tabs optimize:get-optimization-progress}}
-
-## Optimization events
-
-The SDK emits events to keep your application informed about optimization status. See [Listening to events](./events.md) for subscription instructions.
-
-{{#tabs optimize:optimization-events}}
+{{#tabs optimize:auto-optimization-events}}

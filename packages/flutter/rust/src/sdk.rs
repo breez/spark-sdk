@@ -234,19 +234,14 @@ impl BreezSdk {
         }
     }
 
-    pub async fn start_leaf_optimization(&self) {
-        self.inner.start_leaf_optimization().await;
+    pub async fn optimize_leaves(
+        &self,
+        request: OptimizeLeavesRequest,
+    ) -> Result<OptimizeLeavesResponse, SdkError> {
+        self.inner.optimize_leaves(request).await
     }
 
-    pub async fn cancel_leaf_optimization(&self) -> Result<(), SdkError> {
-        self.inner.cancel_leaf_optimization().await
-    }
 
-    #[frb(sync)]
-    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
-        self.inner.get_leaf_optimization_progress().into()
-    }
-    
     pub async fn fetch_conversion_limits(
         &self,
         request: FetchConversionLimitsRequest,

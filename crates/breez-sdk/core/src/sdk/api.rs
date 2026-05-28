@@ -7,9 +7,10 @@ use breez_sdk_common::buy::cashapp::CashAppProvider;
 use crate::{
     BuyBitcoinRequest, BuyBitcoinResponse, CheckMessageRequest, CheckMessageResponse,
     GetTokensMetadataRequest, GetTokensMetadataResponse, InputType, ListFiatCurrenciesResponse,
-    ListFiatRatesResponse, Network, OptimizationProgress, RegisterWebhookRequest,
-    RegisterWebhookResponse, SignMessageRequest, SignMessageResponse, UnregisterWebhookRequest,
-    UpdateUserSettingsRequest, UserSettings, Webhook,
+    ListFiatRatesResponse, Network, OptimizationMode, OptimizeLeavesRequest,
+    OptimizeLeavesResponse, RegisterWebhookRequest, RegisterWebhookResponse, SignMessageRequest,
+    SignMessageResponse, UnregisterWebhookRequest, UpdateUserSettingsRequest, UserSettings,
+    Webhook,
     chain::RecommendedFees,
     error::SdkError,
     events::EventListener,
@@ -242,31 +243,33 @@ impl BreezSdk {
         TokenIssuer::new(self.spark_wallet.clone(), self.storage.clone())
     }
 
-    /// Starts leaf optimization in the background.
+    /// Manually drives leaf optimization, blocking until the requested work
+    /// is done.
     ///
-    /// This method spawns the optimization work in a background task and returns
-    /// immediately. Progress is reported via events.
-    /// If optimization is already running, no new task will be started.
-    pub async fn start_leaf_optimization(&self) {
-        self.spark_wallet.start_leaf_optimization().await;
-    }
-
-    /// Cancels the ongoing leaf optimization.
+    /// With [`OptimizationMode::Full`] (the default) the call runs the entire
+    /// optimization in a single invocation. With
+    /// [`OptimizationMode::SingleRound`] it executes one round and returns —
+    /// the caller drives the loop by inspecting the
+    /// [`OptimizeLeavesResponse::outcome`] and calling again until
+    /// `InProgress` no longer appears.
     ///
-    /// This method cancels the ongoing optimization and waits for it to fully stop.
-    /// The current round will complete before stopping. This method blocks
-    /// until the optimization has fully stopped and leaves reserved for optimization
-    /// are available again.
+    /// Returns an error if another optimization run (auto or manual) is
+    /// already in flight ([`SdkError::OptimizationAlreadyRunning`]), or if
+    /// the SDK preempted this run to free leaves for a payment
+    /// ([`SdkError::OptimizationCancelled`]).
     ///
-    /// If no optimization is running, this method returns immediately.
-    pub async fn cancel_leaf_optimization(&self) -> Result<(), SdkError> {
-        self.spark_wallet.cancel_leaf_optimization().await?;
-        Ok(())
-    }
-
-    /// Returns the current optimization progress snapshot.
-    pub fn get_leaf_optimization_progress(&self) -> OptimizationProgress {
-        self.spark_wallet.get_leaf_optimization_progress().into()
+    /// Manual runs do not emit events; events ([`SdkEvent::AutoOptimization`])
+    /// are reserved for the background auto-optimizer.
+    pub async fn optimize_leaves(
+        &self,
+        request: OptimizeLeavesRequest,
+    ) -> Result<OptimizeLeavesResponse, SdkError> {
+        let max_rounds = match request.mode {
+            OptimizationMode::Full => None,
+            OptimizationMode::SingleRound => Some(1),
+        };
+        let outcome = self.spark_wallet.optimize_leaves(max_rounds).await?.into();
+        Ok(OptimizeLeavesResponse { outcome })
     }
 
     /// Registers a webhook to receive notifications for wallet events.
