@@ -170,66 +170,109 @@ fn main() -> Result<()> {
     }
 }
 
-/// Relative paths (from workspace root) where the canonical
-/// CredentialManagerPrfCore.kt must be mirrored. Flutter and React Native
-/// plugins are shipped via pub/npm, which strips cross-repo relative paths,
-/// so gradle srcDirs sharing is not an option there — the file must be
-/// physically copied into each tree and committed.
-const PASSKEY_CORE_CANONICAL: &str = "crates/breez-sdk/bindings/langs/shared/android-passkey/src/main/kotlin/technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt";
-
-const PASSKEY_CORE_MIRRORS: &[&str] = &[
-    "packages/flutter/android/src/main/kotlin/technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt",
-    // NOTE: Under `src/main/kotlin/`, NOT `src/main/java/`. The java tree is
-    // owned by uniffi-bindgen-react-native (`yarn ubrn:clean` wipes it).
-    "packages/react-native/android/src/main/kotlin/technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt",
+/// Files that must be physically copied from the canonical source into
+/// the Flutter and React Native package trees. Both plugins ship via
+/// pub/npm, which strip cross-repo relative paths, so gradle srcDirs
+/// sharing is not an option.
+const PASSKEY_SYNC_FILES: &[(&str, &[&str])] = &[
+    (
+        // CredentialManagerPrfCore: WebAuthn / PRF / dual-salt logic.
+        "crates/breez-sdk/bindings/langs/shared/android-passkey/src/main/kotlin/technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt",
+        &[
+            "packages/flutter/android/src/main/kotlin/technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt",
+            // NOTE: Under `src/main/kotlin/`, NOT `src/main/java/`. The java tree is
+            // owned by uniffi-bindgen-react-native (`yarn ubrn:clean` wipes it).
+            "packages/react-native/android/src/main/kotlin/technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt",
+        ],
+    ),
+    (
+        // PasskeyAssertionCore: WebAuthn / PRF / dual-salt logic on iOS+macOS.
+        // The upstream Swift target ships the same file in its own Sources
+        // tree so SPM can compile PasskeyProvider.swift against it without
+        // editing Package.swift.
+        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/PasskeyAssertionCore.swift",
+        &[
+            "crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/PasskeyAssertionCore.swift",
+            "packages/flutter/ios/Classes/PasskeyAssertionCore.swift",
+            "packages/react-native/ios/PasskeyAssertionCore.swift",
+        ],
+    ),
+    (
+        // PasskeyPRFHelper.h: ObjC bridge header for NS_REFINED_FOR_SWIFT
+        // PRF types. Flat layout (no `include/`) so the same file works
+        // in the upstream SPM target (publicHeadersPath: ".") and the
+        // Flutter / React Native pods (which package files at the root).
+        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.h",
+        &[
+            "crates/breez-sdk/bindings/langs/swift/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.h",
+            "packages/flutter/ios/Classes/PasskeyPRFHelper.h",
+            "packages/react-native/ios/PasskeyPRFHelper.h",
+        ],
+    ),
+    (
+        // PasskeyPRFHelper.m: ObjC implementation matching the flat header layout.
+        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.m",
+        &[
+            "crates/breez-sdk/bindings/langs/swift/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.m",
+            "packages/flutter/ios/Classes/PasskeyPRFHelper.m",
+            "packages/react-native/ios/PasskeyPRFHelper.m",
+        ],
+    ),
 ];
 
 fn sync_passkey_core_cmd(check: bool) -> Result<()> {
     let workspace_root = workspace_metadata()?.workspace_root;
-    let canonical_path = Path::new(workspace_root.as_str()).join(PASSKEY_CORE_CANONICAL);
-    let canonical = fs::read(&canonical_path).with_context(|| {
-        format!(
-            "Failed to read canonical CredentialManagerPrfCore.kt at {}",
-            canonical_path.display()
-        )
-    })?;
-
     let mut drifted: Vec<PathBuf> = Vec::new();
 
-    for rel in PASSKEY_CORE_MIRRORS {
-        let dest = Path::new(workspace_root.as_str()).join(rel);
-        let matches = match fs::read(&dest) {
-            Ok(existing) => existing == canonical,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-            Err(err) => {
-                return Err(err)
-                    .with_context(|| format!("Failed to read mirror copy at {}", dest.display()));
+    for (canonical_rel, mirrors) in PASSKEY_SYNC_FILES {
+        let canonical_path = Path::new(workspace_root.as_str()).join(canonical_rel);
+        let canonical = fs::read(&canonical_path).with_context(|| {
+            format!(
+                "Failed to read canonical {} at {}",
+                Path::new(canonical_rel)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| canonical_rel.to_string()),
+                canonical_path.display()
+            )
+        })?;
+
+        for rel in *mirrors {
+            let dest = Path::new(workspace_root.as_str()).join(rel);
+            let matches = match fs::read(&dest) {
+                Ok(existing) => existing == canonical,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!("Failed to read mirror copy at {}", dest.display())
+                    });
+                }
+            };
+
+            if matches {
+                println!("passkey-core: up to date: {}", rel);
+                continue;
             }
-        };
 
-        if matches {
-            println!("passkey-core: up to date: {}", rel);
-            continue;
-        }
+            if check {
+                drifted.push(dest.clone());
+                println!("passkey-core: DRIFT: {}", rel);
+                continue;
+            }
 
-        if check {
-            drifted.push(dest.clone());
-            println!("passkey-core: DRIFT: {}", rel);
-            continue;
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+            }
+            fs::write(&dest, &canonical)
+                .with_context(|| format!("Failed to write mirror copy to {}", dest.display()))?;
+            println!("passkey-core: wrote: {}", rel);
         }
-
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create directory {}", parent.display()))?;
-        }
-        fs::write(&dest, &canonical)
-            .with_context(|| format!("Failed to write mirror copy to {}", dest.display()))?;
-        println!("passkey-core: wrote: {}", rel);
     }
 
     if check && !drifted.is_empty() {
         bail!(
-            "CredentialManagerPrfCore.kt is out of sync in {} location(s). \
+            "Passkey shared sources are out of sync in {} location(s). \
             Run `cargo xtask sync-passkey-core` and commit the diff.",
             drifted.len()
         );

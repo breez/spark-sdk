@@ -205,10 +205,13 @@ fn package_wasm_target(
 
     // The top-level packages/wasm/package.json exposes
     //   "./passkey-prf-provider": "./web/passkey-prf-provider/index.js"
-    // so the helper only needs to land in the `web` target output to be
-    // reachable via `@breeztech/breez-sdk-spark/passkey-prf-provider`.
+    //   "./passkey-capacitor-bridge": "./web/passkey-capacitor-bridge/index.js"
+    // so each helper only needs to land in the `web` target output to be
+    // reachable via the corresponding `@breeztech/breez-sdk-spark/...`
+    // sub-export.
     if target == "web" {
         copy_passkey_prf_provider_files(crate_dir, &out_path)?;
+        copy_passkey_capacitor_bridge_files(crate_dir, &out_path)?;
     }
 
     println!("Successfully built WASM target: {}", target);
@@ -260,7 +263,7 @@ fn parse_wasm_exports(dts_path: &Path) -> Result<WasmExports> {
 
     anyhow::ensure!(
         !functions.is_empty() && !classes.is_empty(),
-        "Failed to parse WASM exports from {} — found {} functions, {} classes. \
+        "Failed to parse WASM exports from {}: found {} functions, {} classes. \
          wasm-bindgen output format may have changed.",
         dts_path.display(),
         functions.len(),
@@ -294,7 +297,7 @@ fn create_ssr_entry_point(pkg_dir: &Path) -> Result<()> {
     let mut js = String::new();
     js.push_str(
         r#"// SSR-safe entry point for Breez SDK
-// Safe to import during server-side rendering — no WASM, no browser APIs, no Node.js APIs.
+// Safe to import during server-side rendering: no WASM, no browser APIs, no Node.js APIs.
 // Call init() on the client before using any SDK functions.
 
 let _module = null;
@@ -331,7 +334,7 @@ export default async function init(wasmInput) {
         ));
     }
 
-    // Class stubs — after init(), delegate to the real class via `return new`
+    // Class stubs: after init(), delegate to the real class via `return new`
     for name in &exports.classes {
         js.push_str(&format!(
             "export class {name} {{\n  \
@@ -405,6 +408,60 @@ fn copy_passkey_prf_provider_files(crate_dir: &Path, out_path: &Path) -> Result<
     Ok(())
 }
 
+/// Copy the Capacitor native-bridge TypeScript types sub-export into
+/// the `web` target output. Pure types: no runtime beyond a stub
+/// `index.js` that exports nothing, so module resolvers that need a
+/// runtime entry alongside the `.d.ts` succeed.
+///
+/// The top-level `packages/wasm/package.json` maps
+/// `./passkey-capacitor-bridge` to this directory so plugin authors
+/// can `import type { PasskeyPrfPlugin } from
+/// '@breeztech/breez-sdk-spark/passkey-capacitor-bridge'` to keep
+/// their `definitions.ts` in lockstep with the SDK's native plugin
+/// contract.
+fn copy_passkey_capacitor_bridge_files(crate_dir: &Path, out_path: &Path) -> Result<()> {
+    let src_dir = crate_dir.join("js/passkey-capacitor-bridge");
+
+    if !src_dir.exists() {
+        println!(
+            "Warning: passkey-capacitor-bridge source directory not found at {:?}",
+            src_dir
+        );
+        return Ok(());
+    }
+
+    let dest_dir = out_path.join("passkey-capacitor-bridge");
+    std::fs::create_dir_all(&dest_dir)?;
+
+    let files_to_copy = ["index.js", "index.d.ts"];
+    for file_name in files_to_copy {
+        let src_file = src_dir.join(file_name);
+        let dest_file = dest_dir.join(file_name);
+
+        if src_file.exists() {
+            std::fs::copy(&src_file, &dest_file).with_context(|| {
+                format!(
+                    "Failed to copy {} to {}",
+                    src_file.display(),
+                    dest_file.display()
+                )
+            })?;
+            println!("Copied passkey-capacitor-bridge file: {}", file_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "passkey-capacitor-bridge file not found: {}",
+                src_file.display()
+            ));
+        }
+    }
+
+    println!(
+        "Successfully copied passkey-capacitor-bridge files to {}",
+        dest_dir.display()
+    );
+    Ok(())
+}
+
 /// Generate an ESM wrapper at `pkg_dir/nodejs/index.mjs` so that
 /// `import { connect } from '@breeztech/breez-sdk-spark'` works in ESM
 /// contexts (e.g. Vite SSR) where the `"node"` export condition is active.
@@ -414,7 +471,7 @@ fn create_nodejs_esm_wrapper(pkg_dir: &Path) -> Result<()> {
 
     let mut mjs = String::new();
     mjs.push_str(
-        "// ESM wrapper for the CJS Node.js entry — re-exports named bindings\n\
+        "// ESM wrapper for the CJS Node.js entry: re-exports named bindings\n\
          // so that `import { connect } from '@breeztech/breez-sdk-spark'` works\n\
          // in ESM contexts.\n\
          import pkg from './index.js';\n\n\
