@@ -1,13 +1,16 @@
 import { NativeModules, Platform } from 'react-native';
+import {
+  PasskeyClient as SdkPasskeyClient,
+  type PasskeyConfig,
+  type PrfProvider,
+} from './generated/breez_sdk_spark';
 
 const { BreezSdkSparkPasskey } = NativeModules;
 
 /**
- * Build a diagnostic error thrown when the native passkey module isn't
- * reachable from JS. The most common cause on iOS is running on a version
- * older than iOS 18 — the Swift class is marked `@available(iOS 18.0, *)`
- * so the ObjC runtime cannot load it on earlier releases. On Android the
- * native module should always load, so the fallback message blames linking.
+ * Diagnostic error for when the native passkey module isn't reachable. The
+ * common iOS cause is running below iOS 18, where the `@available(iOS 18.0, *)`
+ * Swift class cannot load; on Android a missing module means broken linking.
  */
 function passkeyModuleUnavailableError(operation: string): Error {
   if (Platform.OS === 'ios') {
@@ -41,164 +44,520 @@ function passkeyModuleUnavailableError(operation: string): Error {
 }
 
 /**
+ * Authenticator data captured at registration. `aaguid` identifies the
+ * provider; `backupEligible` reports whether the credential can sync across
+ * devices. Both are `null` when the attestation can't be parsed. Treat the
+ * AAGUID as a display hint only, never a trust decision: it is unverified.
+ * `userId` is the user handle minted by the native plugin (never host-supplied).
+ */
+export interface RegisteredCredential {
+  credentialId: Uint8Array;
+  userId: Uint8Array;
+  aaguid: Uint8Array | null;
+  backupEligible: boolean | null;
+}
+
+
+/**
+ * Result of {@link PasskeyProvider.checkDomainAssociation}. Switch on `kind`
+ * to handle each outcome.
+ */
+export type DomainAssociation =
+  | { kind: 'Associated' }
+  | { kind: 'NotAssociated'; source: string; reason: string }
+  | { kind: 'Skipped'; reason: string };
+
+/**
+ * App-side persistent store of credential IDs registered for an RP. The
+ * SDK ships no implementation: bring your own (Keychain, Block Store, etc;
+ * see the passkey guide). Calls are best-effort optimizations: failures and
+ * 3s timeouts are swallowed, reported via
+ * {@link PasskeyProviderOptions.onRegistryError}, and never block the ceremony.
+ */
+export interface CredentialRegistry {
+  read(rpId: string): Promise<Uint8Array[]>;
+  add(rpId: string, credentialId: Uint8Array): Promise<void>;
+  remove(rpId: string, credentialId: Uint8Array): Promise<void>;
+  clear(rpId: string): Promise<void>;
+}
+
+/** Discriminator for {@link PasskeyProviderOptions.onRegistryError}. */
+export type RegistryOperation = 'read' | 'add' | 'remove' | 'clear';
+
+/**
  * Options for constructing a PasskeyProvider.
  */
 export interface PasskeyProviderOptions {
   /**
-   * Relying Party ID. Must match the domain configured for cross-platform
-   * credential sharing.
-   *
-   * Changing this after users have registered passkeys will make their existing
-   * credentials undiscoverable — they would need to create new passkeys.
-   * @default 'keys.breez.technology'
+   * Relying Party ID: the domain configured for credential sharing.
+   * Changing it after users register passkeys makes their existing
+   * credentials undiscoverable. Pass {@link PasskeyProvider.BREEZ_RP_ID} for
+   * the Breez-managed RP (only valid for Breez-registered apps).
    */
-  rpId?: string;
+  rpId: string;
 
   /**
-   * RP display name shown during credential registration. Only used when
-   * creating new passkeys; changing it does not affect existing credentials.
-   * @default 'Breez SDK'
+   * Display name shown in the OS passkey picker and credential-manager
+   * UIs. Only used at registration; changing it does not affect existing
+   * credentials.
    */
-  rpName?: string;
+  rpName: string;
 
   /**
-   * User name stored with the credential, shown as a secondary label in some
-   * passkey managers. Defaults to rpName. Only used during registration;
-   * changing it does not affect existing credentials.
+   * Per-credential identifier shown in the account picker during sign-in.
+   * Pass a stable per-user value to surface each registration distinctly
+   * (Apple's Passwords app dedupes by `(rpId, userName)`). Defaults to
+   * `rpName`. Only used at registration.
    */
   userName?: string;
 
   /**
-   * User display name shown as the primary label in the passkey picker.
-   * Defaults to userName. Only used during registration; changing it does
-   * not affect existing credentials.
+   * User-friendly label some platforms show in the picker. Defaults to
+   * `userName`. Only used at registration.
    */
   userDisplayName?: string;
 
   /**
-   * When true (default), `derivePrfSeed` automatically creates a new passkey
-   * if none exists for this RP ID, then retries the assertion. When false,
-   * throws an error instead, letting the caller control registration
-   * separately via `createPasskey()`.
-   * @default true
+   * Optional store of known credential IDs. When set, the SDK merges stored
+   * IDs into the assertion / registration and persists new ones after
+   * success. Best-effort with a 3s timeout: failures fire
+   * {@link onRegistryError} and the ceremony proceeds.
    */
-  autoRegister?: boolean;
+  credentialRegistry?: CredentialRegistry;
+
+  /**
+   * Fired when a {@link CredentialRegistry} call throws or times out. Never
+   * blocks the ceremony.
+   */
+  onRegistryError?: (operation: RegistryOperation, error: Error) => void;
+}
+
+const REGISTRY_TIMEOUT_MS = 3_000;
+
+const CREDENTIAL_REGISTRY_HELP_SUFFIX =
+  ' (No CredentialRegistry was supplied to PasskeyProvider; ' +
+  'if you expect the SDK to auto-discover known credentials, see ' +
+  'https://sdk-doc-spark.breez.technology/guide/passkey.html#credentialregistry)';
+
+const _REGISTRY_TIMEOUT = Symbol('registryTimeout');
+
+function _withRegistryTimeout<T>(p: Promise<T>): Promise<T | typeof _REGISTRY_TIMEOUT> {
+  return Promise.race([
+    p,
+    new Promise<typeof _REGISTRY_TIMEOUT>((resolve) =>
+      setTimeout(() => resolve(_REGISTRY_TIMEOUT), REGISTRY_TIMEOUT_MS)
+    ),
+  ]);
+}
+
+async function _registryReadBestEffort(
+  registry: CredentialRegistry,
+  rpId: string,
+  onRegistryError?: (op: RegistryOperation, err: Error) => void
+): Promise<Uint8Array[]> {
+  try {
+    const result = await _withRegistryTimeout(registry.read(rpId));
+    if (result === _REGISTRY_TIMEOUT) {
+      const err = new Error('CredentialRegistry.read timed out');
+      console.warn('[CredentialRegistry] read timed out');
+      onRegistryError?.('read', err);
+      return [];
+    }
+    return Array.isArray(result) ? result : [];
+  } catch (err) {
+    console.warn('[CredentialRegistry] read failed', err);
+    onRegistryError?.('read', err as Error);
+    return [];
+  }
+}
+
+function _registryAddFireAndForget(
+  registry: CredentialRegistry,
+  rpId: string,
+  credentialId: Uint8Array,
+  onRegistryError?: (op: RegistryOperation, err: Error) => void
+): void {
+  _withRegistryTimeout(registry.add(rpId, credentialId))
+    .then((result) => {
+      if (result === _REGISTRY_TIMEOUT) {
+        const err = new Error('CredentialRegistry.add timed out');
+        console.warn('[CredentialRegistry] add timed out');
+        onRegistryError?.('add', err);
+      }
+    })
+    .catch((err) => {
+      console.warn('[CredentialRegistry] add failed', err);
+      onRegistryError?.('add', err as Error);
+    });
 }
 
 /**
- * Built-in React Native passkey PRF provider using platform-native APIs.
- *
- * Implements the PrfProvider interface using:
- * - iOS: AuthenticationServices framework (iOS 18+)
- * - Android: Credential Manager API (Android 14+)
- *
- * On first use, if no credential exists for the RP ID, a new passkey is
- * automatically created (registered), then the assertion is retried.
- *
- * Requirements:
- * - iOS 18.0+ or Android 14+ (API 34)
- * - Associated Domains entitlement (iOS) or assetlinks.json (Android) for the RP domain
- *
- * @example
- * ```typescript
- * import { Passkey } from '@breeztech/breez-sdk-spark-react-native'
- * import { PasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
- *
- * const prfProvider = new PasskeyProvider()
- * const passkey = new Passkey(prfProvider, undefined)
- * const wallet = await passkey.getWallet('personal')
- * ```
+ * Error thrown when a passkey operation fails, with a structured `code` for
+ * programmatic handling: `userCancelled`, `userTimedOut`, `prfNotSupported`,
+ * `noCredential`, `configuration`, `credentialAlreadyExists`, `unknown`.
+ * `userTimedOut` is the OS biometric inactivity timeout (distinct from the
+ * user dismissing the prompt), so hosts may safely auto-retry it.
+ */
+export class PasskeyPrfException extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'PasskeyPrfException';
+    this.code = code;
+  }
+}
+
+/**
+ * Map a native bridge rejection (RN passes `{ code, message }` on the
+ * thrown error) into a typed [PasskeyPrfException].
+ */
+function mapNativeError(err: unknown): PasskeyPrfException {
+  const anyErr = err as { code?: string; message?: string };
+  const message = anyErr?.message ?? 'Unknown passkey error';
+  switch (anyErr?.code) {
+    case 'ERR_USER_CANCELLED':
+      return new PasskeyPrfException('userCancelled', message);
+    case 'ERR_USER_TIMED_OUT':
+      return new PasskeyPrfException('userTimedOut', message);
+    case 'ERR_PRF_NOT_SUPPORTED':
+      return new PasskeyPrfException('prfNotSupported', message);
+    case 'ERR_NO_CREDENTIAL':
+      return new PasskeyPrfException('noCredential', message);
+    case 'ERR_CONFIGURATION':
+      return new PasskeyPrfException('configuration', message);
+    case 'ERR_CREDENTIAL_ALREADY_EXISTS':
+      return new PasskeyPrfException('credentialAlreadyExists', message);
+    case 'ERR_AUTHENTICATION_FAILED':
+      return new PasskeyPrfException('authenticationFailed', message);
+    case 'ERR_PRF_EVALUATION_FAILED':
+      return new PasskeyPrfException('prfEvaluationFailed', message);
+    default:
+      return new PasskeyPrfException('unknown', message);
+  }
+}
+
+/**
+ * Built-in React Native passkey PRF provider, backed by AuthenticationServices
+ * on iOS and Credential Manager on Android. The default {@link PrfProvider};
+ * inject a configured instance through {@link PasskeyClientBuilder}. Requires
+ * iOS 18+ or Android 14+ (API 34) plus the Associated Domains entitlement
+ * (iOS) or assetlinks.json (Android) for the RP domain.
  */
 export class PasskeyProvider {
+  /**
+   * Breez's shared `keys.breez.technology` RP. Pass as `rpId` to opt in
+   * (only valid for apps registered with Breez); apps with their own RP
+   * domain pass their own string.
+   */
+  static readonly BREEZ_RP_ID: string = 'keys.breez.technology';
+
+  /** Default `rpName` for the zero-config client when none is supplied. */
+  static readonly DEFAULT_RP_NAME: string = 'Breez';
+
   private rpId: string;
   private rpName: string;
   private userName: string;
   private userDisplayName: string;
-  private autoRegister: boolean;
+  private credentialRegistry: CredentialRegistry | undefined;
+  private onRegistryError: ((op: RegistryOperation, err: Error) => void) | undefined;
 
-  constructor(options?: PasskeyProviderOptions) {
-    this.rpId = options?.rpId ?? 'keys.breez.technology';
-    this.rpName = options?.rpName ?? 'Breez SDK';
-    this.userName = options?.userName ?? this.rpName;
-    this.userDisplayName = options?.userDisplayName ?? this.userName;
-    this.autoRegister = options?.autoRegister !== false;
+  constructor(options: PasskeyProviderOptions) {
+    if (!options?.rpId || options.rpId.length === 0) {
+      throw new Error(
+        "PasskeyProvider: rpId is required. Pass your app's RP domain, " +
+          'or PasskeyProvider.BREEZ_RP_ID if you registered with Breez.'
+      );
+    }
+    if (!options.rpName || options.rpName.length === 0) {
+      throw new Error(
+        'PasskeyProvider: rpName is required. Pass your app name; it is ' +
+          'shown to the user in the OS passkey picker.'
+      );
+    }
+    this.rpId = options.rpId;
+    this.rpName = options.rpName;
+    this.userName = options.userName ?? this.rpName;
+    this.userDisplayName = options.userDisplayName ?? this.userName;
+    this.credentialRegistry = options.credentialRegistry;
+    if (this.credentialRegistry) {
+      for (const method of ['read', 'add', 'remove', 'clear'] as const) {
+        if (typeof this.credentialRegistry[method] !== 'function') {
+          throw new Error(
+            `PasskeyProvider: credentialRegistry is missing a "${method}" ` +
+              'method. Implementations must provide read / add / remove / clear.'
+          );
+        }
+      }
+    }
+    this.onRegistryError = options.onRegistryError;
   }
 
   /**
-   * Derive a 32-byte seed from passkey PRF with the given salt.
-   *
-   * Authenticates the user via a platform passkey and evaluates the PRF extension.
-   * If no credential exists for this RP ID, a new passkey is created automatically.
-   *
-   * @param salt - The salt string to use for PRF evaluation.
-   * @returns The 32-byte PRF output.
-   * @throws If authentication fails, PRF is not supported, or the user cancels.
+   * Derive one 32-byte seed per salt from passkey PRF, in as few OS prompts
+   * as the platform supports. `allowCredentials` restricts the assertion to
+   * specific credential IDs (mainly for reauthentication) when non-empty;
+   * `preferImmediatelyAvailableCredentials` overrides the platform default
+   * when set. Returns the seeds plus the asserted credential ID.
    */
-  async derivePrfSeed(salt: string): Promise<Uint8Array> {
+  async deriveSeeds(request: {
+    salts: string[];
+    allowCredentials?: Uint8Array[];
+    preferImmediatelyAvailableCredentials?: boolean | null;
+  }): Promise<{ seeds: Uint8Array[]; credentialId?: Uint8Array }> {
     if (!BreezSdkSparkPasskey) {
-      throw passkeyModuleUnavailableError('derivePrfSeed');
+      throw passkeyModuleUnavailableError('deriveSeeds');
     }
 
-    const base64Result: string = await BreezSdkSparkPasskey.derivePrfSeed(
-      salt,
-      this.rpId,
-      this.rpName,
-      this.userName,
-      this.userDisplayName,
-      this.autoRegister
-    );
+    let effectiveAllow = request.allowCredentials ?? [];
+    // Auto-merge registry IDs into the allow-list. JS-side dance:
+    // the native module never sees the registry.
+    if (this.credentialRegistry) {
+      const registryIds = await _registryReadBestEffort(
+        this.credentialRegistry,
+        this.rpId,
+        this.onRegistryError
+      );
+      if (registryIds.length > 0) {
+        const seen = new Set(effectiveAllow.map(uint8ArrayToBase64));
+        const merged: Uint8Array[] = [...effectiveAllow];
+        for (const id of registryIds) {
+          const key = uint8ArrayToBase64(id);
+          if (!seen.has(key)) {
+            seen.add(key);
+            merged.push(id);
+          }
+        }
+        effectiveAllow = merged;
+      }
+    }
+    const allowBase64 = effectiveAllow.map(id => uint8ArrayToBase64(id));
+    const preferImmediate = request.preferImmediatelyAvailableCredentials ?? null;
 
-    return base64ToUint8Array(base64Result);
+    let result: { seeds: string[]; credentialId?: string | null };
+    try {
+      result = await BreezSdkSparkPasskey.deriveSeeds(
+        request.salts,
+        this.rpId,
+        this.rpName,
+        this.userName,
+        this.userDisplayName,
+        false,
+        allowBase64,
+        preferImmediate
+      );
+      if (!result || !Array.isArray(result.seeds)) {
+        throw new PasskeyPrfException('unknown', 'deriveSeeds returned an unexpected shape');
+      }
+    } catch (err) {
+      if (err instanceof PasskeyPrfException) {
+        throw err;
+      }
+      const mapped = mapNativeError(err);
+      // Augment CredentialNotFound when host had no allow-list and no
+      // registry so integrators can discover the opt-in path.
+      if (
+        mapped.code === 'noCredential' &&
+        effectiveAllow.length === 0 &&
+        !this.credentialRegistry
+      ) {
+        throw new PasskeyPrfException(
+          mapped.code,
+          mapped.message + CREDENTIAL_REGISTRY_HELP_SUFFIX
+        );
+      }
+      throw mapped;
+    }
+
+    // The native module returns the asserted credential ID alongside the
+    // seeds; surface it so the SDK can pin the next derive to this exact
+    // credential.
+    return {
+      seeds: result.seeds.map(b64 => base64ToUint8Array(b64)),
+      credentialId: result.credentialId
+        ? base64ToUint8Array(result.credentialId)
+        : undefined,
+    };
   }
 
   /**
-   * Create a new passkey with PRF support.
-   *
-   * Only registers the credential — no seed derivation. Triggers exactly
-   * 1 platform prompt. Use this to separate credential creation from
-   * derivation in multi-step onboarding flows.
-   *
-   * @param excludeCredentialIds - Optional list of credential IDs to exclude.
-   *   Pass previously created credential IDs to prevent the authenticator
-   *   from creating a duplicate on the same device.
-   * @returns The credential ID of the newly created passkey.
-   * @throws If the user cancels or PRF is not supported by the authenticator.
+   * Register a new PRF-capable passkey (one prompt, no seed derivation): use
+   * it to split credential creation from derivation in multi-step onboarding.
+   * `excludeCredentials` blocks re-registering a device that already holds a
+   * credential, surfaced as a `credentialAlreadyExists` failure. The returned
+   * user handle is minted fresh per call (never host-supplied).
    */
-  async createPasskey(excludeCredentialIds?: Uint8Array[]): Promise<Uint8Array> {
+  async createPasskey(excludeCredentials: Uint8Array[] = []): Promise<RegisteredCredential> {
     if (!BreezSdkSparkPasskey) {
       throw passkeyModuleUnavailableError('createPasskey');
     }
 
-    const excludeBase64 = (excludeCredentialIds ?? []).map(id => uint8ArrayToBase64(id));
+    let excludeIds = excludeCredentials;
+    // Merge registry IDs into the exclude list before the native call.
+    if (this.credentialRegistry) {
+      const registryIds = await _registryReadBestEffort(
+        this.credentialRegistry,
+        this.rpId,
+        this.onRegistryError
+      );
+      if (registryIds.length > 0) {
+        const seen = new Set(excludeIds.map(uint8ArrayToBase64));
+        const merged: Uint8Array[] = [...excludeIds];
+        for (const id of registryIds) {
+          const key = uint8ArrayToBase64(id);
+          if (!seen.has(key)) {
+            seen.add(key);
+            merged.push(id);
+          }
+        }
+        excludeIds = merged;
+      }
+    }
+    const excludeBase64 = excludeIds.map(id => uint8ArrayToBase64(id));
 
-    const base64Result: string = await BreezSdkSparkPasskey.createPasskey(
-      this.rpId,
-      this.rpName,
-      this.userName,
-      this.userDisplayName,
-      excludeBase64
-    );
+    try {
+      const result: {
+        credentialId: string;
+        userId: string;
+        aaguid: string | null;
+        backupEligible: boolean | null;
+      } = await BreezSdkSparkPasskey.createPasskey(
+        this.rpId,
+        this.rpName,
+        this.userName,
+        this.userDisplayName,
+        excludeBase64
+      );
 
-    return base64ToUint8Array(base64Result);
+      const credentialId = base64ToUint8Array(result.credentialId);
+      const userId = base64ToUint8Array(result.userId);
+      // Persist new credential ID to the registry post-success.
+      if (this.credentialRegistry) {
+        _registryAddFireAndForget(
+          this.credentialRegistry,
+          this.rpId,
+          credentialId,
+          this.onRegistryError
+        );
+      }
+      return {
+        credentialId,
+        userId,
+        aaguid: result.aaguid ? base64ToUint8Array(result.aaguid) : null,
+        backupEligible: result.backupEligible,
+      };
+    } catch (err) {
+      throw mapNativeError(err);
+    }
   }
 
   /**
-   * Check if a PRF-capable passkey is available on this device.
-   *
-   * @returns true if the platform supports passkeys with PRF extension.
+   * Credential IDs the configured {@link CredentialRegistry} has stored for
+   * the current `rpId`. Empty when no registry is configured.
    */
-  async isPrfAvailable(): Promise<boolean> {
+  async getKnownCredentialIds(): Promise<Uint8Array[]> {
+    if (!this.credentialRegistry) {
+      return [];
+    }
+    return _registryReadBestEffort(
+      this.credentialRegistry,
+      this.rpId,
+      this.onRegistryError
+    );
+  }
+
+  /**
+   * Drop a single credential ID from the configured registry. No-op when
+   * no registry is configured.
+   */
+  async removeKnownCredentialId(credentialId: Uint8Array): Promise<void> {
+    if (!this.credentialRegistry) {
+      return;
+    }
+    try {
+      const result = await _withRegistryTimeout(
+        this.credentialRegistry.remove(this.rpId, credentialId)
+      );
+      if (result === _REGISTRY_TIMEOUT) {
+        const err = new Error('CredentialRegistry.remove timed out');
+        console.warn('[CredentialRegistry] remove timed out');
+        this.onRegistryError?.('remove', err);
+      }
+    } catch (err) {
+      console.warn('[CredentialRegistry] remove failed', err);
+      this.onRegistryError?.('remove', err as Error);
+    }
+  }
+
+  /**
+   * Clear the configured registry's credential IDs for the current `rpId`.
+   * No-op when no registry is configured.
+   */
+  async clearKnownCredentialIds(): Promise<void> {
+    if (!this.credentialRegistry) {
+      return;
+    }
+    try {
+      const result = await _withRegistryTimeout(
+        this.credentialRegistry.clear(this.rpId)
+      );
+      if (result === _REGISTRY_TIMEOUT) {
+        const err = new Error('CredentialRegistry.clear timed out');
+        console.warn('[CredentialRegistry] clear timed out');
+        this.onRegistryError?.('clear', err);
+      }
+    } catch (err) {
+      console.warn('[CredentialRegistry] clear failed', err);
+      this.onRegistryError?.('clear', err as Error);
+    }
+  }
+
+  /** Whether this device supports passkeys with the PRF extension. */
+  async isSupported(): Promise<boolean> {
     if (!BreezSdkSparkPasskey) {
       return false;
     }
 
-    return await BreezSdkSparkPasskey.isPrfAvailable();
+    return await BreezSdkSparkPasskey.isSupported();
+  }
+
+  /**
+   * Verify the app is associated with the configured `rpId` for WebAuthn.
+   * Android always returns `Skipped` rather than `NotAssociated`: Credential
+   * Manager runs its own check internally against fresher data.
+   */
+  async checkDomainAssociation(): Promise<DomainAssociation> {
+    if (!BreezSdkSparkPasskey) {
+      return {
+        kind: 'Skipped',
+        reason: 'Native passkey module unavailable on this platform',
+      };
+    }
+    try {
+      const result = await BreezSdkSparkPasskey.checkDomainAssociation(this.rpId);
+      const kind = result?.kind;
+      if (kind === 'Associated') {
+        return { kind: 'Associated' };
+      }
+      if (kind === 'NotAssociated') {
+        return {
+          kind: 'NotAssociated',
+          source: result?.source ?? 'unknown',
+          reason: result?.reason ?? '',
+        };
+      }
+      return { kind: 'Skipped', reason: result?.reason ?? '' };
+    } catch (err) {
+      const anyErr = err as { message?: string };
+      return {
+        kind: 'Skipped',
+        reason: anyErr?.message ?? 'Domain association probe failed',
+      };
+    }
   }
 }
 
-/**
- * Decode a base64 string to Uint8Array.
- */
+/** Decode a base64 string to Uint8Array. */
 function base64ToUint8Array(base64: string): Uint8Array {
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
@@ -208,9 +567,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes;
 }
 
-/**
- * Encode a Uint8Array to base64 string.
- */
+/** Encode a Uint8Array to base64 string. */
 function uint8ArrayToBase64(bytes: Uint8Array): string {
   let binary = '';
   for (const byte of bytes) {
@@ -220,11 +577,73 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * @deprecated Use PasskeyProviderOptions instead. This alias will be removed in a future release.
+ * Builds a `PasskeyClient` backed by a caller-supplied provider. Use this
+ * when you need a configured {@link PasskeyProvider} (custom `rpId` /
+ * `rpName`, a credential registry) or a custom PRF backend; omit the provider
+ * for the zero-config Breez-RP default.
  */
-export type PasskeyPrfProviderOptions = PasskeyProviderOptions;
+export class PasskeyClientBuilder {
+  private provider?: PrfProvider;
+
+  /**
+   * @param breezApiKey Breez relay key for authenticated (NIP-42) label
+   *   storage. Omit for public relays only.
+   * @param config Passkey client config. `rpId` / `rpName` configure the
+   *   default provider (ignored when a provider is injected via
+   *   {@link withPrfProvider}, which owns its RP); `defaultLabel` is the
+   *   label-store default.
+   */
+  constructor(
+    private readonly breezApiKey?: string,
+    private readonly config?: PasskeyConfig
+  ) {}
+
+  /**
+   * Inject the provider the client derives seeds through: the built-in
+   * {@link PasskeyProvider} or any custom `PrfProvider` implementation.
+   * Supersedes the config's `rpId` / `rpName` (the injected provider owns
+   * its RP).
+   */
+  withPrfProvider(provider: PrfProvider): this {
+    this.provider = provider;
+    return this;
+  }
+
+  /**
+   * Construct the client. Falls back to a default {@link PasskeyProvider}
+   * on the config's `rpId` / `rpName` (default: the Breez RP) when no
+   * provider was injected.
+   */
+  build(): SdkPasskeyClient {
+    // The hand-written PasskeyProvider conforms structurally to the
+    // generated PrfProvider foreign interface.
+    const provider: PrfProvider =
+      this.provider ??
+      (new PasskeyProvider({
+        rpId: this.config?.rpId ?? PasskeyProvider.BREEZ_RP_ID,
+        rpName: this.config?.rpName ?? PasskeyProvider.DEFAULT_RP_NAME,
+      }) as unknown as PrfProvider);
+    return new SdkPasskeyClient(provider, this.breezApiKey, this.config);
+  }
+}
+
+/** @internal Builds the zero-config client; exposed via {@link PasskeyClient}. */
+function buildPasskeyClient(
+  breezApiKey?: string,
+  config?: PasskeyConfig
+): SdkPasskeyClient {
+  return new PasskeyClientBuilder(breezApiKey, config).build();
+}
 
 /**
- * @deprecated Use PasskeyProvider instead. This alias will be removed in a future release.
+ * Zero-config passkey client on the Breez shared RP (`keys.breez.technology`),
+ * so a Breez-registered app needs only its relay key; set `rpId` / `rpName` on
+ * the config to use your own RP. For a credential registry or custom PRF
+ * backend, build the provider and inject it via {@link PasskeyClientBuilder}.
  */
-export { PasskeyProvider as PasskeyPrfProvider };
+export const PasskeyClient: {
+  new (breezApiKey?: string, config?: PasskeyConfig): SdkPasskeyClient;
+} = buildPasskeyClient as unknown as {
+  new (breezApiKey?: string, config?: PasskeyConfig): SdkPasskeyClient;
+};
+

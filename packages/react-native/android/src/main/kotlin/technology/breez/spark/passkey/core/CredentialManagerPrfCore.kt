@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.content.pm.Signature
 import android.os.Build
 import android.util.Base64
+import android.util.Log
 import androidx.credentials.CreatePublicKeyCredentialRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
@@ -17,8 +18,15 @@ import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
 import androidx.credentials.exceptions.domerrors.InvalidStateError
 import androidx.credentials.exceptions.publickeycredential.CreatePublicKeyCredentialDomException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -30,162 +38,423 @@ import java.security.SecureRandom
 // =====================================================================
 // !!! SOURCE-OF-TRUTH NOTICE !!!
 //
-// The canonical copy of this file lives at:
+// Canonical copy:
 //   crates/breez-sdk/bindings/langs/shared/android-passkey/src/main/kotlin/
 //     technology/breez/spark/passkey/core/CredentialManagerPrfCore.kt
 //
-// It is shared into four Android artifacts via two mechanisms:
-//   1. gradle `srcDirs` — bindings-android + breez-sdk-spark-kmp
-//   2. `cargo xtask sync-passkey-core` — packages/flutter + packages/react-native
-//
-// Never hand-edit the Flutter or React Native copies. Edit the canonical
-// file, then run `cargo xtask sync-passkey-core` and commit the diff.
-// CI will fail if a copy drifts from the canonical.
+// Shared into four Android artifacts via gradle `srcDirs`
+// (bindings-android + breez-sdk-spark-kmp) and `cargo xtask
+// sync-passkey-core` (packages/flutter + packages/react-native). Never
+// hand-edit a copy: edit this file, run the xtask, commit the diff. CI
+// fails if a copy drifts.
 // =====================================================================
 
 /**
- * Framework-agnostic helper that wraps the AndroidX Credential Manager +
- * WebAuthn PRF extension machinery for passkey-based seed derivation.
+ * Framework-agnostic helper wrapping AndroidX Credential Manager + the
+ * WebAuthn PRF extension for passkey-based seed derivation.
  *
- * Wrappers (the UniFFI `PasskeyProvider`, the Flutter MethodChannel
- * plugin, the React Native native module) delegate to this object and
- * only provide framework-specific glue on top: error mapping, activity
- * retrieval, and call-site boilerplate.
- *
- * Throws [CredentialManagerPrfCoreException] for every well-known failure
- * mode so wrappers can switch on [Kind] without peeking at WebAuthn or
- * Credential Manager internals.
+ * Wrappers (UniFFI `PasskeyProvider`, Flutter MethodChannel, React Native
+ * module) delegate here and add only framework glue: error mapping,
+ * activity retrieval, call-site boilerplate. Throws
+ * [CredentialManagerPrfCoreException] for every well-known failure so
+ * wrappers can switch on [Kind] without touching Credential Manager
+ * internals.
  */
-public object CredentialManagerPrfCore {
 
-    /** Default Relying Party ID for cross-platform credential sharing. */
-    public const val DEFAULT_RP_ID: String = "keys.breez.technology"
+/**
+ * Authenticator data captured at registration. [aaguid] is the 16-byte
+ * Authenticator Attestation GUID (provider identifier); [backupEligible]
+ * is the BE flag (can the credential sync across devices). Both are null
+ * when the attestation can't be parsed. AAGUID is unverified attestation:
+ * display hint only, never a trust decision.
+ *
+ * [userId] is the core-minted WebAuthn user handle: always populated,
+ * never host-supplied.
+ */
+public data class RegisteredCredential(
+    public val credentialId: ByteArray,
+    public val userId: ByteArray,
+    public val aaguid: ByteArray?,
+    public val backupEligible: Boolean?,
+)
 
-    /** Default Relying Party display name shown during passkey registration. */
-    public const val DEFAULT_RP_NAME: String = "Breez SDK"
+/**
+ * App-side persistent store of credential IDs registered for an RP.
+ * No built-in implementation: bring your own (Block Store,
+ * EncryptedSharedPreferences, custom backend); see the passkey guide.
+ *
+ * All methods are best-effort optimizations: failures and timeouts (3s)
+ * are swallowed and surfaced via `onRegistryError`, never blocking the
+ * WebAuthn ceremony.
+ */
+public interface CredentialRegistry {
+    public suspend fun read(rpId: String): List<ByteArray>
+    public suspend fun add(rpId: String, credentialId: ByteArray)
+    public suspend fun remove(rpId: String, credentialId: ByteArray)
+    public suspend fun clear(rpId: String)
+}
 
-    /**
-     * Returns `true` if this device's OS version could support passkey PRF.
-     *
-     * PRF extension support requires API 28+ (Android 9+) via Google Play
-     * Services. The Jetpack Credential Manager library handles backward
-     * compatibility automatically from there. This check does NOT verify
-     * that a credential provider is actually installed or that biometrics
-     * are enrolled — only the platform version.
-     */
-    public fun isPrfAvailable(): Boolean =
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+/** Discriminator passed to the core's `onRegistryError` callback. */
+public enum class RegistryOperation { Read, Add, Remove, Clear }
 
-    /**
-     * Authenticate the user via passkey PRF and return the 32-byte seed.
-     *
-     * If no credential exists for [rpId], auto-register a new one and
-     * retry the assertion. Switches to `Dispatchers.Main` internally so
-     * callers may invoke from any coroutine context.
-     *
-     * @param allowCredentialIds When non-empty, restricts assertion to one
-     *   of the listed credential IDs. The Credential Manager refuses any
-     *   other credential for this RP. Use this to bind sign-in to a
-     *   specific passkey the caller has registered, instead of letting
-     *   the platform pick any sibling credential that happens to share
-     *   the RP. Critical for deterministic seed derivation when multiple
-     *   credentials might exist for the same RP.
-     * @param onAssertionCredentialId Optional callback invoked with the
-     *   credential ID of every successful assertion. Hosts can use this
-     *   to record which credential was used and populate
-     *   [allowCredentialIds] / `excludeCredentialIds` on subsequent
-     *   requests, e.g. migrating users whose passkey predates the host's
-     *   own credential-ID tracking. Best-effort: failures inside the
-     *   callback do not block the seed return.
-     *
-     * @throws CredentialManagerPrfCoreException for every handled error;
-     *   wrappers should catch and remap by [CredentialManagerPrfCoreException.kind].
-     */
-    public suspend fun deriveSeedOrRegister(
-        activity: Activity,
-        salt: String,
-        rpId: String,
-        rpName: String,
-        userName: String,
-        userDisplayName: String,
-        autoRegister: Boolean = true,
-        allowCredentialIds: List<ByteArray> = emptyList(),
-        onAssertionCredentialId: ((ByteArray) -> Unit)? = null,
-    ): ByteArray = withContext(Dispatchers.Main) {
+/**
+ * Content-equality wrapper so credential-ID byte arrays can key a Set.
+ * `ByteArray` uses identity equality; the alternative is a `.toList()`
+ * boxing allocation per dedupe. (A `value class` would be zero-cost but
+ * can't carry custom `equals`/`hashCode` on the pinned Kotlin version.)
+ */
+private class ByteArrayKey(private val bytes: ByteArray) {
+    override fun equals(other: Any?): Boolean =
+        other is ByteArrayKey && bytes.contentEquals(other.bytes)
+
+    override fun hashCode(): Int = bytes.contentHashCode()
+}
+
+/** Append [extra] to [base], skipping entries already present by content. */
+private fun mergeUniqueCredentialIds(
+    base: List<ByteArray>,
+    extra: List<ByteArray>,
+): List<ByteArray> {
+    if (extra.isEmpty()) return base
+    val seen = base.mapTo(HashSet()) { ByteArrayKey(it) }
+    val out = base.toMutableList()
+    for (id in extra) {
+        if (seen.add(ByteArrayKey(id))) out.add(id)
+    }
+    return out
+}
+
+private const val REGISTRY_TAG = "CredentialRegistry"
+private const val CORE_TAG = "PasskeyPrfCore"
+private const val REGISTRY_TIMEOUT_MS: Long = 3_000L
+
+/**
+ * Process-lifetime scope for fire-and-forget registry writes that must
+ * outlive the ceremony coroutine (so the seed return isn't blocked).
+ * `SupervisorJob` isolates one child's failure from siblings; never
+ * cancelled (writes are short, 3s-capped).
+ */
+private val registryIoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+/**
+ * Run [body] under a 3 second timeout. Returns null on timeout. The
+ * underlying coroutine is cancelled when the deadline elapses.
+ */
+private suspend fun <T> withRegistryTimeout(body: suspend () -> T): T? =
+    withTimeoutOrNull(REGISTRY_TIMEOUT_MS) { body() }
+
+/**
+ * Best-effort registry read. On timeout / throw: log + invoke the
+ * caller's [onRegistryError], return empty list.
+ */
+private suspend fun registryReadBestEffort(
+    registry: CredentialRegistry,
+    rpId: String,
+    onRegistryError: ((RegistryOperation, Throwable) -> Unit)?,
+): List<ByteArray> = try {
+    val result = withRegistryTimeout { registry.read(rpId) }
+    if (result == null) {
+        Log.w(REGISTRY_TAG, "CredentialRegistry.read timed out after ${REGISTRY_TIMEOUT_MS}ms")
+        onRegistryError?.invoke(
+            RegistryOperation.Read,
+            RuntimeException("CredentialRegistry.read timed out"),
+        )
+        emptyList()
+    } else {
+        result
+    }
+} catch (t: Throwable) {
+    Log.w(REGISTRY_TAG, "CredentialRegistry.read failed", t)
+    onRegistryError?.invoke(RegistryOperation.Read, t)
+    emptyList()
+}
+
+/**
+ * Best-effort registry add. Fire-and-forget: failures log + fire
+ * the [onRegistryError] callback but do not block ceremony progress.
+ */
+private fun registryAddFireAndForget(
+    registry: CredentialRegistry,
+    rpId: String,
+    credentialId: ByteArray,
+    onRegistryError: ((RegistryOperation, Throwable) -> Unit)?,
+) {
+    registryIoScope.launch {
         try {
+            val ok = withRegistryTimeout { registry.add(rpId, credentialId) }
+            if (ok == null) {
+                Log.w(REGISTRY_TAG, "CredentialRegistry.add timed out")
+                onRegistryError?.invoke(
+                    RegistryOperation.Add,
+                    RuntimeException("CredentialRegistry.add timed out"),
+                )
+            }
+        } catch (t: Throwable) {
+            Log.w(REGISTRY_TAG, "CredentialRegistry.add failed", t)
+            onRegistryError?.invoke(RegistryOperation.Add, t)
+        }
+    }
+}
+
+/**
+ * Suffix appended to a `CredentialNotFound` error message when the
+ * host had no `allowCredentials` and no `CredentialRegistry`. Lets
+ * integrators discover the opt-in auto-discovery path from the error.
+ */
+public const val CREDENTIAL_REGISTRY_HELP_SUFFIX: String =
+    " (No CredentialRegistry was supplied to PasskeyProvider; " +
+        "if you expect the SDK to auto-discover known credentials, see " +
+        "https://sdk-doc-spark.breez.technology/guide/passkey.html#credentialregistry)"
+
+// =====================================================================
+// Post-create grace
+// =====================================================================
+
+/**
+ * A newly-registered passkey is briefly not ready for the immediate
+ * post-create assertion: Credential Manager can drop `prf.second` from a
+ * dual-salt assertion (forcing a second single-salt prompt) or surface
+ * the credential as not yet discoverable in the picker. Holding the next
+ * derive up to [DEFAULT_DURATION_MS] lets the OS finish indexing.
+ *
+ * Mirrors iOS `PostCreateGraceTracker`; an instance lives inside
+ * [CredentialManagerPrfCore] so every consumer that holds onto a single
+ * core (e.g. `PasskeyProvider` for UniFFI / KMM consumers) inherits the
+ * grace without per-wrapper plumbing.
+ */
+public class PostCreateGraceTracker {
+    private val mutex = Mutex()
+    @Volatile private var deadlineMs: Long = 0L
+
+    public suspend fun arm(durationMs: Long = DEFAULT_DURATION_MS) {
+        mutex.withLock {
+            deadlineMs = System.currentTimeMillis() + durationMs
+        }
+    }
+
+    public suspend fun consume() {
+        val waitMs = mutex.withLock {
+            val remaining = deadlineMs - System.currentTimeMillis()
+            deadlineMs = 0L
+            if (remaining > 0L) remaining else 0L
+        }
+        if (waitMs > 0L) {
+            delay(waitMs)
+        }
+    }
+
+    public companion object {
+        public const val DEFAULT_DURATION_MS: Long = 800L
+    }
+}
+
+/**
+ * Platform PRF engine: holds the relying-party identity + optional
+ * registry for one provider's lifetime, exposing `deriveSeeds`,
+ * `register`, `checkDomainAssociation`, and `isSupported`. Per-call
+ * methods take only per-ceremony arguments; everything else is fixed at
+ * construction. Each consumer maps the typed
+ * [CredentialManagerPrfCoreException] onto its own error surface.
+ *
+ * @param activityProvider Resolves the current top Activity lazily on
+ *   each call, so a stale instance is never held across rotation.
+ * @param graceTracker Post-create grace state. Defaults to a fresh
+ *   tracker per core; consumers that pool cores across the same wrapper
+ *   instance can share one tracker explicitly.
+ * @param postCreateGraceMs How long [register] arms the grace for.
+ *   Defaults to [PostCreateGraceTracker.DEFAULT_DURATION_MS].
+ */
+public class CredentialManagerPrfCore(
+    private val rpId: String,
+    private val rpName: String,
+    private val userName: String,
+    private val userDisplayName: String,
+    private val credentialRegistry: CredentialRegistry? = null,
+    private val onRegistryError: ((RegistryOperation, Throwable) -> Unit)? = null,
+    private val activityProvider: () -> Activity,
+    private val graceTracker: PostCreateGraceTracker = PostCreateGraceTracker(),
+    private val postCreateGraceMs: Long = PostCreateGraceTracker.DEFAULT_DURATION_MS,
+) {
+
+    public companion object {
+        /** Default Relying Party ID for cross-platform credential sharing. */
+        public const val DEFAULT_RP_ID: String = "keys.breez.technology"
+
+        /**
+         * `true` if the OS version could support passkey PRF (API 28+).
+         * Checks the platform version only, not whether a credential
+         * provider is installed or biometrics are enrolled.
+         */
+        public fun isSupported(): Boolean =
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+
+        /** Lazily initialised; first-use entropy gathering can dominate the cold path. */
+        private val secureRandom: SecureRandom by lazy { SecureRandom() }
+
+        /**
+         * Cached `CredentialManager`, held process-wide against the
+         * application context (lifecycle-safe across rotation) so per-call
+         * core instances don't each re-allocate it.
+         */
+        @Volatile
+        private var cachedCredentialManager: CredentialManager? = null
+
+        private fun credentialManager(activity: Activity): CredentialManager =
+            cachedCredentialManager ?: synchronized(this) {
+                cachedCredentialManager ?: CredentialManager.create(activity.applicationContext).also {
+                    cachedCredentialManager = it
+                }
+            }
+
+        private fun encodeBase64Url(bytes: ByteArray): String =
+            Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+
+        private fun decodeBase64Url(s: String): ByteArray =
+            Base64.decode(s, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+
+        /**
+         * Decode URL-safe base64 from a provider response, logging +
+         * returning null on malformed input (a provider/protocol fault).
+         */
+        private fun decodeBase64UrlOrNull(s: String, what: String): ByteArray? =
             try {
-                getAssertionWithPrf(activity, salt, rpId, allowCredentialIds, onAssertionCredentialId)
+                decodeBase64Url(s)
+            } catch (e: IllegalArgumentException) {
+                Log.w(CORE_TAG, "Malformed base64url in provider response ($what)", e)
+                null
+            }
+
+        private fun randomBase64Url(byteCount: Int): String {
+            val bytes = ByteArray(byteCount)
+            secureRandom.nextBytes(bytes)
+            return encodeBase64Url(bytes)
+        }
+    }
+
+    /** Help suffix when the host gave no allow-list and no registry. */
+    private fun helpSuffixIfApplicable(allowCredentials: List<ByteArray>): String =
+        if (allowCredentials.isEmpty() && credentialRegistry == null) {
+            CREDENTIAL_REGISTRY_HELP_SUFFIX
+        } else {
+            ""
+        }
+
+    /**
+     * Derive one 32-byte PRF output per salt in as few authenticator
+     * ceremonies as the platform supports: salts are walked in pairs
+     * (one dual-salt assertion each via `prf.eval.first`/`.second`),
+     * and an authenticator that drops `second` is recovered with a
+     * single-salt re-assert. When no credential exists yet and
+     * [autoRegister] is set, the first miss registers a passkey and
+     * retries. Output ordering matches input ordering.
+     *
+     * Prompt count for the common 2-salt setup: 1 on a conformant
+     * authenticator. Worst case is 3 (assert-miss, register, then a
+     * dual-assert that drops `prf.second` plus a single-salt recover) on
+     * a provider that both lacks a credential and drops `second`. Register
+     * runs at most once per call, so prompts never grow unbounded.
+     */
+    public suspend fun deriveSeeds(
+        salts: List<String>,
+        autoRegister: Boolean = true,
+        allowCredentials: List<ByteArray> = emptyList(),
+        preferImmediatelyAvailableCredentials: Boolean = true,
+    ): PrfDerivation = withContext(Dispatchers.Main) {
+        // Wait out the post-create grace so an immediate derive doesn't
+        // race the credential's PRF-readiness window (see grace tracker).
+        graceTracker.consume()
+        // Union the caller's allow-list with the registry's stored IDs.
+        var allow = allowCredentials
+        credentialRegistry?.let { registry ->
+            allow = mergeUniqueCredentialIds(
+                allow, registryReadBestEffort(registry, rpId, onRegistryError),
+            )
+        }
+        if (salts.isEmpty()) return@withContext PrfDerivation(emptyList(), null)
+
+        // One assertion for 1-2 salts, registering + retrying once on no
+        // credential. Returns one output per salt the authenticator
+        // evaluated (a dropped `second` yields one) plus the asserted
+        // credential ID (same across every chunk).
+        suspend fun assertChunk(chunk: List<String>): Pair<List<ByteArray>, ByteArray?> =
+            try {
+                assertPrf(chunk, allow, preferImmediatelyAvailableCredentials)
             } catch (e: NoCredentialException) {
                 if (!autoRegister) {
-                    throw CredentialManagerPrfCoreException(Kind.CredentialNotFound, e.message)
+                    throw CredentialManagerPrfCoreException(
+                        Kind.CredentialNotFound,
+                        (e.message ?: "") + helpSuffixIfApplicable(allow),
+                    )
                 }
-                @Suppress("UNUSED_VARIABLE")
-                val ignored = registerCredential(activity, rpId, rpName, userName, userDisplayName)
-                // Retry with the same allowCredentialIds. If the caller
-                // supplied a non-empty list and the existing credential was
-                // genuinely missing (e.g. user deleted it from Settings),
-                // the just-registered ID won't be in the list and the
-                // retry will fail with CredentialNotFound. Hosts handle
-                // that as a deletion-recovery signal: clear the registry
-                // and route to onboarding. Mirrors iOS behavior.
-                getAssertionWithPrf(activity, salt, rpId, allowCredentialIds, onAssertionCredentialId)
+                register()
+                // Retry once. A second miss (e.g. user deleted the pinned
+                // credential in Settings) escapes as CredentialNotFound for
+                // hosts to treat as deletion recovery.
+                assertPrf(chunk, allow, preferImmediatelyAvailableCredentials)
             }
+
+        val startedAtMs = System.currentTimeMillis()
+        try {
+            val output = ArrayList<ByteArray>(salts.size)
+            // Asserted credential ID, returned so the binding layer can
+            // surface it on `SignInResponse.credential_id`.
+            var observedCredentialId: ByteArray? = null
+            var idx = 0
+            while (idx < salts.size) {
+                if (idx + 1 < salts.size) {
+                    val (outputs, credId) = assertChunk(listOf(salts[idx], salts[idx + 1]))
+                    observedCredentialId = credId
+                    output.add(outputs[0])
+                    if (outputs.size > 1) {
+                        output.add(outputs[1])
+                    } else {
+                        val (recovered, recoveredCredId) = assertChunk(listOf(salts[idx + 1]))
+                        output.add(recovered[0])
+                        observedCredentialId = recoveredCredId
+                    }
+                    idx += 2
+                } else {
+                    val (single, credId) = assertChunk(listOf(salts[idx]))
+                    output.add(single[0])
+                    observedCredentialId = credId
+                    idx += 1
+                }
+            }
+            PrfDerivation(output, observedCredentialId)
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
         } catch (e: Exception) {
-            throw e.toCoreException()
+            throw e.toCoreException(System.currentTimeMillis() - startedAtMs)
         }
     }
 
     /**
-     * Verify the app's package identity is listed by Google's Digital Asset
-     * Links API for the given [rpId], with `get_login_creds` (WebAuthn /
-     * passkey) permission.
-     *
-     * # Why this check exists
-     *
-     * Android's Credential Manager delegates domain verification to Google
-     * Play Services, which caches assetlinks statements server-side. When
-     * the `/.well-known/assetlinks.json` file on the RP domain doesn't list
-     * your package (either because it was never added, or because Google's
-     * cache is stale), subsequent WebAuthn calls fail with opaque
-     * `GetCredentialException` / `CreateCredentialException` variants —
-     * typically mapped to `CredentialNotFound` or a generic "cannot be
-     * validated" error. Those are indistinguishable from "no credential
-     * found" at the error layer.
-     *
-     * This check hits Google's public Digital Asset Links API directly:
+     * Verify the app is listed by Google's Digital Asset Links API for
+     * [rpId] with `get_login_creds` permission, queried up front because
+     * Credential Manager otherwise surfaces a stale or missing
+     * assetlinks.json as an opaque `CredentialNotFound` / "cannot be
+     * validated" error indistinguishable from "no credential found":
      *
      *   `GET https://digitalassetlinks.googleapis.com/v1/statements:list`
      *      `?source.web.site=https://<rpId>`
      *      `&relation=delegate_permission/common.get_login_creds`
      *
-     * and looks for an `android_app` statement matching this app's
-     * package name **and** signing-certificate SHA-256 fingerprint. Both
-     * must match — a package-only match would accept a MITM'd package
-     * signed by a different key.
+     * Requires an `android_app` statement matching this app's package name
+     * AND signing-cert SHA-256: a package-only match would accept a MITM'd
+     * package signed by a different key.
      *
-     * # Return semantics
+     * Returns `Associated` on a match, `NotAssociated` when the endpoint
+     * is reachable but no statement matches, `Skipped` on any
+     * network/timeout/non-200/parse failure (caller proceeds anyway).
      *
-     * - Match found → `DomainAssociationResult.Associated`
-     * - Endpoint reachable, response parseable, no matching statement →
-     *   `DomainAssociationResult.NotAssociated`
-     * - Network error / timeout / non-200 / unparseable response →
-     *   `DomainAssociationResult.Skipped` (caller proceeds with WebAuthn)
-     *
-     * @param context Any Context; used only to read
-     *   [PackageManager.getPackageInfo] metadata on the running app.
-     * @param rpId Relying Party ID (the domain hosting
-     *   `.well-known/assetlinks.json`).
      * @param connectTimeoutMs HTTP connect timeout. Default 3000ms.
      * @param readTimeoutMs HTTP read timeout. Default 3000ms.
      */
     public suspend fun checkDomainAssociation(
-        context: Context,
-        rpId: String,
         connectTimeoutMs: Int = 3000,
         readTimeoutMs: Int = 3000,
     ): DomainAssociationResult = withContext(Dispatchers.IO) {
+        val context = activityProvider().applicationContext
         val packageName = context.packageName
         val signingCertSha256 = try {
             computeSigningCertSha256(context, packageName)
@@ -233,23 +502,15 @@ public object CredentialManagerPrfCore {
             )
         }
 
-        // Response-format note: the `.well-known/assetlinks.json` FILE
-        // format uses snake_case (`android_app`, `package_name`,
-        // `sha256_cert_fingerprints` as an array). The Digital Asset
-        // Links API response format is DIFFERENT — it's proto3 JSON
-        // with camelCase field names and de-nests each fingerprint into
-        // its own statement. A matching API statement looks like:
+        // The API response format differs from the assetlinks.json FILE:
+        // it's proto3 JSON with camelCase keys and de-nests each
+        // fingerprint into its own statement (file-format snake_case keys
+        // never match). A matching statement looks like:
         //
         //   { "target": { "androidApp": {
         //       "packageName": "technology.breez.glow",
         //       "certificate": { "sha256Fingerprint": "AA:BB:..." }
         //     } } }
-        //
-        // Arrays in the file become multiple statements in the API. The
-        // initial implementation used the file-format keys against the
-        // API response and never found a match, blocking every Android
-        // user. Verified live against
-        // digitalassetlinks.googleapis.com/v1/statements:list.
         val listedFingerprints = mutableListOf<String>()
         for (i in 0 until statements.length()) {
             val stmt = statements.optJSONObject(i) ?: continue
@@ -280,13 +541,10 @@ public object CredentialManagerPrfCore {
     }
 
     /**
-     * Compute the SHA-256 fingerprint of the app's signing certificate in
-     * colon-separated uppercase hex (the format Google Digital Asset Links
-     * uses). Returns null if the app has no signing certificate.
-     *
-     * Uses `PackageManager.GET_SIGNING_CERTIFICATES` on API 28+ (the
-     * `CredentialManagerPrfCore` contract requires API 28+ anyway, so this
-     * is always available in the contexts where this function runs).
+     * SHA-256 of the app's signing certificate in colon-separated
+     * uppercase hex (the format Digital Asset Links uses). Null if the app
+     * has no signing certificate. Uses `GET_SIGNING_CERTIFICATES`, always
+     * available given the API 28+ contract.
      */
     @Suppress("DEPRECATION")
     private fun computeSigningCertSha256(context: Context, packageName: String): String? {
@@ -295,8 +553,8 @@ public object CredentialManagerPrfCore {
                 packageName,
                 PackageManager.GET_SIGNING_CERTIFICATES,
             )
-            // Prefer apkContentsSigners (current signer), ignore past signers:
-            // assetlinks.json matches only against the current signing cert.
+            // Current signer only: assetlinks.json matches the current
+            // signing cert, not past signers.
             val signingInfo = packageInfo.signingInfo ?: return null
             if (signingInfo.hasMultipleSigners()) {
                 signingInfo.apkContentsSigners
@@ -304,8 +562,7 @@ public object CredentialManagerPrfCore {
                 signingInfo.signingCertificateHistory
             }
         } else {
-            // Pre-API 28 path — not reachable since CredentialManagerPrfCore
-            // gates on API 28, but defensively included.
+            // Defensive only: the API 28+ contract makes this unreachable.
             val packageInfo = context.packageManager.getPackageInfo(
                 packageName,
                 PackageManager.GET_SIGNATURES,
@@ -318,72 +575,35 @@ public object CredentialManagerPrfCore {
         return digest.joinToString(":") { "%02X".format(it) }
     }
 
-    /**
-     * Register a new passkey without deriving a seed.
-     *
-     * Use this to separate credential creation from derivation in
-     * multi-step onboarding flows. Triggers exactly one platform prompt.
-     *
-     * @param excludeCredentialIds Optional list of credential IDs to exclude.
-     *   Pass previously created credential IDs to prevent the authenticator
-     *   from creating a duplicate on the same device.
-     * @return The credential ID of the newly created passkey.
-     */
-    public suspend fun createCredential(
-        activity: Activity,
-        rpId: String,
-        rpName: String,
-        userName: String,
-        userDisplayName: String,
-        excludeCredentialIds: List<ByteArray> = emptyList(),
-    ): ByteArray = withContext(Dispatchers.Main) {
-        try {
-            registerCredential(activity, rpId, rpName, userName, userDisplayName, excludeCredentialIds)
-        } catch (e: CredentialManagerPrfCoreException) {
-            throw e
-        } catch (e: Exception) {
-            throw e.toCoreException()
-        }
-    }
-
     // ------------------------------------------------------------------
     // Private
     // ------------------------------------------------------------------
 
-    private suspend fun getAssertionWithPrf(
-        activity: Activity,
-        salt: String,
-        rpId: String,
-        allowCredentialIds: List<ByteArray> = emptyList(),
-        onAssertionCredentialId: ((ByteArray) -> Unit)? = null,
-    ): ByteArray {
-        val credentialManager = CredentialManager.create(activity)
-
-        val saltBase64 = Base64.encodeToString(
-            salt.toByteArray(Charsets.UTF_8),
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-        )
-        val challenge = randomBase64Url(32)
-
-        // Build request via JSONObject so integrator-provided strings (rpId)
-        // are escaped correctly. Raw template interpolation would break on
-        // rpId values containing quotes / backslashes / control chars and
-        // surface as opaque JSONException deep in Credential Manager.
+    /**
+     * Run one assertion ceremony for [salts] (1 or 2): build the WebAuthn
+     * request (cross-device hybrid suppressed unless
+     * [preferImmediatelyAvailableCredentials] is false), evaluate PRF, seed
+     * the registry with the asserted credential ID, and return one 32-byte
+     * output per salt the authenticator evaluated. A dropped
+     * `results.second` yields a single-element list.
+     */
+    private suspend fun assertPrf(
+        salts: List<String>,
+        allowCredentials: List<ByteArray>,
+        preferImmediatelyAvailableCredentials: Boolean,
+    ): Pair<List<ByteArray>, ByteArray?> {
+        val activity = activityProvider()
+        // JSONObject (not string interpolation) so integrator-supplied rpId
+        // is escaped, not breaking on quotes/backslashes inside Credential
+        // Manager.
         val requestJson = JSONObject().apply {
-            put("challenge", challenge)
+            put("challenge", randomBase64Url(32))
             put("rpId", rpId)
-            // When non-empty, constrains assertion to one of the listed
-            // credential IDs. Without this, the platform picks any
-            // credential matching the RP, which produces non-deterministic
-            // seeds when multiple credentials exist for the same RP.
             put("allowCredentials", JSONArray().apply {
-                for (credId in allowCredentialIds) {
+                for (credId in allowCredentials) {
                     put(JSONObject().apply {
                         put("type", "public-key")
-                        put("id", Base64.encodeToString(
-                            credId,
-                            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                        ))
+                        put("id", encodeBase64Url(credId))
                     })
                 }
             })
@@ -391,42 +611,38 @@ public object CredentialManagerPrfCore {
             put("extensions", JSONObject().apply {
                 put("prf", JSONObject().apply {
                     put("eval", JSONObject().apply {
-                        put("first", saltBase64)
+                        put("first", encodeBase64Url(salts[0].toByteArray(Charsets.UTF_8)))
+                        if (salts.size > 1) {
+                            put("second", encodeBase64Url(salts[1].toByteArray(Charsets.UTF_8)))
+                        }
                     })
                 })
             })
         }.toString()
 
-        val option = GetPublicKeyCredentialOption(requestJson)
-        val request = GetCredentialRequest(listOf(option))
-        val response = credentialManager.getCredential(activity, request)
+        // `preferImmediatelyAvailableCredentials = true` suppresses the
+        // cross-device QR sheet so a missing local credential surfaces
+        // as NoCredentialException; `false` opts back into the picker.
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(GetPublicKeyCredentialOption(requestJson))
+            .setPreferImmediatelyAvailableCredentials(preferImmediatelyAvailableCredentials)
+            .build()
+        val response = credentialManager(activity).getCredential(activity, request)
 
         val authResponseJson = response.credential.data.getString(
             "androidx.credentials.BUNDLE_KEY_AUTHENTICATION_RESPONSE_JSON",
         ) ?: throw CredentialManagerPrfCoreException(
-            Kind.AuthenticationFailed,
-            "No credential response",
+            Kind.AuthenticationFailed, "No credential response",
         )
-
         val responseJson = JSONObject(authResponseJson)
 
-        // Surface the asserted credential ID before the PRF result so
-        // hosts can record it (synced storage, server-side allowlist).
-        // Failures inside the callback must not block seed return: the
-        // assertion already succeeded.
-        if (onAssertionCredentialId != null) {
-            val rawIdEncoded = responseJson.optString("rawId", "")
-            if (rawIdEncoded.isNotEmpty()) {
-                try {
-                    val rawId = Base64.decode(
-                        rawIdEncoded,
-                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                    )
-                    onAssertionCredentialId(rawId)
-                } catch (_: Exception) {
-                    // Best-effort: malformed rawId is non-fatal here.
-                }
-            }
+        // Seed the registry with the asserted credential ID (captures a
+        // returning user's pre-tracking credential). The ID is also
+        // returned inline below for the binding layer.
+        val credentialId = responseJson.optString("rawId", "").takeIf { it.isNotEmpty() }
+            ?.let { decodeBase64UrlOrNull(it, "assertion rawId") }
+        credentialId?.let { id ->
+            credentialRegistry?.let { registryAddFireAndForget(it, rpId, id, onRegistryError) }
         }
 
         val extensions = responseJson.optJSONObject("clientExtensionResults")
@@ -434,132 +650,223 @@ public object CredentialManagerPrfCore {
         val prf = extensions.optJSONObject("prf")
             ?: throw CredentialManagerPrfCoreException(Kind.PrfNotSupported)
         val results = prf.optJSONObject("results")
-            ?: throw CredentialManagerPrfCoreException(
-                Kind.PrfEvaluationFailed,
-                "no results",
-            )
+            ?: throw CredentialManagerPrfCoreException(Kind.PrfEvaluationFailed, "no results")
+
         val first = results.optString("first")
         if (first.isNullOrEmpty()) {
-            throw CredentialManagerPrfCoreException(
-                Kind.PrfEvaluationFailed,
-                "empty result",
-            )
+            throw CredentialManagerPrfCoreException(Kind.PrfEvaluationFailed, "empty result")
         }
-        return Base64.decode(first, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        val out = ArrayList<ByteArray>(salts.size)
+        out.add(decodeBase64Url(first))
+        // Older Credential Manager implementations silently drop
+        // saltInput2; omit it so the caller re-asserts single-salt.
+        if (salts.size > 1) {
+            results.optString("second", "").takeIf { it.isNotEmpty() }
+                ?.let { decodeBase64UrlOrNull(it, "prf.results.second") }
+                ?.let { out.add(it) }
+        }
+        return Pair(out, credentialId)
     }
 
-    private suspend fun registerCredential(
-        activity: Activity,
-        rpId: String,
-        rpName: String,
-        userName: String,
-        userDisplayName: String,
-        excludeCredentialIds: List<ByteArray> = emptyList(),
-    ): ByteArray {
-        val credentialManager = CredentialManager.create(activity)
-        val challenge = randomBase64Url(32)
-        val userId = randomBase64Url(16)
-
-        // Build request via JSONObject so integrator-provided strings
-        // (rpId, rpName, userName, userDisplayName) are escaped correctly.
-        // A perfectly reasonable display name like `Bob "B" Smith` or any
-        // value containing a backslash / newline / apostrophe would break
-        // raw template interpolation and surface as a confusing
-        // JSONException deep in Credential Manager.
-        val requestJson = JSONObject().apply {
-            put("challenge", challenge)
-            put("rp", JSONObject().apply {
-                put("id", rpId)
-                put("name", rpName)
-            })
-            put("user", JSONObject().apply {
-                put("id", userId)
-                put("name", userName)
-                put("displayName", userDisplayName)
-            })
-            put("pubKeyCredParams", JSONArray().apply {
-                put(JSONObject().apply { put("type", "public-key"); put("alg", -7) })
-                put(JSONObject().apply { put("type", "public-key"); put("alg", -257) })
-            })
-            if (excludeCredentialIds.isNotEmpty()) {
-                put("excludeCredentials", JSONArray().apply {
-                    for (credId in excludeCredentialIds) {
-                        put(JSONObject().apply {
-                            put("type", "public-key")
-                            put("id", Base64.encodeToString(
-                                credId,
-                                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                            ))
-                        })
-                    }
-                })
+    /**
+     * Register a new passkey (one platform prompt, no seed derivation).
+     * The registry's stored IDs are auto-merged into [excludeCredentials]
+     * so the platform refuses to register the same device twice (raising
+     * `CredentialAlreadyExists`, which callers route to sign-in). Returns
+     * the credential ID plus AAGUID / backup-eligibility from the
+     * attestation (null when unparseable).
+     */
+    public suspend fun register(
+        excludeCredentials: List<ByteArray> = emptyList(),
+    ): RegisteredCredential = withContext(Dispatchers.Main) {
+        val startedAtMs = System.currentTimeMillis()
+        try {
+            val activity = activityProvider()
+            // Auto-merge the registry's stored IDs into the exclusions.
+            var effectiveExclude = excludeCredentials
+            credentialRegistry?.let { reg ->
+                effectiveExclude = mergeUniqueCredentialIds(
+                    effectiveExclude, registryReadBestEffort(reg, rpId, onRegistryError),
+                )
             }
-            put("authenticatorSelection", JSONObject().apply {
-                put("residentKey", "required")
-                put("requireResidentKey", true)
-                put("userVerification", "required")
-            })
-            put("extensions", JSONObject().apply {
-                put("prf", JSONObject())
-            })
-        }.toString()
+            // Mint a fresh random 16-byte user handle per call (never
+            // host-supplied); the JSON base64url string and the raw
+            // RegisteredCredential.userId bytes share this buffer.
+            val userIdBytes = ByteArray(16).also { secureRandom.nextBytes(it) }
 
-        val response = credentialManager.createCredential(
-            activity,
-            CreatePublicKeyCredentialRequest(requestJson),
-        )
+            // JSONObject (not string interpolation) so integrator strings
+            // are escaped, not breaking on quotes/backslashes inside
+            // Credential Manager.
+            val requestJson = JSONObject().apply {
+                put("challenge", randomBase64Url(32))
+                put("rp", JSONObject().apply {
+                    put("id", rpId)
+                    put("name", rpName)
+                })
+                put("user", JSONObject().apply {
+                    put("id", encodeBase64Url(userIdBytes))
+                    put("name", userName)
+                    put("displayName", userDisplayName)
+                })
+                put("pubKeyCredParams", JSONArray().apply {
+                    put(JSONObject().apply { put("type", "public-key"); put("alg", -7) })
+                    put(JSONObject().apply { put("type", "public-key"); put("alg", -257) })
+                })
+                if (effectiveExclude.isNotEmpty()) {
+                    put("excludeCredentials", JSONArray().apply {
+                        for (credId in effectiveExclude) {
+                            put(JSONObject().apply {
+                                put("type", "public-key")
+                                put("id", encodeBase64Url(credId))
+                            })
+                        }
+                    })
+                }
+                put("authenticatorSelection", JSONObject().apply {
+                    put("residentKey", "required")
+                    put("requireResidentKey", true)
+                    put("userVerification", "required")
+                })
+                put("extensions", JSONObject().apply {
+                    put("prf", JSONObject())
+                })
+            }.toString()
 
-        val registrationJson = response.data.getString(
-            "androidx.credentials.BUNDLE_KEY_REGISTRATION_RESPONSE_JSON"
-        ) ?: throw CredentialManagerPrfCoreException(
-            Kind.AuthenticationFailed,
-            "No registration response",
-        )
-        val responseJson = JSONObject(registrationJson)
-        val rawId = responseJson.optString("rawId", "")
-        if (rawId.isEmpty()) {
-            throw CredentialManagerPrfCoreException(
-                Kind.AuthenticationFailed,
-                "No credential ID in registration response",
+            val response = credentialManager(activity).createCredential(
+                activity,
+                CreatePublicKeyCredentialRequest(requestJson),
             )
+            val registrationJson = response.data.getString(
+                "androidx.credentials.BUNDLE_KEY_REGISTRATION_RESPONSE_JSON"
+            ) ?: throw CredentialManagerPrfCoreException(
+                Kind.AuthenticationFailed, "No registration response",
+            )
+            val responseJson = JSONObject(registrationJson)
+            val rawId = responseJson.optString("rawId", "")
+            if (rawId.isEmpty()) {
+                throw CredentialManagerPrfCoreException(
+                    Kind.AuthenticationFailed, "No credential ID in registration response",
+                )
+            }
+            val credentialId = decodeBase64Url(rawId)
+            var aaguid: ByteArray? = null
+            var backupEligible: Boolean? = null
+            val attestationB64 = responseJson.optJSONObject("response")?.optString("attestationObject", "") ?: ""
+            if (attestationB64.isNotEmpty()) {
+                extractRegistrationMetadata(decodeBase64Url(attestationB64))?.let { meta ->
+                    aaguid = meta.first
+                    backupEligible = meta.second
+                }
+            }
+            // Best-effort: persist for future auto-discovery.
+            credentialRegistry?.let { registryAddFireAndForget(it, rpId, credentialId, onRegistryError) }
+            // Arm the post-create grace so the immediate derive doesn't
+            // race the credential's PRF-readiness window (see grace tracker).
+            graceTracker.arm(postCreateGraceMs)
+            RegisteredCredential(credentialId, userIdBytes, aaguid, backupEligible)
+        } catch (e: CredentialManagerPrfCoreException) {
+            throw e
+        } catch (e: Exception) {
+            throw e.toCoreException(System.currentTimeMillis() - startedAtMs)
         }
-        return Base64.decode(rawId, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     }
 
-    private fun randomBase64Url(byteCount: Int): String {
-        val bytes = ByteArray(byteCount)
-        SecureRandom().nextBytes(bytes)
-        return Base64.encodeToString(
-            bytes,
-            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-        )
+    /**
+     * Extract AAGUID + BE flag from the attestation object's authenticator
+     * data via byte-pattern search for the "authData" CBOR key. Returns
+     * null when not found or too short.
+     *
+     * authData layout when AT flag is set (always on a successful create):
+     *   [32]      flags (UP=0, UV=2, BE=3, BS=4, AT=6)
+     *   [37..53)  AAGUID (16 bytes)
+     */
+    private fun extractRegistrationMetadata(attestation: ByteArray): Pair<ByteArray, Boolean>? {
+        // CBOR text key "authData": 0x68 = major type 3 (text) + length 8.
+        val key = byteArrayOf(0x68, 0x61, 0x75, 0x74, 0x68, 0x44, 0x61, 0x74, 0x61)
+        if (attestation.size < key.size) return null
+        var keyEnd = -1
+        for (i in 0..(attestation.size - key.size)) {
+            var match = true
+            for (j in key.indices) {
+                if (attestation[i + j] != key[j]) { match = false; break }
+            }
+            if (match) { keyEnd = i + key.size; break }
+        }
+        if (keyEnd < 0 || keyEnd >= attestation.size) return null
+
+        val header = attestation[keyEnd].toInt() and 0xff
+        if (header shr 5 != 2) return null
+        val minor = header and 0x1f
+        val length: Int
+        val dataStart: Int
+        when {
+            minor < 24 -> { length = minor; dataStart = keyEnd + 1 }
+            minor == 24 -> {
+                if (keyEnd + 1 >= attestation.size) return null
+                length = attestation[keyEnd + 1].toInt() and 0xff
+                dataStart = keyEnd + 2
+            }
+            minor == 25 -> {
+                if (keyEnd + 2 >= attestation.size) return null
+                length = ((attestation[keyEnd + 1].toInt() and 0xff) shl 8) or
+                    (attestation[keyEnd + 2].toInt() and 0xff)
+                dataStart = keyEnd + 3
+            }
+            minor == 26 -> {
+                if (keyEnd + 4 >= attestation.size) return null
+                length = ((attestation[keyEnd + 1].toInt() and 0xff) shl 24) or
+                    ((attestation[keyEnd + 2].toInt() and 0xff) shl 16) or
+                    ((attestation[keyEnd + 3].toInt() and 0xff) shl 8) or
+                    (attestation[keyEnd + 4].toInt() and 0xff)
+                dataStart = keyEnd + 5
+            }
+            else -> return null
+        }
+        if (dataStart + length > attestation.size || length < 53) return null
+        val flags = attestation[dataStart + 32].toInt() and 0xff
+        if (flags and 0x40 == 0) return null
+        val backupEligible = flags and 0x08 != 0
+        val aaguid = attestation.copyOfRange(dataStart + 37, dataStart + 53)
+        return Pair(aaguid, backupEligible)
     }
 
-    private fun Exception.toCoreException(): CredentialManagerPrfCoreException = when (this) {
+    /**
+     * Map a Credential Manager exception into the typed core exception.
+     * `elapsedMs` is the ceremony's wall-clock duration: a cancellation
+     * beyond ~55s reclassifies to [Kind.UserTimedOut] (biometric
+     * inactivity timeout) instead of [Kind.UserCancelled]. Pass `null`
+     * when timing is unknown to default to `UserCancelled`.
+     */
+    private fun Exception.toCoreException(
+        elapsedMs: Long? = null,
+    ): CredentialManagerPrfCoreException = when (this) {
         is GetCredentialCancellationException,
         is CreateCredentialCancellationException ->
-            CredentialManagerPrfCoreException(Kind.UserCancelled)
+            CredentialManagerPrfCoreException(classifyCancellation(elapsedMs), cause = this)
 
         is NoCredentialException ->
-            CredentialManagerPrfCoreException(Kind.CredentialNotFound)
+            CredentialManagerPrfCoreException(
+                Kind.CredentialNotFound,
+                message ?: "No matching credential on this device",
+                this,
+            )
 
-        // Surface the platform's duplicate-prevention check as a typed
-        // kind so callers can route the user to the sign-in path instead
-        // of treating it as a generic registration failure. Credential
-        // Manager wraps WebAuthn DOM errors in CreatePublicKeyCredential
-        // DomException with the spec-level error in `domError`. Must be
-        // matched before the generic CreateCredentialException case
-        // since it's a subclass.
+        // Credential Manager wraps WebAuthn DOM errors here with the
+        // spec-level error in `domError`; an InvalidStateError is the
+        // duplicate-prevention check, routed to sign-in. Must precede the
+        // generic CreateCredentialException case (this is a subclass).
         is CreatePublicKeyCredentialDomException ->
             if (domError is InvalidStateError) {
                 CredentialManagerPrfCoreException(
                     Kind.CredentialAlreadyExists,
                     message ?: "Credential already registered for this RP",
+                    this,
                 )
             } else {
                 CredentialManagerPrfCoreException(
                     Kind.AuthenticationFailed,
                     "${type}: ${message ?: toString()}",
+                    this,
                 )
             }
 
@@ -567,19 +874,19 @@ public object CredentialManagerPrfCore {
             CredentialManagerPrfCoreException(
                 Kind.AuthenticationFailed,
                 "${type}: ${message ?: toString()}",
+                this,
             )
 
         is CreateCredentialException ->
             CredentialManagerPrfCoreException(
                 Kind.AuthenticationFailed,
                 "${type}: ${message ?: toString()}",
+                this,
             )
 
         else -> {
             val raw = message ?: toString()
-            // Actionable hints for common misconfigurations. Mirror what the
-            // original Flutter plugin surfaced so existing users see the same
-            // guidance after the refactor.
+            // Actionable hints for common misconfigurations.
             val hint = when {
                 raw.contains("cannot be validated", ignoreCase = true) ->
                     "Domain verification failed. Passkeys require a physical device with " +
@@ -590,8 +897,21 @@ public object CredentialManagerPrfCore {
                         "14+ with a compatible Credential Manager provider."
                 else -> raw
             }
-            CredentialManagerPrfCoreException(Kind.Generic, hint)
+            CredentialManagerPrfCoreException(Kind.Generic, hint, this)
         }
+    }
+
+    /**
+     * Tell a user-dismissed prompt from the biometric inactivity timeout:
+     * AndroidX surfaces both as the same `*CancellationException`, so the
+     * ceremony's elapsed time is the only signal. The prompt is torn down
+     * at ~55s+, so anything beyond that is [Kind.UserTimedOut].
+     */
+    private fun classifyCancellation(elapsedMs: Long?): Kind {
+        if (elapsedMs != null && elapsedMs >= 55_000L) {
+            return Kind.UserTimedOut
+        }
+        return Kind.UserCancelled
     }
 
     /** Discriminator for [CredentialManagerPrfCoreException]. */
@@ -600,26 +920,45 @@ public object CredentialManagerPrfCore {
         PrfNotSupported,
         /** The user dismissed the passkey prompt or cancelled the operation. */
         UserCancelled,
+        /**
+         * The biometric prompt timed out without user interaction (~55s+).
+         * Distinct from [UserCancelled] (active dismissal): hosts may
+         * auto-retry or re-prompt rather than treating it as abandonment.
+         */
+        UserTimedOut,
         /** No credential exists for the RP and auto-registration was not attempted. */
         CredentialNotFound,
         /** Credential Manager reported an authentication / registration failure. */
         AuthenticationFailed,
         /** PRF evaluation produced an empty or malformed response. */
         PrfEvaluationFailed,
-        /** Platform or app configuration error (e.g. missing assetlinks.json, misconfigured RP ID). */
+        /**
+         * Platform or app configuration error (e.g. missing
+         * assetlinks.json, misconfigured RP ID). Reserved for parity with
+         * the cross-platform taxonomy; Credential Manager reports these as
+         * `AuthenticationFailed`, so this kind is never emitted here.
+         */
         Configuration,
         /**
-         * Credential registration was refused because a credential matching
-         * one of the IDs in `excludeCredentialIds` is already on the
-         * authenticator. Surfaces the platform's duplicate-prevention check
-         * as a typed kind so callers can route the user to the sign-in
-         * path instead of treating it as a generic registration failure.
+         * Registration refused because a credential in `excludeCredentials`
+         * is already on the authenticator. The duplicate-prevention check,
+         * surfaced as a typed kind so callers route to sign-in.
          */
         CredentialAlreadyExists,
-        /** Any other unexpected error — message contains the details. */
+        /** Any other unexpected error: message contains the details. */
         Generic,
     }
 }
+
+/**
+ * Result of [CredentialManagerPrfCore.deriveSeeds]: one 32-byte PRF
+ * output per salt (input order) plus the asserted credential ID.
+ * [credentialId] is `null` when no assertion ran (empty `salts`).
+ */
+public data class PrfDerivation(
+    public val seeds: List<ByteArray>,
+    public val credentialId: ByteArray?,
+)
 
 /**
  * Typed exception thrown by [CredentialManagerPrfCore]. Wrappers should
@@ -628,12 +967,12 @@ public object CredentialManagerPrfCore {
 public class CredentialManagerPrfCoreException(
     public val kind: CredentialManagerPrfCore.Kind,
     message: String? = null,
-) : Exception(message)
+    cause: Throwable? = null,
+) : Exception(message, cause)
 
 /**
  * Result of a domain-association check. Mirrors the Rust
- * `DomainAssociation` enum one-to-one so the provider wrapper can map
- * directly without lossy conversions.
+ * `DomainAssociation` enum one-to-one so the wrapper maps it losslessly.
  */
 public sealed class DomainAssociationResult {
     public object Associated : DomainAssociationResult()
