@@ -9,6 +9,7 @@ edition = "2024"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
+anyhow = "1.0.102"
 async-trait = "0.1.88"
 # Replaced with release commit during publishing
 breez-sdk-spark = { path = "../../../crates/breez-sdk/core", features = [

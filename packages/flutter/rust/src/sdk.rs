@@ -241,7 +241,6 @@ impl BreezSdk {
         self.inner.optimize_leaves(request).await
     }
 
-
     pub async fn fetch_conversion_limits(
         &self,
         request: FetchConversionLimitsRequest,
@@ -282,10 +281,7 @@ impl BreezSdk {
         self.inner.add_contact(request).await
     }
 
-    pub async fn update_contact(
-        &self,
-        request: UpdateContactRequest,
-    ) -> Result<Contact, SdkError> {
+    pub async fn update_contact(&self, request: UpdateContactRequest) -> Result<Contact, SdkError> {
         self.inner.update_contact(request).await
     }
 
