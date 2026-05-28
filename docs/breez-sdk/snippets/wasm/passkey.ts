@@ -1,9 +1,10 @@
 import type { NostrRelayConfig } from '@breeztech/breez-sdk-spark'
 import { Passkey, connect, defaultConfig } from '@breeztech/breez-sdk-spark'
+import { PasskeyProvider } from '@breeztech/breez-sdk-spark/passkey-prf-provider'
 
 // ANCHOR: implement-prf-provider
-// In practice, implement PRF provider using WebAuthn API
-class ExamplePasskeyPrfProvider {
+// Implement the interface for custom logic if the built-in PasskeyProvider doesn't fit your needs.
+class CustomPrfProvider {
   derivePrfSeed = async (salt: string): Promise<Uint8Array> => {
     // Call platform passkey API with PRF extension
     // Returns 32-byte PRF output
@@ -17,9 +18,21 @@ class ExamplePasskeyPrfProvider {
 }
 // ANCHOR_END: implement-prf-provider
 
-const exampleConnectWithPasskey = async () => {
+const checkAvailability = async () => {
+  // ANCHOR: check-availability
+  const prfProvider = new PasskeyProvider()
+  if (await prfProvider.isPrfAvailable()) {
+    // Show passkey as primary option
+  } else {
+    // Fall back to mnemonic flow
+  }
+  // ANCHOR_END: check-availability
+}
+
+const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
-  const prfProvider = new ExamplePasskeyPrfProvider()
+  // Use the built-in passkey PRF provider (or pass a custom implementation)
+  const prfProvider = new PasskeyProvider()
   const passkey = new Passkey(prfProvider, undefined)
 
   // Construct the wallet using the passkey (pass undefined for the default wallet)
@@ -31,9 +44,9 @@ const exampleConnectWithPasskey = async () => {
   return sdk
 }
 
-const exampleListLabels = async (): Promise<string[]> => {
+const listLabels = async (): Promise<string[]> => {
   // ANCHOR: list-labels
-  const prfProvider = new ExamplePasskeyPrfProvider()
+  const prfProvider = new PasskeyProvider()
   const relayConfig: NostrRelayConfig = {
     breezApiKey: '<breez api key>'
   }
@@ -49,9 +62,9 @@ const exampleListLabels = async (): Promise<string[]> => {
   return labels
 }
 
-const exampleStoreLabel = async () => {
+const storeLabel = async () => {
   // ANCHOR: store-label
-  const prfProvider = new ExamplePasskeyPrfProvider()
+  const prfProvider = new PasskeyProvider()
   const relayConfig: NostrRelayConfig = {
     breezApiKey: '<breez api key>'
   }
