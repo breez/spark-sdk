@@ -1,61 +1,53 @@
-use super::error::PasskeyPrfError;
+use super::error::PrfProviderError;
+use super::models::{DeriveSeedsOutput, RegisteredCredential};
 
-/// Result of a domain-association verification check against the platform's
-/// well-known configuration source.
-///
-/// Passkey operations on iOS and Android both depend on out-of-band
-/// verification files (`apple-app-site-association` / `assetlinks.json`) that
-/// the platform caches independently of the app. When the verification is
-/// missing or stale, the OS-level `WebAuthn` APIs fail with opaque errors
-/// (`ASAuthorizationError.notHandled` / `.failed` on iOS; assorted
-/// `GetCredentialException` variants on Android) that callers cannot reliably
-/// distinguish from "no credential found" or "user cancelled".
-///
-/// [`PrfProvider::check_domain_association`] runs an active check
-/// against the platform's own verification source (Apple's AASA CDN or
-/// Google's Digital Asset Links API) so callers have a definitive signal
-/// they can gate UX on — without heuristics over overloaded error codes.
-///
-/// # Caller semantics
-///
-/// - `Associated`: safe to proceed with `WebAuthn` calls.
-/// - `NotAssociated`: subsequent `WebAuthn` calls will fail for
-///   configuration reasons. Callers should surface a dedicated error state
-///   rather than attempting the ceremony (which would produce an opaque
-///   error that looks identical to "no credential").
-/// - `Skipped`: the provider does not verify domain association, or the
-///   check could not be performed (offline, endpoint timeout). Callers
-///   should proceed with `WebAuthn` normally — `Skipped` is **not** a
-///   negative signal.
+/// Per-call inputs for [`PrfProvider::derive_seeds`]. Hosts that
+/// don't need per-ceremony overrides fall back to [`Default`]
+/// (`salts` only, all overrides empty / `None`).
+#[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct DeriveSeedsRequest {
+    /// Salt strings in caller order. One 32-byte PRF output is
+    /// returned per salt, in the same order.
+    pub salts: Vec<String>,
+
+    /// A list of credential IDs the assertion is restricted to. The
+    /// primary use case is reauthentication when the user is already
+    /// known: if any of the listed credentials is available locally,
+    /// the OS prompts for device unlock straight away (no account
+    /// picker); otherwise the user is asked to present another
+    /// device (paired phone or security key) that holds a valid
+    /// credential. Empty falls through to the provider's configured
+    /// default.
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub allow_credentials: Vec<Vec<u8>>,
+
+    /// Restrict the assertion to credentials already present on this
+    /// device. When `true`, the OS skips the cross-device picker (iOS
+    /// QR, Android hybrid, web `mediation: undefined`) and surfaces a
+    /// missing local credential as `CredentialNotFound` immediately.
+    /// When `false`, the OS picker is shown as usual. Unset uses the
+    /// provider's default (`true` for built-in providers).
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub prefer_immediately_available_credentials: Option<bool>,
+}
+
+/// Result of [`PrfProvider::check_domain_association`]. The platform's
+/// out-of-band verification (AASA / assetlinks) gates passkey
+/// ceremonies but its failures collapse into opaque platform errors;
+/// this gives callers a definitive signal they can gate UX on.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum DomainAssociation {
-    /// The app's identity (bundle ID / package name + signing cert) is
-    /// confirmed present in the platform's verification source for the
-    /// configured `rpId`.
+    /// Configuration verified; safe to proceed.
     Associated,
-    /// The app's identity is confirmed **missing** from the platform's
-    /// verification source. Subsequent `WebAuthn` calls will fail.
-    NotAssociated {
-        /// Origin of the verification check (e.g. `"Apple AASA CDN"`,
-        /// `"Google Digital Asset Links API"`). Surfaced in diagnostic UIs
-        /// and logs so maintainers can tell which side to fix.
-        source: String,
-        /// Human-readable explanation of what was missing (e.g.
-        /// `"Bundle ID F7R2LZH3W5.technology.breez.glow not in
-        /// webcredentials.apps for keys.breez.technology"`).
-        reason: String,
-    },
-    /// Verification was not performed. The provider either does not have a
-    /// verification source to check (custom / CLI providers, browser-side
-    /// `WebAuthn`), or the check itself could not complete (network offline,
-    /// CDN timeout). Callers proceed with `WebAuthn` as normal.
-    Skipped {
-        /// Human-readable reason for skipping (e.g. `"Provider does not
-        /// verify domain association"`, `"Apple CDN request timed out
-        /// after 3s"`).
-        reason: String,
-    },
+    /// Configuration is broken; subsequent ceremonies will fail.
+    /// `source` names the verification origin (e.g. `"Apple AASA CDN"`)
+    /// for diagnostic UIs; `reason` explains what was missing.
+    NotAssociated { source: String, reason: String },
+    /// Check was not performed (provider has no verification source,
+    /// or the check itself could not complete). Not a negative signal.
+    Skipped { reason: String },
 }
 
 /// Trait for PRF (Pseudo-Random Function) operations backing a passkey-derived
@@ -75,78 +67,93 @@ pub enum DomainAssociation {
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait PrfProvider: Send + Sync {
-    /// Derive a 32-byte seed from passkey PRF with the given salt.
+    /// Derive 32-byte PRF outputs for `request.salts` in as few
+    /// authenticator ceremonies as the platform supports. Output
+    /// ordering matches input ordering. Empty `salts` returns an
+    /// empty vec without prompting. Built-in providers chunk pairs
+    /// via `WebAuthn`'s `prf.eval.first` + `.second` (halving prompt
+    /// count); custom providers without bulk capability should loop
+    /// internally.
     ///
-    /// The platform authenticates the user via passkey and evaluates the PRF extension.
-    /// The salt is used as input to the PRF to derive a deterministic output.
+    /// `request.allow_credentials` and
+    /// `request.prefer_immediately_available_credentials` shape the
+    /// platform ceremony for this single call. Custom providers that
+    /// don't model those concepts (file-backed, `YubiKey` HMAC, etc.)
+    /// can ignore them.
     ///
-    /// # Arguments
-    /// * `salt` - The salt string to use for PRF evaluation
-    ///
-    /// # Returns
-    /// * `Ok(Vec<u8>)` - The 32-byte PRF output
-    /// * `Err(PasskeyPrfError)` - If authentication fails or PRF is not supported
-    async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError>;
+    /// Returns the seeds plus the credential ID observed in the same
+    /// assertion ([`DeriveSeedsOutput`]); the credential ID is absent
+    /// when the provider does not surface it.
+    async fn derive_seeds(
+        &self,
+        request: DeriveSeedsRequest,
+    ) -> Result<DeriveSeedsOutput, PrfProviderError>;
 
-    /// Check if a PRF-capable passkey is available on this device.
-    ///
-    /// This allows applications to gracefully degrade if passkey PRF is not supported.
-    ///
-    /// # Returns
-    /// * `Ok(true)` - PRF-capable passkey is available
-    /// * `Ok(false)` - No PRF-capable passkey available
-    /// * `Err(PasskeyPrfError)` - If the check fails
-    async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError>;
+    /// Whether this provider can produce PRF outputs on the current
+    /// device. Hosts gate UX on the result.
+    async fn is_supported(&self) -> Result<bool, PrfProviderError>;
 
-    /// Diagnostic check: verify the app's identity against the platform's
-    /// domain verification source (iOS AASA / Android assetlinks / browser
-    /// rpId scope).
+    /// Explicit registration. Platform passkey providers override this
+    /// to drive the OS create ceremony and surface credential metadata
+    /// hosts need for `exclude_credentials` bookkeeping. CLI /
+    /// hardware providers register lazily inside [`Self::derive_seeds`]
+    /// and inherit the default `PrfNotSupported`.
     ///
-    /// This method is **advisory**. The SDK never blocks internally on its
-    /// result. Applications choose their own policy for how to use it.
+    /// `exclude_credentials` is a list of already-registered
+    /// credential IDs: it prevents registering the same device twice
+    /// by surfacing duplicates as `CredentialAlreadyExists`.
+    /// Branding fields (`user_name`, `user_display_name`) live on
+    /// the platform `PasskeyProvider` constructor. The `user.id` is
+    /// always provider-minted and surfaced on
+    /// `RegisteredCredential.user_id`.
+    async fn create_passkey(
+        &self,
+        exclude_credentials: Vec<Vec<u8>>,
+    ) -> Result<RegisteredCredential, PrfProviderError> {
+        let _ = exclude_credentials;
+        Err(PrfProviderError::PrfNotSupported)
+    }
+
+    /// Advisory check against the platform's out-of-band verification
+    /// source (iOS AASA / Android assetlinks / browser rpId scope).
+    /// The SDK never gates internally; hosts pick their own policy.
     ///
-    /// # When to call
+    /// Built-in providers override:
+    /// - **iOS/macOS**: AASA `webcredentials.apps` lookup. May be stale.
+    /// - **Android**: Digital Asset Links query. Degrades `NotAssociated`
+    ///   to `Skipped` because `CredentialManager` runs its own check.
+    /// - **Browser**: `rpId` is a registrable suffix of `window.location.hostname`.
     ///
-    /// - **First launch / onboarding**: call once to catch misconfiguration
-    ///   early, before the first `WebAuthn` ceremony.
-    /// - **Error recovery**: if `derivePrfSeed` returns `CredentialNotFound`
-    ///   but you expect a credential to exist, call this to distinguish
-    ///   "genuinely no credential" from "platform configuration is broken."
-    ///   On iOS, `ASAuthorizationError.notHandled` collapses both cases into
-    ///   the same error code, making this check the only reliable diagnostic.
-    /// - **Not needed per-session**: once association is confirmed, the
-    ///   configuration rarely changes. Re-check only after errors.
-    ///
-    /// # Platform behavior
-    ///
-    /// The built-in `PasskeyProvider` on each platform overrides this with
-    /// an active check:
-    /// - **iOS/macOS**: verifies the app's bundle ID + team ID appear in the
-    ///   AASA `webcredentials.apps` array for the RP domain. Results may be
-    ///   stale if the AASA file was recently updated.
-    /// - **Android**: queries the Digital Asset Links API for a matching
-    ///   `get_login_creds` statement. Returns `Skipped` (not `NotAssociated`)
-    ///   on mismatch, because Android's `CredentialManager` performs its own
-    ///   internal verification that may be more up-to-date than the public API.
-    /// - **Browser**: checks that `rpId` is a registrable suffix of
-    ///   `window.location.hostname` (the same rule the browser enforces
-    ///   at `WebAuthn` call time). No network request needed.
-    ///
-    /// Custom providers (`YubiKey`, `FIDO2`, file-backed) that have no platform
-    /// verification source should inherit the default, which returns
-    /// `Skipped`.
-    ///
-    /// # Returns
-    /// * `Ok(DomainAssociation::Associated)`: configuration looks correct.
-    /// * `Ok(DomainAssociation::NotAssociated { .. })`: configuration problem
-    ///   detected. On iOS this is a hard signal (AASA mismatch). On Android
-    ///   the provider degrades this to `Skipped` (see above).
-    /// * `Ok(DomainAssociation::Skipped { .. })`: check was not performed or
-    ///   could not complete. Proceed normally.
-    /// * `Err(PasskeyPrfError)`: the check mechanism itself failed.
-    async fn check_domain_association(&self) -> Result<DomainAssociation, PasskeyPrfError> {
+    /// Custom providers without a verification source inherit the
+    /// `Skipped` default.
+    async fn check_domain_association(&self) -> Result<DomainAssociation, PrfProviderError> {
         Ok(DomainAssociation::Skipped {
             reason: "Provider does not verify domain association".to_string(),
         })
+    }
+
+    /// List credential IDs the provider has persisted for the current
+    /// RP. Backs `PasskeyClient::credentials().get()`. Platform passkey
+    /// providers delegate to their `CredentialRegistry` / native
+    /// `KnownCredentialsStore`; file / `YubiKey` / FIDO2 providers
+    /// inherit the empty-list default.
+    async fn get_known_credential_ids(&self) -> Result<Vec<Vec<u8>>, PrfProviderError> {
+        Ok(vec![])
+    }
+
+    /// Drop a single credential ID from the provider's persisted set
+    /// for the current RP. Backs
+    /// `PasskeyClient::credentials().remove(id)`. Default no-op for
+    /// providers without a persistent registry.
+    async fn remove_known_credential_id(&self, id: Vec<u8>) -> Result<(), PrfProviderError> {
+        let _ = id;
+        Ok(())
+    }
+
+    /// Clear the provider's persisted credential-ID set for the
+    /// current RP. Backs `PasskeyClient::credentials().clear()`.
+    /// Default no-op for providers without a persistent registry.
+    async fn clear_known_credential_ids(&self) -> Result<(), PrfProviderError> {
+        Ok(())
     }
 }

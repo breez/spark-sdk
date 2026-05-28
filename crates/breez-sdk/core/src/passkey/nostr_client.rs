@@ -11,7 +11,6 @@ use tracing::{info, warn};
 
 use super::derivation::derive_nip42_keypair;
 use super::error::PasskeyError;
-use super::models::NostrRelayConfig;
 
 /// Public relays used as fallback when NIP-65 lists cannot be fetched.
 /// The first entry doubles as the preferred read relay for non-API-key users.
@@ -23,6 +22,11 @@ const STATIC_RELAYS: &[&str] = &[
     "wss://monitorlizard.nostr1.com",
 ];
 
+/// Per-relay-batch read/write timeout. Picked to outlast a slow public
+/// relay's TLS handshake without keeping a stalled batch alive long
+/// enough to block the surrounding flow.
+const RELAY_TIMEOUT_SECS: u64 = 30;
+
 /// Breez-operated relay URL (requires NIP-42 authentication).
 const BREEZ_RELAY: &str = "wss://nr1.breez.technology";
 
@@ -30,17 +34,20 @@ const BREEZ_RELAY: &str = "wss://nr1.breez.technology";
 /// the authoritative NIP-65 relay list.
 const BREEZ_NIP65_PUBKEY: &str = "0478caf9d25260b7603154c4227d4af5c2e4937092fbdbc9958aef9ea8856e23";
 
-/// Client for publishing and discovering labels on Nostr relays.
+/// Sole concrete, internal label store for the passkey orchestrator.
+/// Owns the full `nostr::Keys` derived from the passkey's account-master
+/// PRF output plus the optional Breez API key used to authenticate with
+/// the Breez relay (NIP-42).
 ///
 /// Labels are stored as kind-1 (text note) events with plain text content.
-/// The Nostr identity is derived from the passkey PRF at account 55.
 ///
 /// Relay URLs are managed internally:
 /// - Public relays are always included for redundancy
 /// - Breez relay is added when an API key is configured (enables NIP-42 auth)
 #[derive(Clone)]
 pub struct NostrSaltClient {
-    config: NostrRelayConfig,
+    keys: nostr::Keys,
+    breez_api_key: Option<String>,
     /// Flag ensuring the NIP-65 relay sync is only spawned once per client lifetime.
     relay_sync_triggered: Arc<AtomicBool>,
     /// Server-provided relay list, set once by the relay sync task.
@@ -48,52 +55,38 @@ pub struct NostrSaltClient {
 }
 
 impl NostrSaltClient {
-    /// Create a new Nostr salt client with the given relay configuration.
-    pub fn new(config: NostrRelayConfig) -> Self {
+    /// Create a new Nostr salt client owning the passkey-derived
+    /// signing keys and an optional Breez API key.
+    pub fn new(keys: nostr::Keys, breez_api_key: Option<String>) -> Self {
         Self {
-            config,
+            keys,
+            breez_api_key,
             relay_sync_triggered: Arc::new(AtomicBool::new(false)),
             server_relays: Arc::new(OnceLock::new()),
         }
     }
 
-    /// Publish a label to Nostr relays.
-    ///
-    /// The label is published as a kind-1 text note event, signed by the provided keys.
-    /// Per the seedless-restore spec, the content is plain text (the label itself).
-    ///
-    /// # Arguments
-    /// * `keys` - The Nostr keypair derived from the account master
-    /// * `label` - The label string to publish
-    ///
-    /// # Returns
-    /// * `Ok(())` - Label was published successfully
-    /// * `Err(PasskeyError)` - Publication failed
-    pub async fn publish_label(&self, keys: &nostr::Keys, label: &str) -> Result<(), PasskeyError> {
-        let builder = nostr::EventBuilder::text_note(label);
-        self.write_event(keys, builder).await
+    /// Reference to the owned passkey-derived signing keys. Used by
+    /// the parent `Passkey` (test-only currently) to reuse the same
+    /// identity across the lazy-init boundary.
+    #[cfg(test)]
+    pub fn keys(&self) -> &nostr::Keys {
+        &self.keys
     }
 
-    /// Query all labels published by the given Nostr identity.
+    /// Query all labels published by the owned identity.
     ///
     /// Returns all kind-1 text note events authored by the pubkey.
     /// The label values are extracted from the event content.
     ///
     /// On the first call, spawns a background task to sync the NIP-65 relay list
     /// with the breez server's authoritative list. This does not block the response.
-    ///
-    /// # Arguments
-    /// * `keys` - The Nostr keypair (used to identify the pubkey to query)
-    ///
-    /// # Returns
-    /// * `Ok(Vec<String>)` - List of labels found
-    /// * `Err(PasskeyError)` - Query failed
-    pub async fn query_labels(&self, keys: &nostr::Keys) -> Result<Vec<String>, PasskeyError> {
+    pub async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
         let filter = Filter::new()
-            .author(keys.public_key())
+            .author(self.keys.public_key())
             .kind(nostr::Kind::TextNote);
 
-        let events_vec = self.read_events(keys, filter).await?;
+        let events_vec = self.read_events(filter).await?;
 
         // Extract label content from events
         let labels: Vec<String> = events_vec
@@ -102,32 +95,81 @@ impl NostrSaltClient {
             .collect();
 
         // Trigger one-time NIP-65 relay sync in the background
-        self.spawn_relay_sync(keys, events_vec);
+        self.spawn_relay_sync(events_vec);
 
         Ok(labels)
     }
 
-    /// Check if a specific label has already been published.
+    /// Idempotently ensure `label` is published for the owned identity.
+    /// Opens a single client connection, queries existing events on a
+    /// relay batch, and writes the new event to the same connection if
+    /// the label is missing. One round trip; avoids the cold NIP-65
+    /// fetch that `create_write_client` would otherwise trigger.
     ///
-    /// # Arguments
-    /// * `keys` - The Nostr keypair
-    /// * `label` - The label to check for
-    ///
-    /// # Returns
-    /// * `Ok(true)` - Label already exists
-    /// * `Ok(false)` - Label not found
-    /// * `Err(PasskeyError)` - Query failed
-    pub async fn label_exists(
-        &self,
-        keys: &nostr::Keys,
-        label: &str,
-    ) -> Result<bool, PasskeyError> {
-        let labels = self.query_labels(keys).await?;
-        Ok(labels.iter().any(|l| l == label))
+    /// Triggers the one-time background NIP-65 relay sync (same as
+    /// `list_labels`), keyed off the events fetched here.
+    pub async fn store_label(&self, label: &str) -> Result<(), PasskeyError> {
+        let relays = self.read_relay_candidates();
+        let timeout = Duration::from_secs(RELAY_TIMEOUT_SECS);
+        let filter = Filter::new()
+            .author(self.keys.public_key())
+            .kind(nostr::Kind::TextNote);
+
+        let mut last_err: Option<String> = None;
+
+        for chunk in relays.chunks(2) {
+            let client = self.new_client()?;
+            let mut added = 0usize;
+            for relay_url in chunk {
+                match client.add_relay(relay_url.as_str()).await {
+                    #[allow(clippy::arithmetic_side_effects)]
+                    Ok(_) => added += 1,
+                    Err(e) => {
+                        warn!("Failed to add relay {relay_url}: {e}");
+                        last_err = Some(e.to_string());
+                    }
+                }
+            }
+            if added == 0 {
+                continue;
+            }
+            client.connect().await;
+
+            let events = match client.fetch_events(filter.clone(), timeout).await {
+                Ok(events) => events,
+                Err(e) => {
+                    client.disconnect().await;
+                    warn!("Failed to fetch events from relay batch: {e}");
+                    last_err = Some(e.to_string());
+                    continue;
+                }
+            };
+            let events_vec: Vec<Event> = events.into_iter().collect();
+
+            let exists = events_vec.iter().any(|e| e.content == label);
+            if !exists {
+                let builder = nostr::EventBuilder::text_note(label);
+                let event = builder.sign_with_keys(&self.keys).map_err(|e| {
+                    PasskeyError::NostrWriteFailed(format!("Failed to sign event: {e}"))
+                })?;
+                if let Err(e) = client.send_event(&event).await {
+                    client.disconnect().await;
+                    return Err(PasskeyError::NostrWriteFailed(e.to_string()));
+                }
+            }
+
+            self.spawn_relay_sync(events_vec);
+            client.disconnect().await;
+            return Ok(());
+        }
+
+        Err(PasskeyError::NostrReadFailed(
+            last_err.unwrap_or_else(|| "no relays available".to_string()),
+        ))
     }
 
     /// Spawn the NIP-65 relay sync task if it hasn't been triggered yet.
-    fn spawn_relay_sync(&self, keys: &nostr::Keys, events: Vec<Event>) {
+    fn spawn_relay_sync(&self, events: Vec<Event>) {
         if self
             .relay_sync_triggered
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -137,10 +179,9 @@ impl NostrSaltClient {
         }
 
         let client = self.clone();
-        let keys = keys.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = client.sync_relay_list(&keys, events).await {
+            if let Err(e) = client.sync_relay_list(events).await {
                 warn!("NIP-65 relay sync failed: {e}");
                 client.relay_sync_triggered.store(false, Ordering::Release);
             }
@@ -148,16 +189,12 @@ impl NostrSaltClient {
     }
 
     /// Ensure the server relay list is populated, fetching it if necessary.
-    ///
-    /// Returns the cached list if already set (by a prior call or background sync).
-    /// Otherwise fetches from the Breez NIP-65 event (falling back to static relays),
-    /// caches the result, and returns it.
-    async fn ensure_server_relays(&self, keys: &nostr::Keys) -> Vec<String> {
+    async fn ensure_server_relays(&self) -> Vec<String> {
         if let Some(relays) = self.server_relays.get() {
             return relays.clone();
         }
 
-        let relays = self.fetch_server_relay_list(keys).await;
+        let relays = self.fetch_server_relay_list().await;
 
         if let Err(existing) = self.server_relays.set(relays.clone()) {
             warn!("Server relay list already set: {existing:?}");
@@ -166,19 +203,11 @@ impl NostrSaltClient {
     }
 
     /// Synchronize the NIP-65 relay list with the breez server's authoritative list.
-    ///
-    /// 1. Fetches the relay list (populating `server_relays` if not already set).
-    /// 2. Queries the user's published NIP-65 event.
-    /// 3. If they differ, re-publishes all label events and updates the NIP-65 event.
-    async fn sync_relay_list(
-        &self,
-        keys: &nostr::Keys,
-        existing_events: Vec<Event>,
-    ) -> Result<(), PasskeyError> {
-        let server_relays = self.ensure_server_relays(keys).await;
+    async fn sync_relay_list(&self, existing_events: Vec<Event>) -> Result<(), PasskeyError> {
+        let server_relays = self.ensure_server_relays().await;
 
         // Query the currently published NIP-65 relay list
-        let published_relays = self.query_nip65_relay_list(keys).await?;
+        let published_relays = self.query_nip65_relay_list().await?;
 
         let needs_update = match &published_relays {
             None => true,
@@ -198,12 +227,11 @@ impl NostrSaltClient {
 
             // Re-publish all existing events to the new relay set
             if !existing_events.is_empty() {
-                self.republish_events_to_relays(keys, &existing_events)
-                    .await?;
+                self.republish_events_to_relays(&existing_events).await?;
             }
 
             // Publish updated NIP-65 event
-            self.publish_nip65_relay_list(keys, &server_relays).await?;
+            self.publish_nip65_relay_list(&server_relays).await?;
 
             info!("NIP-65 relay list sync completed successfully.");
         }
@@ -212,13 +240,7 @@ impl NostrSaltClient {
     }
 
     /// Fetch the recommended relay list from the Breez NIP-65 event.
-    ///
-    /// Queries relays (Breez first if API key set, then static) for the well-known
-    /// Breez pubkey's kind-10002 event and extracts the relay URLs.
-    ///
-    /// Returns `None` on any failure (logged as warnings); the caller falls back
-    /// to the static relay list.
-    async fn fetch_breez_nip65(&self, keys: &nostr::Keys) -> Option<Vec<String>> {
+    async fn fetch_breez_nip65(&self) -> Option<Vec<String>> {
         let breez_pubkey = match PublicKey::from_hex(BREEZ_NIP65_PUBKEY) {
             Ok(pk) => pk,
             Err(e) => {
@@ -234,7 +256,7 @@ impl NostrSaltClient {
 
         let relays = self.read_relay_candidates();
 
-        let events = match self.fetch_events_with_fallback(keys, &relays, filter).await {
+        let events = match self.fetch_events_with_fallback(&relays, filter).await {
             Ok(events) => events,
             Err(e) => {
                 warn!("Failed to fetch Breez NIP-65 event: {e}");
@@ -256,19 +278,14 @@ impl NostrSaltClient {
     }
 
     /// Fetch the authoritative relay list.
-    ///
-    /// Fallback chain: Breez NIP-65 → user's own published NIP-65 → static list.
-    /// Using the user's NIP-65 as a middle fallback avoids overwriting a previously
-    /// synced relay list with the static list when the Breez NIP-65 is temporarily
-    /// unavailable.
-    async fn fetch_server_relay_list(&self, keys: &nostr::Keys) -> Vec<String> {
-        if let Some(relays) = self.fetch_breez_nip65(keys).await {
+    async fn fetch_server_relay_list(&self) -> Vec<String> {
+        if let Some(relays) = self.fetch_breez_nip65().await {
             info!("Fetched {} relays from Breez NIP-65 event", relays.len());
             return relays;
         }
 
         // Try the user's own published NIP-65 list before falling back to static
-        match self.query_nip65_relay_list(keys).await {
+        match self.query_nip65_relay_list().await {
             Ok(Some(relays)) => {
                 info!(
                     "Using user's published NIP-65 relay list ({} relays)",
@@ -282,7 +299,7 @@ impl NostrSaltClient {
 
         info!("Falling back to static relay list");
         let mut relays: Vec<String> = Vec::new();
-        if self.config.breez_api_key.is_some() {
+        if self.breez_api_key.is_some() {
             relays.push(BREEZ_RELAY.to_string());
         }
         relays.extend(STATIC_RELAYS.iter().map(|s| (*s).to_string()));
@@ -290,19 +307,13 @@ impl NostrSaltClient {
     }
 
     /// Query the user's published NIP-65 relay list from read relays.
-    ///
-    /// Returns the set of relay URLs from the most recent event, or `None` if
-    /// no NIP-65 event has been published.
-    async fn query_nip65_relay_list(
-        &self,
-        keys: &nostr::Keys,
-    ) -> Result<Option<Vec<String>>, PasskeyError> {
+    async fn query_nip65_relay_list(&self) -> Result<Option<Vec<String>>, PasskeyError> {
         let filter = Filter::new()
-            .author(keys.public_key())
+            .author(self.keys.public_key())
             .kind(Kind::RelayList)
             .limit(1);
 
-        let events = self.read_events(keys, filter).await?;
+        let events = self.read_events(filter).await?;
 
         // NIP-65 is a replaceable event, so there should be at most one
         let Some(event) = events.into_iter().next() else {
@@ -321,27 +332,19 @@ impl NostrSaltClient {
     }
 
     /// Publish a NIP-65 relay list metadata event.
-    async fn publish_nip65_relay_list(
-        &self,
-        keys: &nostr::Keys,
-        relay_urls: &[String],
-    ) -> Result<(), PasskeyError> {
+    async fn publish_nip65_relay_list(&self, relay_urls: &[String]) -> Result<(), PasskeyError> {
         let relay_entries: Vec<(RelayUrl, Option<nip65::RelayMetadata>)> = relay_urls
             .iter()
             .filter_map(|url| RelayUrl::parse(url).ok().map(|r| (r, None)))
             .collect();
 
         let builder = nostr::EventBuilder::relay_list(relay_entries);
-        self.write_event(keys, builder).await
+        self.write_event(builder).await
     }
 
     /// Re-publish existing label events to the current write relay set.
-    async fn republish_events_to_relays(
-        &self,
-        keys: &nostr::Keys,
-        events: &[Event],
-    ) -> Result<(), PasskeyError> {
-        let client = self.create_write_client(keys).await?;
+    async fn republish_events_to_relays(&self, events: &[Event]) -> Result<(), PasskeyError> {
+        let client = self.create_write_client().await?;
 
         for event in events {
             if let Err(e) = client.send_event(event).await {
@@ -354,15 +357,11 @@ impl NostrSaltClient {
     }
 
     /// Sign and publish an event to write relays.
-    async fn write_event(
-        &self,
-        keys: &nostr::Keys,
-        builder: nostr::EventBuilder,
-    ) -> Result<(), PasskeyError> {
-        let client = self.create_write_client(keys).await?;
+    async fn write_event(&self, builder: nostr::EventBuilder) -> Result<(), PasskeyError> {
+        let client = self.create_write_client().await?;
 
         let event = builder
-            .sign_with_keys(keys)
+            .sign_with_keys(&self.keys)
             .map_err(|e| PasskeyError::NostrWriteFailed(format!("Failed to sign event: {e}")))?;
 
         client
@@ -375,11 +374,9 @@ impl NostrSaltClient {
     }
 
     /// Build the ordered list of relay candidates for read operations.
-    ///
-    /// Priority: Breez relay (if API key set), then static relays.
     fn read_relay_candidates(&self) -> Vec<String> {
         let mut candidates: Vec<String> = Vec::new();
-        if self.config.breez_api_key.is_some() {
+        if self.breez_api_key.is_some() {
             candidates.push(BREEZ_RELAY.to_string());
         }
         candidates.extend(STATIC_RELAYS.iter().map(|s| (*s).to_string()));
@@ -387,25 +384,16 @@ impl NostrSaltClient {
     }
 
     /// Fetch events matching a filter, trying relays in batches of 2 with cascading fallback.
-    ///
-    /// Queries relays in pairs for redundancy: if one relay is missing events the other
-    /// may have them. The nostr-sdk `Client` fans out queries to all connected relays
-    /// and merges results internally.
-    ///
-    /// On batch failure (all relays in the batch error), tries the next batch.
-    /// On success (even empty results), returns immediately.
-    /// Errors only if all batches fail.
     async fn fetch_events_with_fallback(
         &self,
-        keys: &nostr::Keys,
         relays: &[String],
         filter: Filter,
     ) -> Result<Vec<Event>, PasskeyError> {
-        let timeout = Duration::from_secs(u64::from(self.config.timeout_secs()));
+        let timeout = Duration::from_secs(RELAY_TIMEOUT_SECS);
         let mut last_err = None;
 
         for chunk in relays.chunks(2) {
-            let client = self.new_client(keys)?;
+            let client = self.new_client()?;
             let mut added = 0usize;
 
             for relay_url in chunk {
@@ -444,25 +432,15 @@ impl NostrSaltClient {
     }
 
     /// Fetch events matching a filter from read relays, with cascading fallback.
-    ///
-    /// Tries Breez relay first (if API key set), then static relays one at a time.
-    /// Falls through to the next relay only on connection or fetch errors.
-    async fn read_events(
-        &self,
-        keys: &nostr::Keys,
-        filter: Filter,
-    ) -> Result<Vec<Event>, PasskeyError> {
+    async fn read_events(&self, filter: Filter) -> Result<Vec<Event>, PasskeyError> {
         let relays = self.read_relay_candidates();
-        self.fetch_events_with_fallback(keys, &relays, filter).await
+        self.fetch_events_with_fallback(&relays, filter).await
     }
 
     /// Create a Nostr client connected to all relays for write operations.
-    ///
-    /// Ensures `server_relays` is populated before writing (fetches if needed).
-    /// Tolerates individual relay failures — only errors if no relays could be added.
-    async fn create_write_client(&self, keys: &nostr::Keys) -> Result<Client, PasskeyError> {
-        let client = self.new_client(keys)?;
-        let write_relays = self.ensure_server_relays(keys).await;
+    async fn create_write_client(&self) -> Result<Client, PasskeyError> {
+        let client = self.new_client()?;
+        let write_relays = self.ensure_server_relays().await;
 
         let mut added = 0usize;
         for relay_url in &write_relays {
@@ -488,14 +466,14 @@ impl NostrSaltClient {
     /// Create a new Nostr client with the appropriate signing keys.
     ///
     /// When an API key is configured, uses API key-derived keys for NIP-42
-    /// authentication. Content events are signed manually with passkey-derived
-    /// keys via `sign_with_keys()`.
-    fn new_client(&self, keys: &nostr::Keys) -> Result<Client, PasskeyError> {
-        Ok(if let Some(ref api_key) = self.config.breez_api_key {
+    /// authentication. Content events are signed manually with the owned
+    /// passkey-derived keys via `sign_with_keys()`.
+    fn new_client(&self) -> Result<Client, PasskeyError> {
+        Ok(if let Some(ref api_key) = self.breez_api_key {
             let auth_keys = derive_nip42_keypair(api_key)?;
             Client::new(auth_keys)
         } else {
-            Client::new(keys.clone())
+            Client::new(self.keys.clone())
         })
     }
 }
@@ -507,31 +485,27 @@ mod tests {
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    fn test_keys() -> nostr::Keys {
+        nostr::Keys::generate()
+    }
+
     #[macros::test_all]
     fn test_nostr_salt_client_new_default() {
-        let config = NostrRelayConfig::default();
-        let client = NostrSaltClient::new(config);
+        let client = NostrSaltClient::new(test_keys(), None);
 
-        assert!(client.config.breez_api_key.is_none());
-        assert_eq!(client.config.timeout_secs(), 30);
+        assert!(client.breez_api_key.is_none());
     }
 
     #[macros::test_all]
     fn test_nostr_salt_client_with_api_key() {
-        let config = NostrRelayConfig {
-            breez_api_key: Some("dGVzdC1hcGkta2V5".to_string()),
-            ..Default::default()
-        };
-        let client = NostrSaltClient::new(config);
+        let client = NostrSaltClient::new(test_keys(), Some("dGVzdC1hcGkta2V5".to_string()));
 
-        assert!(client.config.breez_api_key.is_some());
-        assert_eq!(client.config.timeout_secs(), 30);
+        assert!(client.breez_api_key.is_some());
     }
 
     #[macros::test_all]
     fn test_relay_sync_state_shared_across_clones() {
-        let config = NostrRelayConfig::default();
-        let client1 = NostrSaltClient::new(config);
+        let client1 = NostrSaltClient::new(test_keys(), None);
         let client2 = client1.clone();
 
         assert!(Arc::ptr_eq(
@@ -557,8 +531,7 @@ mod tests {
 
     #[macros::test_all]
     fn test_read_relay_candidates_without_api_key() {
-        let config = NostrRelayConfig::default();
-        let client = NostrSaltClient::new(config);
+        let client = NostrSaltClient::new(test_keys(), None);
         let candidates = client.read_relay_candidates();
 
         assert_eq!(candidates.len(), STATIC_RELAYS.len());
@@ -568,11 +541,7 @@ mod tests {
 
     #[macros::test_all]
     fn test_read_relay_candidates_with_api_key() {
-        let config = NostrRelayConfig {
-            breez_api_key: Some("dGVzdC1hcGkta2V5".to_string()),
-            ..Default::default()
-        };
-        let client = NostrSaltClient::new(config);
+        let client = NostrSaltClient::new(test_keys(), Some("dGVzdC1hcGkta2V5".to_string()));
         let candidates = client.read_relay_candidates();
 
         // Breez relay should be first
