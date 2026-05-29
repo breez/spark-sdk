@@ -7,7 +7,7 @@ use bitcoin::{
 };
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use prost::Message as _;
 
@@ -834,32 +834,52 @@ impl TokenService {
             .broadcast_transaction(broadcast_req)
             .await?;
 
+        // The transaction is broadcast past this point, so the reserved inputs are spent on the
+        // operators. Errors must not propagate from here on: with_reserved_token_outputs cancels
+        // the reservation on Err, which would wrongly return the already-spent outputs to the
+        // available pool. Surface inconsistencies via logs and fall back to values that let the
+        // next sync reconcile.
         let commit_status = broadcast_response.commit_status();
         let commit_progress = broadcast_response.commit_progress;
-        let final_token_transaction =
-            broadcast_response.final_token_transaction.ok_or_else(|| {
-                ServiceError::Generic(format!(
-                    "broadcast response missing final_token_transaction for tx {partial_txid}"
-                ))
-            })?;
-        let final_tx_hash = spark_token_primitives::hash_final_token_transaction(
-            final_token_transaction.encode_to_vec(),
-        )
-        .map_err(|e| {
-            ServiceError::Generic(format!(
-                "Failed to compute final token transaction hash for tx {partial_txid}: {e}"
-            ))
-        })?;
-        let txid = hex::encode(&final_tx_hash);
+        let final_token_transaction = broadcast_response.final_token_transaction;
 
-        if let Some(observer) = &self.transfer_observer {
-            // The transaction is already broadcast at this point, so failing to notify the
-            // observer must not propagate: returning an error here would cancel the reservation
-            // and wrongly return the already-spent outputs to the available pool.
-            if let Err(e) = observer.after_send_token(&partial_txid, &txid).await {
-                warn!("after_send_token observer failed for tx {txid}: {e:?}");
+        // Derive the final txid and outputs from the operator response, which is authoritative now
+        // that the transaction is broadcast. Fall back to the partial txid if the response is
+        // malformed so a parsing failure never rolls back the reservation.
+        let final_outputs = match final_token_transaction {
+            Some(final_token_transaction) => spark_token_primitives::hash_final_token_transaction(
+                final_token_transaction.encode_to_vec(),
+            )
+            .map_err(|e| format!("Failed to compute final token transaction hash: {e}"))
+            .and_then(|final_tx_hash| {
+                let txid = hex::encode(&final_tx_hash);
+                final_token_transaction
+                    .final_token_outputs
+                    .into_iter()
+                    .enumerate()
+                    .map(|(vout, fo)| {
+                        let mut output: TokenOutput = (fo, self.network)
+                            .try_into()
+                            .map_err(|e: ServiceError| e.to_string())?;
+                        output.id = format!("{txid}:{vout}");
+                        Ok(output)
+                    })
+                    .collect::<Result<Vec<TokenOutput>, String>>()
+                    .map(|outputs| (txid, outputs))
+            }),
+            None => Err("broadcast response missing final_token_transaction".to_string()),
+        };
+
+        let (txid, outputs) = match final_outputs {
+            Ok(value) => value,
+            Err(e) => {
+                error!(
+                    "Failed to read final outputs for tx {partial_txid}: {e}; using the partial txid \
+                     so the broadcast reservation is finalized rather than rolled back"
+                );
+                (partial_txid.clone(), Vec::new())
             }
-        }
+        };
 
         let is_finalized = match commit_status {
             CommitStatus::CommitFinalized => true,
@@ -877,11 +897,41 @@ impl TokenService {
                 false
             }
             CommitStatus::CommitUnspecified => {
-                return Err(ServiceError::Generic(format!(
-                    "broadcast_transaction for tx {txid} returned COMMIT_UNSPECIFIED"
-                )));
+                warn!("broadcast_transaction for tx {txid} returned COMMIT_UNSPECIFIED");
+                false
             }
         };
+
+        // Sanity-check the operator outputs against what we requested. After broadcast these are
+        // authoritative, so a mismatch is logged rather than propagated.
+        if outputs.len() != receiver_outputs.len() {
+            warn!(
+                "broadcast returned {} final outputs but expected {} for tx {txid}",
+                outputs.len(),
+                receiver_outputs.len()
+            );
+        }
+        for (i, (output, expected)) in outputs.iter().zip(receiver_outputs.iter()).enumerate() {
+            if output.token_amount != expected.amount {
+                warn!(
+                    "final output {i} for tx {txid} has amount {} but expected {}",
+                    output.token_amount, expected.amount
+                );
+            }
+            if output.token_identifier != expected.token_id {
+                warn!(
+                    "final output {i} for tx {txid} has token identifier {} but expected {}",
+                    output.token_identifier, expected.token_id
+                );
+            }
+        }
+
+        if let Some(observer) = &self.transfer_observer {
+            // Already broadcast, so a failed observer notification must not propagate either.
+            if let Err(e) = observer.after_send_token(&partial_txid, &txid).await {
+                warn!("after_send_token observer failed for tx {txid}: {e:?}");
+            }
+        }
 
         let outputs_to_spend = inputs
             .iter()
@@ -890,39 +940,6 @@ impl TokenService {
                 prev_token_tx_vout: o.prev_tx_vout,
             })
             .collect();
-
-        let outputs = final_token_transaction
-            .final_token_outputs
-            .into_iter()
-            .enumerate()
-            .map(|(vout, fo)| {
-                let mut output: TokenOutput = (fo, self.network).try_into()?;
-                output.id = format!("{txid}:{vout}");
-                Ok(output)
-            })
-            .collect::<Result<Vec<TokenOutput>, ServiceError>>()?;
-
-        if outputs.len() != receiver_outputs.len() {
-            return Err(ServiceError::Generic(format!(
-                "broadcast returned {} final outputs but expected {} for tx {txid}",
-                outputs.len(),
-                receiver_outputs.len()
-            )));
-        }
-        for (i, (output, expected)) in outputs.iter().zip(receiver_outputs.iter()).enumerate() {
-            if output.token_amount != expected.amount {
-                return Err(ServiceError::Generic(format!(
-                    "final output {i} for tx {txid} has amount {} but expected {}",
-                    output.token_amount, expected.amount
-                )));
-            }
-            if output.token_identifier != expected.token_id {
-                return Err(ServiceError::Generic(format!(
-                    "final output {i} for tx {txid} has token identifier {} but expected {}",
-                    output.token_identifier, expected.token_id
-                )));
-            }
-        }
 
         let created_timestamp = now;
 
