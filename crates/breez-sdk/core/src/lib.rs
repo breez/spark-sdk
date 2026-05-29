@@ -56,6 +56,8 @@ pub use persist::{
     backend::postgres_storage,
     postgres::{PoolQueueMode, PostgresStorageConfig, default_postgres_storage_config},
 };
+#[cfg(all(feature = "postgres", feature = "test-utils"))]
+pub use persist::postgres::PostgresStorage;
 
 #[cfg(feature = "mysql")]
 pub use persist::{

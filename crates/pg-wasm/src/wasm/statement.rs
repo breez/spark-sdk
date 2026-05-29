@@ -6,7 +6,9 @@
 //! `parsedStatements` cache to key on.
 
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 
 use postgres_types::Type;
 
@@ -127,14 +129,32 @@ struct CacheEntry {
 }
 
 impl StmtCache {
-    /// Look up or assign a stable name for `sql`. Names look like `pgw_<n>`
-    /// — well under Postgres' 63-char identifier limit.
+    /// Look up or assign a stable name for `sql`.
+    ///
+    /// The name is a stable hash of the SQL text — `pgw_<hex>` — so the
+    /// same SQL maps to the same name regardless of which Rust `Client`
+    /// wrapper is asking. This matters because `pg.Pool` recycles its
+    /// underlying `pg.Client` instances: a fresh Rust `Client` from
+    /// `pool.get()` may sit on top of a JS connection whose
+    /// `connection.parsedStatements` cache already contains entries
+    /// from a previous checkout. Counter-based names would collide
+    /// (different SQL, same name) and `Describe Statement` would return
+    /// parameter info for the *previously* cached statement.
+    ///
+    /// `DefaultHasher` is SipHash-1-3; collisions for the ~100 SQL
+    /// strings the SDK uses are astronomically improbable. The JS
+    /// bridge does a defensive `parsedStatements[name] === text` check
+    /// and falls back gracefully if one ever happens.
     pub(crate) fn intern(&mut self, sql: &str) -> String {
         if let Some(e) = self.entries.get(sql) {
             return e.name.clone();
         }
+        // Bump the counter so generated names stay distinct in any
+        // legacy code paths that still read it; unused for the hash.
         self.next_id = self.next_id.saturating_add(1);
-        let name = format!("pgw_{}", self.next_id);
+        let mut h = DefaultHasher::new();
+        sql.hash(&mut h);
+        let name = format!("pgw_{:016x}", h.finish());
         self.entries.insert(
             sql.to_string(),
             CacheEntry {

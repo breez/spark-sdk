@@ -278,8 +278,19 @@ class BinaryPrepare {
     // and detach in cleanup.
     connection.on("parameterDescription", this._onParameterDescription);
     try {
-      const alreadyParsed = this.name && connection.parsedStatements[this.name];
-      if (!alreadyParsed) {
+      const cachedText = this.name
+        ? connection.parsedStatements[this.name]
+        : undefined;
+      if (cachedText !== undefined && cachedText !== this.text) {
+        // Hash collision with a previously-parsed statement on this
+        // connection (extremely rare). Surface it loudly rather than
+        // describing the wrong SQL.
+        throw new Error(
+          `pg-wasm: prepared-statement name collision on '${this.name}'. ` +
+            `Cached SQL differs from requested SQL.`
+        );
+      }
+      if (!cachedText) {
         connection.parse({
           name: this.name,
           text: this.text,
@@ -374,12 +385,24 @@ class BinaryQuery {
   submit(connection) {
     try {
       // pg-protocol caches parsed statement names in
-      // `connection.parsedStatements[name]`. Skip the Parse round-trip if
-      // we've already sent it. Unnamed statements (name === '') must
-      // always re-parse: each Parse with empty name overwrites the
-      // previous unnamed statement on the backend.
-      const alreadyParsed = this.name && connection.parsedStatements[this.name];
-      if (!alreadyParsed) {
+      // `connection.parsedStatements[name]`. Skip the Parse round-trip
+      // if we've already sent it under the same name AND the cached SQL
+      // matches. Unnamed statements (`name === ''`) always re-parse.
+      //
+      // Defensive `cachedText === this.text` check: prepared-statement
+      // names are stable hashes of the SQL; the equality should always
+      // hold and a mismatch indicates a hash collision that we'd rather
+      // surface loudly than silently describe the wrong statement.
+      const cachedText = this.name
+        ? connection.parsedStatements[this.name]
+        : undefined;
+      if (cachedText !== undefined && cachedText !== this.text) {
+        throw new Error(
+          `pg-wasm: prepared-statement name collision on '${this.name}'. ` +
+            `Cached SQL differs from requested SQL.`
+        );
+      }
+      if (!cachedText) {
         connection.parse({
           name: this.name,
           text: this.text,

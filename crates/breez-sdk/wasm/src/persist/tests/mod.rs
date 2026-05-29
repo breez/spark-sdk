@@ -8,6 +8,9 @@ mod postgres;
 mod pg_wasm_smoke;
 
 #[cfg(not(feature = "browser-tests"))]
+mod pg_wasm_rust_storage;
+
+#[cfg(not(feature = "browser-tests"))]
 mod mysql;
 
 #[cfg(not(feature = "browser-tests"))]

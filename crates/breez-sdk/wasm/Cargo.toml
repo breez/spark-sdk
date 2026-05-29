@@ -50,3 +50,4 @@ web-sys.workspace = true
 wasm-bindgen-test.workspace = true
 breez-sdk-spark = { workspace = true, features = ["test-utils", "postgres"] }
 pg-wasm.workspace = true
+spark-postgres.workspace = true

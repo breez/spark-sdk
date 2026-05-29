@@ -167,7 +167,8 @@ const SCHEMA_RENAMES: SchemaRenames<'static> = SchemaRenames {
 /// compressed public key). All reads and writes are filtered by `user_id` so
 /// that multiple instances with distinct identities can share one Postgres DB
 /// without seeing each other's data.
-pub(crate) struct PostgresStorage {
+#[cfg_attr(not(feature = "test-utils"), allow(unreachable_pub))]
+pub struct PostgresStorage {
     pool: Pool,
     /// Tenant identity: 33-byte compressed secp256k1 pubkey. Stored as raw
     /// bytes for direct binding to BYTEA columns.
