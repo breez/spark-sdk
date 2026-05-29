@@ -14,7 +14,9 @@ use crate::bitcoin::{sighash_from_multi_input_tx, sighash_from_tx};
 use crate::core::Network;
 use crate::operator::OperatorPool;
 use crate::operator::rpc as operator_rpc;
-use crate::services::models::{SignedTx, map_signing_nonce_commitments};
+use crate::services::models::{
+    SignedTx, map_signing_nonce_commitments, split_signing_commitments_by_variant,
+};
 use crate::services::{
     ExitSpeed, LeafKeyTweak, LeafRefundSigningData, Transfer, TransferId, TransferService,
 };
@@ -252,6 +254,11 @@ impl CoopExitService {
         debug!(
             "Submitting cooperative exit transfer for connector_txid: {connector_txid}, exit_txid: {exit_txid}",
         );
+        if leaf_key_tweaks.is_empty() {
+            return Err(ServiceError::InvalidInput(
+                "submit_coop_exit_transfer requires at least one leaf".to_string(),
+            ));
+        }
         let receiver_public_key = self.ssp_client.identity_public_key();
 
         // 1. Prepare key tweaks (empty signature maps; the SO hasn't signed yet).
@@ -293,14 +300,8 @@ impl CoopExitService {
             .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let chunks = signing_commitments
-            .chunks(leaf_key_tweaks.len())
-            .collect::<Vec<_>>();
-        if chunks.len() != 3 {
-            return Err(ServiceError::Generic(
-                "Not enough signing commitments returned".to_string(),
-            ));
-        }
+        let [cpfp_chunk, direct_chunk, direct_from_cpfp_chunk] =
+            split_signing_commitments_by_variant(&signing_commitments, leaf_key_tweaks.len())?;
 
         // 4. Sign coop-exit refunds (connector refunds, decremented timelock)
         //    operator-commits-first into UserSignedTxSigningJob's.
@@ -314,9 +315,9 @@ impl CoopExitService {
                 &receiver_public_key,
                 connector_txid,
                 &connector_tx_parsed,
-                chunks[0],
-                chunks[1],
-                chunks[2],
+                cpfp_chunk,
+                direct_chunk,
+                direct_from_cpfp_chunk,
             )
             .await?;
 

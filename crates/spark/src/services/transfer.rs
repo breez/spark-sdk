@@ -7,7 +7,9 @@ use crate::operator::OperatorPool;
 use crate::operator::rpc::spark::transfer_filter::Participant;
 use crate::operator::rpc::spark::{HashVariant, StartTransferRequest, TransferFilter};
 use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
-use crate::services::models::{LeafKeyTweak, Transfer, map_signing_nonce_commitments};
+use crate::services::models::{
+    LeafKeyTweak, Transfer, map_signing_nonce_commitments, split_signing_commitments_by_variant,
+};
 use crate::services::{ProofMap, TransferId, TransferObserver, TransferStatus};
 use crate::signer::{
     FrostSigningCommitmentsWithNonces, SecretSource, SecretToSplit, SignFrostRequest,
@@ -445,6 +447,12 @@ impl TransferService {
         payment_hash: Option<&sha256::Hash>,
         cpfp_adaptor_public_key: Option<&PublicKey>,
     ) -> Result<PreparedTransferPackage, ServiceError> {
+        if leaf_key_tweaks.is_empty() {
+            return Err(ServiceError::InvalidInput(
+                "prepare_transfer_package requires at least one leaf".to_string(),
+            ));
+        }
+
         let signing_commitments = self
             .operator_pool
             .get_coordinator()
@@ -463,19 +471,11 @@ impl TransferService {
             .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let chunked_signing_commitments = signing_commitments
-            .chunks(leaf_key_tweaks.len())
-            .collect::<Vec<_>>();
-
-        if chunked_signing_commitments.len() != 3 {
-            return Err(ServiceError::SSPswapError(
-                "Not enough signing commitments returned".to_string(),
-            ));
-        }
-
-        let cpfp_signing_commitments = chunked_signing_commitments[0].to_vec();
-        let direct_signing_commitments = chunked_signing_commitments[1].to_vec();
-        let direct_from_cpfp_signing_commitments = chunked_signing_commitments[2].to_vec();
+        let [cpfp_chunk, direct_chunk, direct_from_cpfp_chunk] =
+            split_signing_commitments_by_variant(&signing_commitments, leaf_key_tweaks.len())?;
+        let cpfp_signing_commitments = cpfp_chunk.to_vec();
+        let direct_signing_commitments = direct_chunk.to_vec();
+        let direct_from_cpfp_signing_commitments = direct_from_cpfp_chunk.to_vec();
 
         let SignedRefundTransactions {
             cpfp_signed_tx,
@@ -848,6 +848,14 @@ impl TransferService {
         transfer: &Transfer,
         leaves: &[LeafKeyTweak],
     ) -> Result<operator_rpc::spark::ClaimPackage, ServiceError> {
+        if leaves.is_empty() {
+            return Err(ServiceError::NoLeavesToClaim);
+        }
+        let node_id_count: u32 = leaves
+            .len()
+            .try_into()
+            .map_err(|_| ServiceError::InvalidInput("too many leaves to claim".to_string()))?;
+
         let (leaves_tweaks_map, _proof_map) = self.prepare_claim_leaves_key_tweaks(leaves).await?;
 
         // ECIES-encrypt the per-operator claim leaf key tweaks.
@@ -872,7 +880,7 @@ impl TransferService {
             .get_signing_commitments(operator_rpc::spark::GetSigningCommitmentsRequest {
                 node_ids: Vec::new(),
                 count: 3,
-                node_id_count: leaves.len() as u32,
+                node_id_count,
             })
             .await?
             .signing_commitments
@@ -880,17 +888,13 @@ impl TransferService {
             .map(|sc| map_signing_nonce_commitments(&sc.signing_nonce_commitments))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let chunks = signing_commitments.chunks(leaves.len()).collect::<Vec<_>>();
-        if chunks.len() != 3 {
-            return Err(ServiceError::Generic(
-                "Not enough signing commitments returned".to_string(),
-            ));
-        }
+        let [cpfp_chunk, direct_chunk, direct_from_cpfp_chunk] =
+            split_signing_commitments_by_variant(&signing_commitments, leaves.len())?;
 
         // Sign the claim refunds (current timelock) operator-commits-first;
         // the operators aggregate server-side during `claim_transfer`.
         let (cpfp_jobs, direct_jobs, direct_from_cpfp_jobs) = self
-            .sign_claim_refunds(leaves, chunks[0], chunks[1], chunks[2])
+            .sign_claim_refunds(leaves, cpfp_chunk, direct_chunk, direct_from_cpfp_chunk)
             .await?;
 
         let mut claim_package = operator_rpc::spark::ClaimPackage {

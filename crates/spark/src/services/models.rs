@@ -222,6 +222,40 @@ pub(crate) fn map_signing_nonce_commitments(
     Ok(nonce_commitments)
 }
 
+/// Splits a flat list of signing commitments returned by
+/// `get_signing_commitments` into the three refund-transaction variants
+/// (CPFP, direct, direct-from-CPFP).
+///
+/// `get_signing_commitments` lays out commitments as
+/// `[A1, B1, A2, B2, A3, B3]` for `node_ids = [A, B], count = 3`, i.e.
+/// `node_id_count` entries per variant, three variants in a row.
+///
+/// Returns `InvalidInput` if `node_id_count == 0` (which would otherwise
+/// cause `Vec::chunks(0)` to panic) and a generic error if the total
+/// length doesn't match `3 * node_id_count`.
+pub(crate) fn split_signing_commitments_by_variant<T>(
+    commitments: &[T],
+    node_id_count: usize,
+) -> Result<[&[T]; 3], ServiceError> {
+    if node_id_count == 0 {
+        return Err(ServiceError::InvalidInput(
+            "cannot request signing commitments for zero nodes".to_string(),
+        ));
+    }
+    let expected = node_id_count.checked_mul(3).ok_or_else(|| {
+        ServiceError::InvalidInput("node count overflow computing commitment total".to_string())
+    })?;
+    if commitments.len() != expected {
+        return Err(ServiceError::Generic(format!(
+            "expected {expected} signing commitments, got {}",
+            commitments.len()
+        )));
+    }
+    let (cpfp, rest) = commitments.split_at(node_id_count);
+    let (direct, direct_from_cpfp) = rest.split_at(node_id_count);
+    Ok([cpfp, direct, direct_from_cpfp])
+}
+
 #[derive(Debug)]
 pub struct LeafKeyTweak {
     pub node: TreeNode,
