@@ -1017,6 +1017,71 @@ async fn test_http_url_without_lightning_querystring_does_not_match() {
 }
 
 #[async_test_all]
+async fn test_http_url_with_garbage_lightning_querystring_does_not_match() {
+    // `lightning=` values that are not a bech32 LNURL must not resolve. None
+    // of these should reach the network — if any did, MockRestClient would
+    // panic on the missing response queue.
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let bolt11 = "lnbc110n1p38q3gtpp5ypz09jrd8p993snjwnm68cph4ftwp22le34xd4r8ftspwshxhmnsdqqxqyjw5qcqpxsp5htlg8ydpywvsa7h3u4hdn77ehs4z4e844em0apjyvmqfkzqhhd2q9qgsqqqyssqszpxzxt9uuqzymr7zxcdccj5g69s8q7zzjs7sgxn9ejhnvdh6gqjcy22mss2yexunagm5r2gqczh8k24cwrqml3njskm548aruhpwssq9nvrvz";
+    let bitcoin_bech32 = "bc1qxhmdufsvnuaaaer4ynz88fspdsxq2h9e9cetdj";
+
+    let cases = [
+        // Non-bech32 random string
+        "https://service.example/?lightning=not-an-lnurl".to_string(),
+        // bech32 with a non-`lnurl` HRP (BOLT11 invoice)
+        format!("https://service.example/?lightning={bolt11}"),
+        // bech32 with a non-`lnurl` HRP (bitcoin segwit address)
+        format!("https://service.example/?lightning={bitcoin_bech32}"),
+        // `lnurl1` prefix but invalid bech32 payload
+        "https://service.example/?lightning=lnurl1invalidpayload".to_string(),
+        // Empty `lightning=` value
+        "https://service.example/?id=123&lightning=".to_string(),
+    ];
+
+    for input in cases {
+        let result = input_parser.parse(&input).await;
+        assert!(
+            matches!(result, Err(ParseError::InvalidInput)),
+            "expected InvalidInput for {input:?}, got: {result:?}"
+        );
+    }
+}
+
+#[async_test_all]
+async fn test_lightning_querystring_outside_url_does_not_match() {
+    // Inputs that contain `lightning=` but are not themselves http(s) URLs must
+    // not trigger the LUD-01 fallback — the spec only applies to URIs that
+    // wrap the LNURL.
+    let mock_dns_resolver = MockDnsResolver::new();
+    let mock_rest_client = MockRestClient::new();
+    let input_parser = InputParser::new(mock_dns_resolver, mock_rest_client, None);
+
+    let lnurl = "lnurl1dp68gurn8ghj7mr0vdskc6r0wd6z7mrww4excttsv9un7um9wdekjmmw84jxywf5x43rvv35xgmr2enrxanr2cfcvsmnwe3jxcukvde48qukgdec89snwde3vfjxvepjxpjnjvtpxd3kvdnxx5crxwpjvyunsephsz36jf";
+
+    let cases = [
+        // Bare `lightning=` pair with no scheme/host
+        format!("lightning={lnurl}"),
+        // Query-string fragment only
+        format!("?lightning={lnurl}"),
+        // Arbitrary text containing the pair
+        format!("hello world lightning={lnurl}"),
+        // Non-http(s) scheme that happens to carry the pair
+        format!("ftp://example.com/?lightning={lnurl}"),
+    ];
+
+    for input in cases {
+        let result = input_parser.parse(&input).await;
+        assert!(
+            matches!(result, Err(ParseError::InvalidInput)),
+            "expected InvalidInput for {input:?}, got: {result:?}"
+        );
+    }
+}
+
+#[async_test_all]
 async fn test_lightning_prefix_with_plain_https_url_does_not_match() {
     // `lightning:` strips its prefix and recurses through parse_lnurl. A bare
     // https URL underneath should not be resolved as an LNURL endpoint.
