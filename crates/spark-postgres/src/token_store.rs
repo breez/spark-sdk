@@ -314,13 +314,9 @@ impl TokenOutputStore for PostgresTokenStore {
         .await
         .map_err(map_err)?;
 
-        // Also delete any non-reserved row whose outpoint is in the incoming
-        // refresh data. The refresh is authoritative for that outpoint, so we
-        // drop a previously-inline-inserted synthetic-id row to make room. This
-        // mirrors the in-memory store's outpoint-keyed semantics where a refresh
-        // overwrites a post-refresh insert for the same outpoint, preventing
-        // duplicate (id, outpoint) rows that would later be selected together
-        // and trigger TOKEN_RULES_VIOLATION at the operator.
+        // The refresh is authoritative for its outpoints, so also drop any non-reserved row whose
+        // outpoint is incoming. This clears an inline-inserted synthetic-id row that would otherwise
+        // duplicate the operator-id row and trigger TOKEN_RULES_VIOLATION.
         let incoming_tx_hashes: Vec<String> = token_outputs
             .iter()
             .flat_map(|to| to.outputs.iter().map(|o| o.prev_tx_hash.clone()))
@@ -673,10 +669,8 @@ impl TokenOutputStore for PostgresTokenStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        // Serialize against `set_tokens_outputs`. Without this lock, a refresh
-        // could insert operator-id rows for the same outpoints we're about to
-        // insert with synthetic ids, leaving duplicate (id, outpoint) rows
-        // that later trigger TOKEN_RULES_VIOLATION at the operator.
+        // Serialize against `set_tokens_outputs`: a concurrent refresh could otherwise leave
+        // duplicate (id, outpoint) rows for these outpoints, triggering TOKEN_RULES_VIOLATION.
         self.acquire_write_lock(&tx).await?;
 
         // 1. Remove spent outputs and mark them as spent.
@@ -731,11 +725,8 @@ impl TokenOutputStore for PostgresTokenStore {
                 .map_err(map_err)?;
             }
 
-            // Collect existing outpoints so we skip re-inserting outpoints
-            // already present (e.g. from a concurrent refresh that landed
-            // operator-id rows). Without this, the synthetic-id row from
-            // this inline insert would coexist with the operator-id row
-            // and surface as a duplicate input at reserve time.
+            // Skip outpoints already present (e.g. from a concurrent refresh that landed an
+            // operator-id row) so we don't add a duplicate synthetic-id row for the same outpoint.
             let existing_outpoints: HashSet<(String, i32)> = {
                 let rows = tx
                     .query(
@@ -829,11 +820,8 @@ impl TokenOutputStore for PostgresTokenStore {
             .map(Self::output_from_row)
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Defensive: dedup by outpoint. brz_token_outputs is keyed by id, so a
-        // race between an inline insert (synthetic id) and a concurrent refresh
-        // (operator id) can land two rows for the same outpoint. Listing both
-        // as inputs to a transaction would trigger TOKEN_RULES_VIOLATION at
-        // the operator ("duplicate output to spend").
+        // Dedup by outpoint: an inline insert (synthetic id) racing a refresh (operator id) can
+        // leave two rows for one outpoint, which would spend as duplicate inputs (TOKEN_RULES_VIOLATION).
         let mut seen: HashSet<(String, u32)> = HashSet::new();
         outputs.retain(|o| seen.insert((o.prev_tx_hash.clone(), o.prev_tx_vout)));
 
@@ -968,9 +956,8 @@ impl TokenOutputStore for PostgresTokenStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        // Serialize against `set_tokens_outputs` so its `brz_token_spent_outputs`
-        // snapshot and the upsert that consumes it cannot interleave with this
-        // transaction's spent-marker write.
+        // Serialize against `set_tokens_outputs` so its spent-marker snapshot and upsert cannot
+        // interleave with this transaction's spent-marker write.
         self.acquire_write_lock(&tx).await?;
 
         // Get reservation purpose and reserved output IDs
@@ -1186,14 +1173,9 @@ impl PostgresTokenStore {
             // leakage), backfills with the connecting tenant, and rewrites primary
             // keys / FKs / indexes to lead with user_id.
             token_store_multi_tenant_migration(identity),
-            // Migration 3: Re-key brz_token_spent_outputs by (prev_tx_hash,
-            // prev_tx_vout) instead of the operator-issued output id. v3
-            // FinalTokenOutput carries no id field, so post-broadcast spent
-            // markers only have an outpoint to work with. The existing
-            // output_id-keyed rows can't be backfilled (no outpoint stored
-            // alongside them), so the table is wiped on upgrade — spent
-            // markers are short-lived (5 minute cleanup window) so wiping is
-            // equivalent to letting them age out.
+            // Migration 3: re-key brz_token_spent_outputs by (prev_tx_hash, prev_tx_vout); v3
+            // FinalTokenOutput has no id, so spent markers only have an outpoint. Old id-keyed rows
+            // can't be backfilled, so the table is wiped — markers age out in 5 minutes anyway.
             vec![
                 "DROP TABLE IF EXISTS brz_token_spent_outputs".to_string(),
                 "CREATE TABLE brz_token_spent_outputs (

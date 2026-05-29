@@ -57,11 +57,8 @@ pub fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> Tok
                 token_identifier: identifier.to_string(),
                 token_amount: amount,
             },
-            // Derive prev_tx_hash from (identifier, amount) so distinct
-            // synthetic outputs get distinct (prev_tx_hash, vout) outpoints,
-            // matching how real on-chain outputs behave. Keeping the helper
-            // index-based would let two unrelated outputs share an outpoint
-            // and confuse the outpoint-keyed pool.
+            // Derive prev_tx_hash from (identifier, amount) so distinct synthetic outputs get
+            // distinct outpoints, matching real on-chain outputs (index-based would collide).
             prev_tx_hash: format!("tx-hash-{}-{}", identifier, amount),
             prev_tx_vout: 0,
         })
@@ -1643,7 +1640,6 @@ pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputSto
         .await
         .unwrap();
 
-    // Remove the amount-200 output by its outpoint
     store
         .update_token_outputs(&[("tx-hash-token-1-200".to_string(), 0)], None)
         .await
@@ -1654,7 +1650,6 @@ pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputSto
         .await
         .unwrap();
     assert_eq!(stored.available.len(), 2);
-    // Remaining outputs should be amounts 100 and 300
     let mut amounts: Vec<u128> = stored
         .available
         .iter()
@@ -1665,14 +1660,12 @@ pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputSto
 }
 
 pub async fn test_remove_token_outputs_prevents_refresh_re_add(store: &dyn TokenOutputStore) {
-    // Insert outputs
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
         .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
-    // Remove the amount-100 output by its outpoint
     store
         .update_token_outputs(&[("tx-hash-token-1-100".to_string(), 0)], None)
         .await

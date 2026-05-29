@@ -30,11 +30,9 @@ struct StoredTokenOutput {
     added_at: SystemTime,
 }
 
-/// Canonical key for an on-chain output: its parent transaction hash + vout.
-/// Used instead of the server-assigned `TokenOutput.id` because the v3
-/// broadcast response (`FinalTokenOutput`) carries no id, so locally-inserted
-/// outputs and refresh-fetched outputs would otherwise dedup against different
-/// strings and the same output could appear twice in the pool.
+/// Canonical key for an on-chain output: parent tx hash + vout. Used instead of the server
+/// `TokenOutput.id` because the v3 broadcast response (`FinalTokenOutput`) carries no id, so
+/// id-keyed dedup would let the same output appear twice in the pool.
 type OutPoint = (String, u32);
 
 #[derive(Default)]

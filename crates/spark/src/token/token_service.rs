@@ -834,18 +834,15 @@ impl TokenService {
             .broadcast_transaction(broadcast_req)
             .await?;
 
-        // The transaction is broadcast past this point, so the reserved inputs are spent on the
-        // operators. Errors must not propagate from here on: with_reserved_token_outputs cancels
-        // the reservation on Err, which would wrongly return the already-spent outputs to the
-        // available pool. Surface inconsistencies via logs and fall back to values that let the
-        // next sync reconcile.
+        // Broadcast succeeded, so the reserved inputs are spent. Errors must not propagate past
+        // here: with_reserved_token_outputs cancels the reservation on Err, wrongly returning the
+        // spent outputs to the available pool. Log and continue instead.
         let commit_status = broadcast_response.commit_status();
         let commit_progress = broadcast_response.commit_progress;
         let final_token_transaction = broadcast_response.final_token_transaction;
 
-        // Derive the final txid and outputs from the operator response, which is authoritative now
-        // that the transaction is broadcast. Fall back to the partial txid if the response is
-        // malformed so a parsing failure never rolls back the reservation.
+        // Fall back to the partial txid if the response is malformed, so a parse failure can't roll
+        // back the now-broadcast reservation.
         let final_outputs = match final_token_transaction {
             Some(final_token_transaction) => spark_token_primitives::hash_final_token_transaction(
                 final_token_transaction.encode_to_vec(),
@@ -902,8 +899,7 @@ impl TokenService {
             }
         };
 
-        // Sanity-check the operator outputs against what we requested. After broadcast these are
-        // authoritative, so a mismatch is logged rather than propagated.
+        // Operator outputs are authoritative post-broadcast; log mismatches rather than propagate.
         if outputs.len() != receiver_outputs.len() {
             warn!(
                 "broadcast returned {} final outputs but expected {} for tx {txid}",
@@ -927,7 +923,6 @@ impl TokenService {
         }
 
         if let Some(observer) = &self.transfer_observer {
-            // Already broadcast, so a failed observer notification must not propagate either.
             if let Err(e) = observer.after_send_token(&partial_txid, &txid).await {
                 warn!("after_send_token observer failed for tx {txid}: {e:?}");
             }
