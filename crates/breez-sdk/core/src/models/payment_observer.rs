@@ -64,16 +64,21 @@ impl From<PaymentObserverError> for TransferObserverError {
     }
 }
 
-/// This interface is used to observe outgoing payments before Lightning, Spark and onchain Bitcoin payments.
-/// If the implementation returns an error, the payment is cancelled.
+/// This interface is used to observe outgoing Lightning, Spark, onchain Bitcoin and token payments.
+///
+/// `before_send` is called before a payment is made; if the implementation returns an error the
+/// payment is cancelled. `after_send` is called after a token payment has been broadcast to report
+/// its final payment id; it cannot cancel the payment and any error it returns is ignored.
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait PaymentObserver: Send + Sync {
-    /// Called before Lightning, Spark or onchain Bitcoin payments are made
+    /// Called before Lightning, Spark, onchain Bitcoin or token payments are made
     async fn before_send(
         &self,
         payments: Vec<ProvisionalPayment>,
     ) -> Result<(), PaymentObserverError>;
+    /// Called after a token payment has been broadcast, mapping the partial tx id reported by
+    /// `before_send` to the final tx id
     async fn after_send(&self, updates: Vec<PaymentIdUpdate>) -> Result<(), PaymentObserverError>;
 }
 

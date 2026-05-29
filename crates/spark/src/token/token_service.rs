@@ -853,7 +853,12 @@ impl TokenService {
         let txid = hex::encode(&final_tx_hash);
 
         if let Some(observer) = &self.transfer_observer {
-            observer.after_send_token(&partial_txid, &txid).await?;
+            // The transaction is already broadcast at this point, so failing to notify the
+            // observer must not propagate: returning an error here would cancel the reservation
+            // and wrongly return the already-spent outputs to the available pool.
+            if let Err(e) = observer.after_send_token(&partial_txid, &txid).await {
+                warn!("after_send_token observer failed for tx {txid}: {e:?}");
+            }
         }
 
         let is_finalized = match commit_status {
