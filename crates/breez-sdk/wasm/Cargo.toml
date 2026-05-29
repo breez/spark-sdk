@@ -31,7 +31,7 @@ crate-type = ["cdylib"]
 [dependencies]
 async-trait.workspace = true
 bitcoin.workspace = true
-breez-sdk-spark = { workspace = true, features = ["passkey"] }
+breez-sdk-spark = { workspace = true, features = ["passkey", "postgres"] }
 js-sys.workspace = true
 macros.workspace = true
 platform-utils.workspace = true
@@ -48,5 +48,5 @@ web-sys.workspace = true
 
 [dev-dependencies]
 wasm-bindgen-test.workspace = true
-breez-sdk-spark = { workspace = true, features = ["test-utils"] }
+breez-sdk-spark = { workspace = true, features = ["test-utils", "postgres"] }
 pg-wasm.workspace = true

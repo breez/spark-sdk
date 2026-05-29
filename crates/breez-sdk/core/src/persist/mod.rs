@@ -277,7 +277,6 @@ pub struct PaymentMetadata {
     pub conversion_status: Option<ConversionStatus>,
 }
 
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub(crate) fn parse_payment_status(value: &str) -> Result<PaymentStatus, StorageError> {
     value
         .parse()
