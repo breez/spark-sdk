@@ -119,15 +119,15 @@ enum Commands {
     /// Check Flutter package (generate bindings and build)
     FlutterCheck {},
 
-    /// Sync the canonical CredentialManagerPrfCore.kt into the Flutter
-    /// and React Native Android plugin trees.
+    /// Sync the canonical native passkey cores into the Flutter and
+    /// React Native plugin trees.
     ///
-    /// The canonical file lives at
-    /// crates/breez-sdk/bindings/langs/shared/android-passkey/.
-    /// Pub/npm packaging strips cross-repo paths, so Flutter and RN
-    /// consume a committed copy instead of a gradle srcDirs share.
-    /// Run this after editing the canonical file; CI runs it with
-    /// `--check` and fails if any copy drifts.
+    /// Canonical sources: the Android core (CredentialManagerPrfCore.kt)
+    /// in shared/android-passkey, and the iOS core (PasskeyAssertionCore.swift
+    /// plus the ObjC PRF helper) in the Swift binding. Pub/npm packaging
+    /// strips cross-repo paths, so Flutter and RN consume committed copies
+    /// instead of a gradle srcDirs / SPM path share. Run this after editing
+    /// a canonical file; CI runs it with `--check` and fails on drift.
     SyncPasskeyCore {
         /// Verify the copies are up to date without writing. Exit
         /// non-zero if any copy differs from the canonical source.
@@ -187,12 +187,12 @@ const PASSKEY_SYNC_FILES: &[(&str, &[&str])] = &[
     ),
     (
         // PasskeyAssertionCore: WebAuthn / PRF / dual-salt logic on iOS+macOS.
-        // The upstream Swift target ships the same file in its own Sources
-        // tree so SPM can compile PasskeyProvider.swift against it without
-        // editing Package.swift.
-        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/PasskeyAssertionCore.swift",
+        // Canonical is the Swift binding's own copy: SPM publishes source, so
+        // the file must live in the Swift target's tree to compile there.
+        // Flutter and React Native consume verbatim copies (pub/npm strip
+        // cross-repo paths, same constraint as the Android core above).
+        "crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/PasskeyAssertionCore.swift",
         &[
-            "crates/breez-sdk/bindings/langs/swift/Sources/BreezSdkSpark/PasskeyAssertionCore.swift",
             "packages/flutter/ios/Classes/PasskeyAssertionCore.swift",
             "packages/react-native/ios/PasskeyAssertionCore.swift",
         ],
@@ -200,20 +200,18 @@ const PASSKEY_SYNC_FILES: &[(&str, &[&str])] = &[
     (
         // PasskeyPRFHelper.h: ObjC bridge header for NS_REFINED_FOR_SWIFT
         // PRF types. Flat layout (no `include/`) so the same file works
-        // in the upstream SPM target (publicHeadersPath: ".") and the
-        // Flutter / React Native pods (which package files at the root).
-        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.h",
+        // in the Swift target (publicHeadersPath: ".") and the Flutter /
+        // React Native pods (which package files at the root).
+        "crates/breez-sdk/bindings/langs/swift/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.h",
         &[
-            "crates/breez-sdk/bindings/langs/swift/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.h",
             "packages/flutter/ios/Classes/PasskeyPRFHelper.h",
             "packages/react-native/ios/PasskeyPRFHelper.h",
         ],
     ),
     (
         // PasskeyPRFHelper.m: ObjC implementation matching the flat header layout.
-        "crates/breez-sdk/bindings/langs/shared/ios-passkey/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.m",
+        "crates/breez-sdk/bindings/langs/swift/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.m",
         &[
-            "crates/breez-sdk/bindings/langs/swift/Sources/PasskeyPRFHelperObjC/PasskeyPRFHelper.m",
             "packages/flutter/ios/Classes/PasskeyPRFHelper.m",
             "packages/react-native/ios/PasskeyPRFHelper.m",
         ],
