@@ -9,8 +9,29 @@ use tracing_subscriber::{
 
 use crate::{LogEntry, Logger, SdkError};
 
-const DEFAULT_FILTER: &str = "debug,h2=warn,rustls=warn,rustyline=warn,hyper=warn,hyper_util=warn,\
-     tower=warn,Connection=warn,tonic=warn";
+const DEFAULT_FILTER: &str = concat!(
+    "info",
+    // First-party crates: keep debug logging.
+    ",breez_sdk_spark=debug",
+    ",breez_sdk_common=debug",
+    ",breez_sdk_spark_wasm=debug",
+    ",breez_sdk_spark_bindings=debug",
+    ",spark=debug",
+    ",spark_wallet=debug",
+    ",spark_postgres=debug",
+    ",spark_mysql=debug",
+    ",flashnet=debug",
+    ",platform_utils=debug",
+    // Noisy third-party crates: silence below warn.
+    ",h2=warn",
+    ",rustls=warn",
+    ",rustyline=warn",
+    ",hyper=warn",
+    ",hyper_util=warn",
+    ",tower=warn",
+    ",Connection=warn",
+    ",tonic=warn",
+);
 
 pub(crate) struct GlobalSdkLogger {
     /// Optional external log listener, that can receive a stream of log statements
