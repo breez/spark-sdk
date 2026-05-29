@@ -126,6 +126,9 @@ pub fn sighash_from_multi_input_tx(
 /// server-side FROST aggregation). Our flows use `TapSighashType::Default`,
 /// so the witness signature must be exactly 64 bytes;
 /// `schnorr::Signature::from_slice` rejects anything else.
+///
+/// `verifying_public_key` is the untweaked FROST group key; the signature
+/// verifies against the BIP-341 taproot output key with an empty script tree.
 pub fn verify_finalized_taproot_signature(
     bitcoin_service: &BitcoinService,
     signed_tx_bytes: &[u8],
@@ -148,8 +151,8 @@ pub fn verify_finalized_taproot_signature(
         BitcoinError::InvalidSignature(format!("witness is not a 64-byte BIP-340 signature: {e}"))
     })?;
     let msg = Message::from_digest(*sighash_bytes);
-    let (xonly, _) = verifying_public_key.x_only_public_key();
-    if !bitcoin_service.is_valid_schnorr_signature(&signature, &msg, &xonly) {
+    let taproot_output_key = bitcoin_service.compute_taproot_key_no_script(verifying_public_key);
+    if !bitcoin_service.is_valid_schnorr_signature(&signature, &msg, &taproot_output_key) {
         return Err(BitcoinError::InvalidSignature(
             "operator-aggregated signature does not verify against expected sighash".to_string(),
         ));
