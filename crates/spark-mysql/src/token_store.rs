@@ -499,8 +499,8 @@ impl TokenOutputStore for MysqlTokenStore {
         outputs_to_add: Option<&TokenOutputs>,
     ) -> Result<(), TokenOutputServiceError> {
         let mut conn = self.pool.get_conn().await.map_err(map_err)?;
-        // Serialize against `set_tokens_outputs`: a concurrent refresh could otherwise leave
-        // duplicate (id, outpoint) rows for these outpoints, triggering TOKEN_RULES_VIOLATION.
+        // Serialize against the other token-store mutators (refresh, reservation, finalization),
+        // which take the same per-user advisory lock.
         self.acquire_write_lock(&mut conn).await?;
         let result = self
             .update_token_outputs_inner(&mut conn, outputs_to_remove, outputs_to_add)
@@ -849,31 +849,6 @@ impl MysqlTokenStore {
         .await
         .map_err(map_err)?;
 
-        // The refresh is authoritative for its outpoints, so also drop any non-reserved row whose
-        // outpoint is incoming. This clears an inline-inserted synthetic-id row that would otherwise
-        // duplicate the operator-id row and trigger TOKEN_RULES_VIOLATION.
-        let total_incoming: usize = token_outputs.iter().map(|to| to.outputs.len()).sum();
-        if total_incoming > 0 {
-            let pair_placeholders = vec!["(?, ?)"; total_incoming].join(", ");
-            let sql = format!(
-                "DELETE FROM brz_token_outputs \
-                 WHERE user_id = ? AND reservation_id IS NULL \
-                   AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
-            );
-            let mut params: Vec<Value> =
-                Vec::with_capacity(total_incoming.saturating_mul(2).saturating_add(1));
-            params.push(Value::from(self.identity.clone()));
-            for to in token_outputs {
-                for o in &to.outputs {
-                    params.push(Value::from(o.prev_tx_hash.clone()));
-                    params.push(Value::from(o.prev_tx_vout as i32));
-                }
-            }
-            tx.exec_drop(&sql, Params::Positional(params))
-                .await
-                .map_err(map_err)?;
-        }
-
         let incoming_output_ids: HashSet<String> = token_outputs
             .iter()
             .flat_map(|to| to.outputs.iter().map(|o| o.output.id.clone()))
@@ -1071,11 +1046,6 @@ impl MysqlTokenStore {
             .map(Self::output_from_row)
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Dedup by outpoint: an inline insert (synthetic id) racing a refresh (operator id) can
-        // leave two rows for one outpoint, which would spend as duplicate inputs (TOKEN_RULES_VIOLATION).
-        let mut seen: HashSet<(String, u32)> = HashSet::new();
-        outputs.retain(|o| seen.insert((o.prev_tx_hash.clone(), o.prev_tx_vout)));
-
         if let Some(ref preferred) = preferred_outputs {
             let preferred_ids: HashSet<&str> =
                 preferred.iter().map(|p| p.output.id.as_str()).collect();
@@ -1258,23 +1228,7 @@ impl MysqlTokenStore {
                     .map_err(map_err)?;
             }
 
-            // Skip outpoints already present (e.g. from a concurrent refresh that landed an
-            // operator-id row) so we don't add a duplicate synthetic-id row for the same outpoint.
-            let existing_outpoints: HashSet<(String, i32)> = tx
-                .exec(
-                    "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs WHERE user_id = ?",
-                    (self.identity.clone(),),
-                )
-                .await
-                .map_err(map_err)?
-                .into_iter()
-                .collect();
-
             for output in &token_outputs.outputs {
-                let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
-                if existing_outpoints.contains(&outpoint) {
-                    continue;
-                }
                 self.insert_single_output(&mut tx, &token_outputs.metadata.identifier, output)
                     .await?;
             }

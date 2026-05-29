@@ -314,31 +314,6 @@ impl TokenOutputStore for PostgresTokenStore {
         .await
         .map_err(map_err)?;
 
-        // The refresh is authoritative for its outpoints, so also drop any non-reserved row whose
-        // outpoint is incoming. This clears an inline-inserted synthetic-id row that would otherwise
-        // duplicate the operator-id row and trigger TOKEN_RULES_VIOLATION.
-        let incoming_tx_hashes: Vec<String> = token_outputs
-            .iter()
-            .flat_map(|to| to.outputs.iter().map(|o| o.prev_tx_hash.clone()))
-            .collect();
-        let incoming_vouts: Vec<i32> = token_outputs
-            .iter()
-            .flat_map(|to| to.outputs.iter().map(|o| o.prev_tx_vout as i32))
-            .collect();
-        if !incoming_tx_hashes.is_empty() {
-            tx.execute(
-                "DELETE FROM brz_token_outputs \
-                 WHERE user_id = $1 \
-                   AND reservation_id IS NULL \
-                   AND (prev_tx_hash, prev_tx_vout) IN ( \
-                     SELECT * FROM UNNEST($2::text[], $3::int[]) \
-                   )",
-                &[&self.identity, &incoming_tx_hashes, &incoming_vouts],
-            )
-            .await
-            .map_err(map_err)?;
-        }
-
         // Build a set of all incoming output IDs for reconciliation
         let incoming_output_ids: HashSet<String> = token_outputs
             .iter()
@@ -669,8 +644,8 @@ impl TokenOutputStore for PostgresTokenStore {
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
 
-        // Serialize against `set_tokens_outputs`: a concurrent refresh could otherwise leave
-        // duplicate (id, outpoint) rows for these outpoints, triggering TOKEN_RULES_VIOLATION.
+        // Serialize against the other token-store mutators (refresh, reservation, finalization),
+        // which take the same per-user advisory lock.
         self.acquire_write_lock(&tx).await?;
 
         // 1. Remove spent outputs and mark them as spent.
@@ -725,25 +700,7 @@ impl TokenOutputStore for PostgresTokenStore {
                 .map_err(map_err)?;
             }
 
-            // Skip outpoints already present (e.g. from a concurrent refresh that landed an
-            // operator-id row) so we don't add a duplicate synthetic-id row for the same outpoint.
-            let existing_outpoints: HashSet<(String, i32)> = {
-                let rows = tx
-                    .query(
-                        "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs \
-                         WHERE user_id = $1",
-                        &[&self.identity],
-                    )
-                    .await
-                    .map_err(map_err)?;
-                rows.iter().map(|r| (r.get(0), r.get(1))).collect()
-            };
-
             for output in &token_outputs.outputs {
-                let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
-                if existing_outpoints.contains(&outpoint) {
-                    continue;
-                }
                 self.insert_single_output(&tx, &token_outputs.metadata.identifier, output)
                     .await?;
             }
@@ -819,11 +776,6 @@ impl TokenOutputStore for PostgresTokenStore {
             .iter()
             .map(Self::output_from_row)
             .collect::<Result<Vec<_>, _>>()?;
-
-        // Dedup by outpoint: an inline insert (synthetic id) racing a refresh (operator id) can
-        // leave two rows for one outpoint, which would spend as duplicate inputs (TOKEN_RULES_VIOLATION).
-        let mut seen: HashSet<(String, u32)> = HashSet::new();
-        outputs.retain(|o| seen.insert((o.prev_tx_hash.clone(), o.prev_tx_vout)));
 
         // Filter by preferred if provided
         if let Some(ref preferred) = preferred_outputs {
