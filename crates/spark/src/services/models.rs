@@ -727,9 +727,8 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
     fn try_from(
         (output, network): (operator_rpc::spark_token::TokenOutput, Network),
     ) -> Result<Self, Self::Error> {
-        let id = output
-            .id
-            .ok_or_else(|| ServiceError::Generic("Missing token output id".to_string()))?;
+        // The operator-assigned `id` is legacy and ignored; the caller sets `id` to the output's
+        // outpoint (txHash:vout) instead, matching how outputs are identified everywhere else.
         let owner_public_key = PublicKey::from_slice(&output.owner_public_key)
             .map_err(|_| ServiceError::Generic("Invalid owner public key".to_string()))?;
         let revocation_commitment =
@@ -764,7 +763,8 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
         );
 
         Ok(TokenOutput {
-            id,
+            // Set by the caller from the outpoint (txHash:vout).
+            id: String::new(),
             owner_public_key,
             revocation_commitment,
             withdraw_bond_sats,
@@ -825,9 +825,10 @@ impl
         let output = output_with_prev_tx_data
             .output
             .ok_or_else(|| ServiceError::Generic("Missing token output".to_string()))?;
-        let output = TokenOutput::try_from((output, network))?;
+        let mut output = TokenOutput::try_from((output, network))?;
         let prev_tx_hash = hex::encode(output_with_prev_tx_data.previous_transaction_hash);
         let prev_tx_vout = output_with_prev_tx_data.previous_transaction_vout;
+        output.id = format!("{prev_tx_hash}:{prev_tx_vout}");
         Ok(TokenOutputWithPrevOut {
             output,
             prev_tx_hash,
@@ -862,8 +863,13 @@ impl TryFrom<(operator_rpc::spark_token::TokenTransaction, Network)> for TokenTr
         let outputs = token_transaction
             .token_outputs
             .into_iter()
-            .map(|output| (output, network).try_into())
-            .collect::<Result<Vec<TokenOutput>, _>>()?;
+            .enumerate()
+            .map(|(vout, output)| {
+                let mut output: TokenOutput = (output, network).try_into()?;
+                output.id = format!("{hash}:{vout}");
+                Ok(output)
+            })
+            .collect::<Result<Vec<TokenOutput>, ServiceError>>()?;
 
         let status = TokenTransactionStatus::Unknown;
 
@@ -924,8 +930,13 @@ impl
         let outputs = token_transaction
             .token_outputs
             .into_iter()
-            .map(|output| (output, network).try_into())
-            .collect::<Result<Vec<TokenOutput>, _>>()?;
+            .enumerate()
+            .map(|(vout, output)| {
+                let mut output: TokenOutput = (output, network).try_into()?;
+                output.id = format!("{hash}:{vout}");
+                Ok(output)
+            })
+            .collect::<Result<Vec<TokenOutput>, ServiceError>>()?;
 
         let status =
             operator_rpc::spark_token::TokenTransactionStatus::try_from(transaction.status)
@@ -1498,7 +1509,15 @@ mod tests {
         ))
         .unwrap();
 
-        assert_eq!(output_with_prev_out.output.id, token_id);
+        // id is derived from the outpoint (txHash:vout), not the operator-sent output.id ("123").
+        assert_eq!(
+            output_with_prev_out.output.id,
+            format!(
+                "{}:{}",
+                hex::encode(&previous_transaction_hash),
+                previous_transaction_vout
+            )
+        );
         assert_eq!(
             output_with_prev_out.output.owner_public_key,
             owner_public_key
