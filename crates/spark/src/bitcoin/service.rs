@@ -120,3 +120,39 @@ pub fn sighash_from_multi_input_tx(
         )?,
     )
 }
+
+/// Verifies the aggregated Schnorr key-path signature attached to a
+/// finalized taproot transaction (e.g. one returned by an operator after
+/// server-side FROST aggregation). Our flows use `TapSighashType::Default`,
+/// so the witness signature must be exactly 64 bytes;
+/// `schnorr::Signature::from_slice` rejects anything else.
+pub fn verify_finalized_taproot_signature(
+    bitcoin_service: &BitcoinService,
+    signed_tx_bytes: &[u8],
+    sighash_bytes: &[u8; 32],
+    verifying_public_key: &PublicKey,
+) -> Result<(), BitcoinError> {
+    let tx: Transaction = bitcoin::consensus::deserialize(signed_tx_bytes).map_err(|e| {
+        BitcoinError::InvalidTransaction(format!("failed to decode signed tx: {e}"))
+    })?;
+    let witness_sig = tx
+        .input
+        .first()
+        .ok_or_else(|| BitcoinError::InvalidTransaction("signed tx has no inputs".to_string()))?
+        .witness
+        .nth(0)
+        .ok_or_else(|| {
+            BitcoinError::InvalidTransaction("signed tx input has empty witness".to_string())
+        })?;
+    let signature = schnorr::Signature::from_slice(witness_sig).map_err(|e| {
+        BitcoinError::InvalidSignature(format!("witness is not a 64-byte BIP-340 signature: {e}"))
+    })?;
+    let msg = Message::from_digest(*sighash_bytes);
+    let (xonly, _) = verifying_public_key.x_only_public_key();
+    if !bitcoin_service.is_valid_schnorr_signature(&signature, &msg, &xonly) {
+        return Err(BitcoinError::InvalidSignature(
+            "operator-aggregated signature does not verify against expected sighash".to_string(),
+        ));
+    }
+    Ok(())
+}

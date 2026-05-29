@@ -13,7 +13,7 @@ use tracing::{error, trace};
 
 use crate::{
     Network,
-    bitcoin::{BitcoinService, sighash_from_tx},
+    bitcoin::{BitcoinService, sighash_from_tx, verify_finalized_taproot_signature},
     operator::{
         OperatorPool,
         rpc::{self as operator_rpc, spark::HashVariant},
@@ -737,6 +737,37 @@ impl DepositService {
                 "finalize_deposit_tree_creation returned no root node".to_string(),
             )
         })?;
+
+        // Verify the operator-returned root node matches what we signed for.
+        // The fused `start_deposit_tree_creation` flow returned signature shares
+        // that we aggregated locally; the package flow aggregates server-side,
+        // so we re-derive the same security guarantees here:
+        //  1) the verifying key we used really is the tree's verifying key,
+        //  2) each returned transaction carries a valid Schnorr signature
+        //     under that key for the sighashes we computed.
+        let returned_verifying_key = PublicKey::from_slice(&root_node.verifying_public_key)
+            .map_err(|_| ServiceError::InvalidVerifyingKey)?;
+        if &returned_verifying_key != verifying_public_key {
+            return Err(ServiceError::InvalidVerifyingKey);
+        }
+        verify_finalized_taproot_signature(
+            &self.bitcoin_service,
+            &root_node.node_tx,
+            cpfp_root_sighash.as_byte_array(),
+            verifying_public_key,
+        )?;
+        verify_finalized_taproot_signature(
+            &self.bitcoin_service,
+            &root_node.refund_tx,
+            cpfp_refund_sighash.as_byte_array(),
+            verifying_public_key,
+        )?;
+        verify_finalized_taproot_signature(
+            &self.bitcoin_service,
+            &root_node.direct_from_cpfp_refund_tx,
+            direct_from_cpfp_refund_sighash.as_byte_array(),
+            verifying_public_key,
+        )?;
 
         Ok(vec![root_node.try_into()?])
     }

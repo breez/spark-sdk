@@ -9,4 +9,6 @@ pub enum BitcoinError {
     Taproot(#[from] TaprootError),
     #[error("invalid transaction: {0}")]
     InvalidTransaction(String),
+    #[error("invalid signature: {0}")]
+    InvalidSignature(String),
 }
