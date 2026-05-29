@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use deadpool_postgres::Pool;
+use crate::deadpool_postgres::Pool;
 use macros::async_trait;
 use platform_utils::time::SystemTime;
 use spark_wallet::{
@@ -241,7 +241,8 @@ impl TokenOutputStore for PostgresTokenStore {
         refresh_started_at: SystemTime,
     ) -> Result<(), TokenOutputServiceError> {
         // Convert SystemTime to chrono for PostgreSQL
-        let refresh_timestamp: chrono::DateTime<chrono::Utc> = refresh_started_at.into();
+        let refresh_timestamp: chrono::DateTime<chrono::Utc> =
+            crate::time_compat::system_time_to_datetime(refresh_started_at);
 
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
@@ -1037,7 +1038,7 @@ impl TokenOutputStore for PostgresTokenStore {
             .await
             .map_err(map_err)?;
         let now: chrono::DateTime<chrono::Utc> = row.get(0);
-        Ok(now.into())
+        Ok(crate::time_compat::datetime_to_system_time(now))
     }
 }
 
@@ -1195,7 +1196,7 @@ impl PostgresTokenStore {
     /// block each other. Same-tenant writes still serialize on the same lock.
     async fn acquire_write_lock(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
     ) -> Result<(), TokenOutputServiceError> {
         tx.execute("SELECT pg_advisory_xact_lock($1)", &[&self.lock_key])
             .await
@@ -1207,7 +1208,7 @@ impl PostgresTokenStore {
     #[allow(clippy::cast_possible_wrap)]
     async fn insert_single_output(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
         token_identifier: &str,
         output: &TokenOutputWithPrevOut,
     ) -> Result<(), TokenOutputServiceError> {
@@ -1240,7 +1241,7 @@ impl PostgresTokenStore {
     #[allow(clippy::cast_possible_wrap)]
     async fn upsert_metadata(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
         metadata: &TokenMetadata,
     ) -> Result<(), TokenOutputServiceError> {
         tx.execute(
@@ -1281,7 +1282,7 @@ impl PostgresTokenStore {
     /// would null `user_id` (NOT NULL).
     async fn cleanup_stale_reservations(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
     ) -> Result<u64, TokenOutputServiceError> {
         // Release outputs still pointing at any soon-to-be-deleted reservation.
         tx.execute(
@@ -1317,7 +1318,7 @@ impl PostgresTokenStore {
     /// Cleans up spent markers older than the cleanup threshold relative to refresh timestamp.
     async fn cleanup_spent_markers(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
         refresh_timestamp: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), TokenOutputServiceError> {
         let threshold = chrono::Duration::milliseconds(SPENT_MARKER_CLEANUP_THRESHOLD_MS);
@@ -1338,7 +1339,7 @@ impl PostgresTokenStore {
     /// Parses a `TokenMetadata` from a database row.
     #[allow(clippy::cast_sign_loss)]
     fn metadata_from_row(
-        row: &tokio_postgres::Row,
+        row: &crate::tokio_postgres::Row,
     ) -> Result<TokenMetadata, TokenOutputServiceError> {
         let identifier: String = row.get("identifier");
         let issuer_pk_str: String = row.get("issuer_public_key");
@@ -1366,7 +1367,7 @@ impl PostgresTokenStore {
     /// Parses a `TokenOutputWithPrevOut` from a database row.
     #[allow(clippy::cast_sign_loss)]
     fn output_from_row(
-        row: &tokio_postgres::Row,
+        row: &crate::tokio_postgres::Row,
     ) -> Result<TokenOutputWithPrevOut, TokenOutputServiceError> {
         let owner_pk_str: String = row.get("owner_public_key");
         let revocation_commitment: String = row.get("revocation_commitment");

@@ -1,22 +1,46 @@
 //! `PostgreSQL` connection pool creation and TLS configuration.
-
-use std::sync::Arc;
-use std::time::Duration;
-
-use deadpool_postgres::Pool;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::ring::default_provider;
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime, pem::PemObject};
-use rustls::server::ParsedCertificate;
-use rustls::{
-    ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme,
-};
-use tokio_postgres::Config as PgConfig;
-use tokio_postgres_rustls::MakeRustlsConnect;
-use webpki_roots::TLS_SERVER_ROOTS;
+//!
+//! On native targets this builds a `deadpool_postgres::Pool` backed by
+//! `tokio_postgres` with rustls TLS. On `wasm32-unknown-unknown` the
+//! pool is a `pg_wasm::pool::Pool` whose TLS is handled by node-postgres
+//! on the JS side — the rustls/webpki_roots stack drops out entirely.
 
 use crate::config::PostgresStorageConfig;
 use crate::error::PostgresError;
+
+// ── Native-only imports (rustls + tokio-postgres infrastructure) ─────────────
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use {
+    crate::deadpool_postgres::Pool,
+    crate::tokio_postgres::Config as PgConfig,
+    rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    rustls::crypto::ring::default_provider,
+    rustls::pki_types::{pem::PemObject, CertificateDer, ServerName, UnixTime},
+    rustls::server::ParsedCertificate,
+    rustls::{
+        ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme,
+    },
+    std::sync::Arc,
+    std::time::Duration,
+    tokio_postgres_rustls::MakeRustlsConnect,
+    webpki_roots::TLS_SERVER_ROOTS,
+};
+
+// ── Wasm-only re-export ──────────────────────────────────────────────────────
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+use crate::deadpool_postgres::Pool;
+
+// ── Native (tokio-postgres + rustls) implementation ──────────────────────────
+//
+// Everything from here to the close of `create_pool` is rustls/
+// deadpool-postgres-specific. On wasm the pool is built via
+// `pg_wasm::Pool::new` below and TLS is handled by node-postgres.
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+mod native {
+use super::*;
 
 /// Certificate verifier that accepts any server certificate.
 /// This is used for `sslmode=require` which only ensures encryption,
@@ -276,8 +300,8 @@ fn parse_sslmode_from_connection_string(conn_str: &str) -> SslModeExt {
 }
 
 /// Applies pool configuration options from `PostgresStorageConfig` to a deadpool-postgres config.
-fn apply_pool_config(config: &PostgresStorageConfig) -> deadpool_postgres::PoolConfig {
-    deadpool_postgres::PoolConfig {
+fn apply_pool_config(config: &PostgresStorageConfig) -> crate::deadpool_postgres::PoolConfig {
+    crate::deadpool_postgres::PoolConfig {
         max_size: config.max_pool_size as usize,
         timeouts: deadpool::managed::Timeouts {
             wait: config.wait_timeout_secs.map(Duration::from_secs),
@@ -328,7 +352,7 @@ pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError
 
     match ssl_mode {
         SslModeExt::Disable => {
-            let manager = deadpool_postgres::Manager::new(pg_config, tokio_postgres::NoTls);
+            let manager = crate::deadpool_postgres::Manager::new(pg_config, crate::tokio_postgres::NoTls);
             Pool::builder(manager)
                 .config(pool_config)
                 .runtime(deadpool::Runtime::Tokio1)
@@ -338,7 +362,7 @@ pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError
         SslModeExt::Prefer | SslModeExt::Require => {
             let tls_config = make_tls_config()?;
             let tls = MakeRustlsConnect::new(tls_config);
-            let manager = deadpool_postgres::Manager::new(pg_config, tls);
+            let manager = crate::deadpool_postgres::Manager::new(pg_config, tls);
             Pool::builder(manager)
                 .config(pool_config)
                 .runtime(deadpool::Runtime::Tokio1)
@@ -348,7 +372,7 @@ pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError
         SslModeExt::VerifyCa => {
             let tls_config = make_tls_config_verifying(false, config.root_ca_pem.as_deref())?;
             let tls = MakeRustlsConnect::new(tls_config);
-            let manager = deadpool_postgres::Manager::new(pg_config, tls);
+            let manager = crate::deadpool_postgres::Manager::new(pg_config, tls);
             Pool::builder(manager)
                 .config(pool_config)
                 .runtime(deadpool::Runtime::Tokio1)
@@ -358,7 +382,7 @@ pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError
         SslModeExt::VerifyFull => {
             let tls_config = make_tls_config_verifying(true, config.root_ca_pem.as_deref())?;
             let tls = MakeRustlsConnect::new(tls_config);
-            let manager = deadpool_postgres::Manager::new(pg_config, tls);
+            let manager = crate::deadpool_postgres::Manager::new(pg_config, tls);
             Pool::builder(manager)
                 .config(pool_config)
                 .runtime(deadpool::Runtime::Tokio1)
@@ -368,23 +392,51 @@ pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError
     }
 }
 
-/// Maps a deadpool-postgres pool error to `PostgresError`.
-/// Pool errors (exhaustion, timeout) are connection-related.
+} // end mod native
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use native::{create_pool, make_tls_config_verifying, parse_pem_to_root_store};
+
+// ── Wasm (pg-wasm) implementation ────────────────────────────────────────────
+
+/// Build a pg-wasm pool from the connection string. The pool sizing and
+/// timing knobs in `PostgresStorageConfig` aren't yet plumbed through to
+/// node-postgres on the JS side; v0 takes the JS pool's defaults.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError> {
+    Pool::new(&config.connection_string).map_err(|e| {
+        PostgresError::Initialization(format!("pg-wasm pool creation failed: {e}"))
+    })
+}
+
+/// PEM parsing is meaningless on wasm — TLS handshakes run inside
+/// node-postgres on the JS side. We keep the function in the public API
+/// for symmetry, but it bails out cleanly.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub fn parse_pem_to_root_store(_pem: &str) -> Result<(), PostgresError> {
+    Err(PostgresError::Initialization(
+        "parse_pem_to_root_store is not implemented on wasm; configure TLS via the connection string instead".to_string(),
+    ))
+}
+
+// ── Error-mapping helpers (both targets) ─────────────────────────────────────
+
+/// Maps a pool error to `PostgresError`. Pool errors (exhaustion,
+/// timeout) are connection-related.
 #[allow(clippy::needless_pass_by_value)]
-pub fn map_pool_error(e: deadpool_postgres::PoolError) -> PostgresError {
+pub fn map_pool_error(e: crate::deadpool_postgres::PoolError) -> PostgresError {
     PostgresError::Connection(e.to_string())
 }
 
-/// Maps a tokio-postgres database error to `PostgresError`.
-/// Connection-class errors (Class 08) and closed connections are mapped to `Connection`,
-/// other errors are mapped to `Database`.
+/// Maps a database error to `PostgresError`. Connection-class errors
+/// (SQLSTATE class `08`) and closed connections are mapped to
+/// `Connection`; everything else falls through to `Database`.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[allow(clippy::needless_pass_by_value)]
-pub fn map_db_error(e: tokio_postgres::Error) -> PostgresError {
-    // Check if the connection is closed
+pub fn map_db_error(e: crate::tokio_postgres::Error) -> PostgresError {
     if e.is_closed() {
         return PostgresError::Connection(e.to_string());
     }
-    // Check SQL state codes for connection errors (Class 08)
     if let Some(code) = e.code()
         && code.code().starts_with("08")
     {
@@ -393,13 +445,30 @@ pub fn map_db_error(e: tokio_postgres::Error) -> PostgresError {
     PostgresError::Database(e.to_string())
 }
 
-impl From<tokio_postgres::Error> for PostgresError {
-    fn from(value: tokio_postgres::Error) -> Self {
+/// Wasm equivalent: `pg_wasm::Error::code()` returns the SQLSTATE as a
+/// `&str` directly (rather than a `SqlState` newtype), so the
+/// classification logic is slightly different.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+#[allow(clippy::needless_pass_by_value)]
+pub fn map_db_error(e: crate::tokio_postgres::Error) -> PostgresError {
+    if e.is_closed() {
+        return PostgresError::Connection(e.to_string());
+    }
+    if let Some(code) = e.code()
+        && code.starts_with("08")
+    {
+        return PostgresError::Connection(e.to_string());
+    }
+    PostgresError::Database(e.to_string())
+}
+
+impl From<crate::tokio_postgres::Error> for PostgresError {
+    fn from(value: crate::tokio_postgres::Error) -> Self {
         map_db_error(value)
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(all(target_family = "wasm", target_os = "unknown"))))]
 mod tests {
     use super::*;
 

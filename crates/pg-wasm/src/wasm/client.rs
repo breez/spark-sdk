@@ -33,6 +33,12 @@ pub struct Client {
     inner: Rc<ClientInner>,
 }
 
+// Wasm is single-threaded and the JS handle is process-local. The same
+// `unsafe impl` pattern is used elsewhere in the SDK's wasm crate (e.g.
+// `WasmStorage`) for the same reason.
+unsafe impl Send for Client {}
+unsafe impl Sync for Client {}
+
 struct ClientInner {
     js: JsClient,
     stmt_cache: RefCell<StmtCache>,

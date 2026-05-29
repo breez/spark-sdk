@@ -14,6 +14,7 @@ pub mod error;
 pub mod migrations;
 pub mod pool;
 mod session_store;
+mod time_compat;
 mod token_store;
 mod tree_store;
 
@@ -34,5 +35,21 @@ pub use tree_store::{
 pub use migrations::{SchemaRenames, run_migrations};
 pub use pool::{create_pool, map_db_error, map_pool_error};
 
-pub use deadpool_postgres;
-pub use tokio_postgres;
+// ── Target-routed re-exports of the Postgres protocol crates ─────────────────
+//
+// Downstream callers (and our own internal modules) should refer to
+// `spark_postgres::tokio_postgres` and `spark_postgres::deadpool_postgres`
+// (or, internally, `crate::tokio_postgres` / `crate::deadpool_postgres`)
+// rather than the upstream crates by name. On native targets these are
+// the real crates; on `wasm32-unknown-unknown` they point at `pg-wasm`,
+// whose surface mirrors the subset of those crates that the SDK uses.
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use ::deadpool_postgres;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use ::tokio_postgres;
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub use pg_wasm::pool as deadpool_postgres;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+pub use pg_wasm as tokio_postgres;

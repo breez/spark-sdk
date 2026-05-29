@@ -13,25 +13,38 @@ workspace = true
 async-trait.workspace = true
 bitcoin.workspace = true
 chrono.workspace = true
-deadpool.workspace = true
-deadpool-postgres.workspace = true
 hex.workspace = true
 macros.workspace = true
 platform-utils.workspace = true
-rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 spark-wallet.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-tokio-postgres.workspace = true
-tokio-postgres-rustls.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+# Native: real tokio-postgres + deadpool-postgres + rustls-backed TLS.
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+deadpool.workspace = true
+deadpool-postgres.workspace = true
+rustls.workspace = true
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
 webpki-roots.workspace = true
 
+# Wasm: route the whole tokio-postgres/deadpool surface through pg-wasm,
+# which dispatches queries to a JS-side node-postgres pool. TLS is
+# handled by node-postgres on the JS side, so the rustls deps drop out.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+pg-wasm.workspace = true
+
 [dev-dependencies]
-rcgen.workspace = true
 spark-postgres = { workspace = true, features = ["test-utils"] }
+
+# Native-only dev deps — testcontainers + rcgen don't apply on wasm and
+# the test modules they back are gated to native targets.
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dev-dependencies]
+rcgen.workspace = true
 testcontainers.workspace = true
 testcontainers-modules = { workspace = true, features = ["postgres"] }

@@ -14,19 +14,38 @@
 //! every client minted by the pool — including lazily-created ones —
 //! picks up the binary DataRow parser automatically.
 
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
 use super::client::Client;
 use super::error::Error;
 use super::js::{create_pool, JsPool};
 
+/// Alias matching the `deadpool_postgres::PoolError` name. Pool errors
+/// in pg-wasm are surfaced through the unified `Error` type — there's no
+/// separate `PoolError` enum on wasm because the JS-side pool surfaces a
+/// single `JsValue` we wrap as `Error::Io`. Code that imports
+/// `pg_wasm::pool::PoolError` resolves to the same `Error` type so
+/// signatures match across the two backends.
+pub type PoolError = Error;
+
 /// Shared, multi-checkout connection pool. Cheap to clone (it's an `Rc`
 /// around a JS handle).
+///
+/// Pool is declared `Send + Sync` via `unsafe impl`s for parity with
+/// `deadpool_postgres::Pool`, which the SDK's storage layer stores
+/// inside `Send + Sync` structs. Wasm is single-threaded, the JS handle
+/// is process-local, and shared-ownership tracking happens through
+/// `Rc`'s non-atomic refcounter — all of which is sound here only
+/// because of the single-threaded environment. The same `unsafe impl`
+/// pattern is used by other wasm SDK types (e.g. `WasmStorage`).
 #[derive(Clone)]
 pub struct Pool {
     inner: Rc<JsPool>,
 }
+
+unsafe impl Send for Pool {}
+unsafe impl Sync for Pool {}
 
 impl Pool {
     /// Build a pool from a libpq connection string.
@@ -63,6 +82,9 @@ pub struct Object {
     client: Client,
 }
 
+unsafe impl Send for Object {}
+unsafe impl Sync for Object {}
+
 impl Deref for Object {
     type Target = Client;
 
@@ -71,9 +93,8 @@ impl Deref for Object {
     }
 }
 
-// We deliberately don't impl `DerefMut`. `Client::query` and friends
-// take `&self`; the only `&mut self` method is `Client::transaction`. If
-// the SDK needs `tx = pool.get().await?.transaction().await?`, we'll
-// add a passthrough `Object::transaction` then — the `&mut Client` it
-// requires is straightforward to expose from `Object` once a concrete
-// caller appears.
+impl DerefMut for Object {
+    fn deref_mut(&mut self) -> &mut Client {
+        &mut self.client
+    }
+}

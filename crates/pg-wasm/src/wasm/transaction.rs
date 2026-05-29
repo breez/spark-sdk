@@ -22,6 +22,9 @@ pub struct Transaction<'a> {
     finished: bool,
 }
 
+unsafe impl<'a> Send for Transaction<'a> {}
+unsafe impl<'a> Sync for Transaction<'a> {}
+
 impl<'a> Transaction<'a> {
     pub(crate) fn new(client: &'a Client) -> Self {
         Self {

@@ -4997,6 +4997,7 @@ dependencies = [
  "deadpool-postgres",
  "hex",
  "macros",
+ "pg-wasm",
  "platform-utils",
  "rcgen",
  "rustls",

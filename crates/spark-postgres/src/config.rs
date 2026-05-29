@@ -16,6 +16,9 @@ pub enum PoolQueueMode {
     Lifo,
 }
 
+// QueueMode conversions only apply to the native (deadpool-backed) pool;
+// the wasm pool ignores queue-mode configuration in v0.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 impl From<PoolQueueMode> for deadpool::managed::QueueMode {
     fn from(mode: PoolQueueMode) -> Self {
         match mode {
@@ -25,6 +28,7 @@ impl From<PoolQueueMode> for deadpool::managed::QueueMode {
     }
 }
 
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 impl From<deadpool::managed::QueueMode> for PoolQueueMode {
     fn from(mode: deadpool::managed::QueueMode) -> Self {
         match mode {
@@ -34,9 +38,12 @@ impl From<deadpool::managed::QueueMode> for PoolQueueMode {
     }
 }
 
-/// Returns the default pool configuration values from deadpool.
-fn default_pool_config() -> deadpool_postgres::PoolConfig {
-    deadpool_postgres::PoolConfig::default()
+/// Default pool configuration values from deadpool. Native targets read
+/// these from deadpool itself; wasm targets supply matching constants
+/// (since the JS pool has its own defaults that we don't surface yet).
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+fn default_pool_config() -> crate::deadpool_postgres::PoolConfig {
+    crate::deadpool_postgres::PoolConfig::default()
 }
 
 /// Configuration for `PostgreSQL` storage connection pool.
@@ -94,14 +101,31 @@ impl PostgresStorageConfig {
     /// - `queue_mode`: FIFO
     #[must_use]
     pub fn with_defaults(connection_string: impl Into<String>) -> Self {
-        let defaults = default_pool_config();
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        {
+            let defaults = default_pool_config();
+            return Self {
+                connection_string: connection_string.into(),
+                max_pool_size: u32::try_from(defaults.max_size).unwrap_or(u32::MAX),
+                wait_timeout_secs: defaults.timeouts.wait.map(|d| d.as_secs()),
+                create_timeout_secs: defaults.timeouts.create.map(|d| d.as_secs()),
+                recycle_timeout_secs: defaults.timeouts.recycle.map(|d| d.as_secs()),
+                queue_mode: defaults.queue_mode.into(),
+                root_ca_pem: None,
+                run_migration: true,
+            };
+        }
+        // Wasm: pg-wasm's pool ignores these knobs in v0 (node-postgres
+        // pool defaults: max=10, no explicit timeouts). We still surface
+        // the same struct shape so callers don't need cfgs.
+        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
         Self {
             connection_string: connection_string.into(),
-            max_pool_size: u32::try_from(defaults.max_size).unwrap_or(u32::MAX),
-            wait_timeout_secs: defaults.timeouts.wait.map(|d| d.as_secs()),
-            create_timeout_secs: defaults.timeouts.create.map(|d| d.as_secs()),
-            recycle_timeout_secs: defaults.timeouts.recycle.map(|d| d.as_secs()),
-            queue_mode: defaults.queue_mode.into(),
+            max_pool_size: 10,
+            wait_timeout_secs: None,
+            create_timeout_secs: None,
+            recycle_timeout_secs: None,
+            queue_mode: PoolQueueMode::Fifo,
             root_ca_pem: None,
             run_migration: true,
         }

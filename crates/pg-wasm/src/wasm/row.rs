@@ -40,6 +40,12 @@ pub struct Row {
     values: Vec<Option<Bytes>>,
 }
 
+// Single-threaded wasm; backing data (`Arc<[Column]>`, `Vec<Bytes>`) is
+// already plain Rust. Matches the `Send + Sync` expectation of code
+// written against `tokio_postgres::Row`.
+unsafe impl Send for Row {}
+unsafe impl Sync for Row {}
+
 impl Row {
     pub(crate) fn new(columns: Arc<[Column]>, values: Vec<Option<Bytes>>) -> Self {
         Self { columns, values }
