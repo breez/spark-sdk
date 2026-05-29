@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Setup logging
     let log_filter = std::env::var("SPARK_LOG_FILTER")
-        .unwrap_or_else(|_| "spark_wallet=info,spark=info,info".to_string());
+        .unwrap_or_else(|_| "spark_wallet=debug,spark=debug,info".to_string());
     let log_file = OpenOptions::new()
         .create(true)
         .append(true)

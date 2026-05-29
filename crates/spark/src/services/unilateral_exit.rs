@@ -7,7 +7,7 @@ use bitcoin::{
     Address, Amount, CompressedPublicKey, OutPoint, Psbt, Transaction, TxIn, TxOut, Txid,
     absolute::LockTime, psbt, secp256k1::PublicKey, transaction::Version,
 };
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::{
     Network,
@@ -19,12 +19,21 @@ use crate::{
         },
     },
     services::ServiceError,
-    tree::{TreeNode, TreeNodeId},
+    tree::{TreeNode, TreeNodeId, TreeNodeStatus},
     utils::{
         paging::{PagingFilter, PagingResult, pager},
         transactions::is_ephemeral_anchor_output,
     },
 };
+
+/// Statuses where a node can still contribute to an exit chain. `OnChain` is
+/// included because the SO marks a node `ON_CHAIN` once its raw or direct tx
+/// confirms, which is a normal in-progress state for an exit.
+const EXIT_CHAIN_STATUSES: [TreeNodeStatus; 3] = [
+    TreeNodeStatus::Available,
+    TreeNodeStatus::Splitted,
+    TreeNodeStatus::OnChain,
+];
 
 pub struct CpfpUtxo {
     pub txid: Txid,
@@ -77,7 +86,7 @@ impl UnilateralExitService {
         let mut checked_txs = HashSet::new();
 
         // Fetch leaves and parents for the given leaf IDs
-        let tree_nodes: HashMap<TreeNodeId, TreeNode> = self
+        let mut tree_nodes: HashMap<TreeNodeId, TreeNode> = self
             .fetch_leaves_parents(&leaf_ids)
             .await?
             .into_iter()
@@ -85,38 +94,25 @@ impl UnilateralExitService {
             .collect();
         for leaf_id in leaf_ids {
             let mut tx_cpfp_psbts = Vec::new();
-            let mut nodes = Vec::new();
 
-            let Some(mut node) = tree_nodes.get(&leaf_id) else {
+            let Some(leaf) = tree_nodes.get(&leaf_id) else {
                 return Err(ServiceError::ValidationError(format!(
                     "Leaf ID {leaf_id} not found in the tree",
                 )));
             };
-            let Some(refund_tx) = &node.refund_tx else {
+            let Some(refund_tx) = leaf.refund_tx.clone() else {
                 return Err(ServiceError::ValidationError(format!(
                     "Leaf ID {leaf_id} does not have a refund transaction",
                 )));
             };
+            let leaf = leaf.clone();
 
-            // Loop through the leaf's ancestors and collect them
-            loop {
-                nodes.insert(0, node);
-
-                let Some(parent_node_id) = &node.parent_node_id else {
-                    break;
-                };
-                let Some(parent) = tree_nodes.get(parent_node_id) else {
-                    return Err(ServiceError::ValidationError(format!(
-                        "Parent ID {parent_node_id} not found in the tree",
-                    )));
-                };
-                trace!(
-                    "Unilateral exit parent {}, txid {}",
-                    parent.id,
-                    parent.node_tx.compute_txid()
-                );
-                node = parent;
-            }
+            // Walk the leaf's ancestors up to the root, re-fetching any parent
+            // missing from the initial response by its node ID.
+            let nodes = build_exit_chain(leaf, &mut tree_nodes, async |ids| {
+                self.fetch_leaves_parents(ids).await
+            })
+            .await?;
 
             // For each node, check it hasn't already been processed and create a
             // child PSBT for its node tx. If the node is a leaf node, create a
@@ -141,7 +137,7 @@ impl UnilateralExitService {
                 if node.id == leaf_id {
                     // Create the PSBT to fee bump the leaf refund tx
                     let child_psbt =
-                        create_tx_cpfp_psbt(refund_tx, &mut utxos, fee_rate, self.network.into())?;
+                        create_tx_cpfp_psbt(&refund_tx, &mut utxos, fee_rate, self.network.into())?;
 
                     tx_cpfp_psbts.push(TxCpfpPsbt {
                         parent_tx: refund_tx.clone(),
@@ -212,6 +208,64 @@ impl UnilateralExitService {
             next: paging.next_from_offset(nodes.offset),
         })
     }
+}
+
+/// Walks a leaf's ancestor chain up to the root, returning the nodes ordered
+/// root → leaf.
+///
+/// `node_map` is seeded with nodes already known to the caller (the leaves and
+/// whatever ancestors the initial `query_nodes(include_parents=true)` returned).
+/// When a `parent_node_id` is absent from the map, it is re-fetched by ID via
+/// `fetch_by_ids`: by-ID queries bypass the SO's ancestor-expansion root-skip
+/// for legacy mainnet trees, which is what omits the root from the bulk response.
+///
+/// The walk stops gracefully when it reaches a node whose status is outside
+/// [`EXIT_CHAIN_STATUSES`] (e.g. an already-exited ancestor), rather than
+/// treating it as an error.
+async fn build_exit_chain<F>(
+    leaf: TreeNode,
+    node_map: &mut HashMap<TreeNodeId, TreeNode>,
+    mut fetch_by_ids: F,
+) -> Result<Vec<TreeNode>, ServiceError>
+where
+    F: AsyncFnMut(&[TreeNodeId]) -> Result<Vec<TreeNode>, ServiceError>,
+{
+    let mut chain = Vec::new();
+    let mut current = leaf;
+    loop {
+        if !EXIT_CHAIN_STATUSES.contains(&current.status) {
+            break;
+        }
+
+        let parent_node_id = current.parent_node_id.clone();
+        chain.insert(0, current);
+
+        let Some(parent_node_id) = parent_node_id else {
+            break;
+        };
+
+        if !node_map.contains_key(&parent_node_id) {
+            debug!(
+                "Parent {parent_node_id} missing from query_nodes response; re-fetching by node ID"
+            );
+            for node in fetch_by_ids(std::slice::from_ref(&parent_node_id)).await? {
+                node_map.insert(node.id.clone(), node);
+            }
+        }
+
+        let Some(parent) = node_map.get(&parent_node_id) else {
+            return Err(ServiceError::ValidationError(format!(
+                "Parent node {parent_node_id} not returned by query_nodes; exit chain incomplete",
+            )));
+        };
+        trace!(
+            "Unilateral exit parent {}, txid {}",
+            parent.id,
+            parent.node_tx.compute_txid()
+        );
+        current = parent.clone();
+    }
+    Ok(chain)
 }
 
 /// Creates a Partially Signed Bitcoin Transaction (PSBT) to CPFP a parent transaction.
@@ -596,5 +650,126 @@ mod tests {
             script_pubkey: ScriptBuf::from(vec![0x51]),
         };
         assert!(!is_ephemeral_anchor_output(&different_script));
+    }
+
+    mod exit_chain {
+        use super::*;
+        use crate::tree::tests::create_test_tree_node;
+        use std::str::FromStr;
+
+        const ROOT: &str = "root";
+        const MID: &str = "mid";
+        const LEAF: &str = "leaf";
+
+        fn node(id: &str, parent: Option<&str>, status: TreeNodeStatus) -> TreeNode {
+            let mut n = create_test_tree_node(id, 1_000);
+            n.parent_node_id = parent.map(|p| TreeNodeId::from_str(p).unwrap());
+            n.status = status;
+            n
+        }
+
+        fn chain_ids(chain: &[TreeNode]) -> Vec<String> {
+            chain.iter().map(|n| n.id.to_string()).collect()
+        }
+
+        // Complete chain in the map: the walk should never re-fetch.
+        #[macros::async_test_all]
+        async fn full_map_no_refetch() {
+            let root = node(ROOT, None, TreeNodeStatus::Available);
+            let mid = node(MID, Some(ROOT), TreeNodeStatus::Splitted);
+            let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+
+            let mut map: HashMap<TreeNodeId, TreeNode> = [&root, &mid, &leaf]
+                .into_iter()
+                .map(|n| (n.id.clone(), n.clone()))
+                .collect();
+
+            let mut fetched = false;
+            let chain = super::super::build_exit_chain(leaf, &mut map, async |_ids| {
+                fetched = true;
+                Ok(Vec::new())
+            })
+            .await
+            .unwrap();
+
+            assert!(
+                !fetched,
+                "fetcher must not be called when chain is complete"
+            );
+            assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
+        }
+
+        // The bug scenario: the SO omits the root from the bulk response, so it
+        // is missing from the seeded map and must be re-fetched by ID.
+        #[macros::async_test_all]
+        async fn refetches_missing_root() {
+            let root = node(ROOT, None, TreeNodeStatus::Available);
+            let mid = node(MID, Some(ROOT), TreeNodeStatus::Splitted);
+            let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+
+            // Seeded map is missing the root.
+            let mut map: HashMap<TreeNodeId, TreeNode> = [&mid, &leaf]
+                .into_iter()
+                .map(|n| (n.id.clone(), n.clone()))
+                .collect();
+
+            // The root is returned by a direct by-ID query.
+            let server: HashMap<TreeNodeId, TreeNode> =
+                [(root.id.clone(), root.clone())].into_iter().collect();
+            let mut requested: Vec<TreeNodeId> = Vec::new();
+
+            let chain =
+                super::super::build_exit_chain(leaf, &mut map, async |ids: &[TreeNodeId]| {
+                    requested.extend_from_slice(ids);
+                    Ok(ids.iter().filter_map(|i| server.get(i).cloned()).collect())
+                })
+                .await
+                .unwrap();
+
+            assert_eq!(requested, vec![root.id.clone()]);
+            assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
+        }
+
+        // An ancestor outside the exitable set ends the walk gracefully.
+        #[macros::async_test_all]
+        async fn stops_on_non_exit_status() {
+            let root = node(ROOT, None, TreeNodeStatus::Available);
+            let mid = node(MID, Some(ROOT), TreeNodeStatus::Exited);
+            let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+
+            let mut map: HashMap<TreeNodeId, TreeNode> = [&root, &mid, &leaf]
+                .into_iter()
+                .map(|n| (n.id.clone(), n.clone()))
+                .collect();
+
+            let chain = super::super::build_exit_chain(leaf, &mut map, async |_ids| Ok(Vec::new()))
+                .await
+                .unwrap();
+
+            assert_eq!(chain_ids(&chain), vec![LEAF]);
+        }
+
+        // A parent that cannot be fetched by ID is a genuine error.
+        #[macros::async_test_all]
+        async fn parent_unavailable_errors() {
+            let mid = node(MID, Some(ROOT), TreeNodeStatus::Splitted);
+            let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+
+            let mut map: HashMap<TreeNodeId, TreeNode> = [&mid, &leaf]
+                .into_iter()
+                .map(|n| (n.id.clone(), n.clone()))
+                .collect();
+
+            let err = super::super::build_exit_chain(leaf, &mut map, async |_ids| Ok(Vec::new()))
+                .await
+                .unwrap_err();
+
+            match err {
+                ServiceError::ValidationError(msg) => {
+                    assert!(msg.contains("exit chain incomplete"))
+                }
+                other => panic!("expected ValidationError, got {other:?}"),
+            }
+        }
     }
 }
