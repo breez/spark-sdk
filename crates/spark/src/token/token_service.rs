@@ -922,10 +922,10 @@ impl TokenService {
             }
         }
 
-        if let Some(observer) = &self.transfer_observer {
-            if let Err(e) = observer.after_send_token(&partial_txid, &txid).await {
-                warn!("after_send_token observer failed for tx {txid}: {e:?}");
-            }
+        if let Some(observer) = &self.transfer_observer
+            && let Err(e) = observer.after_send_token(&partial_txid, &txid).await
+        {
+            warn!("after_send_token observer failed for tx {txid}: {e:?}");
         }
 
         let outputs_to_spend = inputs
