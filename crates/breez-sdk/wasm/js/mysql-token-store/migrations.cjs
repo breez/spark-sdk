@@ -481,6 +481,29 @@ class MysqlTokenStoreMigrationManager {
            )`,
         ],
       },
+      {
+        // Mirrors Rust migration 5 in spark-mysql/src/token_store.rs.
+        // Re-key brz_token_outputs by (prev_tx_hash, prev_tx_vout) and drop the
+        // legacy id column. id already held "{prev_tx_hash}:{vout}", so the
+        // outpoint is the natural key. Dedup any duplicate-outpoint rows
+        // (possible from pre-outpoint code) before adding the composite PK,
+        // preferring rows that hold a reservation.
+        name: "Re-key token outputs by (prev_tx_hash, prev_tx_vout), drop legacy id",
+        sql: [
+          `DELETE a FROM brz_token_outputs a
+           JOIN brz_token_outputs b
+             ON a.user_id = b.user_id
+            AND a.prev_tx_hash = b.prev_tx_hash
+            AND a.prev_tx_vout = b.prev_tx_vout
+            AND ((b.reservation_id IS NOT NULL) > (a.reservation_id IS NOT NULL)
+                 OR ((b.reservation_id IS NOT NULL) = (a.reservation_id IS NOT NULL)
+                     AND b.id > a.id))`,
+          `ALTER TABLE brz_token_outputs
+             DROP PRIMARY KEY,
+             ADD PRIMARY KEY (user_id, prev_tx_hash, prev_tx_vout)`,
+          `ALTER TABLE brz_token_outputs DROP COLUMN id`,
+        ],
+      },
     ];
   }
 }
