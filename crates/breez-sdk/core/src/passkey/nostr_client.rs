@@ -101,13 +101,14 @@ impl NostrSaltClient {
     }
 
     /// Idempotently ensure `label` is published for the owned identity.
-    /// Opens a single client connection, queries existing events on a
-    /// relay batch, and writes the new event to the same connection if
-    /// the label is missing. One round trip; avoids the cold NIP-65
-    /// fetch that `create_write_client` would otherwise trigger.
+    /// Writes the event to every reachable relay batch, not just the
+    /// first: the read path early-exits on the first batch that responds
+    /// (even empty), so a single-batch write could be missed after a
+    /// relay flap. Skips batches that already carry the label and avoids
+    /// the cold NIP-65 fetch `create_write_client` would otherwise trigger.
     ///
     /// Triggers the one-time background NIP-65 relay sync (same as
-    /// `list_labels`), keyed off the events fetched here.
+    /// `list_labels`), keyed off the first batch's events.
     pub async fn store_label(&self, label: &str) -> Result<(), PasskeyError> {
         let relays = self.read_relay_candidates();
         let timeout = Duration::from_secs(RELAY_TIMEOUT_SECS);
@@ -115,7 +116,15 @@ impl NostrSaltClient {
             .author(self.keys.public_key())
             .kind(nostr::Kind::TextNote);
 
+        // Sign once and broadcast the same event to every batch missing the
+        // label, so all relays converge on a single event id.
+        let event = nostr::EventBuilder::text_note(label)
+            .sign_with_keys(&self.keys)
+            .map_err(|e| PasskeyError::NostrWriteFailed(format!("Failed to sign event: {e}")))?;
+
         let mut last_err: Option<String> = None;
+        let mut any_stored = false;
+        let mut sync_events: Option<Vec<Event>> = None;
 
         for chunk in relays.chunks(2) {
             let client = self.new_client()?;
@@ -146,26 +155,33 @@ impl NostrSaltClient {
             };
             let events_vec: Vec<Event> = events.into_iter().collect();
 
-            let exists = events_vec.iter().any(|e| e.content == label);
-            if !exists {
-                let builder = nostr::EventBuilder::text_note(label);
-                let event = builder.sign_with_keys(&self.keys).map_err(|e| {
-                    PasskeyError::NostrWriteFailed(format!("Failed to sign event: {e}"))
-                })?;
-                if let Err(e) = client.send_event(&event).await {
-                    client.disconnect().await;
-                    return Err(PasskeyError::NostrWriteFailed(e.to_string()));
-                }
+            if events_vec.iter().any(|e| e.content == label) {
+                any_stored = true;
+            } else if let Err(e) = client.send_event(&event).await {
+                warn!("Failed to write label to relay batch: {e}");
+                last_err = Some(e.to_string());
+            } else {
+                any_stored = true;
             }
 
-            self.spawn_relay_sync(events_vec);
+            // Seed the one-time NIP-65 sync from the first batch we read.
+            if sync_events.is_none() {
+                sync_events = Some(events_vec);
+            }
             client.disconnect().await;
-            return Ok(());
         }
 
-        Err(PasskeyError::NostrReadFailed(
-            last_err.unwrap_or_else(|| "no relays available".to_string()),
-        ))
+        if let Some(events) = sync_events {
+            self.spawn_relay_sync(events);
+        }
+
+        if any_stored {
+            Ok(())
+        } else {
+            Err(PasskeyError::NostrReadFailed(
+                last_err.unwrap_or_else(|| "no relays available".to_string()),
+            ))
+        }
     }
 
     /// Spawn the NIP-65 relay sync task if it hasn't been triggered yet.
