@@ -28,11 +28,6 @@
         "import": "./web/passkey-prf-provider/index.js",
         "default": "./web/passkey-prf-provider/index.js"
       },
-      "./passkey-capacitor-bridge": {
-        "types": "./web/passkey-capacitor-bridge/index.d.ts",
-        "import": "./web/passkey-capacitor-bridge/index.js",
-        "default": "./web/passkey-capacitor-bridge/index.js"
-      },
       ".": {
         "node": {
           "import": "./nodejs/index.mjs",
