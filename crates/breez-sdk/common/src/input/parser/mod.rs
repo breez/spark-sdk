@@ -268,6 +268,19 @@ where
         input: &str,
         source: &PaymentRequestSource,
     ) -> Result<Option<InputType>, LnurlError> {
+        // LUD-01 fallback: an LNURL can be embedded inside another URI scheme via
+        // a `lightning` query parameter, e.g.
+        // `https://service.com/giftcard/redeem?id=123&lightning=LNURL1...`.
+        // If the input is a plain http(s) URL with such a parameter, swap it for
+        // the bech32-encoded value before resolving.
+        let extracted = extract_lud01_lightning_param(input);
+        let input = extracted.as_deref().unwrap_or(input);
+
+        // Track whether the input is unambiguously an LNURL: either it bech32-decodes
+        // with the `lnurl` HRP, or it carries one of the lnurl-specific URI schemes.
+        // A bare http(s) URL is not enough — resolving any URL as an LNURL endpoint
+        // would silently hit the network for plain web links.
+        let mut is_lnurl = false;
         let mut input = match bech32::decode(input) {
             Ok((hrp, data)) => {
                 let hrp = hrp.to_lowercase();
@@ -275,6 +288,7 @@ where
                     return Ok(None);
                 }
 
+                is_lnurl = true;
                 match String::from_utf8(data) {
                     Ok(decoded) => decoded,
                     Err(_) => return Ok(None),
@@ -302,8 +316,13 @@ where
             let scheme_authority = format!("{pref}://");
             if has_prefix(&input, &scheme_authority) {
                 input = replace_prefix(&input, pref, "https");
+                is_lnurl = true;
                 break;
             }
+        }
+
+        if !is_lnurl {
+            return Ok(None);
         }
 
         let Ok(parsed_url) = url::Url::parse(&input) else {
@@ -465,6 +484,20 @@ fn replace_prefix(input: &str, prefix: &str, new_prefix: &str) -> String {
     }
 
     format!("{}{}", new_prefix, &input[prefix.len()..])
+}
+
+/// LUD-01: returns the value of a `lightning` query parameter on a plain
+/// http(s) URL, if present. Per the spec the value is a bech32-encoded LNURL.
+fn extract_lud01_lightning_param(input: &str) -> Option<String> {
+    let url = url::Url::parse(input).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url.query_pairs().find_map(|(k, v)| {
+        k.eq_ignore_ascii_case("lightning")
+            .then(|| v.into_owned())
+            .filter(|v| !v.is_empty())
+    })
 }
 
 fn extract_bip353_record(records: Vec<String>) -> Option<String> {
