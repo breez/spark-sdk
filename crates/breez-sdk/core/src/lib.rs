@@ -33,6 +33,7 @@ pub use common::{fiat::*, models::*, sync_storage};
 pub use error::{DepositClaimError, SdkError, SignerError};
 pub use events::{AutoOptimizationEvent, EventEmitter, EventListener, SdkEvent};
 pub use issuer::*;
+pub use logger::DEFAULT_FILTER;
 pub use models::*;
 pub use persist::{
     PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError, StorageListPaymentsRequest,
@@ -40,7 +41,6 @@ pub use persist::{
     backend::{PrebuiltBackend, ResolvedStores, StorageBackend, custom_storage},
     path::default_storage_path,
 };
-pub use logger::DEFAULT_FILTER;
 pub use sdk::{
     BreezSdk, default_config, default_server_config, get_spark_status, init_logging, parse_input,
 };
