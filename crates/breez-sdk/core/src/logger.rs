@@ -9,7 +9,10 @@ use tracing_subscriber::{
 
 use crate::{LogEntry, Logger, SdkError};
 
-const DEFAULT_FILTER: &str = concat!(
+/// Default tracing filter: `info` globally, `debug` for first-party crates,
+/// and noisy third-party crates silenced below `warn`. Shared with the WASM
+/// bindings so both default to the same behaviour.
+pub const DEFAULT_FILTER: &str = concat!(
     "info",
     // First-party crates: keep debug logging.
     ",breez_sdk_spark=debug",

@@ -21,9 +21,9 @@ pub struct BreezSdk {
 pub async fn init_logging(logger: Logger, filter: Option<String>) -> WasmResult<()> {
     crate::logger::WASM_LOGGER.set(Some(logger));
 
-    let filter = EnvFilter::new(filter.unwrap_or(
-        "debug,h2=warn,rustls=warn,rustyline=warn,hyper=warn,hyper_util=warn,tower=warn,Connection=warn,tonic=warn".to_string(),
-    ));
+    let filter = EnvFilter::new(
+        filter.unwrap_or_else(|| breez_sdk_spark::DEFAULT_FILTER.to_string()),
+    );
     let subscriber = tracing_subscriber::registry()
         .with(filter)
         .with(WasmTracingLayer {});
