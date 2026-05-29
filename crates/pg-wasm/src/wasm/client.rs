@@ -58,21 +58,46 @@ impl Client {
         }
     }
 
-    /// Prepare a statement without specifying parameter types. The server
-    /// infers OIDs at Parse time.
+    /// Prepare a statement and let the server infer parameter types.
+    ///
+    /// On a first call this round-trips Parse + Describe Statement +
+    /// Sync to fetch the inferred parameter type OIDs, then caches the
+    /// resulting [`Statement`] by SQL text. Subsequent calls with the
+    /// same SQL hit the cache and skip the round-trip.
     pub async fn prepare(&self, sql: &str) -> Result<Statement, Error> {
-        self.prepare_typed(sql, &[]).await
+        if let Some(stmt) = self.inner.stmt_cache.borrow().get(sql) {
+            return Ok(stmt);
+        }
+        let name = self.inner.stmt_cache.borrow_mut().intern(sql);
+        let prep = self
+            .inner
+            .js
+            .prepare_statement(sql, &name)
+            .await
+            .map_err(Error::from_js)?;
+        let oids = prep.prepare_param_oids();
+        let mut param_types = Vec::with_capacity(oids.length() as usize);
+        for i in 0..oids.length() {
+            let oid = oids.get_index(i);
+            param_types.push(Type::from_oid(oid).unwrap_or(Type::UNKNOWN));
+        }
+        let stmt = Statement::new(name, sql.to_string(), param_types);
+        self.inner
+            .stmt_cache
+            .borrow_mut()
+            .store(sql, stmt.clone());
+        Ok(stmt)
     }
 
-    /// Prepare a statement with explicit parameter types.
+    /// Prepare a statement with explicit parameter types. No server
+    /// round-trip; the caller asserts the types match the SQL. Useful
+    /// when you already know them (most SDK queries) and want to skip
+    /// the Describe Statement.
     pub async fn prepare_typed(
         &self,
         sql: &str,
         param_types: &[Type],
     ) -> Result<Statement, Error> {
-        // We don't actually round-trip Parse here — pg-protocol's
-        // `connection.parsedStatements` cache short-circuits the second
-        // Parse for the same name. The Statement itself is just metadata.
         let name = self.inner.stmt_cache.borrow_mut().intern(sql);
         Ok(Statement::new(name, sql.to_string(), param_types.to_vec()))
     }

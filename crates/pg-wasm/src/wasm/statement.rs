@@ -105,25 +105,66 @@ impl ToStatement for String {
     }
 }
 
-/// Per-`Client` interner: stable SQL → statement-name mapping. Wasm is
-/// single-threaded, so we don't need a Mutex around it (`RefCell` is enough
-/// on the `Client` side).
+/// Per-`Client` cache: stable SQL → `(statement-name, prepared
+/// Statement)`. Wasm is single-threaded so a `RefCell` around it is
+/// enough on the `Client` side.
+///
+/// The `name` part is interned eagerly (so `prepare_typed` and the
+/// describe-round-trip in `prepare` agree on the name); the `Statement`
+/// half is populated only by `prepare` after it has fetched
+/// server-inferred parameter types. `prepare_typed` leaves the
+/// `Statement` slot empty because it doesn't round-trip and doesn't
+/// know whether the caller's types are authoritative.
 #[derive(Default)]
 pub(crate) struct StmtCache {
     next_id: u32,
-    by_sql: HashMap<String, String>,
+    entries: HashMap<String, CacheEntry>,
+}
+
+struct CacheEntry {
+    name: String,
+    prepared: Option<Statement>,
 }
 
 impl StmtCache {
     /// Look up or assign a stable name for `sql`. Names look like `pgw_<n>`
-    /// — alphanumeric, well under Postgres' 63-char identifier limit.
+    /// — well under Postgres' 63-char identifier limit.
     pub(crate) fn intern(&mut self, sql: &str) -> String {
-        if let Some(name) = self.by_sql.get(sql) {
-            return name.clone();
+        if let Some(e) = self.entries.get(sql) {
+            return e.name.clone();
         }
         self.next_id = self.next_id.saturating_add(1);
         let name = format!("pgw_{}", self.next_id);
-        self.by_sql.insert(sql.to_string(), name.clone());
+        self.entries.insert(
+            sql.to_string(),
+            CacheEntry {
+                name: name.clone(),
+                prepared: None,
+            },
+        );
         name
+    }
+
+    /// Look up an already-prepared statement by SQL text, if any.
+    pub(crate) fn get(&self, sql: &str) -> Option<Statement> {
+        self.entries.get(sql).and_then(|e| e.prepared.clone())
+    }
+
+    /// Store a fully-prepared statement (with server-inferred types) in
+    /// the cache. `intern` is expected to have run already.
+    pub(crate) fn store(&mut self, sql: &str, stmt: Statement) {
+        if let Some(e) = self.entries.get_mut(sql) {
+            e.prepared = Some(stmt);
+        } else {
+            // Shouldn't happen in practice — prepare always interns
+            // first — but be defensive.
+            self.entries.insert(
+                sql.to_string(),
+                CacheEntry {
+                    name: stmt.name().to_string(),
+                    prepared: Some(stmt),
+                },
+            );
+        }
     }
 }

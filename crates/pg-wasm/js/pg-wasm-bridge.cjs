@@ -239,6 +239,114 @@ function patchPgInternals() {
 }
 
 /**
+ * Submittable that prepares a statement and fetches the
+ * server-inferred parameter type OIDs plus the resulting RowDescription
+ * (if any).
+ *
+ * Sequence: Parse → Describe Statement → Sync. The backend replies with
+ * ParseComplete, ParameterDescription, then either RowDescription or
+ * NoData, then ReadyForQuery. We resolve with `{ paramOids, fieldOids,
+ * fieldNames }` so the Rust side can build a `Statement` whose
+ * `params()` match what `ToSql::accepts` expects.
+ *
+ * pg's Client doesn't route ParameterDescription to active queries
+ * (none of its built-in Query impls need it), so we attach our own
+ * listener on the connection for the duration of this Submittable and
+ * remove it on completion.
+ */
+class BinaryPrepare {
+  constructor(text, name, resolve, reject) {
+    this.text = text;
+    this.name = name;
+    this._resolve = resolve;
+    this._reject = reject;
+    this._paramOids = null;
+    this._desc = null;
+    this._error = null;
+    this._connection = null;
+    this._onParameterDescription = (msg) => {
+      // msg.dataTypeIDs is the wire-order array of inferred parameter
+      // type OIDs.
+      this._paramOids = msg.dataTypeIDs;
+    };
+  }
+
+  submit(connection) {
+    this._connection = connection;
+    // pg doesn't route ParameterDescription anywhere by default; we
+    // listen directly on the connection for the duration of this query
+    // and detach in cleanup.
+    connection.on("parameterDescription", this._onParameterDescription);
+    try {
+      const alreadyParsed = this.name && connection.parsedStatements[this.name];
+      if (!alreadyParsed) {
+        connection.parse({
+          name: this.name,
+          text: this.text,
+          types: [],
+        });
+      }
+      // Describe Statement → ParameterDescription + RowDescription/NoData.
+      connection.describe({ type: "S", name: this.name });
+      connection.sync();
+      return null;
+    } catch (err) {
+      this._cleanup();
+      this._reject(err);
+      return err;
+    }
+  }
+
+  _cleanup() {
+    if (this._connection) {
+      this._connection.off(
+        "parameterDescription",
+        this._onParameterDescription
+      );
+      this._connection = null;
+    }
+  }
+
+  handleRowDescription(msg) {
+    this._desc = msg;
+  }
+
+  handleDataRow() {
+    // unreachable — Describe Statement doesn't produce rows
+  }
+
+  handleCommandComplete() {
+    // unreachable — Describe Statement doesn't produce a CommandComplete
+  }
+
+  handleEmptyQuery() {
+    // unreachable
+  }
+
+  handleNoData() {
+    // statement has no result columns; _desc stays null
+  }
+
+  handleError(err) {
+    this._error = err;
+  }
+
+  handleReadyForQuery() {
+    this._cleanup();
+    if (this._error) {
+      this._reject(this._error);
+      return;
+    }
+    const paramOids = new Uint32Array(this._paramOids || []);
+    const fieldOids = this._desc
+      ? new Uint32Array(this._desc.fields.map((f) => f.dataTypeID))
+      : new Uint32Array();
+    const fieldNames = this._desc ? this._desc.fields.map((f) => f.name) : [];
+    this._resolve({ paramOids, fieldOids, fieldNames });
+  }
+}
+
+/**
  * Submittable that runs Parse + Bind + Describe + Execute + Sync with
  * binary parameter and result formats.
  *
@@ -454,6 +562,13 @@ class JsClient {
   constructor(client, pooled) {
     this._client = client;
     this._pooled = pooled;
+  }
+
+  prepareStatement(text, statementName) {
+    return new Promise((resolve, reject) => {
+      const sub = new BinaryPrepare(text, statementName, resolve, reject);
+      this._client.query(sub);
+    });
   }
 
   queryBinary(text, statementName, paramOids, paramValues) {

@@ -103,11 +103,10 @@ async fn smoke_null_param_and_result() {
 
 #[wasm_bindgen_test]
 async fn smoke_query_with_str_statement() {
-    // Validates the `ToStatement` impl for `&str` for the parameterless
-    // path. With parameters, callers must use `prepare_typed` so the
-    // Rust-side `ToSql::accepts` check has a real Postgres type to match
-    // against — v0 doesn't yet send a `Describe Statement` round-trip
-    // to fetch server-inferred types the way tokio-postgres does.
+    // Validates the `ToStatement` impl for `&str`, including the
+    // parameterised path which depends on `Client::prepare` doing a
+    // server-side Describe Statement round-trip to fetch inferred
+    // parameter type OIDs.
     let conn_str = create_test_connection_string("pg_wasm_smoke_str_stmt")
         .await
         .expect("create test connection string")
@@ -116,6 +115,7 @@ async fn smoke_query_with_str_statement() {
 
     let client = pg_wasm::connect(&conn_str).await.expect("connect");
 
+    // Parameterless &str.
     let affected = client
         .execute("CREATE TABLE t (id BIGINT)", &[])
         .await
@@ -128,6 +128,23 @@ async fn smoke_query_with_str_statement() {
         .expect("query_one with &str");
     let v: i64 = row.get(0);
     assert_eq!(v, 42);
+
+    // Parameterised &str — relies on server-inferred OIDs.
+    let row = client
+        .query_one("SELECT $1::int8 + 100", &[&7_i64])
+        .await
+        .expect("query_one with parameterised &str");
+    let v: i64 = row.get(0);
+    assert_eq!(v, 107);
+
+    // Second call exercises the prepare-cache: should not round-trip
+    // Describe Statement again.
+    let row = client
+        .query_one("SELECT $1::int8 + 100", &[&8_i64])
+        .await
+        .expect("cached parameterised &str");
+    let v: i64 = row.get(0);
+    assert_eq!(v, 108);
 }
 
 #[wasm_bindgen_test]

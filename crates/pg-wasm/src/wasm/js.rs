@@ -52,6 +52,28 @@ extern "C" {
         param_values: js_sys::Array,
     ) -> Result<JsQueryResult, JsValue>;
 
+    /// Send a Parse + Describe Statement + Sync sequence to fetch the
+    /// server-inferred parameter type OIDs (and result column metadata,
+    /// for callers that want to skip per-execute Describe Portal).
+    #[wasm_bindgen(method, catch, js_name = "prepareStatement")]
+    pub async fn prepare_statement(
+        this: &JsClient,
+        text: &str,
+        statement_name: &str,
+    ) -> Result<JsPrepareResult, JsValue>;
+
+    /// Opaque handle to the result of one `prepareStatement` round-trip.
+    pub type JsPrepareResult;
+
+    #[wasm_bindgen(method, getter, js_name = "paramOids")]
+    pub fn prepare_param_oids(this: &JsPrepareResult) -> js_sys::Uint32Array;
+
+    #[wasm_bindgen(method, getter, js_name = "fieldOids")]
+    pub fn prepare_field_oids(this: &JsPrepareResult) -> js_sys::Uint32Array;
+
+    #[wasm_bindgen(method, getter, js_name = "fieldNames")]
+    pub fn prepare_field_names(this: &JsPrepareResult) -> js_sys::Array;
+
     /// Run one or more SQL statements via the simple query protocol.
     /// Used for `BEGIN` / `COMMIT` / `ROLLBACK` and `batch_execute`.
     #[wasm_bindgen(method, catch, js_name = "simpleQuery")]
