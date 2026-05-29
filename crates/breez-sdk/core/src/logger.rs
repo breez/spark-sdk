@@ -1,5 +1,5 @@
 use std::fs::OpenOptions;
-use tracing::{Event, Level, Subscriber};
+use tracing::{Event, Subscriber};
 use tracing_subscriber::{
     EnvFilter, Layer,
     fmt::{FormatFields, format::Writer},
@@ -22,9 +22,7 @@ where
     S: Subscriber,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        if event.metadata().level() <= &Level::INFO
-            && let Some(s) = self.log_listener.as_ref()
-        {
+        if let Some(s) = self.log_listener.as_ref() {
             let mut buf = String::new();
             let writer = Writer::new(&mut buf);
 
@@ -48,11 +46,12 @@ pub(super) fn init_logging(
 ) -> Result<(), SdkError> {
     let filter = log_filter.unwrap_or(DEFAULT_FILTER);
 
-    let registry = tracing_subscriber::registry()
-        .with(EnvFilter::new(filter))
-        .with(GlobalSdkLogger {
+    let registry = tracing_subscriber::registry().with(
+        GlobalSdkLogger {
             log_listener: app_logger,
-        });
+        }
+        .with_filter(EnvFilter::new(filter)),
+    );
 
     if let Some(log_dir) = log_dir {
         let log_file = OpenOptions::new()
@@ -70,10 +69,74 @@ pub(super) fn init_logging(
         // which spans actually emit.
         #[cfg(feature = "span-trace")]
         let fmt_layer = fmt_layer.with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE);
+        let fmt_layer = fmt_layer.with_filter(EnvFilter::new(filter));
         registry.with(fmt_layer).try_init()?;
     } else {
         registry.try_init()?;
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::{debug, info, trace};
+
+    use super::{EnvFilter, GlobalSdkLogger, Layer, SubscriberExt};
+    use crate::{LogEntry, Logger};
+
+    /// External logger that records the level of every entry it receives.
+    struct CapturingLogger {
+        levels: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Logger for CapturingLogger {
+        fn log(&self, l: LogEntry) {
+            self.levels.lock().unwrap().push(l.level);
+        }
+    }
+
+    /// Runs `emit` with a [`GlobalSdkLogger`] filtered by `filter` installed as
+    /// the thread-local default, returning the levels that reached the external
+    /// logger. `emit` must use a literal `target:` (the macros bake it into a
+    /// `static` callsite) matching a directive in `filter`.
+    fn forwarded_levels(filter: &str, emit: impl FnOnce()) -> Vec<String> {
+        let levels = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(
+            GlobalSdkLogger {
+                log_listener: Some(Box::new(CapturingLogger {
+                    levels: levels.clone(),
+                })),
+            }
+            .with_filter(EnvFilter::new(filter)),
+        );
+
+        tracing::subscriber::with_default(subscriber, emit);
+
+        levels.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn external_logger_respects_filter_level() {
+        // A `debug` filter forwards debug (and above) but not trace — this is
+        // the behaviour that regressed when the layer hard-capped at INFO.
+        let levels = forwarded_levels("brz_logtest_debug=debug", || {
+            info!(target: "brz_logtest_debug", "info");
+            debug!(target: "brz_logtest_debug", "debug");
+            trace!(target: "brz_logtest_debug", "trace");
+        });
+        assert!(levels.contains(&"INFO".to_string()), "got {levels:?}");
+        assert!(levels.contains(&"DEBUG".to_string()), "got {levels:?}");
+        assert!(!levels.contains(&"TRACE".to_string()), "got {levels:?}");
+
+        // A `trace` filter forwards trace too.
+        let levels = forwarded_levels("brz_logtest_trace=trace", || {
+            debug!(target: "brz_logtest_trace", "debug");
+            trace!(target: "brz_logtest_trace", "trace");
+        });
+        assert!(levels.contains(&"DEBUG".to_string()), "got {levels:?}");
+        assert!(levels.contains(&"TRACE".to_string()), "got {levels:?}");
+    }
 }
