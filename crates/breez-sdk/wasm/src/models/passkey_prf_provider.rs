@@ -322,47 +322,34 @@ const PRF_PROVIDER_INTERFACE: &'static str = r#"/**
  */
 export interface PrfProvider {
     /**
-     * Derive 32-byte PRF outputs for one or more salts. Implementations
-     * with bulk capability (e.g. WebAuthn dual-salt via
-     * `prf.eval.first` + `prf.eval.second`) should pack two salts per
-     * ceremony where supported; otherwise loop the single-salt path
-     * internally. Output ordering matches input ordering.
-     *
-     * The optional `options` object carries per-call ceremony shapers
-     * (allow-list, immediate-mediation toggle). Built-in providers
-     * forward them to the underlying WebAuthn / Credential Manager
-     * call; custom providers without an OS picker can ignore them.
-     *
-     * Resolves to `{ seeds, credentialId }`: the 32-byte outputs in
-     * input order plus the credential ID observed in the same assertion
-     * (`null` when the provider does not surface one). The SDK reads
-     * `credentialId` to surface the signed-in credential to callers, so
-     * providers without an OS picker may return `null`.
+     * Derive 32-byte PRF outputs for one or more salts, in input order.
+     * Implementations with bulk capability (WebAuthn dual-salt via
+     * `prf.eval.first` + `prf.eval.second`) pack two salts per ceremony
+     * where supported; others loop the single-salt path. `options` carries
+     * per-call ceremony shapers that built-in providers forward to the OS
+     * call and custom providers may ignore.
      *
      * @param salts - Salt strings in caller order
      * @param options - Optional per-call overrides
-     * @returns A Promise resolving to the seeds plus observed credential ID
+     * @returns Promise of the 32-byte outputs in input order plus the
+     *   credential ID observed in the same assertion (`null` when the
+     *   provider surfaces none, e.g. sources without an OS picker)
      */
     deriveSeeds(salts: string[], options?: DeriveSeedsOptionsJSON): Promise<DeriveSeedsResultJSON>;
 
     /**
-     * Optional explicit registration. Platform passkey providers
-     * (browser WebAuthn, iOS / Android) implement this to drive the OS
-     * create ceremony and return credential metadata (`credentialId`,
-     * `userId`, optional `aaguid`, optional `backupEligible`) that
-     * callers need for `excludeCredentials` bookkeeping and
-     * server-side correlation. Custom providers without an explicit
-     * creation step can omit this method.
+     * Optional explicit registration. Platform passkey providers (browser
+     * WebAuthn, iOS / Android) implement this to drive the OS create
+     * ceremony and return credential metadata (`credentialId`, `userId`,
+     * optional `aaguid` / `backupEligible`) callers need for
+     * `excludeCredentials` bookkeeping and server-side correlation. Custom
+     * providers without a creation step can omit it.
      *
-     * `excludeCredentials` is a list of already-registered credential
-     * IDs. Prevents registering the same device twice: when any entry
-     * matches a credential already on the device, the provider raises
-     * `PasskeyAlreadyExistsError`. Branding fields (rpName, userName,
-     * userDisplayName) live on the provider constructor.
+     * `excludeCredentials` lists already-registered IDs; a match raises
+     * `PasskeyAlreadyExistsError`.
      *
      * @throws `PasskeyAlreadyExistsError` when an entry in
-     *   `excludeCredentials` matches a credential already on the
-     *   device.
+     *   `excludeCredentials` matches a credential already on the device.
      */
     createPasskey?(excludeCredentials: Uint8Array[]): Promise<RegisteredCredentialJSON>;
 
@@ -404,23 +391,16 @@ export interface PrfProvider {
  */
 export interface DeriveSeedsOptionsJSON {
     /**
-     * A list of credential IDs the assertion is restricted to. The
-     * primary use case is reauthentication when the user is already
-     * known: if any of the listed credentials is available locally,
-     * the platform prompts for device unlock straight away (no
-     * account picker); otherwise the user is asked to present another
-     * device (paired phone or security key) that holds a valid
-     * credential. Empty / omitted lets the provider default apply.
+     * Credential IDs the assertion is restricted to, for reauthenticating
+     * a known user without an account picker. Empty or unset lets the
+     * provider's default apply.
      */
     allowCredentials?: Uint8Array[];
     /**
-     * Controls the platform's "fast-fail when no local credential is
-     * available" behavior. On the web this maps to the WebAuthn
-     * `mediation: 'immediate'` / `uiMode: 'immediate'` flag: `true`
-     * opts into immediate mediation when the browser advertises the
-     * capability; `false` falls back to the standard picker
-     * (cross-device QR, hybrid transports). Omitted lets the provider
-     * default apply.
+     * Fast-fail when no local credential is available. On the web this maps
+     * to WebAuthn `mediation: 'immediate'`: `true` opts in where the browser
+     * advertises support, `false` uses the standard picker. Unset uses the
+     * provider default.
      */
     preferImmediatelyAvailableCredentials?: boolean;
 }

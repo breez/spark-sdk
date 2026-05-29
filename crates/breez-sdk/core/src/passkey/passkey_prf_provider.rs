@@ -11,14 +11,11 @@ pub struct DeriveSeedsRequest {
     /// returned per salt, in the same order.
     pub salts: Vec<String>,
 
-    /// A list of credential IDs the assertion is restricted to. The
-    /// primary use case is reauthentication when the user is already
-    /// known: if any of the listed credentials is available locally,
-    /// the OS prompts for device unlock straight away (no account
-    /// picker); otherwise the user is asked to present another
-    /// device (paired phone or security key) that holds a valid
-    /// credential. Empty falls through to the provider's configured
-    /// default.
+    /// Credential IDs the assertion is restricted to. The main use is
+    /// reauthenticating a known user: if a listed credential is on the
+    /// device the OS unlocks straight away (no account picker); otherwise
+    /// it asks for another device (paired phone, security key) holding one.
+    /// Empty falls through to the provider's configured default.
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
     pub allow_credentials: Vec<Vec<u8>>,
 
@@ -50,40 +47,28 @@ pub enum DomainAssociation {
     Skipped { reason: String },
 }
 
-/// Trait for PRF (Pseudo-Random Function) operations backing a passkey-derived
-/// wallet seed.
+/// Trait for PRF (Pseudo-Random Function) operations backing a
+/// passkey-derived wallet seed.
 ///
-/// The built-in passkey provider on each platform (`PasskeyProvider`)
-/// implements this trait by authenticating with a platform passkey and
-/// evaluating the `WebAuthn` PRF extension. Custom providers (CLI tools
-/// backed by `YubiKey`, FIDO2 hmac-secret, on-disk key material, hardware
-/// HSMs) also implement this trait, anything that can deterministically
-/// derive 32 bytes from a salt is a valid `PrfProvider`.
-///
-/// The implementation is responsible for:
-/// - Authenticating the user via platform-specific passkey APIs (`WebAuthn`, native passkey managers) or another deterministic source
-/// - Evaluating the PRF extension (or equivalent) with the provided salt
-/// - Returning the 32-byte PRF output
+/// Each platform's built-in `PasskeyProvider` implements this by
+/// authenticating with a platform passkey and evaluating the `WebAuthn`
+/// PRF extension. Custom providers (CLI tools backed by `YubiKey`, FIDO2
+/// hmac-secret, on-disk key material, HSMs) implement the same contract:
+/// anything that deterministically derives 32 bytes from a salt qualifies.
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait PrfProvider: Send + Sync {
     /// Derive 32-byte PRF outputs for `request.salts` in as few
-    /// authenticator ceremonies as the platform supports. Output
-    /// ordering matches input ordering. Empty `salts` returns an
-    /// empty vec without prompting. Built-in providers chunk pairs
-    /// via `WebAuthn`'s `prf.eval.first` + `.second` (halving prompt
-    /// count); custom providers without bulk capability should loop
-    /// internally.
+    /// authenticator ceremonies as the platform supports, preserving input
+    /// order. Empty `salts` returns an empty vec without prompting. Built-in
+    /// providers pair salts via `WebAuthn`'s `prf.eval.first` + `.second`
+    /// (halving prompts); custom providers without bulk support loop.
     ///
     /// `request.allow_credentials` and
-    /// `request.prefer_immediately_available_credentials` shape the
-    /// platform ceremony for this single call. Custom providers that
-    /// don't model those concepts (file-backed, `YubiKey` HMAC, etc.)
-    /// can ignore them.
-    ///
-    /// Returns the seeds plus the credential ID observed in the same
-    /// assertion ([`DeriveSeedsOutput`]); the credential ID is absent
-    /// when the provider does not surface it.
+    /// `request.prefer_immediately_available_credentials` shape this single
+    /// ceremony; providers that don't model them (file-backed, `YubiKey`)
+    /// ignore them. Returns the seeds plus the credential ID observed in the
+    /// same assertion, absent when the provider does not surface it.
     async fn derive_seeds(
         &self,
         request: DeriveSeedsRequest,
@@ -93,19 +78,15 @@ pub trait PrfProvider: Send + Sync {
     /// device. Hosts gate UX on the result.
     async fn is_supported(&self) -> Result<bool, PrfProviderError>;
 
-    /// Explicit registration. Platform passkey providers override this
-    /// to drive the OS create ceremony and surface credential metadata
-    /// hosts need for `exclude_credentials` bookkeeping. CLI /
-    /// hardware providers register lazily inside [`Self::derive_seeds`]
-    /// and inherit the default `PrfNotSupported`.
+    /// Explicit registration. Platform passkey providers override this to
+    /// drive the OS create ceremony and surface the credential metadata
+    /// hosts need for `exclude_credentials` bookkeeping. CLI / hardware
+    /// providers register lazily in [`Self::derive_seeds`] and inherit the
+    /// default `PrfNotSupported`.
     ///
-    /// `exclude_credentials` is a list of already-registered
-    /// credential IDs: it prevents registering the same device twice
-    /// by surfacing duplicates as `CredentialAlreadyExists`.
-    /// Branding fields (`user_name`, `user_display_name`) live on
-    /// the platform `PasskeyProvider` constructor. The `user.id` is
-    /// always provider-minted and surfaced on
-    /// `RegisteredCredential.user_id`.
+    /// `exclude_credentials` lists already-registered IDs and surfaces
+    /// duplicates as `CredentialAlreadyExists`. The `user.id` is always
+    /// provider-minted and returned on `RegisteredCredential.user_id`.
     async fn create_passkey(
         &self,
         exclude_credentials: Vec<Vec<u8>>,

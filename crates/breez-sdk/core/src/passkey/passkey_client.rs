@@ -78,13 +78,8 @@ pub struct SignInRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// A list of credential IDs the assertion is restricted to. The
-    /// primary use case is reauthentication when the user is already
-    /// known: if any of the listed credentials is available locally,
-    /// the OS prompts for device unlock straight away (no account
-    /// picker); otherwise the user is asked to present another
-    /// device (paired phone or security key) that holds a valid
-    /// credential. Empty / omitted lets the OS pick any matching
+    /// Credential IDs the assertion is restricted to (reauthentication of
+    /// a known user). Empty / omitted lets the OS pick any matching
     /// credential for this RP. Forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::allow_credentials`].
     #[cfg_attr(feature = "uniffi", uniffi(default = []))]
@@ -266,26 +261,20 @@ impl PasskeyClient {
     }
 
     /// Single-CTA onboarding: silent sign-in, falling through to
-    /// registration when no credential exists on the device. The
-    /// returned [`ConnectFlow`] tells the caller which path ran.
+    /// registration when no credential exists on the device. The returned
+    /// [`ConnectFlow`] tells the caller which path ran.
     ///
-    /// The silent sign-in attempt pins
-    /// `prefer_immediately_available_credentials = true` regardless of
-    /// what [`SignInRequest`] would carry: the fallback contract
-    /// depends on the OS fast-failing with [`PrfProviderError::CredentialNotFound`]
-    /// when no local credential exists. Without the fast-fail, the
-    /// OS would show the cross-device picker and a user dismiss would
-    /// surface as a real `Cancel`, which is propagated unchanged
-    /// rather than triggering registration. All other errors
-    /// (`Cancel`, `Timeout`, `Configuration`, etc.) propagate
-    /// unchanged: only `CredentialNotFound` flips to the register
-    /// path.
+    /// The silent sign-in pins `prefer_immediately_available_credentials =
+    /// true` regardless of [`SignInRequest`]: the fallback depends on the OS
+    /// fast-failing with [`PrfProviderError::CredentialNotFound`] when no
+    /// local credential exists. Only `CredentialNotFound` flips to the
+    /// register path; every other error (`Cancel`, `Timeout`, ...) propagates
+    /// unchanged.
     ///
     /// Mobile-only: meant for iOS 18+ / Android 9+ where
     /// `preferImmediatelyAvailableCredentials` is honored. The web
-    /// equivalent (`mediation: 'immediate'` / `uiMode: 'immediate'`)
-    /// is not yet stable cross-browser, so this method is not
-    /// surfaced on WASM. Hosts on web should call
+    /// equivalent (`mediation: 'immediate'`) is not yet stable
+    /// cross-browser, so this is not surfaced on WASM; web hosts call
     /// [`Self::sign_in`] and catch `CredentialNotFound` themselves.
     pub async fn connect_with_passkey(
         &self,

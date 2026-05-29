@@ -10,11 +10,10 @@ import Security
 /// signed App Store / TestFlight build.
 @available(iOS 18.0, macOS 15.0, *)
 public struct IOSOptions {
-    /// Apple Developer Team ID (10-character alphanumeric). Used by
-    /// `checkDomainAssociation` to verify the app against Apple's
-    /// AASA CDN. `nil` auto-detects from the signing entitlement;
-    /// override only when entitlement lookup is unavailable (unit
-    /// tests, sandboxed contexts).
+    /// Apple Developer Team ID (10-char). Used by `checkDomainAssociation`
+    /// to verify the app against Apple's AASA CDN. `nil` auto-detects from
+    /// the signing entitlement; override only when that's unavailable
+    /// (unit tests, sandboxed contexts).
     public let teamId: String?
 
     /// Custom URLSession for the AASA CDN fetch. Defaults to
@@ -73,44 +72,27 @@ public class PasskeyProvider: PrfProvider {
     /// Create a new platform passkey PRF provider.
     ///
     /// - Parameters:
-    ///   - rpId: **Required.** Relying Party ID. Pass your app's domain,
-    ///     or `PasskeyProvider.BREEZ_RP_ID` to opt into Breez's shared
-    ///     `keys.breez.technology` RP (only valid for Breez-registered apps).
-    ///     Changing this after users have registered passkeys will make
-    ///     their existing credentials undiscoverable.
-    ///   - rpName: **Required.** Maps to the WebAuthn `rp.name`.
-    ///     Deprecated in WebAuthn L3 but still required by current
-    ///     iOS / macOS prompts. Surfaces in some credential-management
-    ///     UIs (iCloud Keychain, Google Password Manager, 1Password);
-    ///     platform UIs increasingly ignore it. Only used at
-    ///     credential registration; changing it does not affect
-    ///     existing credentials.
-    ///   - userName: Maps to the WebAuthn `user.name`. Treated as the
-    ///     user's unique identifier for the credential and shown in
-    ///     Apple's account picker during sign-in. Pass a stable
-    ///     per-user value if each registration should surface as a
-    ///     distinct entry (iCloud Keychain dedupes by
-    ///     `(rpId, user.name)`). Defaults to `rpName`. Only used at
-    ///     registration; changing it does not affect existing
-    ///     credentials.
+    ///   - rpId: **Required.** Relying Party ID (your app's domain), or
+    ///     `PasskeyProvider.BREEZ_RP_ID` to opt into Breez's shared RP
+    ///     (Breez-registered apps only). Changing it after users register
+    ///     makes their existing credentials undiscoverable.
+    ///   - rpName: **Required.** WebAuthn `rp.name`, shown in some
+    ///     credential-manager UIs. Deprecated in L3 but still required by
+    ///     current prompts. Used only at registration.
+    ///   - userName: WebAuthn `user.name`, shown in the sign-in picker.
+    ///     Pass a stable per-user value if each registration should be a
+    ///     distinct entry (iCloud Keychain dedupes by `(rpId, user.name)`).
+    ///     Defaults to `rpName`. Used only at registration.
     ///   - userDisplayName: WebAuthn `user.displayName`. Defaults to
-    ///     `userName`. **Note:** the platform create-credential overload
-    ///     available on current iOS SDKs takes only `challenge:name:userID:`,
-    ///     so this value is silently dropped at registration on iOS. Kept
-    ///     on the constructor for cross-platform parity; password managers
-    ///     show `user.name` as the primary label here. Changing it does
-    ///     not affect existing
-    ///     credentials.
-    ///   - credentialRegistry: Opt-in app-side store of known
-    ///     credential IDs. When supplied, the SDK auto-merges stored
-    ///     IDs into `allowCredentials` / `excludeCredentials` and
-    ///     writes new IDs back after success.
+    ///     `userName`. Silently dropped at registration on current iOS SDKs
+    ///     (the create overload omits it); kept for cross-platform parity.
+    ///   - credentialRegistry: Opt-in app-side store of known credential
+    ///     IDs. When set, the SDK auto-merges stored IDs into
+    ///     `allowCredentials` / `excludeCredentials` and writes new IDs back.
     ///   - onRegistryError: Best-effort callback for registry failures;
     ///     never blocks the WebAuthn ceremony.
-    ///   - iosOptions: iOS / macOS-specific knobs (team ID for AASA CDN,
-    ///     custom URLSession, presentation anchor). Defaults work for
-    ///     every signed App Store / TestFlight build; override only for
-    ///     unit tests or unusual presentation setups.
+    ///   - iosOptions: iOS / macOS-specific knobs (team ID, URLSession,
+    ///     presentation anchor). Defaults work for any signed build.
     public init(
         rpId: String,
         rpName: String,
@@ -137,30 +119,22 @@ public class PasskeyProvider: PrfProvider {
     }
 
     /// Derive multiple PRF outputs in as few authenticator ceremonies as
-    /// possible. Uses the iOS 18+
-    /// `ASAuthorizationPublicKeyCredentialPRFAssertionInputValues`
-    /// dual-salt path: 2 derivations in a single user prompt.
+    /// possible, using the iOS 18+ dual-salt path (2 derivations per prompt).
     ///
     /// Salt count semantics:
     /// - 0 salts: returns empty without prompting.
     /// - 1 salt: equivalent to `deriveSeed`.
     /// - 2 salts: one ceremony.
-    /// - 3+ salts: pairs are batched (N+1)/2 ceremonies; a trailing odd
-    ///   salt uses the single-salt path.
+    /// - 3+ salts: pairs are batched into (N+1)/2 ceremonies.
     ///
     /// - Parameter salts: Salt strings in order.
     /// - Returns: One 32-byte output per salt (in input order) plus the
-    ///   credential ID observed in the same assertion (nil when none was
-    ///   captured, e.g. empty `salts`).
-    /// - Throws: `PrfProviderError` if any underlying ceremony fails. The
-    ///   first failing ceremony aborts the rest.
+    ///   credential ID observed in the same assertion (nil when none).
+    /// - Throws: `PrfProviderError` if any ceremony fails; the first
+    ///   failure aborts the rest.
     ///
-    /// Passes `autoRegister: false`: this provider never implicitly
-    /// creates a credential during derivation. Sign-up and sign-in stay
-    /// explicit (the host calls `createPasskey` to register), so a
-    /// missing credential surfaces as `.credentialNotFound` rather than
-    /// silently minting a new passkey. (The core defaults `autoRegister`
-    /// to true for direct callers; the provider opts out.)
+    /// Never auto-creates a credential during derivation: a missing
+    /// credential surfaces as `.credentialNotFound`, not a new passkey.
     public func deriveSeeds(request: DeriveSeedsRequest) async throws -> DeriveSeedsOutput {
         // Map (not compactMap) so a salt that somehow can't UTF-8 encode
         // fails loudly with its position rather than being dropped and
@@ -187,20 +161,14 @@ public class PasskeyProvider: PrfProvider {
         }
     }
 
-    /// Create a new passkey with PRF support. Single platform prompt;
-    /// separates credential creation from derivation in multi-step
-    /// onboarding flows.
+    /// Create a new PRF-capable passkey (single platform prompt). Use it to
+    /// separate registration from derivation in multi-step onboarding.
     ///
     /// `user.id` is never host-supplied: the core mints a fresh random
-    /// 16-byte handle per call and surfaces it via
-    /// `RegisteredCredential.userId`. Branding fields (`userName`,
-    /// `userDisplayName`) live on this provider's constructor.
-    ///
-    /// Auto-merges previously-registered credential IDs from the
-    /// optional `CredentialRegistry` into `excludeCredentials` so the
-    /// platform refuses to create a duplicate even after a reinstall
-    /// (the registry is iCloud-synced when host-backed). Records the
-    /// new credential ID after a successful create.
+    /// 16-byte handle and returns it as `RegisteredCredential.userId`. When
+    /// a `CredentialRegistry` is configured, previously-registered IDs are
+    /// merged into `excludeCredentials` (so the platform refuses a duplicate
+    /// even after reinstall) and the new ID is recorded on success.
     @discardableResult
     public func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
         do {
@@ -244,78 +212,31 @@ public class PasskeyProvider: PrfProvider {
         }
     }
 
-    /// Check if this device's OS version supports the passkey PRF extension.
-    ///
-    /// This is an **API availability** check, not a readiness check:
-    /// - Returns `true` whenever the OS exposes
-    ///   `ASAuthorizationPlatformPublicKeyCredentialPRFAssertionInput`
-    ///   (iOS 18.0+ / macOS 15.0+). Because this class is itself gated on
-    ///   those versions via `@available`, any instance that can be
-    ///   constructed will return `true`.
-    /// - Does **not** verify that the user has Face ID / Touch ID /
-    ///   a device passcode enrolled, or that iCloud Keychain / a third-party
-    ///   credential provider is configured. Those states are handled by the
-    ///   system at call time: when `deriveSeed` runs, the OS surfaces
-    ///   its own "set up biometrics / pick a credential provider" prompts
-    ///   and the call either succeeds or fails with a `PrfProviderError`
-    ///   (e.g. `.userCancelled`, `.authenticationFailed`).
-    ///
-    /// Callers that need a stronger "ready to derive" signal should try a
-    /// real `deriveSeed` and handle the error, rather than pre-checking.
-    ///
-    /// - Returns: `true` on supported OS versions.
+    /// Whether this OS version exposes the passkey PRF API (iOS 18+ /
+    /// macOS 15+). An availability check, not a readiness check: it does not
+    /// verify biometric enrollment or a configured credential provider,
+    /// which the OS handles at ceremony time. For a stronger "ready to
+    /// derive" signal, attempt a real `deriveSeed` and handle the error.
+    /// Always `true` here, since the class is `@available`-gated.
     public func isSupported() async throws -> Bool {
         return true
     }
 
-    /// Verify the app's bundle identifier is listed in the `webcredentials`
-    /// section of the Apple app-site-association file served for `rpId`,
-    /// via Apple's CDN (`app-site-association.cdn-apple.com`).
+    /// Verify the app's bundle ID is listed in the `webcredentials` section
+    /// of the apple-app-site-association file for `rpId`, via Apple's CDN.
     ///
-    /// # Why this check exists
+    /// Associated Domains is normally verified by iOS at install time and
+    /// cached. If the AASA doesn't list the app, WebAuthn ceremonies fail
+    /// with errors indistinguishable from "no credential" or "user
+    /// cancelled". Calling this first lets the host show a dedicated
+    /// misconfiguration error instead of a generic "passkey failed".
     ///
-    /// On iOS, Associated Domains verification is run by Apple's
-    /// infrastructure at app install time and cached on-device. When the
-    /// AASA file doesn't list your bundle ID (because it was never added,
-    /// or because your app update shipped before Apple's CDN picked up a
-    /// newly-deployed AASA), subsequent `ASAuthorizationController`
-    /// requests fail with `ASAuthorizationError.notHandled` or `.failed`
-    /// (errors that are **indistinguishable** from "no credential found"
-    /// or "user cancelled" at the error-code layer).
+    /// The team ID for the `<TEAM_ID>.<BUNDLE_ID>` match comes from the
+    /// `teamId` option, else the app's `application-identifier` entitlement.
     ///
-    /// By proactively hitting the same CDN iOS consults
-    /// (`app-site-association.cdn-apple.com/a/v1/<rpId>`), callers can
-    /// detect this condition before the first WebAuthn ceremony and show
-    /// a dedicated error state rather than falling through to the generic
-    /// "passkey failed" handler.
-    ///
-    /// # Detection asymmetry
-    ///
-    /// - CDN lists this bundle: device will also list it (CDN is the
-    ///   upstream; propagation is monotonic). Return `.associated`.
-    /// - CDN does **not** list this bundle: device on this region almost
-    ///   certainly does not either. Return `.notAssociated`.
-    /// - CDN unreachable / timed out / returned invalid JSON: the check
-    ///   itself couldn't complete; return `.skipped` and let the caller
-    ///   proceed with the WebAuthn ceremony normally.
-    ///
-    /// # Team ID resolution
-    ///
-    /// AASA matches on the full `<TEAM_ID>.<BUNDLE_ID>` identity. The team
-    /// ID comes from:
-    /// 1. The `teamId` constructor parameter, if explicitly provided.
-    /// 2. Otherwise, auto-detected from the running app's
-    ///    `application-identifier` entitlement via
-    ///    `SecTaskCopyValueForEntitlement`. The entitlement value is
-    ///    `<TEAM_ID>.<BUNDLE_ID>`; the team ID is the prefix before the
-    ///    first dot.
-    ///
-    /// If both sources fail (no explicit team ID AND entitlement lookup
-    /// unavailable, e.g. unsigned test builds), returns `.skipped`.
-    ///
-    /// - Returns: A [`DomainAssociation`] describing the verification
-    ///   outcome. Never throws; uses `.skipped` for verification-level
-    ///   failures so callers have a single surface to handle.
+    /// - Returns: A [`DomainAssociation`]. Never throws: returns `.skipped`
+    ///   when the check can't complete (CDN unreachable, unsigned build) so
+    ///   the caller can proceed with the ceremony normally.
     public func checkDomainAssociation() async throws -> DomainAssociation {
         // Delegate to the canonical core. Translate from the layer-
         // neutral `IosDomainAssociation` to UniFFI's `DomainAssociation`.

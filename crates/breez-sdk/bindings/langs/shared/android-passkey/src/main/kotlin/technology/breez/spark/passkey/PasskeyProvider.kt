@@ -28,40 +28,27 @@ import technology.breez.spark.passkey.core.RegistryOperation
  * - A physical device: emulators cannot complete the WebAuthn registration
  *   handshake.
  *
- * @param activityProvider Called lazily on every request to obtain the
- *   current top Activity. Using a lambda (rather than a direct Activity
- *   reference) avoids holding a stale instance across configuration
- *   changes. Credential Manager is lifecycle-sensitive, so the lambda
- *   MUST return the foreground, RESUMED, non-finishing Activity at call
- *   time (it shows system UI on top of it) and MUST NOT return a
- *   destroyed or cached background instance. Returning the wrong
- *   Activity surfaces as opaque Credential Manager failures.
- * @param rpId Relying Party ID. Must match the domain configured for
- *   cross-platform credential sharing.
- * @param rpName Maps to the WebAuthn `rp.name`. Deprecated in
- *   WebAuthn L3 but still required by current Credential Manager
- *   prompts. Surfaces in some credential-management UIs (Google
- *   Password Manager, 1Password); platform UIs increasingly ignore
- *   it. Only used at credential registration; changing it does not
- *   affect existing credentials.
- * @param userName Maps to the WebAuthn `user.name`. Treated as the
- *   user's unique identifier for the credential and shown in the
- *   account picker during sign-in. Pass a stable per-user value if
- *   each registration should surface as a distinct entry. Defaults
- *   to [rpName]. Only used at registration; changing it does not
- *   affect existing credentials.
- * @param userDisplayName Maps to the WebAuthn `user.displayName`.
- *   The user-friendly label the OS / browser MAY (but is not
- *   required to) show in the picker; behavior varies by Credential
- *   Manager backend. Defaults to [userName] (or [rpName] if
- *   [userName] is null). Only used at registration; changing it
- *   does not affect existing credentials.
- * @param credentialRegistry Opt-in app-side store of known credential
- *   IDs. When supplied, the SDK auto-merges stored IDs into
- *   `allowCredentials` / `excludeCredentials` and writes new IDs
- *   back after success.
- * @param onRegistryError Best-effort callback for registry failures;
- *   never blocks the ceremony.
+ * @param activityProvider Called lazily per request for the current top
+ *   Activity. Credential Manager is lifecycle-sensitive: this MUST return
+ *   the foreground, RESUMED, non-finishing Activity (a stale or background
+ *   instance surfaces as opaque Credential Manager failures). A lambda
+ *   avoids holding a stale reference across configuration changes.
+ * @param rpId Relying Party ID (your app's domain), or [BREEZ_RP_ID] to opt
+ *   into Breez's shared RP. Changing it after users register makes their
+ *   existing credentials undiscoverable.
+ * @param rpName WebAuthn `rp.name`, shown in some credential-manager UIs.
+ *   Deprecated in L3 but still required by current prompts. Used only at
+ *   registration.
+ * @param userName WebAuthn `user.name`, shown in the sign-in picker. Pass a
+ *   stable per-user value if each registration should be a distinct entry.
+ *   Defaults to [rpName]. Used only at registration.
+ * @param userDisplayName WebAuthn `user.displayName`, a label the picker MAY
+ *   show (varies by backend). Defaults to [userName]. Used only at registration.
+ * @param credentialRegistry Opt-in app-side store of known credential IDs.
+ *   When set, the SDK auto-merges stored IDs into `allowCredentials` /
+ *   `excludeCredentials` and writes new IDs back.
+ * @param onRegistryError Best-effort callback for registry failures; never
+ *   blocks the ceremony.
  */
 public class PasskeyProvider(
     private val activityProvider: () -> Activity,
@@ -110,17 +97,12 @@ public class PasskeyProvider(
     /**
      * Bulk PRF derivation backed by [CredentialManagerPrfCore.deriveSeeds].
      * Uses the WebAuthn PRF dual-salt fast path where the authenticator
-     * honors `prf.eval.second`, falling back to single-salt otherwise.
-     * Output ordering matches input ordering. Returns the seeds plus the
-     * credential ID observed in the same assertion (null when none was
-     * captured, e.g. empty `salts`).
+     * honors `prf.eval.second`, else falls back to single-salt. Output order
+     * matches input order; returns the seeds plus the credential ID observed
+     * in the same assertion (null when none, e.g. empty `salts`).
      *
-     * Passes `autoRegister = false`: this provider never implicitly
-     * creates a credential during derivation. Sign-up and sign-in are
-     * explicit (the host calls [createPasskey] for registration), so a
-     * missing credential surfaces as `CredentialNotFound` rather than
-     * silently minting a new passkey. (The core defaults `autoRegister`
-     * to true for direct callers; the provider opts out.)
+     * Never auto-creates a credential during derivation: a missing credential
+     * surfaces as `CredentialNotFound`, not a new passkey.
      */
     override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput =
         try {
@@ -147,29 +129,15 @@ public class PasskeyProvider(
             is DomainAssociationResult.Associated ->
                 DomainAssociation.Associated
 
-            // Soft-fail on Android: degrade NotAssociated → Skipped.
+            // Soft-fail on Android: degrade NotAssociated to Skipped.
             //
-            // Rationale: Android's CredentialManager performs its own DAL
-            // verification internally, using Google Play Services' cache
-            // of the assetlinks statements. That cache is typically
-            // fresher than the public Digital Asset Links API our Core
-            // queries. If our public-API probe reports "no match" while
-            // GMS's cache would actually accept the credential, blocking
-            // the user on our check is a strict regression vs. the
-            // native path.
-            //
-            // Android's native error surface is also granular enough
-            // (NoCredentialException, GetCredentialProviderConfiguration
-            // Exception, etc.) that the subsequent CredentialManager call
-            // produces a recognizable error when the credential truly
-            // can't be used. iOS has the opposite property : 
-            // ASAuthorizationError collapses AASA failures into
-            // `CredentialNotFound`, so iOS keeps NotAssociated as a
-            // hard-block (that's the whole point of the pre-check there).
-            //
-            // Logging at WARN so maintainers can still see the DAL
-            // mismatch in logcat (or in-app log export) without users
-            // being blocked.
+            // Android's CredentialManager runs its own Digital Asset Links
+            // check against Google Play Services' assetlinks cache, typically
+            // fresher than the public DAL API the core queries. A "no match"
+            // from our probe can be a false negative, so hard-blocking here
+            // regresses vs. the native path: degrade to Skipped and let the
+            // CredentialManager call surface a real error if one exists.
+            // Logged at WARN so the DAL mismatch stays visible in logcat.
             is DomainAssociationResult.NotAssociated -> {
                 android.util.Log.w(
                     "CredentialManagerPrf",
@@ -187,18 +155,12 @@ public class PasskeyProvider(
     }
 
     /**
-     * Register a new passkey with PRF support. One ceremony, no seed
-     * derivation.
+     * Register a new passkey with PRF support. One ceremony, no derivation.
      *
-     * `user.id` is never host-supplied: the core mints a fresh random
-     * 16-byte handle per call and surfaces it via
-     * [RegisteredCredential.userId]. Branding fields (`userName`,
-     * `userDisplayName`) live on this provider's constructor.
-     *
-     * When the provider was constructed with a `credentialRegistry`,
-     * the registry's stored IDs are auto-merged into
-     * `excludeCredentials` and the new credential ID is auto-added
-     * on success.
+     * `user.id` is never host-supplied: the core mints a fresh random 16-byte
+     * handle and returns it as [RegisteredCredential.userId]. When a
+     * `credentialRegistry` is configured, stored IDs are merged into
+     * `excludeCredentials` and the new ID is added on success.
      */
     override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential {
         try {
