@@ -11,6 +11,12 @@ import UIKit
 @available(iOS 18.0, *)
 public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
 
+    /// Shared across the per-call cores so the post-create PRF-readiness
+    /// grace armed by `createPasskey` survives to an immediately-following
+    /// `deriveSeeds` (sparing a second prompt). The registrar retains this
+    /// plugin instance, so it persists across calls; mirrors the Android plugin.
+    private let graceTracker = PostCreateGraceTracker()
+
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(
             name: "breez_sdk_spark_passkey",
@@ -60,7 +66,8 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         }
 
         let core = PasskeyAssertionCore(
-            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName
+            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName,
+            graceTracker: graceTracker
         )
         Task { @MainActor in
             do {
@@ -110,7 +117,8 @@ public class BreezSdkSparkPasskeyPlugin: NSObject, FlutterPlugin {
         let preferImmediate = args["preferImmediatelyAvailableCredentials"] as? Bool
 
         let core = PasskeyAssertionCore(
-            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName
+            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName,
+            graceTracker: graceTracker
         )
         Task { @MainActor in
             do {

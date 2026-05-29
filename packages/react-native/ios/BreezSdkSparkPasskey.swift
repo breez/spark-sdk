@@ -12,6 +12,12 @@ import React
 @objc(BreezSdkSparkPasskey)
 class BreezSdkSparkPasskey: NSObject {
 
+    /// Shared across the per-call cores so the post-create PRF-readiness
+    /// grace armed by `createPasskey` survives to an immediately-following
+    /// `deriveSeeds` (sparing a second prompt). The RN module is a singleton
+    /// per bridge, so this persists across calls; mirrors the Android module.
+    private let graceTracker = PostCreateGraceTracker()
+
     @objc
     static func requiresMainQueueSetup() -> Bool {
         return false
@@ -48,7 +54,8 @@ class BreezSdkSparkPasskey: NSObject {
         let preferImmediate = preferImmediatelyAvailableCredentials?.boolValue
 
         let core = PasskeyAssertionCore(
-            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName
+            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName,
+            graceTracker: graceTracker
         )
         Task { @MainActor in
             do {
@@ -89,7 +96,8 @@ class BreezSdkSparkPasskey: NSObject {
         let excludeIds: [Data] = excludeCredentials.compactMap { Data(base64Encoded: $0) }
 
         let core = PasskeyAssertionCore(
-            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName
+            rpId: rpId, rpName: rpName, userName: userName, userDisplayName: userDisplayName,
+            graceTracker: graceTracker
         )
         Task { @MainActor in
             do {
