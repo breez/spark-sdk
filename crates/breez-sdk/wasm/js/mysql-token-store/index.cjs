@@ -238,32 +238,6 @@ class MysqlTokenStore {
           [this.identity, refreshTimestamp]
         );
 
-        // Also delete any non-reserved row whose outpoint is in the incoming
-        // refresh data. The refresh is authoritative for that outpoint, so we
-        // drop a previously-inline-inserted synthetic-id row to make room.
-        // Mirrors the in-memory store's outpoint-keyed semantics and prevents
-        // duplicate (id, outpoint) rows that would later trigger
-        // TOKEN_RULES_VIOLATION at the operator.
-        const incomingOutpoints = [];
-        for (const to of tokenOutputs) {
-          for (const o of to.outputs) {
-            incomingOutpoints.push([o.prevTxHash, o.prevTxVout]);
-          }
-        }
-        if (incomingOutpoints.length > 0) {
-          const pairPlaceholders = incomingOutpoints.map(() => "(?, ?)").join(", ");
-          const params = [this.identity];
-          for (const [h, v] of incomingOutpoints) {
-            params.push(h, v);
-          }
-          await conn.query(
-            `DELETE FROM brz_token_outputs
-             WHERE user_id = ? AND reservation_id IS NULL
-               AND (prev_tx_hash, prev_tx_vout) IN (${pairPlaceholders})`,
-            params
-          );
-        }
-
         const incomingOutputIds = new Set();
         for (const to of tokenOutputs) {
           for (const o of to.outputs) {
@@ -572,11 +546,8 @@ class MysqlTokenStore {
    */
   async updateTokenOutputs(outputsToRemove, outputsToAdd) {
     try {
-      // Serialize against setTokensOutputs. Without the write lock, a
-      // concurrent refresh could insert operator-id rows for the same
-      // outpoints we're about to insert with synthetic ids, leaving
-      // duplicate (id, outpoint) rows that later trigger
-      // TOKEN_RULES_VIOLATION at the operator.
+      // Serialize against the other token-store mutators (refresh, reservation,
+      // finalization), which take the same per-user advisory lock.
       await this._withWriteTransaction(async (conn) => {
         // 1. Remove spent outputs and mark as spent.
         if (outputsToRemove && outputsToRemove.length > 0) {
@@ -612,24 +583,7 @@ class MysqlTokenStore {
             );
           }
 
-          // Collect existing outpoints so we skip re-inserting outpoints
-          // already present (e.g. from a concurrent refresh that landed
-          // operator-id rows). Without this, the synthetic-id row from this
-          // inline insert would coexist with the operator-id row and surface
-          // as a duplicate input at reserve time.
-          const [existingRows] = await conn.query(
-            "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs WHERE user_id = ?",
-            [this.identity]
-          );
-          const existingOutpoints = new Set(
-            existingRows.map((r) => `${r.prev_tx_hash}:${r.prev_tx_vout}`)
-          );
-
           for (const output of outputsToAdd.outputs) {
-            const outpoint = `${output.prevTxHash}:${output.prevTxVout}`;
-            if (existingOutpoints.has(outpoint)) {
-              continue;
-            }
             await this._insertSingleOutput(
               conn,
               outputsToAdd.metadata.identifier,
@@ -697,20 +651,6 @@ class MysqlTokenStore {
         );
 
         let outputs = outputRows.map((row) => this._outputFromRow(row));
-
-        // Defensive: dedup by outpoint. brz_token_outputs is keyed by id, so a
-        // race between an inline insert (synthetic id) and a concurrent refresh
-        // (operator id) can land two rows for the same outpoint. Listing both
-        // as inputs would trigger TOKEN_RULES_VIOLATION at the operator.
-        {
-          const seen = new Set();
-          outputs = outputs.filter((o) => {
-            const key = `${o.prevTxHash}:${o.prevTxVout}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-        }
 
         if (preferredOutputs && preferredOutputs.length > 0) {
           const preferredIds = new Set(

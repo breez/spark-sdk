@@ -216,32 +216,6 @@ class PostgresTokenStore {
           [this.identity, refreshTimestamp]
         );
 
-        // Also delete any non-reserved row whose outpoint is in the incoming
-        // refresh data. The refresh is authoritative for that outpoint, so we
-        // drop a previously-inline-inserted synthetic-id row to make room.
-        // Mirrors the in-memory store's outpoint-keyed semantics and prevents
-        // duplicate (id, outpoint) rows that would later trigger
-        // TOKEN_RULES_VIOLATION at the operator.
-        const incomingTxHashes = [];
-        const incomingVouts = [];
-        for (const to of tokenOutputs) {
-          for (const o of to.outputs) {
-            incomingTxHashes.push(o.prevTxHash);
-            incomingVouts.push(o.prevTxVout);
-          }
-        }
-        if (incomingTxHashes.length > 0) {
-          await client.query(
-            `DELETE FROM brz_token_outputs
-             WHERE user_id = $1
-               AND reservation_id IS NULL
-               AND (prev_tx_hash, prev_tx_vout) IN (
-                 SELECT * FROM UNNEST($2::text[], $3::int[])
-               )`,
-            [this.identity, incomingTxHashes, incomingVouts]
-          );
-        }
-
         // Build a set of all incoming output IDs for reconciliation
         const incomingOutputIds = new Set();
         for (const to of tokenOutputs) {
@@ -570,11 +544,8 @@ class PostgresTokenStore {
    */
   async updateTokenOutputs(outputsToRemove, outputsToAdd) {
     try {
-      // Serialize against setTokensOutputs. Without the write lock, a
-      // concurrent refresh could insert operator-id rows for the same
-      // outpoints we're about to insert with synthetic ids, leaving
-      // duplicate (id, outpoint) rows that later trigger
-      // TOKEN_RULES_VIOLATION at the operator.
+      // Serialize against the other token-store mutators (refresh, reservation,
+      // finalization), which take the same per-user advisory lock.
       await this._withWriteTransaction(async (client) => {
         // 1. Remove spent outputs and mark as spent.
         if (outputsToRemove && outputsToRemove.length > 0) {
@@ -609,24 +580,7 @@ class PostgresTokenStore {
             );
           }
 
-          // Collect existing outpoints so we skip re-inserting outpoints
-          // already present (e.g. from a concurrent refresh that landed
-          // operator-id rows). Without this, the synthetic-id row from this
-          // inline insert would coexist with the operator-id row and surface
-          // as a duplicate input at reserve time.
-          const existingResult = await client.query(
-            "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs WHERE user_id = $1",
-            [this.identity]
-          );
-          const existingOutpoints = new Set(
-            existingResult.rows.map((r) => `${r.prev_tx_hash}:${r.prev_tx_vout}`)
-          );
-
           for (const output of outputsToAdd.outputs) {
-            const outpoint = `${output.prevTxHash}:${output.prevTxVout}`;
-            if (existingOutpoints.has(outpoint)) {
-              continue;
-            }
             await this._insertSingleOutput(
               client,
               outputsToAdd.metadata.identifier,
@@ -702,20 +656,6 @@ class PostgresTokenStore {
         );
 
         let outputs = outputRows.rows.map((row) => this._outputFromRow(row));
-
-        // Defensive: dedup by outpoint. brz_token_outputs is keyed by id, so a
-        // race between an inline insert (synthetic id) and a concurrent refresh
-        // (operator id) can land two rows for the same outpoint. Listing both
-        // as inputs would trigger TOKEN_RULES_VIOLATION at the operator.
-        {
-          const seen = new Set();
-          outputs = outputs.filter((o) => {
-            const key = `${o.prevTxHash}:${o.prevTxVout}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-          });
-        }
 
         // Filter by preferred if provided
         if (preferredOutputs && preferredOutputs.length > 0) {
