@@ -331,20 +331,31 @@ export class PasskeyProvider {
             return { seeds, credentialId: this._lastObservedCredentialId };
         }
 
+        // After the first assertion, pin the rest of this call to the
+        // credential it resolved to, so every salt derives from one passkey
+        // even when a chunk splits (dropped `prf.eval.second`, or 3+ salts).
+        let activeOptions = options;
+        const pinToObserved = () => {
+            if (this._lastObservedCredentialId != null) {
+                activeOptions = { ...options, _pinnedCredentialId: this._lastObservedCredentialId };
+            }
+        };
+
         let idx = 0;
         while (idx < salts.length) {
             if (idx + 1 < salts.length) {
-                const pair = await this._tryDualSaltAssertion(salts[idx], salts[idx + 1], options);
+                const pair = await this._tryDualSaltAssertion(salts[idx], salts[idx + 1], activeOptions);
+                pinToObserved();
                 seeds.push(pair[0]);
                 if (pair[1] != null) {
                     seeds.push(pair[1]);
                     idx += 2;
                     continue;
                 }
-                seeds.push(await this._deriveSeed(salts[idx + 1], options));
+                seeds.push(await this._deriveSeed(salts[idx + 1], activeOptions));
                 idx += 2;
             } else {
-                seeds.push(await this._deriveSeed(salts[idx], options));
+                seeds.push(await this._deriveSeed(salts[idx], activeOptions));
                 idx += 1;
             }
         }
@@ -505,23 +516,31 @@ export class PasskeyProvider {
      * @private
      */
     async _performAssertion(prfEval, options) {
-        let allowList = options.allowCredentials || [];
-        // Auto-merge registry IDs into the allow-list.
-        if (this.credentialRegistry) {
-            const registryIds = await _registryReadBestEffort(
-                this.credentialRegistry, this.rpId, this.onRegistryError,
-            );
-            if (registryIds.length > 0) {
-                const seen = new Set(allowList.map((id) => _bytesToBase64Url(id)));
-                const merged = [...allowList];
-                for (const id of registryIds) {
-                    const key = _bytesToBase64Url(id);
-                    if (!seen.has(key)) {
-                        seen.add(key);
-                        merged.push(id);
+        let allowList;
+        if (options._pinnedCredentialId != null) {
+            // A later assertion in a multi-ceremony derive: pin to the
+            // credential the first one resolved to and skip the registry
+            // merge, so the pin can't be re-widened to another credential.
+            allowList = [options._pinnedCredentialId];
+        } else {
+            allowList = options.allowCredentials || [];
+            // Auto-merge registry IDs into the allow-list.
+            if (this.credentialRegistry) {
+                const registryIds = await _registryReadBestEffort(
+                    this.credentialRegistry, this.rpId, this.onRegistryError,
+                );
+                if (registryIds.length > 0) {
+                    const seen = new Set(allowList.map((id) => _bytesToBase64Url(id)));
+                    const merged = [...allowList];
+                    for (const id of registryIds) {
+                        const key = _bytesToBase64Url(id);
+                        if (!seen.has(key)) {
+                            seen.add(key);
+                            merged.push(id);
+                        }
                     }
+                    allowList = merged;
                 }
-                allowList = merged;
             }
         }
         const allowCredentials = allowList.map((id) => ({

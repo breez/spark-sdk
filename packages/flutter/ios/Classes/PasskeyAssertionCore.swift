@@ -352,15 +352,10 @@ public final class DefaultPasskeyPresentationAnchorProvider: PasskeyPresentation
 
 // MARK: - Core
 
-/// Reusable WebAuthn PRF logic; holds no per-request state. All
-/// ASAuthorizationController orchestration lives here:
-/// - one assertion ceremony for 1-2 salts (`assertPrf`)
-/// - bulk derivation walking salts in pairs (`deriveSeeds`)
-/// - registration (`register`)
-/// - opt-in `CredentialRegistry` auto-merge / auto-capture
-/// - `preferImmediatelyAvailableCredentials` for fast-fail on no-cred
-/// - AAGUID + BE flag extraction from attestation CBOR
-/// - post-create grace tracker
+/// Reusable WebAuthn PRF logic; holds no per-request state. Owns all
+/// ASAuthorizationController orchestration (assertion, bulk derivation,
+/// registration) plus the opt-in `CredentialRegistry` and post-create
+/// grace tracker.
 @available(iOS 18.0, macOS 15.0, *)
 public final class PasskeyAssertionCore {
     private let rpId: String
@@ -432,8 +427,9 @@ public final class PasskeyAssertionCore {
 
         // One assertion for 1-2 salts, registering + retrying once on no
         // credential. Returns (first, second?, credentialId); `second` is
-        // nil when the authenticator dropped saltInput2. `credentialId` is
-        // the same across every chunk of one derive call.
+        // nil when the authenticator dropped saltInput2. After the first
+        // chunk the caller pins `allow` to its credential, so every chunk
+        // resolves to the same one.
         func assertChunk(_ salt1: Data, _ salt2: Data?) async throws -> (Data, Data?, Data) {
             do {
                 return try await assertPrf(
@@ -475,20 +471,25 @@ public final class PasskeyAssertionCore {
             if i + 1 < salts.count {
                 let (first, second, credId) = try await assertChunk(salts[i], salts[i + 1])
                 observedCredentialId = credId
+                // Pin every later assertion in this call to the credential the
+                // first one resolved to, so all salts derive from one passkey
+                // even when a chunk splits (dropped `second`, or 3+ salts).
+                allow = [credId]
                 out.append(first)
                 if let second = second {
                     out.append(second)
                 } else {
-                    // Authenticator dropped `second`: single-salt recover.
-                    let (recovered, _, recoveredCredId) = try await assertChunk(salts[i + 1], nil)
+                    // Authenticator dropped `second`: single-salt recover,
+                    // pinned to the same credential as `first`.
+                    let (recovered, _, _) = try await assertChunk(salts[i + 1], nil)
                     out.append(recovered)
-                    observedCredentialId = recoveredCredId
                 }
                 i += 2
             } else {
                 let (single, _, credId) = try await assertChunk(salts[i], nil)
-                out.append(single)
                 observedCredentialId = credId
+                allow = [credId]
+                out.append(single)
                 i += 1
             }
         }

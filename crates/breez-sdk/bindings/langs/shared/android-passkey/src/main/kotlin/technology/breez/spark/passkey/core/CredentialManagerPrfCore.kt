@@ -375,7 +375,8 @@ public class CredentialManagerPrfCore(
         // One assertion for 1-2 salts, registering + retrying once on no
         // credential. Returns one output per salt the authenticator
         // evaluated (a dropped `second` yields one) plus the asserted
-        // credential ID (same across every chunk).
+        // credential ID. After the first chunk the caller pins `allow` to
+        // it, so every chunk resolves to the same credential.
         suspend fun assertChunk(chunk: List<String>): Pair<List<ByteArray>, ByteArray?> =
             try {
                 assertPrf(chunk, allow, preferImmediatelyAvailableCredentials)
@@ -404,19 +405,25 @@ public class CredentialManagerPrfCore(
                 if (idx + 1 < salts.size) {
                     val (outputs, credId) = assertChunk(listOf(salts[idx], salts[idx + 1]))
                     observedCredentialId = credId
+                    // Pin every later assertion in this call to the credential
+                    // the first one resolved to, so all salts derive from one
+                    // passkey even when a chunk splits (dropped `second`, 3+ salts).
+                    credId?.let { allow = listOf(it) }
                     output.add(outputs[0])
                     if (outputs.size > 1) {
                         output.add(outputs[1])
                     } else {
-                        val (recovered, recoveredCredId) = assertChunk(listOf(salts[idx + 1]))
+                        // Authenticator dropped `second`: single-salt recover,
+                        // pinned to the same credential as the first output.
+                        val (recovered, _) = assertChunk(listOf(salts[idx + 1]))
                         output.add(recovered[0])
-                        observedCredentialId = recoveredCredId
                     }
                     idx += 2
                 } else {
                     val (single, credId) = assertChunk(listOf(salts[idx]))
-                    output.add(single[0])
                     observedCredentialId = credId
+                    credId?.let { allow = listOf(it) }
+                    output.add(single[0])
                     idx += 1
                 }
             }
