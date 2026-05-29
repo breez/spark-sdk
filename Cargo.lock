@@ -777,6 +777,7 @@ dependencies = [
  "breez-sdk-spark",
  "js-sys",
  "macros",
+ "pg-wasm",
  "platform-utils",
  "serde",
  "serde-wasm-bindgen",
@@ -1998,11 +1999,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -3493,6 +3496,22 @@ checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
 dependencies = [
  "fixedbitset",
  "indexmap 2.14.0",
+]
+
+[[package]]
+name = "pg-wasm"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "deadpool-postgres",
+ "getrandom 0.4.2",
+ "js-sys",
+ "postgres-types",
+ "tokio-postgres",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]

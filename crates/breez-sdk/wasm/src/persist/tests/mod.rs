@@ -5,6 +5,9 @@ mod node;
 mod postgres;
 
 #[cfg(not(feature = "browser-tests"))]
+mod pg_wasm_smoke;
+
+#[cfg(not(feature = "browser-tests"))]
 mod mysql;
 
 #[cfg(not(feature = "browser-tests"))]
