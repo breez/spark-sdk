@@ -48,7 +48,6 @@ pub fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> Tok
         .enumerate()
         .map(|(i, amount)| TokenOutputWithPrevOut {
             output: TokenOutput {
-                id: format!("output-{}-{}", identifier, amount),
                 owner_public_key: owner_pk,
                 revocation_commitment: format!("commitment-{}", i),
                 withdraw_bond_sats: 1000,

@@ -314,16 +314,20 @@ impl TokenOutputStore for PostgresTokenStore {
         .await
         .map_err(map_err)?;
 
-        // Build a set of all incoming output IDs for reconciliation
-        let incoming_output_ids: HashSet<String> = token_outputs
+        // Build a set of all incoming outpoints for reconciliation
+        let incoming_outpoints: HashSet<(String, i32)> = token_outputs
             .iter()
-            .flat_map(|to| to.outputs.iter().map(|o| o.output.id.clone()))
+            .flat_map(|to| {
+                to.outputs
+                    .iter()
+                    .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout as i32))
+            })
             .collect();
 
         // Reconcile reservations: find reserved outputs that no longer exist
         let reserved_rows = tx
             .query(
-                r"SELECT r.id, o.id AS output_id
+                r"SELECT r.id, o.prev_tx_hash, o.prev_tx_vout
                   FROM brz_token_reservations r
                   JOIN brz_token_outputs o
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
@@ -333,34 +337,31 @@ impl TokenOutputStore for PostgresTokenStore {
             .await
             .map_err(map_err)?;
 
-        // Group reserved outputs by reservation ID
-        let mut reservation_outputs: HashMap<String, Vec<String>> = HashMap::new();
+        // Group reserved outpoints by reservation ID
+        let mut reservation_outputs: HashMap<String, Vec<(String, i32)>> = HashMap::new();
         for row in &reserved_rows {
             let reservation_id: String = row.get("id");
-            let output_id: String = row.get("output_id");
+            let outpoint: (String, i32) = (row.get("prev_tx_hash"), row.get("prev_tx_vout"));
             reservation_outputs
                 .entry(reservation_id)
                 .or_default()
-                .push(output_id);
+                .push(outpoint);
         }
 
         // Find reservations that have no valid outputs after reconciliation
         let mut reservations_to_delete: Vec<String> = Vec::new();
-        let mut outputs_to_remove_from_reservation: Vec<String> = Vec::new();
-        for (reservation_id, output_ids) in &reservation_outputs {
-            let valid_ids: Vec<&String> = output_ids
-                .iter()
-                .filter(|id| incoming_output_ids.contains(*id))
-                .collect();
-            if valid_ids.is_empty() {
-                reservations_to_delete.push(reservation_id.clone());
-            } else {
+        let mut outpoints_to_remove_from_reservation: Vec<(String, i32)> = Vec::new();
+        for (reservation_id, outpoints) in &reservation_outputs {
+            let has_valid = outpoints.iter().any(|op| incoming_outpoints.contains(op));
+            if has_valid {
                 // Remove individual outputs that no longer exist
-                for id in output_ids {
-                    if !incoming_output_ids.contains(id) {
-                        outputs_to_remove_from_reservation.push(id.clone());
+                for op in outpoints {
+                    if !incoming_outpoints.contains(op) {
+                        outpoints_to_remove_from_reservation.push(op.clone());
                     }
                 }
+            } else {
+                reservations_to_delete.push(reservation_id.clone());
             }
         }
 
@@ -382,10 +383,21 @@ impl TokenOutputStore for PostgresTokenStore {
         }
 
         // Delete individual reserved outputs that no longer exist
-        if !outputs_to_remove_from_reservation.is_empty() {
+        if !outpoints_to_remove_from_reservation.is_empty() {
+            let tx_hashes: Vec<String> = outpoints_to_remove_from_reservation
+                .iter()
+                .map(|(h, _)| h.clone())
+                .collect();
+            let vouts: Vec<i32> = outpoints_to_remove_from_reservation
+                .iter()
+                .map(|(_, v)| *v)
+                .collect();
             tx.execute(
-                "DELETE FROM brz_token_outputs WHERE user_id = $1 AND id = ANY($2)",
-                &[&self.identity, &outputs_to_remove_from_reservation],
+                "DELETE FROM brz_token_outputs WHERE user_id = $1 \
+                   AND (prev_tx_hash, prev_tx_vout) IN ( \
+                     SELECT * FROM UNNEST($2::text[], $3::int[]) \
+                   )",
+                &[&self.identity, &tx_hashes, &vouts],
             )
             .await
             .map_err(map_err)?;
@@ -396,7 +408,7 @@ impl TokenOutputStore for PostgresTokenStore {
                     r"SELECT r.id FROM brz_token_reservations r
                       LEFT JOIN brz_token_outputs o
                         ON o.reservation_id = r.id AND o.user_id = r.user_id
-                      WHERE r.user_id = $1 AND o.id IS NULL",
+                      WHERE r.user_id = $1 AND o.prev_tx_hash IS NULL",
                     &[&self.identity],
                 )
                 .await
@@ -413,17 +425,17 @@ impl TokenOutputStore for PostgresTokenStore {
             }
         }
 
-        // Collect IDs of currently reserved outputs (that survived reconciliation)
-        let reserved_output_ids: HashSet<String> = {
+        // Collect outpoints of currently reserved outputs (that survived reconciliation)
+        let reserved_outpoints: HashSet<(String, i32)> = {
             let rows = tx
                 .query(
-                    "SELECT id FROM brz_token_outputs \
+                    "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs \
                      WHERE user_id = $1 AND reservation_id IS NOT NULL",
                     &[&self.identity],
                 )
                 .await
                 .map_err(map_err)?;
-            rows.iter().map(|r| r.get("id")).collect()
+            rows.iter().map(|r| (r.get(0), r.get(1))).collect()
         };
 
         // Delete metadata not referenced by any remaining outputs (per-tenant).
@@ -447,9 +459,7 @@ impl TokenOutputStore for PostgresTokenStore {
             // Insert outputs that aren't currently reserved or spent
             for output in &to.outputs {
                 let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
-                if reserved_output_ids.contains(&output.output.id)
-                    || spent_outpoints.contains(&outpoint)
-                {
+                if reserved_outpoints.contains(&outpoint) || spent_outpoints.contains(&outpoint) {
                     continue;
                 }
                 self.insert_single_output(&tx, &to.metadata.identifier, output)
@@ -512,7 +522,7 @@ impl TokenOutputStore for PostgresTokenStore {
             .query(
                 r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
                          m.max_supply, m.is_freezable, m.creation_entity_public_key,
-                         o.id AS output_id, o.owner_public_key, o.revocation_commitment,
+                         o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount,
                          o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
@@ -549,8 +559,8 @@ impl TokenOutputStore for PostgresTokenStore {
                 continue;
             };
 
-            let output_id: Option<String> = row.get("output_id");
-            if output_id.is_none() {
+            let prev_tx_hash: Option<String> = row.get("prev_tx_hash");
+            if prev_tx_hash.is_none() {
                 continue;
             }
 
@@ -583,7 +593,7 @@ impl TokenOutputStore for PostgresTokenStore {
         let query = format!(
             r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
                      m.max_supply, m.is_freezable, m.creation_entity_public_key,
-                     o.id AS output_id, o.owner_public_key, o.revocation_commitment,
+                     o.owner_public_key, o.revocation_commitment,
                      o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                      o.token_public_key, o.token_amount,
                      o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
@@ -617,8 +627,8 @@ impl TokenOutputStore for PostgresTokenStore {
         };
 
         for row in &rows {
-            let output_id: Option<String> = row.get("output_id");
-            if output_id.is_none() {
+            let prev_tx_hash: Option<String> = row.get("prev_tx_hash");
+            if prev_tx_hash.is_none() {
                 continue;
             }
 
@@ -710,7 +720,7 @@ impl TokenOutputStore for PostgresTokenStore {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::cast_possible_wrap)]
     async fn reserve_token_outputs(
         &self,
         token_identifier: &str,
@@ -759,7 +769,7 @@ impl TokenOutputStore for PostgresTokenStore {
         // Get available (non-reserved) outputs
         let rows = tx
             .query(
-                r"SELECT o.id AS output_id, o.owner_public_key, o.revocation_commitment,
+                r"SELECT o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount, o.prev_tx_hash, o.prev_tx_vout,
                          o.token_identifier AS identifier
@@ -779,9 +789,13 @@ impl TokenOutputStore for PostgresTokenStore {
 
         // Filter by preferred if provided
         if let Some(ref preferred) = preferred_outputs {
-            let preferred_ids: HashSet<&str> =
-                preferred.iter().map(|p| p.output.id.as_str()).collect();
-            outputs.retain(|o| preferred_ids.contains(o.output.id.as_str()));
+            let preferred_outpoints: HashSet<(&str, u32)> = preferred
+                .iter()
+                .map(|p| (p.prev_tx_hash.as_str(), p.prev_tx_vout))
+                .collect();
+            outputs.retain(|o| {
+                preferred_outpoints.contains(&(o.prev_tx_hash.as_str(), o.prev_tx_vout))
+            });
         }
 
         // Check sufficiency for MinTotalValue
@@ -843,15 +857,27 @@ impl TokenOutputStore for PostgresTokenStore {
         .await
         .map_err(map_err)?;
 
-        // Set reservation_id on selected outputs
-        let selected_ids: Vec<String> = selected_outputs
+        // Set reservation_id on selected outputs (by outpoint)
+        let selected_tx_hashes: Vec<String> = selected_outputs
             .iter()
-            .map(|o| o.output.id.clone())
+            .map(|o| o.prev_tx_hash.clone())
+            .collect();
+        let selected_vouts: Vec<i32> = selected_outputs
+            .iter()
+            .map(|o| o.prev_tx_vout as i32)
             .collect();
         tx.execute(
             "UPDATE brz_token_outputs SET reservation_id = $1 \
-             WHERE user_id = $3 AND id = ANY($2)",
-            &[&reservation_id, &selected_ids, &self.identity],
+             WHERE user_id = $4 \
+               AND (prev_tx_hash, prev_tx_vout) IN ( \
+                 SELECT * FROM UNNEST($2::text[], $3::int[]) \
+               )",
+            &[
+                &reservation_id,
+                &selected_tx_hashes,
+                &selected_vouts,
+                &self.identity,
+            ],
         )
         .await
         .map_err(map_err)?;
@@ -1139,6 +1165,27 @@ impl PostgresTokenStore {
                 )"
                 .to_string(),
             ],
+            // Migration 4: re-key brz_token_outputs by (prev_tx_hash, prev_tx_vout) and drop the
+            // legacy id column. id already held "{prev_tx_hash}:{vout}", so the outpoint is the
+            // natural key. First dedup any duplicate-outpoint rows (possible from pre-outpoint
+            // code) so the composite PK can be added, preferring rows that hold a reservation.
+            vec![
+                "DELETE FROM brz_token_outputs WHERE ctid IN (
+                    SELECT ctid FROM (
+                        SELECT ctid, ROW_NUMBER() OVER (
+                            PARTITION BY user_id, prev_tx_hash, prev_tx_vout
+                            ORDER BY (reservation_id IS NULL) ASC, id ASC
+                        ) AS rn
+                        FROM brz_token_outputs
+                    ) t WHERE t.rn > 1
+                )"
+                .to_string(),
+                "ALTER TABLE brz_token_outputs \
+                 DROP CONSTRAINT IF EXISTS brz_token_outputs_pkey, \
+                 ADD PRIMARY KEY (user_id, prev_tx_hash, prev_tx_vout)"
+                    .to_string(),
+                "ALTER TABLE brz_token_outputs DROP COLUMN id".to_string(),
+            ],
         ]
     }
 
@@ -1166,13 +1213,13 @@ impl PostgresTokenStore {
     ) -> Result<(), TokenOutputServiceError> {
         tx.execute(
             r"INSERT INTO brz_token_outputs
-                (user_id, id, token_identifier, owner_public_key, revocation_commitment,
+                (user_id, token_identifier, owner_public_key, revocation_commitment,
                  withdraw_bond_sats, withdraw_relative_block_locktime,
                  token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
-              VALUES ($11, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-              ON CONFLICT (user_id, id) DO NOTHING",
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+              ON CONFLICT (user_id, prev_tx_hash, prev_tx_vout) DO NOTHING",
             &[
-                &output.output.id,
+                &self.identity,
                 &token_identifier,
                 &output.output.owner_public_key.to_string(),
                 &output.output.revocation_commitment,
@@ -1182,7 +1229,6 @@ impl PostgresTokenStore {
                 &output.output.token_amount.to_string(),
                 &output.prev_tx_hash,
                 &(output.prev_tx_vout as i32),
-                &self.identity,
             ],
         )
         .await
@@ -1322,7 +1368,6 @@ impl PostgresTokenStore {
     fn output_from_row(
         row: &tokio_postgres::Row,
     ) -> Result<TokenOutputWithPrevOut, TokenOutputServiceError> {
-        let output_id: String = row.get("output_id");
         let owner_pk_str: String = row.get("owner_public_key");
         let revocation_commitment: String = row.get("revocation_commitment");
         let withdraw_bond_sats: i64 = row.get("withdraw_bond_sats");
@@ -1339,7 +1384,6 @@ impl PostgresTokenStore {
 
         Ok(TokenOutputWithPrevOut {
             output: TokenOutput {
-                id: output_id,
                 owner_public_key: owner_pk_str.parse().map_err(map_err)?,
                 revocation_commitment,
                 withdraw_bond_sats: withdraw_bond_sats as u64,

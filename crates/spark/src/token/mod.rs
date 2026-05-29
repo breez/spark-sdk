@@ -37,7 +37,6 @@ pub struct TokenMetadata {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct TokenOutput {
-    pub id: String,
     pub owner_public_key: PublicKey,
     pub revocation_commitment: String,
     pub withdraw_bond_sats: u64,

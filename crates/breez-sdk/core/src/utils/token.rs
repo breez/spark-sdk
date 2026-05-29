@@ -251,7 +251,6 @@ mod tests {
 
     fn token_output(owner: PublicKey) -> TokenOutput {
         TokenOutput {
-            id: "out".to_string(),
             owner_public_key: owner,
             revocation_commitment: "commitment".to_string(),
             withdraw_bond_sats: 1000,

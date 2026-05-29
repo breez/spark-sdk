@@ -365,7 +365,7 @@ impl TokenOutputStore for MysqlTokenStore {
             .exec(
                 r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
                          m.max_supply, m.is_freezable, m.creation_entity_public_key,
-                         o.id AS output_id, o.owner_public_key, o.revocation_commitment,
+                         o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount,
                          o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
@@ -404,9 +404,9 @@ impl TokenOutputStore for MysqlTokenStore {
 
             // `Option<Option<String>>`: outer = column missing, inner = NULL.
             // Both flatten to "no output for this row" (LEFT JOIN miss).
-            let output_id: Option<String> =
-                row.get::<Option<String>, _>("output_id").and_then(|v| v);
-            if output_id.is_none() {
+            let prev_tx_hash: Option<String> =
+                row.get::<Option<String>, _>("prev_tx_hash").and_then(|v| v);
+            if prev_tx_hash.is_none() {
                 continue;
             }
 
@@ -439,7 +439,7 @@ impl TokenOutputStore for MysqlTokenStore {
         let query = format!(
             r"SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
                      m.max_supply, m.is_freezable, m.creation_entity_public_key,
-                     o.id AS output_id, o.owner_public_key, o.revocation_commitment,
+                     o.owner_public_key, o.revocation_commitment,
                      o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                      o.token_public_key, o.token_amount,
                      o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
@@ -473,9 +473,9 @@ impl TokenOutputStore for MysqlTokenStore {
         };
 
         for row in &rows {
-            let output_id: Option<String> =
-                row.get::<Option<String>, _>("output_id").and_then(|v| v);
-            if output_id.is_none() {
+            let prev_tx_hash: Option<String> =
+                row.get::<Option<String>, _>("prev_tx_hash").and_then(|v| v);
+            if prev_tx_hash.is_none() {
                 continue;
             }
 
@@ -764,6 +764,28 @@ impl MysqlTokenStore {
                     )",
                 ),
             ],
+            // Migration 5: re-key brz_token_outputs by (prev_tx_hash, prev_tx_vout) and drop the
+            // legacy id column. id already held "{prev_tx_hash}:{vout}", so the outpoint is the
+            // natural key. First dedup any duplicate-outpoint rows (possible from pre-outpoint
+            // code) so the composite PK can be added, preferring rows that hold a reservation.
+            vec![
+                Migration::sql(
+                    "DELETE a FROM brz_token_outputs a \
+                     JOIN brz_token_outputs b \
+                       ON a.user_id = b.user_id \
+                      AND a.prev_tx_hash = b.prev_tx_hash \
+                      AND a.prev_tx_vout = b.prev_tx_vout \
+                      AND ((b.reservation_id IS NOT NULL) > (a.reservation_id IS NOT NULL) \
+                           OR ((b.reservation_id IS NOT NULL) = (a.reservation_id IS NOT NULL) \
+                               AND b.id > a.id))",
+                ),
+                Migration::sql(
+                    "ALTER TABLE brz_token_outputs \
+                     DROP PRIMARY KEY, \
+                     ADD PRIMARY KEY (user_id, prev_tx_hash, prev_tx_vout)",
+                ),
+                Migration::sql("ALTER TABLE brz_token_outputs DROP COLUMN id"),
+            ],
         ]
     }
 
@@ -849,14 +871,18 @@ impl MysqlTokenStore {
         .await
         .map_err(map_err)?;
 
-        let incoming_output_ids: HashSet<String> = token_outputs
+        let incoming_outpoints: HashSet<(String, i32)> = token_outputs
             .iter()
-            .flat_map(|to| to.outputs.iter().map(|o| o.output.id.clone()))
+            .flat_map(|to| {
+                to.outputs
+                    .iter()
+                    .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout as i32))
+            })
             .collect();
 
-        let reserved_pairs: Vec<(String, String)> = tx
+        let reserved_pairs: Vec<(String, String, i32)> = tx
             .exec(
-                r"SELECT r.id, o.id
+                r"SELECT r.id, o.prev_tx_hash, o.prev_tx_vout
                   FROM brz_token_reservations r
                   JOIN brz_token_outputs o
                     ON o.reservation_id = r.id AND o.user_id = r.user_id
@@ -866,29 +892,26 @@ impl MysqlTokenStore {
             .await
             .map_err(map_err)?;
 
-        let mut reservation_outputs: HashMap<String, Vec<String>> = HashMap::new();
-        for (reservation_id, output_id) in reserved_pairs {
+        let mut reservation_outputs: HashMap<String, Vec<(String, i32)>> = HashMap::new();
+        for (reservation_id, prev_tx_hash, prev_tx_vout) in reserved_pairs {
             reservation_outputs
                 .entry(reservation_id)
                 .or_default()
-                .push(output_id);
+                .push((prev_tx_hash, prev_tx_vout));
         }
 
         let mut reservations_to_delete: Vec<String> = Vec::new();
-        let mut outputs_to_remove_from_reservation: Vec<String> = Vec::new();
-        for (reservation_id, output_ids) in &reservation_outputs {
-            let valid_ids: Vec<&String> = output_ids
-                .iter()
-                .filter(|id| incoming_output_ids.contains(*id))
-                .collect();
-            if valid_ids.is_empty() {
-                reservations_to_delete.push(reservation_id.clone());
-            } else {
-                for id in output_ids {
-                    if !incoming_output_ids.contains(id) {
-                        outputs_to_remove_from_reservation.push(id.clone());
+        let mut outpoints_to_remove_from_reservation: Vec<(String, i32)> = Vec::new();
+        for (reservation_id, outpoints) in &reservation_outputs {
+            let has_valid = outpoints.iter().any(|op| incoming_outpoints.contains(op));
+            if has_valid {
+                for op in outpoints {
+                    if !incoming_outpoints.contains(op) {
+                        outpoints_to_remove_from_reservation.push(op.clone());
                     }
                 }
+            } else {
+                reservations_to_delete.push(reservation_id.clone());
             }
         }
 
@@ -917,20 +940,24 @@ impl MysqlTokenStore {
                 .map_err(map_err)?;
         }
 
-        if !outputs_to_remove_from_reservation.is_empty() {
-            let placeholders = build_placeholders(outputs_to_remove_from_reservation.len());
+        if !outpoints_to_remove_from_reservation.is_empty() {
+            let pair_placeholders =
+                vec!["(?, ?)"; outpoints_to_remove_from_reservation.len()].join(", ");
             let sql = format!(
-                "DELETE FROM brz_token_outputs WHERE user_id = ? AND id IN ({placeholders})"
+                "DELETE FROM brz_token_outputs WHERE user_id = ? \
+                   AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
             );
-            let mut params: Vec<Value> =
-                Vec::with_capacity(outputs_to_remove_from_reservation.len().saturating_add(1));
+            let mut params: Vec<Value> = Vec::with_capacity(
+                outpoints_to_remove_from_reservation
+                    .len()
+                    .saturating_mul(2)
+                    .saturating_add(1),
+            );
             params.push(Value::from(self.identity.clone()));
-            params.extend(
-                outputs_to_remove_from_reservation
-                    .iter()
-                    .cloned()
-                    .map(Value::from),
-            );
+            for (h, v) in &outpoints_to_remove_from_reservation {
+                params.push(Value::from(h.clone()));
+                params.push(Value::from(*v));
+            }
             tx.exec_drop(&sql, Params::Positional(params))
                 .await
                 .map_err(map_err)?;
@@ -940,7 +967,7 @@ impl MysqlTokenStore {
                     r"SELECT r.id FROM brz_token_reservations r
                       LEFT JOIN brz_token_outputs o
                         ON o.reservation_id = r.id AND o.user_id = r.user_id
-                      WHERE r.user_id = ? AND o.id IS NULL",
+                      WHERE r.user_id = ? AND o.prev_tx_hash IS NULL",
                     (self.identity.clone(),),
                 )
                 .await
@@ -959,9 +986,9 @@ impl MysqlTokenStore {
             }
         }
 
-        let reserved_output_ids: HashSet<String> = tx
-            .exec::<String, _, _>(
-                "SELECT id FROM brz_token_outputs WHERE user_id = ? AND reservation_id IS NOT NULL",
+        let reserved_outpoints: HashSet<(String, i32)> = tx
+            .exec::<(String, i32), _, _>(
+                "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs WHERE user_id = ? AND reservation_id IS NOT NULL",
                 (self.identity.clone(),),
             )
             .await
@@ -986,9 +1013,7 @@ impl MysqlTokenStore {
 
             for output in &to.outputs {
                 let outpoint = (output.prev_tx_hash.clone(), output.prev_tx_vout as i32);
-                if reserved_output_ids.contains(&output.output.id)
-                    || spent_outpoints.contains(&outpoint)
-                {
+                if reserved_outpoints.contains(&outpoint) || spent_outpoints.contains(&outpoint) {
                     continue;
                 }
                 self.insert_single_output(&mut tx, &to.metadata.identifier, output)
@@ -1002,7 +1027,11 @@ impl MysqlTokenStore {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines, clippy::arithmetic_side_effects)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_wrap
+    )]
     async fn reserve_token_outputs_inner(
         &self,
         conn: &mut Conn,
@@ -1030,7 +1059,7 @@ impl MysqlTokenStore {
 
         let rows: Vec<Row> = tx
             .exec(
-                r"SELECT o.id AS output_id, o.owner_public_key, o.revocation_commitment,
+                r"SELECT o.owner_public_key, o.revocation_commitment,
                          o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                          o.token_public_key, o.token_amount, o.prev_tx_hash, o.prev_tx_vout,
                          o.token_identifier
@@ -1047,9 +1076,13 @@ impl MysqlTokenStore {
             .collect::<Result<Vec<_>, _>>()?;
 
         if let Some(ref preferred) = preferred_outputs {
-            let preferred_ids: HashSet<&str> =
-                preferred.iter().map(|p| p.output.id.as_str()).collect();
-            outputs.retain(|o| preferred_ids.contains(o.output.id.as_str()));
+            let preferred_outpoints: HashSet<(&str, u32)> = preferred
+                .iter()
+                .map(|p| (p.prev_tx_hash.as_str(), p.prev_tx_vout))
+                .collect();
+            outputs.retain(|o| {
+                preferred_outpoints.contains(&(o.prev_tx_hash.as_str(), o.prev_tx_vout))
+            });
         }
 
         if let ReservationTarget::MinTotalValue(amount) = target
@@ -1108,20 +1141,19 @@ impl MysqlTokenStore {
         .await
         .map_err(map_err)?;
 
-        let selected_ids: Vec<String> = selected_outputs
-            .iter()
-            .map(|o| o.output.id.clone())
-            .collect();
-        if !selected_ids.is_empty() {
-            let placeholders = build_placeholders(selected_ids.len());
+        if !selected_outputs.is_empty() {
+            let pair_placeholders = vec!["(?, ?)"; selected_outputs.len()].join(", ");
             let sql = format!(
-                "UPDATE brz_token_outputs SET reservation_id = ? WHERE user_id = ? AND id IN ({placeholders})"
+                "UPDATE brz_token_outputs SET reservation_id = ? WHERE user_id = ? \
+                   AND (prev_tx_hash, prev_tx_vout) IN ({pair_placeholders})"
             );
-            let mut params: Vec<Value> = Vec::with_capacity(selected_ids.len() + 2);
+            let mut params: Vec<Value> =
+                Vec::with_capacity(selected_outputs.len().saturating_mul(2).saturating_add(2));
             params.push(Value::from(reservation_id.clone()));
             params.push(Value::from(self.identity.clone()));
-            for id in &selected_ids {
-                params.push(Value::from(id.clone()));
+            for o in &selected_outputs {
+                params.push(Value::from(o.prev_tx_hash.clone()));
+                params.push(Value::from(o.prev_tx_vout as i32));
             }
             tx.exec_drop(&sql, Params::Positional(params))
                 .await
@@ -1342,18 +1374,17 @@ impl MysqlTokenStore {
         output: &TokenOutputWithPrevOut,
     ) -> Result<(), TokenOutputServiceError> {
         tx.exec_drop(
-            // ON DUPLICATE KEY UPDATE id = id no-ops on the (user_id, id)
-            // primary key conflict only — unlike INSERT IGNORE, FK / NOT NULL
-            // / type errors still propagate.
+            // ON DUPLICATE KEY UPDATE prev_tx_hash = prev_tx_hash no-ops on the
+            // (user_id, prev_tx_hash, prev_tx_vout) primary key conflict only — unlike
+            // INSERT IGNORE, FK / NOT NULL / type errors still propagate.
             r"INSERT INTO brz_token_outputs
-                (user_id, id, token_identifier, owner_public_key, revocation_commitment,
+                (user_id, token_identifier, owner_public_key, revocation_commitment,
                  withdraw_bond_sats, withdraw_relative_block_locktime,
                  token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))
-              ON DUPLICATE KEY UPDATE id = id",
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))
+              ON DUPLICATE KEY UPDATE prev_tx_hash = prev_tx_hash",
             (
                 self.identity.clone(),
-                &output.output.id,
                 token_identifier,
                 output.output.owner_public_key.to_string(),
                 &output.output.revocation_commitment,
@@ -1515,7 +1546,6 @@ impl MysqlTokenStore {
     fn output_from_row(row: &Row) -> Result<TokenOutputWithPrevOut, TokenOutputServiceError> {
         // See `metadata_from_row` for why every column is read via `Option<T>`
         // first — `mysql_async` panics on NULL for non-Option `T`.
-        let output_id: String = get_str_required(row, "output_id")?;
         let owner_pk_str: String = get_str_required(row, "owner_public_key")?;
         let revocation_commitment: String = get_str_required(row, "revocation_commitment")?;
         let withdraw_bond_sats: i64 = row
@@ -1552,7 +1582,6 @@ impl MysqlTokenStore {
 
         Ok(TokenOutputWithPrevOut {
             output: TokenOutput {
-                id: output_id,
                 owner_public_key: owner_pk_str.parse().map_err(map_err)?,
                 revocation_commitment,
                 withdraw_bond_sats: withdraw_bond_sats as u64,

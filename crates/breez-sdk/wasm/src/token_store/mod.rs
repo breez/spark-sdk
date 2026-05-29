@@ -123,7 +123,6 @@ struct WasmTokenBalance {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WasmTokenOutput {
-    id: String,
     owner_public_key: String,
     revocation_commitment: String,
     withdraw_bond_sats: u64,
@@ -136,7 +135,6 @@ struct WasmTokenOutput {
 impl From<&TokenOutput> for WasmTokenOutput {
     fn from(o: &TokenOutput) -> Self {
         Self {
-            id: o.id.clone(),
             owner_public_key: o.owner_public_key.to_string(),
             revocation_commitment: o.revocation_commitment.clone(),
             withdraw_bond_sats: o.withdraw_bond_sats,
@@ -153,7 +151,6 @@ impl TryFrom<WasmTokenOutput> for TokenOutput {
 
     fn try_from(w: WasmTokenOutput) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: w.id,
             owner_public_key: w.owner_public_key.parse().map_err(map_parse_err)?,
             revocation_commitment: w.revocation_commitment,
             withdraw_bond_sats: w.withdraw_bond_sats,

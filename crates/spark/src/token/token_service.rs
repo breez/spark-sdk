@@ -853,13 +853,10 @@ impl TokenService {
                 final_token_transaction
                     .final_token_outputs
                     .into_iter()
-                    .enumerate()
-                    .map(|(vout, fo)| {
-                        let mut output: TokenOutput = (fo, self.network)
+                    .map(|fo| {
+                        (fo, self.network)
                             .try_into()
-                            .map_err(|e: ServiceError| e.to_string())?;
-                        output.id = format!("{txid}:{vout}");
-                        Ok(output)
+                            .map_err(|e: ServiceError| e.to_string())
                     })
                     .collect::<Result<Vec<TokenOutput>, String>>()
                     .map(|outputs| (txid, outputs))
@@ -2432,7 +2429,6 @@ mod tests {
             local.revocation_commitment,
             hex::encode(&revocation_commitment)
         );
-        assert!(local.id.is_empty());
         assert!(local.token_public_key.is_none());
     }
 }
