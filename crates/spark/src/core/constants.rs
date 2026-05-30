@@ -23,10 +23,7 @@ pub fn initial_timelock_sequence() -> (Sequence, Sequence) {
 }
 
 pub fn initial_root_timelock_sequence() -> (Sequence, Sequence) {
-    (
-        to_sequence(0, SPARK_SEQUENCE_FLAG),
-        to_sequence(DIRECT_TIME_LOCK_OFFSET, SPARK_SEQUENCE_FLAG),
-    )
+    (to_sequence(0, 0), to_sequence(DIRECT_TIME_LOCK_OFFSET, 0))
 }
 
 pub fn initial_zero_timelock_sequence() -> (Sequence, Sequence) {
@@ -205,6 +202,25 @@ mod tests {
             direct_height.value(),
             INITIAL_TIME_LOCK + DIRECT_TIME_LOCK_OFFSET
         );
+    }
+
+    #[test_all]
+    fn test_initial_root_timelock_sequence() {
+        let (cpfp_sequence, direct_sequence) = initial_root_timelock_sequence();
+
+        assert_eq!(cpfp_sequence.to_consensus_u32() & SPARK_SEQUENCE_FLAG, 0);
+        assert_eq!(direct_sequence.to_consensus_u32() & SPARK_SEQUENCE_FLAG, 0);
+
+        let LockTime::Blocks(cpfp_height) = cpfp_sequence.to_relative_lock_time().unwrap() else {
+            panic!("Expected a cpfp block height locktime");
+        };
+        assert_eq!(cpfp_height.value(), 0);
+
+        let LockTime::Blocks(direct_height) = direct_sequence.to_relative_lock_time().unwrap()
+        else {
+            panic!("Expected a direct block height locktime");
+        };
+        assert_eq!(direct_height.value(), DIRECT_TIME_LOCK_OFFSET);
     }
 
     #[test_all]
