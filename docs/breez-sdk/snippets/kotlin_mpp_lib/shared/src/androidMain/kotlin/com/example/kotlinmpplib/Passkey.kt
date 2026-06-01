@@ -133,6 +133,38 @@ class PasskeySnippets(private val activity: Activity) {
         return sdk
     }
 
+    suspend fun credentialMetadata() {
+        // ANCHOR: credential-metadata
+        val prfProvider = PasskeyProvider(
+            activityProvider = { activity },
+            rpId = "<your-rp-domain>",
+            rpName = "Your App",
+        )
+        val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
+
+        val response = passkey.register(RegisterRequest(label = "personal"))
+
+        // Persist these in synced storage (Block Store / iCloud Keychain) so
+        // they survive reinstall and reach the user's other devices. aaguid
+        // and backupEligible are only available here, on registration.
+        response.credential?.let { credential ->
+            val persistedCredentialId = credential.credentialId
+            val persistedAaguid = credential.aaguid
+            val persistedBackupEligible = credential.backupEligible
+        }
+
+        // On a later sign-in, pin the stored credential ID via allowCredentials
+        // so the OS cannot substitute a sibling credential, which would derive
+        // a different wallet seed.
+        passkey.signIn(
+            SignInRequest(
+                label = "personal",
+                allowCredentials = emptyList(), // stored credentialId bytes
+            )
+        )
+        // ANCHOR_END: credential-metadata
+    }
+
     suspend fun listLabels(): List<String> {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },

@@ -128,6 +128,36 @@ const registerNewPasskey = async () => {
   return sdk
 }
 
+const credentialMetadata = async () => {
+  // ANCHOR: credential-metadata
+  const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, config.apiKey, undefined)
+
+  const response = await passkey.register({ label: 'personal', excludeCredentials: [] })
+
+  // Persist these in synced storage (iCloud Keychain / Block Store) so they
+  // survive reinstall and reach the user's other devices. aaguid and
+  // backupEligible are only available here, on registration.
+  if (response.credential !== undefined) {
+    const _meta = {
+      credentialId: response.credential.credentialId,
+      aaguid: response.credential.aaguid,
+      backupEligible: response.credential.backupEligible
+    }
+  }
+
+  // On a later sign-in, pin the stored credential ID via allowCredentials so
+  // the OS cannot substitute a sibling credential, which would derive a
+  // different wallet seed.
+  const _signedIn = await passkey.signIn({
+    label: 'personal',
+    allowCredentials: [/* stored credentialId bytes */],
+    preferImmediatelyAvailableCredentials: undefined
+  })
+  // ANCHOR_END: credential-metadata
+}
+
 const listLabels = async (): Promise<string[]> => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)

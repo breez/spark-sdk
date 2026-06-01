@@ -130,6 +130,37 @@ namespace BreezSdkSnippets
             return sdk;
         }
 
+        async Task CredentialMetadata()
+        {
+            // ANCHOR: credential-metadata
+            var prfProvider = new CustomPrfProvider();
+            var passkey = new PasskeyClient(prfProvider, null, null);
+
+            var response = await passkey.Register(new RegisterRequest(label: "personal"));
+
+            // Persist these in synced storage (iCloud Keychain / Block Store) so
+            // they survive reinstall and reach the user's other devices. aaguid
+            // and backupEligible are only available here, on registration.
+            if (response.credential is not null)
+            {
+                var _persistedCredentialId = response.credential.credentialId;
+                var _persistedAaguid = response.credential.aaguid;
+                var _persistedBackupEligible = response.credential.backupEligible;
+            }
+
+            // On a later sign-in, pin the stored credential ID via
+            // allowCredentials so the OS cannot substitute a sibling credential,
+            // which would derive a different wallet seed.
+            await passkey.SignIn(new SignInRequest(
+                label: "personal",
+                allowCredentials: new byte[][]
+                {
+                    // stored credentialId bytes
+                }
+            ));
+            // ANCHOR_END: credential-metadata
+        }
+
         async Task<string[]> ListLabels()
         {
             var prfProvider = new CustomPrfProvider();

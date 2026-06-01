@@ -141,6 +141,35 @@ async def register_new_passkey():
     return sdk
 
 
+async def credential_metadata():
+    # ANCHOR: credential-metadata
+    prf_provider = CustomPrfProvider()
+    passkey = PasskeyClient(prf_provider, None, None)
+
+    response = await passkey.register(RegisterRequest(label="personal"))
+
+    # Persist these in synced storage (iCloud Keychain / Block Store) so they
+    # survive reinstall and reach the user's other devices. aaguid and
+    # backup_eligible are only available here, on registration.
+    if response.credential is not None:
+        _persisted_credential_id = response.credential.credential_id
+        _persisted_aaguid = response.credential.aaguid
+        _persisted_backup_eligible = response.credential.backup_eligible
+
+    # On a later sign-in, pin the stored credential ID via allow_credentials so
+    # the OS cannot substitute a sibling credential, which would derive a
+    # different wallet seed.
+    await passkey.sign_in(
+        SignInRequest(
+            label="personal",
+            allow_credentials=[
+                # stored credential_id bytes
+            ],
+        )
+    )
+    # ANCHOR_END: credential-metadata
+
+
 async def list_labels() -> list[str]:
     prf_provider = CustomPrfProvider()
     passkey = PasskeyClient(prf_provider, "<breez api key>", None)

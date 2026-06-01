@@ -130,6 +130,36 @@ func registerNewPasskey() async throws -> BreezSdk {
     return sdk
 }
 
+func credentialMetadata() async throws {
+    // ANCHOR: credential-metadata
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
+
+    let response = try await passkey.register(
+        request: RegisterRequest(label: "personal")
+    )
+
+    // Persist these in synced storage (iCloud Keychain) so they survive
+    // reinstall and reach the user's other devices. aaguid and backupEligible
+    // are only available here, on registration.
+    if let credential = response.credential {
+        let _ = (credential.credentialId, credential.aaguid, credential.backupEligible)
+    }
+
+    // On a later sign-in, pin the stored credential ID via allowCredentials so
+    // the OS cannot substitute a sibling credential, which would derive a
+    // different wallet seed.
+    let _ = try await passkey.signIn(
+        request: SignInRequest(
+            label: "personal",
+            allowCredentials: [
+                // stored credentialId bytes
+            ]
+        )
+    )
+    // ANCHOR_END: credential-metadata
+}
+
 func listLabels() async throws -> [String] {
     let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)

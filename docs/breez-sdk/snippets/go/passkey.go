@@ -153,6 +153,42 @@ func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	return sdk, nil
 }
 
+func CredentialMetadata() error {
+	// ANCHOR: credential-metadata
+	prfProvider := &CustomPrfProvider{}
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+
+	label := "personal"
+	response, err := passkey.Register(breez_sdk_spark.RegisterRequest{Label: &label})
+	if err != nil {
+		return err
+	}
+
+	// Persist these in synced storage (iCloud Keychain / Block Store) so they
+	// survive reinstall and reach the user's other devices. Aaguid and
+	// BackupEligible are only available here, on registration.
+	if response.Credential != nil {
+		_ = response.Credential.CredentialId
+		_ = response.Credential.Aaguid
+		_ = response.Credential.BackupEligible
+	}
+
+	// On a later sign-in, pin the stored credential ID via AllowCredentials so
+	// the OS cannot substitute a sibling credential, which would derive a
+	// different wallet seed.
+	_, err = passkey.SignIn(breez_sdk_spark.SignInRequest{
+		Label:            &label,
+		AllowCredentials: [][]byte{
+			// stored CredentialId bytes
+		},
+	})
+	if err != nil {
+		return err
+	}
+	// ANCHOR_END: credential-metadata
+	return nil
+}
+
 func ListLabels() ([]string, error) {
 	prfProvider := &CustomPrfProvider{}
 	breezApiKey := "<breez api key>"

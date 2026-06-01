@@ -21,39 +21,19 @@ The attestation fields ({{#name user_id}}, {{#name aaguid}}, {{#name backup_elig
 
 Persist {{#name credential_id}} from every response in your own storage. On registration, also persist {{#name aaguid}} and {{#name backup_eligible}}: they are not available again on later sign-ins.
 
-```typescript
-const reg = await client.register({ label })
-if (reg.credential) {
-  store.setActive(reg.credential.credentialId)
-  if (reg.credential.aaguid) store.setAaguid(reg.credential.credentialId, reg.credential.aaguid)
-  if (reg.credential.backupEligible != null) {
-    store.setBackupEligible(reg.credential.credentialId, reg.credential.backupEligible)
-  }
-}
+{{#tabs passkey:credential-metadata}}
 
-const si = await client.signIn({ label })
-if (si.credential) store.setActive(si.credential.credentialId)
-```
-
-The same `credential` field is on every binding (with each language's field casing). For cross-device continuity, back this store with synced storage: iCloud Keychain (`kSecAttrSynchronizable`) on iOS, Block Store on Android, or your own synced backend. Plain local storage does not survive reinstall or replicate to a second device.
+For cross-device continuity, back this store with synced storage: iCloud Keychain (`kSecAttrSynchronizable`) on iOS, Block Store on Android, or your own synced backend. Plain local storage does not survive reinstall or replicate to a second device.
 
 ## Pinning a credential on sign-in
 
-Pass a stored {{#name credential_id}} as `allow_credentials` to constrain the assertion to one credential:
-
-```typescript
-await client.signIn({ allowCredentials: [store.getActive()] })
-```
-
-This matters for security-sensitive flows. With an empty `allow_credentials`, the OS picker may resolve a different (sibling) credential for the same Relying Party, and a different credential derives a different wallet seed. Pin `allow_credentials` to the active credential before revealing anything tied to the active wallet, such as a recovery phrase.
+The sign-in call in the snippet above passes a stored {{#name credential_id}} as `allow_credentials` to constrain the assertion to one credential. This matters for security-sensitive flows. With an empty `allow_credentials`, the OS picker may resolve a different (sibling) credential for the same Relying Party, and a different credential derives a different wallet seed. Pin `allow_credentials` to the active credential before revealing anything tied to the active wallet, such as a recovery phrase.
 
 ## Preventing duplicate registration
 
 Pass your stored credential IDs as `exclude_credentials` on {{#name register}} so the OS refuses to create a second credential on a device that already has one. It raises {{#enum PrfProviderError::CredentialAlreadyExists}}, which you route to the sign-in path:
 
-```typescript
-await client.register({ label, excludeCredentials: store.all() })
-```
+{{#tabs passkey:recover-already-exists}}
 
 ## Showing the authenticator provider (AAGUID)
 

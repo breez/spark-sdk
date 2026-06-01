@@ -159,6 +159,43 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
     Ok(sdk)
 }
 
+async fn credential_metadata() -> Result<()> {
+    // ANCHOR: credential-metadata
+    let prf_provider = Arc::new(CustomPrfProvider);
+    let passkey = PasskeyClient::new(prf_provider, None, None);
+
+    let response = passkey
+        .register(RegisterRequest {
+            label: Some("personal".to_string()),
+            exclude_credentials: vec![],
+        })
+        .await?;
+
+    // Persist these in synced storage (iCloud Keychain / Block Store) so they
+    // survive reinstall and reach the user's other devices. aaguid and
+    // backup_eligible are only available here, on registration.
+    if let Some(credential) = &response.credential {
+        let _meta = (
+            credential.credential_id.clone(),
+            credential.aaguid.clone(),
+            credential.backup_eligible,
+        );
+    }
+
+    // On a later sign-in, pin the stored credential ID via allow_credentials so
+    // the OS cannot substitute a sibling credential, which would derive a
+    // different wallet seed.
+    let _signed_in = passkey
+        .sign_in(SignInRequest {
+            label: Some("personal".to_string()),
+            allow_credentials: vec![/* stored credential_id bytes */],
+            ..Default::default()
+        })
+        .await?;
+    // ANCHOR_END: credential-metadata
+    Ok(())
+}
+
 async fn list_labels() -> Result<Vec<String>> {
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None);
