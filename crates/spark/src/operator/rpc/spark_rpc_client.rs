@@ -8,6 +8,8 @@ use crate::header_provider::HeaderProvider;
 use crate::operator::rpc::OperatorRpcError;
 use crate::operator::rpc::spark::query_nodes_request::Source;
 use crate::operator::rpc::spark::spark_service_client::SparkServiceClient;
+use crate::operator::rpc::spark_token::BroadcastTransactionRequest;
+use crate::operator::rpc::spark_token::BroadcastTransactionResponse;
 use crate::operator::rpc::spark_token::CommitTransactionRequest;
 use crate::operator::rpc::spark_token::CommitTransactionResponse;
 use crate::operator::rpc::spark_token::StartTransactionRequest;
@@ -584,6 +586,20 @@ impl SparkRpcClient {
             .spark_token_service_client()
             .await?
             .commit_transaction(req)
+            .await?
+            .into_inner())
+    }
+
+    #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
+    pub async fn broadcast_transaction(
+        &self,
+        req: BroadcastTransactionRequest,
+    ) -> Result<BroadcastTransactionResponse> {
+        debug!("Calling broadcast_transaction with request: {:?}", req);
+        Ok(self
+            .spark_token_service_client()
+            .await?
+            .broadcast_transaction(req)
             .await?
             .into_inner())
     }

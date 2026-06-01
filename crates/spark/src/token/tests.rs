@@ -48,7 +48,6 @@ pub fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> Tok
         .enumerate()
         .map(|(i, amount)| TokenOutputWithPrevOut {
             output: TokenOutput {
-                id: format!("output-{}-{}", identifier, amount),
                 owner_public_key: owner_pk,
                 revocation_commitment: format!("commitment-{}", i),
                 withdraw_bond_sats: 1000,
@@ -57,8 +56,10 @@ pub fn create_token_outputs(identifier_no: u8, output_amounts: Vec<u128>) -> Tok
                 token_identifier: identifier.to_string(),
                 token_amount: amount,
             },
-            prev_tx_hash: format!("tx-hash-{}", i),
-            prev_tx_vout: i as u32,
+            // Derive prev_tx_hash from (identifier, amount) so distinct synthetic outputs get
+            // distinct outpoints, matching real on-chain outputs (index-based would collide).
+            prev_tx_hash: format!("tx-hash-{}-{}", identifier, amount),
+            prev_tx_vout: 0,
         })
         .collect();
 
@@ -1632,16 +1633,14 @@ pub async fn test_insert_outputs_clears_spent_status(store: &dyn TokenOutputStor
 }
 
 pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputStore) {
-    // Insert outputs: token-1 has outputs at (tx-hash-0, 0), (tx-hash-1, 1), (tx-hash-2, 2)
     let token1 = create_token_outputs(1, vec![100, 200, 300]);
     store
         .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
-    // Remove the output at (tx-hash-1, 1)
     store
-        .update_token_outputs(&[("tx-hash-1".to_string(), 1)], None)
+        .update_token_outputs(&[("tx-hash-token-1-200".to_string(), 0)], None)
         .await
         .unwrap();
 
@@ -1650,7 +1649,6 @@ pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputSto
         .await
         .unwrap();
     assert_eq!(stored.available.len(), 2);
-    // Remaining outputs should be amounts 100 and 300
     let mut amounts: Vec<u128> = stored
         .available
         .iter()
@@ -1661,16 +1659,14 @@ pub async fn test_remove_token_outputs_by_prev_tx_ref(store: &dyn TokenOutputSto
 }
 
 pub async fn test_remove_token_outputs_prevents_refresh_re_add(store: &dyn TokenOutputStore) {
-    // Insert outputs
     let token1 = create_token_outputs(1, vec![100, 200]);
     store
         .set_tokens_outputs(slice::from_ref(&token1), future_refresh_start(store).await)
         .await
         .unwrap();
 
-    // Remove the output at (tx-hash-0, 0)
     store
-        .update_token_outputs(&[("tx-hash-0".to_string(), 0)], None)
+        .update_token_outputs(&[("tx-hash-token-1-100".to_string(), 0)], None)
         .await
         .unwrap();
 

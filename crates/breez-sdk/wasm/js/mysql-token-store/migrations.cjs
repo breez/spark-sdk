@@ -460,6 +460,50 @@ class MysqlTokenStoreMigrationManager {
           `ALTER TABLE brz_token_schema_migrations  MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
         ],
       },
+      {
+        // Mirrors Rust migration 4 in spark-mysql/src/token_store.rs.
+        // Re-keys brz_token_spent_outputs by (prev_tx_hash, prev_tx_vout) instead
+        // of the operator-issued output id. v3 FinalTokenOutput carries no id
+        // field, so post-broadcast spent markers only have an outpoint to work
+        // with. Existing output_id-keyed rows can't be backfilled (no outpoint
+        // stored alongside them), so the table is wiped on upgrade — spent
+        // markers are short-lived (5 minute cleanup window) so wiping is
+        // equivalent to letting them age out.
+        name: "Re-key spent outputs by (prev_tx_hash, prev_tx_vout)",
+        sql: [
+          `DROP TABLE IF EXISTS brz_token_spent_outputs`,
+          `CREATE TABLE brz_token_spent_outputs (
+             user_id VARBINARY(33) NOT NULL,
+             prev_tx_hash VARCHAR(255) NOT NULL,
+             prev_tx_vout INT NOT NULL,
+             spent_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6)),
+             PRIMARY KEY (user_id, prev_tx_hash, prev_tx_vout)
+           )`,
+        ],
+      },
+      {
+        // Mirrors Rust migration 5 in spark-mysql/src/token_store.rs.
+        // Re-key brz_token_outputs by (prev_tx_hash, prev_tx_vout) and drop the
+        // legacy id column. id already held "{prev_tx_hash}:{vout}", so the
+        // outpoint is the natural key. Dedup any duplicate-outpoint rows
+        // (possible from pre-outpoint code) before adding the composite PK,
+        // preferring rows that hold a reservation.
+        name: "Re-key token outputs by (prev_tx_hash, prev_tx_vout), drop legacy id",
+        sql: [
+          `DELETE a FROM brz_token_outputs a
+           JOIN brz_token_outputs b
+             ON a.user_id = b.user_id
+            AND a.prev_tx_hash = b.prev_tx_hash
+            AND a.prev_tx_vout = b.prev_tx_vout
+            AND ((b.reservation_id IS NOT NULL) > (a.reservation_id IS NOT NULL)
+                 OR ((b.reservation_id IS NOT NULL) = (a.reservation_id IS NOT NULL)
+                     AND b.id > a.id))`,
+          `ALTER TABLE brz_token_outputs
+             DROP PRIMARY KEY,
+             ADD PRIMARY KEY (user_id, prev_tx_hash, prev_tx_vout)`,
+          `ALTER TABLE brz_token_outputs DROP COLUMN id`,
+        ],
+      },
     ];
   }
 }

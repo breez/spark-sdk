@@ -72,6 +72,14 @@ namespace BreezSdkSnippets
                     Console.WriteLine($"About to send payment {payment.paymentId} of amount {payment.amount}");
                 }
             }
+
+            public async Task AfterSend(PaymentIdUpdate[] updates)
+            {
+                foreach (var update in updates)
+                {
+                    Console.WriteLine($"Token tx broadcast: {update.provisionalPaymentId} -> {update.finalPaymentId}");
+                }
+            }
         }
 
         async Task WithPaymentObserver(SdkBuilder builder)

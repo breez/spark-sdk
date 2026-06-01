@@ -9,6 +9,7 @@ import {
 } from '@breeztech/breez-sdk-spark'
 import type {
   BreezSdk,
+  PaymentIdUpdate,
   ProvisionalPayment,
   Seed,
   TxStatus,
@@ -213,6 +214,12 @@ class ExamplePaymentObserver {
   beforeSend = async (payments: ProvisionalPayment[]) => {
     for (const payment of payments) {
       console.log(`About to send payment: ${payment.paymentId} of amount ${payment.amount}`)
+    }
+  }
+
+  afterSend = async (updates: PaymentIdUpdate[]) => {
+    for (const update of updates) {
+      console.log(`Token tx broadcast: ${update.provisionalPaymentId} -> ${update.finalPaymentId}`)
     }
   }
 }

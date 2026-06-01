@@ -37,6 +37,15 @@ pub enum ProvisionalPaymentDetails {
     },
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PaymentIdUpdate {
+    /// Provisional payment id reported by `before_send`, in the form `{partial_tx_id}:{index}`
+    pub provisional_payment_id: String,
+    /// Final payment id once the transaction is broadcast, in the form `{final_tx_id}:{vout}`
+    pub final_payment_id: String,
+}
+
 #[derive(Debug, Error, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum PaymentObserverError {
@@ -57,16 +66,22 @@ impl From<PaymentObserverError> for TransferObserverError {
     }
 }
 
-/// This interface is used to observe outgoing payments before Lightning, Spark and onchain Bitcoin payments.
-/// If the implementation returns an error, the payment is cancelled.
+/// This interface is used to observe outgoing Lightning, Spark, onchain Bitcoin and token payments.
+///
+/// `before_send` is called before a payment is made; if the implementation returns an error the
+/// payment is cancelled. `after_send` is called after a token payment has been broadcast to report
+/// its final payment id; it cannot cancel the payment and any error it returns is ignored.
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait PaymentObserver: Send + Sync {
-    /// Called before Lightning, Spark or onchain Bitcoin payments are made
+    /// Called before Lightning, Spark, onchain Bitcoin or token payments are made
     async fn before_send(
         &self,
         payments: Vec<ProvisionalPayment>,
     ) -> Result<(), PaymentObserverError>;
+    /// Called after a token payment has been broadcast, mapping each provisional payment id
+    /// reported by `before_send` to its final payment id
+    async fn after_send(&self, updates: Vec<PaymentIdUpdate>) -> Result<(), PaymentObserverError>;
 }
 
 pub(crate) struct SparkTransferObserver {
@@ -118,7 +133,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
 
     async fn before_send_token(
         &self,
-        tx_id: &str,
+        partial_tx_id: &str,
         token_id: &str,
         receiver_outputs: Vec<spark_wallet::ReceiverTokenOutput>,
     ) -> Result<(), TransferObserverError> {
@@ -129,7 +144,7 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
                     .into_iter()
                     .enumerate()
                     .map(|(index, output)| ProvisionalPayment {
-                        payment_id: format!("{tx_id}:{index}"),
+                        payment_id: format!("{partial_tx_id}:{index}"),
                         amount: output.amount,
                         details: ProvisionalPaymentDetails::Token {
                             token_id: token_id.to_string(),
@@ -157,5 +172,23 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
                 },
             }])
             .await?)
+    }
+
+    async fn after_send_token(
+        &self,
+        partial_tx_id: &str,
+        final_tx_id: &str,
+        receiver_output_count: usize,
+    ) -> Result<(), TransferObserverError> {
+        // Pair each provisional id minted by before_send_token with its final id. The receiver
+        // outputs keep their order (and vout) across the partial and final transaction, so index i
+        // maps to vout i.
+        let updates = (0..receiver_output_count)
+            .map(|i| PaymentIdUpdate {
+                provisional_payment_id: format!("{partial_tx_id}:{i}"),
+                final_payment_id: format!("{final_tx_id}:{i}"),
+            })
+            .collect();
+        Ok(self.inner.after_send(updates).await?)
     }
 }

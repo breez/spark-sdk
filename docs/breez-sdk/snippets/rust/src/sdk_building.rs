@@ -74,6 +74,19 @@ impl PaymentObserver for ExamplePaymentObserver {
         }
         Ok(())
     }
+
+    async fn after_send(
+        &self,
+        updates: Vec<PaymentIdUpdate>,
+    ) -> Result<(), PaymentObserverError> {
+        for update in updates {
+            info!(
+                "Token tx broadcast: {} -> {}",
+                update.provisional_payment_id, update.final_payment_id
+            );
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn with_payment_observer(builder: SdkBuilder) -> SdkBuilder {

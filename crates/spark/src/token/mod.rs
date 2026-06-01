@@ -37,7 +37,6 @@ pub struct TokenMetadata {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct TokenOutput {
-    pub id: String,
     pub owner_public_key: PublicKey,
     pub revocation_commitment: String,
     pub withdraw_bond_sats: u64,
@@ -61,8 +60,11 @@ pub struct TokenOutputs {
 }
 
 impl TokenOutputs {
-    pub fn ids(&self) -> HashSet<String> {
-        self.outputs.iter().map(|o| o.output.id.clone()).collect()
+    pub fn prev_outpoints(&self) -> HashSet<(String, u32)> {
+        self.outputs
+            .iter()
+            .map(|o| (o.prev_tx_hash.clone(), o.prev_tx_vout))
+            .collect()
     }
 }
 

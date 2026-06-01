@@ -32,10 +32,22 @@ pub trait TransferObserver: Send + Sync {
     ) -> Result<(), TransferObserverError>;
     async fn before_send_token(
         &self,
-        tx_id: &str,
+        partial_tx_id: &str,
         token_id: &str,
         receiver_outputs: Vec<ReceiverTokenOutput>,
     ) -> Result<(), TransferObserverError>;
+    /// `receiver_output_count` is the number of receiver outputs reported by `before_send_token`
+    /// (the change output is excluded). Those outputs occupy vouts `0..receiver_output_count` in
+    /// both the partial and the final transaction, so the observer can pair each provisional id
+    /// `{partial_tx_id}:{i}` with its final id `{final_tx_id}:{i}`.
+    async fn after_send_token(
+        &self,
+        _partial_tx_id: &str,
+        _final_tx_id: &str,
+        _receiver_output_count: usize,
+    ) -> Result<(), TransferObserverError> {
+        Ok(())
+    }
     async fn before_send_transfer(
         &self,
         transfer_id: &TransferId,

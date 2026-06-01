@@ -9,6 +9,7 @@ from breez_sdk_spark import (
     postgres_storage,
     mysql_storage,
     Network,
+    PaymentIdUpdate,
     ProvisionalPayment,
     ReceivePaymentMethod,
     ReceivePaymentRequest,
@@ -86,6 +87,12 @@ class ExamplePaymentObserver(PaymentObserver):
     async def before_send(self, payments: typing.List[ProvisionalPayment]):
         for payment in payments:
             logging.debug(f"About to send payment {payment.payment_id} of amount {payment.amount}")
+
+    async def after_send(self, updates: typing.List[PaymentIdUpdate]):
+        for update in updates:
+            logging.debug(
+                f"Token tx broadcast: {update.provisional_payment_id} -> {update.final_payment_id}"
+            )
 
 
 async def with_payment_observer(builder: SdkBuilder):

@@ -226,25 +226,27 @@ class MysqlTokenStore {
         );
 
         const [spentRows] = await conn.query(
-          "SELECT output_id FROM brz_token_spent_outputs WHERE user_id = ? AND spent_at >= ?",
+          "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_spent_outputs WHERE user_id = ? AND spent_at >= ?",
           [this.identity, refreshTimestamp]
         );
-        const spentIds = new Set(spentRows.map((r) => r.output_id));
+        const spentOutpoints = new Set(
+          spentRows.map((r) => `${r.prev_tx_hash}:${r.prev_tx_vout}`)
+        );
 
         await conn.query(
           "DELETE FROM brz_token_outputs WHERE user_id = ? AND reservation_id IS NULL AND added_at < ?",
           [this.identity, refreshTimestamp]
         );
 
-        const incomingOutputIds = new Set();
+        const incomingOutpoints = new Set();
         for (const to of tokenOutputs) {
           for (const o of to.outputs) {
-            incomingOutputIds.add(o.output.id);
+            incomingOutpoints.add(`${o.prevTxHash}:${o.prevTxVout}`);
           }
         }
 
         const [reservedRows] = await conn.query(
-          `SELECT r.id, o.id AS output_id
+          `SELECT r.id, o.prev_tx_hash, o.prev_tx_vout
            FROM brz_token_reservations r
            JOIN brz_token_outputs o
              ON o.reservation_id = r.id AND o.user_id = r.user_id
@@ -257,21 +259,23 @@ class MysqlTokenStore {
           if (!reservationOutputs.has(row.id)) {
             reservationOutputs.set(row.id, []);
           }
-          reservationOutputs.get(row.id).push(row.output_id);
+          reservationOutputs.get(row.id).push([row.prev_tx_hash, row.prev_tx_vout]);
         }
 
         const reservationsToDelete = [];
-        const outputsToRemoveFromReservation = [];
-        for (const [reservationId, outputIds] of reservationOutputs) {
-          const validIds = outputIds.filter((id) => incomingOutputIds.has(id));
-          if (validIds.length === 0) {
-            reservationsToDelete.push(reservationId);
-          } else {
-            for (const id of outputIds) {
-              if (!incomingOutputIds.has(id)) {
-                outputsToRemoveFromReservation.push(id);
+        const outpointsToRemoveFromReservation = [];
+        for (const [reservationId, outpoints] of reservationOutputs) {
+          const hasValid = outpoints.some(([h, v]) =>
+            incomingOutpoints.has(`${h}:${v}`)
+          );
+          if (hasValid) {
+            for (const [h, v] of outpoints) {
+              if (!incomingOutpoints.has(`${h}:${v}`)) {
+                outpointsToRemoveFromReservation.push([h, v]);
               }
             }
+          } else {
+            reservationsToDelete.push(reservationId);
           }
         }
 
@@ -287,20 +291,25 @@ class MysqlTokenStore {
           );
         }
 
-        if (outputsToRemoveFromReservation.length > 0) {
-          const placeholders = buildPlaceholders(
-            outputsToRemoveFromReservation.length
-          );
+        if (outpointsToRemoveFromReservation.length > 0) {
+          const pairPlaceholders = outpointsToRemoveFromReservation
+            .map(() => "(?, ?)")
+            .join(", ");
+          const params = [this.identity];
+          for (const [h, v] of outpointsToRemoveFromReservation) {
+            params.push(h, v);
+          }
           await conn.query(
-            `DELETE FROM brz_token_outputs WHERE user_id = ? AND id IN (${placeholders})`,
-            [this.identity, ...outputsToRemoveFromReservation]
+            `DELETE FROM brz_token_outputs WHERE user_id = ?
+               AND (prev_tx_hash, prev_tx_vout) IN (${pairPlaceholders})`,
+            params
           );
 
           const [emptyRows] = await conn.query(
             `SELECT r.id FROM brz_token_reservations r
              LEFT JOIN brz_token_outputs o
                ON o.reservation_id = r.id AND o.user_id = r.user_id
-             WHERE r.user_id = ? AND o.id IS NULL`,
+             WHERE r.user_id = ? AND o.prev_tx_hash IS NULL`,
             [this.identity]
           );
           const emptyIds = emptyRows.map((r) => r.id);
@@ -314,10 +323,12 @@ class MysqlTokenStore {
         }
 
         const [reservedOutputRows] = await conn.query(
-          "SELECT id FROM brz_token_outputs WHERE user_id = ? AND reservation_id IS NOT NULL",
+          "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs WHERE user_id = ? AND reservation_id IS NOT NULL",
           [this.identity]
         );
-        const reservedOutputIds = new Set(reservedOutputRows.map((r) => r.id));
+        const reservedOutpoints = new Set(
+          reservedOutputRows.map((r) => `${r.prev_tx_hash}:${r.prev_tx_vout}`)
+        );
 
         await conn.query(
           `DELETE FROM brz_token_metadata
@@ -332,10 +343,8 @@ class MysqlTokenStore {
           await this._upsertMetadata(conn, to.metadata);
 
           for (const output of to.outputs) {
-            if (
-              reservedOutputIds.has(output.output.id) ||
-              spentIds.has(output.output.id)
-            ) {
+            const outpoint = `${output.prevTxHash}:${output.prevTxVout}`;
+            if (reservedOutpoints.has(outpoint) || spentOutpoints.has(outpoint)) {
               continue;
             }
             await this._insertSingleOutput(
@@ -410,7 +419,7 @@ class MysqlTokenStore {
       const [rows] = await this.pool.query(
         `SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
                 m.max_supply, m.is_freezable, m.creation_entity_public_key,
-                o.id AS output_id, o.owner_public_key, o.revocation_commitment,
+                o.owner_public_key, o.revocation_commitment,
                 o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                 o.token_public_key, o.token_amount, o.token_identifier,
                 o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
@@ -439,7 +448,7 @@ class MysqlTokenStore {
 
         const entry = map.get(row.identifier);
 
-        if (!row.output_id) {
+        if (!row.prev_tx_hash) {
           continue;
         }
 
@@ -482,7 +491,7 @@ class MysqlTokenStore {
       const [rows] = await this.pool.query(
         `SELECT m.identifier, m.issuer_public_key, m.name, m.ticker, m.decimals,
                 m.max_supply, m.is_freezable, m.creation_entity_public_key,
-                o.id AS output_id, o.owner_public_key, o.revocation_commitment,
+                o.owner_public_key, o.revocation_commitment,
                 o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                 o.token_public_key, o.token_amount, o.token_identifier,
                 o.prev_tx_hash, o.prev_tx_vout, o.reservation_id,
@@ -510,7 +519,7 @@ class MysqlTokenStore {
       };
 
       for (const row of rows) {
-        if (!row.output_id) {
+        if (!row.prev_tx_hash) {
           continue;
         }
 
@@ -543,23 +552,20 @@ class MysqlTokenStore {
    */
   async updateTokenOutputs(outputsToRemove, outputsToAdd) {
     try {
-      await this._withTransaction(async (conn) => {
+      // Serialize against the other token-store mutators (refresh, reservation,
+      // finalization), which take the same per-user advisory lock.
+      await this._withWriteTransaction(async (conn) => {
         // 1. Remove spent outputs and mark as spent.
         if (outputsToRemove && outputsToRemove.length > 0) {
           for (const [txHash, vout] of outputsToRemove) {
-            const [rows] = await conn.query(
-              "SELECT id FROM brz_token_outputs WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
+            const [result] = await conn.query(
+              "DELETE FROM brz_token_outputs WHERE user_id = ? AND prev_tx_hash = ? AND prev_tx_vout = ?",
               [this.identity, txHash, vout]
             );
-            if (rows.length > 0) {
-              const outputId = rows[0].id;
+            if (result.affectedRows > 0) {
               await conn.query(
-                "DELETE FROM brz_token_outputs WHERE user_id = ? AND id = ?",
-                [this.identity, outputId]
-              );
-              await conn.query(
-                "INSERT IGNORE INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES (?, ?, UTC_TIMESTAMP(6))",
-                [this.identity, outputId]
+                "INSERT IGNORE INTO brz_token_spent_outputs (user_id, prev_tx_hash, prev_tx_vout, spent_at) VALUES (?, ?, ?, UTC_TIMESTAMP(6))",
+                [this.identity, txHash, vout]
               );
             }
           }
@@ -569,12 +575,17 @@ class MysqlTokenStore {
         if (outputsToAdd) {
           await this._upsertMetadata(conn, outputsToAdd.metadata);
 
-          const outputIds = outputsToAdd.outputs.map((o) => o.output.id);
-          if (outputIds.length > 0) {
-            const placeholders = buildPlaceholders(outputIds.length);
+          if (outputsToAdd.outputs.length > 0) {
+            const pairPlaceholders = outputsToAdd.outputs
+              .map(() => "(?, ?)")
+              .join(", ");
+            const params = [this.identity];
+            for (const o of outputsToAdd.outputs) {
+              params.push(o.prevTxHash, o.prevTxVout);
+            }
             await conn.query(
-              `DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND output_id IN (${placeholders})`,
-              [this.identity, ...outputIds]
+              `DELETE FROM brz_token_spent_outputs WHERE user_id = ? AND (prev_tx_hash, prev_tx_vout) IN (${pairPlaceholders})`,
+              params
             );
           }
 
@@ -636,7 +647,7 @@ class MysqlTokenStore {
         const metadata = this._metadataFromRow(metadataRows[0]);
 
         const [outputRows] = await conn.query(
-          `SELECT o.id AS output_id, o.owner_public_key, o.revocation_commitment,
+          `SELECT o.owner_public_key, o.revocation_commitment,
                   o.withdraw_bond_sats, o.withdraw_relative_block_locktime,
                   o.token_public_key, o.token_amount, o.token_identifier,
                   o.prev_tx_hash, o.prev_tx_vout
@@ -648,10 +659,12 @@ class MysqlTokenStore {
         let outputs = outputRows.map((row) => this._outputFromRow(row));
 
         if (preferredOutputs && preferredOutputs.length > 0) {
-          const preferredIds = new Set(
-            preferredOutputs.map((p) => p.output.id)
+          const preferredOutpoints = new Set(
+            preferredOutputs.map((p) => `${p.prevTxHash}:${p.prevTxVout}`)
           );
-          outputs = outputs.filter((o) => preferredIds.has(o.output.id));
+          outputs = outputs.filter((o) =>
+            preferredOutpoints.has(`${o.prevTxHash}:${o.prevTxVout}`)
+          );
         }
 
         let selectedOutputs;
@@ -731,12 +744,18 @@ class MysqlTokenStore {
           [this.identity, reservationId, purpose]
         );
 
-        const selectedIds = selectedOutputs.map((o) => o.output.id);
-        if (selectedIds.length > 0) {
-          const placeholders = buildPlaceholders(selectedIds.length);
+        if (selectedOutputs.length > 0) {
+          const pairPlaceholders = selectedOutputs
+            .map(() => "(?, ?)")
+            .join(", ");
+          const params = [reservationId, this.identity];
+          for (const o of selectedOutputs) {
+            params.push(o.prevTxHash, o.prevTxVout);
+          }
           await conn.query(
-            `UPDATE brz_token_outputs SET reservation_id = ? WHERE user_id = ? AND id IN (${placeholders})`,
-            [reservationId, this.identity, ...selectedIds]
+            `UPDATE brz_token_outputs SET reservation_id = ? WHERE user_id = ?
+               AND (prev_tx_hash, prev_tx_vout) IN (${pairPlaceholders})`,
+            params
           );
         }
 
@@ -794,23 +813,22 @@ class MysqlTokenStore {
         const isSwap = reservationRows[0].purpose === "Swap";
 
         const [reservedRows] = await conn.query(
-          "SELECT id FROM brz_token_outputs WHERE user_id = ? AND reservation_id = ?",
+          "SELECT prev_tx_hash, prev_tx_vout FROM brz_token_outputs WHERE user_id = ? AND reservation_id = ?",
           [this.identity, id]
         );
-        const reservedOutputIds = reservedRows.map((r) => r.id);
 
-        if (reservedOutputIds.length > 0) {
-          const valueClauses = new Array(reservedOutputIds.length)
-            .fill("(?, ?, UTC_TIMESTAMP(6))")
+        if (reservedRows.length > 0) {
+          const valueClauses = new Array(reservedRows.length)
+            .fill("(?, ?, ?, UTC_TIMESTAMP(6))")
             .join(", ");
           const params = [];
-          for (const outputId of reservedOutputIds) {
-            params.push(this.identity, outputId);
+          for (const row of reservedRows) {
+            params.push(this.identity, row.prev_tx_hash, row.prev_tx_vout);
           }
           // Suppress duplicate-PK errors only.
           await conn.query(
-            `INSERT INTO brz_token_spent_outputs (user_id, output_id, spent_at) VALUES ${valueClauses}
-             ON DUPLICATE KEY UPDATE output_id = output_id`,
+            `INSERT INTO brz_token_spent_outputs (user_id, prev_tx_hash, prev_tx_vout, spent_at) VALUES ${valueClauses}
+             ON DUPLICATE KEY UPDATE prev_tx_hash = prev_tx_hash`,
             params
           );
         }
@@ -933,19 +951,18 @@ class MysqlTokenStore {
   }
 
   async _insertSingleOutput(conn, tokenIdentifier, output) {
-    // ON DUPLICATE KEY UPDATE id = id no-ops on the (user_id, id) primary key
-    // conflict only — unlike INSERT IGNORE, FK / NOT NULL / type errors
-    // still propagate.
+    // ON DUPLICATE KEY UPDATE prev_tx_hash = prev_tx_hash no-ops on the
+    // (user_id, prev_tx_hash, prev_tx_vout) primary key conflict only — unlike
+    // INSERT IGNORE, FK / NOT NULL / type errors still propagate.
     await conn.query(
       `INSERT INTO brz_token_outputs
-        (user_id, id, token_identifier, owner_public_key, revocation_commitment,
+        (user_id, token_identifier, owner_public_key, revocation_commitment,
          withdraw_bond_sats, withdraw_relative_block_locktime,
          token_public_key, token_amount, prev_tx_hash, prev_tx_vout, added_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))
-       ON DUPLICATE KEY UPDATE id = id`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))
+       ON DUPLICATE KEY UPDATE prev_tx_hash = prev_tx_hash`,
       [
         this.identity,
-        output.output.id,
         tokenIdentifier,
         output.output.ownerPublicKey,
         output.output.revocationCommitment,
@@ -975,7 +992,6 @@ class MysqlTokenStore {
   _outputFromRow(row) {
     return {
       output: {
-        id: row.output_id,
         ownerPublicKey: row.owner_public_key,
         revocationCommitment: row.revocation_commitment,
         withdrawBondSats: Number(row.withdraw_bond_sats),

@@ -64,6 +64,12 @@ class ExamplePaymentObserver: PaymentObserver {
             print("About to send payment: \(payment.paymentId) of amount \(payment.amount)")
         }
     }
+
+    func afterSend(updates: [PaymentIdUpdate]) async {
+        for update in updates {
+            print("Token tx broadcast: \(update.provisionalPaymentId) -> \(update.finalPaymentId)")
+        }
+    }
 }
 
 func withPaymentObserver(builder: SdkBuilder) async {

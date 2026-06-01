@@ -727,9 +727,6 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
     fn try_from(
         (output, network): (operator_rpc::spark_token::TokenOutput, Network),
     ) -> Result<Self, Self::Error> {
-        let id = output
-            .id
-            .ok_or_else(|| ServiceError::Generic("Missing token output id".to_string()))?;
         let owner_public_key = PublicKey::from_slice(&output.owner_public_key)
             .map_err(|_| ServiceError::Generic("Invalid owner public key".to_string()))?;
         let revocation_commitment =
@@ -762,13 +759,44 @@ impl TryFrom<(operator_rpc::spark_token::TokenOutput, Network)> for TokenOutput 
                 .try_into()
                 .map_err(|_| ServiceError::Generic("Invalid token amount".to_string()))?,
         );
+
         Ok(TokenOutput {
-            id,
             owner_public_key,
             revocation_commitment,
             withdraw_bond_sats,
             withdraw_relative_block_locktime,
             token_public_key,
+            token_identifier,
+            token_amount,
+        })
+    }
+}
+
+impl TryFrom<(operator_rpc::spark_token::FinalTokenOutput, Network)> for TokenOutput {
+    type Error = ServiceError;
+
+    fn try_from(
+        (output, network): (operator_rpc::spark_token::FinalTokenOutput, Network),
+    ) -> Result<Self, Self::Error> {
+        let partial = output.partial_token_output.ok_or_else(|| {
+            ServiceError::Generic("FinalTokenOutput missing partial_token_output".to_string())
+        })?;
+        let owner_public_key = PublicKey::from_slice(&partial.owner_public_key)
+            .map_err(|_| ServiceError::Generic("Invalid owner public key".to_string()))?;
+        let revocation_commitment = hex::encode(output.revocation_commitment);
+        let token_identifier = bech32m_encode_token_id(&partial.token_identifier, network)?;
+        let token_amount = u128::from_be_bytes(
+            partial
+                .token_amount
+                .try_into()
+                .map_err(|_| ServiceError::Generic("Invalid token amount".to_string()))?,
+        );
+        Ok(TokenOutput {
+            owner_public_key,
+            revocation_commitment,
+            withdraw_bond_sats: partial.withdraw_bond_sats,
+            withdraw_relative_block_locktime: partial.withdraw_relative_block_locktime,
+            token_public_key: None,
             token_identifier,
             token_amount,
         })
@@ -1465,7 +1493,6 @@ mod tests {
         ))
         .unwrap();
 
-        assert_eq!(output_with_prev_out.output.id, token_id);
         assert_eq!(
             output_with_prev_out.output.owner_public_key,
             owner_public_key

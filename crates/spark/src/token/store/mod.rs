@@ -30,15 +30,20 @@ struct StoredTokenOutput {
     added_at: SystemTime,
 }
 
+/// Canonical key for an on-chain output: parent tx hash + vout. Used instead of the server
+/// `TokenOutput.id` because the v3 broadcast response (`FinalTokenOutput`) carries no id, so
+/// id-keyed dedup would let the same output appear twice in the pool.
+type OutPoint = (String, u32);
+
 #[derive(Default)]
 pub(crate) struct TokenOutputsState {
     /// Available (unreserved) token outputs, keyed by token identifier.
-    /// Each value maps output ID to StoredTokenOutput for timestamp tracking.
+    /// Each value maps an `OutPoint` to its StoredTokenOutput for timestamp tracking.
     available_token_outputs: HashMap<String, AvailableTokenOutputs>,
     reservations: HashMap<TokenOutputsReservationId, TokenOutputsEntry>,
-    /// Output IDs that have been finalized (spent) with their spent timestamp.
+    /// Outpoints that have been finalized (spent) with their spent timestamp.
     /// Prevents re-adding during refresh. Cleaned up when entry is older than refresh_started_at.
-    spent_output_ids: HashMap<String, SystemTime>,
+    spent_outpoints: HashMap<OutPoint, SystemTime>,
     /// Timestamp of when the most recent swap finalization completed.
     /// Used to detect if a refresh started before a swap finished.
     last_swap_completed_at: Option<SystemTime>,
@@ -48,17 +53,21 @@ pub(crate) struct TokenOutputsState {
 #[derive(Clone)]
 struct AvailableTokenOutputs {
     metadata: crate::token::TokenMetadata,
-    outputs: HashMap<String, StoredTokenOutput>,
+    outputs: HashMap<OutPoint, StoredTokenOutput>,
 }
 
 impl AvailableTokenOutputs {
-    fn ids(&self) -> HashSet<String> {
+    fn outpoints(&self) -> HashSet<OutPoint> {
         self.outputs.keys().cloned().collect()
     }
 
     fn output_vec(&self) -> Vec<TokenOutputWithPrevOut> {
         self.outputs.values().map(|s| s.output.clone()).collect()
     }
+}
+
+fn outpoint_of(o: &TokenOutputWithPrevOut) -> OutPoint {
+    (o.prev_tx_hash.clone(), o.prev_tx_vout)
 }
 
 #[macros::async_trait]
@@ -88,7 +97,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
 
         // Remove spent entries that operators have had time to process
         state
-            .spent_output_ids
+            .spent_outpoints
             .retain(|_, spent_at| *spent_at >= refresh_started_at);
 
         // Save old pools before replacing
@@ -96,7 +105,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
 
         // Build new pools from refresh data, excluding spent outputs
         let now = SystemTime::now();
-        let spent_ids: HashSet<String> = state.spent_output_ids.keys().cloned().collect();
+        let spent_outpoints: HashSet<OutPoint> = state.spent_outpoints.keys().cloned().collect();
         for to in token_outputs {
             let identifier = to.metadata.identifier.clone();
             let entry = state
@@ -108,9 +117,10 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                 });
             entry.metadata = to.metadata.clone();
             for output in &to.outputs {
-                if !spent_ids.contains(&output.output.id) {
+                let outpoint = outpoint_of(output);
+                if !spent_outpoints.contains(&outpoint) {
                     entry.outputs.insert(
-                        output.output.id.clone(),
+                        outpoint,
                         StoredTokenOutput {
                             output: output.clone(),
                             added_at: now,
@@ -124,13 +134,13 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         // and aren't in the refresh data (they weren't available when refresh collected data).
         let mut preserved_count = 0u32;
         for old_token_outputs in old_available.values() {
-            for (output_id, stored) in &old_token_outputs.outputs {
+            for (outpoint, stored) in &old_token_outputs.outputs {
                 if stored.added_at >= refresh_started_at {
                     // Check if this output already exists in the new data
                     let already_exists = state
                         .available_token_outputs
                         .values()
-                        .any(|ato| ato.outputs.contains_key(output_id));
+                        .any(|ato| ato.outputs.contains_key(outpoint));
                     if !already_exists {
                         let entry = state
                             .available_token_outputs
@@ -139,7 +149,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                                 metadata: old_token_outputs.metadata.clone(),
                                 outputs: HashMap::new(),
                             });
-                        entry.outputs.insert(output_id.clone(), stored.clone());
+                        entry.outputs.insert(outpoint.clone(), stored.clone());
                         preserved_count += 1;
                     }
                 }
@@ -155,11 +165,11 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
                 state.reservations.remove(id);
                 continue;
             };
-            let output_ids = token_outputs.ids();
+            let pool_outpoints = token_outputs.outpoints();
             let reserved_stored = reserved_entry
                 .stored_outputs
                 .iter()
-                .filter(|s| output_ids.contains(&s.output.output.id))
+                .filter(|s| pool_outpoints.contains(&outpoint_of(&s.output)))
                 .cloned()
                 .collect::<Vec<_>>();
             if reserved_stored.is_empty() {
@@ -168,13 +178,13 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             }
 
             // Remove the reserved outputs from the pool
-            let reserved_output_ids = reserved_stored
+            let reserved_outpoints = reserved_stored
                 .iter()
-                .map(|s| s.output.output.id.clone())
+                .map(|s| outpoint_of(&s.output))
                 .collect::<HashSet<_>>();
             token_outputs
                 .outputs
-                .retain(|id, _| !reserved_output_ids.contains(id));
+                .retain(|op, _| !reserved_outpoints.contains(op));
 
             // Update the reservation with the reconciled outputs
             state.reservations.insert(
@@ -343,28 +353,24 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
 
         // 1. Remove spent outputs by (prev_tx_hash, prev_tx_vout) and mark as spent.
         for (tx_hash, vout) in outputs_to_remove {
+            let outpoint = (tx_hash.clone(), *vout);
             for available in state.available_token_outputs.values_mut() {
-                let output_id = available
-                    .outputs
-                    .values()
-                    .find(|s| s.output.prev_tx_hash == *tx_hash && s.output.prev_tx_vout == *vout)
-                    .map(|s| s.output.output.id.clone());
-                if let Some(id) = output_id {
-                    available.outputs.remove(&id);
-                    state.spent_output_ids.insert(id, now);
+                if available.outputs.remove(&outpoint).is_some() {
                     break;
                 }
             }
+            state.spent_outpoints.insert(outpoint, now);
         }
 
         // 2. Insert new outputs.
         if let Some(token_outputs) = outputs_to_add {
             // Clear spent status for outputs being (re-)added.
             for output in &token_outputs.outputs {
-                if state.spent_output_ids.remove(&output.output.id).is_some() {
+                let outpoint = outpoint_of(output);
+                if state.spent_outpoints.remove(&outpoint).is_some() {
                     trace!(
-                        "Removed output {} from spent_output_ids (receiving it back)",
-                        output.output.id
+                        "Removed outpoint {}:{} from spent_outpoints (receiving it back)",
+                        outpoint.0, outpoint.1
                     );
                 }
             }
@@ -375,22 +381,19 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             {
                 Some(existing) => {
                     for o in &token_outputs.outputs {
-                        if !existing.outputs.contains_key(&o.output.id) {
-                            existing.outputs.insert(
-                                o.output.id.clone(),
-                                StoredTokenOutput {
-                                    output: o.clone(),
-                                    added_at: now,
-                                },
-                            );
-                        }
+                        existing.outputs.entry(outpoint_of(o)).or_insert_with(|| {
+                            StoredTokenOutput {
+                                output: o.clone(),
+                                added_at: now,
+                            }
+                        });
                     }
                 }
                 None => {
                     let mut outputs_map = HashMap::new();
                     for o in &token_outputs.outputs {
                         outputs_map.insert(
-                            o.output.id.clone(),
+                            outpoint_of(o),
                             StoredTokenOutput {
                                 output: o.clone(),
                                 added_at: now,
@@ -460,10 +463,12 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         };
 
         let mut outputs = if let Some(preferred_outputs) = preferred_outputs {
+            let preferred_outpoints: HashSet<OutPoint> =
+                preferred_outputs.iter().map(outpoint_of).collect();
             token_outputs
                 .output_vec()
                 .into_iter()
-                .filter(|o| preferred_outputs.iter().any(|p| o.output.id == p.output.id))
+                .filter(|o| preferred_outpoints.contains(&outpoint_of(o)))
                 .collect::<Vec<_>>()
         } else {
             token_outputs.output_vec()
@@ -520,7 +525,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         // Collect stored outputs with their original added_at timestamps
         let stored_selected: Vec<StoredTokenOutput> = selected_outputs
             .iter()
-            .filter_map(|o| token_outputs.outputs.get(&o.output.id).cloned())
+            .filter_map(|o| token_outputs.outputs.get(&outpoint_of(o)).cloned())
             .collect();
 
         let metadata = token_outputs.metadata.clone();
@@ -530,13 +535,13 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
         };
 
         // Remove selected outputs from the available pool
-        let selected_output_ids = selected_outputs
+        let selected_outpoints = selected_outputs
             .iter()
-            .map(|so| so.output.id.clone())
+            .map(outpoint_of)
             .collect::<HashSet<_>>();
         token_outputs
             .outputs
-            .retain(|id, _| !selected_output_ids.contains(id));
+            .retain(|op, _| !selected_outpoints.contains(op));
 
         // Insert the reservation (with original timestamps preserved)
         token_outputs_state.reservations.insert(
@@ -567,7 +572,7 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             for stored in reserved_entry.stored_outputs {
                 token_outputs
                     .outputs
-                    .insert(stored.output.output.id.clone(), stored);
+                    .insert(outpoint_of(&stored.output), stored);
             }
         }
         trace!("Canceled token outputs reservation: {}", id);
@@ -584,8 +589,8 @@ impl TokenOutputStore for InMemoryTokenOutputStore {
             let now = SystemTime::now();
             for stored in &entry.stored_outputs {
                 token_outputs_state
-                    .spent_output_ids
-                    .insert(stored.output.output.id.clone(), now);
+                    .spent_outpoints
+                    .insert(outpoint_of(&stored.output), now);
             }
 
             // If this was a swap reservation, record completion time.

@@ -7,7 +7,9 @@ use bitcoin::{
 };
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
+
+use prost::Message as _;
 
 use crate::{
     Network,
@@ -17,21 +19,22 @@ use crate::{
         rpc::{
             self, OperatorRpcError,
             spark_token::{
-                CommitTransactionRequest, QueryTokenMetadataRequest,
-                QueryTokenTransactionsByFilters, QueryTokenTransactionsByTxHash,
-                QueryTokenTransactionsRequest, SignatureWithIndex, StartTransactionRequest,
-                query_token_transactions_request::QueryType,
+                BroadcastTransactionRequest, CommitStatus, CommitTransactionRequest,
+                QueryTokenMetadataRequest, QueryTokenTransactionsByFilters,
+                QueryTokenTransactionsByTxHash, QueryTokenTransactionsRequest, SignatureWithIndex,
+                StartTransactionRequest, query_token_transactions_request::QueryType,
             },
         },
     },
     services::{
         FreezeIssuerTokenResponse, QueryTokenTransactionsFilter, ReceiverTokenOutput, ServiceError,
-        TokenInputs, TokenTransaction, TransferObserver, TransferTokenOutput,
+        TokenInputs, TokenOutputToSpend, TokenTransaction, TokenTransactionStatus,
+        TokenTransferInput, TransferObserver, TransferTokenOutput,
     },
     signer::Signer,
     token::{
         GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
-        TokenMetadata, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
+        TokenMetadata, TokenOutput, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
         with_reserved_token_outputs,
     },
     utils::{
@@ -564,7 +567,6 @@ impl TokenService {
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
     ) -> Result<TokenTransaction, ServiceError> {
-        // Validate parameters
         if receiver_outputs.is_empty() {
             return Err(ServiceError::Generic(
                 "No receiver outputs provided".to_string(),
@@ -578,6 +580,9 @@ impl TokenService {
         }
 
         let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
+
+        // Stable for the wallet's lifetime; fetch once and reuse across retries and below.
+        let identity_public_key = self.signer.get_identity_public_key().await?;
 
         let mut attempt = 0;
         let mut preempted_attempt = 0;
@@ -600,6 +605,7 @@ impl TokenService {
             let result = with_reserved_token_outputs(
                 self.token_output_service.as_ref(),
                 self.transfer_tokens_inner(
+                    identity_public_key,
                     &token_id,
                     reservation.token_outputs.outputs.clone(),
                     receiver_outputs.clone(),
@@ -636,8 +642,7 @@ impl TokenService {
             }
         };
 
-        let identity_public_key = self.signer.get_identity_public_key().await?;
-        let outputs = token_transaction
+        let our_outputs = token_transaction
             .outputs
             .iter()
             .enumerate()
@@ -653,7 +658,7 @@ impl TokenService {
                 &[],
                 Some(&TokenOutputs {
                     metadata: reservation.token_outputs.metadata,
-                    outputs,
+                    outputs: our_outputs,
                 }),
             )
             .await?;
@@ -663,6 +668,7 @@ impl TokenService {
 
     async fn transfer_tokens_inner(
         &self,
+        identity_public_key: PublicKey,
         token_id: &str,
         inputs: Vec<TokenOutputWithPrevOut>,
         receiver_outputs: Vec<TransferTokenOutput>,
@@ -671,27 +677,141 @@ impl TokenService {
             return Err(ServiceError::NeededTooManyOutputs);
         }
 
-        let partial_tx = self
-            .build_transfer_token_transaction(inputs.clone(), receiver_outputs.clone())
-            .await?;
-        let final_tx = self.start_transaction(partial_tx).await?;
-        let txid = hex::encode(final_tx.compute_hash(false)?);
+        let identity_public_key_bytes = identity_public_key.serialize().to_vec();
+
+        // SO sorts inputs by vout before validating owner signatures; match that here.
+        let mut inputs = inputs;
+        inputs.sort_by_key(|o| o.prev_tx_vout);
+
+        // The caller's receiver outputs occupy vouts 0..num_receiver_outputs. Any change output we
+        // append below lands after them and goes to our own identity key; the payment pipeline
+        // (token_transaction_to_payments) filters such self-outputs, so we keep change out of the
+        // observer's view too and only report these receiver outputs.
+        let num_receiver_outputs = receiver_outputs.len();
+
+        let mut receiver_outputs = receiver_outputs;
+        let inputs_amount = inputs.iter().map(|o| o.output.token_amount).sum::<u128>();
+        let outputs_amount = receiver_outputs.iter().map(|o| o.amount).sum::<u128>();
+        if inputs_amount > outputs_amount {
+            receiver_outputs.push(TransferTokenOutput {
+                token_id: token_id.to_string(),
+                amount: inputs_amount
+                    .checked_sub(outputs_amount)
+                    .ok_or_else(|| ServiceError::Generic("Amount overflow".to_string()))?,
+                receiver_address: SparkAddress::new(identity_public_key, self.network, None),
+                spark_invoice: None,
+            });
+        }
+
+        let token_id_bytes = bech32m_decode_token_id(token_id, Some(self.network))
+            .map_err(|e| ServiceError::Generic(format!("Invalid token id '{token_id}': {e}")))?;
+
+        let selected_outputs = inputs
+            .iter()
+            .map(|o| {
+                Ok(spark_token_primitives::SelectedTokenOutput {
+                    previous_transaction_hash: hex::decode(&o.prev_tx_hash)
+                        .map_err(|_| ServiceError::Generic("Invalid prev tx hash".to_string()))?,
+                    previous_transaction_vout: o.prev_tx_vout,
+                    owner_public_key: o.output.owner_public_key.serialize().to_vec(),
+                    token_identifier: token_id_bytes.clone(),
+                    token_amount: o.output.token_amount.to_be_bytes().to_vec(),
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+
+        let prim_receiver_outputs = receiver_outputs
+            .iter()
+            .map(|o| {
+                let receiver_spark_address = match &o.spark_invoice {
+                    Some(invoice) => invoice.clone(),
+                    None => o
+                        .receiver_address
+                        .to_address_string()
+                        .map_err(|e| ServiceError::Generic(e.to_string()))?,
+                };
+                Ok(spark_token_primitives::ReceiverTokenOutput {
+                    receiver_spark_address,
+                    token_identifier: Some(
+                        bech32m_decode_token_id(&o.token_id, Some(self.network)).map_err(|e| {
+                            ServiceError::Generic(format!("Invalid token id '{}': {e}", o.token_id))
+                        })?,
+                    ),
+                    token_amount: Some(o.amount.to_be_bytes().to_vec()),
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+
+        let now = SystemTime::now();
+        let client_created_timestamp_unix_micros = i64::try_from(
+            now.duration_since(UNIX_EPOCH)
+                .map_err(|_| {
+                    ServiceError::Generic(
+                        "client_created_timestamp is before UNIX_EPOCH".to_string(),
+                    )
+                })?
+                .as_micros(),
+        )
+        .map_err(|_| ServiceError::Generic("client_created_timestamp overflows i64".to_string()))?;
+
+        let result = spark_token_primitives::construct_partial_transfer_transaction(
+            spark_token_primitives::TransferBuildRequest {
+                identity_public_key: identity_public_key_bytes.clone(),
+                selected_outputs,
+                receiver_outputs: prim_receiver_outputs,
+                operator_identity_public_keys: self.get_operator_identity_public_keys()?,
+                network: u32::try_from(self.network.to_proto_network() as i32).map_err(|_| {
+                    ServiceError::Generic("network proto value is negative".to_string())
+                })?,
+                validity_duration_seconds: self.tokens_config.transaction_validity_duration_seconds,
+                client_created_timestamp_unix_micros,
+                withdraw_bond_sats: self.tokens_config.expected_withdraw_bond_sats,
+                withdraw_relative_block_locktime: self
+                    .tokens_config
+                    .expected_withdraw_relative_block_locktime,
+                execute_before_unix_micros: None,
+            },
+        )
+        .map_err(|e| ServiceError::Generic(e.to_string()))?;
+
+        let signature = self
+            .signer
+            .sign_hash_schnorr_with_identity_key(&result.partial_token_transaction_hash)
+            .await?
+            .serialize()
+            .to_vec();
+
+        let owner_signatures = inputs
+            .iter()
+            .enumerate()
+            .map(|(i, _)| spark_token_primitives::SignatureWithIndexInput {
+                input_index: i as u32,
+                public_key: identity_public_key_bytes.clone(),
+                signature: signature.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let partial_txid = hex::encode(&result.partial_token_transaction_hash);
 
         if let Some(observer) = &self.transfer_observer {
             observer
                 .before_send_token(
-                    &txid,
+                    &partial_txid,
                     token_id,
                     receiver_outputs
-                        .into_iter()
+                        .iter()
+                        .take(num_receiver_outputs)
                         .map(|o| {
                             Ok(ReceiverTokenOutput {
                                 pay_request: o
                                     .spark_invoice
+                                    .clone()
                                     .or(o.receiver_address.to_address_string().ok())
-                                    .ok_or(ServiceError::Generic(
-                                        "No pay request available".to_string(),
-                                    ))?,
+                                    .ok_or_else(|| {
+                                        ServiceError::Generic(
+                                            "No pay request available".to_string(),
+                                        )
+                                    })?,
                                 amount: o.amount,
                             })
                         })
@@ -700,9 +820,148 @@ impl TokenService {
                 .await?;
         }
 
-        self.commit_transaction(final_tx.clone()).await?;
+        let broadcast_bytes = spark_token_primitives::build_broadcast_transaction_request(
+            spark_token_primitives::BroadcastBuildRequest {
+                identity_public_key: identity_public_key_bytes,
+                partial_token_transaction_bytes: result.partial_token_transaction_bytes,
+                owner_signatures,
+            },
+        )
+        .map_err(|e| ServiceError::Generic(e.to_string()))?;
 
-        (final_tx, self.network).try_into()
+        let broadcast_req = BroadcastTransactionRequest::decode(broadcast_bytes.as_slice())
+            .map_err(|e| {
+                ServiceError::Generic(format!(
+                    "Failed to decode broadcast request for tx {partial_txid} (encoded bytes len={}): {e}",
+                    broadcast_bytes.len()
+                ))
+            })?;
+
+        let broadcast_response = self
+            .operator_pool
+            .get_coordinator()
+            .client
+            .broadcast_transaction(broadcast_req)
+            .await?;
+
+        // Broadcast succeeded, so the reserved inputs are spent. Errors must not propagate past
+        // here: with_reserved_token_outputs cancels the reservation on Err, wrongly returning the
+        // spent outputs to the available pool. Log and continue instead.
+        let commit_status = broadcast_response.commit_status();
+        let commit_progress = broadcast_response.commit_progress;
+        let final_token_transaction = broadcast_response.final_token_transaction;
+
+        // Fall back to the partial txid if the response is malformed, so a parse failure can't roll
+        // back the now-broadcast reservation.
+        let final_outputs = match final_token_transaction {
+            Some(final_token_transaction) => spark_token_primitives::hash_final_token_transaction(
+                final_token_transaction.encode_to_vec(),
+            )
+            .map_err(|e| format!("Failed to compute final token transaction hash: {e}"))
+            .and_then(|final_tx_hash| {
+                let txid = hex::encode(&final_tx_hash);
+                final_token_transaction
+                    .final_token_outputs
+                    .into_iter()
+                    .map(|fo| {
+                        (fo, self.network)
+                            .try_into()
+                            .map_err(|e: ServiceError| e.to_string())
+                    })
+                    .collect::<Result<Vec<TokenOutput>, String>>()
+                    .map(|outputs| (txid, outputs))
+            }),
+            None => Err("broadcast response missing final_token_transaction".to_string()),
+        };
+
+        let (txid, outputs) = match final_outputs {
+            Ok(value) => value,
+            Err(e) => {
+                error!(
+                    "Failed to read final outputs for tx {partial_txid}: {e}; using the partial txid \
+                     so the broadcast reservation is finalized rather than rolled back"
+                );
+                (partial_txid.clone(), Vec::new())
+            }
+        };
+
+        let is_finalized = match commit_status {
+            CommitStatus::CommitFinalized => true,
+            CommitStatus::CommitProcessing => {
+                warn!(
+                    "broadcast_transaction for tx {txid} returned COMMIT_PROCESSING; \
+                     committed operators: {:?}, uncommitted operators: {:?}",
+                    commit_progress
+                        .as_ref()
+                        .map(|p| &p.committed_operator_public_keys),
+                    commit_progress
+                        .as_ref()
+                        .map(|p| &p.uncommitted_operator_public_keys),
+                );
+                false
+            }
+            CommitStatus::CommitUnspecified => {
+                warn!("broadcast_transaction for tx {txid} returned COMMIT_UNSPECIFIED");
+                false
+            }
+        };
+
+        // Operator outputs are authoritative post-broadcast; log mismatches rather than propagate.
+        if outputs.len() != receiver_outputs.len() {
+            warn!(
+                "broadcast returned {} final outputs but expected {} for tx {txid}",
+                outputs.len(),
+                receiver_outputs.len()
+            );
+        }
+        for (i, (output, expected)) in outputs.iter().zip(receiver_outputs.iter()).enumerate() {
+            if output.token_amount != expected.amount {
+                warn!(
+                    "final output {i} for tx {txid} has amount {} but expected {}",
+                    output.token_amount, expected.amount
+                );
+            }
+            if output.token_identifier != expected.token_id {
+                warn!(
+                    "final output {i} for tx {txid} has token identifier {} but expected {}",
+                    output.token_identifier, expected.token_id
+                );
+            }
+        }
+
+        if let Some(observer) = &self.transfer_observer
+            && let Err(e) = observer
+                .after_send_token(&partial_txid, &txid, num_receiver_outputs)
+                .await
+        {
+            warn!("after_send_token observer failed for tx {txid}: {e:?}");
+        }
+
+        let outputs_to_spend = inputs
+            .iter()
+            .map(|o| TokenOutputToSpend {
+                prev_token_tx_hash: o.prev_tx_hash.clone(),
+                prev_token_tx_vout: o.prev_tx_vout,
+            })
+            .collect();
+
+        let created_timestamp = now;
+
+        Ok(TokenTransaction {
+            hash: txid,
+            inputs: TokenInputs::Transfer(TokenTransferInput { outputs_to_spend }),
+            outputs,
+            status: if is_finalized {
+                TokenTransactionStatus::Finalized
+            } else {
+                TokenTransactionStatus::Unknown
+            },
+            created_timestamp,
+            fulfilled_invoices: receiver_outputs
+                .into_iter()
+                .filter_map(|o| o.spark_invoice)
+                .collect(),
+        })
     }
 
     /// Optimizes token outputs by consolidating them when there are more than the configured threshold.
@@ -781,11 +1040,8 @@ impl TokenService {
                 .map(|o| o.output.token_amount)
                 .sum::<u128>();
 
-            let receiver_address = SparkAddress::new(
-                self.signer.get_identity_public_key().await?,
-                self.network,
-                None,
-            );
+            let identity_public_key = self.signer.get_identity_public_key().await?;
+            let receiver_address = SparkAddress::new(identity_public_key, self.network, None);
             let receiver_outputs = build_consolidation_outputs(
                 &output.metadata.identifier,
                 amount,
@@ -796,6 +1052,7 @@ impl TokenService {
             let token_transaction = with_reserved_token_outputs(
                 self.token_output_service.as_ref(),
                 self.transfer_tokens_inner(
+                    identity_public_key,
                     &output.metadata.identifier,
                     reservation.token_outputs.outputs.clone(),
                     receiver_outputs,
@@ -888,76 +1145,6 @@ impl TokenService {
         }];
 
         self.build_token_transaction(token_inputs, token_outputs, vec![])
-    }
-
-    async fn build_transfer_token_transaction(
-        &self,
-        mut inputs: Vec<TokenOutputWithPrevOut>,
-        mut receiver_outputs: Vec<TransferTokenOutput>,
-    ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
-        // Ensure inputs are ordered by vout ascending so that the input indices
-        // used for owner signatures match the order expected by the SO, which sorts
-        // inputs by "prevTokenTransactionVout" before validating signatures.
-        inputs.sort_by_key(|o| o.prev_tx_vout);
-
-        // If the inputs amount is greater than the outputs amount, we add a change output
-        let inputs_amount = inputs.iter().map(|o| o.output.token_amount).sum::<u128>();
-        let outputs_amount = receiver_outputs.iter().map(|o| o.amount).sum::<u128>();
-        if inputs_amount > outputs_amount {
-            receiver_outputs.push(TransferTokenOutput {
-                token_id: receiver_outputs[0].token_id.clone(),
-                amount: inputs_amount - outputs_amount,
-                receiver_address: SparkAddress::new(
-                    self.signer.get_identity_public_key().await?,
-                    self.network,
-                    None,
-                ),
-                spark_invoice: None,
-            });
-        }
-
-        // Prepare inputs
-        let outputs_to_spend = inputs
-            .iter()
-            .map(|o| {
-                Ok(rpc::spark_token::TokenOutputToSpend {
-                    prev_token_transaction_hash: hex::decode(&o.prev_tx_hash)
-                        .map_err(|_| ServiceError::Generic("Invalid prev tx hash".to_string()))?,
-                    prev_token_transaction_vout: o.prev_tx_vout,
-                })
-            })
-            .collect::<Result<Vec<_>, ServiceError>>()?;
-        let inputs = rpc::spark_token::token_transaction::TokenInputs::TransferInput(
-            rpc::spark_token::TokenTransferInput { outputs_to_spend },
-        );
-
-        // Prepare outputs
-        let token_outputs = receiver_outputs
-            .iter()
-            .map(|o| {
-                Ok(rpc::spark_token::TokenOutput {
-                    owner_public_key: o.receiver_address.identity_public_key.serialize().to_vec(),
-                    token_identifier: Some(
-                        bech32m_decode_token_id(&o.token_id, Some(self.network))
-                            .map_err(|_| ServiceError::Generic("Invalid token id".to_string()))?,
-                    ),
-                    token_amount: o.amount.to_be_bytes().to_vec(),
-                    ..Default::default()
-                })
-            })
-            .collect::<Result<Vec<_>, ServiceError>>()?;
-
-        // Spark invoices this tx fulfills
-        let invoice_attachments = receiver_outputs
-            .into_iter()
-            .filter_map(|o| {
-                o.spark_invoice
-                    .map(|i| rpc::spark_token::InvoiceAttachment { spark_invoice: i })
-            })
-            .collect::<Vec<_>>();
-
-        // Build transaction
-        self.build_token_transaction(inputs, token_outputs, invoice_attachments)
     }
 
     fn build_token_transaction(
@@ -2210,5 +2397,48 @@ mod tests {
 
         let decoded = super::bech32m_decode_token_id(&encoded, Some(Network::Regtest)).unwrap();
         assert_eq!(decoded, raw_token_id);
+    }
+
+    #[test_all]
+    fn test_final_token_output_conversion_populates_payment_required_fields() {
+        use crate::token::TokenOutput;
+
+        // secp256k1 generator G — on-curve, so PublicKey::from_slice accepts it.
+        let owner_pubkey =
+            hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+                .unwrap();
+        let token_id = vec![0xab; 32];
+        let amount_bytes = 1000u128.to_be_bytes().to_vec();
+        let revocation_commitment = vec![0xcd; 33];
+
+        let final_output = rpc::spark_token::FinalTokenOutput {
+            partial_token_output: Some(rpc::spark_token::PartialTokenOutput {
+                owner_public_key: owner_pubkey.clone(),
+                withdraw_bond_sats: 10_000,
+                withdraw_relative_block_locktime: 1_000,
+                token_identifier: token_id.clone(),
+                token_amount: amount_bytes,
+            }),
+            revocation_commitment: revocation_commitment.clone(),
+        };
+
+        let local: TokenOutput = (final_output, Network::Regtest)
+            .try_into()
+            .expect("FinalTokenOutput must convert to local TokenOutput");
+
+        assert_eq!(local.owner_public_key.serialize().to_vec(), owner_pubkey);
+        assert_eq!(local.token_amount, 1000);
+        assert!(
+            local.token_identifier.starts_with("btknrt1"),
+            "expected regtest btknrt1 prefix, got {}",
+            local.token_identifier
+        );
+        assert_eq!(local.withdraw_bond_sats, 10_000);
+        assert_eq!(local.withdraw_relative_block_locktime, 1_000);
+        assert_eq!(
+            local.revocation_commitment,
+            hex::encode(&revocation_commitment)
+        );
+        assert!(local.token_public_key.is_none());
     }
 }
