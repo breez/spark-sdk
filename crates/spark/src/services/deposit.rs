@@ -3,7 +3,7 @@ use std::{collections::HashSet, str::FromStr, sync::Arc};
 use bitcoin::{
     Address, Amount, OutPoint, Transaction, TxOut, Txid, Witness,
     address::NetworkUnchecked,
-    consensus::{deserialize, serialize},
+    consensus::serialize,
     hashes::{Hash, sha256},
     params::Params,
     secp256k1::{Message, PublicKey, ecdsa::Signature, schnorr},
@@ -13,15 +13,15 @@ use tracing::{error, trace};
 
 use crate::{
     Network,
-    bitcoin::{BitcoinService, sighash_from_tx},
+    bitcoin::{BitcoinService, sighash_from_tx, verify_finalized_taproot_signature},
     operator::{
         OperatorPool,
         rpc::{self as operator_rpc, spark::HashVariant},
     },
-    services::Utxo,
-    signer::{SecretSource, Signer},
+    services::{Utxo, models::map_signing_nonce_commitments},
+    signer::{SecretSource, SignFrostRequest, Signer},
     ssp::{ClaimStaticDepositInput, ClaimStaticDepositRequestType, ServiceProvider},
-    tree::{TreeNode, TreeNodeId, TreeNodeStatus},
+    tree::{TreeNode, TreeNodeId},
     utils::{
         frost::{SignAggregateFrostParams, sign_aggregate_frost},
         paging::{PagingFilter, PagingResult, pager},
@@ -584,78 +584,31 @@ impl DepositService {
         let direct_from_cpfp_refund_nonce_commitment =
             self.signer.generate_random_signing_commitment().await?;
 
-        let tree_resp = self
+        // Fetch operator signing commitments. The tree node does not exist yet,
+        // so request commitments by count rather than by node id.
+        let signing_commitments = self
             .operator_pool
             .get_coordinator()
             .client
-            .start_deposit_tree_creation(operator_rpc::spark::StartDepositTreeCreationRequest {
-                identity_public_key: self.identity_public_key.serialize().to_vec(),
-                on_chain_utxo: Some(operator_rpc::spark::Utxo {
-                    raw_tx: serialize(&deposit_tx),
-                    vout,
-                    network: self.network.to_proto_network() as i32,
-                    txid: deposit_txid.as_byte_array().to_vec(),
-                }),
-                root_tx_signing_job: Some(operator_rpc::spark::SigningJob {
-                    signing_public_key: signing_public_key.serialize().to_vec(),
-                    raw_tx: serialize(&cpfp_root_tx),
-                    signing_nonce_commitment: Some(
-                        cpfp_node_nonce_commitment.commitments.try_into()?,
-                    ),
-                }),
-                refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
-                    signing_public_key: signing_public_key.serialize().to_vec(),
-                    raw_tx: serialize(&cpfp_refund_tx),
-                    signing_nonce_commitment: Some(
-                        cpfp_refund_nonce_commitment.commitments.try_into()?,
-                    ),
-                }),
-                #[allow(deprecated)]
-                direct_root_tx_signing_job: None,
-                #[allow(deprecated)]
-                direct_refund_tx_signing_job: None,
-                direct_from_cpfp_refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
-                    signing_public_key: signing_public_key.serialize().to_vec(),
-                    raw_tx: serialize(&direct_from_cpfp_refund_tx),
-                    signing_nonce_commitment: Some(
-                        direct_from_cpfp_refund_nonce_commitment
-                            .commitments
-                            .try_into()?,
-                    ),
-                }),
+            .get_signing_commitments(operator_rpc::spark::GetSigningCommitmentsRequest {
+                node_ids: Vec::new(),
+                count: 3,
+                node_id_count: 1,
             })
-            .await?;
+            .await?
+            .signing_commitments;
 
-        let root_node_signature_shares = tree_resp
-            .root_node_signature_shares
-            .ok_or(ServiceError::MissingTreeSignatures)?;
-
-        let cpfp_node_signing_result = root_node_signature_shares
-            .node_tx_signing_result
-            .as_ref()
-            .map(|sr| sr.try_into())
-            .transpose()?
-            .ok_or(ServiceError::MissingTreeSignatures)?;
-        let cpfp_refund_signing_result = root_node_signature_shares
-            .refund_tx_signing_result
-            .as_ref()
-            .map(|sr| sr.try_into())
-            .transpose()?
-            .ok_or(ServiceError::MissingTreeSignatures)?;
-        let direct_from_cpfp_refund_signing_result = root_node_signature_shares
-            .direct_from_cpfp_refund_tx_signing_result
-            .as_ref()
-            .map(|sr| sr.try_into())
-            .transpose()?
-            .ok_or(ServiceError::MissingTreeSignatures)?;
-
-        let tree_resp_verifying_key =
-            PublicKey::from_slice(&root_node_signature_shares.verifying_key)
-                .map_err(|_| ServiceError::InvalidVerifyingKey)?;
-
-        if &tree_resp_verifying_key != verifying_public_key {
-            return Err(ServiceError::InvalidVerifyingKey);
-        }
+        let [
+            cpfp_root_commitments,
+            cpfp_refund_commitments,
+            direct_from_cpfp_refund_commitments,
+        ] = signing_commitments.as_slice()
+        else {
+            return Err(ServiceError::Generic(format!(
+                "Expected 3 signing commitments, got {}",
+                signing_commitments.len()
+            )));
+        };
 
         // Compute sighashes for all transactions
         let cpfp_root_sighash = sighash_from_tx(&cpfp_root_tx, 0, deposit_tx_out)?;
@@ -663,122 +616,160 @@ impl DepositService {
         let direct_from_cpfp_refund_sighash =
             sighash_from_tx(&direct_from_cpfp_refund_tx, 0, &cpfp_root_tx.output[0])?;
 
-        let cpfp_root_signature = sign_aggregate_frost(SignAggregateFrostParams {
-            signer: &self.signer,
-            sighash: &cpfp_root_sighash,
-            signing_public_key: &signing_public_key,
-            aggregating_public_key: &signing_public_key,
-            signing_private_key: &signing_private_key,
-            self_nonce_commitment: &cpfp_node_nonce_commitment,
-            adaptor_public_key: None,
-            verifying_key: verifying_public_key,
-            signing_result: cpfp_node_signing_result,
-        })
-        .await?;
+        // The user produces a FROST signature share for each transaction; the
+        // operators aggregate server-side during finalization.
+        let cpfp_root_user_signature = self
+            .signer
+            .sign_frost(SignFrostRequest {
+                message: cpfp_root_sighash.as_byte_array(),
+                public_key: &signing_public_key,
+                private_key: &signing_private_key,
+                verifying_key: verifying_public_key,
+                self_nonce_commitment: &cpfp_node_nonce_commitment,
+                statechain_commitments: map_signing_nonce_commitments(
+                    &cpfp_root_commitments.signing_nonce_commitments,
+                )?,
+                adaptor_public_key: None,
+            })
+            .await?;
 
-        let cpfp_refund_signature = sign_aggregate_frost(SignAggregateFrostParams {
-            signer: &self.signer,
-            sighash: &cpfp_refund_sighash,
-            signing_public_key: &signing_public_key,
-            aggregating_public_key: &signing_public_key,
-            signing_private_key: &signing_private_key,
-            self_nonce_commitment: &cpfp_refund_nonce_commitment,
-            adaptor_public_key: None,
-            verifying_key: verifying_public_key,
-            signing_result: cpfp_refund_signing_result,
-        })
-        .await?;
+        let cpfp_refund_user_signature = self
+            .signer
+            .sign_frost(SignFrostRequest {
+                message: cpfp_refund_sighash.as_byte_array(),
+                public_key: &signing_public_key,
+                private_key: &signing_private_key,
+                verifying_key: verifying_public_key,
+                self_nonce_commitment: &cpfp_refund_nonce_commitment,
+                statechain_commitments: map_signing_nonce_commitments(
+                    &cpfp_refund_commitments.signing_nonce_commitments,
+                )?,
+                adaptor_public_key: None,
+            })
+            .await?;
 
-        let direct_from_cpfp_refund_signature = sign_aggregate_frost(SignAggregateFrostParams {
-            signer: &self.signer,
-            sighash: &direct_from_cpfp_refund_sighash,
-            signing_public_key: &signing_public_key,
-            aggregating_public_key: &signing_public_key,
-            signing_private_key: &signing_private_key,
-            self_nonce_commitment: &direct_from_cpfp_refund_nonce_commitment,
-            adaptor_public_key: None,
-            verifying_key: verifying_public_key,
-            signing_result: direct_from_cpfp_refund_signing_result,
-        })
-        .await?;
+        let direct_from_cpfp_refund_user_signature = self
+            .signer
+            .sign_frost(SignFrostRequest {
+                message: direct_from_cpfp_refund_sighash.as_byte_array(),
+                public_key: &signing_public_key,
+                private_key: &signing_private_key,
+                verifying_key: verifying_public_key,
+                self_nonce_commitment: &direct_from_cpfp_refund_nonce_commitment,
+                statechain_commitments: map_signing_nonce_commitments(
+                    &direct_from_cpfp_refund_commitments.signing_nonce_commitments,
+                )?,
+                adaptor_public_key: None,
+            })
+            .await?;
 
         let finalize_resp = self
             .operator_pool
             .get_coordinator()
             .client
-            .finalize_node_signatures_v2(operator_rpc::spark::FinalizeNodeSignaturesRequest {
-                intent: operator_rpc::common::SignatureIntent::Creation as i32,
-                node_signatures: vec![operator_rpc::spark::NodeSignatures {
-                    node_id: root_node_signature_shares.node_id,
-                    node_tx_signature: cpfp_root_signature
-                        .serialize()
-                        .map_err(|_| ServiceError::InvalidSignatureShare)?
-                        .to_vec(),
-                    refund_tx_signature: cpfp_refund_signature
-                        .serialize()
-                        .map_err(|_| ServiceError::InvalidSignatureShare)?
-                        .to_vec(),
-                    direct_node_tx_signature: Vec::new(),
-                    direct_refund_tx_signature: Vec::new(),
-                    direct_from_cpfp_refund_tx_signature: direct_from_cpfp_refund_signature
-                        .serialize()
-                        .map_err(|_| ServiceError::InvalidSignatureShare)?
-                        .to_vec(),
-                }],
-            })
+            .finalize_deposit_tree_creation(
+                operator_rpc::spark::FinalizeDepositTreeCreationRequest {
+                    identity_public_key: self.identity_public_key.serialize().to_vec(),
+                    on_chain_utxo: Some(operator_rpc::spark::Utxo {
+                        raw_tx: serialize(&deposit_tx),
+                        vout,
+                        network: self.network.to_proto_network() as i32,
+                        txid: deposit_txid.as_byte_array().to_vec(),
+                    }),
+                    root_tx_signing_job: Some(operator_rpc::spark::UserSignedTxSigningJob {
+                        leaf_id: String::new(),
+                        signing_public_key: signing_public_key.serialize().to_vec(),
+                        raw_tx: serialize(&cpfp_root_tx),
+                        signing_nonce_commitment: Some(
+                            cpfp_node_nonce_commitment.commitments.try_into()?,
+                        ),
+                        user_signature: cpfp_root_user_signature.serialize().to_vec(),
+                        signing_commitments: Some(operator_rpc::spark::SigningCommitments {
+                            signing_commitments: cpfp_root_commitments
+                                .signing_nonce_commitments
+                                .clone(),
+                        }),
+                        additional_inputs: Vec::new(),
+                    }),
+                    refund_tx_signing_job: Some(operator_rpc::spark::UserSignedTxSigningJob {
+                        leaf_id: String::new(),
+                        signing_public_key: signing_public_key.serialize().to_vec(),
+                        raw_tx: serialize(&cpfp_refund_tx),
+                        signing_nonce_commitment: Some(
+                            cpfp_refund_nonce_commitment.commitments.try_into()?,
+                        ),
+                        user_signature: cpfp_refund_user_signature.serialize().to_vec(),
+                        signing_commitments: Some(operator_rpc::spark::SigningCommitments {
+                            signing_commitments: cpfp_refund_commitments
+                                .signing_nonce_commitments
+                                .clone(),
+                        }),
+                        additional_inputs: Vec::new(),
+                    }),
+                    direct_from_cpfp_refund_tx_signing_job: Some(
+                        operator_rpc::spark::UserSignedTxSigningJob {
+                            leaf_id: String::new(),
+                            signing_public_key: signing_public_key.serialize().to_vec(),
+                            raw_tx: serialize(&direct_from_cpfp_refund_tx),
+                            signing_nonce_commitment: Some(
+                                direct_from_cpfp_refund_nonce_commitment
+                                    .commitments
+                                    .try_into()?,
+                            ),
+                            user_signature: direct_from_cpfp_refund_user_signature
+                                .serialize()
+                                .to_vec(),
+                            signing_commitments: Some(operator_rpc::spark::SigningCommitments {
+                                signing_commitments: direct_from_cpfp_refund_commitments
+                                    .signing_nonce_commitments
+                                    .clone(),
+                            }),
+                            additional_inputs: Vec::new(),
+                        },
+                    ),
+                    additional_on_chain_utxos: Vec::new(),
+                },
+            )
             .await?;
 
-        // TODO: Verify the returned tx signatures
+        let root_node = finalize_resp.root_node.ok_or_else(|| {
+            ServiceError::Generic(
+                "finalize_deposit_tree_creation returned no root node".to_string(),
+            )
+        })?;
 
-        let nodes = finalize_resp
-            .nodes
-            .into_iter()
-            .map(|node| {
-                let signing_keyshare = node
-                    .signing_keyshare
-                    .ok_or(ServiceError::MissingSigningKeyshare)?;
+        // Verify the operator-returned root node matches what we signed for.
+        // The fused `start_deposit_tree_creation` flow returned signature shares
+        // that we aggregated locally; the package flow aggregates server-side,
+        // so we re-derive the same security guarantees here:
+        //  1) the verifying key we used really is the tree's verifying key,
+        //  2) each returned transaction carries a valid Schnorr signature
+        //     under that key for the sighashes we computed.
+        let returned_verifying_key = PublicKey::from_slice(&root_node.verifying_public_key)
+            .map_err(|_| ServiceError::InvalidVerifyingKey)?;
+        if &returned_verifying_key != verifying_public_key {
+            return Err(ServiceError::InvalidVerifyingKey);
+        }
+        verify_finalized_taproot_signature(
+            &self.bitcoin_service,
+            &root_node.node_tx,
+            cpfp_root_sighash.as_byte_array(),
+            verifying_public_key,
+        )?;
+        verify_finalized_taproot_signature(
+            &self.bitcoin_service,
+            &root_node.refund_tx,
+            cpfp_refund_sighash.as_byte_array(),
+            verifying_public_key,
+        )?;
+        verify_finalized_taproot_signature(
+            &self.bitcoin_service,
+            &root_node.direct_from_cpfp_refund_tx,
+            direct_from_cpfp_refund_sighash.as_byte_array(),
+            verifying_public_key,
+        )?;
 
-                Ok(TreeNode {
-                    id: node
-                        .id
-                        .parse()
-                        .map_err(|_| ServiceError::InvalidNodeId(node.id))?,
-                    tree_id: node.tree_id,
-                    value: node.value,
-                    parent_node_id: match node.parent_node_id {
-                        Some(id) => Some(id.parse().map_err(|_| ServiceError::InvalidNodeId(id))?),
-                        None => None,
-                    },
-                    node_tx: deserialize(&node.node_tx)
-                        .map_err(|_| ServiceError::InvalidTransaction)?,
-                    refund_tx: Some(
-                        deserialize(&node.refund_tx)
-                            .map_err(|_| ServiceError::InvalidTransaction)?,
-                    ),
-                    direct_tx: None,
-                    direct_refund_tx: None,
-                    direct_from_cpfp_refund_tx: Some(
-                        deserialize(&node.direct_from_cpfp_refund_tx)
-                            .map_err(|_| ServiceError::InvalidTransaction)?,
-                    ),
-                    vout: node.vout,
-                    verifying_public_key: PublicKey::from_slice(&node.verifying_public_key)
-                        .map_err(|_| ServiceError::InvalidVerifyingKey)?,
-                    owner_identity_public_key: if node.owner_identity_public_key.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            PublicKey::from_slice(&node.owner_identity_public_key)
-                                .map_err(|_| ServiceError::InvalidPublicKey)?,
-                        )
-                    },
-                    signing_keyshare: signing_keyshare.try_into()?,
-                    status: TreeNodeStatus::from(node.status.as_str()),
-                })
-            })
-            .collect::<Result<Vec<_>, ServiceError>>()?;
-
-        Ok(nodes)
+        Ok(vec![root_node.try_into()?])
     }
 
     pub async fn generate_deposit_address(

@@ -20,8 +20,6 @@ pub enum ServiceError {
     MissingUtxo,
     #[error("missing deposit address proof")]
     MissingDepositAddressProof,
-    #[error("missing signing keyshare")]
-    MissingSigningKeyshare,
     #[error("missing tree signatures")]
     MissingTreeSignatures,
     #[error("missing leaf id")]
@@ -52,20 +50,12 @@ pub enum ServiceError {
     SSPswapError(String),
     #[error("preimage share store failed: {0}")]
     PreimageShareStoreFailed(String),
-    #[error("payment not found")]
-    PaymentNotFound,
 
     // Transfer related errors
-    #[error("Failed to extend time lock: {0}")]
-    ExtendTimeLockError(String),
-    #[error("Transfer verification failed: {0}")]
-    TransferVerificationError(String),
     #[error("Max retries exceeded")]
     MaxRetriesExceeded,
     #[error("No leaves to claim")]
     NoLeavesToClaim,
-    #[error("Claim transfer failed: {0}")]
-    ClaimTransferError(String),
     #[error("Signature verification failed: {0}")]
     SignatureVerificationFailed(String),
 
