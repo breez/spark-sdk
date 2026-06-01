@@ -12,8 +12,7 @@ use crate::services::models::{
 };
 use crate::services::{ProofMap, TransferId, TransferObserver, TransferStatus};
 use crate::signer::{
-    FrostSigningCommitmentsWithNonces, SecretSource, SecretToSplit, SignFrostRequest,
-    VerifiableSecretShare,
+    FrostSigningCommitmentsWithNonces, SecretSource, SecretToSplit, VerifiableSecretShare,
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::paging::{PagingFilter, PagingResult, pager};
@@ -38,7 +37,10 @@ use tracing::{debug, error, trace, warn};
 
 use crate::{
     bitcoin::sighash_from_tx,
-    signer::{OperatorRecipient, PrepareTransferRequest, Signer, SparkSigner, TransferLeafInput},
+    signer::{
+        FrostDerivation, FrostJob, OperatorRecipient, PrepareTransferRequest, Signer, SparkSigner,
+        TransferLeafInput,
+    },
     tree::{TreeNode, TreeNodeId},
 };
 
@@ -1140,16 +1142,12 @@ impl TransferService {
             let verifying_key = leaf.node.verifying_public_key;
 
             let LeafRefundSigningData {
-                signing_private_key,
                 signing_public_key,
                 tx: node_tx,
                 direct_tx,
                 refund_tx,
                 direct_refund_tx,
                 direct_from_cpfp_refund_tx,
-                signing_nonce_commitment,
-                direct_signing_nonce_commitment,
-                direct_from_cpfp_signing_nonce_commitment,
                 ..
             } = data;
 
@@ -1162,8 +1160,6 @@ impl TransferService {
                     cpfp_refund_tx,
                     cpfp_sighash.as_byte_array(),
                     &signing_public_key,
-                    &signing_private_key,
-                    signing_nonce_commitment,
                     cpfp_commitments[i].clone(),
                     &verifying_key,
                 )
@@ -1178,8 +1174,6 @@ impl TransferService {
                         direct_refund_tx,
                         sighash.as_byte_array(),
                         &signing_public_key,
-                        &signing_private_key,
-                        direct_signing_nonce_commitment,
                         direct_commitments[i].clone(),
                         &verifying_key,
                     )
@@ -1195,8 +1189,6 @@ impl TransferService {
                         dfc_refund_tx,
                         sighash.as_byte_array(),
                         &signing_public_key,
-                        &signing_private_key,
-                        direct_from_cpfp_signing_nonce_commitment,
                         direct_from_cpfp_commitments[i].clone(),
                         &verifying_key,
                     )
@@ -1208,41 +1200,43 @@ impl TransferService {
         Ok((cpfp_jobs, direct_jobs, direct_from_cpfp_jobs))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn sign_claim_refund_job(
         &self,
         node_id: &TreeNodeId,
         refund_tx: Transaction,
-        sighash_bytes: &[u8],
+        sighash_bytes: &[u8; 32],
         signing_public_key: &PublicKey,
-        signing_private_key: &SecretSource,
-        self_nonce_commitment: FrostSigningCommitmentsWithNonces,
         operator_commitments: std::collections::BTreeMap<
             Identifier,
             frost_secp256k1_tr::round1::SigningCommitments,
         >,
         verifying_key: &PublicKey,
     ) -> Result<operator_rpc::spark::UserSignedTxSigningJob, ServiceError> {
-        let user_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: sighash_bytes,
-                public_key: signing_public_key,
-                private_key: signing_private_key,
-                verifying_key,
-                self_nonce_commitment: &self_nonce_commitment,
-                statechain_commitments: operator_commitments.clone(),
+        // The claim refund is signed with the receiver's new leaf key, which is
+        // the derived key for this node id.
+        let share = self
+            .spark_signer
+            .sign_frost(vec![FrostJob {
+                derivation: FrostDerivation::SigningLeaf {
+                    leaf_id: node_id.clone(),
+                },
+                sighash: *sighash_bytes,
+                verifying_key: *verifying_key,
+                operator_commitments: operator_commitments.clone(),
                 adaptor_public_key: None,
-            })
-            .await?;
+            }])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| ServiceError::Generic("sign_frost returned no share".to_string()))?;
 
         let signed_tx = SignedTx {
             node_id: node_id.clone(),
             signing_public_key: *signing_public_key,
             tx: refund_tx,
-            user_signature,
+            user_signature: share.signature_share,
             signing_commitments: operator_commitments,
-            self_nonce_commitment,
+            self_nonce_commitment: share.commitment,
             network: self.network,
         };
         (&signed_tx).try_into()
