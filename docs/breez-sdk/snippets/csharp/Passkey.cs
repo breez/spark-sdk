@@ -19,7 +19,7 @@ namespace BreezSdkSnippets
             throw new NotImplementedException("Check platform passkey availability");
         }
 
-        public async Task<RegisteredCredential> CreatePasskey(byte[][] excludeCredentials)
+        public async Task<PasskeyCredential> CreatePasskey(byte[][] excludeCredentials)
         {
             // Register a new credential and return its ID, the WebAuthn
             // user.id the platform recorded (returned for host-side
@@ -33,19 +33,6 @@ namespace BreezSdkSnippets
                 new DomainAssociation.Skipped("CustomPrfProvider does not verify domain association"));
         }
 
-        // CredentialRegistry hooks: wire these to your app's stored
-        // credential-ID set if you want the SDK to auto-merge known IDs
-        // into allowCredentials / excludeCredentials. Custom providers
-        // without a registry can return empty and treat the mutators as
-        // no-ops.
-        public async Task<byte[][]> GetKnownCredentialIds() =>
-            await Task.FromResult(Array.Empty<byte[]>());
-
-        public async Task RemoveKnownCredentialId(byte[] credentialId) =>
-            await Task.CompletedTask;
-
-        public async Task ClearKnownCredentialIds() =>
-            await Task.CompletedTask;
     }
     // ANCHOR_END: implement-prf-provider
 
@@ -99,13 +86,11 @@ namespace BreezSdkSnippets
                 new ConnectWithPasskeyRequest(label: "personal", excludeCredentials: Array.Empty<byte[]>())
             );
 
-            // registeredCredential doubles as the path discriminator:
-            // non-null when a new credential was just registered (persist
-            // credentialId for future excludeCredentials); null when
-            // silent sign-in succeeded for an existing credential.
-            if (response.registeredCredential is not null)
+            // The credential is surfaced on both paths when the provider
+            // exposes it. Persist credentialId for future excludeCredentials.
+            if (response.credential is not null)
             {
-                var persistedId = response.registeredCredential.credentialId;
+                var persistedId = response.credential.credentialId;
             }
 
             var config = BreezSdkSparkMethods.DefaultConfig(network: Network.Mainnet);
@@ -126,11 +111,14 @@ namespace BreezSdkSnippets
 
             var response = await passkey.Register(new RegisterRequest(label: "personal"));
 
-            // Hosts SHOULD persist credential.credentialId (for excludeCredentials
-            // bookkeeping) and credential.userId (for server-side correlation).
-            // The SDK generates userId; it is never host-supplied.
-            var _persistedCredentialId = response.credential.credentialId;
-            var _persistedUserId = response.credential.userId;
+            // Persist credential.credentialId (for excludeCredentials bookkeeping)
+            // and credential.userId (for server-side correlation). The SDK
+            // generates userId; it is never host-supplied.
+            if (response.credential is not null)
+            {
+                var _persistedCredentialId = response.credential.credentialId;
+                var _persistedUserId = response.credential.userId;
+            }
 
             var config = BreezSdkSparkMethods.DefaultConfig(network: Network.Mainnet);
             var sdk = await BreezSdkSparkMethods.Connect(new ConnectRequest(

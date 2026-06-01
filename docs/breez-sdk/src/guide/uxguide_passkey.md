@@ -31,7 +31,7 @@ Total: **1** OS prompt. The reverse order (`labels().store` before `sign_in`) co
 
 ### Credential ID and user-handle management
 
-`createPasskey()` returns a `RegisteredCredential` carrying:
+`createPasskey()` returns a `PasskeyCredential` carrying:
 
 - `credentialId` - the opaque ID the authenticator assigned to the new credential.
 - `userId` - the WebAuthn `user.id` (user handle). The SDK generates a fresh random 16-byte value per call and surfaces it here for host-side correlation. Hosts cannot supply one: reusing a value across creates on the same `rpId` silently overwrites the prior credential on some authenticators (Apple Passwords), destroying the PRF secret the wallet derives from. The SDK locks this down by always randomizing.

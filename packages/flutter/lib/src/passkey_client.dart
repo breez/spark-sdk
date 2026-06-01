@@ -9,9 +9,9 @@ import 'rust/models.dart'
         DeriveSeedsRequest,
         PasskeyAvailability,
         PasskeyConfig,
+        PasskeyCredential,
         RegisterRequest,
         RegisterResponse,
-        RegisteredCredential,
         SignInRequest,
         SignInResponse;
 import 'rust/passkey.dart' as rust;
@@ -45,9 +45,6 @@ class PasskeyClient {
         deriveSeeds: provider.deriveSeeds,
         isSupported: provider.isSupported,
         createPasskey: provider.createPasskey,
-        getKnownCredentialIds: provider.getKnownCredentialIds,
-        removeKnownCredentialId: provider.removeKnownCredentialId,
-        clearKnownCredentialIds: provider.clearKnownCredentialIds,
         breezApiKey: breezApiKey,
         config: config,
       );
@@ -58,19 +55,13 @@ class PasskeyClient {
   PasskeyClient.fromCallbacks({
     required FutureOr<DeriveSeedsOutput> Function(DeriveSeedsRequest) deriveSeeds,
     required FutureOr<bool> Function() isSupported,
-    required FutureOr<RegisteredCredential> Function(List<Uint8List>) createPasskey,
-    required FutureOr<List<Uint8List>> Function() getKnownCredentialIds,
-    required FutureOr<void> Function(Uint8List) removeKnownCredentialId,
-    required FutureOr<void> Function() clearKnownCredentialIds,
+    required FutureOr<PasskeyCredential> Function(List<Uint8List>) createPasskey,
     String? breezApiKey,
     PasskeyConfig? config,
   }) : _inner = rust.PasskeyClient(
          deriveSeeds: deriveSeeds,
          isSupported: isSupported,
          createPasskey: createPasskey,
-         getKnownCredentialIds: getKnownCredentialIds,
-         removeKnownCredentialId: removeKnownCredentialId,
-         clearKnownCredentialIds: clearKnownCredentialIds,
          breezApiKey: breezApiKey,
          config: config,
        );
@@ -80,8 +71,6 @@ class PasskeyClient {
   Future<ConnectWithPasskeyResponse> connectWithPasskey({required ConnectWithPasskeyRequest request}) =>
       _inner.connectWithPasskey(request: request);
 
-  rust.PasskeyCredentials credentials() => _inner.credentials();
-
   rust.PasskeyLabels labels() => _inner.labels();
 
   Future<RegisterResponse> register({required RegisterRequest request}) => _inner.register(request: request);
@@ -90,8 +79,8 @@ class PasskeyClient {
 }
 
 /// Builds a [PasskeyClient] backed by a caller-supplied [PrfProvider]. Use
-/// this when you need a configured provider (custom `rpId` / `rpName`, a
-/// credential registry, rotating `userName`).
+/// this when you need a configured provider (custom `rpId` / `rpName`,
+/// rotating `userName`).
 class PasskeyClientBuilder {
   PasskeyClientBuilder({this.breezApiKey, this.config});
 

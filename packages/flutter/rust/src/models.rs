@@ -1337,10 +1337,10 @@ pub struct _Wallet {
     pub label: String,
 }
 
-#[frb(mirror(RegisteredCredential))]
-pub struct _RegisteredCredential {
+#[frb(mirror(PasskeyCredential))]
+pub struct _PasskeyCredential {
     pub credential_id: Vec<u8>,
-    pub user_id: Vec<u8>,
+    pub user_id: Option<Vec<u8>>,
     pub aaguid: Option<Vec<u8>>,
     pub backup_eligible: Option<bool>,
 }
@@ -1354,7 +1354,7 @@ pub struct _RegisterRequest {
 #[frb(mirror(RegisterResponse))]
 pub struct _RegisterResponse {
     pub wallet: Wallet,
-    pub credential: RegisteredCredential,
+    pub credential: Option<PasskeyCredential>,
 }
 
 #[frb(mirror(SignInRequest))]
@@ -1381,7 +1381,7 @@ pub struct _DeriveSeedsOutput {
 pub struct _SignInResponse {
     pub wallet: Wallet,
     pub labels: Vec<String>,
-    pub credential_id: Option<Vec<u8>>,
+    pub credential: Option<PasskeyCredential>,
 }
 
 #[frb(mirror(ConnectWithPasskeyRequest))]
@@ -1394,5 +1394,5 @@ pub struct _ConnectWithPasskeyRequest {
 #[frb(mirror(ConnectWithPasskeyResponse))]
 pub struct _ConnectWithPasskeyResponse {
     pub wallet: Wallet,
-    pub registered_credential: Option<RegisteredCredential>,
+    pub credential: Option<PasskeyCredential>,
 }

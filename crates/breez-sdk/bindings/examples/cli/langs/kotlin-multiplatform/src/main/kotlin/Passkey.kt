@@ -95,7 +95,7 @@ class FilePrfProvider(dataDir: String) : PrfProvider {
 
     override suspend fun isSupported(): Boolean = true
 
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential {
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential {
         throw UnsupportedOperationException(
             "File-backed PRF provider does not implement create-credential; " +
                 "use sign-in by label instead."
@@ -104,12 +104,6 @@ class FilePrfProvider(dataDir: String) : PrfProvider {
 
     override suspend fun checkDomainAssociation(): DomainAssociation =
         DomainAssociation.Skipped("FilePrfProvider does not verify domain association")
-
-    // CredentialRegistry hooks are no-ops: this provider doesn't track
-    // credential IDs (no real WebAuthn ceremonies happen here).
-    override suspend fun getKnownCredentialIds(): List<ByteArray> = emptyList()
-    override suspend fun removeKnownCredentialId(id: ByteArray) = Unit
-    override suspend fun clearKnownCredentialIds() = Unit
 }
 
 // ---------------------------------------------------------------------------
@@ -127,14 +121,10 @@ class NotYetSupportedProvider(private val name: String) : PrfProvider {
 
     override suspend fun isSupported(): Boolean = notYet()
 
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential = notYet()
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential = notYet()
 
     override suspend fun checkDomainAssociation(): DomainAssociation =
         DomainAssociation.Skipped("$name does not verify domain association")
-
-    override suspend fun getKnownCredentialIds(): List<ByteArray> = emptyList()
-    override suspend fun removeKnownCredentialId(id: ByteArray) = Unit
-    override suspend fun clearKnownCredentialIds() = Unit
 }
 
 // ---------------------------------------------------------------------------

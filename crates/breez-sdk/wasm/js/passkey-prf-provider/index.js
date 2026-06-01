@@ -98,9 +98,7 @@ export class PasskeyTimedOutError extends Error {
 
 /**
  * Thrown when `deriveSeeds` cannot match a credential for this RP on
- * the device. `message` carries diagnostic detail and may append a
- * `CredentialRegistry` hint when no allow-list and no registry were
- * configured.
+ * the device. `message` carries diagnostic detail.
  */
 export class PasskeyCredentialNotFoundError extends Error {
     constructor(message = 'Credential not found') {
@@ -119,74 +117,6 @@ export class PasskeyUserCancelledError extends Error {
         super(message);
         this.name = 'PasskeyUserCancelledError';
     }
-}
-
-function _bytesToBase64Url(bytes) {
-    let s = '';
-    for (const b of bytes) s += String.fromCharCode(b);
-    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function _base64UrlToBytes(s) {
-    const pad = s.length % 4 === 0 ? 0 : 4 - (s.length % 4);
-    const b64 = s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(pad);
-    const bin = atob(b64);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-}
-
-/** Hard cap on registry calls; the ceremony proceeds either way. */
-const REGISTRY_TIMEOUT_MS = 3_000;
-
-/** Appended to `Credential not found` when no `allowCredentials` and no
- *  registry were supplied, pointing at the opt-in auto-discovery path.
- */
-const CREDENTIAL_REGISTRY_HELP_SUFFIX =
-    ' (No CredentialRegistry was supplied to PasskeyProvider; '
-    + 'if you expect the SDK to auto-discover known credentials, see '
-    + 'https://sdk-doc-spark.breez.technology/guide/passkey.html#credentialregistry)';
-
-/** Sentinel used to distinguish a timeout from a thrown error. */
-const _REGISTRY_TIMEOUT = Symbol('registryTimeout');
-
-function _withRegistryTimeout(promise) {
-    return Promise.race([
-        promise,
-        new Promise((resolve) => setTimeout(() => resolve(_REGISTRY_TIMEOUT), REGISTRY_TIMEOUT_MS)),
-    ]);
-}
-
-async function _registryReadBestEffort(registry, rpId, onRegistryError) {
-    try {
-        const result = await _withRegistryTimeout(registry.read(rpId));
-        if (result === _REGISTRY_TIMEOUT) {
-            const err = new Error('CredentialRegistry.read timed out');
-            console.warn('[CredentialRegistry] read timed out');
-            onRegistryError?.('read', err);
-            return [];
-        }
-        return Array.isArray(result) ? result : [];
-    } catch (err) {
-        console.warn('[CredentialRegistry] read failed', err);
-        onRegistryError?.('read', err);
-        return [];
-    }
-}
-
-function _registryAddFireAndForget(registry, rpId, credentialId, onRegistryError) {
-    _withRegistryTimeout(registry.add(rpId, credentialId))
-        .then((result) => {
-            if (result === _REGISTRY_TIMEOUT) {
-                const err = new Error('CredentialRegistry.add timed out');
-                console.warn('[CredentialRegistry] add timed out');
-                onRegistryError?.('add', err);
-            }
-        })
-        .catch((err) => {
-            console.warn('[CredentialRegistry] add failed', err);
-            onRegistryError?.('add', err);
-        });
 }
 
 /**
@@ -262,30 +192,6 @@ export class PasskeyProvider {
          * @type {number | undefined}
          */
         this.defaultTimeoutMs = options.defaultTimeoutMs;
-
-        /**
-         * Opt-in registry. When set, auto-merges stored IDs into
-         * `excludeCredentials` on create and `allowCredentials` on
-         * assert, and writes successful IDs back. Unset disables it.
-         * @type {CredentialRegistry | undefined}
-         */
-        this.credentialRegistry = options.credentialRegistry;
-        if (this.credentialRegistry) {
-            for (const method of ['read', 'add', 'remove', 'clear']) {
-                if (typeof this.credentialRegistry[method] !== 'function') {
-                    throw new Error(
-                        `PasskeyProvider: credentialRegistry is missing a "${method}" `
-                        + 'method. Implementations must provide read / add / remove / clear.'
-                    );
-                }
-            }
-        }
-        /**
-         * Callback for `CredentialRegistry` failures. Never blocks the
-         * ceremony.
-         * @type {((operation: string, error: Error) => void) | undefined}
-         */
-        this.onRegistryError = options.onRegistryError;
 
         /**
          * Credential ID asserted in the most recent ceremony. Reset at
@@ -369,7 +275,7 @@ export class PasskeyProvider {
      * registration as `PasskeyAlreadyExistsError`.
      *
      * @param {Uint8Array[]} [excludeCredentials]
-     * @returns {Promise<RegisteredCredential>} `aaguid`/`backupEligible`
+     * @returns {Promise<PasskeyCredential>} `aaguid`/`backupEligible`
      *   are null on browsers without `getAuthenticatorData()`.
      */
     async createPasskey(excludeCredentials = []) {
@@ -519,29 +425,11 @@ export class PasskeyProvider {
         let allowList;
         if (options._pinnedCredentialId != null) {
             // A later assertion in a multi-ceremony derive: pin to the
-            // credential the first one resolved to and skip the registry
-            // merge, so the pin can't be re-widened to another credential.
+            // credential the first one resolved to, so the pin can't be
+            // re-widened to another credential.
             allowList = [options._pinnedCredentialId];
         } else {
             allowList = options.allowCredentials || [];
-            // Auto-merge registry IDs into the allow-list.
-            if (this.credentialRegistry) {
-                const registryIds = await _registryReadBestEffort(
-                    this.credentialRegistry, this.rpId, this.onRegistryError,
-                );
-                if (registryIds.length > 0) {
-                    const seen = new Set(allowList.map((id) => _bytesToBase64Url(id)));
-                    const merged = [...allowList];
-                    for (const id of registryIds) {
-                        const key = _bytesToBase64Url(id);
-                        if (!seen.has(key)) {
-                            seen.add(key);
-                            merged.push(id);
-                        }
-                    }
-                    allowList = merged;
-                }
-            }
         }
         const allowCredentials = allowList.map((id) => ({
             type: 'public-key',
@@ -574,89 +462,14 @@ export class PasskeyProvider {
             const elapsed = ((typeof performance !== 'undefined' && performance.now)
                 ? performance.now()
                 : Date.now()) - startedAt;
-            // Append the registry hint only when there was nothing to
-            // populate the allow-list with: no per-call IDs, no registry.
-            const augmentNoCredHelp =
-                allowCredentials.length === 0 && !this.credentialRegistry;
-            throw this._mapAssertionError(error, elapsed, augmentNoCredHelp);
+            throw this._mapAssertionError(error, elapsed);
         }
         if (!credential) {
             throw new PasskeyCredentialNotFoundError();
         }
 
-        const credentialIdBytes = new Uint8Array(credential.rawId);
-        this._lastObservedCredentialId = credentialIdBytes;
-        if (this.credentialRegistry) {
-            _registryAddFireAndForget(
-                this.credentialRegistry, this.rpId, credentialIdBytes, this.onRegistryError,
-            );
-        }
+        this._lastObservedCredentialId = new Uint8Array(credential.rawId);
         return credential;
-    }
-
-    /**
-     * Credential IDs the configured registry has stored for the current
-     * `rpId`. Empty when no registry is configured. Backs
-     * `PasskeyClient.credentials().get()`.
-     * @returns {Promise<Uint8Array[]>}
-     */
-    async getKnownCredentialIds() {
-        if (!this.credentialRegistry) {
-            return [];
-        }
-        const stored = await _registryReadBestEffort(
-            this.credentialRegistry, this.rpId, this.onRegistryError,
-        );
-        return Array.isArray(stored) ? stored : [];
-    }
-
-    /**
-     * Drop one credential ID from the registry. No-op when no registry
-     * is configured. Backs `PasskeyClient.credentials().remove(id)`.
-     * @param {Uint8Array} credentialId
-     * @returns {Promise<void>}
-     */
-    async removeKnownCredentialId(credentialId) {
-        if (!this.credentialRegistry) {
-            return;
-        }
-        try {
-            const result = await _withRegistryTimeout(
-                this.credentialRegistry.remove(this.rpId, credentialId),
-            );
-            if (result === _REGISTRY_TIMEOUT) {
-                const err = new Error('CredentialRegistry.remove timed out');
-                console.warn('[CredentialRegistry] remove timed out');
-                this.onRegistryError?.('remove', err);
-            }
-        } catch (err) {
-            console.warn('[CredentialRegistry] remove failed', err);
-            this.onRegistryError?.('remove', err);
-        }
-    }
-
-    /**
-     * Clear the registry's stored IDs for the current `rpId`. No-op when
-     * no registry is configured. Backs `PasskeyClient.credentials().clear()`.
-     * @returns {Promise<void>}
-     */
-    async clearKnownCredentialIds() {
-        if (!this.credentialRegistry) {
-            return;
-        }
-        try {
-            const result = await _withRegistryTimeout(
-                this.credentialRegistry.clear(this.rpId),
-            );
-            if (result === _REGISTRY_TIMEOUT) {
-                const err = new Error('CredentialRegistry.clear timed out');
-                console.warn('[CredentialRegistry] clear timed out');
-                this.onRegistryError?.('clear', err);
-            }
-        } catch (err) {
-            console.warn('[CredentialRegistry] clear failed', err);
-            this.onRegistryError?.('clear', err);
-        }
     }
 
     /**
@@ -708,10 +521,8 @@ export class PasskeyProvider {
             publicKeyOptions.hints = [...this.hints];
         }
 
-        // Merge caller-supplied IDs with the registry, dedupe by base64url.
-        const mergedExcludeIds = await this._buildExcludeCredentials(excludeCredentials);
-        if (mergedExcludeIds.length > 0) {
-            publicKeyOptions.excludeCredentials = mergedExcludeIds.map((id) => ({
+        if (Array.isArray(excludeCredentials) && excludeCredentials.length > 0) {
+            publicKeyOptions.excludeCredentials = excludeCredentials.map((id) => ({
                 type: 'public-key',
                 id,
             }));
@@ -762,44 +573,12 @@ export class PasskeyProvider {
         }
 
         const meta = extractRegistrationMetadata(credential);
-        const credentialIdBytes = new Uint8Array(credential.rawId);
-        if (this.credentialRegistry) {
-            _registryAddFireAndForget(
-                this.credentialRegistry, this.rpId, credentialIdBytes, this.onRegistryError,
-            );
-        }
         return {
-            credentialId: credentialIdBytes,
+            credentialId: new Uint8Array(credential.rawId),
             userId: resolvedUserId,
             aaguid: meta ? meta.aaguid : null,
             backupEligible: meta ? meta.backupEligible : null,
         };
-    }
-
-    /**
-     * Merge caller-supplied excludeCredentials with whatever the
-     * registry has stored for `this.rpId`. Dedupes by base64url
-     * encoding so the same credential isn't sent twice.
-     * @private
-     */
-    async _buildExcludeCredentials(callerIds) {
-        if (!this.credentialRegistry) {
-            return Array.isArray(callerIds) ? [...callerIds] : [];
-        }
-        const stored = await _registryReadBestEffort(
-            this.credentialRegistry, this.rpId, this.onRegistryError,
-        );
-        const seen = new Set();
-        const out = [];
-        const push = (id) => {
-            const key = _bytesToBase64Url(id);
-            if (seen.has(key)) return;
-            seen.add(key);
-            out.push(id);
-        };
-        if (Array.isArray(callerIds)) for (const id of callerIds) push(id);
-        for (const id of stored) push(id);
-        return out;
     }
 
     /**
@@ -829,13 +608,11 @@ export class PasskeyProvider {
      * @returns {Error}
      * @private
      */
-    _mapAssertionError(error, elapsedMs, augmentNoCredHelp = false) {
+    _mapAssertionError(error, elapsedMs) {
         if (!error) return new Error('Unknown WebAuthn error');
         if (error.name === 'NotAllowedError') {
             if (elapsedMs < NO_CRED_FAST_FAIL_MS) {
-                const msg = 'Credential not found'
-                    + (augmentNoCredHelp ? CREDENTIAL_REGISTRY_HELP_SUFFIX : '');
-                return new PasskeyCredentialNotFoundError(msg);
+                return new PasskeyCredentialNotFoundError();
             }
             if (elapsedMs >= this._cancelVsTimeoutThresholdMs()) {
                 return new PasskeyTimedOutError();
@@ -888,13 +665,13 @@ export class PasskeyProvider {
 /**
  * Builder for a {@link PasskeyClient} with a caller-supplied
  * `PrfProvider`. Use it when you need a configured {@link PasskeyProvider}
- * (custom `rpId`/`rpName`, a `credentialRegistry`, timeout overrides) or
- * a custom PRF backend. For the zero-config Breez-RP case, use the
- * {@link PasskeyClient} constructor directly.
+ * (custom `rpId`/`rpName`, timeout overrides) or a custom PRF backend.
+ * For the zero-config Breez-RP case, use the {@link PasskeyClient}
+ * constructor directly.
  *
  * @example
  * ```javascript
- * const provider = new PasskeyProvider({ rpId, rpName, credentialRegistry })
+ * const provider = new PasskeyProvider({ rpId, rpName })
  * const client = new PasskeyClientBuilder(breezApiKey)
  *     .withPrfProvider(provider)
  *     .build()
@@ -953,10 +730,10 @@ export class PasskeyClientBuilder {
  * const { wallet } = await client.signIn({ label: 'personal' })
  * ```
  *
- * Apps with their own RP, a credential registry, or a custom PRF backend
- * inject their own provider through {@link PasskeyClientBuilder}. The
- * instance is the underlying SDK client (`checkAvailability`, `register`,
- * `signIn`, `labels()`, `credentials()`).
+ * Apps with their own RP or a custom PRF backend inject their own
+ * provider through {@link PasskeyClientBuilder}. The instance is the
+ * underlying SDK client (`checkAvailability`, `register`, `signIn`,
+ * `labels()`).
  */
 export class PasskeyClient {
     /**

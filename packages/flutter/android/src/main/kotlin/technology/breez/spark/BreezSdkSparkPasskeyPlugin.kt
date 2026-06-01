@@ -107,10 +107,10 @@ class BreezSdkSparkPasskeyPlugin : FlutterPlugin, MethodCallHandler, ActivityAwa
             return
         }
 
-        // Caller-supplied allow-list. When the host has a Dart-side
-        // `CredentialRegistry`, registry IDs are merged in on the
-        // Dart side before the MethodChannel call. The native plugin
-        // never reads or writes credential IDs itself.
+        // Caller-supplied allow-list. The host passes any known
+        // credential IDs from the Dart side before the MethodChannel
+        // call. The native plugin never reads or writes credential IDs
+        // itself.
         val allowIds: List<ByteArray> =
             (call.argument<List<String>>("allowCredentials") ?: emptyList()).map {
                 Base64.decode(it, Base64.NO_WRAP)

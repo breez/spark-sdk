@@ -106,8 +106,8 @@ func (f *FilePrfProvider) IsSupported() (bool, error) {
 	return true, nil
 }
 
-func (f *FilePrfProvider) CreatePasskey(excludeCredentials [][]byte) (breez_sdk_spark.RegisteredCredential, error) {
-	return breez_sdk_spark.RegisteredCredential{}, fmt.Errorf(
+func (f *FilePrfProvider) CreatePasskey(excludeCredentials [][]byte) (breez_sdk_spark.PasskeyCredential, error) {
+	return breez_sdk_spark.PasskeyCredential{}, fmt.Errorf(
 		"file-backed PRF provider does not implement create-credential; " +
 			"use sign-in by label instead")
 }
@@ -117,12 +117,6 @@ func (f *FilePrfProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAssoci
 		Reason: "FilePrfProvider does not verify domain association",
 	}, nil
 }
-
-// CredentialRegistry hooks are no-ops: this provider doesn't track
-// credential IDs (no real WebAuthn ceremonies happen here).
-func (f *FilePrfProvider) GetKnownCredentialIds() ([][]byte, error) { return nil, nil }
-func (f *FilePrfProvider) RemoveKnownCredentialId(id []byte) error  { return nil }
-func (f *FilePrfProvider) ClearKnownCredentialIds() error           { return nil }
 
 // ---------------------------------------------------------------------------
 // Stub providers for hardware-dependent backends
@@ -144,8 +138,8 @@ func (p *notYetSupportedProvider) IsSupported() (bool, error) {
 	return false, p.notYet()
 }
 
-func (p *notYetSupportedProvider) CreatePasskey(_ [][]byte) (breez_sdk_spark.RegisteredCredential, error) {
-	return breez_sdk_spark.RegisteredCredential{}, p.notYet()
+func (p *notYetSupportedProvider) CreatePasskey(_ [][]byte) (breez_sdk_spark.PasskeyCredential, error) {
+	return breez_sdk_spark.PasskeyCredential{}, p.notYet()
 }
 
 func (p *notYetSupportedProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAssociation, error) {
@@ -153,10 +147,6 @@ func (p *notYetSupportedProvider) CheckDomainAssociation() (breez_sdk_spark.Doma
 		Reason: fmt.Sprintf("%s does not verify domain association", p.name),
 	}, nil
 }
-
-func (p *notYetSupportedProvider) GetKnownCredentialIds() ([][]byte, error) { return nil, nil }
-func (p *notYetSupportedProvider) RemoveKnownCredentialId(_ []byte) error   { return nil }
-func (p *notYetSupportedProvider) ClearKnownCredentialIds() error           { return nil }
 
 // ---------------------------------------------------------------------------
 // Passkey seed resolution (orchestration)

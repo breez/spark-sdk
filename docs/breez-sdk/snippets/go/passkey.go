@@ -28,7 +28,7 @@ func (p *CustomPrfProvider) IsSupported() (bool, error) {
 	panic("Check platform passkey availability")
 }
 
-func (p *CustomPrfProvider) CreatePasskey(excludeCredentials [][]byte) (breez_sdk_spark.RegisteredCredential, error) {
+func (p *CustomPrfProvider) CreatePasskey(excludeCredentials [][]byte) (breez_sdk_spark.PasskeyCredential, error) {
 	// Register a new credential and return its ID, the WebAuthn user.id
 	// the platform recorded (returned for host-side correlation, never
 	// host-supplied), AAGUID, and BE flag.
@@ -44,14 +44,6 @@ func (p *CustomPrfProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAsso
 		Reason: "CustomPrfProvider does not verify domain association",
 	}, nil
 }
-
-// CredentialRegistry hooks: wire these to your app's stored credential-ID
-// set if you want the SDK to auto-merge known IDs into allowCredentials /
-// excludeCredentials. Custom providers without a registry can return empty
-// and treat the mutators as no-ops.
-func (p *CustomPrfProvider) GetKnownCredentialIds() ([][]byte, error) { return nil, nil }
-func (p *CustomPrfProvider) RemoveKnownCredentialId(id []byte) error  { return nil }
-func (p *CustomPrfProvider) ClearKnownCredentialIds() error           { return nil }
 
 // ANCHOR_END: implement-prf-provider
 
@@ -106,12 +98,10 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 		return nil, err
 	}
 
-	// RegisteredCredential doubles as the path discriminator: non-nil
-	// when a new credential was just registered (persist CredentialId
-	// for future ExcludeCredentials); nil when silent sign-in
-	// succeeded for an existing credential.
-	if response.RegisteredCredential != nil {
-		_ = response.RegisteredCredential.CredentialId
+	// The credential is surfaced on both paths when the provider exposes
+	// it. Persist CredentialId for future ExcludeCredentials / AllowCredentials.
+	if response.Credential != nil {
+		_ = response.Credential.CredentialId
 	}
 
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
@@ -142,11 +132,13 @@ func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 		return nil, err
 	}
 
-	// Hosts SHOULD persist Credential.CredentialId (for ExcludeCredentials
-	// bookkeeping) and Credential.UserId (for server-side correlation).
-	// The SDK generates UserId; it is never host-supplied.
-	_ = response.Credential.CredentialId
-	_ = response.Credential.UserId
+	// Persist Credential.CredentialId (for ExcludeCredentials bookkeeping)
+	// and Credential.UserId (for server-side correlation). The SDK
+	// generates UserId; it is never host-supplied.
+	if response.Credential != nil {
+		_ = response.Credential.CredentialId
+		_ = response.Credential.UserId
+	}
 
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
 	sdk, err := breez_sdk_spark.Connect(breez_sdk_spark.ConnectRequest{

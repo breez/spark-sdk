@@ -60,23 +60,12 @@ class FilePrfProvider implements PrfProvider {
   Future<bool> isSupported() async => true;
 
   @override
-  Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentials) async {
+  Future<PasskeyCredential> createPasskey(List<Uint8List> excludeCredentials) async {
     throw Exception(
       'File-backed PRF provider does not implement create-credential; '
       'use sign-in by label instead.',
     );
   }
-
-  // CredentialRegistry hooks are no-ops: this provider doesn't track
-  // credential IDs (no real WebAuthn ceremonies happen here).
-  @override
-  Future<List<Uint8List>> getKnownCredentialIds() async => const [];
-
-  @override
-  Future<void> removeKnownCredentialId(Uint8List id) async {}
-
-  @override
-  Future<void> clearKnownCredentialIds() async {}
 }
 
 /// Configuration for passkey seed derivation.

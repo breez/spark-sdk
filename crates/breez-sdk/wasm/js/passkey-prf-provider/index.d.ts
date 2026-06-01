@@ -11,15 +11,17 @@ export type DomainAssociation =
     | { kind: 'Skipped'; reason: string };
 
 /**
- * Authenticator data captured at registration. `userId` is the
- * provider-generated WebAuthn user handle (never host-supplied).
- * `aaguid` (provider identifier) and `backupEligible` (can sync across
- * devices) are null when the platform doesn't expose them. AAGUID is
- * unverified attestation: a display hint only, never a trust signal.
+ * A passkey credential from a register or sign-in ceremony.
+ * `credentialId` is always set. `userId` (provider-generated WebAuthn
+ * user handle, never host-supplied), `aaguid` (provider identifier), and
+ * `backupEligible` (can sync across devices) are populated on
+ * registration and null on sign-in (an assertion carries no
+ * attestation). AAGUID is unverified: a display hint only, never a trust
+ * signal.
  */
-export interface RegisteredCredential {
+export interface PasskeyCredential {
     credentialId: Uint8Array;
-    userId: Uint8Array;
+    userId: Uint8Array | null;
     aaguid: Uint8Array | null;
     backupEligible: boolean | null;
 }
@@ -54,9 +56,7 @@ export declare class PasskeyTimedOutError extends Error {
 
 /**
  * Thrown when `deriveSeeds` cannot match a credential for this RP on
- * the device. `message` carries diagnostic detail and may append a
- * `CredentialRegistry` hint when no allow-list and no registry were
- * configured.
+ * the device. `message` carries diagnostic detail.
  */
 export declare class PasskeyCredentialNotFoundError extends Error {
     constructor(message?: string);
@@ -87,23 +87,6 @@ export interface DeriveSeedOptions {
      */
     preferImmediatelyAvailableCredentials?: boolean;
 }
-
-/**
- * App-supplied persistent store of credential IDs for an RP (the SDK
- * ships no implementation: back it with localStorage, IndexedDB, etc).
- * All calls are best-effort: failures and 3s timeouts are swallowed and
- * surfaced via {@link PasskeyProviderOptions.onRegistryError}, never
- * blocking the WebAuthn ceremony. IDs are raw `Uint8Array`s.
- */
-export interface CredentialRegistry {
-    read(rpId: string): Promise<Uint8Array[]>;
-    add(rpId: string, credentialId: Uint8Array): Promise<void>;
-    remove(rpId: string, credentialId: Uint8Array): Promise<void>;
-    clear(rpId: string): Promise<void>;
-}
-
-/** Discriminator for {@link PasskeyProviderOptions.onRegistryError}. */
-export type RegistryOperation = 'read' | 'add' | 'remove' | 'clear';
 
 /**
  * Options for constructing a PasskeyProvider. `rpId` is required: pass
@@ -166,21 +149,6 @@ export interface PasskeyProviderOptions {
      * tears the prompt down. Unset uses the platform default.
      */
     defaultTimeoutMs?: number;
-
-    /**
-     * Opt-in registry. When set, the provider auto-merges stored IDs
-     * into `excludeCredentials` on create and `allowCredentials` on
-     * assert, and adds new IDs after success. Unset disables
-     * auto-population. The constructor throws if `read`/`add`/`remove`/
-     * `clear` are missing, so misconfiguration surfaces at startup.
-     */
-    credentialRegistry?: CredentialRegistry;
-
-    /**
-     * Fired when a {@link CredentialRegistry} call throws or times
-     * out. Best-effort: invocation never blocks ceremony progress.
-     */
-    onRegistryError?: (operation: RegistryOperation, error: Error) => void;
 }
 
 /**
@@ -231,7 +199,7 @@ export declare class PasskeyProvider {
      *   `excludeCredentials` already exists on the device.
      * @throws If the user cancels or PRF is not supported.
      */
-    createPasskey(excludeCredentials?: Uint8Array[]): Promise<RegisteredCredential>;
+    createPasskey(excludeCredentials?: Uint8Array[]): Promise<PasskeyCredential>;
 
     /**
      * Check if a PRF-capable passkey is available on this device.
@@ -251,33 +219,14 @@ export declare class PasskeyProvider {
      *   when not, or `Skipped` when no `window.location` is available.
      */
     checkDomainAssociation(): Promise<DomainAssociation>;
-
-    /**
-     * Credential IDs the configured registry has stored for the current
-     * `rpId`. Empty when no registry is configured. Backs
-     * `PasskeyClient.credentials().get()`.
-     */
-    getKnownCredentialIds(): Promise<Uint8Array[]>;
-
-    /**
-     * Drop one credential ID from the registry. No-op when no registry
-     * is configured. Backs `PasskeyClient.credentials().remove(id)`.
-     */
-    removeKnownCredentialId(credentialId: Uint8Array): Promise<void>;
-
-    /**
-     * Clear the registry's stored IDs for the current `rpId`. No-op when
-     * no registry is configured. Backs `PasskeyClient.credentials().clear()`.
-     */
-    clearKnownCredentialIds(): Promise<void>;
 }
 
 /**
  * Builder for a {@link PasskeyClient} with a caller-supplied
  * `PrfProvider`. Use it when you need a configured {@link PasskeyProvider}
- * (custom `rpId`/`rpName`, a `credentialRegistry`, timeout overrides) or
- * a custom PRF backend. For the zero-config Breez-RP case, use the
- * {@link PasskeyClient} constructor directly.
+ * (custom `rpId`/`rpName`, timeout overrides) or a custom PRF backend.
+ * For the zero-config Breez-RP case, use the {@link PasskeyClient}
+ * constructor directly.
  */
 export declare class PasskeyClientBuilder {
     /**
@@ -302,11 +251,10 @@ export declare class PasskeyClientBuilder {
 /**
  * High-level passkey client. The zero-config constructor wires the
  * built-in browser {@link PasskeyProvider} on the Breez shared RP, so a
- * Breez-registered app needs only its relay key. Apps with their own RP,
- * a credential registry, or a custom PRF backend inject their own
- * provider through {@link PasskeyClientBuilder}. The instance is the
- * underlying SDK client (`checkAvailability`, `register`, `signIn`,
- * `labels()`, `credentials()`).
+ * Breez-registered app needs only its relay key. Apps with their own RP
+ * or a custom PRF backend inject their own provider through
+ * {@link PasskeyClientBuilder}. The instance is the underlying SDK client
+ * (`checkAvailability`, `register`, `signIn`, `labels()`).
  */
 export declare class PasskeyClient extends SdkPasskeyClient {
     /**

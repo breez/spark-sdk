@@ -12,8 +12,8 @@ from breez_sdk_spark import (
     PasskeyClient,
     PrfProvider,
     PrfProviderError,
+    PasskeyCredential,
     RegisterRequest,
-    RegisteredCredential,
     SignInRequest,
     connect,
     default_config,
@@ -38,7 +38,7 @@ class CustomPrfProvider(PrfProvider):
         # platform / device.
         raise NotImplementedError("Check platform passkey availability")
 
-    async def create_passkey(self, exclude_credentials: list[bytes]) -> RegisteredCredential:
+    async def create_passkey(self, exclude_credentials: list[bytes]) -> PasskeyCredential:
         # Register a new credential and return its ID, the WebAuthn
         # user.id the platform recorded (returned for host-side
         # correlation, never host-supplied), AAGUID, and BE flag.
@@ -102,12 +102,10 @@ async def connect_with_passkey():
         ConnectWithPasskeyRequest(label="personal", exclude_credentials=[])
     )
 
-    # `registered_credential` doubles as the path discriminator:
-    # not None when a new credential was just registered (persist
-    # credential_id for future exclude_credentials); None when
-    # silent sign-in succeeded for an existing credential.
-    if response.registered_credential is not None:
-        _persist = response.registered_credential.credential_id
+    # The credential is surfaced on both paths when the provider exposes
+    # it. Persist credential_id for future exclude_credentials.
+    if response.credential is not None:
+        _persist = response.credential.credential_id
 
     config = default_config(network=Network.MAINNET)
     sdk = await connect(
@@ -128,11 +126,12 @@ async def register_new_passkey():
 
     response = await passkey.register(RegisterRequest(label="personal"))
 
-    # Hosts SHOULD persist credential.credential_id (for excludeCredentials
-    # bookkeeping) and credential.user_id (for server-side correlation).
-    # The SDK generates user_id; it is never host-supplied.
-    _persisted_credential_id = response.credential.credential_id
-    _persisted_user_id = response.credential.user_id
+    # Persist credential.credential_id (for exclude_credentials bookkeeping)
+    # and credential.user_id (for server-side correlation). The SDK
+    # generates user_id; it is never host-supplied.
+    if response.credential is not None:
+        _persisted_credential_id = response.credential.credential_id
+        _persisted_user_id = response.credential.user_id
 
     config = default_config(network=Network.MAINNET)
     sdk = await connect(

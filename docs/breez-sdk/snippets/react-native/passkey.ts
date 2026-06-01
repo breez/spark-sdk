@@ -1,5 +1,5 @@
 import type {
-  RegisteredCredential
+  PasskeyCredential
 } from '@breeztech/breez-sdk-spark-react-native'
 import {
   PasskeyAvailability_Tags,
@@ -27,7 +27,7 @@ class CustomPrfProvider {
 
   createPasskey = async (
     _excludeCredentials: Uint8Array[]
-  ): Promise<RegisteredCredential> => {
+  ): Promise<PasskeyCredential> => {
     // Register a new credential and return its ID, the WebAuthn user.id
     // the native plugin minted for it (returned for host-side
     // correlation, never host-supplied), AAGUID, and BE flag.
@@ -88,9 +88,9 @@ const connectWithPasskey = async () => {
     excludeCredentials: []
   })
 
-  // `registeredCredential` is the path discriminator (undefined on sign-in).
-  if (response.registeredCredential !== undefined) {
-    const _persist = response.registeredCredential.credentialId
+  // `credential` is the path discriminator (undefined on sign-in).
+  if (response.credential !== undefined) {
+    const _persist = response.credential.credentialId
   }
 
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })
@@ -119,8 +119,8 @@ const registerNewPasskey = async () => {
 
   // Persist credentialId for future excludeCredentials.
   const _persist = {
-    credentialId: response.credential.credentialId,
-    userId: response.credential.userId
+    credentialId: response.credential?.credentialId,
+    userId: response.credential?.userId
   }
 
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })
@@ -217,28 +217,4 @@ const handleTimeout = async () => {
     throw error
   }
   // ANCHOR_END: handle-timeout
-}
-
-const withCredentialRegistry = async () => {
-  // Structural type: the SDK doesn't re-export the CredentialRegistry
-  // interface from the RN entrypoint, so the snippet matches the
-  // shape with explicit method signatures instead of importing it.
-  const registry = {
-    async read (_rpId: string): Promise<Uint8Array[]> { return [] },
-    async add (_rpId: string, _credentialId: Uint8Array): Promise<void> {},
-    async remove (_rpId: string, _credentialId: Uint8Array): Promise<void> {},
-    async clear (_rpId: string): Promise<void> {}
-  }
-
-  const prfProvider = new PasskeyProvider({
-    rpId: '<your-rp-domain>',
-    rpName: 'Your App',
-    credentialRegistry: registry,
-    onRegistryError: (op, err) => { console.warn('registry', op, err) }
-  })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
-  // ANCHOR: with-credential-registry
-  const known = await passkey.credentials().get()
-  console.log(`Known credentials: ${known.length}`)
-  // ANCHOR_END: with-credential-registry
 }

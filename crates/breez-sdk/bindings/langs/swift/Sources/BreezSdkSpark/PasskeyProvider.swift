@@ -63,8 +63,6 @@ public class PasskeyProvider: PrfProvider {
 
     private let rpId: String
     private let core: PasskeyAssertionCore
-    private let credentialRegistry: CredentialRegistry?
-    private let onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)?
 
     /// Protocol for providing a presentation anchor for the authorization controller.
     public typealias PresentationAnchorProvider = PasskeyPresentationAnchorProvider
@@ -86,11 +84,6 @@ public class PasskeyProvider: PrfProvider {
     ///   - userDisplayName: WebAuthn `user.displayName`. Defaults to
     ///     `userName`. Silently dropped at registration on current iOS SDKs
     ///     (the create overload omits it); kept for cross-platform parity.
-    ///   - credentialRegistry: Opt-in app-side store of known credential
-    ///     IDs. When set, the SDK auto-merges stored IDs into
-    ///     `allowCredentials` / `excludeCredentials` and writes new IDs back.
-    ///   - onRegistryError: Best-effort callback for registry failures;
-    ///     never blocks the WebAuthn ceremony.
     ///   - iosOptions: iOS / macOS-specific knobs (team ID, URLSession,
     ///     presentation anchor). Defaults work for any signed build.
     public init(
@@ -98,20 +91,14 @@ public class PasskeyProvider: PrfProvider {
         rpName: String,
         userName: String? = nil,
         userDisplayName: String? = nil,
-        credentialRegistry: CredentialRegistry? = nil,
-        onRegistryError: (@Sendable (RegistryOperation, Error) -> Void)? = nil,
         iosOptions: IOSOptions? = nil
     ) {
         self.rpId = rpId
-        self.credentialRegistry = credentialRegistry
-        self.onRegistryError = onRegistryError
         self.core = PasskeyAssertionCore(
             rpId: rpId,
             rpName: rpName,
             userName: userName ?? rpName,
             userDisplayName: userDisplayName ?? (userName ?? rpName),
-            credentialRegistry: credentialRegistry,
-            onRegistryError: onRegistryError,
             explicitTeamId: iosOptions?.teamId,
             urlSession: iosOptions?.urlSession ?? .shared,
             anchorProvider: iosOptions?.anchorProvider
@@ -165,15 +152,14 @@ public class PasskeyProvider: PrfProvider {
     /// separate registration from derivation in multi-step onboarding.
     ///
     /// `user.id` is never host-supplied: the core mints a fresh random
-    /// 16-byte handle and returns it as `RegisteredCredential.userId`. When
-    /// a `CredentialRegistry` is configured, previously-registered IDs are
-    /// merged into `excludeCredentials` (so the platform refuses a duplicate
-    /// even after reinstall) and the new ID is recorded on success.
+    /// 16-byte handle and returns it as `PasskeyCredential.userId`. Pass
+    /// already-registered IDs in `excludeCredentials` so the platform
+    /// refuses a duplicate even after reinstall.
     @discardableResult
-    public func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
+    public func createPasskey(excludeCredentials: [Data]) async throws -> PasskeyCredential {
         do {
             let credential = try await core.register(excludeCredentials: excludeCredentials)
-            return RegisteredCredential(
+            return PasskeyCredential(
                 credentialId: credential.credentialId,
                 userId: credential.userId,
                 aaguid: credential.aaguid,
@@ -181,34 +167,6 @@ public class PasskeyProvider: PrfProvider {
             )
         } catch let err as PasskeyAssertionError {
             throw Self.toPrfProviderError(err)
-        }
-    }
-
-    public func getKnownCredentialIds() async throws -> [Data] {
-        guard let reg = credentialRegistry else { return [] }
-        do {
-            return try await reg.read(rpId: rpId)
-        } catch {
-            onRegistryError?(.read, error)
-            return []
-        }
-    }
-
-    public func removeKnownCredentialId(id: Data) async throws {
-        guard let reg = credentialRegistry else { return }
-        do {
-            try await reg.remove(rpId: rpId, credentialId: id)
-        } catch {
-            onRegistryError?(.remove, error)
-        }
-    }
-
-    public func clearKnownCredentialIds() async throws {
-        guard let reg = credentialRegistry else { return }
-        do {
-            try await reg.clear(rpId: rpId)
-        } catch {
-            onRegistryError?(.clear, error)
         }
     }
 
@@ -262,9 +220,6 @@ public class PasskeyProvider: PrfProvider {
         case .userTimedOut:
             return .UserTimedOut
         case .credentialNotFound(let msg):
-            // The core embeds any registry help suffix into the message
-            // when relevant. Pass through unchanged so every host
-            // surface (UniFFI, Flutter, RN) sees the same diagnostic.
             return .CredentialNotFound(msg)
         case .credentialAlreadyExists(let msg):
             return .CredentialAlreadyExists(msg)

@@ -77,12 +77,17 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   // `/passkey-prf-provider` subpath export, declared separately below.
   // PrfProvider is the trait that custom implementations target.
   export type PrfProvider = any;
+  export type DeriveSeedsRequest = any;
+  export type DeriveSeedsOutput = any;
 
-  export const Passkey: any;
-  export type Passkey = any;
+  export const PasskeyClient: any;
+  export type PasskeyClient = any;
 
-  export const NostrRelayConfig: any;
-  export type NostrRelayConfig = any;
+  export const PasskeyCredential: any;
+  export type PasskeyCredential = any;
+
+  export const DomainAssociation: any;
+  export type DomainAssociation = any;
 
   // --- types only ---
   export type BreezSdkInterface = any;

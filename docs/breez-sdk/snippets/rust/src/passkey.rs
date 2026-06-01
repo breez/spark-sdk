@@ -1,8 +1,8 @@
 use anyhow::Result;
 use breez_sdk_spark::passkey::{
     ConnectWithPasskeyRequest, DeriveSeedsOutput, DeriveSeedsRequest, DomainAssociation, ErrorKind,
-    PasskeyAvailability, PasskeyClient, PrfProvider, PrfProviderError,
-    RegisterRequest, RegisteredCredential, SignInRequest, SignInResponse, Wallet,
+    PasskeyAvailability, PasskeyClient, PasskeyCredential, PrfProvider, PrfProviderError,
+    RegisterRequest, SignInRequest, SignInResponse, Wallet,
 };
 use breez_sdk_spark::{ConnectRequest, Network, connect, default_config};
 use std::sync::Arc;
@@ -37,7 +37,7 @@ impl PrfProvider for CustomPrfProvider {
     async fn create_passkey(
         &self,
         _exclude_credentials: Vec<Vec<u8>>,
-    ) -> Result<RegisteredCredential, PrfProviderError> {
+    ) -> Result<PasskeyCredential, PrfProviderError> {
         // Register a new credential and return its ID, the WebAuthn
         // user.id the platform recorded (returned for host-side
         // correlation, never host-supplied), AAGUID, and BE flag.
@@ -100,8 +100,8 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
         })
         .await?;
 
-    // `registered_credential` is the path discriminator (None on sign-in).
-    if let Some(credential) = &response.registered_credential {
+    // The credential is surfaced on both paths when the provider exposes it.
+    if let Some(credential) = &response.credential {
         let _persist = credential.credential_id.clone();
     }
 
@@ -144,10 +144,9 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
         .await?;
 
     // Persist credential_id for future exclude_credentials.
-    let _persist = (
-        response.credential.credential_id.clone(),
-        response.credential.user_id.clone(),
-    );
+    if let Some(credential) = &response.credential {
+        let _persist = (credential.credential_id.clone(), credential.user_id.clone());
+    }
 
     let config = default_config(Network::Mainnet);
     let sdk = connect(ConnectRequest {

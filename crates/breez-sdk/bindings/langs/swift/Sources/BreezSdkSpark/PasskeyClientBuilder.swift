@@ -4,8 +4,8 @@ import Foundation
 /// ``PrfProvider``.
 ///
 /// Use this when you need a fully custom PRF backend or a
-/// ``PasskeyProvider`` configured beyond `rpId` / `rpName` (a
-/// `credentialRegistry`, rotating `userName`, timeout overrides). For the
+/// ``PasskeyProvider`` configured beyond `rpId` / `rpName` (rotating
+/// `userName`, timeout overrides). For the
 /// zero-config or RP-only case, use
 /// ``PasskeyClient/init(breezApiKey:config:)`` and set `rpId` / `rpName`
 /// on the ``PasskeyConfig``.

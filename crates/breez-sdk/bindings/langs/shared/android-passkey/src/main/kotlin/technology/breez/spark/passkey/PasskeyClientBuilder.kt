@@ -38,8 +38,8 @@ public fun PasskeyClient(
 /**
  * Builder for a [PasskeyClient] backed by a caller-supplied
  * [PrfProvider]. Use this when you need a [PasskeyProvider] configured
- * beyond `rpId` / `rpName` (a `credentialRegistry`, rotating `userName`)
- * or a custom PRF backend. For the zero-config case use the
+ * beyond `rpId` / `rpName` (rotating `userName`) or a custom PRF
+ * backend. For the zero-config case use the
  * [PasskeyClient] factory above, which takes the `activityProvider`.
  *
  * @param breezApiKey Breez relay key for authenticated (NIP-42) label

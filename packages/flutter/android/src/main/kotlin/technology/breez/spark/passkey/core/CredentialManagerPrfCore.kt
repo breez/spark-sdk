@@ -18,15 +18,11 @@ import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
 import androidx.credentials.exceptions.domerrors.InvalidStateError
 import androidx.credentials.exceptions.publickeycredential.CreatePublicKeyCredentialDomException
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -62,149 +58,24 @@ import java.security.SecureRandom
  */
 
 /**
- * Authenticator data captured at registration. [aaguid] is the 16-byte
- * Authenticator Attestation GUID (provider identifier); [backupEligible]
- * is the BE flag (can the credential sync across devices). Both are null
- * when the attestation can't be parsed. AAGUID is unverified attestation:
- * display hint only, never a trust decision.
- *
- * [userId] is the core-minted WebAuthn user handle: always populated,
- * never host-supplied.
+ * A passkey credential from a register or sign-in ceremony.
+ * [credentialId] is always set. The remaining fields are populated on
+ * registration and null on sign-in (an assertion carries no
+ * attestation). [aaguid] is the 16-byte Authenticator Attestation GUID
+ * (provider identifier), unverified attestation: a display hint only,
+ * never a trust decision. [backupEligible] is the BE flag (can the
+ * credential sync across devices). [userId] is the core-minted WebAuthn
+ * user handle, never host-supplied. Persist [credentialId] to drive
+ * `excludeCredentials` / `allowCredentials` on later calls.
  */
-public data class RegisteredCredential(
+public data class PasskeyCredential(
     public val credentialId: ByteArray,
-    public val userId: ByteArray,
+    public val userId: ByteArray?,
     public val aaguid: ByteArray?,
     public val backupEligible: Boolean?,
 )
 
-/**
- * App-side persistent store of credential IDs registered for an RP.
- * No built-in implementation: bring your own (Block Store,
- * EncryptedSharedPreferences, custom backend); see the passkey guide.
- *
- * All methods are best-effort optimizations: failures and timeouts (3s)
- * are swallowed and surfaced via `onRegistryError`, never blocking the
- * WebAuthn ceremony.
- */
-public interface CredentialRegistry {
-    public suspend fun read(rpId: String): List<ByteArray>
-    public suspend fun add(rpId: String, credentialId: ByteArray)
-    public suspend fun remove(rpId: String, credentialId: ByteArray)
-    public suspend fun clear(rpId: String)
-}
-
-/** Discriminator passed to the core's `onRegistryError` callback. */
-public enum class RegistryOperation { Read, Add, Remove, Clear }
-
-/**
- * Content-equality wrapper so credential-ID byte arrays can key a Set.
- * `ByteArray` uses identity equality; the alternative is a `.toList()`
- * boxing allocation per dedupe. (A `value class` would be zero-cost but
- * can't carry custom `equals`/`hashCode` on the pinned Kotlin version.)
- */
-private class ByteArrayKey(private val bytes: ByteArray) {
-    override fun equals(other: Any?): Boolean =
-        other is ByteArrayKey && bytes.contentEquals(other.bytes)
-
-    override fun hashCode(): Int = bytes.contentHashCode()
-}
-
-/** Append [extra] to [base], skipping entries already present by content. */
-private fun mergeUniqueCredentialIds(
-    base: List<ByteArray>,
-    extra: List<ByteArray>,
-): List<ByteArray> {
-    if (extra.isEmpty()) return base
-    val seen = base.mapTo(HashSet()) { ByteArrayKey(it) }
-    val out = base.toMutableList()
-    for (id in extra) {
-        if (seen.add(ByteArrayKey(id))) out.add(id)
-    }
-    return out
-}
-
-private const val REGISTRY_TAG = "CredentialRegistry"
 private const val CORE_TAG = "PasskeyPrfCore"
-private const val REGISTRY_TIMEOUT_MS: Long = 3_000L
-
-/**
- * Process-lifetime scope for fire-and-forget registry writes that must
- * outlive the ceremony coroutine (so the seed return isn't blocked).
- * `SupervisorJob` isolates one child's failure from siblings; never
- * cancelled (writes are short, 3s-capped).
- */
-private val registryIoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-/**
- * Run [body] under a 3 second timeout. Returns null on timeout. The
- * underlying coroutine is cancelled when the deadline elapses.
- */
-private suspend fun <T> withRegistryTimeout(body: suspend () -> T): T? =
-    withTimeoutOrNull(REGISTRY_TIMEOUT_MS) { body() }
-
-/**
- * Best-effort registry read. On timeout / throw: log + invoke the
- * caller's [onRegistryError], return empty list.
- */
-private suspend fun registryReadBestEffort(
-    registry: CredentialRegistry,
-    rpId: String,
-    onRegistryError: ((RegistryOperation, Throwable) -> Unit)?,
-): List<ByteArray> = try {
-    val result = withRegistryTimeout { registry.read(rpId) }
-    if (result == null) {
-        Log.w(REGISTRY_TAG, "CredentialRegistry.read timed out after ${REGISTRY_TIMEOUT_MS}ms")
-        onRegistryError?.invoke(
-            RegistryOperation.Read,
-            RuntimeException("CredentialRegistry.read timed out"),
-        )
-        emptyList()
-    } else {
-        result
-    }
-} catch (t: Throwable) {
-    Log.w(REGISTRY_TAG, "CredentialRegistry.read failed", t)
-    onRegistryError?.invoke(RegistryOperation.Read, t)
-    emptyList()
-}
-
-/**
- * Best-effort registry add. Fire-and-forget: failures log + fire
- * the [onRegistryError] callback but do not block ceremony progress.
- */
-private fun registryAddFireAndForget(
-    registry: CredentialRegistry,
-    rpId: String,
-    credentialId: ByteArray,
-    onRegistryError: ((RegistryOperation, Throwable) -> Unit)?,
-) {
-    registryIoScope.launch {
-        try {
-            val ok = withRegistryTimeout { registry.add(rpId, credentialId) }
-            if (ok == null) {
-                Log.w(REGISTRY_TAG, "CredentialRegistry.add timed out")
-                onRegistryError?.invoke(
-                    RegistryOperation.Add,
-                    RuntimeException("CredentialRegistry.add timed out"),
-                )
-            }
-        } catch (t: Throwable) {
-            Log.w(REGISTRY_TAG, "CredentialRegistry.add failed", t)
-            onRegistryError?.invoke(RegistryOperation.Add, t)
-        }
-    }
-}
-
-/**
- * Suffix appended to a `CredentialNotFound` error message when the
- * host had no `allowCredentials` and no `CredentialRegistry`. Lets
- * integrators discover the opt-in auto-discovery path from the error.
- */
-public const val CREDENTIAL_REGISTRY_HELP_SUFFIX: String =
-    " (No CredentialRegistry was supplied to PasskeyProvider; " +
-        "if you expect the SDK to auto-discover known credentials, see " +
-        "https://sdk-doc-spark.breez.technology/guide/passkey.html#credentialregistry)"
 
 // =====================================================================
 // Post-create grace
@@ -249,10 +120,10 @@ public class PostCreateGraceTracker {
 }
 
 /**
- * Platform PRF engine: holds the relying-party identity + optional
- * registry for one provider's lifetime, exposing `deriveSeeds`,
- * `register`, `checkDomainAssociation`, and `isSupported`. Per-call
- * methods take only per-ceremony arguments; everything else is fixed at
+ * Platform PRF engine: holds the relying-party identity for one
+ * provider's lifetime, exposing `deriveSeeds`, `register`,
+ * `checkDomainAssociation`, and `isSupported`. Per-call methods take
+ * only per-ceremony arguments; everything else is fixed at
  * construction. Each consumer maps the typed
  * [CredentialManagerPrfCoreException] onto its own error surface.
  *
@@ -269,8 +140,6 @@ public class CredentialManagerPrfCore(
     private val rpName: String,
     private val userName: String,
     private val userDisplayName: String,
-    private val credentialRegistry: CredentialRegistry? = null,
-    private val onRegistryError: ((RegistryOperation, Throwable) -> Unit)? = null,
     private val activityProvider: () -> Activity,
     private val graceTracker: PostCreateGraceTracker = PostCreateGraceTracker(),
     private val postCreateGraceMs: Long = PostCreateGraceTracker.DEFAULT_DURATION_MS,
@@ -331,14 +200,6 @@ public class CredentialManagerPrfCore(
         }
     }
 
-    /** Help suffix when the host gave no allow-list and no registry. */
-    private fun helpSuffixIfApplicable(allowCredentials: List<ByteArray>): String =
-        if (allowCredentials.isEmpty() && credentialRegistry == null) {
-            CREDENTIAL_REGISTRY_HELP_SUFFIX
-        } else {
-            ""
-        }
-
     /**
      * Derive one 32-byte PRF output per salt in as few authenticator
      * ceremonies as the platform supports: salts are walked in pairs
@@ -363,13 +224,9 @@ public class CredentialManagerPrfCore(
         // Wait out the post-create grace so an immediate derive doesn't
         // race the credential's PRF-readiness window (see grace tracker).
         graceTracker.consume()
-        // Union the caller's allow-list with the registry's stored IDs.
+        // Pinned to the first asserted credential after the first chunk so
+        // every salt in this call derives from one passkey.
         var allow = allowCredentials
-        credentialRegistry?.let { registry ->
-            allow = mergeUniqueCredentialIds(
-                allow, registryReadBestEffort(registry, rpId, onRegistryError),
-            )
-        }
         if (salts.isEmpty()) return@withContext PrfDerivation(emptyList(), null)
 
         // One assertion for 1-2 salts, registering + retrying once on no
@@ -384,7 +241,7 @@ public class CredentialManagerPrfCore(
                 if (!autoRegister) {
                     throw CredentialManagerPrfCoreException(
                         Kind.CredentialNotFound,
-                        (e.message ?: "") + helpSuffixIfApplicable(allow),
+                        e.message ?: "",
                     )
                 }
                 register()
@@ -589,10 +446,10 @@ public class CredentialManagerPrfCore(
     /**
      * Run one assertion ceremony for [salts] (1 or 2): build the WebAuthn
      * request (cross-device hybrid suppressed unless
-     * [preferImmediatelyAvailableCredentials] is false), evaluate PRF, seed
-     * the registry with the asserted credential ID, and return one 32-byte
-     * output per salt the authenticator evaluated. A dropped
-     * `results.second` yields a single-element list.
+     * [preferImmediatelyAvailableCredentials] is false), evaluate PRF, and
+     * return one 32-byte output per salt the authenticator evaluated plus
+     * the asserted credential ID. A dropped `results.second` yields a
+     * single-element list.
      */
     private suspend fun assertPrf(
         salts: List<String>,
@@ -643,14 +500,9 @@ public class CredentialManagerPrfCore(
         )
         val responseJson = JSONObject(authResponseJson)
 
-        // Seed the registry with the asserted credential ID (captures a
-        // returning user's pre-tracking credential). The ID is also
-        // returned inline below for the binding layer.
+        // Asserted credential ID, returned inline for the binding layer.
         val credentialId = responseJson.optString("rawId", "").takeIf { it.isNotEmpty() }
             ?.let { decodeBase64UrlOrNull(it, "assertion rawId") }
-        credentialId?.let { id ->
-            credentialRegistry?.let { registryAddFireAndForget(it, rpId, id, onRegistryError) }
-        }
 
         val extensions = responseJson.optJSONObject("clientExtensionResults")
             ?: throw CredentialManagerPrfCoreException(Kind.PrfNotSupported)
@@ -677,28 +529,21 @@ public class CredentialManagerPrfCore(
 
     /**
      * Register a new passkey (one platform prompt, no seed derivation).
-     * The registry's stored IDs are auto-merged into [excludeCredentials]
-     * so the platform refuses to register the same device twice (raising
+     * [excludeCredentials] is passed straight through so the platform
+     * refuses to register a credential already on the device (raising
      * `CredentialAlreadyExists`, which callers route to sign-in). Returns
      * the credential ID plus AAGUID / backup-eligibility from the
      * attestation (null when unparseable).
      */
     public suspend fun register(
         excludeCredentials: List<ByteArray> = emptyList(),
-    ): RegisteredCredential = withContext(Dispatchers.Main) {
+    ): PasskeyCredential = withContext(Dispatchers.Main) {
         val startedAtMs = System.currentTimeMillis()
         try {
             val activity = activityProvider()
-            // Auto-merge the registry's stored IDs into the exclusions.
-            var effectiveExclude = excludeCredentials
-            credentialRegistry?.let { reg ->
-                effectiveExclude = mergeUniqueCredentialIds(
-                    effectiveExclude, registryReadBestEffort(reg, rpId, onRegistryError),
-                )
-            }
             // Mint a fresh random 16-byte user handle per call (never
             // host-supplied); the JSON base64url string and the raw
-            // RegisteredCredential.userId bytes share this buffer.
+            // PasskeyCredential.userId bytes share this buffer.
             val userIdBytes = ByteArray(16).also { secureRandom.nextBytes(it) }
 
             // JSONObject (not string interpolation) so integrator strings
@@ -719,9 +564,9 @@ public class CredentialManagerPrfCore(
                     put(JSONObject().apply { put("type", "public-key"); put("alg", -7) })
                     put(JSONObject().apply { put("type", "public-key"); put("alg", -257) })
                 })
-                if (effectiveExclude.isNotEmpty()) {
+                if (excludeCredentials.isNotEmpty()) {
                     put("excludeCredentials", JSONArray().apply {
-                        for (credId in effectiveExclude) {
+                        for (credId in excludeCredentials) {
                             put(JSONObject().apply {
                                 put("type", "public-key")
                                 put("id", encodeBase64Url(credId))
@@ -765,12 +610,10 @@ public class CredentialManagerPrfCore(
                     backupEligible = meta.second
                 }
             }
-            // Best-effort: persist for future auto-discovery.
-            credentialRegistry?.let { registryAddFireAndForget(it, rpId, credentialId, onRegistryError) }
             // Arm the post-create grace so the immediate derive doesn't
             // race the credential's PRF-readiness window (see grace tracker).
             graceTracker.arm(postCreateGraceMs)
-            RegisteredCredential(credentialId, userIdBytes, aaguid, backupEligible)
+            PasskeyCredential(credentialId, userIdBytes, aaguid, backupEligible)
         } catch (e: CredentialManagerPrfCoreException) {
             throw e
         } catch (e: Exception) {

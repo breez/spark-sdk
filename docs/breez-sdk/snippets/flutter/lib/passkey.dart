@@ -13,7 +13,7 @@ Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request) async {
   throw UnimplementedError('Implement using platform passkey APIs');
 }
 
-Future<RegisteredCredential> createPasskey(List<Uint8List> excludeCredentials) async {
+Future<PasskeyCredential> createPasskey(List<Uint8List> excludeCredentials) async {
   // Register a new credential and return its ID, the WebAuthn user.id
   // the native plugin minted for it (returned for host-side
   // correlation, never host-supplied), AAGUID, and BE flag.
@@ -25,10 +25,6 @@ Future<bool> isSupported() async {
   // platform / device.
   throw UnimplementedError('Check platform passkey availability');
 }
-
-Future<List<Uint8List>> getKnownCredentialIds() async => const [];
-Future<void> removeKnownCredentialId(Uint8List _) async {}
-Future<void> clearKnownCredentialIds() async {}
 // ANCHOR_END: implement-prf-provider
 
 Future<void> checkAvailability() async {
@@ -86,8 +82,8 @@ Future<BreezSdk> connectWithPasskey() async {
     request: ConnectWithPasskeyRequest(label: 'personal', allowCredentials: const [], excludeCredentials: const []),
   );
 
-  // `registeredCredential` is the path discriminator (null on sign-in).
-  final credential = response.registeredCredential;
+  // `credential` is the path discriminator (null on sign-in).
+  final credential = response.credential;
   if (credential != null) {
     final _ = credential.credentialId;
   }
@@ -133,8 +129,8 @@ Future<BreezSdk> registerNewPasskey() async {
 
   // Persist credentialId + userId for future excludeCredentials / host-side
   // correlation. Replace the prints with your own persistence call.
-  print('credentialId: ${response.credential.credentialId}');
-  print('userId: ${response.credential.userId}');
+  print('credentialId: ${response.credential?.credentialId}');
+  print('userId: ${response.credential?.userId}');
 
   final sdk = await connect(
       request: ConnectRequest(
@@ -243,32 +239,4 @@ Future<SignInResponse> handleTimeout() async {
     rethrow;
   }
   // ANCHOR_END: handle-timeout
-}
-
-// Stub for the snippet to compile. Use the LocalStorageCredentialRegistry
-// or platform-equivalent reference impl from the passkey guide.
-class StubCredentialRegistry implements CredentialRegistry {
-  @override
-  Future<List<Uint8List>> read(String rpId) async => const [];
-  @override
-  Future<void> add(String rpId, Uint8List credentialId) async {}
-  @override
-  Future<void> remove(String rpId, Uint8List credentialId) async {}
-  @override
-  Future<void> clear(String rpId) async {}
-}
-
-Future<void> withCredentialRegistry() async {
-  final registry = StubCredentialRegistry();
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(
-    rpId: '<your-rp-domain>',
-    rpName: 'Your App',
-    credentialRegistry: registry,
-    onRegistryError: (op, err) {},
-  ));
-  final passkey = PasskeyClientBuilder().withPrfProvider(prfProvider).build();
-  // ANCHOR: with-credential-registry
-  final known = await passkey.credentials().get_();
-  print("Known credentials: ${known.length}");
-  // ANCHOR_END: with-credential-registry
 }

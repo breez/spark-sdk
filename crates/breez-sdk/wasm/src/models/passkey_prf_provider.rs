@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
 use breez_sdk_spark::passkey::{
-    DeriveSeedsOutput, DeriveSeedsRequest, PrfProviderError, RegisteredCredential,
+    DeriveSeedsOutput, DeriveSeedsRequest, PasskeyCredential, PrfProviderError,
 };
 
 pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderError {
@@ -52,12 +52,6 @@ pub struct WasmPrfProvider {
     /// Cached `createPasskey` presence probe: JS providers may omit
     /// it (only platform passkey backends implement registration).
     supports_create: OnceLock<bool>,
-    /// Cached presence probes for the three known-credential methods.
-    /// Custom providers (no built-in registry) may omit them and
-    /// inherit the trait defaults (empty list / no-op writes).
-    supports_get_known: OnceLock<bool>,
-    supports_remove_known: OnceLock<bool>,
-    supports_clear_known: OnceLock<bool>,
 }
 
 impl WasmPrfProvider {
@@ -65,9 +59,6 @@ impl WasmPrfProvider {
         Self {
             inner,
             supports_create: OnceLock::new(),
-            supports_get_known: OnceLock::new(),
-            supports_remove_known: OnceLock::new(),
-            supports_clear_known: OnceLock::new(),
         }
     }
 
@@ -160,7 +151,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
     async fn create_passkey(
         &self,
         exclude_credentials: Vec<Vec<u8>>,
-    ) -> Result<RegisteredCredential, PrfProviderError> {
+    ) -> Result<PasskeyCredential, PrfProviderError> {
         // Custom providers may not implement explicit creation; fall
         // back to the trait default (`PrfNotSupported`).
         if !self.js_has_method("createPasskey", &self.supports_create) {
@@ -176,57 +167,7 @@ impl breez_sdk_spark::passkey::PrfProvider for WasmPrfProvider {
             .await
             .map_err(js_error_to_prf_provider_error)?;
 
-        parse_registered_credential(&result)
-    }
-
-    async fn get_known_credential_ids(&self) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-        if !self.js_has_method("getKnownCredentialIds", &self.supports_get_known) {
-            return Ok(vec![]);
-        }
-        let promise = self
-            .inner
-            .get_known_credential_ids()
-            .map_err(js_error_to_prf_provider_error)?;
-        let result = JsFuture::from(promise)
-            .await
-            .map_err(js_error_to_prf_provider_error)?;
-        let array = js_sys::Array::from(&result);
-        let len = array.length() as usize;
-        let mut out = Vec::with_capacity(len);
-        for i in 0..array.length() {
-            let item = array.get(i);
-            out.push(js_sys::Uint8Array::new(&item).to_vec());
-        }
-        Ok(out)
-    }
-
-    async fn remove_known_credential_id(&self, id: Vec<u8>) -> Result<(), PrfProviderError> {
-        if !self.js_has_method("removeKnownCredentialId", &self.supports_remove_known) {
-            return Ok(());
-        }
-        let arg = js_sys::Uint8Array::from(id.as_slice());
-        let promise = self
-            .inner
-            .remove_known_credential_id(arg)
-            .map_err(js_error_to_prf_provider_error)?;
-        JsFuture::from(promise)
-            .await
-            .map_err(js_error_to_prf_provider_error)?;
-        Ok(())
-    }
-
-    async fn clear_known_credential_ids(&self) -> Result<(), PrfProviderError> {
-        if !self.js_has_method("clearKnownCredentialIds", &self.supports_clear_known) {
-            return Ok(());
-        }
-        let promise = self
-            .inner
-            .clear_known_credential_ids()
-            .map_err(js_error_to_prf_provider_error)?;
-        JsFuture::from(promise)
-            .await
-            .map_err(js_error_to_prf_provider_error)?;
-        Ok(())
+        parse_passkey_credential(&result)
     }
 }
 
@@ -270,11 +211,11 @@ fn build_exclude_credentials(exclude_credentials: &[Vec<u8>]) -> JsValue {
     arr.into()
 }
 
-/// Parse the JS `RegisteredCredential` returned by the provider's
-/// `createPasskey` into the Rust core type. Tolerates `aaguid` /
-/// `backupEligible` being missing or null since some platforms can't
-/// surface them (Safari without `getAuthenticatorData()`).
-fn parse_registered_credential(value: &JsValue) -> Result<RegisteredCredential, PrfProviderError> {
+/// Parse the JS credential object returned by the provider's
+/// `createPasskey` into the Rust core type. `credentialId` is required;
+/// the attestation fields tolerate missing / null values since some
+/// platforms can't surface them (Safari without `getAuthenticatorData()`).
+fn parse_passkey_credential(value: &JsValue) -> Result<PasskeyCredential, PrfProviderError> {
     let credential_id_raw = js_sys::Reflect::get(value, &JsValue::from_str("credentialId"))
         .map_err(js_error_to_prf_provider_error)?;
     if credential_id_raw.is_undefined() || credential_id_raw.is_null() {
@@ -284,14 +225,10 @@ fn parse_registered_credential(value: &JsValue) -> Result<RegisteredCredential, 
     }
     let credential_id = js_sys::Uint8Array::new(&credential_id_raw).to_vec();
 
-    let user_id_raw = js_sys::Reflect::get(value, &JsValue::from_str("userId"))
-        .map_err(js_error_to_prf_provider_error)?;
-    if user_id_raw.is_undefined() || user_id_raw.is_null() {
-        return Err(PrfProviderError::Generic(
-            "createPasskey result missing userId".to_string(),
-        ));
-    }
-    let user_id = js_sys::Uint8Array::new(&user_id_raw).to_vec();
+    let user_id = js_sys::Reflect::get(value, &JsValue::from_str("userId"))
+        .ok()
+        .and_then(|v| (!v.is_null() && !v.is_undefined()).then_some(v))
+        .map(|v| js_sys::Uint8Array::new(&v).to_vec());
 
     let aaguid = js_sys::Reflect::get(value, &JsValue::from_str("aaguid"))
         .ok()
@@ -302,7 +239,7 @@ fn parse_registered_credential(value: &JsValue) -> Result<RegisteredCredential, 
         .ok()
         .and_then(|v| v.as_bool());
 
-    Ok(RegisteredCredential {
+    Ok(PasskeyCredential {
         credential_id,
         user_id,
         aaguid,
@@ -351,36 +288,13 @@ export interface PrfProvider {
      * @throws `PasskeyAlreadyExistsError` when an entry in
      *   `excludeCredentials` matches a credential already on the device.
      */
-    createPasskey?(excludeCredentials: Uint8Array[]): Promise<RegisteredCredentialJSON>;
+    createPasskey?(excludeCredentials: Uint8Array[]): Promise<PasskeyCredentialJSON>;
 
     /**
      * Whether this provider can produce PRF outputs on the current
      * device. Hosts gate UX on the result.
      */
     isSupported(): Promise<boolean>;
-
-    /**
-     * Optional. Backs `PasskeyClient.credentials().get()`. Implementations
-     * with a persistent registry (browser `CredentialRegistry`, native
-     * `KnownCredentialsStore`) return the stored credential-ID set for
-     * the current RP; custom providers may omit and inherit the
-     * empty-list default.
-     */
-    getKnownCredentialIds?(): Promise<Uint8Array[]>;
-
-    /**
-     * Optional. Backs `PasskeyClient.credentials().remove(id)`. Drops
-     * a single ID from the persisted registry. Omit on providers
-     * without a registry (no-op default).
-     */
-    removeKnownCredentialId?(credentialId: Uint8Array): Promise<void>;
-
-    /**
-     * Optional. Backs `PasskeyClient.credentials().clear()`. Clears
-     * the persisted credential-ID set for the current RP. Omit on
-     * providers without a registry (no-op default).
-     */
-    clearKnownCredentialIds?(): Promise<void>;
 }
 
 /**
@@ -417,14 +331,12 @@ export interface DeriveSeedsResultJSON {
 }
 
 /**
- * Plain-object shape returned by {@link PrfProvider.createPasskey}. The
- * bundled `PasskeyProvider` returns a `RegisteredCredential` with the
- * same shape; this name is reserved for the Rust-bridge boundary.
- *
- * `userId` is the WebAuthn user handle the provider generated for this
- * credential. Always returned; never host-supplied.
+ * Plain-object shape returned by {@link PrfProvider.createPasskey}: the
+ * registered credential plus its attestation. `userId` is the WebAuthn
+ * user handle the provider generated for this credential, always
+ * returned on registration and never host-supplied.
  */
-export interface RegisteredCredentialJSON {
+export interface PasskeyCredentialJSON {
     credentialId: Uint8Array;
     userId: Uint8Array;
     aaguid?: Uint8Array | null;
@@ -446,23 +358,11 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = "isSupported", catch)]
     pub fn is_supported(this: &PrfProvider) -> Result<Promise, JsValue>;
 
-    // Optional methods. Custom providers may omit them; callers probe
+    // Optional method. Custom providers may omit it; callers probe
     // with `js_has_method` before invoking.
     #[wasm_bindgen(structural, method, js_name = "createPasskey", catch)]
     pub fn create_passkey(
         this: &PrfProvider,
         exclude_credentials: JsValue,
     ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = "getKnownCredentialIds", catch)]
-    pub fn get_known_credential_ids(this: &PrfProvider) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = "removeKnownCredentialId", catch)]
-    pub fn remove_known_credential_id(
-        this: &PrfProvider,
-        id: js_sys::Uint8Array,
-    ) -> Result<Promise, JsValue>;
-
-    #[wasm_bindgen(structural, method, js_name = "clearKnownCredentialIds", catch)]
-    pub fn clear_known_credential_ids(this: &PrfProvider) -> Result<Promise, JsValue>;
 }

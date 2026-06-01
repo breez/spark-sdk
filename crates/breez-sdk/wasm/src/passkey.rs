@@ -46,15 +46,15 @@ pub struct Wallet {
     pub label: String,
 }
 
-/// Authenticator metadata returned by `PasskeyClient.register`. `userId`
-/// is the provider-generated WebAuthn user handle (never host-supplied).
-/// `aaguid` (provider identifier) and `backupEligible` are null when the
-/// platform doesn't expose them. AAGUID is unverified attestation: a
+/// A passkey credential from `register` or `signIn`. `credentialId` is
+/// always set. The attestation fields (`userId`, `aaguid`,
+/// `backupEligible`) are populated on registration and null on sign-in
+/// (an assertion carries no attestation). AAGUID is unverified: a
 /// display hint only, never a trust signal.
-#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::RegisteredCredential)]
-pub struct RegisteredCredential {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyCredential)]
+pub struct PasskeyCredential {
     pub credential_id: Vec<u8>,
-    pub user_id: Vec<u8>,
+    pub user_id: Option<Vec<u8>>,
     pub aaguid: Option<Vec<u8>>,
     pub backup_eligible: Option<bool>,
 }
@@ -70,7 +70,7 @@ pub struct RegisterRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::RegisterResponse)]
 pub struct RegisterResponse {
     pub wallet: Wallet,
-    pub credential: RegisteredCredential,
+    pub credential: Option<PasskeyCredential>,
 }
 
 /// Request shape for `PasskeyClient.signIn`.
@@ -86,7 +86,7 @@ pub struct SignInRequest {
 pub struct SignInResponse {
     pub wallet: Wallet,
     pub labels: Vec<String>,
-    pub credential_id: Option<Vec<u8>>,
+    pub credential: Option<PasskeyCredential>,
 }
 
 /// High-level orchestrator that collapses register / sign-in flows
@@ -150,15 +150,6 @@ impl PasskeyClient {
             inner: self.inner.labels(),
         }
     }
-
-    /// Credential sub-object. Inspect / mutate the provider's
-    /// persisted credential-ID set.
-    #[wasm_bindgen(js_name = "credentials")]
-    pub fn credentials(&self) -> PasskeyCredentials {
-        PasskeyCredentials {
-            inner: self.inner.credentials(),
-        }
-    }
 }
 
 /// Label sub-object surfaced from `PasskeyClient.labels()`.
@@ -179,37 +170,5 @@ impl PasskeyLabels {
     #[wasm_bindgen(js_name = "store")]
     pub async fn store(&self, label: String) -> WasmResult<()> {
         Ok(self.inner.store(label).await?)
-    }
-}
-
-/// Credential sub-object surfaced from `PasskeyClient.credentials()`.
-/// Reads / mutates the provider's persisted credential-ID set.
-#[wasm_bindgen]
-pub struct PasskeyCredentials {
-    inner: Arc<breez_sdk_spark::passkey::PasskeyCredentials>,
-}
-
-#[wasm_bindgen]
-impl PasskeyCredentials {
-    /// Read the persisted set of credential IDs for the current RP.
-    #[wasm_bindgen(js_name = "get")]
-    pub async fn get(&self) -> WasmResult<Vec<js_sys::Uint8Array>> {
-        let ids = self.inner.get().await?;
-        Ok(ids
-            .into_iter()
-            .map(|id| js_sys::Uint8Array::from(id.as_slice()))
-            .collect())
-    }
-
-    /// Drop a single credential ID from the persisted set.
-    #[wasm_bindgen(js_name = "remove")]
-    pub async fn remove(&self, credential_id: Vec<u8>) -> WasmResult<()> {
-        Ok(self.inner.remove(credential_id).await?)
-    }
-
-    /// Clear the persisted credential-ID set for the current RP.
-    #[wasm_bindgen(js_name = "clear")]
-    pub async fn clear(&self) -> WasmResult<()> {
-        Ok(self.inner.clear().await?)
     }
 }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::Passkey;
 use super::error::{PasskeyError, PrfProviderError};
-use super::models::{PasskeyConfig, RegisteredCredential, SetupWalletRequest, Wallet};
+use super::models::{PasskeyConfig, PasskeyCredential, SetupWalletRequest, Wallet};
 use super::passkey_prf_provider::PrfProvider;
 
 /// Single-value result of [`PasskeyClient::check_availability`].
@@ -60,11 +60,11 @@ pub struct RegisterRequest {
 pub struct RegisterResponse {
     /// The newly-derived wallet for [`RegisterRequest::label`].
     pub wallet: Wallet,
-    /// Metadata for the credential the platform just registered. Hosts
-    /// SHOULD persist [`RegisteredCredential::credential_id`] so they
-    /// can populate `exclude_credentials` on future
-    /// [`PasskeyClient::register`] calls.
-    pub credential: RegisteredCredential,
+    /// The credential the platform just registered. Persist
+    /// [`PasskeyCredential::credential_id`] to populate
+    /// `exclude_credentials` on future [`PasskeyClient::register`]
+    /// calls. Always set on the register path.
+    pub credential: Option<PasskeyCredential>,
 }
 
 /// Request shape for [`PasskeyClient::sign_in`].
@@ -99,11 +99,12 @@ pub struct SignInResponse {
     /// Empty on the fast path. Populated on discovery (or empty if
     /// the label store was unreachable).
     pub labels: Vec<String>,
-    /// The credential ID the user used for this sign-in, when the
-    /// underlying [`PrfProvider`] surfaces it. `None` for providers
-    /// that don't expose this signal (CLI / file-backed / hardware
-    /// providers).
-    pub credential_id: Option<Vec<u8>>,
+    /// The credential the user signed in with, when the underlying
+    /// [`PrfProvider`] surfaces it. `None` for providers that don't
+    /// expose this signal (CLI / file-backed / hardware). Only
+    /// `credential_id` is set: a sign-in assertion carries no
+    /// attestation.
+    pub credential: Option<PasskeyCredential>,
 }
 
 /// Request shape for [`PasskeyClient::connect_with_passkey`].
@@ -133,20 +134,15 @@ pub struct ConnectWithPasskeyRequest {
 
 /// Response from [`PasskeyClient::connect_with_passkey`].
 ///
-/// `registered_credential` doubles as the path discriminator:
-/// - When present, a new credential was registered (silent sign-in
-///   fast-failed with `CredentialNotFound`). Persist
-///   `credential.credential_id` in your `excludeCredentials` set.
-/// - When absent, silent sign-in succeeded for an existing
-///   credential. Hosts that need the asserted credential ID per
-///   sign-in (e.g. to mark "recently used" in a `CredentialRegistry`)
-///   should use [`PasskeyClient::sign_in`] directly; the unified
-///   call doesn't surface it.
+/// `credential` carries whichever credential signed in or was
+/// registered, when the provider surfaces it. The register path also
+/// populates the attestation fields (`aaguid`, `backup_eligible`); the
+/// sign-in path sets only `credential_id`.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectWithPasskeyResponse {
     pub wallet: Wallet,
-    pub registered_credential: Option<RegisteredCredential>,
+    pub credential: Option<PasskeyCredential>,
 }
 
 /// High-level orchestration over a [`PrfProvider`] and the internal
@@ -159,8 +155,7 @@ pub struct ConnectWithPasskeyResponse {
 /// - [`Self::sign_in`]: returning user. Fast path when the host has
 ///   the label cached locally; cold-restore-with-discovery when not.
 ///
-/// Label and credential management hang off the [`Self::labels`] and
-/// [`Self::credentials`] sub-objects.
+/// Label management hangs off the [`Self::labels`] sub-object.
 ///
 /// The `breez_api_key` is the Breez relay key used for authenticated
 /// (NIP-42) label storage. Hosts that already construct the SDK
@@ -221,7 +216,7 @@ impl PasskeyClient {
 
         Ok(RegisterResponse {
             wallet: setup.wallet,
-            credential,
+            credential: Some(credential),
         })
     }
 
@@ -243,9 +238,13 @@ impl PasskeyClient {
             })
             .await?;
 
-        // The credential ID observed during the derive ceremony, carried
-        // back on the setup result.
-        let credential_id = setup.credential_id.clone();
+        // The credential observed during the derive ceremony, carried
+        // back on the setup result. A sign-in assertion yields only the
+        // credential ID, no attestation.
+        let credential = setup
+            .credential_id
+            .clone()
+            .map(PasskeyCredential::from_credential_id);
 
         let labels = if discovery {
             self.passkey.list_labels().await.unwrap_or_default()
@@ -256,7 +255,7 @@ impl PasskeyClient {
         Ok(SignInResponse {
             wallet: setup.wallet,
             labels,
-            credential_id,
+            credential,
         })
     }
 
@@ -291,7 +290,7 @@ impl PasskeyClient {
         match sign_in_result {
             Ok(response) => Ok(ConnectWithPasskeyResponse {
                 wallet: response.wallet,
-                registered_credential: None,
+                credential: response.credential,
             }),
             Err(PasskeyError::Prf(PrfProviderError::CredentialNotFound(_))) => {
                 let register_response = self
@@ -302,7 +301,7 @@ impl PasskeyClient {
                     .await?;
                 Ok(ConnectWithPasskeyResponse {
                     wallet: register_response.wallet,
-                    registered_credential: Some(register_response.credential),
+                    credential: register_response.credential,
                 })
             }
             Err(e) => Err(e),
@@ -314,14 +313,6 @@ impl PasskeyClient {
     pub fn labels(&self) -> Arc<PasskeyLabels> {
         Arc::new(PasskeyLabels {
             passkey: self.passkey.clone(),
-        })
-    }
-
-    /// Credential sub-object. Inspect or mutate the provider's
-    /// persisted credential-ID set.
-    pub fn credentials(&self) -> Arc<PasskeyCredentials> {
-        Arc::new(PasskeyCredentials {
-            prf_provider: Arc::clone(self.passkey.prf_provider()),
         })
     }
 }
@@ -356,35 +347,6 @@ impl PasskeyLabels {
     /// Idempotently publish `label` for this passkey's identity.
     pub async fn store(&self, label: String) -> Result<(), PasskeyError> {
         self.passkey.store_label(label).await
-    }
-}
-
-/// Credential sub-object surfaced from [`PasskeyClient::credentials`].
-/// Reads / mutates the provider's persisted credential-ID set; methods
-/// no-op on providers without a registry (CLI / file / `YubiKey`).
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
-pub struct PasskeyCredentials {
-    prf_provider: Arc<dyn PrfProvider>,
-}
-
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-impl PasskeyCredentials {
-    /// Read the persisted set of credential IDs for the current RP.
-    pub async fn get(&self) -> Result<Vec<Vec<u8>>, PasskeyError> {
-        Ok(self.prf_provider.get_known_credential_ids().await?)
-    }
-
-    /// Drop a single credential ID from the persisted set.
-    pub async fn remove(&self, credential_id: Vec<u8>) -> Result<(), PasskeyError> {
-        Ok(self
-            .prf_provider
-            .remove_known_credential_id(credential_id)
-            .await?)
-    }
-
-    /// Clear the persisted credential-ID set for the current RP.
-    pub async fn clear(&self) -> Result<(), PasskeyError> {
-        Ok(self.prf_provider.clear_known_credential_ids().await?)
     }
 }
 
@@ -484,15 +446,15 @@ mod tests {
         async fn create_passkey(
             &self,
             _exclude_credentials: Vec<Vec<u8>>,
-        ) -> Result<RegisteredCredential, PrfProviderError> {
+        ) -> Result<PasskeyCredential, PrfProviderError> {
             if self.fail_create {
                 return Err(PrfProviderError::PrfNotSupported);
             }
             let mut count = self.create_calls.lock().unwrap();
             *count = count.checked_add(1).expect("create_calls overflow");
-            Ok(RegisteredCredential {
+            Ok(PasskeyCredential {
                 credential_id: vec![0xab, 0xcd, 0xef],
-                user_id: vec![0u8; 16],
+                user_id: Some(vec![0u8; 16]),
                 aaguid: Some(vec![0; 16]),
                 backup_eligible: Some(true),
             })
@@ -511,8 +473,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.credential.credential_id, vec![0xab, 0xcd, 0xef]);
-        assert_eq!(response.credential.user_id.len(), 16);
+        let credential = response
+            .credential
+            .expect("register surfaces the credential");
+        assert_eq!(credential.credential_id, vec![0xab, 0xcd, 0xef]);
+        assert_eq!(credential.user_id.expect("user_id").len(), 16);
         assert_eq!(*provider.create_calls.lock().unwrap(), 1);
         assert_eq!(response.wallet.label, "alice");
     }
@@ -579,8 +544,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.wallet.label, "personal");
-        // Sign-in path: no new credential to surface.
-        assert!(response.registered_credential.is_none());
+        // Sign-in path: the mock provider surfaces no credential_id.
+        assert!(response.credential.is_none());
         // No registration ceremony on the silent-sign-in success path.
         assert_eq!(*provider.create_calls.lock().unwrap(), 0);
     }
@@ -603,7 +568,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.wallet.label, "personal");
         let credential = response
-            .registered_credential
+            .credential
             .expect("registered path must surface the new credential");
         assert_eq!(credential.credential_id, vec![0xab, 0xcd, 0xef]);
         assert_eq!(*provider.create_calls.lock().unwrap(), 1);

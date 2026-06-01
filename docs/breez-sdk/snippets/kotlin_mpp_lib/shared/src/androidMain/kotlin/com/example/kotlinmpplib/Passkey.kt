@@ -3,16 +3,6 @@ package com.example.kotlinmpplib
 import android.app.Activity
 import breez_sdk_spark.*
 import technology.breez.spark.passkey.PasskeyProvider
-import technology.breez.spark.passkey.core.CredentialRegistry
-
-// Stub for the snippet to compile. Use the BlockStoreCredentialRegistry
-// reference impl from the passkey guide in production.
-class BlockStoreCredentialRegistry : CredentialRegistry {
-    override suspend fun read(rpId: String): List<ByteArray> = emptyList()
-    override suspend fun add(rpId: String, credentialId: ByteArray) {}
-    override suspend fun remove(rpId: String, credentialId: ByteArray) {}
-    override suspend fun clear(rpId: String) {}
-}
 
 // ANCHOR: implement-prf-provider
 // Implement the PrfProvider interface for custom logic if the built-in
@@ -32,7 +22,7 @@ class CustomPrfProvider : PrfProvider {
         TODO("Check platform passkey availability")
     }
 
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential {
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential {
         // Register a new credential and return its ID, the WebAuthn
         // user.id the platform recorded (returned for host-side
         // correlation, never host-supplied), AAGUID, and BE flag.
@@ -42,15 +32,6 @@ class CustomPrfProvider : PrfProvider {
     override suspend fun checkDomainAssociation(): DomainAssociation {
         return DomainAssociation.Skipped("CustomPrfProvider does not verify domain association")
     }
-
-    // CredentialRegistry hooks: wire these to your app's stored
-    // credential-ID set if you want the SDK to auto-merge known IDs
-    // into allowCredentials / excludeCredentials. Custom providers
-    // without a registry can return empty and treat the mutators as
-    // no-ops.
-    override suspend fun getKnownCredentialIds(): List<ByteArray> = emptyList()
-    override suspend fun removeKnownCredentialId(id: ByteArray) = Unit
-    override suspend fun clearKnownCredentialIds() = Unit
 }
 // ANCHOR_END: implement-prf-provider
 
@@ -104,8 +85,8 @@ class PasskeySnippets(private val activity: Activity) {
             ConnectWithPasskeyRequest(label = "personal")
         )
 
-        // `registeredCredential` is the path discriminator (null on sign-in).
-        response.registeredCredential?.let { credential ->
+        // The credential is surfaced on both paths when the provider exposes it.
+        response.credential?.let { credential ->
             val persistedId = credential.credentialId
         }
 
@@ -142,8 +123,10 @@ class PasskeySnippets(private val activity: Activity) {
         val response = passkey.register(RegisterRequest(label = "personal"))
 
         // Persist credentialId for future excludeCredentials.
-        val persistedCredentialId = response.credential.credentialId
-        val persistedUserId = response.credential.userId
+        response.credential?.let { credential ->
+            val persistedCredentialId = credential.credentialId
+            val persistedUserId = credential.userId
+        }
 
         val sdk = connect(ConnectRequest(config, response.wallet.seed, "./.data"))
         // ANCHOR_END: register-passkey
@@ -241,21 +224,5 @@ class PasskeySnippets(private val activity: Activity) {
             throw e
         }
         // ANCHOR_END: handle-timeout
-    }
-
-    suspend fun withCredentialRegistry() {
-        val registry = BlockStoreCredentialRegistry()
-        val prfProvider = PasskeyProvider(
-            activityProvider = { activity },
-            rpId = "<your-rp-domain>",
-            rpName = "Your App",
-            credentialRegistry = registry,
-            onRegistryError = { op, err -> /* log */ },
-        )
-        val passkey = PasskeyClient(prfProvider, null, null)
-        // ANCHOR: with-credential-registry
-        val known = passkey.credentials().get()
-        // Log.v("Breez", "Known credentials: ${known.size}")
-        // ANCHOR_END: with-credential-registry
     }
 }

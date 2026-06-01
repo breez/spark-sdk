@@ -1,18 +1,15 @@
 package technology.breez.spark.passkey
 
 import android.app.Activity
-import android.util.Log
 import breez_sdk_spark.DeriveSeedsOutput
 import breez_sdk_spark.DeriveSeedsRequest
 import breez_sdk_spark.DomainAssociation
+import breez_sdk_spark.PasskeyCredential
 import breez_sdk_spark.PrfProvider
 import breez_sdk_spark.PrfProviderException
-import breez_sdk_spark.RegisteredCredential
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
 import technology.breez.spark.passkey.core.CredentialManagerPrfCoreException
-import technology.breez.spark.passkey.core.CredentialRegistry
 import technology.breez.spark.passkey.core.DomainAssociationResult
-import technology.breez.spark.passkey.core.RegistryOperation
 
 /**
  * Built-in [PrfProvider] that uses the AndroidX Credential Manager +
@@ -44,11 +41,6 @@ import technology.breez.spark.passkey.core.RegistryOperation
  *   Defaults to [rpName]. Used only at registration.
  * @param userDisplayName WebAuthn `user.displayName`, a label the picker MAY
  *   show (varies by backend). Defaults to [userName]. Used only at registration.
- * @param credentialRegistry Opt-in app-side store of known credential IDs.
- *   When set, the SDK auto-merges stored IDs into `allowCredentials` /
- *   `excludeCredentials` and writes new IDs back.
- * @param onRegistryError Best-effort callback for registry failures; never
- *   blocks the ceremony.
  */
 public class PasskeyProvider(
     private val activityProvider: () -> Activity,
@@ -56,8 +48,6 @@ public class PasskeyProvider(
     private val rpName: String,
     userName: String? = null,
     userDisplayName: String? = null,
-    private val credentialRegistry: CredentialRegistry? = null,
-    private val onRegistryError: ((RegistryOperation, Throwable) -> Unit)? = null,
 ) : PrfProvider {
 
     public companion object {
@@ -76,21 +66,17 @@ public class PasskeyProvider(
          * (Google Password Manager).
          */
         public const val DEFAULT_RP_NAME: String = "Breez"
-
-        private const val TAG = "PasskeyProvider"
     }
 
     private val resolvedUserName: String = userName ?: rpName
     private val resolvedUserDisplayName: String = userDisplayName ?: resolvedUserName
 
-    /** The configured PRF engine; holds rp identity + registry. */
+    /** The configured PRF engine; holds the rp identity. */
     private val core = CredentialManagerPrfCore(
         rpId = rpId,
         rpName = rpName,
         userName = resolvedUserName,
         userDisplayName = resolvedUserDisplayName,
-        credentialRegistry = credentialRegistry,
-        onRegistryError = onRegistryError,
         activityProvider = activityProvider,
     )
 
@@ -158,47 +144,16 @@ public class PasskeyProvider(
      * Register a new passkey with PRF support. One ceremony, no derivation.
      *
      * `user.id` is never host-supplied: the core mints a fresh random 16-byte
-     * handle and returns it as [RegisteredCredential.userId]. When a
-     * `credentialRegistry` is configured, stored IDs are merged into
-     * `excludeCredentials` and the new ID is added on success.
+     * handle and returns it as [PasskeyCredential.userId]. Pass already-
+     * registered IDs in `excludeCredentials` so the platform refuses a
+     * duplicate even after reinstall.
      */
-    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): RegisteredCredential {
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential {
         try {
             val c = core.register(excludeCredentials)
-            return RegisteredCredential(c.credentialId, c.userId, c.aaguid, c.backupEligible)
+            return PasskeyCredential(c.credentialId, c.userId, c.aaguid, c.backupEligible)
         } catch (e: CredentialManagerPrfCoreException) {
             throw e.toPrfProviderException()
-        }
-    }
-
-    override suspend fun getKnownCredentialIds(): List<ByteArray> {
-        val reg = credentialRegistry ?: return emptyList()
-        return try {
-            reg.read(rpId)
-        } catch (t: Throwable) {
-            Log.w(TAG, "CredentialRegistry.read failed", t)
-            onRegistryError?.invoke(RegistryOperation.Read, t)
-            emptyList()
-        }
-    }
-
-    override suspend fun removeKnownCredentialId(id: ByteArray) {
-        val reg = credentialRegistry ?: return
-        try {
-            reg.remove(rpId, id)
-        } catch (t: Throwable) {
-            Log.w(TAG, "CredentialRegistry.remove failed", t)
-            onRegistryError?.invoke(RegistryOperation.Remove, t)
-        }
-    }
-
-    override suspend fun clearKnownCredentialIds() {
-        val reg = credentialRegistry ?: return
-        try {
-            reg.clear(rpId)
-        } catch (t: Throwable) {
-            Log.w(TAG, "CredentialRegistry.clear failed", t)
-            onRegistryError?.invoke(RegistryOperation.Clear, t)
         }
     }
 

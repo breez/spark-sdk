@@ -1,5 +1,5 @@
 use super::error::PrfProviderError;
-use super::models::{DeriveSeedsOutput, RegisteredCredential};
+use super::models::{DeriveSeedsOutput, PasskeyCredential};
 
 /// Per-call inputs for [`PrfProvider::derive_seeds`]. Hosts that
 /// don't need per-ceremony overrides fall back to [`Default`]
@@ -86,11 +86,11 @@ pub trait PrfProvider: Send + Sync {
     ///
     /// `exclude_credentials` lists already-registered IDs and surfaces
     /// duplicates as `CredentialAlreadyExists`. The `user.id` is always
-    /// provider-minted and returned on `RegisteredCredential.user_id`.
+    /// provider-minted and returned on `PasskeyCredential.user_id`.
     async fn create_passkey(
         &self,
         exclude_credentials: Vec<Vec<u8>>,
-    ) -> Result<RegisteredCredential, PrfProviderError> {
+    ) -> Result<PasskeyCredential, PrfProviderError> {
         let _ = exclude_credentials;
         Err(PrfProviderError::PrfNotSupported)
     }
@@ -111,30 +111,5 @@ pub trait PrfProvider: Send + Sync {
         Ok(DomainAssociation::Skipped {
             reason: "Provider does not verify domain association".to_string(),
         })
-    }
-
-    /// List credential IDs the provider has persisted for the current
-    /// RP. Backs `PasskeyClient::credentials().get()`. Platform passkey
-    /// providers delegate to their `CredentialRegistry` / native
-    /// `KnownCredentialsStore`; file / `YubiKey` / FIDO2 providers
-    /// inherit the empty-list default.
-    async fn get_known_credential_ids(&self) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-        Ok(vec![])
-    }
-
-    /// Drop a single credential ID from the provider's persisted set
-    /// for the current RP. Backs
-    /// `PasskeyClient::credentials().remove(id)`. Default no-op for
-    /// providers without a persistent registry.
-    async fn remove_known_credential_id(&self, id: Vec<u8>) -> Result<(), PrfProviderError> {
-        let _ = id;
-        Ok(())
-    }
-
-    /// Clear the provider's persisted credential-ID set for the
-    /// current RP. Backs `PasskeyClient::credentials().clear()`.
-    /// Default no-op for providers without a persistent registry.
-    async fn clear_known_credential_ids(&self) -> Result<(), PrfProviderError> {
-        Ok(())
     }
 }

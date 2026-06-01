@@ -1,5 +1,5 @@
 import type {
-  RegisteredCredential
+  PasskeyCredential
 } from '@breeztech/breez-sdk-spark'
 import { PasskeyClient, connect, defaultConfig } from '@breeztech/breez-sdk-spark'
 import {
@@ -25,7 +25,7 @@ class CustomPrfProvider {
 
   createPasskey = async (
     _excludeCredentials: Uint8Array[]
-  ): Promise<RegisteredCredential> => {
+  ): Promise<PasskeyCredential> => {
     // Register a new credential and return its ID, the WebAuthn
     // user.id the provider minted for it (returned for host-side
     // correlation, never host-supplied), AAGUID, and BE flag.
@@ -114,12 +114,12 @@ const registerNewPasskey = async () => {
 
   const response = await passkey.register({ label: 'personal', excludeCredentials: [] })
 
-  // Hosts SHOULD persist credential.credentialId (for excludeCredentials
-  // bookkeeping) and credential.userId (for server-side correlation).
+  // Hosts SHOULD persist credentialId (for excludeCredentials
+  // bookkeeping) and userId (for server-side correlation).
   // The SDK generates userId; it is never host-supplied.
   const _persist = {
-    credentialId: response.credential.credentialId,
-    userId: response.credential.userId
+    credentialId: response.credential?.credentialId,
+    userId: response.credential?.userId
   }
 
   const config = defaultConfig('mainnet')
@@ -227,31 +227,4 @@ const handleTimeout = async () => {
     throw error
   }
   // ANCHOR_END: handle-timeout
-}
-
-const withCredentialRegistry = async () => {
-  const registry = new LocalStorageCredentialRegistry()
-  const prfProvider = new PasskeyProvider({
-    rpId: '<your-rp-domain>',
-    rpName: 'Your App',
-    credentialRegistry: registry,
-    onRegistryError: (op, err) => { console.warn('registry', op, err) }
-  })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
-
-  await passkey.signIn({ label: 'personal', allowCredentials: [] })
-  await passkey.register({ label: 'personal', excludeCredentials: [] })
-  // ANCHOR: with-credential-registry
-  const known = await passkey.credentials().get()
-  console.log(`Known credentials: ${known.length}`)
-  // ANCHOR_END: with-credential-registry
-}
-
-// LocalStorageCredentialRegistry is a copy-paste reference impl;
-// see the passkey guide. Defined here for the snippet to compile.
-declare class LocalStorageCredentialRegistry {
-  read (rpId: string): Promise<Uint8Array[]>
-  add (rpId: string, credentialId: Uint8Array): Promise<void>
-  remove (rpId: string, credentialId: Uint8Array): Promise<void>
-  clear (rpId: string): Promise<void>
 }

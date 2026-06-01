@@ -2,7 +2,7 @@
  * Passkey support for the Breez SDK React Native CLI.
  *
  * Provides:
- *   - PasskeyProvider enum (File, YubiKey, Fido2)
+ *   - PasskeyProvider enum (Platform, File, YubiKey, Fido2)
  *   - PasskeyConfig interface
  *   - File-based PRF provider using HMAC-SHA256
  *   - resolvePasskeySeed() async function matching the Rust CLI logic
@@ -13,9 +13,12 @@
 
 import {
   type Seed as SeedType,
-  Passkey,
+  PasskeyClient,
   type PrfProvider,
-  type NostrRelayConfig,
+  type DeriveSeedsRequest,
+  type DeriveSeedsOutput,
+  type PasskeyCredential,
+  DomainAssociation,
 } from '@breeztech/breez-sdk-spark-react-native'
 import { PasskeyProvider as PlatformPasskeyProvider } from '@breeztech/breez-sdk-spark-react-native/passkey-prf-provider'
 import RNFS from 'react-native-fs'
@@ -70,7 +73,7 @@ export interface PasskeyConfig {
   listLabels: boolean
   /** Whether to publish the label to Nostr. */
   storeLabel: boolean
-  /** Optional relying party ID for FIDO2 provider (default: keys.breez.technology). */
+  /** Optional relying party ID for the Platform provider (default: keys.breez.technology). */
   rpid?: string
 }
 
@@ -133,7 +136,7 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
  * Security note: This is less secure than hardware-backed solutions like
  * YubiKey. Suitable for development/testing or when hardware keys are unavailable.
  */
-class FilePrfProvider {
+class FilePrfProvider implements PrfProvider {
   private secret: Uint8Array
 
   private constructor(secret: Uint8Array) {
@@ -173,18 +176,30 @@ class FilePrfProvider {
   }
 
   /**
-   * Derive a PRF seed from a salt using HMAC-SHA256(secret, salt).
+   * Derive one 32-byte PRF output per salt via HMAC-SHA256(secret, salt),
+   * preserving input order. No credential ID is surfaced by this backend.
    */
-  derivePrfSeed = async (salt: string): Promise<ArrayBuffer> => {
-    const result = hmacSha256(this.secret, new TextEncoder().encode(salt))
-    return (result.buffer as ArrayBuffer).slice(result.byteOffset, result.byteOffset + result.byteLength)
+  deriveSeeds = async (request: DeriveSeedsRequest): Promise<DeriveSeedsOutput> => {
+    const seeds = request.salts.map((salt: string) => {
+      const result = hmacSha256(this.secret, new TextEncoder().encode(salt))
+      return (result.buffer as ArrayBuffer).slice(result.byteOffset, result.byteOffset + result.byteLength)
+    })
+    return { seeds, credentialId: undefined }
   }
 
-  /**
-   * File-based PRF is always available once initialized.
-   */
-  isPrfAvailable = async (): Promise<boolean> => {
+  /** File-based PRF is always available once initialized. */
+  isSupported = async (): Promise<boolean> => {
     return true
+  }
+
+  /** File-backed seeds derive lazily; there is no credential to register. */
+  createPasskey = async (_excludeCredentials: ArrayBuffer[]): Promise<PasskeyCredential> => {
+    throw new Error('file-backed PRF provider does not support credential creation; use sign-in by label instead')
+  }
+
+  /** No out-of-band verification source for a file secret. */
+  checkDomainAssociation = async (): Promise<DomainAssociation> => {
+    return new DomainAssociation.Skipped({ reason: 'FilePrfProvider does not verify domain association' })
   }
 }
 
@@ -196,19 +211,31 @@ class FilePrfProvider {
  * Stub provider that returns errors for hardware-dependent backends
  * not yet supported in the React Native CLI.
  */
-class NotYetSupportedProvider {
+class NotYetSupportedProvider implements PrfProvider {
   private name: string
 
   constructor(name: string) {
     this.name = name
   }
 
-  derivePrfSeed = async (_salt: string): Promise<ArrayBuffer> => {
-    throw new Error(`${this.name} passkey provider is not yet supported in the React Native CLI`)
+  private notYet(): Error {
+    return new Error(`${this.name} passkey provider is not yet supported in the React Native CLI`)
   }
 
-  isPrfAvailable = async (): Promise<boolean> => {
+  deriveSeeds = async (_request: DeriveSeedsRequest): Promise<DeriveSeedsOutput> => {
+    throw this.notYet()
+  }
+
+  isSupported = async (): Promise<boolean> => {
     return false
+  }
+
+  createPasskey = async (_excludeCredentials: ArrayBuffer[]): Promise<PasskeyCredential> => {
+    throw this.notYet()
+  }
+
+  checkDomainAssociation = async (): Promise<DomainAssociation> => {
+    return new DomainAssociation.Skipped({ reason: `${this.name} does not verify domain association` })
   }
 }
 
@@ -221,15 +248,23 @@ class NotYetSupportedProvider {
  *
  * @param provider - The provider type
  * @param dataDir - The data directory (used by File provider)
+ * @param rpid - Relying party ID for the Platform provider (default: keys.breez.technology)
  * @returns The PRF provider instance
  */
 export async function buildPrfProvider(
   provider: PasskeyProvider,
   dataDir: string,
-): Promise<{ derivePrfSeed: (salt: string) => Promise<ArrayBuffer>; isPrfAvailable: () => Promise<boolean> }> {
+  rpid?: string,
+): Promise<PrfProvider> {
   switch (provider) {
     case PasskeyProvider.Platform:
-      return new PlatformPasskeyProvider()
+      // The built-in provider's TS types are Uint8Array-based; the SDK's
+      // PrfProvider interface is ArrayBuffer-based. The cast bridges that
+      // surface difference, same as the RN passkey snippet.
+      return new PlatformPasskeyProvider({
+        rpId: rpid ?? PlatformPasskeyProvider.BREEZ_RP_ID,
+        rpName: 'Breez SDK CLI',
+      }) as unknown as PrfProvider
     case PasskeyProvider.File:
       return FilePrfProvider.create(dataDir)
     case PasskeyProvider.YubiKey:
@@ -246,29 +281,13 @@ export async function buildPrfProvider(
 // ---------------------------------------------------------------------------
 
 /**
- * Check if an error indicates the user needs to create a passkey.
- */
-function isPasskeyCreationNeeded(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error)
-  // Also check the error code (RN native modules set .code on rejections)
-  const code = (error as { code?: string })?.code ?? ''
-  const combined = `${code} ${msg}`.toLowerCase()
-  return combined.includes('cancelled')
-    || combined.includes('canceled')
-    || combined.includes('no_credential')
-    || combined.includes('nocredential')
-    || combined.includes('not found')
-    || combined.includes('no credentials')
-}
-
-/**
- * Resolve a wallet seed using the given PRF provider via the SDK's Passkey
- * wrapper. The wrapper handles PRF→12-word BIP39 mnemonic derivation, and
- * Nostr label storage / discovery, matching the WASM, Go, Python, and Rust CLIs.
+ * Resolve a wallet seed using the given PRF provider via PasskeyClient. The
+ * client handles PRF -> 12-word BIP39 mnemonic derivation and Nostr label
+ * storage / discovery, matching the Go, Python, and Rust CLIs.
  *
- * For Platform providers: if the user cancels or has no credential, this
- * automatically calls createPasskey() and retries: matching the glow-web
- * onboarding flow.
+ * Uses connectWithPasskey (silent sign-in, falling through to registration on
+ * the Platform provider when no credential exists): the file / YubiKey / FIDO2
+ * backends always resolve via the sign-in path.
  *
  * @param provider - The PRF provider to use
  * @param breezApiKey - Optional Breez API key (enables NIP-42 auth on the Breez relay)
@@ -279,60 +298,34 @@ function isPasskeyCreationNeeded(error: unknown): boolean {
  *          labels is populated when listLabels is true
  */
 export async function resolvePasskeySeed(
-  provider: {
-    derivePrfSeed: (salt: string) => Promise<ArrayBuffer>
-    isPrfAvailable: () => Promise<boolean>
-    createPasskey?: (excludeCredentials?: Uint8Array[]) => Promise<unknown>
-  },
+  provider: PrfProvider,
   breezApiKey: string | undefined,
   label: string | undefined,
   listLabels: boolean,
   storeLabel: boolean,
 ): Promise<{ seed: SeedType; labels?: string[] }> {
-  const relayConfig: NostrRelayConfig = { breezApiKey, timeoutSecs: undefined }
-  // The Passkey constructor accepts any object implementing the
-  // PrfProvider shape (derivePrfSeed + isPrfAvailable). FilePrfProvider,
-  // NotYetSupportedProvider, and the built-in PasskeyProvider all satisfy
-  // this, same trick the WASM CLI uses (see langs/wasm/src/passkey.js).
-  const passkey = new Passkey(provider as unknown as PrfProvider, relayConfig)
+  const passkey = new PasskeyClient(provider, breezApiKey, undefined)
 
-  const runFlow = async (): Promise<{ seed: SeedType; labels?: string[] }> => {
-    let returnedLabels: string[] | undefined
-
-    // --store-label: publish to Nostr
-    if (storeLabel && label) {
-      await passkey.storeLabel(label)
-    }
-
-    // --list-labels: query Nostr for all labels published by this identity
-    let resolvedLabel = label
-    if (listLabels) {
-      const labels = await passkey.listLabels()
-      returnedLabels = labels
-      // App.tsx currently does not prompt for selection; default to the
-      // explicit label if provided, otherwise the first discovered label.
-      resolvedLabel = label ?? labels[0]
-    }
-
-    const wallet = await passkey.getWallet(resolvedLabel)
-    return { seed: wallet.seed, labels: returnedLabels }
+  // --store-label: publish to Nostr
+  if (storeLabel && label) {
+    await passkey.labels().store(label)
   }
 
-  try {
-    return await runFlow()
-  } catch (firstError) {
-    const errCode = (firstError as { code?: string })?.code ?? 'unknown'
-    const errMsg = firstError instanceof Error ? firstError.message : String(firstError)
-    console.log(`[Passkey] First attempt failed: code=${errCode}, message=${errMsg}`)
-    console.log(`[Passkey] Creation needed: ${isPasskeyCreationNeeded(firstError)}, hasCreate: ${!!provider.createPasskey}`)
-
-    // If user cancelled or no credential, try creating a new passkey then retry the flow.
-    if (isPasskeyCreationNeeded(firstError) && provider.createPasskey) {
-      console.log('[Passkey] No existing credential, creating new passkey...')
-      await provider.createPasskey()
-      console.log('[Passkey] Passkey created, deriving seed...')
-      return await runFlow()
-    }
-    throw firstError
+  // --list-labels: query Nostr for all labels published by this identity.
+  // App.tsx does not prompt for selection; default to the explicit label if
+  // provided, otherwise the first discovered label.
+  let returnedLabels: string[] | undefined
+  let resolvedLabel = label
+  if (listLabels) {
+    const labels = await passkey.labels().list()
+    returnedLabels = labels
+    resolvedLabel = label ?? labels[0]
   }
+
+  const response = await passkey.connectWithPasskey({
+    label: resolvedLabel,
+    allowCredentials: [],
+    excludeCredentials: [],
+  })
+  return { seed: response.wallet.seed, labels: returnedLabels }
 }

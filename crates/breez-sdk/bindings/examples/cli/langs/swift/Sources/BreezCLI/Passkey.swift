@@ -83,7 +83,7 @@ class FilePrfProvider: PrfProvider {
 
     func isSupported() async throws -> Bool { true }
 
-    func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
+    func createPasskey(excludeCredentials: [Data]) async throws -> PasskeyCredential {
         throw PrfProviderError.Generic(
             "File-backed PRF provider does not implement create-credential; " +
             "use sign-in by label instead."
@@ -93,12 +93,6 @@ class FilePrfProvider: PrfProvider {
     func checkDomainAssociation() async throws -> DomainAssociation {
         .skipped(reason: "FilePrfProvider does not verify domain association")
     }
-
-    // CredentialRegistry hooks are no-ops: this provider doesn't track
-    // credential IDs (no real WebAuthn ceremonies happen here).
-    func getKnownCredentialIds() async throws -> [Data] { [] }
-    func removeKnownCredentialId(id: Data) async throws {}
-    func clearKnownCredentialIds() async throws {}
 }
 
 // MARK: - YubiKey PRF provider (skeleton)
@@ -121,17 +115,13 @@ class YubiKeyPrfProvider: PrfProvider {
 
     func isSupported() async throws -> Bool { false }
 
-    func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
+    func createPasskey(excludeCredentials: [Data]) async throws -> PasskeyCredential {
         throw notYet()
     }
 
     func checkDomainAssociation() async throws -> DomainAssociation {
         .skipped(reason: "YubiKeyPrfProvider does not verify domain association")
     }
-
-    func getKnownCredentialIds() async throws -> [Data] { [] }
-    func removeKnownCredentialId(id: Data) async throws {}
-    func clearKnownCredentialIds() async throws {}
 }
 
 // MARK: - FIDO2 PRF provider (skeleton)
@@ -154,17 +144,13 @@ class Fido2PrfProvider: PrfProvider {
 
     func isSupported() async throws -> Bool { false }
 
-    func createPasskey(excludeCredentials: [Data]) async throws -> RegisteredCredential {
+    func createPasskey(excludeCredentials: [Data]) async throws -> PasskeyCredential {
         throw notYet()
     }
 
     func checkDomainAssociation() async throws -> DomainAssociation {
         .skipped(reason: "Fido2PrfProvider does not verify domain association")
     }
-
-    func getKnownCredentialIds() async throws -> [Data] { [] }
-    func removeKnownCredentialId(id: Data) async throws {}
-    func clearKnownCredentialIds() async throws {}
 }
 
 // MARK: - Provider factory

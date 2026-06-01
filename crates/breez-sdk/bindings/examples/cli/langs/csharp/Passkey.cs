@@ -138,7 +138,7 @@ public class FilePrfProvider : PrfProvider
 
     public Task<bool> IsSupported() => Task.FromResult(true);
 
-    public Task<RegisteredCredential> CreatePasskey(byte[][] excludeCredentials)
+    public Task<PasskeyCredential> CreatePasskey(byte[][] excludeCredentials)
     {
         throw new NotSupportedException(
             "File-backed PRF provider does not implement create-credential; " +
@@ -148,15 +148,6 @@ public class FilePrfProvider : PrfProvider
     public Task<DomainAssociation> CheckDomainAssociation() =>
         Task.FromResult<DomainAssociation>(
             new DomainAssociation.Skipped("FilePrfProvider does not verify domain association"));
-
-    // CredentialRegistry hooks are no-ops: this provider doesn't track
-    // credential IDs (no real WebAuthn ceremonies happen here).
-    public Task<byte[][]> GetKnownCredentialIds() =>
-        Task.FromResult(Array.Empty<byte[]>());
-
-    public Task RemoveKnownCredentialId(byte[] credentialId) => Task.CompletedTask;
-
-    public Task ClearKnownCredentialIds() => Task.CompletedTask;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,17 +173,11 @@ public class NotYetSupportedProvider : PrfProvider
 
     public Task<bool> IsSupported() => throw NotYet();
 
-    public Task<RegisteredCredential> CreatePasskey(byte[][] excludeCredentials) => throw NotYet();
+    public Task<PasskeyCredential> CreatePasskey(byte[][] excludeCredentials) => throw NotYet();
 
     public Task<DomainAssociation> CheckDomainAssociation() =>
         Task.FromResult<DomainAssociation>(
             new DomainAssociation.Skipped($"{_name} does not verify domain association"));
-
-    public Task<byte[][]> GetKnownCredentialIds() => Task.FromResult(Array.Empty<byte[]>());
-
-    public Task RemoveKnownCredentialId(byte[] credentialId) => Task.CompletedTask;
-
-    public Task ClearKnownCredentialIds() => Task.CompletedTask;
 }
 
 // ---------------------------------------------------------------------------

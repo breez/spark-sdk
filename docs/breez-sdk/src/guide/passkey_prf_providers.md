@@ -2,7 +2,7 @@
 
 The built-in {{#name PasskeyProvider}} covers the common case. Reach for this page when:
 
-- You need fine-grained `PasskeyProvider` options (custom `userName`, [CredentialRegistry](./passkey_credential_registry.md), etc.).
+- You need fine-grained `PasskeyProvider` options (custom `userName`, `userDisplayName`, etc.).
 - You're integrating Python, Go, or C# (no built-in `PasskeyProvider` ships for those bindings).
 - You need a custom `PrfProvider` (CLI YubiKey, FIDO2, air-gapped backup file, hardware module).
 
@@ -16,7 +16,6 @@ In addition to `rpId` and `rpName`, the `PasskeyProvider` constructor accepts:
 | {{#name rp_name}} | **required** | Maps to the WebAuthn `rp.name`. Required by current OS prompts (deprecated in WebAuthn L3 but still enforced everywhere). Surfaces in some credential-management UIs (iCloud Keychain, Google Password Manager, 1Password); platform UIs increasingly ignore it. Set at registration only; changing it does not affect existing credentials. |
 | {{#name user_name}} | {{#name rp_name}} | Maps to the WebAuthn `user.name`. Treated as the user's unique identifier for the credential and shown in the OS account picker during sign-in. Pass a stable per-user value if each registration should surface as a distinct entry (Apple's Passwords app, in particular, dedupes credentials by `(rpId, user.name)`; iOS additionally treats this as the only label exposed by `ASAuthorizationPlatformPublicKeyCredentialProvider`). Registration-only. |
 | {{#name user_display_name}} | {{#name user_name}} | Maps to the WebAuthn `user.displayName`. The user-friendly label the OS / browser MAY (but is not required to) show in the picker; Android Credential Manager and the WebAuthn L3 picker surface it, iOS ignores. Registration-only. |
-| {{#name credential_registry}} | none | Opt-in app-side store of known credential IDs. See [CredentialRegistry](./passkey_credential_registry.md). |
 
 <div class="warning">
 <h4>C# / Go / Python limitation</h4>

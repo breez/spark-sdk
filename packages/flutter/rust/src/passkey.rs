@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
     ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, DeriveSeedsOutput, DeriveSeedsRequest,
-    PasskeyAvailability, PasskeyConfig, PasskeyError, PrfProvider, PrfProviderError, RegisterRequest,
-    RegisterResponse, RegisteredCredential, SignInRequest, SignInResponse,
+    PasskeyAvailability, PasskeyConfig, PasskeyCredential, PasskeyError, PrfProvider,
+    PrfProviderError, RegisterRequest, RegisterResponse, SignInRequest, SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -19,9 +19,7 @@ fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
 
 /// Wraps Dart callbacks as a [`PrfProvider`] implementation. Each
 /// callback returns a Result so Dart-side throws (e.g.
-/// `PasskeyPrfException`) propagate cleanly. The known-credential
-/// callbacks back `PasskeyClient.credentials()`; hosts without a
-/// registry can have them resolve to empty / no-op on the Dart side.
+/// `PasskeyPrfException`) propagate cleanly.
 struct CallbackPrfProvider {
     /// Bulk PRF callback. Single OS ceremony for N salts on platforms
     /// that support the WebAuthn dual-salt fast path (saltInput1 +
@@ -33,14 +31,8 @@ struct CallbackPrfProvider {
         dyn Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<DeriveSeedsOutput>> + Send + Sync,
     >,
     is_supported_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync>,
-    create_passkey_fn: Arc<
-        dyn Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<RegisteredCredential>> + Send + Sync,
-    >,
-    get_known_credential_ids_fn:
-        Arc<dyn Fn() -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>> + Send + Sync>,
-    remove_known_credential_id_fn:
-        Arc<dyn Fn(Vec<u8>) -> DartFnFuture<anyhow::Result<()>> + Send + Sync>,
-    clear_known_credential_ids_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<()>> + Send + Sync>,
+    create_passkey_fn:
+        Arc<dyn Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<PasskeyCredential>> + Send + Sync>,
 }
 
 /// Convert a Dart-thrown error into a [`PrfProviderError`]. The Dart
@@ -94,32 +86,8 @@ impl PrfProvider for CallbackPrfProvider {
     async fn create_passkey(
         &self,
         exclude_credentials: Vec<Vec<u8>>,
-    ) -> Result<RegisteredCredential, PrfProviderError> {
+    ) -> Result<PasskeyCredential, PrfProviderError> {
         let result = AssertUnwindSafe((self.create_passkey_fn)(exclude_credentials))
-            .catch_unwind()
-            .await
-            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
-        result.map_err(dart_error_to_prf)
-    }
-
-    async fn get_known_credential_ids(&self) -> Result<Vec<Vec<u8>>, PrfProviderError> {
-        let result = AssertUnwindSafe((self.get_known_credential_ids_fn)())
-            .catch_unwind()
-            .await
-            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
-        result.map_err(dart_error_to_prf)
-    }
-
-    async fn remove_known_credential_id(&self, id: Vec<u8>) -> Result<(), PrfProviderError> {
-        let result = AssertUnwindSafe((self.remove_known_credential_id_fn)(id))
-            .catch_unwind()
-            .await
-            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
-        result.map_err(dart_error_to_prf)
-    }
-
-    async fn clear_known_credential_ids(&self) -> Result<(), PrfProviderError> {
-        let result = AssertUnwindSafe((self.clear_known_credential_ids_fn)())
             .catch_unwind()
             .await
             .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
@@ -138,9 +106,7 @@ pub struct PasskeyClient {
 impl PasskeyClient {
     /// Construct using Dart callbacks for the underlying `PrfProvider`.
     /// Hosts that don't drive registration can have `create_passkey`
-    /// throw `PrfProviderError.PrfNotSupported` on the Dart side. The
-    /// three known-credential callbacks back `PasskeyClient.credentials()`;
-    /// hosts without a registry can return empty / no-op.
+    /// throw `PrfProviderError.PrfNotSupported` on the Dart side.
     #[frb(sync)]
     pub fn new(
         derive_seeds: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<DeriveSeedsOutput>>
@@ -148,19 +114,7 @@ impl PasskeyClient {
         + Sync
         + 'static,
         is_supported: impl Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync + 'static,
-        create_passkey: impl Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<RegisteredCredential>>
-        + Send
-        + Sync
-        + 'static,
-        get_known_credential_ids: impl Fn() -> DartFnFuture<anyhow::Result<Vec<Vec<u8>>>>
-        + Send
-        + Sync
-        + 'static,
-        remove_known_credential_id: impl Fn(Vec<u8>) -> DartFnFuture<anyhow::Result<()>>
-        + Send
-        + Sync
-        + 'static,
-        clear_known_credential_ids: impl Fn() -> DartFnFuture<anyhow::Result<()>>
+        create_passkey: impl Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<PasskeyCredential>>
         + Send
         + Sync
         + 'static,
@@ -171,9 +125,6 @@ impl PasskeyClient {
             derive_seeds_fn: Arc::new(derive_seeds),
             is_supported_fn: Arc::new(is_supported),
             create_passkey_fn: Arc::new(create_passkey),
-            get_known_credential_ids_fn: Arc::new(get_known_credential_ids),
-            remove_known_credential_id_fn: Arc::new(remove_known_credential_id),
-            clear_known_credential_ids_fn: Arc::new(clear_known_credential_ids),
         });
         Self {
             inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, breez_api_key, config),
@@ -217,15 +168,6 @@ impl PasskeyClient {
             inner: self.inner.labels(),
         }
     }
-
-    /// Credential sub-object: inspect / mutate the provider's persisted
-    /// credential-ID set.
-    #[frb(sync)]
-    pub fn credentials(&self) -> PasskeyCredentials {
-        PasskeyCredentials {
-            inner: self.inner.credentials(),
-        }
-    }
 }
 
 /// Label sub-object surfaced from [`PasskeyClient::labels`].
@@ -244,30 +186,6 @@ impl PasskeyLabels {
     /// Idempotently publish `label`.
     pub async fn store(&self, label: String) -> Result<(), PasskeyError> {
         self.inner.store(label).await
-    }
-}
-
-/// Credential sub-object surfaced from [`PasskeyClient::credentials`].
-#[derive(Clone)]
-#[frb(opaque)]
-pub struct PasskeyCredentials {
-    pub(crate) inner: Arc<breez_sdk_spark::passkey::PasskeyCredentials>,
-}
-
-impl PasskeyCredentials {
-    /// Read the persisted set of credential IDs for the current RP.
-    pub async fn get(&self) -> Result<Vec<Vec<u8>>, PasskeyError> {
-        self.inner.get().await
-    }
-
-    /// Drop a single credential ID from the persisted set.
-    pub async fn remove(&self, credential_id: Vec<u8>) -> Result<(), PasskeyError> {
-        self.inner.remove(credential_id).await
-    }
-
-    /// Clear the persisted credential-ID set for the current RP.
-    pub async fn clear(&self) -> Result<(), PasskeyError> {
-        self.inner.clear().await
     }
 }
 
@@ -294,11 +212,8 @@ mod tests {
             derive_seeds_fn: Arc::new(derive_bulk),
             is_supported_fn: Arc::new(is_available),
             create_passkey_fn: Arc::new(|_req| {
-                panicking::<anyhow::Result<RegisteredCredential>>("create_passkey not used")
+                panicking::<anyhow::Result<PasskeyCredential>>("create_passkey not used")
             }),
-            get_known_credential_ids_fn: Arc::new(|| ready(Ok(vec![]))),
-            remove_known_credential_id_fn: Arc::new(|_id| ready(Ok(()))),
-            clear_known_credential_ids_fn: Arc::new(|| ready(Ok(()))),
         }
     }
 

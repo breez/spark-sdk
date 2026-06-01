@@ -56,12 +56,11 @@ pub use derivation::ACCOUNT_MASTER_SALT;
 use derivation::prf_to_mnemonic;
 pub use error::{ErrorKind, PasskeyError, PrfProviderError};
 pub use models::{
-    DeriveSeedsOutput, PasskeyConfig, RegisteredCredential, SetupWalletRequest, Wallet, WalletSetup,
+    DeriveSeedsOutput, PasskeyConfig, PasskeyCredential, SetupWalletRequest, Wallet, WalletSetup,
 };
 pub use passkey_client::{
     ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, PasskeyAvailability, PasskeyClient,
-    PasskeyCredentials, PasskeyLabels, RegisterRequest, RegisterResponse, SignInRequest,
-    SignInResponse,
+    PasskeyLabels, RegisterRequest, RegisterResponse, SignInRequest, SignInResponse,
 };
 pub use passkey_prf_provider::{DeriveSeedsRequest, DomainAssociation, PrfProvider};
 
