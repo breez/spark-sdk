@@ -8,11 +8,13 @@ The External Signer feature allows you to provide custom signing logic for the S
 
 ## Using the Default External Signer
 
-The SDK provides a convenient factory function {{#name default_external_signer}} that creates a signer from a mnemonic. This is the easiest way to get started:
+The external signer interface is split into two parts: an `ExternalBreezSigner` for SDK-layer signing (LNURL-auth, sync, message signing, ECIES) and an `ExternalSparkSigner` for the Spark wallet flows (transfers, claims, FROST signing, deposits).
+
+The SDK provides a convenient factory function {{#name default_external_signer}} that creates the `ExternalBreezSigner` from a mnemonic:
 
 {{#tabs external_signer:default-external-signer}}
 
-Once you have a signer, you can use it when connecting to the SDK with the {{#name connect_with_signer}} method instead of the regular {{#name connect}} method:
+Connecting also requires an `ExternalSparkSigner`. Provide both signers to the {{#name connect_with_signer}} method instead of the regular {{#name connect}} method:
 
 {{#tabs external_signer:connect-with-signer}}
 
@@ -23,7 +25,7 @@ When using an external signer, you don't provide a seed directly to the SDK. Ins
 
 ## Implementing a Custom Signer
 
-If you need full control over the signing process, you can implement the [ExternalSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/external.rs) interface in your application. This interface defines all the cryptographic operations the SDK needs.
+If you need full control over the signing process, you can implement the [ExternalBreezSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/external.rs) and [ExternalSparkSigner](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/core/src/signer/external_spark.rs) interfaces in your application. These interfaces define all the cryptographic operations the SDK needs.
 
 The [DefaultSigner](https://github.com/breez/spark-sdk/blob/main/crates/spark/src/signer/default_signer.rs) implementation can be used as a reference for what's expected.
 

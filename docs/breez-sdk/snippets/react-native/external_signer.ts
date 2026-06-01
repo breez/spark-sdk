@@ -5,7 +5,7 @@ import {
   Network,
   KeySetType
 } from '@breeztech/breez-sdk-spark-react-native'
-import type { KeySetConfig } from '@breeztech/breez-sdk-spark-react-native'
+import type { ExternalSparkSigner, KeySetConfig } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
 
 // ANCHOR: default-external-signer
@@ -25,15 +25,19 @@ const createSigner = () => {
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-const exampleConnectWithSigner = async (signer: ReturnType<typeof defaultExternalSigner>) => {
+const exampleConnectWithSigner = async (
+  signer: ReturnType<typeof defaultExternalSigner>,
+  sparkSigner: ExternalSparkSigner
+) => {
   // Create the config
   const config = defaultConfig(Network.Mainnet)
   config.apiKey = '<breez api key>'
 
-  // Connect using the external signer
+  // Connect using the external signers
   const sdk = await connectWithSigner({
     config,
     signer,
+    sparkSigner,
     storageDir: `${RNFS.DocumentDirectoryPath}/data`
   })
 }

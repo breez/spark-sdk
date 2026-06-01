@@ -3,7 +3,7 @@ import BreezSdkSpark
 
 class ExternalSignerSnippets {
     // ANCHOR: default-external-signer
-    func createSigner() throws -> ExternalSigner {
+    func createSigner() throws -> ExternalBreezSigner {
         let mnemonic = "<mnemonic words>"
         let network = Network.mainnet
         
@@ -23,15 +23,16 @@ class ExternalSignerSnippets {
     // ANCHOR_END: default-external-signer
     
     // ANCHOR: connect-with-signer
-    func connectExample(signer: ExternalSigner) async throws -> BreezSdk {
+    func connectExample(signer: ExternalBreezSigner, sparkSigner: ExternalSparkSigner) async throws -> BreezSdk {
         // Create the config
         var config = defaultConfig(network: .mainnet)
         config.apiKey = "<breez api key>"
-        
-        // Connect using the external signer
+
+        // Connect using the external signers
         let sdk = try await BreezSdkSpark.connectWithSigner(request: ConnectWithSignerRequest(
             config: config,
             signer: signer,
+            sparkSigner: sparkSigner,
             storageDir: "./.data"
         ))
         
