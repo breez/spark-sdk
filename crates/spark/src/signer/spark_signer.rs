@@ -34,6 +34,8 @@ use crate::tree::{TreeNode, TreeNodeId};
 /// share-encryption.
 #[derive(Debug, Clone)]
 pub struct OperatorRecipient {
+    /// Numeric operator id; determines the Feldman share index (`id + 1`).
+    pub id: usize,
     /// FROST identifier (e.g. 0x000...01).
     pub identifier: Identifier,
     /// The operator's ECIES / identity public key.

@@ -3,6 +3,7 @@ mod error;
 mod models;
 mod secret_sharing;
 mod spark_signer;
+mod spark_signer_adapter;
 
 use crate::tree::TreeNodeId;
 use bitcoin::secp256k1::ecdsa::Signature;
@@ -13,6 +14,7 @@ pub use default_signer::{DefaultSigner, DefaultSignerError, KeySet, KeySetType};
 pub use error::SignerError;
 pub use models::*;
 pub use spark_signer::*;
+pub use spark_signer_adapter::SparkSignerAdapter;
 
 #[cfg(test)]
 pub(crate) use default_signer::tests::create_test_signer;
