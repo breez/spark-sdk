@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::{PublicKey, ecdsa::Signature};
+use bitcoin::secp256k1::PublicKey;
 use bitcoin::{Sequence, Transaction};
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::SigningCommitments;
@@ -17,13 +17,6 @@ use crate::utils::htlc_transactions::{
 };
 use crate::utils::transactions::{RefundTransactions, create_refund_txs};
 use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
-
-#[derive(Clone, Debug, Default)]
-pub struct RefundSignatures {
-    pub cpfp_signatures: HashMap<TreeNodeId, Signature>,
-    pub direct_signatures: HashMap<TreeNodeId, Signature>,
-    pub direct_from_cpfp_signatures: HashMap<TreeNodeId, Signature>,
-}
 
 pub struct RefundTxConstructor<'a> {
     pub node: &'a TreeNode,

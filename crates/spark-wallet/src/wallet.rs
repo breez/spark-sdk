@@ -312,6 +312,7 @@ impl SparkWallet {
             Arc::clone(&transfer_service),
             config.network,
             Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             transfer_observer.clone(),
         ));
         let unilateral_exit_service = Arc::new(UnilateralExitService::new(

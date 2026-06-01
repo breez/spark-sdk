@@ -11,27 +11,20 @@ use crate::services::models::{
     LeafKeyTweak, Transfer, map_signing_nonce_commitments, split_signing_commitments_by_variant,
 };
 use crate::services::{TransferId, TransferObserver, TransferStatus};
-use crate::signer::{
-    FrostSigningCommitmentsWithNonces, SecretSource, SecretToSplit, VerifiableSecretShare,
-};
+use crate::signer::{FrostSigningCommitmentsWithNonces, SecretSource};
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::paging::{PagingFilter, PagingResult, pager};
 use crate::utils::refund::{
-    RefundSignatures, SignRefundsParams, SignedRefundTransactions, prepare_refund_so_signing_jobs,
-    sign_refunds,
+    SignRefundsParams, SignedRefundTransactions, prepare_refund_so_signing_jobs, sign_refunds,
 };
-use crate::utils::tagged_hasher::TaggedHasher;
 use crate::utils::time::web_time_to_prost_timestamp;
 
 use bitcoin::Transaction;
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::ecdsa::Signature;
-use bitcoin::secp256k1::{PublicKey, SecretKey};
+use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::Identifier;
-use k256::Scalar;
 use platform_utils::time::SystemTime;
 use platform_utils::tokio;
-use prost::Message as ProstMessage;
 use tracing::{debug, error, trace, warn};
 
 use crate::{
@@ -266,172 +259,6 @@ impl TransferService {
         transfer.try_into()
     }
 
-    pub(crate) async fn prepare_send_transfer_key_tweaks(
-        &self,
-        transfer_id: &TransferId,
-        receiver_public_key: &PublicKey,
-        leaves: &[LeafKeyTweak],
-        refund_signatures: RefundSignatures,
-    ) -> Result<HashMap<Identifier, Vec<operator_rpc::spark::SendLeafKeyTweak>>, ServiceError> {
-        let mut leaves_tweaks_map = HashMap::new();
-
-        for leaf in leaves {
-            let cpfp_refund_signature = refund_signatures
-                .cpfp_signatures
-                .get(&leaf.node.id)
-                .cloned();
-            let direct_refund_signature = refund_signatures
-                .direct_signatures
-                .get(&leaf.node.id)
-                .cloned();
-            let direct_from_cpfp_refund_signature = refund_signatures
-                .direct_from_cpfp_signatures
-                .get(&leaf.node.id)
-                .cloned();
-
-            let leaf_tweaks_map = self
-                .prepare_single_send_transfer_key_tweak(
-                    transfer_id,
-                    leaf,
-                    receiver_public_key,
-                    cpfp_refund_signature,
-                    direct_refund_signature,
-                    direct_from_cpfp_refund_signature,
-                )
-                .await?;
-
-            // Merge the leaf tweaks into the main map
-            for (identifier, leaf_tweak) in leaf_tweaks_map {
-                leaves_tweaks_map
-                    .entry(identifier)
-                    .or_insert_with(Vec::new)
-                    .push(leaf_tweak);
-            }
-        }
-
-        Ok(leaves_tweaks_map)
-    }
-
-    /// Prepares a single leaf key tweak for transfer
-    async fn prepare_single_send_transfer_key_tweak(
-        &self,
-        transfer_id: &TransferId,
-        leaf: &LeafKeyTweak,
-        receiver_public_key: &PublicKey,
-        cpfp_refund_signature: Option<Signature>,
-        direct_refund_signature: Option<Signature>,
-        direct_from_cpfp_refund_signature: Option<Signature>,
-    ) -> Result<HashMap<Identifier, operator_rpc::spark::SendLeafKeyTweak>, ServiceError> {
-        // Calculate the key tweak by subtracting keys
-        let privkey_tweak = self
-            .signer
-            .subtract_secrets(&leaf.signing_key, &leaf.new_signing_key)
-            .await?;
-
-        // Split the secret into threshold shares with proofs
-        let shares = self
-            .signer
-            .split_secret_with_proofs(
-                &SecretToSplit::SecretSource(privkey_tweak),
-                self.split_secret_threshold,
-                self.operator_pool.len(),
-            )
-            .await?;
-
-        trace!(
-            "prepare transfer: Split secret into {} shares",
-            shares.len()
-        );
-
-        // TODO: move secp to a field of self to avoid creating it every time
-        let secp = bitcoin::secp256k1::Secp256k1::new();
-        // Create pubkey shares tweak map
-        let mut pubkey_shares_tweak = HashMap::new();
-        for operator in self.operator_pool.get_all_operators() {
-            let operator_identifier = hex::encode(operator.identifier.serialize());
-
-            let share = find_share(&shares, operator.id).ok_or_else(|| {
-                ServiceError::Generic(format!("Share not found for operator {}", operator.id))
-            })?;
-            trace!("Found share for operator {}: {:?}", operator.id, share);
-
-            let pubkey_tweak = SecretKey::from_slice(&share.secret_share.share.to_bytes())
-                .map_err(|_| ServiceError::Generic("Invalid secret share".to_string()))?
-                .public_key(&secp);
-            pubkey_shares_tweak.insert(operator_identifier, pubkey_tweak.serialize().to_vec());
-        }
-
-        // Encrypt the leaf private key for the receiver
-        let secret_cipher = match &leaf.new_signing_key {
-            SecretSource::Derived(_) => {
-                return Err(ServiceError::Generic(
-                    "Trying to share derived private key".to_string(),
-                ));
-            }
-            SecretSource::Encrypted(private_key) => {
-                self.signer
-                    .encrypt_secret_for_receiver(private_key, receiver_public_key)
-                    .await?
-            }
-        };
-
-        // Create the signing payload: leaf_id || transfer_id || secret_cipher
-        let mut payload = Vec::new();
-        payload.extend_from_slice(leaf.node.id.to_string().as_bytes());
-        payload.extend_from_slice(transfer_id.to_string().as_bytes());
-        payload.extend_from_slice(&secret_cipher);
-
-        // Sign the hash with identity key
-        let signature = self
-            .signer
-            .sign_message_ecdsa_with_identity_key(&payload)
-            .await?;
-
-        trace!(
-            "Prepared leaf key tweak for transfer: leaf_id={}, transfer_id={}, signature={}",
-            leaf.node.id,
-            transfer_id,
-            hex::encode(signature.serialize_compact())
-        );
-
-        // Create leaf tweaks map for each signing operator
-        let mut leaf_tweaks_map = HashMap::new();
-
-        for operator in self.operator_pool.get_all_operators() {
-            let share = find_share(&shares, operator.id).ok_or_else(|| {
-                ServiceError::Generic(format!("Share not found for operator {}", operator.id))
-            })?;
-
-            let send_leaf_key_tweak = operator_rpc::spark::SendLeafKeyTweak {
-                leaf_id: leaf.node.id.to_string(),
-                secret_share_tweak: Some(operator_rpc::spark::SecretShare {
-                    secret_share: share.secret_share.share.to_bytes().to_vec(),
-                    proofs: share
-                        .proofs
-                        .iter()
-                        .map(|p| p.to_sec1_bytes().to_vec())
-                        .collect(),
-                }),
-                pubkey_shares_tweak: pubkey_shares_tweak.clone(),
-                secret_cipher: secret_cipher.clone(),
-                signature: signature.serialize_compact().to_vec(),
-                refund_signature: cpfp_refund_signature
-                    .map(|s| s.serialize_compact().to_vec())
-                    .unwrap_or_default(),
-                direct_refund_signature: direct_refund_signature
-                    .map(|s| s.serialize_compact().to_vec())
-                    .unwrap_or_default(),
-                direct_from_cpfp_refund_signature: direct_from_cpfp_refund_signature
-                    .map(|s| s.serialize_compact().to_vec())
-                    .unwrap_or_default(),
-            };
-
-            leaf_tweaks_map.insert(operator.identifier, send_leaf_key_tweak);
-        }
-
-        Ok(leaf_tweaks_map)
-    }
-
     pub(crate) async fn prepare_transfer_package(
         &self,
         transfer_id: &TransferId,
@@ -540,6 +367,11 @@ impl TransferService {
         })
     }
 
+    /// The Feldman-split threshold this service is configured with.
+    pub(crate) fn split_secret_threshold(&self) -> u32 {
+        self.split_secret_threshold
+    }
+
     /// Builds the operator-recipient list for share-encryption from the pool.
     fn operator_recipients(&self) -> Vec<OperatorRecipient> {
         self.operator_pool
@@ -590,101 +422,6 @@ impl TransferService {
             },
             cpfp_signed_txs: prepared_package.cpfp_signed_txs,
         })
-    }
-
-    /// Encrypts key tweaks for each signing operator using their identity public keys
-    pub(crate) fn encrypt_key_tweaks(
-        &self,
-        key_tweak_input_map: &HashMap<Identifier, Vec<operator_rpc::spark::SendLeafKeyTweak>>,
-    ) -> Result<HashMap<Identifier, Vec<u8>>, ServiceError> {
-        let mut encrypted_key_tweaks = HashMap::new();
-
-        for (key, value) in key_tweak_input_map {
-            // Create the protobuf message to encrypt
-            let proto_to_encrypt = operator_rpc::spark::SendLeafKeyTweaks {
-                leaves_to_send: value.clone(),
-            };
-
-            let proto_to_encrypt_binary = proto_to_encrypt.encode_to_vec();
-
-            // Get the operator by identifier
-            let operator_client = self
-                .operator_pool
-                .get_operator_by_identifier(key)
-                .ok_or_else(|| ServiceError::Generic("Operator not found".to_string()))?;
-
-            // Encrypt the binary data using the operator's identity public key
-            let encrypted_proto = self.encrypt_with_public_key(
-                &operator_client.identity_public_key,
-                &proto_to_encrypt_binary,
-            )?;
-
-            encrypted_key_tweaks.insert(*key, encrypted_proto);
-        }
-
-        Ok(encrypted_key_tweaks)
-    }
-
-    /// Encrypts data using ECIES with the given public key
-    fn encrypt_with_public_key(
-        &self,
-        public_key: &PublicKey,
-        data: &[u8],
-    ) -> Result<Vec<u8>, ServiceError> {
-        // Convert bitcoin PublicKey to the format expected by ecies crate
-        let public_key_bytes = public_key.serialize_uncompressed();
-
-        // Use ECIES to encrypt the data
-        utils::ecies::encrypt(&public_key_bytes, data)
-            .map_err(|e| ServiceError::Generic(format!("ECIES encryption failed: {e}")))
-    }
-
-    pub(crate) async fn sign_transfer_package(
-        &self,
-        transfer_id: &TransferId,
-        transfer_package: operator_rpc::spark::TransferPackage,
-    ) -> Result<operator_rpc::spark::TransferPackage, ServiceError> {
-        let signing_payload =
-            self.get_transfer_package_signing_payload(transfer_id, &transfer_package)?;
-
-        let signature = self
-            .signer
-            .sign_message_ecdsa_with_identity_key(&signing_payload)
-            .await
-            .map_err(ServiceError::SignerError)?;
-
-        // Create a new transfer package with the signature
-        let mut signed_package = transfer_package;
-        signed_package.user_signature = signature.serialize_der().to_vec();
-
-        Ok(signed_package)
-    }
-
-    /// Creates the signing payload for a transfer package using tagged hashing.
-    /// Uses V2 structured hashing with domain tag for collision resistance.
-    fn get_transfer_package_signing_payload(
-        &self,
-        transfer_id: &TransferId,
-        transfer_package: &operator_rpc::spark::TransferPackage,
-    ) -> Result<Vec<u8>, ServiceError> {
-        let transfer_id_bytes =
-            hex::decode(transfer_id.to_string().replace('-', "")).map_err(|e| {
-                ServiceError::ValidationError(format!("Failed to decode transfer ID: {e}"))
-            })?;
-
-        // Convert HashMap to BTreeMap for deterministic ordering
-        let key_tweak_package: std::collections::BTreeMap<String, Vec<u8>> = transfer_package
-            .key_tweak_package
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
-        let signable_message = TaggedHasher::new(&["spark", "transfer", "signing payload"])
-            .add_bytes(&transfer_id_bytes)
-            .add_map_string_to_bytes(&key_tweak_package)
-            .signable_message();
-
-        Ok(signable_message)
     }
 
     /// Claims a transfer with retry logic and automatic leaf preparation.
@@ -1379,23 +1116,4 @@ impl TransferService {
             None => Ok(None),
         }
     }
-}
-
-fn find_share(
-    shares: &[VerifiableSecretShare],
-    operator_id: usize,
-) -> Option<&VerifiableSecretShare> {
-    let target_share_index = Scalar::from((operator_id + 1) as u64);
-
-    for share in shares {
-        if share.secret_share.index == target_share_index {
-            return Some(share);
-        }
-    }
-
-    trace!(
-        "Found no share for operator id: {}, shares: {:?}",
-        operator_id, shares
-    );
-    None
 }
