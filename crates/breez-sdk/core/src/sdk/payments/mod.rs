@@ -20,7 +20,7 @@ mod polling;
 pub(in crate::sdk) mod prepare;
 mod receive;
 pub(in crate::sdk) mod send;
-mod validation;
+pub(in crate::sdk) mod validation;
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]

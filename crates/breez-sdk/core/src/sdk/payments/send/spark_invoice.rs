@@ -7,6 +7,7 @@ use crate::{
     error::SdkError,
     models::{SendPaymentRequest, SendPaymentResponse},
     sdk::BreezSdk,
+    sdk::payments::conversion,
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::token::map_and_persist_token_transaction,
 };
@@ -54,14 +55,11 @@ pub(in crate::sdk::payments) async fn convert_token(
     conversion_amount: ConversionAmount,
     token_identifier: Option<&String>,
 ) -> Result<(TokenConversionResponse, ConversionPurpose), SdkError> {
-    let own_identity_public_key = sdk.spark_wallet.get_identity_public_key().to_string();
-    let purpose = if spark_invoice_details.identity_public_key == own_identity_public_key {
-        ConversionPurpose::SelfTransfer
-    } else {
-        ConversionPurpose::OngoingPayment {
-            payment_request: spark_invoice_details.invoice.clone(),
-        }
-    };
+    let purpose = conversion::conversion_purpose_for_identity(
+        &sdk.spark_wallet.get_identity_public_key().to_string(),
+        &spark_invoice_details.identity_public_key,
+        spark_invoice_details.invoice.clone(),
+    );
     let response = sdk
         .token_converter
         .convert(

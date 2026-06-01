@@ -1,22 +1,23 @@
 use crate::{
-    ConversionEstimate, ConversionOptions, ConversionType, FeePolicy, SendPaymentMethod,
-    SparkAddressDetails,
+    ConversionType, FeePolicy, SendPaymentMethod, SparkAddressDetails,
     error::SdkError,
     models::{PrepareSendPaymentRequest, PrepareSendPaymentResponse},
     sdk::BreezSdk,
+    sdk::payments::{conversion, validation},
 };
 
-use super::super::{conversion, validation};
-
-/// Validates a spark address request.
-fn validate_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError> {
+/// Validates a spark address request and returns the validated amount.
+fn validate_request(request: &PrepareSendPaymentRequest) -> Result<u128, SdkError> {
     validation::validate_amount(request.amount)?;
-    validation::validate_fee_policy_for_conversion(request)?;
+    validation::validate_fee_policy_for_conversion(
+        request.fee_policy,
+        request.conversion_options.as_ref(),
+    )?;
 
     // Amount is required for spark addresses
-    if request.amount.is_none() {
-        return Err(SdkError::InvalidInput("Amount is required".to_string()));
-    }
+    let amount = request
+        .amount
+        .ok_or_else(|| SdkError::InvalidInput("Amount is required".to_string()))?;
 
     // Check if token identifier is provided
     let has_token_identifier = request.token_identifier.is_some();
@@ -36,7 +37,7 @@ fn validate_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError>
     }
 
     // Token identifier is optional for spark addresses
-    Ok(())
+    Ok(amount)
 }
 
 pub(super) async fn prepare(
@@ -46,11 +47,7 @@ pub(super) async fn prepare(
     fee_policy: FeePolicy,
     token_identifier: Option<String>,
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
-    validate_request(request)?;
-
-    let amount = request
-        .amount
-        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
+    let amount = validate_request(request)?;
 
     let (amount, conversion_estimate) = conversion::resolve_send_amount_with_conversion_estimate(
         sdk,
@@ -61,23 +58,8 @@ pub(super) async fn prepare(
     )
     .await?;
 
-    // For ToBitcoin conversions, the output is sats — clear token_identifier
-    // so it reflects the output denomination, not the input.
-    let is_to_bitcoin = matches!(
-        conversion_estimate,
-        Some(ConversionEstimate {
-            options: ConversionOptions {
-                conversion_type: ConversionType::ToBitcoin { .. },
-                ..
-            },
-            ..
-        })
-    );
-    let response_token_identifier = if is_to_bitcoin {
-        None
-    } else {
-        token_identifier.clone()
-    };
+    let response_token_identifier =
+        conversion::response_token_identifier(conversion_estimate.as_ref(), token_identifier);
 
     Ok(PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::SparkAddress {

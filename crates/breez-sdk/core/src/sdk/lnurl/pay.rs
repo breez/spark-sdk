@@ -1,6 +1,6 @@
 use breez_sdk_common::lnurl::{
     error::LnurlError,
-    pay::{ValidatedCallbackResponse, validate_lnurl_pay},
+    pay::{CallbackResponse, ValidatedCallbackResponse, validate_lnurl_pay},
 };
 use tracing::info;
 
@@ -14,14 +14,38 @@ use crate::{
     sdk::{
         BreezSdk,
         helpers::process_success_action,
-        payments::{conversion, send},
+        payments::{conversion, send, validation},
     },
 };
+
+/// Validates an LNURL pay request and returns the (possibly upgraded) fee policy.
+///
+/// Synchronous, input-only checks. Async checks (LNURL min/max sendable, post-conversion
+/// dust, converter availability) stay in the prepare flow.
+fn validate_request(request: &PrepareLnurlPayRequest) -> Result<(), SdkError> {
+    validation::validate_amount(Some(request.amount))?;
+    validation::validate_fee_policy_for_conversion(
+        request.fee_policy,
+        request.conversion_options.as_ref(),
+    )?;
+
+    // Token-denominated LNURL pay (`token_identifier` set) requires
+    // `FeesIncluded`: the conversion output is the only sat budget, so fees
+    // must come out of it.
+    if request.token_identifier.is_some() && request.fee_policy != Some(FeePolicy::FeesIncluded) {
+        return Err(SdkError::InvalidInput(
+            "Token conversion with token_identifier requires FeesIncluded fee policy".to_string(),
+        ));
+    }
+
+    Ok(())
+}
 
 pub(super) async fn prepare(
     sdk: &BreezSdk,
     request: PrepareLnurlPayRequest,
 ) -> Result<PrepareLnurlPayResponse, SdkError> {
+    validate_request(&request)?;
     let fee_policy = request.fee_policy.unwrap_or_default();
 
     // For token conversions, the helper returns the raw estimated sats.
@@ -34,23 +58,19 @@ pub(super) async fn prepare(
         fee_policy,
     )
     .await?;
-    let is_token_conversion = conversion_estimate.is_some();
 
-    // When token_identifier is set, the amount is in token units and the
-    // conversion output (estimated_sats) is all we have to pay with — there
-    // are no separate sats to cover fees. Force FeesIncluded so fees are
-    // deducted from the conversion output. Reject explicit FeesExcluded.
-    let (amount, fee_policy) = if is_token_conversion && request.token_identifier.is_some() {
-        if fee_policy == FeePolicy::FeesExcluded {
-            return Err(SdkError::InvalidInput(
-                "Token conversion with token_identifier requires FeesIncluded fee policy"
-                    .to_string(),
-            ));
-        }
-        (estimated_sats, FeePolicy::FeesIncluded)
-    } else {
-        (estimated_sats, fee_policy)
-    };
+    // If the user is denominating in tokens (`token_identifier` set), the
+    // conversion must be available — otherwise the request.amount (in token
+    // units) would be silently treated as sats by the sats branch below.
+    if request.token_identifier.is_some() && conversion_estimate.is_none() {
+        return Err(SdkError::InvalidInput(
+            "Token conversion is not available for the requested token and amount".to_string(),
+        ));
+    }
+    // `amount` switches from token base units to sats post-conversion.
+    // `fee_policy` is already validated; for token-denominated requests it's
+    // guaranteed `FeesIncluded` by `validate_request`.
+    let amount = estimated_sats;
 
     // FeesIncluded uses the double-query approach
     if fee_policy == FeePolicy::FeesIncluded {
@@ -65,21 +85,8 @@ pub(super) async fn prepare(
         .try_into()
         .map_err(|_| SdkError::InvalidInput("Amount too large for LNURL".to_string()))?;
 
-    let success_data = match validate_lnurl_pay(
-        sdk.lnurl_client.as_ref(),
-        amount_sats.saturating_mul(1_000),
-        &request.comment,
-        &request.pay_request.clone().into(),
-        sdk.config.network.into(),
-        request.validate_success_action_url,
-    )
-    .await?
-    {
-        ValidatedCallbackResponse::EndpointError { data } => {
-            return Err(LnurlError::EndpointError(data.reason).into());
-        }
-        ValidatedCallbackResponse::EndpointSuccess { data } => data,
-    };
+    let success_data =
+        query_lnurl_invoice(sdk, &request, amount_sats.saturating_mul(1_000)).await?;
 
     let prepare_response = sdk
         .prepare_send_payment(crate::PrepareSendPaymentRequest {
@@ -150,24 +157,9 @@ async fn prepare_fees_included(
         )));
     }
 
-    // 2. First query: get invoice for full amount to estimate fees
-    // Note: We don't intend to pay this invoice. It's only for fee estimation.
-    let first_invoice = validate_lnurl_pay(
-        sdk.lnurl_client.as_ref(),
-        amount_sats.saturating_mul(1_000), // convert to msats
-        &request.comment,
-        &request.pay_request.clone().into(),
-        sdk.config.network.into(),
-        request.validate_success_action_url,
-    )
-    .await?;
-
-    let first_data = match first_invoice {
-        ValidatedCallbackResponse::EndpointError { data } => {
-            return Err(LnurlError::EndpointError(data.reason).into());
-        }
-        ValidatedCallbackResponse::EndpointSuccess { data } => data,
-    };
+    // 2. First query: get invoice for full amount to estimate fees.
+    // Note: we don't intend to pay this invoice, it's only for fee estimation.
+    let first_data = query_lnurl_invoice(sdk, &request, amount_sats.saturating_mul(1_000)).await?;
 
     // 3. Get fee estimate for first invoice
     let first_fee = sdk
@@ -185,22 +177,9 @@ async fn prepare_fees_included(
         )));
     }
 
-    // 5. Second query: get invoice for actual amount (back-to-back, no delay)
-    let success_data = match validate_lnurl_pay(
-        sdk.lnurl_client.as_ref(),
-        actual_amount.saturating_mul(1_000),
-        &request.comment,
-        &request.pay_request.clone().into(),
-        sdk.config.network.into(),
-        request.validate_success_action_url,
-    )
-    .await?
-    {
-        ValidatedCallbackResponse::EndpointError { data } => {
-            return Err(LnurlError::EndpointError(data.reason).into());
-        }
-        ValidatedCallbackResponse::EndpointSuccess { data } => data,
-    };
+    // 5. Second query: get invoice for actual amount (back-to-back, no delay).
+    let success_data =
+        query_lnurl_invoice(sdk, &request, actual_amount.saturating_mul(1_000)).await?;
 
     // 6. Get actual fee for the smaller invoice
     let actual_fee = sdk
@@ -401,4 +380,171 @@ pub(super) async fn send(
         payment,
         success_action: success_action.map(From::from),
     })
+}
+
+/// Calls the LNURL pay endpoint for the given `amount_msat` and unwraps the
+/// success branch into a `CallbackResponse`, mapping `EndpointError` into an
+/// `SdkError`.
+async fn query_lnurl_invoice(
+    sdk: &BreezSdk,
+    request: &PrepareLnurlPayRequest,
+    amount_msat: u64,
+) -> Result<CallbackResponse, SdkError> {
+    let response = validate_lnurl_pay(
+        sdk.lnurl_client.as_ref(),
+        amount_msat,
+        &request.comment,
+        &request.pay_request.clone().into(),
+        sdk.config.network.into(),
+        request.validate_success_action_url,
+    )
+    .await?;
+    match response {
+        ValidatedCallbackResponse::EndpointError { data } => {
+            Err(LnurlError::EndpointError(data.reason).into())
+        }
+        ValidatedCallbackResponse::EndpointSuccess { data } => Ok(data),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_request;
+    use crate::{
+        ConversionOptions, ConversionType, FeePolicy, LnurlPayRequestDetails,
+        PrepareLnurlPayRequest, error::SdkError,
+    };
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn pay_request_details() -> LnurlPayRequestDetails {
+        LnurlPayRequestDetails {
+            callback: "https://example.com/callback".to_string(),
+            min_sendable: 1_000,
+            max_sendable: 100_000_000_000,
+            metadata_str: "[]".to_string(),
+            comment_allowed: 0,
+            domain: "example.com".to_string(),
+            url: "https://example.com".to_string(),
+            address: None,
+            allows_nostr: None,
+            nostr_pubkey: None,
+        }
+    }
+
+    fn request_with(
+        amount: u128,
+        token_identifier: Option<&str>,
+        fee_policy: Option<FeePolicy>,
+    ) -> PrepareLnurlPayRequest {
+        PrepareLnurlPayRequest {
+            amount,
+            pay_request: pay_request_details(),
+            comment: None,
+            validate_success_action_url: None,
+            token_identifier: token_identifier.map(String::from),
+            conversion_options: None,
+            fee_policy,
+        }
+    }
+
+    fn to_bitcoin_options() -> ConversionOptions {
+        ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        }
+    }
+
+    fn from_bitcoin_options() -> ConversionOptions {
+        ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        }
+    }
+
+    // ---- Amount ----
+
+    #[test_all]
+    fn test_validate_lnurl_pay_amount_zero_rejected() {
+        let request = request_with(0, None, None);
+        let result = validate_request(&request);
+        assert!(result.is_err());
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(msg.contains("must be greater than 0"));
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_lnurl_pay_positive_amount_ok() {
+        assert!(validate_request(&request_with(1_000, None, None)).is_ok());
+    }
+
+    // ---- FeesIncluded + FromBitcoin (shared rule) ----
+
+    #[test_all]
+    fn test_validate_lnurl_pay_fees_included_with_from_bitcoin_rejected() {
+        let mut request = request_with(1_000, None, Some(FeePolicy::FeesIncluded));
+        request.conversion_options = Some(from_bitcoin_options());
+        let result = validate_request(&request);
+        assert!(result.is_err());
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(msg.contains("FeesIncluded cannot be combined with FromBitcoin"));
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_lnurl_pay_fees_included_with_to_bitcoin_ok() {
+        let mut request = request_with(1_000, Some("token123"), Some(FeePolicy::FeesIncluded));
+        request.conversion_options = Some(to_bitcoin_options());
+        assert!(validate_request(&request).is_ok());
+    }
+
+    // ---- Token-denominated requires FeesIncluded ----
+
+    #[test_all]
+    fn test_validate_lnurl_pay_token_identifier_with_fees_excluded_rejected() {
+        let request = request_with(1_000, Some("token123"), Some(FeePolicy::FeesExcluded));
+        let result = validate_request(&request);
+        assert!(result.is_err());
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(msg.contains("requires FeesIncluded"));
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_lnurl_pay_token_identifier_with_default_fee_policy_rejected() {
+        // None defaults to FeesExcluded, which is rejected for token-denominated.
+        let request = request_with(1_000, Some("token123"), None);
+        let result = validate_request(&request);
+        assert!(result.is_err());
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(msg.contains("requires FeesIncluded"));
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_lnurl_pay_token_identifier_with_fees_included_ok() {
+        let request = request_with(1_000, Some("token123"), Some(FeePolicy::FeesIncluded));
+        assert!(validate_request(&request).is_ok());
+    }
+
+    #[test_all]
+    fn test_validate_lnurl_pay_no_token_identifier_no_fee_policy_ok() {
+        // Plain LNURL pay (no token, no fee policy) — must work.
+        assert!(validate_request(&request_with(1_000, None, None)).is_ok());
+    }
 }

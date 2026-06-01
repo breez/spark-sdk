@@ -1,14 +1,12 @@
 use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{
-    ConversionEstimate, ConversionOptions, ConversionType, FeePolicy, SendPaymentMethod,
-    SparkInvoiceDetails,
+    ConversionOptions, ConversionType, FeePolicy, SendPaymentMethod, SparkInvoiceDetails,
     error::SdkError,
     models::{PrepareSendPaymentRequest, PrepareSendPaymentResponse},
     sdk::BreezSdk,
+    sdk::payments::{conversion, validation},
 };
-
-use super::super::{conversion, validation};
 
 /// Validates a spark invoice request against the provided request parameters.
 fn validate_request(
@@ -17,7 +15,10 @@ fn validate_request(
     identity_public_key: &str,
 ) -> Result<(), SdkError> {
     validation::validate_amount(request.amount)?;
-    validation::validate_fee_policy_for_conversion(request)?;
+    validation::validate_fee_policy_for_conversion(
+        request.fee_policy,
+        request.conversion_options.as_ref(),
+    )?;
 
     // FeesIncluded is only supported for amountless Spark invoices
     if request.fee_policy == Some(FeePolicy::FeesIncluded) && spark_invoice_details.amount.is_some()
@@ -140,21 +141,10 @@ pub(super) async fn prepare(
     )
     .await?;
 
-    let is_to_bitcoin = matches!(
-        conversion_estimate,
-        Some(ConversionEstimate {
-            options: ConversionOptions {
-                conversion_type: ConversionType::ToBitcoin { .. },
-                ..
-            },
-            ..
-        })
+    let response_token_identifier = conversion::response_token_identifier(
+        conversion_estimate.as_ref(),
+        effective_token_identifier,
     );
-    let response_token_identifier = if is_to_bitcoin {
-        None
-    } else {
-        effective_token_identifier.clone()
-    };
 
     Ok(PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::SparkInvoice {

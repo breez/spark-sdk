@@ -16,7 +16,10 @@ fn validate_request(
     request: &PrepareSendPaymentRequest,
 ) -> Result<(), SdkError> {
     validation::validate_amount(request.amount)?;
-    validation::validate_fee_policy_for_conversion(request)?;
+    validation::validate_fee_policy_for_conversion(
+        request.fee_policy,
+        request.conversion_options.as_ref(),
+    )?;
 
     // FeesIncluded is only supported for amountless Bolt11 invoices
     if request.fee_policy == Some(FeePolicy::FeesIncluded) && invoice_details.amount_msat.is_some()
@@ -95,17 +98,16 @@ pub(super) async fn prepare(
         request.amount,
         request.conversion_options.as_ref(),
         token_identifier.as_ref(),
-    ) && let Some(response) = prepare_token_denominated(
-        sdk,
-        request,
-        detailed_bolt11_invoice,
-        spark_transfer_fee_sats,
-        token_identifier.as_ref(),
-        fee_policy,
-    )
-    .await?
-    {
-        return Ok(response);
+    ) {
+        return prepare_token_denominated(
+            sdk,
+            request,
+            detailed_bolt11_invoice,
+            spark_transfer_fee_sats,
+            token_identifier.as_ref(),
+            fee_policy,
+        )
+        .await;
     }
 
     prepare_sats_denominated(
@@ -180,11 +182,10 @@ async fn prepare_sats_denominated(
 /// fees based on the estimated sats, and validates the conversion output covers
 /// the invoice + fees.
 ///
-/// Returns `Ok(None)` when the converter can't validate the requested conversion
-/// (rare — unsupported config / temporary outage), so the caller can fall back to
-/// the sats-denominated path. The `is_token_denominated` gate at the call site
-/// guarantees `request.amount.is_some()`, so the early-`None` on missing amount
-/// is a defensive safety net rather than a reachable path.
+/// Returns an explicit `InvalidInput` error when the converter can't validate the
+/// requested conversion (rare — unsupported config / temporary outage). The
+/// caller must not silently fall back to the sats-denominated path, since the
+/// user's `amount` is in token units and would be misinterpreted as sats.
 async fn prepare_token_denominated(
     sdk: &BreezSdk,
     request: &PrepareSendPaymentRequest,
@@ -192,10 +193,11 @@ async fn prepare_token_denominated(
     spark_transfer_fee_sats: Option<u64>,
     token_identifier: Option<&String>,
     fee_policy: FeePolicy,
-) -> Result<Option<PrepareSendPaymentResponse>, SdkError> {
-    let Some(token_amount) = request.amount else {
-        return Ok(None);
-    };
+) -> Result<PrepareSendPaymentResponse, SdkError> {
+    // The is_token_denominated gate at the call site guarantees amount.is_some().
+    let token_amount = request.amount.ok_or_else(|| {
+        SdkError::Generic("prepare_token_denominated called without amount".to_string())
+    })?;
     let (estimated_sats, conversion_estimate) = conversion::estimate_sats_from_token_conversion(
         sdk,
         request.conversion_options.as_ref(),
@@ -205,7 +207,9 @@ async fn prepare_token_denominated(
     )
     .await?;
     if conversion_estimate.is_none() {
-        return Ok(None);
+        return Err(SdkError::InvalidInput(
+            "Token conversion is not available for the requested token and amount".to_string(),
+        ));
     }
 
     let lightning_fee_sats = sdk
@@ -230,7 +234,7 @@ async fn prepare_token_denominated(
         ));
     }
 
-    Ok(Some(PrepareSendPaymentResponse {
+    Ok(PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::Bolt11Invoice {
             invoice_details: invoice.clone(),
             spark_transfer_fee_sats,
@@ -241,7 +245,7 @@ async fn prepare_token_denominated(
         token_identifier: None,
         conversion_estimate,
         fee_policy,
-    }))
+    })
 }
 
 #[cfg(test)]

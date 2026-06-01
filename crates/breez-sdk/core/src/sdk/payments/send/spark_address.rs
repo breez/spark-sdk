@@ -9,6 +9,7 @@ use crate::{
     error::SdkError,
     models::{Payment, SendPaymentResponse},
     sdk::BreezSdk,
+    sdk::payments::conversion,
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::token::map_and_persist_token_transaction,
 };
@@ -142,14 +143,11 @@ pub(in crate::sdk::payments) async fn convert_token(
     let spark_address = address
         .parse::<SparkAddress>()
         .map_err(|_| SdkError::InvalidInput("Invalid spark address".to_string()))?;
-    let purpose = if spark_address.identity_public_key == sdk.spark_wallet.get_identity_public_key()
-    {
-        ConversionPurpose::SelfTransfer
-    } else {
-        ConversionPurpose::OngoingPayment {
-            payment_request: address.to_string(),
-        }
-    };
+    let purpose = conversion::conversion_purpose_for_identity(
+        &sdk.spark_wallet.get_identity_public_key().to_string(),
+        &spark_address.identity_public_key.to_string(),
+        address.to_string(),
+    );
     let response = sdk
         .token_converter
         .convert(

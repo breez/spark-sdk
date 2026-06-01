@@ -4,14 +4,13 @@ use crate::{
     error::SdkError,
     models::{ConversionStatus, SendPaymentRequest, SendPaymentResponse},
     persist::PaymentMetadata,
+    sdk::BreezSdk,
+    sdk::payments::send,
     token_conversion::{
         ConversionAmount, DEFAULT_CONVERSION_TIMEOUT_SECS, TokenConversionResponse,
     },
     utils::payments::get_payment_with_conversion_details,
 };
-
-use super::super::BreezSdk;
-use super::send;
 
 /// Gets conversion options for a payment, auto-populating from stable balance config if needed.
 ///
@@ -198,8 +197,9 @@ pub(super) async fn resolve_send_amount_with_conversion_estimate(
     fee_policy: FeePolicy,
 ) -> Result<(u128, Option<ConversionEstimate>), SdkError> {
     // Token-denominated: substitute `amount` with the post-conversion estimated sats.
-    // The converter may refuse for unsupported configs; in that rare case we fall
-    // through to the sats-denominated branch (pre-existing behavior).
+    // Errors explicitly if the converter can't produce an estimate, since silently
+    // falling through to the sats branch would reinterpret the user's token amount
+    // as a sat amount.
     if is_token_denominated(Some(amount), conversion_options, token_identifier) {
         let (estimated_sats, conversion_estimate) = estimate_sats_from_token_conversion(
             sdk,
@@ -209,9 +209,12 @@ pub(super) async fn resolve_send_amount_with_conversion_estimate(
             fee_policy,
         )
         .await?;
-        if conversion_estimate.is_some() {
-            return Ok((estimated_sats, conversion_estimate));
+        if conversion_estimate.is_none() {
+            return Err(SdkError::InvalidInput(
+                "Token conversion is not available for the requested token and amount".to_string(),
+            ));
         }
+        return Ok((estimated_sats, conversion_estimate));
     }
 
     // Sats-denominated: keep `amount` as-is, attach a `MinAmountOut` estimate for display
@@ -524,6 +527,47 @@ pub(super) fn is_to_bitcoin(conversion_options: Option<&ConversionOptions>) -> b
     )
 }
 
+/// Returns the `ConversionPurpose` for a Spark-rail send: `SelfTransfer` when
+/// the destination is our own identity (the conversion stays in-wallet),
+/// otherwise an `OngoingPayment` toward the destination's payment request.
+pub(super) fn conversion_purpose_for_identity(
+    own_identity_pubkey: &str,
+    target_identity_pubkey: &str,
+    payment_request: String,
+) -> ConversionPurpose {
+    if target_identity_pubkey == own_identity_pubkey {
+        ConversionPurpose::SelfTransfer
+    } else {
+        ConversionPurpose::OngoingPayment { payment_request }
+    }
+}
+
+/// Returns the `token_identifier` to surface on a prepare response.
+///
+/// For `ToBitcoin` conversions the prepared output is sats, so the response
+/// reflects the output denomination by clearing the (input) token identifier.
+/// Otherwise the input token identifier is preserved.
+pub(super) fn response_token_identifier(
+    conversion_estimate: Option<&ConversionEstimate>,
+    input_token_identifier: Option<String>,
+) -> Option<String> {
+    let is_to_bitcoin = matches!(
+        conversion_estimate,
+        Some(ConversionEstimate {
+            options: ConversionOptions {
+                conversion_type: ConversionType::ToBitcoin { .. },
+                ..
+            },
+            ..
+        })
+    );
+    if is_to_bitcoin {
+        None
+    } else {
+        input_token_identifier
+    }
+}
+
 /// Returns whether the request is token-denominated: the user supplied an
 /// `amount` (in token base units), declared the source token via
 /// `token_identifier`, and the conversion is `ToBitcoin`.
@@ -582,8 +626,11 @@ fn compute_amount_override(
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_amount_override, is_to_bitcoin, is_token_denominated, uses_amount_in};
-    use crate::{ConversionEstimate, ConversionOptions, ConversionType};
+    use super::{
+        compute_amount_override, conversion_purpose_for_identity, is_to_bitcoin,
+        is_token_denominated, response_token_identifier, uses_amount_in,
+    };
+    use crate::{ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType};
     use macros::test_all;
 
     #[cfg(feature = "browser-tests")]
@@ -600,6 +647,20 @@ mod tests {
             },
             amount_in: 0,
             amount_out,
+            fee: 0,
+            amount_adjustment: None,
+        }
+    }
+
+    fn from_bitcoin_estimate() -> ConversionEstimate {
+        ConversionEstimate {
+            options: ConversionOptions {
+                conversion_type: ConversionType::FromBitcoin,
+                max_slippage_bps: None,
+                completion_timeout_secs: None,
+            },
+            amount_in: 0,
+            amount_out: 0,
             fee: 0,
             amount_adjustment: None,
         }
@@ -789,5 +850,60 @@ mod tests {
             compute_amount_override(None, true, prepared, 0, 500),
             Some(500)
         );
+    }
+
+    // ============ response_token_identifier ============
+
+    #[test_all]
+    fn test_response_token_identifier_to_bitcoin_clears() {
+        // ToBitcoin conversion outputs sats, so the response token_identifier
+        // is cleared regardless of the input token identifier.
+        let estimate = estimate_with_amount_out(1000);
+        assert_eq!(
+            response_token_identifier(Some(&estimate), Some("token123".to_string())),
+            None
+        );
+    }
+
+    #[test_all]
+    fn test_response_token_identifier_from_bitcoin_preserves() {
+        // FromBitcoin conversion outputs tokens — preserve the input token identifier.
+        let estimate = from_bitcoin_estimate();
+        assert_eq!(
+            response_token_identifier(Some(&estimate), Some("token123".to_string())),
+            Some("token123".to_string())
+        );
+    }
+
+    #[test_all]
+    fn test_response_token_identifier_no_estimate_preserves() {
+        // No conversion — pass through the input token identifier.
+        assert_eq!(
+            response_token_identifier(None, Some("token123".to_string())),
+            Some("token123".to_string())
+        );
+        assert_eq!(response_token_identifier(None, None), None);
+    }
+
+    // ============ conversion_purpose_for_identity ============
+
+    #[test_all]
+    fn test_conversion_purpose_self_transfer() {
+        // Target == own → SelfTransfer.
+        let purpose = conversion_purpose_for_identity("pubkey_a", "pubkey_a", "dest".to_string());
+        assert!(matches!(purpose, ConversionPurpose::SelfTransfer));
+    }
+
+    #[test_all]
+    fn test_conversion_purpose_ongoing_payment() {
+        // Target != own → OngoingPayment with the destination payment_request.
+        let purpose =
+            conversion_purpose_for_identity("pubkey_a", "pubkey_b", "destination".to_string());
+        match purpose {
+            ConversionPurpose::OngoingPayment { payment_request } => {
+                assert_eq!(payment_request, "destination");
+            }
+            _ => panic!("Expected OngoingPayment"),
+        }
     }
 }

@@ -4,16 +4,18 @@ use crate::{
     error::SdkError,
     models::{PrepareSendPaymentRequest, PrepareSendPaymentResponse},
     sdk::BreezSdk,
+    sdk::payments::{conversion, validation},
     token_conversion::ConversionAmount,
     utils::bitcoin_dust::get_dust_limit_sats,
 };
 
-use super::super::{conversion, validation};
-
-/// Validates a Bitcoin address request.
-fn validate_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError> {
+/// Validates a Bitcoin address request and returns the validated amount.
+fn validate_request(request: &PrepareSendPaymentRequest) -> Result<u128, SdkError> {
     validation::validate_amount(request.amount)?;
-    validation::validate_fee_policy_for_conversion(request)?;
+    validation::validate_fee_policy_for_conversion(
+        request.fee_policy,
+        request.conversion_options.as_ref(),
+    )?;
 
     // Token identifier cannot be provided for Bitcoin addresses unless ToBitcoin conversion
     // is present (send-all-with-conversion from stable balance).
@@ -33,9 +35,9 @@ fn validate_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError>
     }
 
     // Amount is required for Bitcoin addresses
-    if request.amount.is_none() {
-        return Err(SdkError::InvalidInput("Amount is required".to_string()));
-    }
+    let amount = request
+        .amount
+        .ok_or_else(|| SdkError::InvalidInput("Amount is required".to_string()))?;
 
     // Validate conversion from Bitcoin is not supported for Bitcoin addresses
     if matches!(
@@ -50,7 +52,7 @@ fn validate_request(request: &PrepareSendPaymentRequest) -> Result<(), SdkError>
         ));
     }
 
-    Ok(())
+    Ok(amount)
 }
 
 pub(super) async fn prepare(
@@ -60,26 +62,27 @@ pub(super) async fn prepare(
     fee_policy: FeePolicy,
     token_identifier: Option<String>,
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
-    validate_request(request)?;
+    let amount = validate_request(request)?;
 
     if conversion::is_token_denominated(
-        request.amount,
+        Some(amount),
         request.conversion_options.as_ref(),
         token_identifier.as_ref(),
-    ) && let Some(response) = prepare_token_denominated(
-        sdk,
-        request,
-        withdrawal_address,
-        token_identifier.as_ref(),
-        fee_policy,
-    )
-    .await?
-    {
-        return Ok(response);
+    ) {
+        return prepare_token_denominated(
+            sdk,
+            amount,
+            request,
+            withdrawal_address,
+            token_identifier.as_ref(),
+            fee_policy,
+        )
+        .await;
     }
 
     prepare_sats_denominated(
         sdk,
+        amount,
         request,
         withdrawal_address,
         token_identifier,
@@ -95,15 +98,12 @@ pub(super) async fn prepare(
 /// are set.
 async fn prepare_sats_denominated(
     sdk: &BreezSdk,
+    amount: u128,
     request: &PrepareSendPaymentRequest,
     withdrawal_address: &BitcoinAddressDetails,
     token_identifier: Option<String>,
     fee_policy: FeePolicy,
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
-    let amount = request
-        .amount
-        .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
-
     // Validate the amount meets the dust limit before making any network calls.
     // For FeesIncluded the output will be smaller after fees, but if the total
     // amount is already below dust there's no point fetching a fee quote.
@@ -167,26 +167,23 @@ async fn prepare_sats_denominated(
     })
 }
 
-/// Token-denominated Bitcoin-address prepare: `request.amount` is in token base
+/// Token-denominated Bitcoin-address prepare: `token_amount` is in token base
 /// units and `conversion_options` is `ToBitcoin`. Estimates the conversion, fetches
 /// the onchain fee quote based on the estimated sats, and validates the output
 /// after fees meets the dust limit.
 ///
-/// Returns `Ok(None)` when the converter can't validate the requested conversion
-/// (rare — unsupported config / temporary outage), so the caller can fall back to
-/// the sats-denominated path. The `is_token_denominated` gate at the call site
-/// guarantees `request.amount.is_some()`, so the early-`None` on missing amount
-/// is a defensive safety net rather than a reachable path.
+/// Returns an explicit `InvalidInput` error when the converter can't validate the
+/// requested conversion (rare — unsupported config / temporary outage). The
+/// caller must not silently fall back to the sats-denominated path, since the
+/// user's `token_amount` is in token units and would be misinterpreted as sats.
 async fn prepare_token_denominated(
     sdk: &BreezSdk,
+    token_amount: u128,
     request: &PrepareSendPaymentRequest,
     withdrawal_address: &BitcoinAddressDetails,
     token_identifier: Option<&String>,
     fee_policy: FeePolicy,
-) -> Result<Option<PrepareSendPaymentResponse>, SdkError> {
-    let Some(token_amount) = request.amount else {
-        return Ok(None);
-    };
+) -> Result<PrepareSendPaymentResponse, SdkError> {
     let (estimated_sats, conversion_estimate) = conversion::estimate_sats_from_token_conversion(
         sdk,
         request.conversion_options.as_ref(),
@@ -196,9 +193,13 @@ async fn prepare_token_denominated(
     )
     .await?;
     if conversion_estimate.is_none() {
-        return Ok(None);
+        return Err(SdkError::InvalidInput(
+            "Token conversion is not available for the requested token and amount".to_string(),
+        ));
     }
 
+    // Early dust check on the raw conversion output so we short-circuit
+    // before the fee-quote network call when there's no chance of success.
     let dust_limit_sats = get_dust_limit_sats(&withdrawal_address.address)?;
     let total_u64: u64 = estimated_sats.try_into()?;
     if total_u64 < dust_limit_sats {
@@ -215,15 +216,17 @@ async fn prepare_token_denominated(
         .await?
         .into();
 
-    let min_fee_sats = fee_quote.speed_slow.total_fee_sat();
-    let output_amount_sats = total_u64.saturating_sub(min_fee_sats);
-    if output_amount_sats < dust_limit_sats {
-        return Err(SdkError::InvalidInput(format!(
-            "Amount is below the minimum of {dust_limit_sats} sats required for this address after lowest fees of {min_fee_sats} sats"
-        )));
-    }
+    // Token-denominated converts the input into sats; fees come out of the
+    // converted output, which is the FeesIncluded shape — use the slow tier
+    // as the best case for the post-fee dust check.
+    validate_dust(
+        total_u64,
+        dust_limit_sats,
+        FeePolicy::FeesIncluded,
+        fee_quote.speed_slow.total_fee_sat(),
+    )?;
 
-    Ok(Some(PrepareSendPaymentResponse {
+    Ok(PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::BitcoinAddress {
             address: withdrawal_address.clone(),
             fee_quote,
@@ -233,7 +236,7 @@ async fn prepare_token_denominated(
         token_identifier: None,
         conversion_estimate,
         fee_policy,
-    }))
+    })
 }
 
 /// Validates a Bitcoin send amount against the address dust limit.

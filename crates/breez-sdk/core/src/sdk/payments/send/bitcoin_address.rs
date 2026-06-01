@@ -34,12 +34,7 @@ pub(super) async fn send(
 
     let exit_speed: ExitSpeed = confirmation_speed.clone().into();
 
-    // Calculate fee based on selected speed
-    let fee_sats = match confirmation_speed {
-        OnchainConfirmationSpeed::Fast => fee_quote.speed_fast.total_fee_sat(),
-        OnchainConfirmationSpeed::Medium => fee_quote.speed_medium.total_fee_sat(),
-        OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
-    };
+    let fee_sats = fee_for_speed(fee_quote, &confirmation_speed);
 
     // Compute amount - for FeesIncluded, receiver gets total minus fees.
     // amount_override (send-all post-conversion) is always FeesIncluded.
@@ -100,17 +95,14 @@ pub(in crate::sdk::payments) async fn convert_token(
     let conversion_amount = match conversion_amount {
         ConversionAmount::AmountIn(_) => conversion_amount,
         ConversionAmount::MinAmountOut(amount) => {
-            // Derive fee_sats from request.options confirmation speed
-            let fee_sats = match &request.options {
+            // Derive fee_sats from request.options confirmation speed (default: Fast).
+            let speed = match &request.options {
                 Some(SendPaymentOptions::BitcoinAddress { confirmation_speed }) => {
-                    match confirmation_speed {
-                        OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
-                        OnchainConfirmationSpeed::Medium => fee_quote.speed_medium.total_fee_sat(),
-                        OnchainConfirmationSpeed::Fast => fee_quote.speed_fast.total_fee_sat(),
-                    }
+                    confirmation_speed.clone()
                 }
-                _ => fee_quote.speed_fast.total_fee_sat(), // Default to fast
+                _ => OnchainConfirmationSpeed::Fast,
             };
+            let fee_sats = fee_for_speed(fee_quote, &speed);
             // The absolute minimum amount out is the amount plus fee
             ConversionAmount::MinAmountOut(amount.saturating_add(u128::from(fee_sats)))
         }
@@ -127,4 +119,58 @@ pub(in crate::sdk::payments) async fn convert_token(
         )
         .await?;
     Ok((response, purpose))
+}
+
+/// Returns the total fee (sats) for the requested confirmation speed.
+fn fee_for_speed(fee_quote: &SendOnchainFeeQuote, speed: &OnchainConfirmationSpeed) -> u64 {
+    match speed {
+        OnchainConfirmationSpeed::Fast => fee_quote.speed_fast.total_fee_sat(),
+        OnchainConfirmationSpeed::Medium => fee_quote.speed_medium.total_fee_sat(),
+        OnchainConfirmationSpeed::Slow => fee_quote.speed_slow.total_fee_sat(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fee_for_speed;
+    use crate::{OnchainConfirmationSpeed, SendOnchainFeeQuote, SendOnchainSpeedFeeQuote};
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn quote_with_speeds(slow: u64, medium: u64, fast: u64) -> SendOnchainFeeQuote {
+        let speed = |total: u64| SendOnchainSpeedFeeQuote {
+            user_fee_sat: total,
+            l1_broadcast_fee_sat: 0,
+        };
+        SendOnchainFeeQuote {
+            id: "test".to_string(),
+            expires_at: 0,
+            speed_slow: speed(slow),
+            speed_medium: speed(medium),
+            speed_fast: speed(fast),
+        }
+    }
+
+    #[test_all]
+    fn test_fee_for_speed_slow() {
+        let quote = quote_with_speeds(100, 200, 300);
+        assert_eq!(fee_for_speed(&quote, &OnchainConfirmationSpeed::Slow), 100);
+    }
+
+    #[test_all]
+    fn test_fee_for_speed_medium() {
+        let quote = quote_with_speeds(100, 200, 300);
+        assert_eq!(
+            fee_for_speed(&quote, &OnchainConfirmationSpeed::Medium),
+            200
+        );
+    }
+
+    #[test_all]
+    fn test_fee_for_speed_fast() {
+        let quote = quote_with_speeds(100, 200, 300);
+        assert_eq!(fee_for_speed(&quote, &OnchainConfirmationSpeed::Fast), 300);
+    }
 }
