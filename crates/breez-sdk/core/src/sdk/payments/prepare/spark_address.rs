@@ -102,6 +102,8 @@ mod tests {
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    // ---- Amount required ----
+
     #[test_all]
     fn test_validate_spark_address_with_amount() {
         let request = create_bitcoin_amount_request(1000);
@@ -124,6 +126,8 @@ mod tests {
         }
     }
 
+    // ---- Token identifier (optional for Spark address) ----
+
     #[test_all]
     fn test_validate_spark_address_with_token_identifier() {
         let request = create_token_amount_request(1000, "token123");
@@ -134,6 +138,8 @@ mod tests {
         );
     }
 
+    // ---- FeesIncluded ----
+
     #[test_all]
     fn test_validate_spark_address_with_fees_included() {
         let request = create_fees_included_request(1000);
@@ -143,6 +149,8 @@ mod tests {
             "Should succeed when FeesIncluded is used for Spark address"
         );
     }
+
+    // ---- Conversion direction (no token identifier) ----
 
     #[test_all]
     fn test_validate_spark_address_with_valid_conversion() {
@@ -162,22 +170,8 @@ mod tests {
     }
 
     #[test_all]
-    fn test_validate_token_spark_address_with_valid_conversion() {
-        let mut request = create_token_amount_request(1000, "token123");
-        request.conversion_options = Some(ConversionOptions {
-            conversion_type: ConversionType::FromBitcoin,
-            max_slippage_bps: None,
-            completion_timeout_secs: None,
-        });
-        let result = validate_request(&request);
-        assert!(
-            result.is_ok(),
-            "Should succeed when conversion from Bitcoin is provided"
-        );
-    }
-
-    #[test_all]
     fn test_validate_spark_address_with_invalid_conversion() {
+        // FromBitcoin without token_identifier is invalid.
         let mut request = create_bitcoin_amount_request(1000);
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::FromBitcoin,
@@ -191,11 +185,11 @@ mod tests {
         );
     }
 
+    // ---- Conversion direction (with token identifier) ----
+
     #[test_all]
-    fn test_validate_token_spark_address_with_invalid_conversion() {
-        // FromBitcoin without token_identifier is invalid
-        let mut request = create_test_request();
-        request.amount = Some(1000);
+    fn test_validate_spark_address_with_token_id_and_from_bitcoin_ok() {
+        let mut request = create_token_amount_request(1000, "token123");
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::FromBitcoin,
             max_slippage_bps: None,
@@ -203,13 +197,13 @@ mod tests {
         });
         let result = validate_request(&request);
         assert!(
-            result.is_err(),
-            "Should fail when FromBitcoin conversion is provided without token identifier"
+            result.is_ok(),
+            "Should succeed when conversion from Bitcoin is provided with token identifier"
         );
     }
 
     #[test_all]
-    fn test_validate_token_spark_address_with_to_bitcoin_conversion_succeeds() {
+    fn test_validate_spark_address_with_token_id_and_to_bitcoin_ok() {
         let mut request = create_token_amount_request(1000, "token123");
         request.conversion_options = Some(ConversionOptions {
             conversion_type: ConversionType::ToBitcoin {
@@ -221,7 +215,7 @@ mod tests {
         let result = validate_request(&request);
         assert!(
             result.is_ok(),
-            "Should succeed when ToBitcoin conversion is provided for token spark address"
+            "Should succeed when ToBitcoin conversion is provided with token identifier (send-all-with-conversion)"
         );
     }
 }

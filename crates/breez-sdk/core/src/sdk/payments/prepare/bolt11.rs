@@ -42,6 +42,20 @@ fn validate_request(
                 .to_string(),
         ));
     }
+
+    // Token-denominated payment to a fixed-amount Bolt11 invoice is ambiguous:
+    // the user's converted sats may not match the invoice amount, causing
+    // overpayment or send failure. Omit `amount` so the SDK can derive the
+    // conversion from the invoice and fees instead.
+    if invoice_details.amount_msat.is_some()
+        && request.amount.is_some()
+        && request.token_identifier.is_some()
+    {
+        return Err(SdkError::InvalidInput(
+            "Token amount is not supported for invoices with a fixed amount".to_string(),
+        ));
+    }
+
     // Conversion from Bitcoin is not supported for Bolt11 invoices
     if matches!(
         &request.conversion_options,
@@ -77,7 +91,11 @@ pub(super) async fn prepare(
         None
     };
 
-    if let Some(response) = maybe_prepare_from_token_conversion(
+    if conversion::is_token_denominated(
+        request.amount,
+        request.conversion_options.as_ref(),
+        token_identifier.as_ref(),
+    ) && let Some(response) = prepare_token_denominated(
         sdk,
         request,
         detailed_bolt11_invoice,
@@ -90,9 +108,32 @@ pub(super) async fn prepare(
         return Ok(response);
     }
 
+    prepare_sats_denominated(
+        sdk,
+        request,
+        detailed_bolt11_invoice,
+        spark_transfer_fee_sats,
+        token_identifier,
+        fee_policy,
+    )
+    .await
+}
+
+/// Sats-denominated Bolt11 prepare: `request.amount` (or the invoice's `amount_msat`)
+/// is in sats. Fetches the lightning fee for the user's amount, validates the
+/// receiver covers fees for `FeesIncluded` amountless invoices, and attaches a
+/// `MinAmountOut` conversion estimate for display when conversion options are set.
+async fn prepare_sats_denominated(
+    sdk: &BreezSdk,
+    request: &PrepareSendPaymentRequest,
+    invoice: &Bolt11InvoiceDetails,
+    spark_transfer_fee_sats: Option<u64>,
+    token_identifier: Option<String>,
+    fee_policy: FeePolicy,
+) -> Result<PrepareSendPaymentResponse, SdkError> {
     let amount = request
         .amount
-        .or(detailed_bolt11_invoice
+        .or(invoice
             .amount_msat
             .map(|msat| u128::from(msat).saturating_div(1000)))
         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
@@ -104,7 +145,7 @@ pub(super) async fn prepare(
         .await?;
 
     // Validate receiver amount is positive for FeesIncluded
-    if fee_policy == FeePolicy::FeesIncluded && detailed_bolt11_invoice.amount_msat.is_none() {
+    if fee_policy == FeePolicy::FeesIncluded && invoice.amount_msat.is_none() {
         let amount_u64: u64 = amount.try_into()?;
         if amount_u64 <= lightning_fee_sats {
             return Err(SdkError::InvalidInput(
@@ -123,7 +164,7 @@ pub(super) async fn prepare(
 
     Ok(PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::Bolt11Invoice {
-            invoice_details: detailed_bolt11_invoice.clone(),
+            invoice_details: invoice.clone(),
             spark_transfer_fee_sats,
             lightning_fee_sats,
         },
@@ -134,13 +175,17 @@ pub(super) async fn prepare(
     })
 }
 
-/// Prepares a Bolt11 invoice payment for token-to-Bitcoin conversion (send-all
-/// or non-send-all). Returns `Ok(None)` when the request is not a token conversion
-/// so the caller can fall through to the regular bolt11 prepare path.
+/// Token-denominated Bolt11 prepare: `request.amount` is in token base units and
+/// `conversion_options` is `ToBitcoin`. Estimates the conversion, fetches lightning
+/// fees based on the estimated sats, and validates the conversion output covers
+/// the invoice + fees.
 ///
-/// Estimates the conversion, fetches lightning fees based on the estimated sats,
-/// and validates the receiver amount covers fees.
-async fn maybe_prepare_from_token_conversion(
+/// Returns `Ok(None)` when the converter can't validate the requested conversion
+/// (rare — unsupported config / temporary outage), so the caller can fall back to
+/// the sats-denominated path. The `is_token_denominated` gate at the call site
+/// guarantees `request.amount.is_some()`, so the early-`None` on missing amount
+/// is a defensive safety net rather than a reachable path.
+async fn prepare_token_denominated(
     sdk: &BreezSdk,
     request: &PrepareSendPaymentRequest,
     invoice: &Bolt11InvoiceDetails,
@@ -209,6 +254,8 @@ mod tests {
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    // ---- Token identifier requires ToBitcoin conversion ----
+
     #[test_all]
     fn test_validate_bolt11_invoice_without_token_identifier() {
         let invoice = create_test_bolt11_invoice();
@@ -238,6 +285,8 @@ mod tests {
             panic!("Expected InvalidInput error");
         }
     }
+
+    // ---- FeesIncluded only on amountless invoices ----
 
     #[test_all]
     fn test_validate_bolt11_invoice_fees_included_with_amountless_invoice() {
@@ -270,6 +319,8 @@ mod tests {
         }
     }
 
+    // ---- Conversion direction ----
+
     #[test_all]
     fn test_validate_bolt11_invoice_with_valid_conversion() {
         let invoice = create_test_bolt11_invoice();
@@ -301,6 +352,59 @@ mod tests {
         assert!(
             result.is_err(),
             "Should fail when conversion from Bitcoin is provided"
+        );
+    }
+
+    // ---- Token amount + fixed-amount invoice (anti-pattern) ----
+
+    #[test_all]
+    fn test_validate_bolt11_token_payment_to_fixed_amount_invoice_rejected() {
+        // Fixed-amount invoice + user-supplied token amount + token_identifier
+        // is ambiguous (would overpay or fail); the SDK-derive path requires
+        // omitting `amount`.
+        let mut invoice = create_test_bolt11_invoice();
+        invoice.amount_msat = Some(1_000_000); // 1000 sats fixed
+        let mut request = create_token_amount_request(2000, "token123");
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        });
+        let result = validate_request(&invoice, &request);
+        assert!(
+            result.is_err(),
+            "Should reject token amount supplied for a fixed-amount Bolt11 invoice"
+        );
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("Token amount") && msg.contains("fixed amount"),
+                "Error should explain the ambiguity (got: {msg})"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_bolt11_token_payment_to_fixed_amount_invoice_no_amount_ok() {
+        // The supported path for paying a fixed-amount invoice with tokens:
+        // user omits `amount`, SDK derives the conversion from the invoice + fees.
+        let mut invoice = create_test_bolt11_invoice();
+        invoice.amount_msat = Some(1_000_000);
+        let mut request = create_test_request();
+        request.token_identifier = Some("token123".to_string());
+        request.conversion_options = Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        });
+        assert!(
+            validate_request(&invoice, &request).is_ok(),
+            "Token payment to fixed-amount invoice should be allowed when amount is omitted"
         );
     }
 }

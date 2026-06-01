@@ -180,6 +180,8 @@ mod tests {
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    // ---- Token identifier match / mismatch / allowed / not allowed ----
+
     #[test_all]
     fn test_validate_spark_invoice_token_identifier_match() {
         let mut invoice = create_test_invoice();
@@ -256,6 +258,8 @@ mod tests {
         }
     }
 
+    // ---- FeesIncluded ----
+
     #[test_all]
     fn test_validate_spark_invoice_fees_included_with_amountless_invoice() {
         let invoice = create_test_invoice(); // No amount
@@ -306,6 +310,8 @@ mod tests {
         );
     }
 
+    // ---- Invoice expiry ----
+
     #[test_all]
     fn test_validate_spark_invoice_expired() {
         let mut invoice = create_test_invoice();
@@ -348,6 +354,8 @@ mod tests {
         assert!(result.is_ok(), "Should succeed when invoice hasn't expired");
     }
 
+    // ---- Sender public key ----
+
     #[test_all]
     fn test_validate_spark_invoice_sender_public_key_match() {
         let mut invoice = create_test_invoice();
@@ -384,6 +392,8 @@ mod tests {
             panic!("Expected InvalidInput error");
         }
     }
+
+    // ---- Amount validation ----
 
     #[test_all]
     fn test_validate_spark_invoice_amount_match() {
@@ -478,6 +488,8 @@ mod tests {
         }
     }
 
+    // ---- Comprehensive positive ----
+
     #[allow(clippy::arithmetic_side_effects)]
     #[test_all]
     fn test_validate_spark_invoice_all_valid() {
@@ -498,6 +510,8 @@ mod tests {
         let result = validate_request(&invoice, &request, &identity_key);
         assert!(result.is_ok(), "Should succeed when all validations pass");
     }
+
+    // ---- Conversion direction ----
 
     #[test_all]
     fn test_validate_spark_invoice_with_valid_token_conversion() {

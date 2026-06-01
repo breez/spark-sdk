@@ -198,17 +198,25 @@ pub(super) async fn resolve_send_amount_with_conversion_estimate(
     amount: u128,
     fee_policy: FeePolicy,
 ) -> Result<(u128, Option<ConversionEstimate>), SdkError> {
-    let (estimated_sats, conversion_estimate) = estimate_sats_from_token_conversion(
-        sdk,
-        conversion_options,
-        token_identifier,
-        amount,
-        fee_policy,
-    )
-    .await?;
-    if conversion_estimate.is_some() {
-        return Ok((estimated_sats, conversion_estimate));
+    // Token-denominated: substitute `amount` with the post-conversion estimated sats.
+    // The converter may refuse for unsupported configs; in that rare case we fall
+    // through to the sats-denominated branch (pre-existing behavior).
+    if is_token_denominated(Some(amount), conversion_options, token_identifier) {
+        let (estimated_sats, conversion_estimate) = estimate_sats_from_token_conversion(
+            sdk,
+            conversion_options,
+            token_identifier,
+            amount,
+            fee_policy,
+        )
+        .await?;
+        if conversion_estimate.is_some() {
+            return Ok((estimated_sats, conversion_estimate));
+        }
     }
+
+    // Sats-denominated: keep `amount` as-is, attach a `MinAmountOut` estimate for display
+    // (or `None` when no conversion options were set).
     let estimate = estimate_conversion(
         sdk,
         conversion_options,
@@ -564,6 +572,38 @@ async fn complete_conversion_and_send(
         .map(|payment| SendPaymentResponse { payment })
 }
 
+/// Returns whether the conversion options request a token→sats conversion.
+///
+/// Used by [`is_token_denominated`] for routing decisions, and by per-type
+/// prepare paths that need to know whether the destination sats will be
+/// produced by a conversion (so leaf selection should be skipped at fee-quote
+/// time — see `prepare/bitcoin_address.rs`).
+pub(super) fn is_to_bitcoin(conversion_options: Option<&ConversionOptions>) -> bool {
+    matches!(
+        conversion_options,
+        Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin { .. },
+            ..
+        })
+    )
+}
+
+/// Returns whether the request is token-denominated: the user supplied an
+/// `amount` (in token base units), declared the source token via
+/// `token_identifier`, and the conversion is `ToBitcoin`.
+///
+/// Used at the top of each per-type prepare to branch between the token-denominated
+/// and sats-denominated paths explicitly, instead of probing further down. When
+/// `token_identifier` is unset, the user's `amount` is in sats and the conversion
+/// (if any) just sources the sats — that's the sats-denominated path.
+pub(super) fn is_token_denominated(
+    amount: Option<u128>,
+    conversion_options: Option<&ConversionOptions>,
+    token_identifier: Option<&String>,
+) -> bool {
+    amount.is_some() && token_identifier.is_some() && is_to_bitcoin(conversion_options)
+}
+
 /// Returns whether the prepare used `AmountIn` (user specified the token amount)
 /// rather than `MinAmountOut` (user specified sats).
 ///
@@ -606,7 +646,7 @@ fn compute_amount_override(
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_amount_override, uses_amount_in};
+    use super::{compute_amount_override, is_to_bitcoin, is_token_denominated, uses_amount_in};
     use crate::{ConversionEstimate, ConversionOptions, ConversionType};
     use macros::test_all;
 
@@ -629,6 +669,102 @@ mod tests {
         }
     }
 
+    fn to_bitcoin_options() -> ConversionOptions {
+        ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: "token123".to_string(),
+            },
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        }
+    }
+
+    fn from_bitcoin_options() -> ConversionOptions {
+        ConversionOptions {
+            conversion_type: ConversionType::FromBitcoin,
+            max_slippage_bps: None,
+            completion_timeout_secs: None,
+        }
+    }
+
+    // ============ is_to_bitcoin ============
+
+    #[test_all]
+    fn test_is_to_bitcoin_yes() {
+        assert!(is_to_bitcoin(Some(&to_bitcoin_options())));
+    }
+
+    #[test_all]
+    fn test_is_to_bitcoin_from_bitcoin() {
+        assert!(!is_to_bitcoin(Some(&from_bitcoin_options())));
+    }
+
+    #[test_all]
+    fn test_is_to_bitcoin_no_options() {
+        assert!(!is_to_bitcoin(None));
+    }
+
+    // ============ is_token_denominated ============
+
+    // ---- Happy path ----
+
+    #[test_all]
+    fn test_is_token_denominated_all_set() {
+        // amount + token_id + ToBitcoin → token-denominated.
+        let token_id = "token123".to_string();
+        assert!(is_token_denominated(
+            Some(1000),
+            Some(&to_bitcoin_options()),
+            Some(&token_id)
+        ));
+    }
+
+    // ---- Missing inputs ----
+
+    #[test_all]
+    fn test_is_token_denominated_no_amount() {
+        // No amount → never token-denominated (the user can't have given token units).
+        let token_id = "token123".to_string();
+        assert!(!is_token_denominated(
+            None,
+            Some(&to_bitcoin_options()),
+            Some(&token_id)
+        ));
+    }
+
+    #[test_all]
+    fn test_is_token_denominated_no_token_identifier() {
+        // Without `token_identifier` the user's `amount` is in sats, not tokens —
+        // the conversion (if any) just sources the sats. That's the sats-denominated
+        // path, even with `ToBitcoin` options set.
+        assert!(!is_token_denominated(
+            Some(1000),
+            Some(&to_bitcoin_options()),
+            None
+        ));
+    }
+
+    #[test_all]
+    fn test_is_token_denominated_no_conversion_options() {
+        let token_id = "token123".to_string();
+        assert!(!is_token_denominated(Some(1000), None, Some(&token_id)));
+    }
+
+    // ---- Wrong conversion direction ----
+
+    #[test_all]
+    fn test_is_token_denominated_from_bitcoin_is_sats_denominated() {
+        // FromBitcoin (sats → tokens) is the sats-denominated path.
+        let token_id = "token123".to_string();
+        assert!(!is_token_denominated(
+            Some(1000),
+            Some(&from_bitcoin_options()),
+            Some(&token_id)
+        ));
+    }
+
+    // ============ uses_amount_in ============
+
     #[test_all]
     fn test_uses_amount_in_none_estimate() {
         assert!(!uses_amount_in(1000, None));
@@ -649,6 +785,10 @@ mod tests {
         assert!(!uses_amount_in(799, Some(&estimate)));
     }
 
+    // ============ compute_amount_override ============
+
+    // ---- Caller override takes precedence ----
+
     #[test_all]
     fn test_compute_amount_override_caller_override_wins() {
         // Caller override takes precedence regardless of the other inputs.
@@ -662,11 +802,15 @@ mod tests {
         );
     }
 
+    // ---- MinAmountOut: no override needed ----
+
     #[test_all]
     fn test_compute_amount_override_min_amount_out_no_override() {
         // MinAmountOut conversion (uses_amount_in = false) → no override.
         assert_eq!(compute_amount_override(None, false, 1000, 800, 900), None);
     }
+
+    // ---- AmountIn: actual sats + sats_change ----
 
     #[test_all]
     fn test_compute_amount_override_amount_in_no_change() {
@@ -687,6 +831,8 @@ mod tests {
             Some(1210)
         );
     }
+
+    // ---- Defensive: saturation/overflow paths ----
 
     #[test_all]
     fn test_compute_amount_override_estimated_out_exceeds_prepared() {

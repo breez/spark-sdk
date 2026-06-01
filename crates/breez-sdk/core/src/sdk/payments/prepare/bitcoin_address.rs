@@ -62,7 +62,11 @@ pub(super) async fn prepare(
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
     validate_request(request)?;
 
-    if let Some(response) = maybe_prepare_from_token_conversion(
+    if conversion::is_token_denominated(
+        request.amount,
+        request.conversion_options.as_ref(),
+        token_identifier.as_ref(),
+    ) && let Some(response) = prepare_token_denominated(
         sdk,
         request,
         withdrawal_address,
@@ -74,6 +78,28 @@ pub(super) async fn prepare(
         return Ok(response);
     }
 
+    prepare_sats_denominated(
+        sdk,
+        request,
+        withdrawal_address,
+        token_identifier,
+        fee_policy,
+    )
+    .await
+}
+
+/// Sats-denominated Bitcoin-address prepare: `request.amount` is in sats. Validates
+/// against the address dust limit (before fetching a fee quote, then again on the
+/// post-fee output for `FeesIncluded`), fetches the coop-exit fee quote, and
+/// attaches a `MinAmountOut` conversion estimate for display when conversion options
+/// are set.
+async fn prepare_sats_denominated(
+    sdk: &BreezSdk,
+    request: &PrepareSendPaymentRequest,
+    withdrawal_address: &BitcoinAddressDetails,
+    token_identifier: Option<String>,
+    fee_policy: FeePolicy,
+) -> Result<PrepareSendPaymentResponse, SdkError> {
     let amount = request
         .amount
         .ok_or(SdkError::InvalidInput("Amount is required".to_string()))?;
@@ -89,14 +115,16 @@ pub(super) async fn prepare(
         )));
     }
 
-    // When stable balance is active (has an active label), sats come
-    // from token conversion so they don't exist yet — pass None to
-    // skip leaf selection.
+    // When a token→sats conversion will run (either auto-filled by an active
+    // stable balance, or explicitly requested via `ToBitcoin` options), the
+    // destination sats don't exist yet — pass None to skip leaf selection.
     let stable_balance_active = match &sdk.stable_balance {
         Some(sb) => sb.get_active_label().await.is_some(),
         None => false,
     };
-    let fee_quote_amount = if stable_balance_active {
+    let sats_from_conversion =
+        stable_balance_active || conversion::is_to_bitcoin(request.conversion_options.as_ref());
+    let fee_quote_amount = if sats_from_conversion {
         None
     } else {
         Some(amount.try_into()?)
@@ -139,13 +167,17 @@ pub(super) async fn prepare(
     })
 }
 
-/// Prepares a Bitcoin address payment for token-to-Bitcoin conversion (send-all
-/// or non-send-all). Returns `Ok(None)` when the request is not a token conversion
-/// so the caller can fall through to the regular bitcoin address prepare path.
+/// Token-denominated Bitcoin-address prepare: `request.amount` is in token base
+/// units and `conversion_options` is `ToBitcoin`. Estimates the conversion, fetches
+/// the onchain fee quote based on the estimated sats, and validates the output
+/// after fees meets the dust limit.
 ///
-/// Estimates the conversion, fetches onchain fee quote based on the estimated
-/// sats, and validates the output after fees meets the dust limit.
-async fn maybe_prepare_from_token_conversion(
+/// Returns `Ok(None)` when the converter can't validate the requested conversion
+/// (rare — unsupported config / temporary outage), so the caller can fall back to
+/// the sats-denominated path. The `is_token_denominated` gate at the call site
+/// guarantees `request.amount.is_some()`, so the early-`None` on missing amount
+/// is a defensive safety net rather than a reachable path.
+async fn prepare_token_denominated(
     sdk: &BreezSdk,
     request: &PrepareSendPaymentRequest,
     withdrawal_address: &BitcoinAddressDetails,
@@ -243,79 +275,9 @@ mod tests {
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    #[test_all]
-    fn test_validate_dust_above_limit() {
-        assert!(validate_dust(1000, 546, FeePolicy::FeesExcluded, 0).is_ok());
-    }
+    // ============ validate_request ============
 
-    #[test_all]
-    fn test_validate_dust_below_limit() {
-        let result = validate_dust(500, 546, FeePolicy::FeesExcluded, 0);
-        assert!(result.is_err(), "Should fail below dust limit");
-        if let Err(SdkError::InvalidInput(msg)) = result {
-            assert!(
-                msg.contains("below the minimum") && !msg.contains("after lowest fees"),
-                "Should use the base (pre-fee) message"
-            );
-        } else {
-            panic!("Expected InvalidInput error");
-        }
-    }
-
-    #[test_all]
-    fn test_validate_dust_fees_excluded_ignores_fee() {
-        // FeesExcluded: a large fee is irrelevant as long as amount >= dust.
-        assert!(validate_dust(600, 546, FeePolicy::FeesExcluded, 1000).is_ok());
-    }
-
-    #[test_all]
-    fn test_validate_dust_fees_included_output_above_limit() {
-        // 1000 - 400 = 600 >= 546 → ok.
-        assert!(validate_dust(1000, 546, FeePolicy::FeesIncluded, 400).is_ok());
-    }
-
-    #[test_all]
-    fn test_validate_dust_fees_included_output_below_limit() {
-        // 1000 - 500 = 500 < 546 → fail with the post-fee message.
-        let result = validate_dust(1000, 546, FeePolicy::FeesIncluded, 500);
-        assert!(result.is_err(), "Should fail when post-fee output dusts");
-        if let Err(SdkError::InvalidInput(msg)) = result {
-            assert!(
-                msg.contains("after lowest fees of 500 sats"),
-                "Should use the post-fee message"
-            );
-        } else {
-            panic!("Expected InvalidInput error");
-        }
-    }
-
-    #[test_all]
-    fn test_validate_dust_amount_equals_limit() {
-        // Boundary: amount == dust is allowed (check is `<`, not `<=`).
-        assert!(validate_dust(546, 546, FeePolicy::FeesExcluded, 0).is_ok());
-    }
-
-    #[test_all]
-    fn test_validate_dust_fees_included_output_equals_limit() {
-        // Boundary: post-fee output exactly equals dust is allowed. 946 - 400 = 546.
-        assert!(validate_dust(946, 546, FeePolicy::FeesIncluded, 400).is_ok());
-    }
-
-    #[test_all]
-    fn test_validate_dust_fees_included_fee_exceeds_amount() {
-        // min_fee_sats > amount_sats: output saturates to 0 (no underflow) and
-        // dusts → error with the post-fee message.
-        let result = validate_dust(600, 546, FeePolicy::FeesIncluded, 1000);
-        assert!(result.is_err(), "Should fail when fee exceeds amount");
-        if let Err(SdkError::InvalidInput(msg)) = result {
-            assert!(
-                msg.contains("after lowest fees of 1000 sats"),
-                "Should use the post-fee message"
-            );
-        } else {
-            panic!("Expected InvalidInput error");
-        }
-    }
+    // ---- Amount required ----
 
     #[test_all]
     fn test_validate_bitcoin_address_with_amount() {
@@ -339,6 +301,8 @@ mod tests {
         }
     }
 
+    // ---- Token identifier requires ToBitcoin conversion ----
+
     #[test_all]
     fn test_validate_bitcoin_address_with_token_identifier() {
         let request = create_token_amount_request(1000, "token123");
@@ -357,6 +321,8 @@ mod tests {
         }
     }
 
+    // ---- FeesIncluded ----
+
     #[test_all]
     fn test_validate_bitcoin_address_with_fees_included() {
         let request = create_fees_included_request(1000);
@@ -366,6 +332,8 @@ mod tests {
             "Should succeed when FeesIncluded is used for Bitcoin address"
         );
     }
+
+    // ---- Conversion direction ----
 
     #[test_all]
     fn test_validate_bitcoin_address_with_valid_conversion() {
@@ -397,5 +365,87 @@ mod tests {
             result.is_err(),
             "Should fail when conversion from Bitcoin is provided"
         );
+    }
+
+    // ============ validate_dust ============
+
+    // ---- Base dust limit ----
+
+    #[test_all]
+    fn test_validate_dust_above_limit() {
+        assert!(validate_dust(1000, 546, FeePolicy::FeesExcluded, 0).is_ok());
+    }
+
+    #[test_all]
+    fn test_validate_dust_below_limit() {
+        let result = validate_dust(500, 546, FeePolicy::FeesExcluded, 0);
+        assert!(result.is_err(), "Should fail below dust limit");
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("below the minimum") && !msg.contains("after lowest fees"),
+                "Should use the base (pre-fee) message"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_dust_amount_equals_limit() {
+        // Boundary: amount == dust is allowed (check is `<`, not `<=`).
+        assert!(validate_dust(546, 546, FeePolicy::FeesExcluded, 0).is_ok());
+    }
+
+    // ---- FeesExcluded ignores fee ----
+
+    #[test_all]
+    fn test_validate_dust_fees_excluded_ignores_fee() {
+        // FeesExcluded: a large fee is irrelevant as long as amount >= dust.
+        assert!(validate_dust(600, 546, FeePolicy::FeesExcluded, 1000).is_ok());
+    }
+
+    // ---- FeesIncluded post-fee output ----
+
+    #[test_all]
+    fn test_validate_dust_fees_included_output_above_limit() {
+        // 1000 - 400 = 600 >= 546 → ok.
+        assert!(validate_dust(1000, 546, FeePolicy::FeesIncluded, 400).is_ok());
+    }
+
+    #[test_all]
+    fn test_validate_dust_fees_included_output_equals_limit() {
+        // Boundary: post-fee output exactly equals dust is allowed. 946 - 400 = 546.
+        assert!(validate_dust(946, 546, FeePolicy::FeesIncluded, 400).is_ok());
+    }
+
+    #[test_all]
+    fn test_validate_dust_fees_included_output_below_limit() {
+        // 1000 - 500 = 500 < 546 → fail with the post-fee message.
+        let result = validate_dust(1000, 546, FeePolicy::FeesIncluded, 500);
+        assert!(result.is_err(), "Should fail when post-fee output dusts");
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("after lowest fees of 500 sats"),
+                "Should use the post-fee message"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
+    }
+
+    #[test_all]
+    fn test_validate_dust_fees_included_fee_exceeds_amount() {
+        // min_fee_sats > amount_sats: output saturates to 0 (no underflow) and
+        // dusts → error with the post-fee message.
+        let result = validate_dust(600, 546, FeePolicy::FeesIncluded, 1000);
+        assert!(result.is_err(), "Should fail when fee exceeds amount");
+        if let Err(SdkError::InvalidInput(msg)) = result {
+            assert!(
+                msg.contains("after lowest fees of 1000 sats"),
+                "Should use the post-fee message"
+            );
+        } else {
+            panic!("Expected InvalidInput error");
+        }
     }
 }
