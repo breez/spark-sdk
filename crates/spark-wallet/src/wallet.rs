@@ -35,7 +35,7 @@ use spark::{
         TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
     },
     session_store::{InMemorySessionStore, SessionStore},
-    signer::{Signer, SparkSignerAdapter},
+    signer::SparkSigner,
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
         InMemoryTokenOutputStore, SelectionStrategy, SynchronousTokenOutputService, TokenMetadata,
@@ -173,8 +173,7 @@ pub struct SparkWallet {
     deposit_service: Arc<DepositService>,
     event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
-    signer: Arc<dyn Signer>,
-    spark_signer: Arc<dyn spark::signer::SparkSigner>,
+    spark_signer: Arc<dyn SparkSigner>,
     tree_service: Arc<dyn TreeService>,
     token_output_service: Arc<dyn TokenOutputService>,
     coop_exit_service: Arc<CoopExitService>,
@@ -200,11 +199,11 @@ pub struct SparkWallet {
 impl SparkWallet {
     pub async fn connect(
         config: SparkWalletConfig,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
     ) -> Result<Self, SparkWalletError> {
         Self::new(
             config,
-            signer,
+            spark_signer,
             Arc::new(InMemorySessionStore::default()),
             Arc::new(InMemoryTreeStore::default()),
             Arc::new(InMemoryTokenOutputStore::default()),
@@ -222,7 +221,7 @@ impl SparkWallet {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         config: SparkWalletConfig,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         session_store: Arc<dyn SessionStore>,
         tree_store: Arc<dyn TreeStore>,
         token_output_store: Arc<dyn TokenOutputStore>,
@@ -235,26 +234,20 @@ impl SparkWallet {
         cancellation_token: Option<watch::Receiver<()>>,
     ) -> Result<Self, SparkWalletError> {
         config.validate()?;
-        let identity_public_key = signer.get_identity_public_key().await?;
-
-        // Default in-process high-level signer wrapping the low-level signer.
-        // Services are being migrated onto this incrementally; un-migrated
-        // services still use `signer` directly.
-        let spark_signer: Arc<dyn spark::signer::SparkSigner> =
-            Arc::new(SparkSignerAdapter::new(Arc::clone(&signer)));
+        let identity_public_key = spark_signer.get_identity_public_key().await?;
 
         let bitcoin_service = BitcoinService::new(config.network);
         let service_provider = Arc::new(match ssp_http_client {
             Some(client) => ServiceProvider::new_with_client(
                 config.service_provider_config.clone(),
-                Arc::clone(&signer),
+                Arc::clone(&spark_signer),
                 Arc::clone(&session_store),
                 ssp_extra_header_provider,
                 client,
             ),
             None => ServiceProvider::new(
                 config.service_provider_config.clone(),
-                Arc::clone(&signer),
+                Arc::clone(&spark_signer),
                 Arc::clone(&session_store),
                 ssp_extra_header_provider,
             ),
@@ -265,14 +258,13 @@ impl SparkWallet {
                 &config.operator_pool,
                 connection_manager,
                 Arc::clone(&session_store),
-                Arc::clone(&signer),
+                Arc::clone(&spark_signer),
                 so_extra_header_provider,
             )
             .await?,
         );
 
         let transfer_service = Arc::new(TransferService::new(
-            signer.clone(),
             Arc::clone(&spark_signer),
             config.network,
             config.split_secret_threshold,
@@ -284,7 +276,6 @@ impl SparkWallet {
             operator_pool.clone(),
             service_provider.clone(),
             config.network,
-            Arc::clone(&signer),
             Arc::clone(&spark_signer),
             transfer_service.clone(),
             config.split_secret_threshold,
@@ -292,7 +283,6 @@ impl SparkWallet {
         ));
 
         let timelock_manager = Arc::new(TimelockManager::new(
-            signer.clone(),
             Arc::clone(&spark_signer),
             config.network,
             operator_pool.clone(),
@@ -304,7 +294,6 @@ impl SparkWallet {
             config.network,
             operator_pool.clone(),
             service_provider.clone(),
-            Arc::clone(&signer),
             Arc::clone(&spark_signer),
         ));
 
@@ -313,7 +302,6 @@ impl SparkWallet {
             service_provider.clone(),
             Arc::clone(&transfer_service),
             config.network,
-            Arc::clone(&signer),
             Arc::clone(&spark_signer),
             transfer_observer.clone(),
         ));
@@ -325,7 +313,7 @@ impl SparkWallet {
         let swap_service = Arc::new(Swap::new(
             config.network,
             operator_pool.clone(),
-            Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             Arc::clone(&service_provider),
             Arc::clone(&transfer_service),
         ));
@@ -336,7 +324,7 @@ impl SparkWallet {
             operator_pool.clone(),
             tree_store.clone(),
             Arc::clone(&timelock_manager),
-            Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             Arc::clone(&swap_service),
         ));
 
@@ -345,12 +333,11 @@ impl SparkWallet {
                 config.network,
                 operator_pool.clone(),
                 token_output_store,
-                Arc::clone(&signer),
+                Arc::clone(&spark_signer),
             ));
 
         let token_service = Arc::new(TokenService::new(
             token_output_service.clone(),
-            Arc::clone(&signer),
             Arc::clone(&spark_signer),
             operator_pool.clone(),
             config.network,
@@ -362,7 +349,6 @@ impl SparkWallet {
         let htlc_service = Arc::new(HtlcService::new(
             operator_pool.clone(),
             config.network,
-            Arc::clone(&signer),
             Arc::clone(&spark_signer),
             Arc::clone(&transfer_service),
             transfer_observer,
@@ -418,7 +404,6 @@ impl SparkWallet {
             deposit_service,
             event_manager,
             identity_public_key,
-            signer,
             spark_signer,
             tree_service,
             token_output_service,
@@ -745,7 +730,7 @@ impl SparkWallet {
         &self,
     ) -> Result<spark::services::SingleUseDepositAddress, SparkWalletError> {
         let leaf_id = TreeNodeId::generate();
-        let signing_public_key = self.signer.get_public_key_for_node(&leaf_id).await?;
+        let signing_public_key = self.spark_signer.get_public_key_for_leaf(&leaf_id).await?;
         let address = self
             .deposit_service
             .generate_deposit_address(signing_public_key, &leaf_id)
@@ -754,7 +739,7 @@ impl SparkWallet {
     }
 
     pub async fn generate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
-        let signing_public_key = self.signer.static_deposit_signing_key(0).await?;
+        let signing_public_key = self.spark_signer.get_static_deposit_public_key(0).await?;
         let address = self
             .deposit_service
             .generate_static_deposit_address(signing_public_key)
@@ -763,7 +748,7 @@ impl SparkWallet {
     }
 
     pub async fn rotate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
-        let signing_public_key = self.signer.static_deposit_signing_key(0).await?;
+        let signing_public_key = self.spark_signer.get_static_deposit_public_key(0).await?;
         let new_address = self
             .deposit_service
             .rotate_static_deposit_address(signing_public_key)
@@ -1171,8 +1156,8 @@ impl SparkWallet {
     /// If exposing this, consider adding a prefix to prevent mistakenly signing messages.
     pub async fn sign_message(&self, message: &str) -> Result<Signature, SparkWalletError> {
         Ok(self
-            .signer
-            .sign_message_ecdsa_with_identity_key(message.as_bytes())
+            .spark_signer
+            .sign_message(message.as_bytes())
             .await?)
     }
 

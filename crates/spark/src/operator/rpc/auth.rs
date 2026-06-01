@@ -15,12 +15,12 @@ use super::spark_authn::{
 use crate::header_provider::{HeaderProvider, HeaderProviderError};
 use crate::operator::rpc::transport::grpc_client::Transport;
 use crate::session_store::{Session, SessionStore, SessionStoreError};
-use crate::signer::Signer;
+use crate::signer::SparkSigner;
 
 #[derive(Clone)]
 pub struct SoAuthHeaderProvider {
     transport: Transport,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     session_store: Arc<dyn SessionStore>,
     identity_public_key: PublicKey,
 }
@@ -28,13 +28,13 @@ pub struct SoAuthHeaderProvider {
 impl SoAuthHeaderProvider {
     pub fn new(
         transport: Transport,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         session_store: Arc<dyn SessionStore>,
         identity_public_key: PublicKey,
     ) -> Self {
         Self {
             transport,
-            signer,
+            spark_signer,
             session_store,
             identity_public_key,
         }
@@ -63,7 +63,7 @@ impl SoAuthHeaderProvider {
     }
 
     async fn authenticate(&self) -> Result<Session> {
-        let pk = self.signer.get_identity_public_key().await?;
+        let pk = self.spark_signer.get_identity_public_key().await?;
         let challenge_req = GetChallengeRequest {
             public_key: pk.serialize().to_vec(),
         };
@@ -93,8 +93,8 @@ impl SoAuthHeaderProvider {
         let challenge_bytes = challenge.encode_to_vec();
 
         let signature = self
-            .signer
-            .sign_message_ecdsa_with_identity_key(&challenge_bytes)
+            .spark_signer
+            .sign_authentication_challenge(&challenge_bytes)
             .await?;
 
         let verify_req = VerifyChallengeRequest {

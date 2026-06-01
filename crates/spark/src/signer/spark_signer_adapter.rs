@@ -18,9 +18,11 @@ use prost::Message as _;
 
 use super::spark_signer::*;
 use super::{
-    SecretSource, SecretToSplit, SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
+    AggregateFrostRequest, SecretSource, SecretToSplit, SignFrostRequest, Signer, SignerError,
+    VerifiableSecretShare,
 };
 use crate::operator::rpc::spark as proto;
+use crate::utils::frost::aggregate_frost;
 use crate::utils::tagged_hasher::TaggedHasher;
 
 /// Length of a Lightning payment preimage in bytes.
@@ -162,6 +164,28 @@ impl SparkSigner for SparkSignerAdapter {
         leaf_id: &crate::tree::TreeNodeId,
     ) -> Result<PublicKey, SignerError> {
         self.signer.get_public_key_for_node(leaf_id).await
+    }
+
+    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
+        self.signer.static_deposit_signing_key(index).await
+    }
+
+    async fn sign_authentication_challenge(
+        &self,
+        challenge: &[u8],
+    ) -> Result<bitcoin::secp256k1::ecdsa::Signature, SignerError> {
+        self.signer
+            .sign_message_ecdsa_with_identity_key(challenge)
+            .await
+    }
+
+    async fn sign_message(
+        &self,
+        message: &[u8],
+    ) -> Result<bitcoin::secp256k1::ecdsa::Signature, SignerError> {
+        self.signer
+            .sign_message_ecdsa_with_identity_key(message)
+            .await
     }
 
     async fn sign_frost(&self, jobs: Vec<FrostJob>) -> Result<Vec<FrostShareResult>, SignerError> {
@@ -456,6 +480,99 @@ impl SparkSigner for SparkSignerAdapter {
         Ok(PreparedStaticDeposit {
             exported_secret,
             frost_shares,
+        })
+    }
+
+    async fn start_static_deposit_refund(
+        &self,
+        request: StartStaticDepositRefundRequest,
+    ) -> Result<StartedStaticDepositRefund, SignerError> {
+        let StartStaticDepositRefundRequest {
+            index,
+            user_statement,
+        } = request;
+
+        let signing_public_key = self.signer.static_deposit_signing_key(index).await?;
+        // User-commits-first: the nonce is generated now and forwarded to the
+        // operators; it is consumed later by `sign_static_deposit_refund`.
+        let nonce_commitment = self.signer.generate_random_signing_commitment().await?;
+        let user_signature = self
+            .signer
+            .sign_message_ecdsa_with_identity_key(&user_statement)
+            .await?;
+
+        Ok(StartedStaticDepositRefund {
+            signing_public_key,
+            nonce_commitment,
+            user_signature,
+        })
+    }
+
+    async fn sign_static_deposit_refund(
+        &self,
+        request: SignStaticDepositRefundRequest,
+    ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
+        let SignStaticDepositRefundRequest {
+            index,
+            sighash,
+            verifying_key,
+            nonce_commitment,
+            statechain_commitments,
+            statechain_signatures,
+            statechain_public_keys,
+        } = request;
+
+        let signing_private_key = self.signer.static_deposit_secret_encrypted(index).await?;
+        let aggregating_public_key = self.signer.static_deposit_signing_key(index).await?;
+
+        // User-commits-first: sign with the pre-committed nonce, then aggregate
+        // the user share with the operators' shares (pure public math).
+        let user_signature = self
+            .signer
+            .sign_frost(SignFrostRequest {
+                message: &sighash,
+                public_key: &verifying_key,
+                private_key: &signing_private_key,
+                verifying_key: &verifying_key,
+                self_nonce_commitment: &nonce_commitment,
+                statechain_commitments: statechain_commitments.clone(),
+                adaptor_public_key: None,
+            })
+            .await?;
+
+        aggregate_frost(AggregateFrostRequest {
+            message: &sighash,
+            statechain_signatures,
+            statechain_public_keys,
+            verifying_key: &verifying_key,
+            statechain_commitments,
+            self_commitment: &nonce_commitment.commitments,
+            public_key: &aggregating_public_key,
+            self_signature: &user_signature,
+            adaptor_public_key: None,
+        })
+    }
+
+    async fn prepare_static_deposit_claim(
+        &self,
+        request: PrepareStaticDepositClaimRequest,
+    ) -> Result<PreparedStaticDepositClaim, SignerError> {
+        let PrepareStaticDepositClaimRequest {
+            index,
+            user_statement,
+        } = request;
+
+        // The SSP co-signs the claim, so it needs the static-deposit secret in
+        // the clear (the exported/local-key path).
+        let deposit_secret_key = self.signer.static_deposit_secret(index).await?;
+        let user_signature = self
+            .signer
+            .sign_message_ecdsa_with_identity_key(&user_statement)
+            .await?;
+
+        Ok(PreparedStaticDepositClaim {
+            deposit_secret_key,
+            user_signature,
         })
     }
 

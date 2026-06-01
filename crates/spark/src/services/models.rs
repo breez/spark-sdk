@@ -258,7 +258,6 @@ pub(crate) fn split_signing_commitments_by_variant<T>(
 pub struct LeafKeyTweak {
     pub node: TreeNode,
     pub signing_key: SecretSource,
-    pub new_signing_key: SecretSource,
 }
 
 // TODO: verify if the optional times should be optional

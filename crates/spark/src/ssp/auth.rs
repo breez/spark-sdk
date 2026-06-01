@@ -8,7 +8,7 @@ use tracing::{debug, error};
 
 use crate::header_provider::{HeaderProvider, HeaderProviderError};
 use crate::session_store::{Session, SessionStore, SessionStoreError};
-use crate::signer::Signer;
+use crate::signer::SparkSigner;
 use crate::ssp::graphql::client::post_graphql_query;
 use crate::ssp::graphql::error::{GraphQLError, GraphQLResult};
 use crate::ssp::graphql::queries::{self, get_challenge, verify_challenge};
@@ -21,7 +21,7 @@ use crate::ssp::graphql::queries::{self, get_challenge, verify_challenge};
 pub struct SspAuthHeaderProvider {
     client: Arc<dyn HttpClient>,
     full_url: String,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     session_store: Arc<dyn SessionStore>,
     ssp_identity_public_key: PublicKey,
 }
@@ -31,7 +31,7 @@ impl SspAuthHeaderProvider {
         base_url: &str,
         schema_endpoint: Option<&str>,
         client: Arc<dyn HttpClient>,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         session_store: Arc<dyn SessionStore>,
         ssp_identity_public_key: PublicKey,
     ) -> Self {
@@ -39,7 +39,7 @@ impl SspAuthHeaderProvider {
         Self {
             client,
             full_url: format!("{base_url}/{schema_endpoint}"),
-            signer,
+            spark_signer,
             session_store,
             ssp_identity_public_key,
         }
@@ -71,7 +71,7 @@ impl SspAuthHeaderProvider {
         debug!("Authenticating with ssp");
 
         let identity_public_key =
-            hex::encode(self.signer.get_identity_public_key().await?.serialize());
+            hex::encode(self.spark_signer.get_identity_public_key().await?.serialize());
 
         let challenge_vars = get_challenge::Variables {
             input: get_challenge::GetChallengeInput {
@@ -93,8 +93,8 @@ impl SspAuthHeaderProvider {
             .map_err(|e| GraphQLError::serialization(e.to_string()))?;
 
         let signature = self
-            .signer
-            .sign_message_ecdsa_with_identity_key(&challenge_bytes)
+            .spark_signer
+            .sign_authentication_challenge(&challenge_bytes)
             .await?
             .serialize_der()
             .to_vec();

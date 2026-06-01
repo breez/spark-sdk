@@ -1,30 +1,21 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use bitcoin::Transaction;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
-use bitcoin::{Sequence, Transaction};
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::SigningCommitments;
 use tracing::info;
 
-use crate::core::{current_sequence, enforce_timelock, next_lightning_htlc_sequence};
-use crate::services::{LeafRefundSigningData, ServiceError, SignedTx};
-use crate::signer::{FrostDerivation, FrostJob, SecretSource, Signer, SignerError, SparkSigner};
-use crate::tree::{TreeNode, TreeNodeId};
+use crate::core::next_lightning_htlc_sequence;
+use crate::services::SignedTx;
+use crate::signer::{FrostDerivation, FrostJob, SecretSource, SignerError, SparkSigner};
 use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
 };
 use crate::utils::transactions::{RefundTransactions, create_refund_txs};
 use crate::{Network, bitcoin::sighash_from_tx, core::next_sequence, services::LeafKeyTweak};
-
-pub struct RefundTxConstructor<'a> {
-    pub node: &'a TreeNode,
-    pub vout: u32,
-    pub cpfp_sequence: Sequence,
-    pub direct_sequence: Sequence,
-    pub receiving_pubkey: &'a PublicKey,
-}
 
 pub struct SignRefundsParams<'a> {
     pub spark_signer: &'a Arc<dyn SparkSigner>,
@@ -43,41 +34,6 @@ pub struct SignedRefundTransactions {
     pub cpfp_signed_tx: Vec<SignedTx>,
     pub direct_signed_tx: Vec<SignedTx>,
     pub direct_from_cpfp_signed_tx: Vec<SignedTx>,
-}
-
-pub async fn prepare_leaf_refund_signing_data(
-    signer: &Arc<dyn Signer>,
-    leaf_key_tweaks: &[LeafKeyTweak],
-    receiving_public_key: PublicKey,
-) -> Result<HashMap<TreeNodeId, LeafRefundSigningData>, SignerError> {
-    let mut leaf_data_map = HashMap::new();
-    for leaf_key in leaf_key_tweaks.iter() {
-        let signing_nonce_commitment = signer.generate_random_signing_commitment().await?;
-        let direct_signing_nonce_commitment = signer.generate_random_signing_commitment().await?;
-        let direct_from_cpfp_signing_nonce_commitment =
-            signer.generate_random_signing_commitment().await?;
-
-        leaf_data_map.insert(
-            leaf_key.node.id.clone(),
-            LeafRefundSigningData {
-                signing_public_key: signer.public_key_from_secret(&leaf_key.signing_key).await?,
-                signing_private_key: leaf_key.signing_key.clone(),
-                receiving_public_key,
-                tx: leaf_key.node.node_tx.clone(),
-                direct_tx: leaf_key.node.direct_tx.clone(),
-                refund_tx: leaf_key.node.refund_tx.clone(),
-                direct_refund_tx: leaf_key.node.direct_refund_tx.clone(),
-                direct_from_cpfp_refund_tx: leaf_key.node.direct_from_cpfp_refund_tx.clone(),
-                signing_nonce_commitment,
-                direct_signing_nonce_commitment,
-                direct_from_cpfp_signing_nonce_commitment,
-                vout: leaf_key.node.vout,
-                connector_prev_out: None,
-            },
-        );
-    }
-
-    Ok(leaf_data_map)
 }
 
 pub async fn sign_refunds(
@@ -289,139 +245,3 @@ async fn sign_refund(
     })
 }
 
-/// Prepares refund signing jobs for claim operations
-pub fn prepare_refund_so_signing_jobs(
-    network: Network,
-    leaves: &[LeafKeyTweak],
-    leaf_data_map: &mut HashMap<TreeNodeId, LeafRefundSigningData>,
-    is_for_claim: bool,
-) -> Result<Vec<crate::operator::rpc::spark::LeafRefundTxSigningJob>, ServiceError> {
-    prepare_refund_so_signing_jobs_with_tx_constructor(
-        leaves,
-        leaf_data_map,
-        is_for_claim,
-        |refund_tx_constructor| {
-            let RefundTxConstructor {
-                node,
-                cpfp_sequence,
-                direct_sequence,
-                receiving_pubkey,
-                ..
-            } = refund_tx_constructor;
-            create_refund_txs(
-                &node.node_tx,
-                node.direct_refund_tx(),
-                cpfp_sequence,
-                direct_sequence,
-                receiving_pubkey,
-                network,
-            )
-        },
-    )
-}
-
-/// Prepares refund signing jobs for claim operations with a custom transaction constructor
-pub fn prepare_refund_so_signing_jobs_with_tx_constructor<F>(
-    leaves: &[LeafKeyTweak],
-    leaf_data_map: &mut HashMap<TreeNodeId, LeafRefundSigningData>,
-    is_for_claim: bool,
-    refund_tx_constructor: F,
-) -> Result<Vec<crate::operator::rpc::spark::LeafRefundTxSigningJob>, ServiceError>
-where
-    F: Fn(RefundTxConstructor) -> RefundTransactions,
-{
-    let mut signing_jobs = Vec::new();
-
-    for (i, leaf) in leaves.iter().enumerate() {
-        let refund_signing_data: &mut LeafRefundSigningData =
-            leaf_data_map.get_mut(&leaf.node.id).ok_or_else(|| {
-                ServiceError::Generic(format!("Leaf data not found for leaf {}", leaf.node.id))
-            })?;
-
-        let refund_tx = leaf
-            .node
-            .refund_tx
-            .clone()
-            .ok_or(ServiceError::Generic("No refund tx".to_string()))?;
-        let old_sequence = refund_tx.input[0].sequence;
-        let (cpfp_sequence, direct_sequence) = if is_for_claim {
-            let enforced = enforce_timelock(old_sequence);
-            current_sequence(enforced)
-        } else {
-            next_sequence(old_sequence).ok_or(ServiceError::Generic(
-                "Failed to get next sequence".to_string(),
-            ))?
-        };
-
-        let RefundTransactions {
-            cpfp_tx: cpfp_refund_tx,
-            direct_tx: direct_refund_tx,
-            direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
-        } = refund_tx_constructor(RefundTxConstructor {
-            node: &leaf.node,
-            vout: i as u32,
-            cpfp_sequence,
-            direct_sequence,
-            receiving_pubkey: &refund_signing_data.receiving_public_key,
-        });
-
-        info!(
-            "prepare_refund_so_signing_jobs_with_tx_constructor for leaf {}: Current sequence: {old_sequence}, next sequence: {}",
-            leaf.node.id, cpfp_refund_tx.input[0].sequence
-        );
-
-        let direct_refund_tx_signing_job = if let Some(direct_refund_tx) = &direct_refund_tx {
-            Some(crate::operator::rpc::spark::SigningJob {
-                signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
-                raw_tx: bitcoin::consensus::serialize(direct_refund_tx),
-                signing_nonce_commitment: Some(
-                    refund_signing_data
-                        .direct_signing_nonce_commitment
-                        .commitments
-                        .try_into()?,
-                ),
-            })
-        } else {
-            None
-        };
-        let direct_from_cpfp_refund_tx_signing_job =
-            if let Some(direct_from_cpfp_refund_tx) = &direct_from_cpfp_refund_tx {
-                Some(crate::operator::rpc::spark::SigningJob {
-                    signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
-                    raw_tx: bitcoin::consensus::serialize(direct_from_cpfp_refund_tx),
-                    signing_nonce_commitment: Some(
-                        refund_signing_data
-                            .direct_from_cpfp_signing_nonce_commitment
-                            .commitments
-                            .try_into()?,
-                    ),
-                })
-            } else {
-                None
-            };
-
-        let signing_job = crate::operator::rpc::spark::LeafRefundTxSigningJob {
-            leaf_id: leaf.node.id.to_string(),
-            refund_tx_signing_job: Some(crate::operator::rpc::spark::SigningJob {
-                signing_public_key: refund_signing_data.signing_public_key.serialize().to_vec(),
-                raw_tx: bitcoin::consensus::serialize(&cpfp_refund_tx),
-                signing_nonce_commitment: Some(
-                    refund_signing_data
-                        .signing_nonce_commitment
-                        .commitments
-                        .try_into()?,
-                ),
-            }),
-            direct_refund_tx_signing_job,
-            direct_from_cpfp_refund_tx_signing_job,
-        };
-
-        refund_signing_data.refund_tx = Some(cpfp_refund_tx);
-        refund_signing_data.direct_refund_tx = direct_refund_tx;
-        refund_signing_data.direct_from_cpfp_refund_tx = direct_from_cpfp_refund_tx;
-
-        signing_jobs.push(signing_job);
-    }
-
-    Ok(signing_jobs)
-}

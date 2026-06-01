@@ -28,7 +28,8 @@ pub use spark::{
     signer::{
         AggregateFrostRequest, DefaultSigner, DefaultSignerError, EncryptedSecret,
         FrostSigningCommitmentsWithNonces, KeySet, KeySetType, SecretShare, SecretSource,
-        SecretToSplit, SignFrostRequest, Signer, SignerError, VerifiableSecretShare,
+        SecretToSplit, SignFrostRequest, Signer, SignerError, SparkSigner, SparkSignerAdapter,
+        VerifiableSecretShare,
     },
     ssp::*,
     token::{

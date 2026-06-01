@@ -18,12 +18,15 @@ use crate::{
         OperatorPool,
         rpc::{self as operator_rpc, spark::HashVariant},
     },
-    services::{Utxo, models::map_signing_nonce_commitments},
-    signer::{FrostDerivation, FrostJob, Signer, SparkSigner},
+    services::{SigningResult, Utxo, models::map_signing_nonce_commitments},
+    signer::{
+        FrostDerivation, FrostJob, PrepareStaticDepositClaimRequest, PreparedStaticDepositClaim,
+        SignStaticDepositRefundRequest, SparkSigner, StartStaticDepositRefundRequest,
+        StartedStaticDepositRefund,
+    },
     ssp::{ClaimStaticDepositInput, ClaimStaticDepositRequestType, ServiceProvider},
     tree::{TreeNode, TreeNodeId},
     utils::{
-        frost::{SignAggregateFrostParams, sign_aggregate_frost},
         paging::{PagingFilter, PagingResult, pager},
         tagged_hasher::TaggedHasher,
         transactions::{
@@ -175,19 +178,16 @@ pub struct DepositService {
     network: Network,
     operator_pool: Arc<OperatorPool>,
     ssp_client: Arc<ServiceProvider>,
-    signer: Arc<dyn Signer>,
     spark_signer: Arc<dyn SparkSigner>,
 }
 
 impl DepositService {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         bitcoin_service: BitcoinService,
         identity_public_key: PublicKey,
         network: impl Into<Network>,
         operator_pool: Arc<OperatorPool>,
         ssp_client: Arc<ServiceProvider>,
-        signer: Arc<dyn Signer>,
         spark_signer: Arc<dyn SparkSigner>,
     ) -> Self {
         DepositService {
@@ -196,7 +196,6 @@ impl DepositService {
             network: network.into(),
             operator_pool,
             ssp_client,
-            signer,
             spark_signer,
         }
     }
@@ -278,26 +277,28 @@ impl DepositService {
             signature: quote_signature,
         } = quote;
 
-        // Serialize the static deposit claim payload
-        let payload = self.serialize_static_deposit_claim_payload(
+        // Serialize the static deposit claim user-statement.
+        let user_statement = self.serialize_static_deposit_claim_payload(
             txid,
             output_index,
             UtxoSwapRequestType::Fixed,
             credit_amount_sats,
             &quote_signature.serialize_der(),
         );
-        // Sign the payload with the identity key
-        let signature = self
-            .signer
-            .sign_message_ecdsa_with_identity_key(&payload)
-            .await?;
 
-        // TODO: Seems unavoidable to use the static deposit secret key here
-        let deposit_secret_key = self
-            .signer
-            .static_deposit_secret(0)
-            .await
-            .map_err(ServiceError::SignerError)?;
+        // The signer exports the static-deposit secret (the SSP co-signs and
+        // needs it in the clear) and signs the user-statement with the
+        // identity key.
+        let PreparedStaticDepositClaim {
+            deposit_secret_key,
+            user_signature,
+        } = self
+            .spark_signer
+            .prepare_static_deposit_claim(PrepareStaticDepositClaimRequest {
+                index: 0,
+                user_statement,
+            })
+            .await?;
 
         // Call the service provider to claim the static deposit
         let resp = self
@@ -311,7 +312,7 @@ impl DepositService {
                 max_fee_sats: None,
                 deposit_secret_key: hex::encode(deposit_secret_key.secret_bytes()),
                 quote_signature: quote_signature.serialize_der().to_string(),
-                signature: signature.serialize_der().to_string(),
+                signature: user_signature.serialize_der().to_string(),
             })
             .await?;
 
@@ -375,30 +376,30 @@ impl DepositService {
         );
 
         let spend_tx_sighash = sighash_from_tx(&refund_tx, 0, tx_out)?;
-        let spend_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
 
-        // Serialize the static deposit claim payload
-        let payload = self.serialize_static_deposit_claim_payload(
+        // Serialize the static deposit refund user-statement.
+        let user_statement = self.serialize_static_deposit_claim_payload(
             txid,
             output_index,
             UtxoSwapRequestType::Refund,
             credit_amount_sats,
             spend_tx_sighash.as_byte_array(),
         );
-        // Sign the payload with the identity key
-        let signature = self
-            .signer
-            .sign_message_ecdsa_with_identity_key(&payload)
-            .await?;
 
-        // Create the UTXO swap request
-        // Create the UTXO swap request
-        let signing_public_key = self
-            .signer
-            .static_deposit_signing_key(0)
-            .await?
-            .serialize()
-            .to_vec();
+        // Begin the refund (user-commits-first): the signer returns the
+        // static-deposit signing key, a user nonce commitment to forward to the
+        // operators, and the identity-key signature over the user-statement.
+        let StartedStaticDepositRefund {
+            signing_public_key,
+            nonce_commitment,
+            user_signature,
+        } = self
+            .spark_signer
+            .start_static_deposit_refund(StartStaticDepositRefundRequest {
+                index: 0,
+                user_statement,
+            })
+            .await?;
 
         let refund_resp = self
             .operator_pool
@@ -413,13 +414,11 @@ impl DepositService {
                             .map_err(|_| ServiceError::InvalidTransaction)?,
                         ..Default::default()
                     }),
-                    user_signature: signature.serialize_der().to_vec(),
+                    user_signature: user_signature.serialize_der().to_vec(),
                     refund_tx_signing_job: Some(operator_rpc::spark::SigningJob {
-                        signing_public_key,
+                        signing_public_key: signing_public_key.serialize().to_vec(),
                         raw_tx: serialize(&refund_tx),
-                        signing_nonce_commitment: Some(
-                            spend_nonce_commitment.commitments.try_into()?,
-                        ),
+                        signing_nonce_commitment: Some(nonce_commitment.commitments.try_into()?),
                     }),
                     hash_variant: 0,
                 },
@@ -427,7 +426,7 @@ impl DepositService {
             .await?;
 
         // Collect and map the signing results
-        let signing_result = refund_resp
+        let signing_result: SigningResult = refund_resp
             .refund_tx_signing_result
             .as_ref()
             .map(|sr| sr.try_into())
@@ -440,24 +439,23 @@ impl DepositService {
             .transpose()
             .map_err(|_| ServiceError::InvalidPublicKey)?
             .ok_or(ServiceError::InvalidVerifyingKey)?;
-        let static_deposit_private_key_source =
-            self.signer.static_deposit_secret_encrypted(0).await?;
-        let static_deposit_public_key = self.signer.static_deposit_signing_key(0).await?;
 
-        let spend_signature = sign_aggregate_frost(SignAggregateFrostParams {
-            signer: &self.signer,
-            sighash: &spend_tx_sighash,
-            signing_public_key: &verifying_public_key,
-            aggregating_public_key: &static_deposit_public_key,
-            signing_private_key: &static_deposit_private_key_source,
-            self_nonce_commitment: &spend_nonce_commitment,
-            adaptor_public_key: None,
-            verifying_key: &verifying_public_key,
-            signing_result,
-        })
-        .await?;
+        // Finish the refund: the signer produces the user's FROST share (bound
+        // to the committed nonce) and aggregates it with the operators' shares.
+        let spend_signature = self
+            .spark_signer
+            .sign_static_deposit_refund(SignStaticDepositRefundRequest {
+                index: 0,
+                sighash: *spend_tx_sighash.as_byte_array(),
+                verifying_key: verifying_public_key,
+                nonce_commitment,
+                statechain_commitments: signing_result.signing_commitments,
+                statechain_signatures: signing_result.signature_shares,
+                statechain_public_keys: signing_result.public_keys,
+            })
+            .await?;
 
-        // Update the input the aggregated signature
+        // Update the input with the aggregated signature
         let mut witness = Witness::new();
         witness.push(&spend_signature.serialize()?);
         refund_tx.input[0].witness = witness;

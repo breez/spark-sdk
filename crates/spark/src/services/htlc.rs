@@ -16,14 +16,13 @@ use crate::{
     Network,
     operator::{OperatorPool, rpc::spark::QueryHtlcRequest},
     services::{PreimageRequestWithTransfer, QueryHtlcFilter, ServiceError, TransferService},
-    signer::{Signer, SparkSigner},
+    signer::SparkSigner,
     utils::paging::{PagingFilter, PagingResult, pager},
 };
 
 pub struct HtlcService {
     operator_pool: Arc<OperatorPool>,
     network: Network,
-    signer: Arc<dyn Signer>,
     spark_signer: Arc<dyn SparkSigner>,
     transfer_service: Arc<TransferService>,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
@@ -33,7 +32,6 @@ impl HtlcService {
     pub fn new(
         operator_pool: Arc<OperatorPool>,
         network: Network,
-        signer: Arc<dyn Signer>,
         spark_signer: Arc<dyn SparkSigner>,
         transfer_service: Arc<TransferService>,
         transfer_observer: Option<Arc<dyn TransferObserver>>,
@@ -41,7 +39,6 @@ impl HtlcService {
         HtlcService {
             operator_pool,
             network,
-            signer,
             spark_signer,
             transfer_service,
             transfer_observer,
@@ -62,7 +59,7 @@ impl HtlcService {
         };
 
         if let Some(transfer_observer) = &self.transfer_observer {
-            let identity_public_key = &self.signer.get_identity_public_key().await?;
+            let identity_public_key = &self.spark_signer.get_identity_public_key().await?;
             if identity_public_key != receiver_id {
                 let receiver_address = SparkAddress::new(*receiver_id, self.network, None);
                 let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
@@ -78,7 +75,7 @@ impl HtlcService {
             }
         }
 
-        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(&self.signer, leaves, None).await?;
+        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves, None);
 
         let prepared_transfer_request = self
             .transfer_service
@@ -141,7 +138,7 @@ impl HtlcService {
                 payment_hash: payment_hash.to_byte_array().to_vec(),
                 preimage: preimage.to_vec(),
                 identity_public_key: self
-                    .signer
+                    .spark_signer
                     .get_identity_public_key()
                     .await?
                     .serialize()

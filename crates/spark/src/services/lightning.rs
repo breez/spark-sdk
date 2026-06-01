@@ -11,7 +11,7 @@ use crate::ssp::{
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
 use crate::{
-    signer::{Signer, SparkSigner},
+    signer::SparkSigner,
     tree::TreeNode,
 };
 use bitcoin::hashes::{Hash, sha256};
@@ -200,7 +200,6 @@ pub struct LightningService {
     operator_pool: Arc<OperatorPool>,
     ssp_client: Arc<ServiceProvider>,
     network: Network,
-    signer: Arc<dyn Signer>,
     spark_signer: Arc<dyn SparkSigner>,
     transfer_service: Arc<TransferService>,
     split_secret_threshold: u32,
@@ -208,12 +207,10 @@ pub struct LightningService {
 }
 
 impl LightningService {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         operator_pool: Arc<OperatorPool>,
         ssp_client: Arc<ServiceProvider>,
         network: Network,
-        signer: Arc<dyn Signer>,
         spark_signer: Arc<dyn SparkSigner>,
         transfer_service: Arc<TransferService>,
         split_secret_threshold: u32,
@@ -223,7 +220,6 @@ impl LightningService {
             operator_pool,
             ssp_client,
             network,
-            signer,
             spark_signer,
             transfer_service,
             split_secret_threshold,
@@ -314,7 +310,7 @@ impl LightningService {
 
         let identity_pubkey = match identity_pubkey {
             Some(pk) => pk,
-            None => self.signer.get_identity_public_key().await?,
+            None => self.spark_signer.get_identity_public_key().await?,
         };
 
         let is_hodl = external_payment_hash.is_some();
@@ -444,8 +440,7 @@ impl LightningService {
         }
 
         // Prepare leaf tweaks
-        let leaf_tweaks =
-            prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None).await?;
+        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec(), None);
 
         let prepared_transfer_request = self
             .transfer_service

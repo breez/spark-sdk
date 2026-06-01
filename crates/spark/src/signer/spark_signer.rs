@@ -17,11 +17,17 @@
 //!  * deposit tree creation = `sign_frost` (the three root-tree txs)
 //!  * cooperative exit = `sign_frost` (connector refunds) + `prepare_transfer`
 //!  * lightning send = `sign_frost` (HTLC refunds) + `prepare_transfer`
-//!  * timelock renewal / static-deposit refund = `sign_frost`
+//!  * timelock renewal = `sign_frost`
+//!
+//! Static-deposit refund is the exception: it is *user-commits-first* (the user
+//! nonce commitment must reach the operators before they sign), so it can't be
+//! a single operator-commits-first `sign_frost`. It gets its own method pair —
+//! `start_static_deposit_refund` + `sign_static_deposit_refund` — split across
+//! the operator round-trip.
 
 use std::collections::BTreeMap;
 
-use bitcoin::secp256k1::{PublicKey, ecdsa, schnorr};
+use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
 
 use super::{FrostSigningCommitmentsWithNonces, SignerError};
@@ -205,6 +211,85 @@ pub struct PreparedStaticDeposit {
     pub frost_shares: Vec<FrostShareResult>,
 }
 
+// ─── static-deposit refund ────────────────────────────────────────────────
+
+/// Begin a static-deposit refund. Unlike every other FROST flow this one is
+/// *user-commits-first*: the user's nonce commitment must reach the operators
+/// (in `initiate_static_deposit_utxo_refund`) before they produce their shares,
+/// so refund signing is split across the operator round-trip instead of being a
+/// single operator-commits-first [`sign_frost`](SparkSigner::sign_frost) call.
+///
+/// It is also the *exported/local-key* path: the static-deposit key is
+/// recoverable client-side (the default adapter signs with the local
+/// static-deposit key; a Turnkey backend exports the static-deposit account),
+/// so the returned nonce travels with that already-local key material between
+/// the two calls.
+#[derive(Debug, Clone)]
+pub struct StartStaticDepositRefundRequest {
+    /// Static-deposit address index.
+    pub index: u32,
+    /// The refund user-statement bytes to ECDSA-sign with the identity key
+    /// (sent to the operators as `user_signature`).
+    pub user_statement: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StartedStaticDepositRefund {
+    /// Static-deposit signing public key (operator
+    /// `SigningJob.signing_public_key`).
+    pub signing_public_key: PublicKey,
+    /// The user's FROST nonce commitment: forward it to the operators, then
+    /// pass it back into
+    /// [`sign_static_deposit_refund`](SparkSigner::sign_static_deposit_refund).
+    pub nonce_commitment: FrostSigningCommitmentsWithNonces,
+    /// ECDSA identity signature over `user_statement`.
+    pub user_signature: ecdsa::Signature,
+}
+
+/// Finish a static-deposit refund once the operators have produced their
+/// signing result for the refund transaction.
+#[derive(Debug, Clone)]
+pub struct SignStaticDepositRefundRequest {
+    /// Static-deposit address index.
+    pub index: u32,
+    /// 32-byte BIP-341 sighash of the refund spend transaction.
+    pub sighash: [u8; 32],
+    /// FROST group verifying key (from the operator response).
+    pub verifying_key: PublicKey,
+    /// The nonce commitment returned by
+    /// [`start_static_deposit_refund`](SparkSigner::start_static_deposit_refund).
+    pub nonce_commitment: FrostSigningCommitmentsWithNonces,
+    /// Operators' round-1 commitments for the refund tx.
+    pub statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
+    /// Operators' round-2 signature shares for the refund tx.
+    pub statechain_signatures: BTreeMap<Identifier, SignatureShare>,
+    /// Operators' public keys for the refund tx.
+    pub statechain_public_keys: BTreeMap<Identifier, PublicKey>,
+}
+
+// ─── static-deposit claim ─────────────────────────────────────────────────
+
+/// Prepare a static-deposit claim. Like the refund, this is the
+/// *exported/local-key* path: the SSP co-signs the claim and therefore needs
+/// the static-deposit secret in the clear, so the signer exports it. The
+/// default adapter reads its local static-deposit key; a Turnkey backend
+/// exports the static-deposit account from the enclave.
+#[derive(Debug, Clone)]
+pub struct PrepareStaticDepositClaimRequest {
+    /// Static-deposit address index.
+    pub index: u32,
+    /// The claim user-statement bytes to ECDSA-sign with the identity key.
+    pub user_statement: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedStaticDepositClaim {
+    /// The static-deposit secret key, exported in the clear for the SSP.
+    pub deposit_secret_key: SecretKey,
+    /// ECDSA identity signature over `user_statement`.
+    pub user_signature: ecdsa::Signature,
+}
+
 // ─── sign_spark_invoice ───────────────────────────────────────────────────
 
 /// Which Spark invoice payload is being signed (the two have different hash
@@ -267,6 +352,28 @@ pub trait SparkSigner: Send + Sync + 'static {
     async fn get_public_key_for_leaf(&self, leaf_id: &TreeNodeId)
     -> Result<PublicKey, SignerError>;
 
+    /// Returns the static-deposit signing public key at `index`. Pure
+    /// public-key derivation (no signing): the wallet hands this to the
+    /// operators to derive a static-deposit address. Analogous to
+    /// [`get_public_key_for_leaf`](Self::get_public_key_for_leaf).
+    async fn get_static_deposit_public_key(
+        &self,
+        index: u32,
+    ) -> Result<PublicKey, SignerError>;
+
+    /// Signs a server authentication challenge with the wallet identity key
+    /// (ECDSA). Used for Spark operator (gRPC) and SSP session authentication.
+    async fn sign_authentication_challenge(
+        &self,
+        challenge: &[u8],
+    ) -> Result<ecdsa::Signature, SignerError>;
+
+    /// Signs an arbitrary user message with the wallet identity key (ECDSA).
+    /// Distinct from [`sign_authentication_challenge`](Self::sign_authentication_challenge)
+    /// so a policy-enforcing signer can gate user-facing message signing
+    /// separately from session authentication.
+    async fn sign_message(&self, message: &[u8]) -> Result<ecdsa::Signature, SignerError>;
+
     /// Produce FROST shares for a batch of jobs (maps to `SPARK_SIGN_FROST`).
     /// Used directly by deposit tree creation, transfer/coop-exit refund
     /// signing, timelock renewal, static-deposit refund, lightning send, and
@@ -308,6 +415,32 @@ pub trait SparkSigner: Send + Sync + 'static {
         &self,
         request: PrepareStaticDepositRequest,
     ) -> Result<PreparedStaticDeposit, SignerError>;
+
+    /// Begin a static-deposit refund: return the static-deposit signing public
+    /// key, a fresh user FROST nonce commitment, and the identity-key ECDSA
+    /// signature over the refund user-statement. See
+    /// [`StartStaticDepositRefundRequest`] for why this is split from
+    /// [`sign_static_deposit_refund`](Self::sign_static_deposit_refund).
+    async fn start_static_deposit_refund(
+        &self,
+        request: StartStaticDepositRefundRequest,
+    ) -> Result<StartedStaticDepositRefund, SignerError>;
+
+    /// Finish a static-deposit refund: produce the user's FROST share over the
+    /// refund sighash (bound to the nonce from `start_static_deposit_refund`)
+    /// and aggregate it with the operators' shares into the final signature.
+    async fn sign_static_deposit_refund(
+        &self,
+        request: SignStaticDepositRefundRequest,
+    ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
+
+    /// Prepare a static-deposit claim: export the static-deposit secret in the
+    /// clear (the SSP co-signs and needs it) and ECDSA-sign the claim
+    /// user-statement with the identity key.
+    async fn prepare_static_deposit_claim(
+        &self,
+        request: PrepareStaticDepositClaimRequest,
+    ) -> Result<PreparedStaticDepositClaim, SignerError>;
 
     /// Schnorr-sign a Spark invoice (sats or tokens) with the identity key.
     /// Spark invoices are unrelated to Lightning.

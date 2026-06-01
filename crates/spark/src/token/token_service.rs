@@ -31,7 +31,7 @@ use crate::{
         TokenInputs, TokenOutputToSpend, TokenTransaction, TokenTransactionStatus,
         TokenTransferInput, TransferObserver, TransferTokenOutput,
     },
-    signer::{PrepareTokenTransactionRequest, Signer, SparkSigner, TokenTransactionKind},
+    signer::{PrepareTokenTransactionRequest, SparkSigner, TokenTransactionKind},
     token::{
         GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
         TokenMetadata, TokenOutput, TokenOutputService, TokenOutputWithPrevOut, TokenOutputs,
@@ -115,7 +115,6 @@ pub struct TokensConfig {
 
 pub struct TokenService {
     token_output_service: Arc<dyn TokenOutputService>,
-    signer: Arc<dyn Signer>,
     spark_signer: Arc<dyn SparkSigner>,
     operator_pool: Arc<OperatorPool>,
     network: Network,
@@ -128,7 +127,6 @@ impl TokenService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         token_output_service: Arc<dyn TokenOutputService>,
-        signer: Arc<dyn Signer>,
         spark_signer: Arc<dyn SparkSigner>,
         operator_pool: Arc<OperatorPool>,
         network: Network,
@@ -138,7 +136,6 @@ impl TokenService {
     ) -> Self {
         Self {
             token_output_service,
-            signer,
             spark_signer,
             operator_pool,
             network,
@@ -345,7 +342,7 @@ impl TokenService {
                 .map(|k| k.serialize().to_vec())
                 .collect::<Vec<_>>(),
             None => vec![
-                self.signer
+                self.spark_signer
                     .get_identity_public_key()
                     .await?
                     .serialize()
@@ -453,7 +450,7 @@ impl TokenService {
     }
 
     pub async fn get_issuer_token_metadata(&self) -> Result<TokenMetadata, ServiceError> {
-        let identity_public_key = self.signer.get_identity_public_key().await?;
+        let identity_public_key = self.spark_signer.get_identity_public_key().await?;
         let tokens_metadata = self
             .get_tokens_metadata(&[], &[identity_public_key])
             .await?;
@@ -607,7 +604,7 @@ impl TokenService {
         let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
 
         // Stable for the wallet's lifetime; fetch once and reuse across retries and below.
-        let identity_public_key = self.signer.get_identity_public_key().await?;
+        let identity_public_key = self.spark_signer.get_identity_public_key().await?;
 
         let mut attempt = 0;
         let mut preempted_attempt = 0;
@@ -802,11 +799,11 @@ impl TokenService {
         .map_err(|e| ServiceError::Generic(e.to_string()))?;
 
         let signature = self
-            .signer
-            .sign_hash_schnorr_with_identity_key(&result.partial_token_transaction_hash)
-            .await?
-            .serialize()
-            .to_vec();
+            .sign_token_digest(
+                TokenTransactionKind::Partial,
+                &result.partial_token_transaction_hash,
+            )
+            .await?;
 
         let owner_signatures = inputs
             .iter()
@@ -1067,7 +1064,7 @@ impl TokenService {
                 .map(|o| o.output.token_amount)
                 .sum::<u128>();
 
-            let identity_public_key = self.signer.get_identity_public_key().await?;
+            let identity_public_key = self.spark_signer.get_identity_public_key().await?;
             let receiver_address = SparkAddress::new(identity_public_key, self.network, None);
             let receiver_outputs = build_consolidation_outputs(
                 &output.metadata.identifier,
@@ -1128,7 +1125,7 @@ impl TokenService {
         let token_inputs = rpc::spark_token::token_transaction::TokenInputs::CreateInput(
             rpc::spark_token::TokenCreateInput {
                 issuer_public_key: self
-                    .signer
+                    .spark_signer
                     .get_identity_public_key()
                     .await?
                     .serialize()
@@ -1151,7 +1148,7 @@ impl TokenService {
         amount: u128,
     ) -> Result<rpc::spark_token::TokenTransaction, ServiceError> {
         let identity_public_key = self
-            .signer
+            .spark_signer
             .get_identity_public_key()
             .await?
             .serialize()
@@ -1254,7 +1251,7 @@ impl TokenService {
             .client
             .start_transaction(StartTransactionRequest {
                 identity_public_key: self
-                    .signer
+                    .spark_signer
                     .get_identity_public_key()
                     .await?
                     .serialize()
@@ -1299,7 +1296,7 @@ impl TokenService {
                 final_token_transaction_hash: final_tx_hash.clone(),
                 input_ttxo_signatures_per_operator: per_operator_signatures,
                 owner_identity_public_key: self
-                    .signer
+                    .spark_signer
                     .get_identity_public_key()
                     .await?
                     .serialize()
