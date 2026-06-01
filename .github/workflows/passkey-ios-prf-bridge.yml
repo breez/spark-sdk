@@ -1,0 +1,20 @@
+name: Passkey iOS PRF Bridge
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prf-bridge-guard:
+    name: No direct refined-for-swift PRF use in iOS Swift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check passkey PRF bridge usage
+        run: scripts/check-passkey-prf-bridge.sh
