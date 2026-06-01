@@ -21,7 +21,7 @@ use crate::{
     signer::{SecretSource, Signer},
     ssp::{RequestSwapInput, ServiceProvider, ServiceProviderError, UserLeafInput},
     tree::{TreeNode, TreeNodeId},
-    utils::{frost::sign_aggregate_frost, refund::RefundSignatures},
+    utils::frost::sign_aggregate_frost,
 };
 
 const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
@@ -136,7 +136,6 @@ impl Swap {
                 &transfer_id,
                 &leaf_key_tweaks,
                 &receiver_public_key,
-                RefundSignatures::default(),
                 None,
                 Some(expiry_time),
                 Some(&cpfp_adaptor_public_key),

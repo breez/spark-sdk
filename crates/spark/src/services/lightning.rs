@@ -458,7 +458,6 @@ impl LightningService {
                 &unwrapped_transfer_id,
                 &leaf_tweaks,
                 &ssp_identity_public_key,
-                Default::default(),
                 Some(payment_hash),
                 Some(expiry_time),
                 None, // No adaptor public key for lightning transfers

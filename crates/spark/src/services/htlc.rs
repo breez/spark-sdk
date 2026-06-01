@@ -86,7 +86,6 @@ impl HtlcService {
                 &unwrapped_transfer_id,
                 &leaf_key_tweaks,
                 receiver_id,
-                Default::default(),
                 Some(payment_hash),
                 Some(expiry_time),
                 None, // No adaptor public key for HTLC transfers

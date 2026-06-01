@@ -38,7 +38,7 @@ use tracing::{debug, error, trace, warn};
 
 use crate::{
     bitcoin::sighash_from_tx,
-    signer::{Signer, SparkSigner},
+    signer::{OperatorRecipient, PrepareTransferRequest, Signer, SparkSigner, TransferLeafInput},
     tree::{TreeNode, TreeNodeId},
 };
 
@@ -223,19 +223,9 @@ impl TransferService {
         receiver_id: &PublicKey,
         spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
-        let key_tweak_input_map = self
-            .prepare_send_transfer_key_tweaks(
-                transfer_id,
-                receiver_id,
-                leaf_key_tweaks,
-                Default::default(),
-            )
-            .await?;
-
         let prepared_package = self
             .prepare_transfer_package(
                 transfer_id,
-                key_tweak_input_map,
                 leaf_key_tweaks,
                 receiver_id,
                 None,
@@ -444,7 +434,6 @@ impl TransferService {
     pub(crate) async fn prepare_transfer_package(
         &self,
         transfer_id: &TransferId,
-        key_tweak_input_map: HashMap<Identifier, Vec<operator_rpc::spark::SendLeafKeyTweak>>,
         leaf_key_tweaks: &[LeafKeyTweak],
         receiver_public_key: &PublicKey,
         payment_hash: Option<&sha256::Hash>,
@@ -480,6 +469,7 @@ impl TransferService {
         let direct_signing_commitments = direct_chunk.to_vec();
         let direct_from_cpfp_signing_commitments = direct_from_cpfp_chunk.to_vec();
 
+        // Refund signing (operator-commits-first) with the old leaf key.
         let SignedRefundTransactions {
             cpfp_signed_tx,
             direct_signed_tx,
@@ -497,9 +487,26 @@ impl TransferService {
         })
         .await?;
 
-        let encrypted_key_tweaks = self.encrypt_key_tweaks(&key_tweak_input_map)?;
+        // Key-tweak / Feldman-split / ECIES / transfer-payload signing. The
+        // signer generates the new receiver key and produces the per-operator
+        // encrypted key-tweak packages plus the transfer-package signature.
+        let prepared = self
+            .spark_signer
+            .prepare_transfer(PrepareTransferRequest {
+                transfer_id: transfer_id.clone(),
+                receiver_public_key: *receiver_public_key,
+                leaves: leaf_key_tweaks
+                    .iter()
+                    .map(|l| TransferLeafInput {
+                        node: l.node.clone(),
+                    })
+                    .collect(),
+                operator_recipients: self.operator_recipients(),
+                threshold: self.split_secret_threshold,
+            })
+            .await?;
 
-        let unsigned_transfer_package = operator_rpc::spark::TransferPackage {
+        let transfer_package = operator_rpc::spark::TransferPackage {
             leaves_to_send: cpfp_signed_tx
                 .iter()
                 .map(|l| l.try_into())
@@ -512,48 +519,50 @@ impl TransferService {
                 .iter()
                 .map(|l| l.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            key_tweak_package: encrypted_key_tweaks
+            key_tweak_package: prepared
+                .operator_packages
                 .into_iter()
-                .map(|(k, v)| (hex::encode(k.serialize()), v))
+                .map(|p| {
+                    (
+                        hex::encode(p.operator_identifier.serialize()),
+                        p.encrypted_package,
+                    )
+                })
                 .collect(),
-            user_signature: Vec::new(),
+            user_signature: prepared.transfer_user_signature.serialize_der().to_vec(),
             hash_variant: HashVariant::V2.into(),
         };
 
-        let signed_transfer_package = self
-            .sign_transfer_package(transfer_id, unsigned_transfer_package)
-            .await?;
-
         Ok(PreparedTransferPackage {
-            transfer_package: signed_transfer_package,
+            transfer_package,
             cpfp_signed_txs: cpfp_signed_tx,
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Builds the operator-recipient list for share-encryption from the pool.
+    fn operator_recipients(&self) -> Vec<OperatorRecipient> {
+        self.operator_pool
+            .get_all_operators()
+            .map(|op| OperatorRecipient {
+                id: op.id,
+                identifier: op.identifier,
+                public_key: op.identity_public_key,
+            })
+            .collect()
+    }
+
     pub async fn prepare_transfer_request(
         &self,
         transfer_id: &TransferId,
         leaves: &[LeafKeyTweak],
         receiver_public_key: &PublicKey,
-        refund_signatures: RefundSignatures,
         payment_hash: Option<&sha256::Hash>,
         expiry_time: Option<SystemTime>,
         cpfp_adaptor_public_key: Option<&PublicKey>,
     ) -> Result<PreparedTransferRequest, ServiceError> {
-        let key_tweak_input_map = self
-            .prepare_send_transfer_key_tweaks(
-                transfer_id,
-                receiver_public_key,
-                leaves,
-                refund_signatures,
-            )
-            .await?;
-
         let prepared_package = self
             .prepare_transfer_package(
                 transfer_id,
-                key_tweak_input_map,
                 leaves,
                 receiver_public_key,
                 payment_hash,
