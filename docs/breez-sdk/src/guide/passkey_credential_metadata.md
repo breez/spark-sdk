@@ -10,7 +10,7 @@ Every passkey flow returns the credential it used or created, so your app can ma
 
 | Field | Available | Use it for |
 |---|---|---|
-| {{#name credential_id}} | always | Pinning later ceremonies via `allow_credentials` / `exclude_credentials`. |
+| {{#name credential_id}} | always | Passing back as `allow_credentials` / `exclude_credentials` (see below). |
 | {{#name user_id}} | registration | The WebAuthn user handle the provider minted. |
 | {{#name aaguid}} | registration | Showing the authenticator / provider (see below). Unverified. |
 | {{#name backup_eligible}} | registration | Showing whether the passkey syncs across the user's devices. |
@@ -25,12 +25,12 @@ Persist {{#name credential_id}} from every response in your own storage. On regi
 
 For cross-device continuity, back this store with synced storage: iCloud Keychain (`kSecAttrSynchronizable`) on iOS, Block Store on Android, or your own synced backend. Plain local storage does not survive reinstall or replicate to a second device.
 
-## Restricting credentials (advanced)
+## Reusing stored credential IDs
 
-Both lists are optional: the basic sign-in and register flows work without them.
+The IDs you store are passed back to the SDK through two optional request lists (both default to empty):
 
-- `allow_credentials` (on sign-in) specifies which registered credentials may authenticate, which streamlines the credential picker. For a seed-deriving wallet, pinning it to the active credential also keeps a returning user in the same wallet.
-- `exclude_credentials` (on register) prevents registering more than one credential for the same account on one device. A match raises {{#enum PrfProviderError::CredentialAlreadyExists}}, which you route to sign-in:
+- `allow_credentials` on {{#name sign_in}} lists the registered credentials a sign-in may use. The OS offers only those, which streamlines its picker. Passing the credential a returning user last signed in with also keeps a seed-deriving wallet on that credential, so they re-open the same wallet.
+- `exclude_credentials` on {{#name register}} lists the credentials already registered for this account, so the OS refuses to create a second one on the same device and raises {{#enum PrfProviderError::CredentialAlreadyExists}} instead. Route that to sign-in:
 
 {{#tabs passkey:recover-already-exists}}
 
