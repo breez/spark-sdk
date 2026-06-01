@@ -14,7 +14,7 @@ use crate::{
         },
     },
     services::{ServiceError, map_signing_nonce_commitments},
-    signer::{SecretSource, Signer},
+    signer::{SecretSource, Signer, SparkSigner},
     tree::{TreeNode, TreeNodeId},
     utils::{
         signing_job::{SigningJob, SigningJobType, sign_signing_jobs},
@@ -35,6 +35,7 @@ enum RenewType<'a> {
 
 pub struct TimelockManager {
     signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     network: Network,
     operator_pool: Arc<OperatorPool>,
 }
@@ -42,11 +43,13 @@ pub struct TimelockManager {
 impl TimelockManager {
     pub fn new(
         signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         network: Network,
         operator_pool: Arc<OperatorPool>,
     ) -> Self {
         Self {
             signer,
+            spark_signer,
             network,
             operator_pool,
         }
@@ -293,7 +296,7 @@ impl TimelockManager {
             .await?;
 
         let signed_jobs = sign_signing_jobs(
-            &self.signer,
+            &self.spark_signer,
             signing_jobs,
             signing_commitments,
             self.network,
@@ -459,7 +462,7 @@ impl TimelockManager {
             .await?;
 
         let signed_jobs = sign_signing_jobs(
-            &self.signer,
+            &self.spark_signer,
             signing_jobs,
             signing_commitments,
             self.network,
@@ -599,7 +602,7 @@ impl TimelockManager {
             .await?;
 
         let signed_jobs = sign_signing_jobs(
-            &self.signer,
+            &self.spark_signer,
             signing_jobs,
             signing_commitments,
             self.network,

@@ -11,11 +11,8 @@ use crate::Network;
 use crate::bitcoin::sighash_from_tx;
 use crate::operator::rpc as operator_rpc;
 use crate::services::{ServiceError, SignedTx};
-use crate::signer::{FrostSigningCommitmentsWithNonces, SecretSource, SignFrostRequest};
-use crate::{
-    signer::{Signer, SignerError},
-    tree::TreeNodeId,
-};
+use crate::signer::{FrostDerivation, FrostJob, FrostSigningCommitmentsWithNonces, SparkSigner};
+use crate::{signer::SignerError, tree::TreeNodeId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) enum SigningJobType {
@@ -63,7 +60,7 @@ pub struct SignedJob {
 }
 
 pub async fn sign_signing_jobs(
-    signer: &Arc<dyn Signer>,
+    spark_signer: &Arc<dyn SparkSigner>,
     signing_jobs: Vec<SigningJob>,
     signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
     network: Network,
@@ -73,26 +70,29 @@ pub async fn sign_signing_jobs(
     for (i, signing_job) in signing_jobs.iter().enumerate() {
         let sighash = sighash_from_tx(&signing_job.tx, 0, &signing_job.parent_tx_out)
             .map_err(|e| SignerError::Generic(e.to_string()))?;
-        let private_key = SecretSource::Derived(signing_job.node_id.clone());
-        let user_signature = signer
-            .sign_frost(SignFrostRequest {
-                message: sighash.to_raw_hash().to_byte_array().as_ref(),
-                public_key: &signing_job.signing_public_key,
-                private_key: &private_key,
-                verifying_key: &signing_job.verifying_public_key,
-                self_nonce_commitment: &signing_job.signing_commitments,
-                statechain_commitments: signing_commitments[i].clone(),
+        // Each renewal tx is signed with the node's derived leaf key.
+        let share = spark_signer
+            .sign_frost(vec![FrostJob {
+                derivation: FrostDerivation::SigningLeaf {
+                    leaf_id: signing_job.node_id.clone(),
+                },
+                sighash: sighash.to_raw_hash().to_byte_array(),
+                verifying_key: signing_job.verifying_public_key,
+                operator_commitments: signing_commitments[i].clone(),
                 adaptor_public_key: None,
-            })
-            .await?;
+            }])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| SignerError::Generic("sign_frost returned no share".to_string()))?;
         signed_txs.push(SignedJob {
             job_type: signing_job.job_type,
             signed_tx: SignedTx {
                 node_id: signing_job.node_id.clone(),
                 signing_public_key: signing_job.signing_public_key,
                 tx: signing_job.tx.clone(),
-                user_signature,
-                self_nonce_commitment: signing_job.signing_commitments.clone(),
+                user_signature: share.signature_share,
+                self_nonce_commitment: share.commitment,
                 signing_commitments: signing_commitments[i].clone(),
                 network,
             },

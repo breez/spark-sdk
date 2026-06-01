@@ -293,6 +293,7 @@ impl SparkWallet {
 
         let timelock_manager = Arc::new(TimelockManager::new(
             signer.clone(),
+            Arc::clone(&spark_signer),
             config.network,
             operator_pool.clone(),
         ));
