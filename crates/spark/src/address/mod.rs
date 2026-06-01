@@ -8,7 +8,7 @@ use crate::{
         SparkInvoiceFields as ProtoSparkInvoiceFields, TokensPayment as ProtoTokensPayment,
         spark_invoice_fields::PaymentType as ProtoPaymentType,
     },
-    signer::Signer,
+    signer::{SignSparkInvoiceRequest, SparkInvoiceKind, SparkSigner},
     token::{bech32m_decode_token_id, bech32m_encode_token_id},
     utils::byte_padding::BytePadding,
 };
@@ -280,7 +280,10 @@ impl SparkAddress {
         Ok(address)
     }
 
-    pub async fn to_invoice_string(&self, signer: &dyn Signer) -> Result<String, AddressError> {
+    pub async fn to_invoice_string(
+        &self,
+        spark_signer: &dyn SparkSigner,
+    ) -> Result<String, AddressError> {
         if !self.is_invoice() {
             return Err(AddressError::Other(
                 "Non-invoice addresses cannot be converted to invoice strings".to_string(),
@@ -288,7 +291,7 @@ impl SparkAddress {
         }
 
         if self.identity_public_key
-            != signer.get_identity_public_key().await.map_err(|e| {
+            != spark_signer.get_identity_public_key().await.map_err(|e| {
                 AddressError::Other(format!("Failed to get identity public key: {e}"))
             })?
         {
@@ -305,12 +308,12 @@ impl SparkAddress {
         match &invoice_fields.payment_type {
             Some(SparkAddressPaymentType::TokensPayment(payment)) => {
                 let prepared = self.prepare_token_invoice_via_primitives(payment)?;
-                let signature = signer
-                    .sign_hash_schnorr_with_identity_key(&prepared.spark_invoice_hash)
-                    .await
-                    .map_err(|e| {
-                        AddressError::Other(format!("Failed to sign invoice hash: {e}"))
-                    })?;
+                let signature = sign_invoice(
+                    spark_signer,
+                    SparkInvoiceKind::Tokens,
+                    &prepared.spark_invoice_hash,
+                )
+                .await?;
                 finalize_token_invoice(FinalizeTokenInvoiceRequest {
                     receiver_identity_public_key: self.identity_public_key.serialize().to_vec(),
                     network: network_as_u32(self.network),
@@ -325,12 +328,8 @@ impl SparkAddress {
 
                 let invoice_hash = self.compute_invoice_hash()?;
 
-                let signature = signer
-                    .sign_hash_schnorr_with_identity_key(&invoice_hash)
-                    .await
-                    .map_err(|e| {
-                        AddressError::Other(format!("Failed to sign invoice hash: {e}"))
-                    })?;
+                let signature =
+                    sign_invoice(spark_signer, SparkInvoiceKind::Sats, &invoice_hash).await?;
 
                 let proto_address = ProtoSparkAddress {
                     identity_public_key: self.identity_public_key.serialize().to_vec(),
@@ -470,6 +469,22 @@ fn network_as_u32(network: Network) -> u32 {
     u32::try_from(network.to_proto_network() as i32).expect("network proto value is non-negative")
 }
 
+/// Schnorr-signs a 32-byte Spark invoice hash with the identity key.
+async fn sign_invoice(
+    spark_signer: &dyn SparkSigner,
+    kind: SparkInvoiceKind,
+    hash: &[u8],
+) -> Result<bitcoin::secp256k1::schnorr::Signature, AddressError> {
+    let invoice_hash: [u8; 32] = hash
+        .try_into()
+        .map_err(|_| AddressError::Other("invoice hash must be 32 bytes".to_string()))?;
+    Ok(spark_signer
+        .sign_spark_invoice(SignSparkInvoiceRequest { kind, invoice_hash })
+        .await
+        .map_err(|e| AddressError::Other(format!("Failed to sign invoice hash: {e}")))?
+        .signature)
+}
+
 /// Returns 4 bytes of the magic network identifier for the given network.
 fn get_magic_network_identifier(network: Network) -> Vec<u8> {
     let magic: i64 = match network {
@@ -600,7 +615,7 @@ fn encode_spark_address_canonical(address: &ProtoSparkAddress) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
 
-    use crate::signer::create_test_signer;
+    use crate::signer::{Signer, SparkSignerAdapter, create_test_signer};
 
     use super::*;
     use bitcoin::secp256k1::Secp256k1;
@@ -820,7 +835,8 @@ mod tests {
 
     #[async_test_all]
     async fn test_invoice_roundtrip() {
-        let signer = create_test_signer();
+        let signer = std::sync::Arc::new(create_test_signer());
+        let spark_signer = SparkSignerAdapter::new(signer.clone());
         let public_key = signer.get_identity_public_key().await.unwrap();
         let sender_public_key = create_test_public_key();
         let invoice_fields = SparkInvoiceFields {
@@ -840,7 +856,10 @@ mod tests {
         let original_address =
             SparkAddress::new(public_key, Network::Regtest, Some(invoice_fields.clone()));
 
-        let invoice_string = original_address.to_invoice_string(&signer).await.unwrap();
+        let invoice_string = original_address
+            .to_invoice_string(&spark_signer)
+            .await
+            .unwrap();
         let parsed_address = SparkAddress::from_str(&invoice_string).unwrap();
 
         assert_eq!(
@@ -881,7 +900,8 @@ mod tests {
 
     #[async_test_all]
     async fn test_invoice_minimal_data() {
-        let signer = create_test_signer();
+        let signer = std::sync::Arc::new(create_test_signer());
+        let spark_signer = SparkSignerAdapter::new(signer.clone());
         let public_key = signer.get_identity_public_key().await.unwrap();
         let invoice_fields = SparkInvoiceFields {
             id: uuid::Uuid::now_v7(),
@@ -897,7 +917,10 @@ mod tests {
         let original_address =
             SparkAddress::new(public_key, Network::Testnet, Some(invoice_fields));
 
-        let invoice_string = original_address.to_invoice_string(&signer).await.unwrap();
+        let invoice_string = original_address
+            .to_invoice_string(&spark_signer)
+            .await
+            .unwrap();
         let parsed_address = SparkAddress::from_str(&invoice_string).unwrap();
 
         assert!(parsed_address.spark_invoice_fields.is_some());
@@ -914,7 +937,8 @@ mod tests {
 
     #[async_test_all]
     async fn test_compare_addresses_with_and_without_invoice_fields() {
-        let signer = create_test_signer();
+        let signer = std::sync::Arc::new(create_test_signer());
+        let spark_signer = SparkSignerAdapter::new(signer.clone());
         let public_key = signer.get_identity_public_key().await.unwrap();
         let sender_public_key = create_test_public_key();
 
@@ -938,7 +962,7 @@ mod tests {
         let address_with_intent =
             SparkAddress::new(public_key, Network::Mainnet, Some(invoice_fields));
         let string_with_intent = address_with_intent
-            .to_invoice_string(&signer)
+            .to_invoice_string(&spark_signer)
             .await
             .unwrap();
 

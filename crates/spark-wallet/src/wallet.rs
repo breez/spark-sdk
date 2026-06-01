@@ -174,6 +174,7 @@ pub struct SparkWallet {
     event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
     signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn spark::signer::SparkSigner>,
     tree_service: Arc<dyn TreeService>,
     token_output_service: Arc<dyn TokenOutputService>,
     coop_exit_service: Arc<CoopExitService>,
@@ -349,6 +350,7 @@ impl SparkWallet {
         let token_service = Arc::new(TokenService::new(
             token_output_service.clone(),
             Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             operator_pool.clone(),
             config.network,
             config.split_secret_threshold,
@@ -416,6 +418,7 @@ impl SparkWallet {
             event_manager,
             identity_public_key,
             signer,
+            spark_signer,
             tree_service,
             token_output_service,
             coop_exit_service,
@@ -1066,7 +1069,7 @@ impl SparkWallet {
             Some(invoice_fields),
         );
 
-        Ok(invoice.to_invoice_string(&*self.signer).await?)
+        Ok(invoice.to_invoice_string(&*self.spark_signer).await?)
     }
 
     pub async fn get_balance(&self) -> Result<u64, SparkWalletError> {
