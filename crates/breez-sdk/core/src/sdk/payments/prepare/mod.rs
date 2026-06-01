@@ -1,6 +1,5 @@
 mod bitcoin_address;
 mod bolt11;
-pub(super) mod lnurl_pay;
 mod spark_address;
 mod spark_invoice;
 

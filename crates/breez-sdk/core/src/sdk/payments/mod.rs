@@ -3,8 +3,7 @@ use tracing::{instrument, warn};
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, FetchConversionLimitsRequest,
-    FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse, LnurlPayRequest,
-    LnurlPayResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse, WaitForPaymentIdentifier,
+    FetchConversionLimitsResponse, GetPaymentRequest, GetPaymentResponse, WaitForPaymentIdentifier,
     error::SdkError,
     models::{
         ListPaymentsRequest, ListPaymentsResponse, Payment, PrepareSendPaymentRequest,
@@ -16,11 +15,11 @@ use crate::{
 
 use super::BreezSdk;
 
-mod conversion;
+pub(in crate::sdk) mod conversion;
 mod polling;
-mod prepare;
+pub(in crate::sdk) mod prepare;
 mod receive;
-mod send;
+pub(in crate::sdk) mod send;
 mod validation;
 
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
@@ -61,18 +60,7 @@ impl BreezSdk {
         if let Some(key) = request.idempotency_key.as_deref() {
             tracing::Span::current().record("payment_id", key);
         }
-        Box::pin(conversion::orchestrate_send(self, request, false, None)).await
-    }
-
-    pub async fn prepare_lnurl_pay(
-        &self,
-        request: PrepareLnurlPayRequest,
-    ) -> Result<PrepareLnurlPayResponse, SdkError> {
-        prepare::lnurl_pay::prepare(self, request).await
-    }
-
-    pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
-        send::lnurl_pay::send(self, request).await
+        Box::pin(send::orchestrate_send(self, request, false, None)).await
     }
 
     pub async fn fetch_conversion_limits(

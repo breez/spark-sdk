@@ -187,7 +187,7 @@ async fn calculate_fees_included_amount(
 /// returns the allowed overpayment (`stored - current`). Fails if the fee
 /// increased since prepare, or if the overpayment exceeds the cap of
 /// `current_fee.max(1)` (allow up to 100% of the actual fee, minimum 1 sat).
-pub(super) fn fee_overpayment(stored_fee: u64, current_fee: u64) -> Result<u64, SdkError> {
+pub(in crate::sdk) fn fee_overpayment(stored_fee: u64, current_fee: u64) -> Result<u64, SdkError> {
     if current_fee > stored_fee {
         return Err(SdkError::Generic(
             "Fee increased since prepare. Please retry.".to_string(),

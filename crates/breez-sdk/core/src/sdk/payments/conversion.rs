@@ -2,7 +2,6 @@ use crate::{
     ConversionEstimate, ConversionOptions, ConversionPurpose, ConversionType, FeePolicy,
     SendPaymentMethod, WaitForPaymentIdentifier,
     error::SdkError,
-    events::SdkEvent,
     models::{ConversionStatus, SendPaymentRequest, SendPaymentResponse},
     persist::PaymentMetadata,
     token_conversion::{
@@ -127,7 +126,7 @@ async fn is_token_conversion(
 /// The returned `estimated_sats` is the *raw* expected conversion output — callers
 /// that need a defensive lower bound (e.g. LNURL invoice sizing on the `AmountIn`
 /// path) should apply their own slippage buffer.
-pub(super) async fn estimate_sats_from_token_conversion(
+pub(in crate::sdk) async fn estimate_sats_from_token_conversion(
     sdk: &BreezSdk,
     conversion_options: Option<&ConversionOptions>,
     token_identifier: Option<&String>,
@@ -227,70 +226,7 @@ pub(super) async fn resolve_send_amount_with_conversion_estimate(
     Ok((amount, estimate))
 }
 
-// Send-with-token-conversion pipeline (orchestrate_send → ...):
-//
-//   1. validate idempotency key + check existing payment by key
-//   2. no conversion_estimate → send_internal directly, return
-//   3. acquire stable-balance payment guard (suppresses auto-convert)
-//   4. execute_pre_send_conversion: decide AmountIn vs MinAmountOut, dispatch to
-//      send::<type>::convert_token (per-type fee shape)
-//   5. pre_link_conversion_children (self-transfer only — parent known up front)
-//   6. complete_conversion_and_send: wait for the conversion receive payment,
-//      compute amount_override, send_internal, link children, persist Completed,
-//      fetch payment with conversion details
-//   7. emit payment event (unless suppressed)
-pub(super) async fn orchestrate_send(
-    sdk: &BreezSdk,
-    request: SendPaymentRequest,
-    mut suppress_payment_event: bool,
-    amount_override: Option<u64>,
-) -> Result<SendPaymentResponse, SdkError> {
-    let token_identifier = request.prepare_response.token_identifier.clone();
-
-    // Check the idempotency key is valid and payment doesn't already exist
-    if request.idempotency_key.is_some() && token_identifier.is_some() {
-        return Err(SdkError::InvalidInput(
-            "Idempotency key is not supported for token payments".to_string(),
-        ));
-    }
-    if let Some(idempotency_key) = &request.idempotency_key {
-        // If an idempotency key is provided, check if a payment with that id already exists
-        if let Ok(payment) = sdk.storage.get_payment_by_id(idempotency_key.clone()).await {
-            return Ok(SendPaymentResponse { payment });
-        }
-    }
-    let conversion_estimate = request.prepare_response.conversion_estimate.clone();
-    // Perform the send payment, with conversion if requested
-    let res = if let Some(ConversionEstimate {
-        options: conversion_options,
-        ..
-    }) = &conversion_estimate
-    {
-        Box::pin(convert_token_send_payment_internal(
-            sdk,
-            conversion_options,
-            &request,
-            amount_override,
-            &mut suppress_payment_event,
-        ))
-        .await
-    } else {
-        Box::pin(send::send_internal(sdk, &request, amount_override)).await
-    };
-    // Emit payment status event. Client runtime listens to payment events
-    // and schedules a wallet-state refresh when background sync is active.
-    if let Ok(response) = &res
-        && !suppress_payment_event
-    {
-        // Emit the payment with metadata already included
-        sdk.event_emitter
-            .emit(&SdkEvent::from_payment(response.payment.clone()))
-            .await;
-    }
-    res
-}
-
-async fn convert_token_send_payment_internal(
+pub(super) async fn convert_token_send_payment_internal(
     sdk: &BreezSdk,
     conversion_options: &ConversionOptions,
     request: &SendPaymentRequest,

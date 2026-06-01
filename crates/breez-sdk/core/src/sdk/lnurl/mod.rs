@@ -1,8 +1,9 @@
 use breez_sdk_common::lnurl::{self, error::LnurlError};
 
 use crate::{
-    LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlWithdrawInfo, LnurlWithdrawRequest,
-    LnurlWithdrawResponse, WaitForPaymentIdentifier,
+    LnurlAuthRequestDetails, LnurlCallbackStatus, LnurlPayRequest, LnurlPayResponse,
+    LnurlWithdrawInfo, LnurlWithdrawRequest, LnurlWithdrawResponse, PrepareLnurlPayRequest,
+    PrepareLnurlPayResponse, WaitForPaymentIdentifier,
     error::SdkError,
     persist::{ObjectCacheRepository, PaymentMetadata},
 };
@@ -10,9 +11,22 @@ use breez_sdk_common::lnurl::withdraw::execute_lnurl_withdraw;
 
 use super::BreezSdk;
 
+mod pay;
+
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 #[allow(clippy::needless_pass_by_value)]
 impl BreezSdk {
+    pub async fn prepare_lnurl_pay(
+        &self,
+        request: PrepareLnurlPayRequest,
+    ) -> Result<PrepareLnurlPayResponse, SdkError> {
+        pay::prepare(self, request).await
+    }
+
+    pub async fn lnurl_pay(&self, request: LnurlPayRequest) -> Result<LnurlPayResponse, SdkError> {
+        pay::send(self, request).await
+    }
+
     /// Performs an LNURL withdraw operation for the amount of satoshis to
     /// withdraw and the LNURL withdraw request details. The LNURL withdraw request
     /// details can be obtained from calling [`BreezSdk::parse`].
