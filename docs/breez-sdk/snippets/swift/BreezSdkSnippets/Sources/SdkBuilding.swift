@@ -67,7 +67,7 @@ class ExamplePaymentObserver: PaymentObserver {
 
     func afterSend(updates: [PaymentIdUpdate]) async {
         for update in updates {
-            print("Token tx broadcast: \(update.partialTxId) -> \(update.finalTxId)")
+            print("Token tx broadcast: \(update.provisionalPaymentId) -> \(update.finalPaymentId)")
         }
     }
 }

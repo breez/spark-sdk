@@ -82,7 +82,7 @@ impl PaymentObserver for ExamplePaymentObserver {
         for update in updates {
             info!(
                 "Token tx broadcast: {} -> {}",
-                update.partial_tx_id, update.final_tx_id
+                update.provisional_payment_id, update.final_payment_id
             );
         }
         Ok(())

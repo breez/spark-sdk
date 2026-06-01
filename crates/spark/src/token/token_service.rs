@@ -581,6 +581,9 @@ impl TokenService {
 
         let total_amount: u128 = receiver_outputs.iter().map(|o| o.amount).sum();
 
+        // Stable for the wallet's lifetime; fetch once and reuse across retries and below.
+        let identity_public_key = self.signer.get_identity_public_key().await?;
+
         let mut attempt = 0;
         let mut preempted_attempt = 0;
         let (token_transaction, reservation) = loop {
@@ -602,6 +605,7 @@ impl TokenService {
             let result = with_reserved_token_outputs(
                 self.token_output_service.as_ref(),
                 self.transfer_tokens_inner(
+                    identity_public_key,
                     &token_id,
                     reservation.token_outputs.outputs.clone(),
                     receiver_outputs.clone(),
@@ -638,7 +642,6 @@ impl TokenService {
             }
         };
 
-        let identity_public_key = self.signer.get_identity_public_key().await?;
         let our_outputs = token_transaction
             .outputs
             .iter()
@@ -665,6 +668,7 @@ impl TokenService {
 
     async fn transfer_tokens_inner(
         &self,
+        identity_public_key: PublicKey,
         token_id: &str,
         inputs: Vec<TokenOutputWithPrevOut>,
         receiver_outputs: Vec<TransferTokenOutput>,
@@ -673,12 +677,17 @@ impl TokenService {
             return Err(ServiceError::NeededTooManyOutputs);
         }
 
-        let identity_public_key = self.signer.get_identity_public_key().await?;
         let identity_public_key_bytes = identity_public_key.serialize().to_vec();
 
         // SO sorts inputs by vout before validating owner signatures; match that here.
         let mut inputs = inputs;
         inputs.sort_by_key(|o| o.prev_tx_vout);
+
+        // The caller's receiver outputs occupy vouts 0..num_receiver_outputs. Any change output we
+        // append below lands after them and goes to our own identity key; the payment pipeline
+        // (token_transaction_to_payments) filters such self-outputs, so we keep change out of the
+        // observer's view too and only report these receiver outputs.
+        let num_receiver_outputs = receiver_outputs.len();
 
         let mut receiver_outputs = receiver_outputs;
         let inputs_amount = inputs.iter().map(|o| o.output.token_amount).sum::<u128>();
@@ -791,6 +800,7 @@ impl TokenService {
                     token_id,
                     receiver_outputs
                         .iter()
+                        .take(num_receiver_outputs)
                         .map(|o| {
                             Ok(ReceiverTokenOutput {
                                 pay_request: o
@@ -920,7 +930,9 @@ impl TokenService {
         }
 
         if let Some(observer) = &self.transfer_observer
-            && let Err(e) = observer.after_send_token(&partial_txid, &txid).await
+            && let Err(e) = observer
+                .after_send_token(&partial_txid, &txid, num_receiver_outputs)
+                .await
         {
             warn!("after_send_token observer failed for tx {txid}: {e:?}");
         }
@@ -1028,11 +1040,8 @@ impl TokenService {
                 .map(|o| o.output.token_amount)
                 .sum::<u128>();
 
-            let receiver_address = SparkAddress::new(
-                self.signer.get_identity_public_key().await?,
-                self.network,
-                None,
-            );
+            let identity_public_key = self.signer.get_identity_public_key().await?;
+            let receiver_address = SparkAddress::new(identity_public_key, self.network, None);
             let receiver_outputs = build_consolidation_outputs(
                 &output.metadata.identifier,
                 amount,
@@ -1043,6 +1052,7 @@ impl TokenService {
             let token_transaction = with_reserved_token_outputs(
                 self.token_output_service.as_ref(),
                 self.transfer_tokens_inner(
+                    identity_public_key,
                     &output.metadata.identifier,
                     reservation.token_outputs.outputs.clone(),
                     receiver_outputs,

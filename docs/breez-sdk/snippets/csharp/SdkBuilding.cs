@@ -77,7 +77,7 @@ namespace BreezSdkSnippets
             {
                 foreach (var update in updates)
                 {
-                    Console.WriteLine($"Token tx broadcast: {update.partialTxId} -> {update.finalTxId}");
+                    Console.WriteLine($"Token tx broadcast: {update.provisionalPaymentId} -> {update.finalPaymentId}");
                 }
             }
         }

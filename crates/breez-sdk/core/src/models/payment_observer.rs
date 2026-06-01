@@ -40,8 +40,10 @@ pub enum ProvisionalPaymentDetails {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PaymentIdUpdate {
-    pub partial_tx_id: String,
-    pub final_tx_id: String,
+    /// Provisional payment id reported by `before_send`, in the form `{partial_tx_id}:{index}`
+    pub provisional_payment_id: String,
+    /// Final payment id once the transaction is broadcast, in the form `{final_tx_id}:{vout}`
+    pub final_payment_id: String,
 }
 
 #[derive(Debug, Error, Clone)]
@@ -77,8 +79,8 @@ pub trait PaymentObserver: Send + Sync {
         &self,
         payments: Vec<ProvisionalPayment>,
     ) -> Result<(), PaymentObserverError>;
-    /// Called after a token payment has been broadcast, mapping the partial tx id reported by
-    /// `before_send` to the final tx id
+    /// Called after a token payment has been broadcast, mapping each provisional payment id
+    /// reported by `before_send` to its final payment id
     async fn after_send(&self, updates: Vec<PaymentIdUpdate>) -> Result<(), PaymentObserverError>;
 }
 
@@ -176,13 +178,17 @@ impl spark_wallet::TransferObserver for SparkTransferObserver {
         &self,
         partial_tx_id: &str,
         final_tx_id: &str,
+        receiver_output_count: usize,
     ) -> Result<(), TransferObserverError> {
-        Ok(self
-            .inner
-            .after_send(vec![PaymentIdUpdate {
-                partial_tx_id: partial_tx_id.to_string(),
-                final_tx_id: final_tx_id.to_string(),
-            }])
-            .await?)
+        // Pair each provisional id minted by before_send_token with its final id. The receiver
+        // outputs keep their order (and vout) across the partial and final transaction, so index i
+        // maps to vout i.
+        let updates = (0..receiver_output_count)
+            .map(|i| PaymentIdUpdate {
+                provisional_payment_id: format!("{partial_tx_id}:{i}"),
+                final_payment_id: format!("{final_tx_id}:{i}"),
+            })
+            .collect();
+        Ok(self.inner.after_send(updates).await?)
     }
 }

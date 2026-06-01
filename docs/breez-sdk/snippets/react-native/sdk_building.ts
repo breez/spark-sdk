@@ -71,7 +71,7 @@ class ExamplePaymentObserver {
 
   afterSend = async (updates: PaymentIdUpdate[]) => {
     for (const update of updates) {
-      console.log(`Token tx broadcast: ${update.partialTxId} -> ${update.finalTxId}`)
+      console.log(`Token tx broadcast: ${update.provisionalPaymentId} -> ${update.finalPaymentId}`)
     }
   }
 }
