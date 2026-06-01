@@ -155,6 +155,8 @@ Register a fresh credential:
 
 Pass `wallet.seed` to {{#name connect}} in either case.
 
+Both calls also take optional `exclude_credentials` (register) and `allow_credentials` (sign-in). These are for advanced use cases; the happy path above needs neither. `exclude_credentials` prevents registering a second credential for the same account on one device, and `allow_credentials` limits sign-in to specific registered credentials to streamline the picker. See [Credential metadata](./passkey_credential_metadata.md).
+
 ### Error recovery
 
 The SDK collapses every passkey failure into seven actionable [`ErrorKind`](https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/enum.ErrorKind.html) values: branching on `error.kind()` is the canonical recovery pattern:

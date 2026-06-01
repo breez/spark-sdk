@@ -25,13 +25,12 @@ Persist {{#name credential_id}} from every response in your own storage. On regi
 
 For cross-device continuity, back this store with synced storage: iCloud Keychain (`kSecAttrSynchronizable`) on iOS, Block Store on Android, or your own synced backend. Plain local storage does not survive reinstall or replicate to a second device.
 
-## Pinning a credential on sign-in
+## Restricting credentials (advanced)
 
-The sign-in call in the snippet above passes a stored {{#name credential_id}} as `allow_credentials` to constrain the assertion to one credential. This matters for security-sensitive flows. With an empty `allow_credentials`, the OS picker may resolve a different (sibling) credential for the same Relying Party, and a different credential derives a different wallet seed. Pin `allow_credentials` to the active credential before revealing anything tied to the active wallet, such as a recovery phrase.
+Both lists are optional: the basic sign-in and register flows work without them.
 
-## Preventing duplicate registration
-
-Pass your stored credential IDs as `exclude_credentials` on {{#name register}} so the OS refuses to create a second credential on a device that already has one. It raises {{#enum PrfProviderError::CredentialAlreadyExists}}, which you route to the sign-in path:
+- `allow_credentials` (on sign-in) specifies which registered credentials may authenticate, which streamlines the credential picker. For a seed-deriving wallet, pinning it to the active credential also keeps a returning user in the same wallet.
+- `exclude_credentials` (on register) prevents registering more than one credential for the same account on one device. A match raises {{#enum PrfProviderError::CredentialAlreadyExists}}, which you route to sign-in:
 
 {{#tabs passkey:recover-already-exists}}
 
