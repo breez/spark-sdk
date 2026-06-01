@@ -226,18 +226,28 @@ impl SdkBuilder {
     }
 
     #[wasm_bindgen(js_name = "newWithSigner")]
-    pub fn new_with_signer(config: Config, signer: crate::signer::JsExternalSigner) -> Self {
-        use crate::signer::WasmExternalSigner;
+    pub fn new_with_signer(
+        config: Config,
+        signer: crate::signer::JsExternalSigner,
+        spark_signer: crate::signer::JsExternalSparkSigner,
+    ) -> Self {
+        use crate::signer::{WasmExternalSigner, WasmExternalSparkSigner};
         use std::sync::Arc;
 
         let config_core: breez_sdk_spark::Config = config.into();
         let signer_adapter: Arc<dyn breez_sdk_spark::signer::ExternalSigner> =
             Arc::new(WasmExternalSigner::new(signer));
+        let spark_signer_adapter: Arc<dyn breez_sdk_spark::signer::ExternalSparkSigner> =
+            Arc::new(WasmExternalSparkSigner::new(spark_signer));
 
         Self {
             network: config_core.network,
             seed: breez_sdk_spark::Seed::Entropy(vec![]), // Placeholder, won't be used
-            builder: breez_sdk_spark::SdkBuilder::new_with_signer(config_core, signer_adapter),
+            builder: breez_sdk_spark::SdkBuilder::new_with_signer(
+                config_core,
+                signer_adapter,
+                spark_signer_adapter,
+            ),
             storage_config: None,
             storage: None,
             context_postgres_pool: None,

@@ -45,9 +45,10 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
 pub async fn connect_with_signer(
     config: Config,
     signer: crate::signer::JsExternalSigner,
+    spark_signer: crate::signer::JsExternalSparkSigner,
     storage_dir: String,
 ) -> WasmResult<BreezSdk> {
-    let builder = SdkBuilder::new_with_signer(config, signer)
+    let builder = SdkBuilder::new_with_signer(config, signer, spark_signer)
         .with_default_storage(storage_dir)
         .await?;
     let sdk = builder.build().await?;
