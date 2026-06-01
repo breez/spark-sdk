@@ -19,7 +19,7 @@ use spark::session_store::InMemorySessionStore;
 use spark::ssp::{ServiceProvider, SparkWalletWebhookEventType};
 use spark::token::InMemoryTokenOutputStore;
 use spark::tree::InMemoryTreeStore;
-use spark_wallet::{DefaultSigner, Network, SparkWalletConfig};
+use spark_wallet::{DefaultSigner, Network, SparkSignerAdapter, SparkWalletConfig};
 use sqlx::{PgPool, SqlitePool, sqlite::SqlitePoolOptions};
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -219,13 +219,17 @@ where
 
     // Create shared infrastructure components
     let signer = Arc::new(DefaultSigner::new(&auth_seed, args.network)?);
+    // High-level Spark signer wrapping the in-process low-level signer, used by
+    // the Spark wallet and service provider.
+    let spark_signer: Arc<dyn spark_wallet::SparkSigner> =
+        Arc::new(SparkSignerAdapter::new(signer.clone()));
     let session_store = Arc::new(InMemorySessionStore::default());
     let connection_manager: Arc<dyn spark::operator::rpc::ConnectionManager> =
         Arc::new(DefaultConnectionManager::new());
     let coordinator = spark_config.operator_pool.get_coordinator().clone();
     let service_provider = Arc::new(ServiceProvider::new(
         spark_config.service_provider_config.clone(),
-        signer.clone(),
+        spark_signer.clone(),
         session_store.clone(),
         None,
     ));
@@ -234,7 +238,7 @@ where
     let wallet = Arc::new(
         spark_wallet::SparkWallet::new(
             spark_config.clone(),
-            signer.clone(),
+            spark_signer.clone(),
             session_store.clone(),
             Arc::new(InMemoryTreeStore::default()),
             Arc::new(InMemoryTokenOutputStore::default()),

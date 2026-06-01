@@ -1155,10 +1155,7 @@ impl SparkWallet {
     ///
     /// If exposing this, consider adding a prefix to prevent mistakenly signing messages.
     pub async fn sign_message(&self, message: &str) -> Result<Signature, SparkWalletError> {
-        Ok(self
-            .spark_signer
-            .sign_message(message.as_bytes())
-            .await?)
+        Ok(self.spark_signer.sign_message(message.as_bytes()).await?)
     }
 
     /// Verifies a message was signed by the given public key and the signature is valid.

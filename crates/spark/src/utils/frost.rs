@@ -90,12 +90,13 @@ pub(crate) fn aggregate_frost(
     let mut verifying_shares = BTreeMap::new();
     // Convert statechain public keys to verifying shares
     for (id, pk) in request.statechain_public_keys.iter() {
-        let verifying_key = VerifyingShare::deserialize(pk.serialize().as_slice()).map_err(|e| {
-            SignerError::SerializationError(format!(
-                "Failed to deserialize public key for participant {id:?}: {e} (culprit: {:?})",
-                e.culprit()
-            ))
-        })?;
+        let verifying_key =
+            VerifyingShare::deserialize(pk.serialize().as_slice()).map_err(|e| {
+                SignerError::SerializationError(format!(
+                    "Failed to deserialize public key for participant {id:?}: {e} (culprit: {:?})",
+                    e.culprit()
+                ))
+            })?;
         verifying_shares.insert(*id, verifying_key);
     }
 

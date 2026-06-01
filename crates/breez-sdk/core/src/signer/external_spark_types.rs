@@ -604,7 +604,9 @@ impl ExternalSignStaticDepositRefundRequest {
             index: r.index,
             sighash: r.sighash.to_vec(),
             verifying_key: r.verifying_key.serialize().to_vec(),
-            nonce_commitment: ExternalFrostCommitments::from_frost_commitments(&r.nonce_commitment)?,
+            nonce_commitment: ExternalFrostCommitments::from_frost_commitments(
+                &r.nonce_commitment,
+            )?,
             statechain_commitments,
             statechain_signatures,
             statechain_public_keys,

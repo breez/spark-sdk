@@ -145,5 +145,4 @@ impl BreezSigner for ExternalBreezSignerAdapter {
             .map_err(|e| SdkError::Signer(format!("External signer hmac_sha256 failed: {e}")))?;
         hash_bytes.to_hmac()
     }
-
 }

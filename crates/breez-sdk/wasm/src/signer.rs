@@ -493,7 +493,10 @@ extern "C" {
     pub fn identity_public_key(this: &JsExternalBreezSigner) -> Result<PublicKeyBytes, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "derivePublicKey", catch)]
-    pub fn derive_public_key(this: &JsExternalBreezSigner, path: String) -> Result<Promise, JsValue>;
+    pub fn derive_public_key(
+        this: &JsExternalBreezSigner,
+        path: String,
+    ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signEcdsa", catch)]
     pub fn sign_ecdsa(
@@ -540,7 +543,9 @@ extern "C" {
 
 // ───────────────────── High-level Spark signer types ─────────────────────
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalFrostDerivation)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalFrostDerivation
+)]
 pub enum ExternalFrostDerivation {
     SigningLeaf { leaf_id: ExternalTreeNodeId },
     StaticDeposit { index: u32 },
@@ -557,26 +562,34 @@ pub struct ExternalFrostJob {
     pub adaptor_public_key: Option<Vec<u8>>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalFrostShareResult)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalFrostShareResult
+)]
 pub struct ExternalFrostShareResult {
     pub commitment: ExternalFrostCommitments,
     pub signature_share: ExternalFrostSignatureShare,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalOperatorRecipient)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalOperatorRecipient
+)]
 pub struct ExternalOperatorRecipient {
     pub id: u64,
     pub identifier: ExternalIdentifier,
     pub public_key: Vec<u8>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalOperatorPackage)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalOperatorPackage
+)]
 pub struct ExternalOperatorPackage {
     pub operator_identifier: ExternalIdentifier,
     pub encrypted_package: Vec<u8>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalTransferLeafInput)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalTransferLeafInput
+)]
 pub struct ExternalTransferLeafInput {
     pub node_id: ExternalTreeNodeId,
 }
@@ -587,7 +600,9 @@ pub struct ExternalNewLeafKey {
     pub new_signing_public_key: Vec<u8>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPrepareTransferRequest)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPrepareTransferRequest
+)]
 pub struct ExternalPrepareTransferRequest {
     pub transfer_id: String,
     pub receiver_public_key: Vec<u8>,
@@ -596,21 +611,27 @@ pub struct ExternalPrepareTransferRequest {
     pub threshold: u32,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPreparedTransfer)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPreparedTransfer
+)]
 pub struct ExternalPreparedTransfer {
     pub operator_packages: Vec<ExternalOperatorPackage>,
     pub new_leaf_keys: Vec<ExternalNewLeafKey>,
     pub transfer_user_signature: EcdsaSignatureBytes,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalClaimLeafInput)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalClaimLeafInput
+)]
 pub struct ExternalClaimLeafInput {
     pub node_id: ExternalTreeNodeId,
     pub sender_signature: Vec<u8>,
     pub leaf_key_ciphertext: Vec<u8>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPrepareClaimRequest)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPrepareClaimRequest
+)]
 pub struct ExternalPrepareClaimRequest {
     pub transfer_id: String,
     pub sender_identity_public_key: Vec<u8>,
@@ -625,45 +646,59 @@ pub struct ExternalPreparedClaim {
     pub claim_user_signature: EcdsaSignatureBytes,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPrepareLightningReceiveRequest)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPrepareLightningReceiveRequest
+)]
 pub struct ExternalPrepareLightningReceiveRequest {
     pub operator_recipients: Vec<ExternalOperatorRecipient>,
     pub threshold: u32,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPreparedLightningReceive)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPreparedLightningReceive
+)]
 pub struct ExternalPreparedLightningReceive {
     pub payment_hash: Vec<u8>,
     pub operator_preimage_packages: Vec<ExternalOperatorPackage>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPrepareStaticDepositRequest)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPrepareStaticDepositRequest
+)]
 pub struct ExternalPrepareStaticDepositRequest {
     pub index: u32,
     pub ssp_public_key: Vec<u8>,
     pub frost_jobs: Vec<ExternalFrostJob>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPreparedStaticDeposit)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPreparedStaticDeposit
+)]
 pub struct ExternalPreparedStaticDeposit {
     pub exported_secret: Vec<u8>,
     pub frost_shares: Vec<ExternalFrostShareResult>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalStartStaticDepositRefundRequest)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalStartStaticDepositRefundRequest
+)]
 pub struct ExternalStartStaticDepositRefundRequest {
     pub index: u32,
     pub user_statement: Vec<u8>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalStartedStaticDepositRefund)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalStartedStaticDepositRefund
+)]
 pub struct ExternalStartedStaticDepositRefund {
     pub signing_public_key: Vec<u8>,
     pub nonce_commitment: ExternalFrostCommitments,
     pub user_signature: EcdsaSignatureBytes,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalSignStaticDepositRefundRequest)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalSignStaticDepositRefundRequest
+)]
 pub struct ExternalSignStaticDepositRefundRequest {
     pub index: u32,
     pub sighash: Vec<u8>,
@@ -674,48 +709,64 @@ pub struct ExternalSignStaticDepositRefundRequest {
     pub statechain_public_keys: Vec<IdentifierPublicKeyPair>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalSparkInvoiceKind)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalSparkInvoiceKind
+)]
 pub enum ExternalSparkInvoiceKind {
     Sats,
     Tokens,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalSignSparkInvoiceRequest)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalSignSparkInvoiceRequest
+)]
 pub struct ExternalSignSparkInvoiceRequest {
     pub kind: ExternalSparkInvoiceKind,
     pub invoice_hash: Vec<u8>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalSignedSparkInvoice)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalSignedSparkInvoice
+)]
 pub struct ExternalSignedSparkInvoice {
     pub signature: SchnorrSignatureBytes,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalTokenTransactionKind)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalTokenTransactionKind
+)]
 pub enum ExternalTokenTransactionKind {
     Freeze,
     Partial,
     Final,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPrepareTokenTransactionRequest)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPrepareTokenTransactionRequest
+)]
 pub struct ExternalPrepareTokenTransactionRequest {
     pub kind: ExternalTokenTransactionKind,
     pub digest: Vec<u8>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPreparedTokenTransaction)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPreparedTokenTransaction
+)]
 pub struct ExternalPreparedTokenTransaction {
     pub signature: SchnorrSignatureBytes,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPrepareStaticDepositClaimRequest)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPrepareStaticDepositClaimRequest
+)]
 pub struct ExternalPrepareStaticDepositClaimRequest {
     pub index: u32,
     pub user_statement: Vec<u8>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPreparedStaticDepositClaim)]
+#[macros::extern_wasm_bindgen(
+    breez_sdk_spark::signer::external_spark_types::ExternalPreparedStaticDepositClaim
+)]
 pub struct ExternalPreparedStaticDepositClaim {
     pub deposit_secret_key: SecretBytes,
     pub user_signature: EcdsaSignatureBytes,
@@ -792,7 +843,8 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
             .sign_authentication_challenge(challenge)
             .map_err(spark_js_err)?;
         let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
-        let v: EcdsaSignatureBytes = serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
+        let v: EcdsaSignatureBytes =
+            serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
         Ok(v.into())
     }
 
@@ -802,7 +854,8 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
     ) -> Result<core_types::EcdsaSignatureBytes, SignerError> {
         let promise = self.inner.sign_message(message).map_err(spark_js_err)?;
         let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
-        let v: EcdsaSignatureBytes = serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
+        let v: EcdsaSignatureBytes =
+            serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
         Ok(v.into())
     }
 
@@ -863,7 +916,10 @@ impl breez_sdk_spark::signer::ExternalSparkSigner for WasmExternalSparkSigner {
         request: core_spark::ExternalPrepareStaticDepositRequest,
     ) -> Result<core_spark::ExternalPreparedStaticDeposit, SignerError> {
         let req: ExternalPrepareStaticDepositRequest = request.into();
-        let promise = self.inner.prepare_static_deposit(req).map_err(spark_js_err)?;
+        let promise = self
+            .inner
+            .prepare_static_deposit(req)
+            .map_err(spark_js_err)?;
         let result = JsFuture::from(promise).await.map_err(spark_js_err)?;
         let v: ExternalPreparedStaticDeposit =
             serde_wasm_bindgen::from_value(result).map_err(spark_de_err)?;
@@ -989,7 +1045,8 @@ extern "C" {
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signMessage", catch)]
-    pub fn sign_message(this: &JsExternalSparkSigner, message: Vec<u8>) -> Result<Promise, JsValue>;
+    pub fn sign_message(this: &JsExternalSparkSigner, message: Vec<u8>)
+    -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signFrost", catch)]
     pub fn sign_frost(this: &JsExternalSparkSigner, jobs: JsValue) -> Result<Promise, JsValue>;

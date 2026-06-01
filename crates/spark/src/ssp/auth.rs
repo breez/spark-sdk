@@ -70,8 +70,12 @@ impl SspAuthHeaderProvider {
     async fn authenticate(&self) -> GraphQLResult<Session> {
         debug!("Authenticating with ssp");
 
-        let identity_public_key =
-            hex::encode(self.spark_signer.get_identity_public_key().await?.serialize());
+        let identity_public_key = hex::encode(
+            self.spark_signer
+                .get_identity_public_key()
+                .await?
+                .serialize(),
+        );
 
         let challenge_vars = get_challenge::Variables {
             input: get_challenge::GetChallengeInput {

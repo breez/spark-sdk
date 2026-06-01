@@ -801,15 +801,23 @@ pub async fn build_sdk_from_mnemonic(
     })
 }
 
-/// Build SDK instance using external signer instead of seed
+/// Build SDK instance from a mnemonic.
+///
+/// The external signer interface is now split into two foreign traits
+/// (`ExternalBreezSigner` + `ExternalSparkSigner`). `default_external_signer`
+/// only produces the `ExternalBreezSigner` half; there is no default
+/// `ExternalSparkSigner` factory (a stateless wrapper cannot satisfy the
+/// transfer/claim flows, which the integrator must back with their own tree
+/// state). This helper therefore builds the SDK from a seed, which constructs
+/// both signers internally.
 ///
 /// # Arguments
 /// * `storage_dir` - Directory path for SDK storage
-/// * `mnemonic` - BIP39 mnemonic phrase for the external signer
+/// * `mnemonic` - BIP39 mnemonic phrase for the signer
 /// * `temp_dir` - Optional TempDir to keep alive
 ///
 /// # Returns
-/// An SdkInstance with SDK initialized via SdkBuilder::new_with_signer
+/// An SdkInstance with SDK initialized via SdkBuilder::new
 pub async fn build_sdk_with_external_signer(
     storage_dir: String,
     mnemonic: String,
@@ -822,20 +830,11 @@ pub async fn build_sdk_with_external_signer(
     config.sync_interval_secs = 5;
     config.real_time_sync_server_url = None;
 
-    // Create default external signer from mnemonic
-    let signer = breez_sdk_spark::default_external_signer(
+    let seed = Seed::Mnemonic {
         mnemonic,
-        None, // no passphrase
-        Network::Regtest,
-        Some(KeySetConfig {
-            key_set_type: KeySetType::Default,
-            use_address_index: false,
-            account_number: None,
-        }),
-    )?;
-
-    // Use SdkBuilder directly so we can apply storage
-    let builder = SdkBuilder::new_with_signer(config, signer);
+        passphrase: None,
+    };
+    let builder = SdkBuilder::new(config, seed);
     let builder = apply_storage(builder, storage_dir).await?;
     let sdk = builder.build().await?;
 

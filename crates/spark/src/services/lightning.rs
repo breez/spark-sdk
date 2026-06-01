@@ -10,10 +10,7 @@ use crate::ssp::{
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
-use crate::{
-    signer::SparkSigner,
-    tree::TreeNode,
-};
+use crate::{signer::SparkSigner, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use hex::ToHex;

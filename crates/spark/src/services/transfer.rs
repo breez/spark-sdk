@@ -694,8 +694,10 @@ impl TransferService {
         for (i, leaf) in leaves.iter().enumerate() {
             // The claim refund is signed with the receiver's new leaf key, which
             // is the derived key for this node id.
-            let signing_public_key =
-                self.spark_signer.get_public_key_for_leaf(&leaf.node.id).await?;
+            let signing_public_key = self
+                .spark_signer
+                .get_public_key_for_leaf(&leaf.node.id)
+                .await?;
             let verifying_key = leaf.node.verifying_public_key;
             let node_tx = &leaf.node.node_tx;
 
@@ -708,8 +710,7 @@ impl TransferService {
                 .clone()
                 .ok_or_else(|| ServiceError::Generic("No refund tx".to_string()))?;
             let old_sequence = refund_tx.input[0].sequence;
-            let (cpfp_sequence, direct_sequence) =
-                current_sequence(enforce_timelock(old_sequence));
+            let (cpfp_sequence, direct_sequence) = current_sequence(enforce_timelock(old_sequence));
             let RefundTransactions {
                 cpfp_tx: cpfp_refund_tx,
                 direct_tx: direct_refund_tx,

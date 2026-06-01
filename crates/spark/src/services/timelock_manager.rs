@@ -202,7 +202,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: cpfp_split_node_tx.clone(),
             parent_tx_out: parent_node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         signing_jobs.push(SigningJob {
@@ -210,7 +211,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: direct_split_node_tx.clone(),
             parent_tx_out: parent_node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         let NodeTransactions {
@@ -223,7 +225,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: cpfp_node_tx.clone(),
             parent_tx_out: cpfp_split_node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         signing_jobs.push(SigningJob {
@@ -231,7 +234,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: direct_node_tx.clone(),
             parent_tx_out: cpfp_split_node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         let RefundTransactions {
@@ -250,7 +254,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: cpfp_refund_tx,
             parent_tx_out: cpfp_node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         if let Some(direct_refund_tx) = direct_refund_tx {
@@ -259,7 +264,8 @@ impl TimelockManager {
                 node_id: node.id.clone(),
                 tx: direct_refund_tx.clone(),
                 parent_tx_out: direct_node_tx.output[0].clone(),
-                signing_public_key,                verifying_public_key: node.verifying_public_key,
+                signing_public_key,
+                verifying_public_key: node.verifying_public_key,
             });
         }
 
@@ -269,7 +275,8 @@ impl TimelockManager {
                 node_id: node.id.clone(),
                 tx: direct_from_cpfp_refund_tx,
                 parent_tx_out: cpfp_node_tx.output[0].clone(),
-                signing_public_key,                verifying_public_key: node.verifying_public_key,
+                signing_public_key,
+                verifying_public_key: node.verifying_public_key,
             });
         }
 
@@ -378,7 +385,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: cpfp_node_tx.clone(),
             parent_tx_out: parent_node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         signing_jobs.push(SigningJob {
@@ -386,7 +394,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: direct_node_tx.clone(),
             parent_tx_out: parent_node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         let RefundTransactions {
@@ -405,7 +414,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: cpfp_refund_tx,
             parent_tx_out: cpfp_node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         if let Some(direct_refund_tx) = direct_refund_tx {
@@ -414,7 +424,8 @@ impl TimelockManager {
                 node_id: node.id.clone(),
                 tx: direct_refund_tx.clone(),
                 parent_tx_out: direct_node_tx.output[0].clone(),
-                signing_public_key,                verifying_public_key: node.verifying_public_key,
+                signing_public_key,
+                verifying_public_key: node.verifying_public_key,
             });
         }
 
@@ -424,7 +435,8 @@ impl TimelockManager {
                 node_id: node.id.clone(),
                 tx: direct_from_cpfp_refund_tx,
                 parent_tx_out: cpfp_node_tx.output[0].clone(),
-                signing_public_key,                verifying_public_key: node.verifying_public_key,
+                signing_public_key,
+                verifying_public_key: node.verifying_public_key,
             });
         }
 
@@ -519,7 +531,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: cpfp_node_tx.clone(),
             parent_tx_out: node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         signing_jobs.push(SigningJob {
@@ -527,7 +540,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: direct_node_tx.clone(),
             parent_tx_out: node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         let RefundTransactions {
@@ -546,7 +560,8 @@ impl TimelockManager {
             node_id: node.id.clone(),
             tx: cpfp_refund_tx,
             parent_tx_out: cpfp_node_tx.output[0].clone(),
-            signing_public_key,            verifying_public_key: node.verifying_public_key,
+            signing_public_key,
+            verifying_public_key: node.verifying_public_key,
         });
 
         if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx {
@@ -555,7 +570,8 @@ impl TimelockManager {
                 node_id: node.id.clone(),
                 tx: direct_from_cpfp_refund_tx,
                 parent_tx_out: cpfp_node_tx.output[0].clone(),
-                signing_public_key,                verifying_public_key: node.verifying_public_key,
+                signing_public_key,
+                verifying_public_key: node.verifying_public_key,
             });
         }
 

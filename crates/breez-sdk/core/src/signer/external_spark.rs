@@ -14,10 +14,9 @@ use super::external_spark_types::{
     ExternalPrepareStaticDepositRequest, ExternalPrepareTokenTransactionRequest,
     ExternalPrepareTransferRequest, ExternalPreparedClaim, ExternalPreparedLightningReceive,
     ExternalPreparedStaticDeposit, ExternalPreparedStaticDepositClaim,
-    ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
-    ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
-    ExternalSignedSparkInvoice, ExternalStartStaticDepositRefundRequest,
-    ExternalStartedStaticDepositRefund,
+    ExternalPreparedTokenTransaction, ExternalPreparedTransfer, ExternalSignSparkInvoiceRequest,
+    ExternalSignStaticDepositRefundRequest, ExternalSignedSparkInvoice,
+    ExternalStartStaticDepositRefundRequest, ExternalStartedStaticDepositRefund,
 };
 use super::external_types::{
     EcdsaSignatureBytes, ExternalFrostSignature, ExternalTreeNodeId, PublicKeyBytes,

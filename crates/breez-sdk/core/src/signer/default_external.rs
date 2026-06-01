@@ -172,7 +172,6 @@ impl ExternalBreezSigner for DefaultExternalSigner {
             .map_err(|e| SignerError::Generic(e.to_string()))?;
         Ok(HashedMessageBytes::from_hmac(&sig))
     }
-
 }
 
 #[cfg(test)]
@@ -385,5 +384,4 @@ mod tests {
             "Schnorr signature should be 64 bytes"
         );
     }
-
 }

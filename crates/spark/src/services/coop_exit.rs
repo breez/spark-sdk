@@ -24,13 +24,13 @@ use crate::signer::{
 };
 use crate::ssp::RequestCoopExitInput;
 use crate::ssp::ServiceProvider;
+use crate::tree::TreeNode;
 use crate::tree::TreeNodeId;
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::time::web_time_to_prost_timestamp;
 use crate::utils::transactions::{
     ConnectorRefundTxsParams, RefundTransactions, create_connector_refund_txs,
 };
-use crate::tree::TreeNode;
 
 const COOP_EXIT_EXPIRY_DURATION_MAINNET: Duration = Duration::from_secs(7 * 24 * 60 * 60 + 5 * 60); // 1 week + 5 minutes
 const COOP_EXIT_EXPIRY_DURATION: Duration = Duration::from_secs(35 * 60); // 35 minutes
@@ -442,8 +442,10 @@ impl CoopExitService {
         let mut direct_from_cpfp_jobs = Vec::new();
         for (i, leaf) in leaves.iter().enumerate() {
             // The connector refund is signed with the leaf's current derived key.
-            let signing_public_key =
-                self.spark_signer.get_public_key_for_leaf(&leaf.node.id).await?;
+            let signing_public_key = self
+                .spark_signer
+                .get_public_key_for_leaf(&leaf.node.id)
+                .await?;
             let verifying_key = leaf.node.verifying_public_key;
             let node_tx = &leaf.node.node_tx;
             let connector_prev_out = connector_tx_parsed.output.get(i).cloned();
@@ -456,9 +458,8 @@ impl CoopExitService {
                 .clone()
                 .ok_or_else(|| ServiceError::Generic("No refund tx".to_string()))?;
             let old_sequence = refund_tx.input[0].sequence;
-            let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence).ok_or_else(|| {
-                ServiceError::Generic("Failed to get next sequence".to_string())
-            })?;
+            let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence)
+                .ok_or_else(|| ServiceError::Generic("Failed to get next sequence".to_string()))?;
             let RefundTransactions {
                 cpfp_tx: cpfp_refund_tx,
                 direct_tx: direct_refund_tx,

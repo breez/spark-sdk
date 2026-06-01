@@ -11,9 +11,9 @@ use spark_wallet::{
     FrostJob, FrostShareResult, PrepareClaimRequest, PrepareLightningReceiveRequest,
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
     PrepareTransferRequest, PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit,
-    PreparedStaticDepositClaim, PreparedTokenTransaction, PreparedTransfer, SignSparkInvoiceRequest,
-    SignStaticDepositRefundRequest, SignedSparkInvoice, SignerError, StartStaticDepositRefundRequest,
-    StartedStaticDepositRefund, TreeNodeId,
+    PreparedStaticDepositClaim, PreparedTokenTransaction, PreparedTransfer,
+    SignSparkInvoiceRequest, SignStaticDepositRefundRequest, SignedSparkInvoice, SignerError,
+    StartStaticDepositRefundRequest, StartedStaticDepositRefund, TreeNodeId,
 };
 
 use super::ExternalSparkSigner;
@@ -53,7 +53,10 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
             .map_err(to_spark_err)
     }
 
-    async fn get_public_key_for_leaf(&self, leaf_id: &TreeNodeId) -> Result<PublicKey, SignerError> {
+    async fn get_public_key_for_leaf(
+        &self,
+        leaf_id: &TreeNodeId,
+    ) -> Result<PublicKey, SignerError> {
         let ext = ExternalTreeNodeId::from_tree_node_id(leaf_id).map_err(to_spark_err)?;
         self.inner
             .get_public_key_for_leaf(ext)
@@ -99,7 +102,11 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
             .map(ExternalFrostJob::from_frost_job)
             .collect::<Result<Vec<_>, _>>()
             .map_err(to_spark_err)?;
-        let results = self.inner.sign_frost(ext_jobs).await.map_err(to_spark_err)?;
+        let results = self
+            .inner
+            .sign_frost(ext_jobs)
+            .await
+            .map_err(to_spark_err)?;
         results
             .iter()
             .map(ExternalFrostShareResult::to_frost_share_result)
@@ -155,8 +162,9 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
         &self,
         request: PrepareStaticDepositRequest,
     ) -> Result<PreparedStaticDeposit, SignerError> {
-        let ext = ExternalPrepareStaticDepositRequest::from_prepare_static_deposit_request(&request)
-            .map_err(to_spark_err)?;
+        let ext =
+            ExternalPrepareStaticDepositRequest::from_prepare_static_deposit_request(&request)
+                .map_err(to_spark_err)?;
         self.inner
             .prepare_static_deposit(ext)
             .await
@@ -216,9 +224,10 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
         &self,
         request: PrepareTokenTransactionRequest,
     ) -> Result<PreparedTokenTransaction, SignerError> {
-        let ext =
-            ExternalPrepareTokenTransactionRequest::from_prepare_token_transaction_request(&request)
-                .map_err(to_spark_err)?;
+        let ext = ExternalPrepareTokenTransactionRequest::from_prepare_token_transaction_request(
+            &request,
+        )
+        .map_err(to_spark_err)?;
         self.inner
             .prepare_token_transaction(ext)
             .await
@@ -231,10 +240,11 @@ impl spark_wallet::SparkSigner for ExternalSparkSignerAdapter {
         &self,
         request: PrepareStaticDepositClaimRequest,
     ) -> Result<PreparedStaticDepositClaim, SignerError> {
-        let ext = ExternalPrepareStaticDepositClaimRequest::from_prepare_static_deposit_claim_request(
-            &request,
-        )
-        .map_err(to_spark_err)?;
+        let ext =
+            ExternalPrepareStaticDepositClaimRequest::from_prepare_static_deposit_claim_request(
+                &request,
+            )
+            .map_err(to_spark_err)?;
         self.inner
             .prepare_static_deposit_claim(ext)
             .await

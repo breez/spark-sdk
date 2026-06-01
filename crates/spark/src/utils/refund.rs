@@ -244,4 +244,3 @@ async fn sign_refund(
         network,
     })
 }
-

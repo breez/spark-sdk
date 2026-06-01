@@ -356,10 +356,7 @@ pub trait SparkSigner: Send + Sync + 'static {
     /// public-key derivation (no signing): the wallet hands this to the
     /// operators to derive a static-deposit address. Analogous to
     /// [`get_public_key_for_leaf`](Self::get_public_key_for_leaf).
-    async fn get_static_deposit_public_key(
-        &self,
-        index: u32,
-    ) -> Result<PublicKey, SignerError>;
+    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError>;
 
     /// Signs a server authentication challenge with the wallet identity key
     /// (ECDSA). Used for Spark operator (gRPC) and SSP session authentication.
