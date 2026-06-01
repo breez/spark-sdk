@@ -187,6 +187,13 @@ impl SparkSigner for SparkSignerAdapter {
         self.signer.get_identity_public_key().await
     }
 
+    async fn get_public_key_for_leaf(
+        &self,
+        leaf_id: &crate::tree::TreeNodeId,
+    ) -> Result<PublicKey, SignerError> {
+        self.signer.get_public_key_for_node(leaf_id).await
+    }
+
     async fn sign_frost(&self, jobs: Vec<FrostJob>) -> Result<Vec<FrostShareResult>, SignerError> {
         let mut results = Vec::with_capacity(jobs.len());
         for job in jobs {

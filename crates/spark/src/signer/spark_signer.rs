@@ -287,6 +287,11 @@ pub trait SparkSigner: Send + Sync + 'static {
     /// Returns the wallet's identity public key.
     async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
 
+    /// Returns the signing public key for a tree leaf. Needed by callers that
+    /// must construct transactions (refunds, etc.) before signing them.
+    async fn get_public_key_for_leaf(&self, leaf_id: &TreeNodeId)
+    -> Result<PublicKey, SignerError>;
+
     /// Produce FROST shares for a batch of jobs (maps to `SPARK_SIGN_FROST`).
     /// Used directly by deposit tree creation, transfer/coop-exit refund
     /// signing, timelock renewal, static-deposit refund, lightning send, and

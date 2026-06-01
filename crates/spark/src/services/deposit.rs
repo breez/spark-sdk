@@ -19,7 +19,7 @@ use crate::{
         rpc::{self as operator_rpc, spark::HashVariant},
     },
     services::{Utxo, models::map_signing_nonce_commitments},
-    signer::{SecretSource, SignFrostRequest, Signer},
+    signer::{FrostDerivation, FrostJob, Signer, SparkSigner},
     ssp::{ClaimStaticDepositInput, ClaimStaticDepositRequestType, ServiceProvider},
     tree::{TreeNode, TreeNodeId},
     utils::{
@@ -176,6 +176,7 @@ pub struct DepositService {
     operator_pool: Arc<OperatorPool>,
     ssp_client: Arc<ServiceProvider>,
     signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
 }
 
 impl DepositService {
@@ -187,6 +188,7 @@ impl DepositService {
         operator_pool: Arc<OperatorPool>,
         ssp_client: Arc<ServiceProvider>,
         signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
     ) -> Self {
         DepositService {
             bitcoin_service,
@@ -195,6 +197,7 @@ impl DepositService {
             operator_pool,
             ssp_client,
             signer,
+            spark_signer,
         }
     }
 
@@ -544,10 +547,9 @@ impl DepositService {
         deposit_tx: Transaction,
         vout: u32,
     ) -> Result<Vec<TreeNode>, ServiceError> {
-        let signing_private_key = SecretSource::Derived(deposit_leaf_id.clone());
         let signing_public_key = self
-            .signer
-            .public_key_from_secret(&signing_private_key)
+            .spark_signer
+            .get_public_key_for_leaf(deposit_leaf_id)
             .await?;
 
         let deposit_txid = deposit_tx.compute_txid();
@@ -577,12 +579,6 @@ impl DepositService {
                 "Direct from CPFP refund transaction is missing".to_string(),
             ));
         };
-
-        // Get random signing commitments
-        let cpfp_node_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
-        let cpfp_refund_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
-        let direct_from_cpfp_refund_nonce_commitment =
-            self.signer.generate_random_signing_commitment().await?;
 
         // Fetch operator signing commitments. The tree node does not exist yet,
         // so request commitments by count rather than by node id.
@@ -617,51 +613,52 @@ impl DepositService {
             sighash_from_tx(&direct_from_cpfp_refund_tx, 0, &cpfp_root_tx.output[0])?;
 
         // The user produces a FROST signature share for each transaction; the
-        // operators aggregate server-side during finalization.
-        let cpfp_root_user_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: cpfp_root_sighash.as_byte_array(),
-                public_key: &signing_public_key,
-                private_key: &signing_private_key,
-                verifying_key: verifying_public_key,
-                self_nonce_commitment: &cpfp_node_nonce_commitment,
-                statechain_commitments: map_signing_nonce_commitments(
+        // operators aggregate server-side during finalization. The deposit
+        // tree-root signing key is the deposit leaf's signing key.
+        let derivation = FrostDerivation::SigningLeaf {
+            leaf_id: deposit_leaf_id.clone(),
+        };
+        let jobs = vec![
+            FrostJob {
+                derivation: derivation.clone(),
+                sighash: *cpfp_root_sighash.as_byte_array(),
+                verifying_key: *verifying_public_key,
+                operator_commitments: map_signing_nonce_commitments(
                     &cpfp_root_commitments.signing_nonce_commitments,
                 )?,
                 adaptor_public_key: None,
-            })
-            .await?;
-
-        let cpfp_refund_user_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: cpfp_refund_sighash.as_byte_array(),
-                public_key: &signing_public_key,
-                private_key: &signing_private_key,
-                verifying_key: verifying_public_key,
-                self_nonce_commitment: &cpfp_refund_nonce_commitment,
-                statechain_commitments: map_signing_nonce_commitments(
+            },
+            FrostJob {
+                derivation: derivation.clone(),
+                sighash: *cpfp_refund_sighash.as_byte_array(),
+                verifying_key: *verifying_public_key,
+                operator_commitments: map_signing_nonce_commitments(
                     &cpfp_refund_commitments.signing_nonce_commitments,
                 )?,
                 adaptor_public_key: None,
-            })
-            .await?;
-
-        let direct_from_cpfp_refund_user_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: direct_from_cpfp_refund_sighash.as_byte_array(),
-                public_key: &signing_public_key,
-                private_key: &signing_private_key,
-                verifying_key: verifying_public_key,
-                self_nonce_commitment: &direct_from_cpfp_refund_nonce_commitment,
-                statechain_commitments: map_signing_nonce_commitments(
+            },
+            FrostJob {
+                derivation,
+                sighash: *direct_from_cpfp_refund_sighash.as_byte_array(),
+                verifying_key: *verifying_public_key,
+                operator_commitments: map_signing_nonce_commitments(
                     &direct_from_cpfp_refund_commitments.signing_nonce_commitments,
                 )?,
                 adaptor_public_key: None,
-            })
-            .await?;
+            },
+        ];
+        let [
+            cpfp_root_share,
+            cpfp_refund_share,
+            direct_from_cpfp_refund_share,
+        ] = self
+            .spark_signer
+            .sign_frost(jobs)
+            .await?
+            .try_into()
+            .map_err(|v: Vec<_>| {
+                ServiceError::Generic(format!("Expected 3 FROST shares, got {}", v.len()))
+            })?;
 
         let finalize_resp = self
             .operator_pool
@@ -681,9 +678,9 @@ impl DepositService {
                         signing_public_key: signing_public_key.serialize().to_vec(),
                         raw_tx: serialize(&cpfp_root_tx),
                         signing_nonce_commitment: Some(
-                            cpfp_node_nonce_commitment.commitments.try_into()?,
+                            cpfp_root_share.commitment.commitments.try_into()?,
                         ),
-                        user_signature: cpfp_root_user_signature.serialize().to_vec(),
+                        user_signature: cpfp_root_share.signature_share.serialize().to_vec(),
                         signing_commitments: Some(operator_rpc::spark::SigningCommitments {
                             signing_commitments: cpfp_root_commitments
                                 .signing_nonce_commitments
@@ -696,9 +693,9 @@ impl DepositService {
                         signing_public_key: signing_public_key.serialize().to_vec(),
                         raw_tx: serialize(&cpfp_refund_tx),
                         signing_nonce_commitment: Some(
-                            cpfp_refund_nonce_commitment.commitments.try_into()?,
+                            cpfp_refund_share.commitment.commitments.try_into()?,
                         ),
-                        user_signature: cpfp_refund_user_signature.serialize().to_vec(),
+                        user_signature: cpfp_refund_share.signature_share.serialize().to_vec(),
                         signing_commitments: Some(operator_rpc::spark::SigningCommitments {
                             signing_commitments: cpfp_refund_commitments
                                 .signing_nonce_commitments
@@ -712,11 +709,13 @@ impl DepositService {
                             signing_public_key: signing_public_key.serialize().to_vec(),
                             raw_tx: serialize(&direct_from_cpfp_refund_tx),
                             signing_nonce_commitment: Some(
-                                direct_from_cpfp_refund_nonce_commitment
+                                direct_from_cpfp_refund_share
+                                    .commitment
                                     .commitments
                                     .try_into()?,
                             ),
-                            user_signature: direct_from_cpfp_refund_user_signature
+                            user_signature: direct_from_cpfp_refund_share
+                                .signature_share
                                 .serialize()
                                 .to_vec(),
                             signing_commitments: Some(operator_rpc::spark::SigningCommitments {

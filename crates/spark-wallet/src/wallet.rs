@@ -35,7 +35,7 @@ use spark::{
         TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
     },
     session_store::{InMemorySessionStore, SessionStore},
-    signer::Signer,
+    signer::{Signer, SparkSignerAdapter},
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
         InMemoryTokenOutputStore, SelectionStrategy, SynchronousTokenOutputService, TokenMetadata,
@@ -236,6 +236,12 @@ impl SparkWallet {
         config.validate()?;
         let identity_public_key = signer.get_identity_public_key().await?;
 
+        // Default in-process high-level signer wrapping the low-level signer.
+        // Services are being migrated onto this incrementally; un-migrated
+        // services still use `signer` directly.
+        let spark_signer: Arc<dyn spark::signer::SparkSigner> =
+            Arc::new(SparkSignerAdapter::new(Arc::clone(&signer)));
+
         let bitcoin_service = BitcoinService::new(config.network);
         let service_provider = Arc::new(match ssp_http_client {
             Some(client) => ServiceProvider::new_with_client(
@@ -295,6 +301,7 @@ impl SparkWallet {
             operator_pool.clone(),
             service_provider.clone(),
             Arc::clone(&signer),
+            Arc::clone(&spark_signer),
         ));
 
         let coop_exit_service = Arc::new(CoopExitService::new(
