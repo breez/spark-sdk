@@ -1,4 +1,4 @@
-//! FFI-compatible types for the `ExternalSigner` trait
+//! FFI-compatible types for the `ExternalBreezSigner` trait
 //!
 //! These types are designed to be simpler and FFI-safe, using basic types like
 //! Vec<u8> and String instead of complex Rust types.

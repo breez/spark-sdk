@@ -1,26 +1,26 @@
 use crate::SdkError;
 use crate::signer::external_types::{MessageBytes, derivation_path_to_string};
-use crate::signer::{BreezSigner, ExternalSigner};
+use crate::signer::{BreezSigner, ExternalBreezSigner};
 use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1;
 use std::sync::Arc;
 
-/// Adapter that wraps an `ExternalSigner` and implements `BreezSigner`.
+/// Adapter that wraps an `ExternalBreezSigner` and implements `BreezSigner`.
 ///
 /// This adapter translates between the internal `BreezSigner` trait (using Rust types)
-/// and the external `ExternalSigner` trait (using FFI-compatible types).
-pub struct ExternalSignerAdapter {
-    external: Arc<dyn ExternalSigner>,
+/// and the external `ExternalBreezSigner` trait (using FFI-compatible types).
+pub struct ExternalBreezSignerAdapter {
+    external: Arc<dyn ExternalBreezSigner>,
 }
 
-impl ExternalSignerAdapter {
-    pub fn new(external: Arc<dyn ExternalSigner>) -> Self {
+impl ExternalBreezSignerAdapter {
+    pub fn new(external: Arc<dyn ExternalBreezSigner>) -> Self {
         Self { external }
     }
 }
 
 #[macros::async_trait]
-impl BreezSigner for ExternalSignerAdapter {
+impl BreezSigner for ExternalBreezSignerAdapter {
     fn identity_public_key(&self) -> Result<secp256k1::PublicKey, SdkError> {
         let pk_bytes = self.external.identity_public_key().map_err(|e| {
             SdkError::Signer(format!("External signer identity_public_key failed: {e}"))

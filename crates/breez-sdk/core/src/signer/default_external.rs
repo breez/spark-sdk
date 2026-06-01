@@ -5,10 +5,10 @@ use crate::signer::external_types::{
     EcdsaSignatureBytes, HashedMessageBytes, MessageBytes, PublicKeyBytes,
     RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes, string_to_derivation_path,
 };
-use crate::signer::{BreezSigner, ExternalSigner, breez::BreezSignerImpl};
+use crate::signer::{BreezSigner, ExternalBreezSigner, breez::BreezSignerImpl};
 use crate::{Network, SdkError, Seed, default_config, models::KeySetType};
 
-/// Default implementation of `ExternalSigner` that uses the internal `BreezSignerImpl`.
+/// Default implementation of `ExternalBreezSigner` that uses the internal `BreezSignerImpl`.
 ///
 /// This provides a reference implementation and allows users to easily create a signer
 /// from a mnemonic without implementing the trait themselves.
@@ -52,7 +52,7 @@ impl DefaultExternalSigner {
 }
 
 #[macros::async_trait]
-impl ExternalSigner for DefaultExternalSigner {
+impl ExternalBreezSigner for DefaultExternalSigner {
     fn identity_public_key(&self) -> Result<PublicKeyBytes, SignerError> {
         let pk = self
             .inner

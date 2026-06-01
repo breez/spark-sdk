@@ -44,7 +44,7 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
 #[wasm_bindgen(js_name = "connectWithSigner")]
 pub async fn connect_with_signer(
     config: Config,
-    signer: crate::signer::JsExternalSigner,
+    signer: crate::signer::JsExternalBreezSigner,
     spark_signer: crate::signer::JsExternalSparkSigner,
     storage_dir: String,
 ) -> WasmResult<BreezSdk> {

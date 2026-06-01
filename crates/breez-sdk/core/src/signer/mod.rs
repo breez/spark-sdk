@@ -71,13 +71,13 @@ pub mod external_spark_types;
 pub mod external_types;
 
 // Re-export only the external signer traits and types
-pub use external::ExternalSigner;
+pub use external::ExternalBreezSigner;
 pub use external_spark::ExternalSparkSigner;
 pub use external_spark_types::*;
 pub use external_types::*;
 
 // Internal-only exports (used by adapter and builder)
-pub(crate) use adapter::ExternalSignerAdapter;
+pub(crate) use adapter::ExternalBreezSignerAdapter;
 pub(crate) use default_external::DefaultExternalSigner;
 pub(crate) use external_spark_adapter::ExternalSparkSignerAdapter;
 pub mod breez;

@@ -158,25 +158,25 @@ pub struct ExternalFrostSignature {
     pub bytes: Vec<u8>,
 }
 
-pub struct WasmExternalSigner {
-    pub inner: JsExternalSigner,
+pub struct WasmExternalBreezSigner {
+    pub inner: JsExternalBreezSigner,
 }
 
 // This assumes that we'll always be running in a single thread (true for Wasm environments)
-unsafe impl Send for WasmExternalSigner {}
-unsafe impl Sync for WasmExternalSigner {}
+unsafe impl Send for WasmExternalBreezSigner {}
+unsafe impl Sync for WasmExternalBreezSigner {}
 
-impl WasmExternalSigner {
-    pub fn new(inner: JsExternalSigner) -> Self {
+impl WasmExternalBreezSigner {
+    pub fn new(inner: JsExternalBreezSigner) -> Self {
         Self { inner }
     }
 }
 
-/// A default signer implementation that wraps the core SDK's ExternalSigner.
+/// A default signer implementation that wraps the core SDK's ExternalBreezSigner.
 /// This is returned by `defaultExternalSigner` and can be passed to `connectWithSigner`.
 #[wasm_bindgen]
 pub struct DefaultSigner {
-    pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSigner>,
+    pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalBreezSigner>,
 }
 
 // This assumes that we'll always be running in a single thread (true for Wasm environments)
@@ -184,7 +184,7 @@ unsafe impl Send for DefaultSigner {}
 unsafe impl Sync for DefaultSigner {}
 
 impl DefaultSigner {
-    pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSigner>) -> Self {
+    pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalBreezSigner>) -> Self {
         Self { inner }
     }
 }
@@ -280,7 +280,7 @@ impl DefaultSigner {
 use breez_sdk_spark::SignerError;
 
 #[async_trait]
-impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
+impl breez_sdk_spark::signer::ExternalBreezSigner for DefaultSigner {
     fn identity_public_key(&self) -> Result<core_types::PublicKeyBytes, SignerError> {
         self.inner.identity_public_key()
     }
@@ -334,7 +334,7 @@ impl breez_sdk_spark::signer::ExternalSigner for DefaultSigner {
 }
 
 #[async_trait]
-impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
+impl breez_sdk_spark::signer::ExternalBreezSigner for WasmExternalBreezSigner {
     fn identity_public_key(&self) -> Result<core_types::PublicKeyBytes, SignerError> {
         let wasm_pubkey: PublicKeyBytes = self
             .inner
@@ -473,7 +473,7 @@ impl breez_sdk_spark::signer::ExternalSigner for WasmExternalSigner {
 }
 
 #[wasm_bindgen(typescript_custom_section)]
-const SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigner {
+const SIGNER_INTERFACE: &'static str = r#"export interface ExternalBreezSigner {
     identityPublicKey(): PublicKeyBytes;
     derivePublicKey(path: string): Promise<PublicKeyBytes>;
     signEcdsa(message: MessageBytes, path: string): Promise<EcdsaSignatureBytes>;
@@ -486,53 +486,53 @@ const SIGNER_INTERFACE: &'static str = r#"export interface ExternalSigner {
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(typescript_type = "ExternalSigner")]
-    pub type JsExternalSigner;
+    #[wasm_bindgen(typescript_type = "ExternalBreezSigner")]
+    pub type JsExternalBreezSigner;
 
     #[wasm_bindgen(structural, method, js_name = "identityPublicKey", catch)]
-    pub fn identity_public_key(this: &JsExternalSigner) -> Result<PublicKeyBytes, JsValue>;
+    pub fn identity_public_key(this: &JsExternalBreezSigner) -> Result<PublicKeyBytes, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "derivePublicKey", catch)]
-    pub fn derive_public_key(this: &JsExternalSigner, path: String) -> Result<Promise, JsValue>;
+    pub fn derive_public_key(this: &JsExternalBreezSigner, path: String) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signEcdsa", catch)]
     pub fn sign_ecdsa(
-        this: &JsExternalSigner,
+        this: &JsExternalBreezSigner,
         message: MessageBytes,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signEcdsaRecoverable", catch)]
     pub fn sign_ecdsa_recoverable(
-        this: &JsExternalSigner,
+        this: &JsExternalBreezSigner,
         message: MessageBytes,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "eciesEncrypt", catch)]
     pub fn encrypt_ecies(
-        this: &JsExternalSigner,
+        this: &JsExternalBreezSigner,
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "eciesDecrypt", catch)]
     pub fn decrypt_ecies(
-        this: &JsExternalSigner,
+        this: &JsExternalBreezSigner,
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "signHashSchnorr", catch)]
     pub fn sign_hash_schnorr(
-        this: &JsExternalSigner,
+        this: &JsExternalBreezSigner,
         hash: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "hmacSha256", catch)]
     pub fn hmac_sha256(
-        this: &JsExternalSigner,
+        this: &JsExternalBreezSigner,
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;

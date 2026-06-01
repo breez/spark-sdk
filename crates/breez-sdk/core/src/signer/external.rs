@@ -18,7 +18,7 @@ use super::external_types::{
 /// Errors are returned as `SignerError` for FFI compatibility.
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
-pub trait ExternalSigner: Send + Sync {
+pub trait ExternalBreezSigner: Send + Sync {
     /// Returns the identity public key as 33 bytes (compressed secp256k1 key).
     ///
     /// See also: [JavaScript `getIdentityPublicKey`](https://docs.spark.money/wallets/spark-signer#get-identity-public-key)

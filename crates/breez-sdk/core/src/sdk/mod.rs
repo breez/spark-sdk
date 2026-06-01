@@ -320,14 +320,14 @@ fn default_spark_config(network: Network) -> crate::models::SparkConfig {
 ///
 /// # Returns
 ///
-/// Result containing the signer as `Arc<dyn ExternalSigner>`
+/// Result containing the signer as `Arc<dyn ExternalBreezSigner>`
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_external_signer(
     mnemonic: String,
     passphrase: Option<String>,
     network: Network,
     key_set_config: Option<crate::models::KeySetConfig>,
-) -> Result<Arc<dyn crate::signer::ExternalSigner>, SdkError> {
+) -> Result<Arc<dyn crate::signer::ExternalBreezSigner>, SdkError> {
     use crate::signer::DefaultExternalSigner;
 
     let config = key_set_config.unwrap_or_default();

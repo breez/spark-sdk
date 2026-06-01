@@ -91,7 +91,7 @@ pub struct ConnectWithSignerRequest {
     pub config: Config,
     /// External signer for non-Spark SDK signing (LNURL-auth, sync, message
     /// signing, ECIES).
-    pub signer: std::sync::Arc<dyn crate::signer::ExternalSigner>,
+    pub signer: std::sync::Arc<dyn crate::signer::ExternalBreezSigner>,
     /// External high-level Spark signer for the Spark wallet flows.
     pub spark_signer: std::sync::Arc<dyn crate::signer::ExternalSparkSigner>,
     pub storage_dir: String,
