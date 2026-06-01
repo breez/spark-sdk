@@ -129,7 +129,7 @@ The recommended flow depends on the platform. Mobile uses a single-call unified 
 
 ### Unified flow (mobile)
 
-One "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's `registered_credential` field doubles as the path discriminator: `Some` (with the new credential metadata) on the register path, `None` on the sign-in path.
+One "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's `credential` field carries whichever credential signed in or was registered; the register path also fills the attestation fields (`aaguid`, `backupEligible`). See [Credential metadata](./passkey_credential_metadata.md) for using these.
 
 Internally the silent attempt pins `preferImmediatelyAvailableCredentials = true` so the OS fast-fails (no UI, sub-300ms on iOS / Android) when no local credential exists; only {{#enum PrfProviderError::CredentialNotFound}} flips to register, all other errors (`Cancel`, `Timeout`, `Configuration`) propagate unchanged.
 
