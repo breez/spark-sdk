@@ -10,7 +10,7 @@ use crate::operator::rpc::{self as operator_rpc, OperatorRpcError};
 use crate::services::models::{
     LeafKeyTweak, Transfer, map_signing_nonce_commitments, split_signing_commitments_by_variant,
 };
-use crate::services::{ProofMap, TransferId, TransferObserver, TransferStatus};
+use crate::services::{TransferId, TransferObserver, TransferStatus};
 use crate::signer::{
     FrostSigningCommitmentsWithNonces, SecretSource, SecretToSplit, VerifiableSecretShare,
 };
@@ -25,7 +25,6 @@ use crate::utils::time::web_time_to_prost_timestamp;
 
 use bitcoin::Transaction;
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey};
 use frost_secp256k1_tr::Identifier;
@@ -38,8 +37,8 @@ use tracing::{debug, error, trace, warn};
 use crate::{
     bitcoin::sighash_from_tx,
     signer::{
-        FrostDerivation, FrostJob, OperatorRecipient, PrepareTransferRequest, Signer, SparkSigner,
-        TransferLeafInput,
+        ClaimLeafInput, FrostDerivation, FrostJob, OperatorRecipient, PrepareClaimRequest,
+        PrepareTransferRequest, Signer, SparkSigner, TransferLeafInput,
     },
     tree::{TreeNode, TreeNodeId},
 };
@@ -870,21 +869,6 @@ impl TransferService {
             .try_into()
             .map_err(|_| ServiceError::InvalidInput("too many leaves to claim".to_string()))?;
 
-        let (leaves_tweaks_map, _proof_map) = self.prepare_claim_leaves_key_tweaks(leaves).await?;
-
-        // ECIES-encrypt the per-operator claim leaf key tweaks.
-        let mut key_tweak_package: HashMap<String, Vec<u8>> = HashMap::new();
-        for (identifier, leaves_to_receive) in leaves_tweaks_map {
-            let proto = operator_rpc::spark::ClaimLeafKeyTweaks { leaves_to_receive };
-            let operator = self
-                .operator_pool
-                .get_operator_by_identifier(&identifier)
-                .ok_or_else(|| ServiceError::Generic("Operator not found".to_string()))?;
-            let encrypted = self
-                .encrypt_with_public_key(&operator.identity_public_key, &proto.encode_to_vec())?;
-            key_tweak_package.insert(hex::encode(identifier.serialize()), encrypted);
-        }
-
         // Fetch operator signing commitments. The receiver does not yet own the
         // leaves, so request commitments by count rather than by node id.
         let signing_commitments = self
@@ -905,165 +889,65 @@ impl TransferService {
         let [cpfp_chunk, direct_chunk, direct_from_cpfp_chunk] =
             split_signing_commitments_by_variant(&signing_commitments, leaves.len())?;
 
-        // Sign the claim refunds (current timelock) operator-commits-first;
-        // the operators aggregate server-side during `claim_transfer`.
+        // Sign the claim refunds (current timelock) operator-commits-first via
+        // sign_frost; the operators aggregate server-side during `claim_transfer`.
         let (cpfp_jobs, direct_jobs, direct_from_cpfp_jobs) = self
             .sign_claim_refunds(leaves, cpfp_chunk, direct_chunk, direct_from_cpfp_chunk)
             .await?;
 
-        let mut claim_package = operator_rpc::spark::ClaimPackage {
+        // Key-tweak step (decrypt incoming key, derive new key, compute tweak,
+        // Feldman-split, ECIES per operator, sign the claim-package payload).
+        let claim_leaves = leaves
+            .iter()
+            .map(|leaf| {
+                let SecretSource::Encrypted(cipher) = &leaf.signing_key else {
+                    return Err(ServiceError::InvalidInput(
+                        "claim leaf signing key must be the encrypted incoming key".to_string(),
+                    ));
+                };
+                let sender_signature = transfer
+                    .leaves
+                    .iter()
+                    .find(|tl| tl.leaf.id == leaf.node.id)
+                    .and_then(|tl| tl.signature)
+                    .map(|s| s.serialize_compact().to_vec())
+                    .unwrap_or_default();
+                Ok(ClaimLeafInput {
+                    node: leaf.node.clone(),
+                    sender_signature,
+                    leaf_key_ciphertext: cipher.as_slice().to_vec(),
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+
+        let prepared = self
+            .spark_signer
+            .prepare_claim(PrepareClaimRequest {
+                transfer_id: transfer.id.clone(),
+                sender_identity_public_key: transfer.sender_identity_public_key,
+                leaves: claim_leaves,
+                operator_recipients: self.operator_recipients(),
+                threshold: self.split_secret_threshold,
+            })
+            .await?;
+
+        Ok(operator_rpc::spark::ClaimPackage {
             leaves_to_claim: cpfp_jobs,
             direct_leaves_to_claim: direct_jobs,
             direct_from_cpfp_leaves_to_claim: direct_from_cpfp_jobs,
-            key_tweak_package,
-            user_signature: Vec::new(),
+            key_tweak_package: prepared
+                .operator_packages
+                .into_iter()
+                .map(|p| {
+                    (
+                        hex::encode(p.operator_identifier.serialize()),
+                        p.encrypted_package,
+                    )
+                })
+                .collect(),
+            user_signature: prepared.claim_user_signature.serialize_der().to_vec(),
             hash_variant: HashVariant::V2.into(),
-        };
-
-        let signing_payload =
-            self.get_claim_package_signing_payload(&transfer.id, &claim_package)?;
-        let signature = self
-            .signer
-            .sign_message_ecdsa_with_identity_key(&signing_payload)
-            .await
-            .map_err(ServiceError::SignerError)?;
-        claim_package.user_signature = signature.serialize_der().to_vec();
-
-        Ok(claim_package)
-    }
-
-    /// Creates the signing payload for a claim package using tagged hashing.
-    /// Uses V2 structured hashing with domain tag for collision resistance.
-    fn get_claim_package_signing_payload(
-        &self,
-        transfer_id: &TransferId,
-        claim_package: &operator_rpc::spark::ClaimPackage,
-    ) -> Result<Vec<u8>, ServiceError> {
-        let transfer_id_bytes =
-            hex::decode(transfer_id.to_string().replace('-', "")).map_err(|e| {
-                ServiceError::ValidationError(format!("Failed to decode transfer ID: {e}"))
-            })?;
-
-        // Convert HashMap to BTreeMap for deterministic ordering
-        let key_tweak_package: std::collections::BTreeMap<String, Vec<u8>> = claim_package
-            .key_tweak_package
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-
-        let signable_message = TaggedHasher::new(&["spark", "claim", "signing payload"])
-            .add_bytes(&transfer_id_bytes)
-            .add_map_string_to_bytes(&key_tweak_package)
-            .signable_message();
-
-        Ok(signable_message)
-    }
-
-    /// Prepares claim leaves key tweaks for all operators
-    async fn prepare_claim_leaves_key_tweaks(
-        &self,
-        leaves: &[LeafKeyTweak],
-    ) -> Result<
-        (
-            HashMap<Identifier, Vec<operator_rpc::spark::ClaimLeafKeyTweak>>,
-            ProofMap,
-        ),
-        ServiceError,
-    > {
-        let mut leaf_data_map = HashMap::new();
-        let mut proof_map = HashMap::new();
-
-        for leaf in leaves {
-            let (leaf_key_tweaks, proof) = self.prepare_claim_leaf_key_tweaks(leaf).await?;
-            proof_map.insert(leaf.node.id.clone(), proof);
-
-            for (identifier, leaf_tweak) in leaf_key_tweaks {
-                leaf_data_map
-                    .entry(identifier)
-                    .or_insert_with(Vec::new)
-                    .push(leaf_tweak);
-            }
-        }
-
-        Ok((leaf_data_map, proof_map))
-    }
-
-    /// Prepares claim key tweaks for a single leaf
-    async fn prepare_claim_leaf_key_tweaks(
-        &self,
-        leaf: &LeafKeyTweak,
-    ) -> Result<
-        (
-            HashMap<Identifier, operator_rpc::spark::ClaimLeafKeyTweak>,
-            k256::PublicKey,
-        ),
-        ServiceError,
-    > {
-        // Calculate the public key tweak by subtracting private keys given public keys
-        let privkey_tweak = self
-            .signer
-            .subtract_secrets(&leaf.signing_key, &leaf.new_signing_key)
-            .await?;
-
-        // Split the secret into threshold shares with proofs
-        let shares = self
-            .signer
-            .split_secret_with_proofs(
-                &SecretToSplit::SecretSource(privkey_tweak),
-                self.split_secret_threshold,
-                self.operator_pool.len(),
-            )
-            .await?;
-
-        trace!("prepare claim: Split secret into {} shares", shares.len());
-
-        // Create pubkey shares tweak map
-        let mut pubkey_shares_tweak = HashMap::new();
-        let secp = Secp256k1::new();
-        for operator in self.operator_pool.get_all_operators() {
-            let operator_identifier = hex::encode(operator.identifier.serialize());
-
-            let share = find_share(&shares, operator.id).ok_or_else(|| {
-                ServiceError::Generic(format!("Share not found for operator {}", operator.id))
-            })?;
-
-            let pubkey_tweak = SecretKey::from_slice(&share.secret_share.share.to_bytes())
-                .map_err(|_| ServiceError::Generic("Invalid secret share".to_string()))?
-                .public_key(&secp);
-            pubkey_shares_tweak.insert(operator_identifier, pubkey_tweak.serialize().to_vec());
-        }
-
-        trace!("Creating leaf tweaks map for each operator");
-
-        // Create leaf tweaks map for each signing operator
-        let mut leaf_tweaks_map = HashMap::new();
-        for operator in self.operator_pool.get_all_operators() {
-            let share = find_share(&shares, operator.id).ok_or_else(|| {
-                ServiceError::Generic(format!("Share not found for operator {}", operator.id))
-            })?;
-
-            let claim_leaf_key_tweak = operator_rpc::spark::ClaimLeafKeyTweak {
-                leaf_id: leaf.node.id.to_string(),
-                secret_share_tweak: Some(operator_rpc::spark::SecretShare {
-                    secret_share: share.secret_share.share.to_bytes().to_vec(),
-                    proofs: share
-                        .proofs
-                        .iter()
-                        .map(|p| p.to_sec1_bytes().to_vec())
-                        .collect(),
-                }),
-                pubkey_shares_tweak: pubkey_shares_tweak.clone(),
-            };
-
-            leaf_tweaks_map.insert(operator.identifier, claim_leaf_key_tweak);
-        }
-
-        let proof = shares
-            .first()
-            .and_then(|s| s.proofs.first())
-            .ok_or(ServiceError::Generic("No proof found".to_string()))?;
-
-        Ok((leaf_tweaks_map, *proof))
+        })
     }
 
     /// Signs claim refund transactions operator-commits-first. The operator

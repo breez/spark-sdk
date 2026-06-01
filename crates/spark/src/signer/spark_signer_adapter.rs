@@ -91,36 +91,6 @@ impl SparkSignerAdapter {
         })
     }
 
-    /// Signs a refund job with a caller-supplied `SecretSource` (used by claim,
-    /// where the key is the freshly-derived receiver key rather than a
-    /// `FrostDerivation`).
-    async fn sign_refund_with_key(
-        &self,
-        private_key: &SecretSource,
-        sighash: &[u8; 32],
-        verifying_key: &PublicKey,
-        operator_commitments: BTreeMap<Identifier, frost_secp256k1_tr::round1::SigningCommitments>,
-    ) -> Result<FrostShareResult, SignerError> {
-        let public_key = self.signer.public_key_from_secret(private_key).await?;
-        let self_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
-        let signature_share = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: sighash,
-                public_key: &public_key,
-                private_key,
-                verifying_key,
-                self_nonce_commitment: &self_nonce_commitment,
-                statechain_commitments: operator_commitments,
-                adaptor_public_key: None,
-            })
-            .await?;
-        Ok(FrostShareResult {
-            commitment: self_nonce_commitment,
-            signature_share,
-        })
-    }
-
     /// ECIES-encrypts `data` to an operator's public key (BIP-340 uncompressed
     /// SEC1, matching the rest of the codebase).
     fn encrypt_for_operator(
@@ -341,7 +311,6 @@ impl SparkSigner for SparkSignerAdapter {
         } = request;
 
         let mut per_operator: BTreeMap<Identifier, Vec<proto::ClaimLeafKeyTweak>> = BTreeMap::new();
-        let mut prepared_leaves = Vec::with_capacity(leaves.len());
 
         for leaf in &leaves {
             // Incoming leaf key (ECIES-encrypted to our identity key by the
@@ -378,51 +347,6 @@ impl SparkSigner for SparkSignerAdapter {
                     .or_default()
                     .push(tweak);
             }
-
-            // FROST-sign the claim refunds with the new receiver key.
-            let cpfp_refund = self
-                .sign_refund_with_key(
-                    &new_signing_key,
-                    &leaf.cpfp_refund.sighash,
-                    &leaf.cpfp_refund.verifying_key,
-                    leaf.cpfp_refund.operator_commitments.clone(),
-                )
-                .await?;
-            let direct_refund = match &leaf.direct_refund {
-                Some(job) => Some(
-                    self.sign_refund_with_key(
-                        &new_signing_key,
-                        &job.sighash,
-                        &job.verifying_key,
-                        job.operator_commitments.clone(),
-                    )
-                    .await?,
-                ),
-                None => None,
-            };
-            let direct_from_cpfp_refund = match &leaf.direct_from_cpfp_refund {
-                Some(job) => Some(
-                    self.sign_refund_with_key(
-                        &new_signing_key,
-                        &job.sighash,
-                        &job.verifying_key,
-                        job.operator_commitments.clone(),
-                    )
-                    .await?,
-                ),
-                None => None,
-            };
-
-            prepared_leaves.push(PreparedClaimLeaf {
-                node_id: leaf.node.id.clone(),
-                new_signing_public_key: self
-                    .signer
-                    .public_key_from_secret(&new_signing_key)
-                    .await?,
-                cpfp_refund,
-                direct_refund,
-                direct_from_cpfp_refund,
-            });
         }
 
         // ECIES-encrypt each operator's bundle of claim key tweaks.
@@ -455,7 +379,6 @@ impl SparkSigner for SparkSignerAdapter {
             .await?;
 
         Ok(PreparedClaim {
-            leaves: prepared_leaves,
             operator_packages,
             claim_user_signature,
         })

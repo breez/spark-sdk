@@ -133,32 +133,19 @@ pub struct PreparedTransfer {
 
 // ─── prepare_claim ────────────────────────────────────────────────────────
 
-/// A single refund tx the signer must FROST-sign during a claim (with the
-/// new receiver key it derives internally).
-#[derive(Debug, Clone)]
-pub struct ClaimRefundJob {
-    /// 32-byte BIP-341 sighash to sign.
-    pub sighash: [u8; 32],
-    /// FROST group verifying key (untweaked).
-    pub verifying_key: PublicKey,
-    /// Per-operator round-1 commitments fetched from the coordinator.
-    pub operator_commitments: BTreeMap<Identifier, SigningCommitments>,
-}
-
-/// A single leaf being claimed.
+/// A single leaf being claimed. Refund signing is a separate `sign_frost`
+/// call (with the new derived leaf key); this carries only what the key-tweak
+/// step needs.
 #[derive(Debug, Clone)]
 pub struct ClaimLeafInput {
     /// The leaf as it lands at the receiver (pre-claim state).
     pub node: TreeNode,
-    /// Sender's ECDSA signature binding this leaf to the transfer.
-    pub sender_signature: ecdsa::Signature,
+    /// Sender's signature binding this leaf to the transfer (raw bytes;
+    /// verified in-enclave by policy-enforcing signers).
+    pub sender_signature: Vec<u8>,
     /// ECIES ciphertext of the incoming leaf signing key, encrypted for this
     /// receiver; the signer decrypts it and derives the claim key tweak.
     pub leaf_key_ciphertext: Vec<u8>,
-    /// Refund jobs (cpfp / direct / direct-from-cpfp) signed with the new key.
-    pub cpfp_refund: ClaimRefundJob,
-    pub direct_refund: Option<ClaimRefundJob>,
-    pub direct_from_cpfp_refund: Option<ClaimRefundJob>,
 }
 
 #[derive(Debug, Clone)]
@@ -170,20 +157,8 @@ pub struct PrepareClaimRequest {
     pub threshold: u32,
 }
 
-/// Signed refund shares for one claimed leaf, plus the new key the signer
-/// derived for it.
-#[derive(Debug, Clone)]
-pub struct PreparedClaimLeaf {
-    pub node_id: TreeNodeId,
-    pub new_signing_public_key: PublicKey,
-    pub cpfp_refund: FrostShareResult,
-    pub direct_refund: Option<FrostShareResult>,
-    pub direct_from_cpfp_refund: Option<FrostShareResult>,
-}
-
 #[derive(Debug, Clone)]
 pub struct PreparedClaim {
-    pub leaves: Vec<PreparedClaimLeaf>,
     /// One ECIES-encrypted claim-tweak package per operator.
     pub operator_packages: Vec<OperatorPackage>,
     /// ECDSA signature over the claim-package payload (identity key).
@@ -308,10 +283,12 @@ pub trait SparkSigner: Send + Sync + 'static {
         request: PrepareTransferRequest,
     ) -> Result<PreparedTransfer, SignerError>;
 
-    /// Claim an inbound transfer: verify each sender signature, ECIES-decrypt
-    /// the incoming leaf key, derive the receiver's new HD leaf key,
-    /// FROST-sign the claim refunds with that new key, and produce
-    /// ECIES-encrypted claim-tweak packages. Maps to `SPARK_CLAIM_TRANSFER`.
+    /// Claim an inbound transfer (key-tweak step): verify each sender
+    /// signature, ECIES-decrypt the incoming leaf key, derive the receiver's
+    /// new HD leaf key, compute the claim key tweak, and produce
+    /// ECIES-encrypted claim-tweak packages plus the claim-package signature.
+    /// Refund signing is a separate `sign_frost` call (new derived leaf key).
+    /// Maps to `SPARK_CLAIM_TRANSFER`.
     async fn prepare_claim(
         &self,
         request: PrepareClaimRequest,

@@ -31,8 +31,6 @@ use super::ServiceError;
 
 pub use crate::ssp::LightningSendRequestStatus;
 
-pub(crate) type ProofMap = HashMap<TreeNodeId, k256::PublicKey>;
-
 impl From<crate::Network> for operator_rpc::spark::Network {
     fn from(network: crate::Network) -> Self {
         match network {
