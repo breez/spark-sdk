@@ -1,0 +1,80 @@
+name: Breez mainnet conversion tests
+
+# Runs the token-conversion / stable-balance integration tests against MAINNET,
+# using real Flashnet pool liquidity. Gated on the MAINNET_TEST_MNEMONIC /
+# BREEZ_API_KEY secrets; the tests skip if those are unset. Triggered manually
+# (workflow_dispatch) or by another workflow (workflow_call), e.g. on release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      token_id:
+        description: 'Token identifier to convert against (blank = USDB default)'
+        required: false
+        type: string
+        default: ''
+      tests:
+        description: 'Which tests to run'
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - mainnet_token_conversion
+          - mainnet_stable_balance
+  workflow_call:
+    inputs:
+      token_id:
+        description: 'Token identifier to convert against (blank = USDB default)'
+        required: false
+        type: string
+        default: ''
+      tests:
+        description: 'Which tests to run (all | mainnet_token_conversion | mainnet_stable_balance)'
+        required: false
+        type: string
+        default: all
+    secrets:
+      MAINNET_TEST_MNEMONIC:
+        required: true
+      BREEZ_API_KEY:
+        required: true
+
+concurrency:
+  group: breez-itest-mainnet
+  cancel-in-progress: false
+
+jobs:
+  breez-itest-mainnet:
+    name: Breez mainnet conversion tests
+    runs-on: ubuntu-latest
+    env:
+      MAINNET_TEST_MNEMONIC: ${{ secrets.MAINNET_TEST_MNEMONIC }}
+      BREEZ_API_KEY: ${{ secrets.BREEZ_API_KEY }}
+      MAINNET_TEST_TOKEN_ID: ${{ inputs.token_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run mainnet conversion tests
+        env:
+          TESTS: ${{ inputs.tests }}
+        run: |
+          case "$TESTS" in
+            mainnet_token_conversion|mainnet_stable_balance)
+              cargo xtask test --package breez-sdk-itest --test "$TESTS" -- --test-threads=1
+              ;;
+            *)
+              make breez-itest-mainnet
+              ;;
+          esac
+
+      # Always run, even if the tests above failed, so Bob's funds are drained
+      # back to the test account (converting tokens to sats).
+      - name: Teardown — drain Bob to Alice
+        if: always()
+        run: make breez-itest-mainnet-teardown

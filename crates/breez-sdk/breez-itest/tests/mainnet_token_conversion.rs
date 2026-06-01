@@ -1,44 +1,77 @@
+//! Token conversion integration tests (mainnet, env-gated).
+//!
+//! These exercise the Flashnet token↔Bitcoin conversion paths, which need real
+//! pool liquidity that regtest lacks. They run against **mainnet** and skip
+//! automatically (logging a warning, returning `Ok`) unless the credentials
+//! below are set, so normal CI is unaffected.
+//!
+//! # Required environment variables
+//! - `MAINNET_TEST_MNEMONIC` — mnemonic of a pre-funded mainnet test account
+//!   ("Alice", the funder). Also the primary gate.
+//! - `BREEZ_API_KEY` — API key the mainnet SDK requires to function.
+//!
+//! # Optional
+//! - `MAINNET_TEST_TOKEN_ID` — token to convert against; defaults to USDB.
+//!
+//! # Wallets & funds
+//! Alice is the env account (keeps her funds). "Bob" is derived deterministically
+//! from Alice's mnemonic (fixed passphrase). There is no per-test sweep — the
+//! dedicated `mainnet_teardown` test drains Bob back to Alice (converting tokens
+//! to sats) once per run, and recovers anything a failed run left behind on the
+//! next run. Amounts are derived from the live pool via `fetch_conversion_limits`;
+//! slippage/timeout inherit the SDK defaults (`None`).
+//!
+//! # Run locally
+//! ```bash
+//! MAINNET_TEST_MNEMONIC="..." BREEZ_API_KEY="..." \
+//!   cargo test -p breez-sdk-itest --test mainnet_token_conversion -- --test-threads=1 --nocapture
+//! ```
+
 use anyhow::Result;
 use breez_sdk_itest::*;
 use breez_sdk_spark::*;
-use rstest::*;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Test token conversions in both directions:
 /// - Part A: Bitcoin → Token (Alice pays Bob's Spark address with token conversion)
 /// - Part B: Token → Bitcoin (Bob pays Alice's Lightning invoice using received tokens)
-#[rstest]
 #[test_log::test(tokio::test)]
-#[ignore = "Skipping due liquidity issues causing test to fail"]
-async fn test_token_conversion_success(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
-    info!("=== Starting test_token_conversion_success ===");
-    let sats_to_token_success_amount: u128 = 20_000_000_000;
-    let token_to_sats_success_amount: u64 = 2_500;
+async fn test_token_conversion_success() -> Result<()> {
+    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
+        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+        return Ok(());
+    };
+    let (mut alice, mut bob) = mainnet_alice_bob(&mnemonic, &api_key, false).await?;
 
-    let mut alice = alice_sdk.await?;
-    let mut bob = bob_sdk.await?;
-
-    // ==========================================
-    // Part A: Bitcoin → Token conversion
-    // ==========================================
-    info!("--- Part A: Bitcoin to Token conversion ---");
-
-    // Fund Alice with Bitcoin
-    ensure_funded(&mut alice, 10_000).await?;
-
-    let alice_initial_balance = alice
+    // Skip rather than fail spuriously if the test account is unfunded.
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_balance = alice
         .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
         .await?
         .balance_sats;
-    info!("Alice initial balance: {} sats", alice_initial_balance);
+    if alice_balance == 0 {
+        warn!("Skipping mainnet test: test account (Alice) has 0 sats");
+        return Ok(());
+    }
 
-    // Verify Bob has no tokens initially
+    info!("=== Starting test_token_conversion_success ===");
+    let token_id = mainnet_test_token_id();
+
+    // The pool only exposes input minimums, so size off the Token→BTC
+    // minimum token input. Part A delivers Bob 3x that so he has enough
+    // for Part B (with margin).
+    let to_btc_min_token = tobtc_min_token_input(&alice.sdk, &token_id).await?;
+    let part_a_token_amount = to_btc_min_token.saturating_mul(3);
+
+    // ==========================================
+    // Part A: Bitcoin → Token conversion
+    // ==========================================
+    info!("--- Part A: Bitcoin to Token conversion ---");
+
+    // Verify Bob's starting token balance
     let bob_initial_token_balance = bob
         .sdk
         .get_info(GetInfoRequest {
@@ -46,13 +79,10 @@ async fn test_token_conversion_success(
         })
         .await?
         .token_balances
-        .get(SHELL_REGTEST_TOKEN_ID)
+        .get(&token_id)
         .map(|b| b.balance)
         .unwrap_or(0);
-    info!(
-        "Bob initial token balance: {} units",
-        bob_initial_token_balance
-    );
+    info!("Bob initial token balance: {bob_initial_token_balance} units");
 
     // Bob exposes a Spark address
     let bob_spark_address = bob
@@ -62,18 +92,19 @@ async fn test_token_conversion_success(
         })
         .await?
         .payment_request;
-    info!("Bob's Spark address: {}", bob_spark_address);
+    info!("Bob's Spark address: {bob_spark_address}");
 
-    // Alice prepares and sends payment with token conversion (Bitcoin → Token)
+    // Alice prepares and sends payment with token conversion (Bitcoin → Token).
+    // Slippage/timeout inherit the SDK defaults.
     let prepare_btc_to_token = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(sats_to_token_success_amount),
-            token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
+            amount: Some(part_a_token_amount),
+            token_identifier: Some(token_id.clone()),
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
-                max_slippage_bps: Some(200), // 2%
+                max_slippage_bps: None,
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
@@ -87,6 +118,25 @@ async fn test_token_conversion_success(
         "Prepared token payment: amount={:?} (converting bitcoin amount={}, fee={})",
         prepare_btc_to_token.amount, conversion_estimate.amount_out, conversion_estimate.fee
     );
+
+    // Skip rather than fail if Alice can't cover the actual Bitcoin input.
+    let part_a_cost = conversion_estimate
+        .amount_in
+        .saturating_add(conversion_estimate.fee);
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    if u128::from(alice_balance) < part_a_cost {
+        warn!(
+            "Skipping test_token_conversion_success: Alice balance {alice_balance} sats \
+                     < Part A cost ~{part_a_cost} sats"
+        );
+        return Ok(());
+    }
 
     let send_btc_to_token = alice
         .sdk
@@ -111,46 +161,42 @@ async fn test_token_conversion_success(
 
     // Check payment conversion details
     let btc_to_token_conversion_details = send_btc_to_token.payment.conversion_details.unwrap();
+    let btc_to_token_from_step = btc_to_token_conversion_details
+        .from
+        .as_ref()
+        .expect("Conversion should have a 'from' step");
     assert_eq!(
-        btc_to_token_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .method,
+        btc_to_token_from_step.method,
         PaymentMethod::Spark,
         "From step should be a spark payment"
     );
     assert!(
-        btc_to_token_conversion_details.from.as_ref().unwrap().fee > 0,
-        "From step should have a fee"
-    );
-    assert!(
-        btc_to_token_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .token_metadata
-            .is_none(),
+        btc_to_token_from_step.token_metadata.is_none(),
         "From step should have no token metadata"
     );
     let btc_to_token_to_step = btc_to_token_conversion_details
         .to
+        .as_ref()
         .expect("Conversion should have a 'to' step");
     assert_eq!(
         btc_to_token_to_step.method,
         PaymentMethod::Token,
         "To step should be a token payment"
     );
-    assert_eq!(btc_to_token_to_step.fee, 0, "To step should have no fee");
     assert!(
         btc_to_token_to_step.token_metadata.is_some(),
         "To step should have token metadata"
+    );
+    // The conversion charges a fee (attributed to the token leg on mainnet).
+    assert!(
+        btc_to_token_from_step.fee + btc_to_token_to_step.fee > 0,
+        "Conversion should charge a fee"
     );
 
     // Wait for Bob to receive the token payment
     info!("Waiting for Bob to receive token payment...");
     let bob_received_payment =
-        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 30).await?;
+        wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 60).await?;
 
     assert_eq!(
         bob_received_payment.payment_type,
@@ -176,7 +222,7 @@ async fn test_token_conversion_success(
         })
         .await?
         .token_balances
-        .get(SHELL_REGTEST_TOKEN_ID)
+        .get(&token_id)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -208,10 +254,15 @@ async fn test_token_conversion_success(
         })
         .await?
         .balance_sats;
-    info!(
-        "Alice balance before Token→Bitcoin: {} sats",
-        alice_balance_before_token_to_btc
-    );
+    info!("Alice balance before Token→Bitcoin: {alice_balance_before_token_to_btc} sats");
+
+    // Size the invoice off the sats produced by converting the minimum
+    // token input (the pool exposes no output minimum). Bob holds 3x that,
+    // so he can comfortably cover it.
+    let invoice_sats = u64::try_from(
+        estimate_tobtc_sats_out(&bob.sdk, &bob_spark_address, &token_id, to_btc_min_token).await?,
+    )?;
+    info!("Part B invoice sized at {invoice_sats} sats (from pool estimate)");
 
     // Alice creates a Lightning invoice for Bob to pay
     let alice_invoice = alice
@@ -219,14 +270,14 @@ async fn test_token_conversion_success(
         .receive_payment(ReceivePaymentRequest {
             payment_method: ReceivePaymentMethod::Bolt11Invoice {
                 description: "Token to Bitcoin test".to_string(),
-                amount_sats: Some(token_to_sats_success_amount),
+                amount_sats: Some(invoice_sats),
                 expiry_secs: None,
                 payment_hash: None,
             },
         })
         .await?
         .payment_request;
-    info!("Alice's Lightning invoice: {}", alice_invoice);
+    info!("Alice's Lightning invoice: {alice_invoice}");
 
     // Bob prepares payment using his tokens (Token → Bitcoin conversion)
     let prepare_token_to_btc = bob
@@ -237,9 +288,9 @@ async fn test_token_conversion_success(
             token_identifier: None,
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::ToBitcoin {
-                    from_token_identifier: SHELL_REGTEST_TOKEN_ID.to_string(),
+                    from_token_identifier: token_id.clone(),
                 },
-                max_slippage_bps: Some(200), // 2%
+                max_slippage_bps: None,
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
@@ -278,46 +329,42 @@ async fn test_token_conversion_success(
 
     // Check payment conversion details
     let token_to_btc_conversion_details = send_token_to_btc.payment.conversion_details.unwrap();
+    let token_to_btc_from_step = token_to_btc_conversion_details
+        .from
+        .as_ref()
+        .expect("Conversion should have a 'from' step");
     assert_eq!(
-        token_to_btc_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .method,
+        token_to_btc_from_step.method,
         PaymentMethod::Token,
         "From step should be a token payment"
     );
     assert!(
-        token_to_btc_conversion_details.from.as_ref().unwrap().fee > 0,
-        "From step should have a fee"
-    );
-    assert!(
-        token_to_btc_conversion_details
-            .from
-            .as_ref()
-            .unwrap()
-            .token_metadata
-            .is_some(),
+        token_to_btc_from_step.token_metadata.is_some(),
         "From step should have token metadata"
     );
     let token_to_btc_to_step = token_to_btc_conversion_details
         .to
+        .as_ref()
         .expect("Conversion should have a 'to' step");
     assert_eq!(
         token_to_btc_to_step.method,
         PaymentMethod::Spark,
         "To step should be a spark payment"
     );
-    assert_eq!(token_to_btc_to_step.fee, 0, "To step should have no fee");
     assert!(
         token_to_btc_to_step.token_metadata.is_none(),
         "To step should have no token metadata"
+    );
+    // The conversion charges a fee (attributed to the token leg on mainnet).
+    assert!(
+        token_to_btc_from_step.fee + token_to_btc_to_step.fee > 0,
+        "Conversion should charge a fee"
     );
 
     // Wait for Alice to receive the Bitcoin payment
     info!("Waiting for Alice to receive Bitcoin payment...");
     let alice_received_payment =
-        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 30).await?;
+        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 60).await?;
 
     assert_eq!(
         alice_received_payment.payment_type,
@@ -325,7 +372,8 @@ async fn test_token_conversion_success(
         "Alice should receive a payment"
     );
     assert_eq!(
-        alice_received_payment.amount, token_to_sats_success_amount as u128,
+        alice_received_payment.amount,
+        u128::from(invoice_sats),
         "Alice should receive the exact invoice amount"
     );
     assert!(
@@ -363,7 +411,7 @@ async fn test_token_conversion_success(
         })
         .await?
         .token_balances
-        .get(SHELL_REGTEST_TOKEN_ID)
+        .get(&token_id)
         .map(|b| b.balance)
         .unwrap_or(0);
 
@@ -383,35 +431,19 @@ async fn test_token_conversion_success(
     Ok(())
 }
 
-/// Test token conversion failure cases:
-/// - Part A: Non-existent token (fails at prepare stage)
-/// - Part B: Low slippage failure with refund verification
-#[rstest]
+/// Test token conversion failure paths:
+/// - Part A: Non-existent token (rejected at prepare; no pool).
+/// - Part B: Insufficient funds (prepare succeeds; send rejects, balance intact).
 #[test_log::test(tokio::test)]
-#[ignore = "Skipping due liquidity issues causing test to fail"]
-async fn test_token_conversion_failure(
-    #[future] alice_sdk: Result<SdkInstance>,
-    #[future] bob_sdk: Result<SdkInstance>,
-) -> Result<()> {
+async fn test_token_conversion_failure() -> Result<()> {
+    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
+        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+        return Ok(());
+    };
+    let (alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, false).await?;
+
     info!("=== Starting test_token_conversion_failure ===");
-    let sats_to_token_failure_amount: u128 = 40_000_000_000;
-
-    let mut alice = alice_sdk.await?;
-    let bob = bob_sdk.await?;
-
-    // Fund Alice with Bitcoin (used for both parts)
-    ensure_funded(&mut alice, 20_000).await?;
-
-    let alice_initial_balance = alice
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .balance_sats;
-    info!("Alice initial balance: {} sats", alice_initial_balance);
-
-    // Bob exposes a Spark address (used for both parts)
+    let token_id = mainnet_test_token_id();
     let bob_spark_address = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
@@ -419,129 +451,141 @@ async fn test_token_conversion_failure(
         })
         .await?
         .payment_request;
-    info!("Bob's Spark address: {}", bob_spark_address);
+    info!("Bob's Spark address: {bob_spark_address}");
 
     // ==========================================
-    // Part A: Non-existent token (fails at prepare)
+    // Part A: Non-existent token rejected at prepare
     // ==========================================
     info!("--- Part A: Non-existent token failure ---");
-
-    let non_existent_token_id = "btknrt1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqdare99";
-
-    let prepare_non_existent_result = alice
+    let non_existent_token_id =
+        "btkn1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqsm5wuq";
+    let result = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(sats_to_token_failure_amount),
+            amount: Some(1_000_000),
             token_identifier: Some(non_existent_token_id.to_string()),
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
-                max_slippage_bps: Some(100),
+                max_slippage_bps: None,
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
         })
         .await;
     assert!(
-        prepare_non_existent_result.is_err(),
+        result.is_err(),
         "prepare_send_payment should fail with non-existent token"
     );
-    info!("Part A: Non-existent token correctly rejected at prepare stage");
+    info!("Part A: Non-existent token correctly rejected at prepare");
 
     // ==========================================
-    // Part B: Low slippage failure with refund
+    // Part B: Insufficient funds rejected at send
     // ==========================================
-    info!("--- Part B: Low slippage failure with refund ---");
-    clear_event_receiver(&mut alice.events).await;
-
-    // Record Alice's balance before the failed payment
+    info!("--- Part B: Insufficient funds failure ---");
     alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let alice_balance_before_failure = alice
+    let alice_balance = alice
         .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
         .await?
         .balance_sats;
-    info!(
-        "Alice balance before low slippage attempt: {} sats",
-        alice_balance_before_failure
-    );
+    if alice_balance == 0 {
+        warn!("Skipping Part B: Alice has 0 sats, insufficient-funds path is trivial");
+        return Ok(());
+    }
+    info!("Alice balance: {alice_balance} sats");
 
-    // Prepare payment with very low slippage (2 bps = 0.02%)
-    let prepare_low_slippage = alice
+    // Sample the pool's sats-per-token rate via a small prepare. Prepare doesn't
+    // check the caller's balance — it just quotes against pool state — so this
+    // succeeds regardless of how much Alice has. We use 2x the ToBitcoin token
+    // minimum to ensure the resulting BTC-side `amount_in` clears the pool's
+    // BTC asset input minimum (the ToBitcoin-side token min doesn't apply here).
+    let to_btc_min_token = tobtc_min_token_input(&alice.sdk, &token_id).await?;
+    let sample_token = to_btc_min_token.saturating_mul(2);
+    let sample_sats_in = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
             payment_request: bob_spark_address.clone(),
-            amount: Some(sats_to_token_failure_amount),
-            token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
+            amount: Some(sample_token),
+            token_identifier: Some(token_id.clone()),
             conversion_options: Some(ConversionOptions {
                 conversion_type: ConversionType::FromBitcoin,
-                max_slippage_bps: Some(2), // 0.02% - very low, likely to fail
+                max_slippage_bps: None,
+                completion_timeout_secs: None,
+            }),
+            fee_policy: None,
+        })
+        .await?
+        .conversion_estimate
+        .as_ref()
+        .expect("sample conversion estimate")
+        .amount_in;
+
+    // Scale the sample so the required sats input exceeds Alice's balance (with
+    // a small headroom buffer to avoid the borderline case).
+    let required_sats = u128::from(alice_balance).saturating_add(1_000);
+    let scale = required_sats.div_ceil(sample_sats_in).max(2);
+    let oversized_target = sample_token.saturating_mul(scale);
+    info!(
+        "Oversized target: {oversized_target} tokens (scale={scale}x, sample_sats_in={sample_sats_in})"
+    );
+
+    let prepare_oversize = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark_address,
+            amount: Some(oversized_target),
+            token_identifier: Some(token_id),
+            conversion_options: Some(ConversionOptions {
+                conversion_type: ConversionType::FromBitcoin,
+                max_slippage_bps: None,
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
         })
         .await?;
-
-    let conversion_estimate = prepare_low_slippage
+    let oversize_amount_in = prepare_oversize
         .conversion_estimate
         .as_ref()
-        .expect("Conversion estimate should be present");
-    info!(
-        "Prepared token payment: amount={:?} (converting bitcoin amount={}, fee={})",
-        prepare_low_slippage.amount, conversion_estimate.amount_out, conversion_estimate.fee
+        .expect("oversized conversion estimate")
+        .amount_in;
+    info!("Oversized prepare: amount_in={oversize_amount_in} sats (alice balance={alice_balance})");
+    assert!(
+        oversize_amount_in > u128::from(alice_balance),
+        "test setup: oversized amount_in ({oversize_amount_in}) should exceed Alice's balance ({alice_balance})"
     );
 
-    // Send the payment - expect it to fail due to slippage
-    let send_low_slippage_result = alice
+    let send_result = alice
         .sdk
         .send_payment(SendPaymentRequest {
-            prepare_response: prepare_low_slippage,
+            prepare_response: prepare_oversize,
             options: None,
             idempotency_key: None,
         })
         .await;
+    info!("Insufficient-funds send rejected: {}", send_result.is_err());
     assert!(
-        send_low_slippage_result.is_err(),
-        "send_payment should fail with low slippage"
+        send_result.is_err(),
+        "send should reject when input exceeds balance"
     );
 
-    // Wait for payment refund event
-    info!("Waiting for payment refund event...");
-    let refund_payment =
-        wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 30).await?;
-
-    assert_eq!(
-        refund_payment.payment_type,
-        PaymentType::Receive,
-        "Alice should receive a refund payment"
-    );
-    assert_eq!(
-        refund_payment.method,
-        PaymentMethod::Spark,
-        "Alice's refund should be via Spark"
-    );
-
-    // Verify Alice's balance is restored
+    // Alice's balance must be intact — a rejected send spends nothing.
     alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let alice_balance_after_refund = alice
+    let alice_balance_after = alice
         .sdk
         .get_info(GetInfoRequest {
             ensure_synced: Some(false),
         })
         .await?
         .balance_sats;
-    info!(
-        "Alice balance after refund: {} sats (was {} sats before failure)",
-        alice_balance_after_refund, alice_balance_before_failure
-    );
     assert_eq!(
-        alice_balance_after_refund, alice_balance_before_failure,
-        "Alice's balance should be restored after refund"
+        alice_balance_after, alice_balance,
+        "Alice's balance should be unchanged by a rejected send"
     );
+    info!("Part B: Insufficient funds correctly rejected at send");
 
-    info!("Part B: Low slippage failure with refund completed successfully");
     info!("=== Test test_token_conversion_failure PASSED ===");
     Ok(())
 }

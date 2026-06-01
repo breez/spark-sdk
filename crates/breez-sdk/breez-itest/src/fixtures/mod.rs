@@ -21,6 +21,11 @@ pub const BEAN_REGTEST_TOKEN_ID: &str =
 pub const SHELL_REGTEST_TOKEN_ID: &str =
     "btknrt1ra8lrwpqgqfz7gcy3gfcucaw3fh62tp3d6qkjxafx0cnxm5gmd3q0xy27c";
 
+/// USDB ("Bitcoin USD", 6 decimals) token identifier on mainnet. Used by the
+/// env-gated mainnet conversion tests (override with `MAINNET_TEST_TOKEN_ID`).
+pub const USDB_MAINNET_TOKEN_ID: &str =
+    "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87";
+
 /// Fixture: Alice's SDK with temporary storage
 #[fixture]
 pub async fn alice_sdk() -> Result<SdkInstance> {

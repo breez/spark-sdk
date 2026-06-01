@@ -1921,3 +1921,202 @@ pub async fn build_sdk_with_mysql_server_mode(
         turnkey_guard: None,
     })
 }
+
+// ============================================================================
+// Mainnet conversion tests
+//
+// The token-conversion / stable-balance tests need real Flashnet pool liquidity,
+// which regtest lacks. They run against mainnet, gated on env credentials, and
+// the dedicated `mainnet_teardown` test drains funds back to the test account.
+// See the module docs on `tests/mainnet_token_conversion.rs`,
+// `tests/mainnet_stable_balance.rs`, and `tests/mainnet_teardown.rs`.
+// ============================================================================
+
+/// Fixed BIP-39 passphrase used to derive the deterministic "Bob" wallet from
+/// the mainnet test mnemonic. Deterministic derivation means funds left behind by
+/// a crashed run are recovered by the next `mainnet_teardown` run.
+const MAINNET_BOB_PASSPHRASE: &str = "breez-itest-bob";
+
+/// Mainnet test credentials read from the environment.
+///
+/// Returns `None` (so the caller skips the test) unless BOTH are set:
+/// - `MAINNET_TEST_MNEMONIC` — the pre-funded test account ("Alice").
+/// - `BREEZ_API_KEY` — required for the mainnet SDK to function.
+///
+/// Returns `Some((mnemonic, api_key))` otherwise.
+pub fn mainnet_test_creds() -> Option<(String, String)> {
+    let mnemonic = std::env::var("MAINNET_TEST_MNEMONIC")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    let api_key = std::env::var("BREEZ_API_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    Some((mnemonic, api_key))
+}
+
+/// Token identifier used by the mainnet conversion tests. Defaults to USDB
+/// ([`crate::fixtures::USDB_MAINNET_TOKEN_ID`]); override with `MAINNET_TEST_TOKEN_ID`.
+pub fn mainnet_test_token_id() -> String {
+    std::env::var("MAINNET_TEST_TOKEN_ID")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::fixtures::USDB_MAINNET_TOKEN_ID.to_string())
+}
+
+/// Build a mainnet SDK instance from a mnemonic (+ optional passphrase) for the
+/// env-gated mainnet conversion tests. Uses SQLite storage in a temp dir.
+///
+/// Unlike the regtest builders this sets `Network::Mainnet` and a real
+/// `api_key`, and keeps the mainnet `lnurl_domain` / real-time sync URL since
+/// the conversions are backed by live services.
+pub async fn build_mainnet_sdk_from_mnemonic(
+    storage_dir: String,
+    mnemonic: String,
+    passphrase: Option<String>,
+    api_key: String,
+    temp_dir: Option<TempDir>,
+    stable_balance_config: Option<StableBalanceConfig>,
+) -> Result<SdkInstance> {
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some(api_key);
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.stable_balance_config = stable_balance_config;
+
+    let seed = Seed::Mnemonic {
+        mnemonic,
+        passphrase,
+    };
+    let sdk = SdkBuilder::new(config, seed)
+        .with_default_storage(storage_dir)
+        .build()
+        .await?;
+
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    // Ensure initial sync completes.
+    let _ = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(SdkInstance {
+        sdk,
+        events: rx,
+        span: tracing::Span::current(),
+        temp_dir,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    })
+}
+
+/// Build the two mainnet test wallets.
+///
+/// - **Alice** = the env mnemonic (the pre-funded test account, the funder).
+/// - **Bob** = deterministically derived from Alice's mnemonic via a fixed
+///   passphrase (recoverable, swept back to Alice on teardown).
+///
+/// When `stable_balance` is true, **Bob** (the receiver) is configured with a
+/// USDB stable-balance config; `threshold_sats`/`max_slippage_bps` are left
+/// `None` so the SDK applies the pool-derived minimum and default slippage.
+pub async fn mainnet_alice_bob(
+    mnemonic: &str,
+    api_key: &str,
+    stable_balance: bool,
+) -> Result<(SdkInstance, SdkInstance)> {
+    let bob_stable = stable_balance.then(|| {
+        let token_id = mainnet_test_token_id();
+        StableBalanceConfig {
+            tokens: vec![StableBalanceToken {
+                label: "USDB".to_string(),
+                token_identifier: token_id,
+            }],
+            default_active_label: Some("USDB".to_string()),
+            threshold_sats: None,
+            max_slippage_bps: None,
+        }
+    });
+
+    let alice_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-mainnet-alice")
+        .tempdir()?;
+    let alice_path = alice_dir.path().to_string_lossy().to_string();
+    info!("Initializing mainnet Alice (test account) at: {alice_path}");
+    let alice = build_mainnet_sdk_from_mnemonic(
+        alice_path,
+        mnemonic.to_string(),
+        None,
+        api_key.to_string(),
+        Some(alice_dir),
+        None,
+    )
+    .await?;
+
+    let bob_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-mainnet-bob")
+        .tempdir()?;
+    let bob_path = bob_dir.path().to_string_lossy().to_string();
+    info!("Initializing mainnet Bob (deterministic) at: {bob_path}");
+    let bob = build_mainnet_sdk_from_mnemonic(
+        bob_path,
+        mnemonic.to_string(),
+        Some(MAINNET_BOB_PASSPHRASE.to_string()),
+        api_key.to_string(),
+        Some(bob_dir),
+        bob_stable,
+    )
+    .await?;
+
+    Ok((alice, bob))
+}
+
+/// Minimum token input for a Token→Bitcoin conversion of `token_id` (token base
+/// units).
+///
+/// The pool only reliably exposes input minimums (`min_from_amount`); output
+/// minimums (`min_to_amount`) are not returned, so callers size token amounts off
+/// this and derive sats amounts via [`estimate_tobtc_sats_out`].
+pub async fn tobtc_min_token_input(sdk: &BreezSdk, token_id: &str) -> Result<u128> {
+    sdk.fetch_conversion_limits(FetchConversionLimitsRequest {
+        conversion_type: ConversionType::ToBitcoin {
+            from_token_identifier: token_id.to_string(),
+        },
+        token_identifier: None,
+    })
+    .await?
+    .min_from_amount
+    .ok_or_else(|| anyhow::anyhow!("ToBitcoin min_from_amount missing"))
+}
+
+/// Estimate the sats produced by converting `token_amount` of `token_id` to
+/// Bitcoin, by preparing (without sending) a Token→BTC payment to `dest`. Used to
+/// size sats amounts, since the pool exposes no output minimum.
+pub async fn estimate_tobtc_sats_out(
+    sdk: &BreezSdk,
+    dest: &str,
+    token_id: &str,
+    token_amount: u128,
+) -> Result<u128> {
+    let prepared = sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: dest.to_string(),
+            amount: Some(token_amount),
+            token_identifier: Some(token_id.to_string()),
+            conversion_options: Some(ConversionOptions {
+                conversion_type: ConversionType::ToBitcoin {
+                    from_token_identifier: token_id.to_string(),
+                },
+                max_slippage_bps: None,
+                completion_timeout_secs: None,
+            }),
+            fee_policy: None,
+        })
+        .await?;
+    Ok(prepared
+        .conversion_estimate
+        .ok_or_else(|| anyhow::anyhow!("conversion estimate missing"))?
+        .amount_out)
+}
