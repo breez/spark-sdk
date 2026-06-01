@@ -38,7 +38,7 @@ use tracing::{debug, error, trace, warn};
 
 use crate::{
     bitcoin::sighash_from_tx,
-    signer::Signer,
+    signer::{Signer, SparkSigner},
     tree::{TreeNode, TreeNodeId},
 };
 
@@ -89,6 +89,7 @@ impl Default for ClaimTransferConfig {
 
 pub struct TransferService {
     signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     network: Network,
     split_secret_threshold: u32,
     operator_pool: Arc<OperatorPool>,
@@ -98,6 +99,7 @@ pub struct TransferService {
 impl TransferService {
     pub fn new(
         signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         network: Network,
         split_secret_threshold: u32,
         operator_pool: Arc<OperatorPool>,
@@ -105,6 +107,7 @@ impl TransferService {
     ) -> Self {
         Self {
             signer,
+            spark_signer,
             network,
             split_secret_threshold,
             operator_pool,
@@ -482,7 +485,7 @@ impl TransferService {
             direct_signed_tx,
             direct_from_cpfp_signed_tx,
         } = sign_refunds(SignRefundsParams {
-            signer: &self.signer,
+            spark_signer: &self.spark_signer,
             leaves: leaf_key_tweaks,
             cpfp_signing_commitments,
             direct_signing_commitments,

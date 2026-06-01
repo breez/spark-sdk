@@ -10,7 +10,10 @@ use crate::ssp::{
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
-use crate::{signer::Signer, tree::TreeNode};
+use crate::{
+    signer::{Signer, SparkSigner},
+    tree::TreeNode,
+};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use hex::ToHex;
@@ -201,17 +204,20 @@ pub struct LightningService {
     ssp_client: Arc<ServiceProvider>,
     network: Network,
     signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     transfer_service: Arc<TransferService>,
     split_secret_threshold: u32,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
 }
 
 impl LightningService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         operator_pool: Arc<OperatorPool>,
         ssp_client: Arc<ServiceProvider>,
         network: Network,
         signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         transfer_service: Arc<TransferService>,
         split_secret_threshold: u32,
         transfer_observer: Option<Arc<dyn TransferObserver>>,
@@ -221,6 +227,7 @@ impl LightningService {
             ssp_client,
             network,
             signer,
+            spark_signer,
             transfer_service,
             split_secret_threshold,
             transfer_observer,
@@ -460,7 +467,7 @@ impl LightningService {
 
         let initiate_preimage_swap_res = swap_nodes_for_preimage(
             &self.operator_pool,
-            &self.signer,
+            &self.spark_signer,
             self.network,
             SwapNodesForPreimageRequest {
                 transfer_id: &unwrapped_transfer_id,

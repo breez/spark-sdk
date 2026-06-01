@@ -10,7 +10,7 @@ use tracing::info;
 
 use crate::core::{current_sequence, enforce_timelock, next_lightning_htlc_sequence};
 use crate::services::{LeafRefundSigningData, ServiceError, SignedTx};
-use crate::signer::{SignFrostRequest, Signer, SignerError};
+use crate::signer::{FrostDerivation, FrostJob, SecretSource, Signer, SignerError, SparkSigner};
 use crate::tree::{TreeNode, TreeNodeId};
 use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
@@ -34,7 +34,7 @@ pub struct RefundTxConstructor<'a> {
 }
 
 pub struct SignRefundsParams<'a> {
-    pub signer: &'a Arc<dyn Signer>,
+    pub spark_signer: &'a Arc<dyn SparkSigner>,
     pub leaves: &'a [LeafKeyTweak],
     pub cpfp_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
     pub direct_signing_commitments: Vec<BTreeMap<Identifier, SigningCommitments>>,
@@ -91,7 +91,7 @@ pub async fn sign_refunds(
     params: SignRefundsParams<'_>,
 ) -> Result<SignedRefundTransactions, SignerError> {
     let SignRefundsParams {
-        signer,
+        spark_signer,
         leaves,
         cpfp_signing_commitments,
         direct_signing_commitments,
@@ -101,7 +101,7 @@ pub async fn sign_refunds(
         network,
         cpfp_adaptor_public_key,
     } = params;
-    let identity_pubkey = signer.get_identity_public_key().await?;
+    let identity_pubkey = spark_signer.get_identity_public_key().await?;
 
     let mut cpfp_signed_refunds = Vec::with_capacity(leaves.len());
     let mut direct_signed_refunds = Vec::with_capacity(leaves.len());
@@ -160,10 +160,10 @@ pub async fn sign_refunds(
             leaf.node.id, cpfp_refund_tx.input[0].sequence
         );
 
-        let signing_public_key = signer.public_key_from_secret(&leaf.signing_key).await?;
+        let signing_public_key = spark_signer.get_public_key_for_leaf(&leaf.node.id).await?;
 
         let cpfp_signed_tx = sign_refund(
-            signer,
+            spark_signer,
             leaf,
             node_tx,
             cpfp_refund_tx,
@@ -183,7 +183,7 @@ pub async fn sign_refunds(
             };
 
             let direct_refund_tx = sign_refund(
-                signer,
+                spark_signer,
                 leaf,
                 direct_tx,
                 direct_refund_tx,
@@ -200,7 +200,7 @@ pub async fn sign_refunds(
         // direct_tx, so it must be signed regardless of whether direct_tx exists.
         if let Some(direct_from_cpfp_refund_tx) = direct_from_cpfp_refund_tx {
             let direct_from_cpfp_signed_tx = sign_refund(
-                signer,
+                spark_signer,
                 leaf,
                 node_tx,
                 direct_from_cpfp_refund_tx,
@@ -248,7 +248,7 @@ pub async fn sign_refunds(
 /// * `Err(SignerError)` - If the signing process fails
 #[allow(clippy::too_many_arguments)]
 async fn sign_refund(
-    signer: &Arc<dyn Signer>,
+    spark_signer: &Arc<dyn SparkSigner>,
     leaf: &LeafKeyTweak,
     tx: &Transaction,
     refund_tx: Transaction,
@@ -259,25 +259,38 @@ async fn sign_refund(
 ) -> Result<SignedTx, SignerError> {
     let sighash = sighash_from_tx(&refund_tx, 0, &tx.output[0])
         .map_err(|e| SignerError::Generic(e.to_string()))?;
-    let self_nonce_commitment = signer.generate_random_signing_commitment().await?;
-    let user_signature = signer
-        .sign_frost(SignFrostRequest {
-            message: sighash.to_raw_hash().to_byte_array().as_ref(),
-            public_key: &signing_public_key,
-            private_key: &leaf.signing_key,
-            verifying_key: &leaf.node.verifying_public_key,
-            self_nonce_commitment: &self_nonce_commitment,
-            statechain_commitments: spark_commitments.clone(),
-            adaptor_public_key,
-        })
-        .await?;
+
+    // Refund signing always uses the leaf's current (derived) signing key. The
+    // `signing_key_source` override is unused in current flows, so anything
+    // other than a derived key is unexpected here.
+    let SecretSource::Derived(leaf_id) = &leaf.signing_key else {
+        return Err(SignerError::Generic(
+            "refund signing requires a derived leaf signing key".to_string(),
+        ));
+    };
+
+    let job = FrostJob {
+        derivation: FrostDerivation::SigningLeaf {
+            leaf_id: leaf_id.clone(),
+        },
+        sighash: sighash.to_raw_hash().to_byte_array(),
+        verifying_key: leaf.node.verifying_public_key,
+        operator_commitments: spark_commitments.clone(),
+        adaptor_public_key: adaptor_public_key.copied(),
+    };
+    let share = spark_signer
+        .sign_frost(vec![job])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| SignerError::Generic("sign_frost returned no share".to_string()))?;
 
     Ok(SignedTx {
         node_id: leaf.node.id.clone(),
         signing_public_key,
         tx: refund_tx,
-        user_signature,
-        self_nonce_commitment,
+        user_signature: share.signature_share,
+        self_nonce_commitment: share.commitment,
         signing_commitments: spark_commitments,
         network,
     })

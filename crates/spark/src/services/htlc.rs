@@ -16,7 +16,7 @@ use crate::{
     Network,
     operator::{OperatorPool, rpc::spark::QueryHtlcRequest},
     services::{PreimageRequestWithTransfer, QueryHtlcFilter, ServiceError, TransferService},
-    signer::Signer,
+    signer::{Signer, SparkSigner},
     utils::paging::{PagingFilter, PagingResult, pager},
 };
 
@@ -24,6 +24,7 @@ pub struct HtlcService {
     operator_pool: Arc<OperatorPool>,
     network: Network,
     signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     transfer_service: Arc<TransferService>,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
 }
@@ -33,6 +34,7 @@ impl HtlcService {
         operator_pool: Arc<OperatorPool>,
         network: Network,
         signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         transfer_service: Arc<TransferService>,
         transfer_observer: Option<Arc<dyn TransferObserver>>,
     ) -> Self {
@@ -40,6 +42,7 @@ impl HtlcService {
             operator_pool,
             network,
             signer,
+            spark_signer,
             transfer_service,
             transfer_observer,
         }
@@ -94,7 +97,7 @@ impl HtlcService {
 
         let transfer: Transfer = match swap_nodes_for_preimage(
             &self.operator_pool,
-            &self.signer,
+            &self.spark_signer,
             self.network,
             SwapNodesForPreimageRequest {
                 transfer_id: &unwrapped_transfer_id,

@@ -272,6 +272,7 @@ impl SparkWallet {
 
         let transfer_service = Arc::new(TransferService::new(
             signer.clone(),
+            Arc::clone(&spark_signer),
             config.network,
             config.split_secret_threshold,
             operator_pool.clone(),
@@ -283,6 +284,7 @@ impl SparkWallet {
             service_provider.clone(),
             config.network,
             Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             transfer_service.clone(),
             config.split_secret_threshold,
             transfer_observer.clone(),
@@ -357,6 +359,7 @@ impl SparkWallet {
             operator_pool.clone(),
             config.network,
             Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             Arc::clone(&transfer_service),
             transfer_observer,
         ));
