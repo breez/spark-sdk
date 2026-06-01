@@ -1286,6 +1286,7 @@ impl SparkWallet {
                 exit_speed,
                 fee_quote_id,
                 fee_leaves,
+                fee_sats,
                 transfer_id,
             })
             .await?;

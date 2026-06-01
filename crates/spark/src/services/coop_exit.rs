@@ -98,6 +98,7 @@ pub struct CoopExitParams<'a> {
     pub exit_speed: ExitSpeed,
     pub fee_quote_id: Option<String>,
     pub fee_leaves: Option<Vec<TreeNode>>,
+    pub fee_sats: u64,
     pub transfer_id: Option<TransferId>,
 }
 
@@ -151,6 +152,7 @@ impl CoopExitService {
             exit_speed,
             fee_quote_id,
             fee_leaves,
+            fee_sats,
             transfer_id,
         } = params;
         debug!("Starting cooperative exit with leaves");
@@ -168,10 +170,17 @@ impl CoopExitService {
             Some(transfer_id) => transfer_id.clone(),
             None => TransferId::generate(),
         };
+
+        let leaves_sum: u64 = leaves.iter().map(|l| l.value).sum();
+        let expected_payout_amount_sats = if withdraw_all {
+            leaves_sum.saturating_sub(fee_sats)
+        } else {
+            leaves_sum
+        };
+
         if let Some(transfer_observer) = &self.transfer_observer {
-            let amount_sats: u64 = leaves.iter().map(|l| l.value).sum();
             transfer_observer
-                .before_coop_exit(&unwrapped_transfer_id, withdrawal_address, amount_sats)
+                .before_coop_exit(&unwrapped_transfer_id, withdrawal_address, leaves_sum)
                 .await?;
         }
 
@@ -196,6 +205,13 @@ impl CoopExitService {
             })
             .await?;
 
+        let expected_exit_txid = validate_coop_exit_payout_transaction(
+            &coop_exit_request.raw_coop_exit_transaction,
+            &coop_exit_request.coop_exit_txid,
+            withdrawal_address,
+            expected_payout_amount_sats,
+        )?;
+
         // Convert the raw connector transaction to a Bitcoin Transaction
         trace!("Processing cooperative exit request: {coop_exit_request:?}",);
         let raw_connector_transaction_bytes =
@@ -208,6 +224,12 @@ impl CoopExitService {
             })?;
         let connector_txid = connector_tx.compute_txid();
         let coop_exit_input = connector_tx.input[0].previous_output.txid;
+
+        if coop_exit_input != expected_exit_txid {
+            return Err(ServiceError::ValidationError(format!(
+                "SSP connector transaction does not spend the verified exit transaction (spends {coop_exit_input}, expected {expected_exit_txid})"
+            )));
+        }
 
         let res = self
             .submit_coop_exit_transfer(
@@ -586,5 +608,139 @@ impl CoopExitService {
             network: self.network,
         };
         (&signed_tx).try_into()
+    }
+}
+
+fn validate_coop_exit_payout_transaction(
+    raw_coop_exit_transaction: &str,
+    coop_exit_txid: &str,
+    withdrawal_address: &Address,
+    expected_payout_amount_sats: u64,
+) -> Result<Txid, ServiceError> {
+    if raw_coop_exit_transaction.is_empty() || coop_exit_txid.is_empty() {
+        return Err(ServiceError::ValidationError(
+            "SSP coop exit response missing L1 transaction fields".to_string(),
+        ));
+    }
+
+    let exit_tx_bytes = hex::decode(raw_coop_exit_transaction).map_err(|_| {
+        ServiceError::ValidationError("invalid raw_coop_exit_transaction hex".to_string())
+    })?;
+    let exit_tx: Transaction = bitcoin::consensus::deserialize(&exit_tx_bytes).map_err(|_| {
+        ServiceError::ValidationError("invalid raw_coop_exit_transaction tx".to_string())
+    })?;
+
+    let expected_txid: Txid = coop_exit_txid
+        .parse()
+        .map_err(|_| ServiceError::ValidationError("invalid coop_exit_txid".to_string()))?;
+    let actual_txid = exit_tx.compute_txid();
+    if actual_txid != expected_txid {
+        return Err(ServiceError::ValidationError(format!(
+            "SSP coop exit response is inconsistent: coop_exit_txid {expected_txid} does not match raw_coop_exit_transaction {actual_txid}"
+        )));
+    }
+
+    let expected_script = withdrawal_address.script_pubkey();
+    let pays_user = exit_tx.output.iter().any(|out| {
+        out.script_pubkey == expected_script && out.value.to_sat() >= expected_payout_amount_sats
+    });
+    if !pays_user {
+        return Err(ServiceError::ValidationError(format!(
+            "SSP cooperative exit transaction does not pay the requested withdrawal address for the expected amount (>= {expected_payout_amount_sats} sats)"
+        )));
+    }
+
+    Ok(expected_txid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::absolute::LockTime;
+    use bitcoin::consensus::encode::serialize_hex;
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use bitcoin::transaction::Version;
+    use bitcoin::{Amount, ScriptBuf, Sequence, TxIn, TxOut, Witness};
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn test_address(seed: u8) -> Address {
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[seed; 32]).unwrap();
+        let pubkey = PublicKey::from_secret_key(&secp, &secret);
+        Address::p2tr(
+            &secp,
+            pubkey.x_only_public_key().0,
+            None,
+            bitcoin::Network::Regtest,
+        )
+    }
+
+    fn exit_tx(outputs: Vec<TxOut>) -> Transaction {
+        Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                witness: Witness::new(),
+            }],
+            output: outputs,
+        }
+    }
+
+    fn paying(addr: &Address, sats: u64) -> (String, String) {
+        let tx = exit_tx(vec![TxOut {
+            value: Amount::from_sat(sats),
+            script_pubkey: addr.script_pubkey(),
+        }]);
+        (serialize_hex(&tx), tx.compute_txid().to_string())
+    }
+
+    #[test_all]
+    fn accepts_payout_to_requested_address() {
+        let addr = test_address(1);
+        let (raw, txid) = paying(&addr, 1000);
+
+        assert!(validate_coop_exit_payout_transaction(&raw, &txid, &addr, 1000).is_ok());
+        assert!(validate_coop_exit_payout_transaction(&raw, &txid, &addr, 900).is_ok());
+    }
+
+    #[test_all]
+    fn rejects_short_amount() {
+        let addr = test_address(1);
+        let (raw, txid) = paying(&addr, 1000);
+
+        assert!(validate_coop_exit_payout_transaction(&raw, &txid, &addr, 1001).is_err());
+    }
+
+    #[test_all]
+    fn rejects_wrong_address() {
+        let addr = test_address(1);
+        let attacker = test_address(2);
+        let (raw, txid) = paying(&attacker, 1000);
+
+        assert!(validate_coop_exit_payout_transaction(&raw, &txid, &addr, 1000).is_err());
+    }
+
+    #[test_all]
+    fn rejects_mismatched_txid() {
+        let addr = test_address(1);
+        let (raw, _) = paying(&addr, 1000);
+        let wrong_txid = Txid::all_zeros().to_string();
+
+        assert!(validate_coop_exit_payout_transaction(&raw, &wrong_txid, &addr, 1000).is_err());
+    }
+
+    #[test_all]
+    fn rejects_missing_fields() {
+        let addr = test_address(1);
+        let (raw, txid) = paying(&addr, 1000);
+
+        assert!(validate_coop_exit_payout_transaction("", &txid, &addr, 1000).is_err());
+        assert!(validate_coop_exit_payout_transaction(&raw, "", &addr, 1000).is_err());
     }
 }
