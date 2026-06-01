@@ -1,5 +1,6 @@
 use std::sync::OnceLock;
 
+use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, js_sys::Promise};
 
@@ -8,43 +9,29 @@ use breez_sdk_spark::passkey::{
 };
 
 pub(crate) fn js_error_to_prf_provider_error(js_error: JsValue) -> PrfProviderError {
-    // Map typed JS error classes thrown by the bundled JS provider
-    // back to the typed Rust variant so callers don't have to
-    // substring-match `error.message`. Other errors fall through to
-    // `Generic`.
-    if let Some(name) = js_sys::Reflect::get(&js_error, &JsValue::from_str("name"))
-        .ok()
-        .and_then(|v| v.as_string())
-    {
-        match name.as_str() {
-            "PasskeyAlreadyExistsError" => {
-                let message = js_sys::Reflect::get(&js_error, &JsValue::from_str("message"))
-                    .ok()
-                    .and_then(|v| v.as_string())
-                    .unwrap_or_else(|| "credential already exists".to_string());
-                return PrfProviderError::CredentialAlreadyExists(message);
-            }
-            "PasskeyTimedOutError" => {
-                return PrfProviderError::UserTimedOut;
-            }
-            "PasskeyUserCancelledError" => {
-                return PrfProviderError::UserCancelled;
-            }
-            "PasskeyCredentialNotFoundError" => {
-                let message = js_sys::Reflect::get(&js_error, &JsValue::from_str("message"))
-                    .ok()
-                    .and_then(|v| v.as_string())
-                    .unwrap_or_else(|| "Credential not found".to_string());
-                return PrfProviderError::CredentialNotFound(message);
-            }
-            _ => {}
-        }
-    }
+    // Map typed JS error classes thrown by the bundled JS provider back to
+    // the typed Rust variant so callers don't have to substring-match
+    // `error.message`. The provider's classes extend Error and set both
+    // `name` and `message`, so read them from the structured Error object;
+    // a bare string throw falls back to the string itself. The real message
+    // is always surfaced, never replaced by a canned string.
+    let (name, message) = match js_error.dyn_ref::<js_sys::Error>() {
+        Some(err) => (Some(String::from(err.name())), String::from(err.message())),
+        None => (None, js_error.as_string().unwrap_or_default()),
+    };
+    let message = if message.is_empty() {
+        "Passkey PRF error occurred".to_string()
+    } else {
+        message
+    };
 
-    let error_message = js_error
-        .as_string()
-        .unwrap_or_else(|| "Passkey PRF error occurred".to_string());
-    PrfProviderError::Generic(error_message)
+    match name.as_deref() {
+        Some("PasskeyAlreadyExistsError") => PrfProviderError::CredentialAlreadyExists(message),
+        Some("PasskeyTimedOutError") => PrfProviderError::UserTimedOut,
+        Some("PasskeyUserCancelledError") => PrfProviderError::UserCancelled,
+        Some("PasskeyCredentialNotFoundError") => PrfProviderError::CredentialNotFound(message),
+        _ => PrfProviderError::Generic(message),
+    }
 }
 
 pub struct WasmPrfProvider {
