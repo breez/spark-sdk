@@ -9,6 +9,7 @@ import Foundation
 /// zero-config or RP-only case, use
 /// ``PasskeyClient/init(breezApiKey:config:)`` and set `rpId` / `rpName`
 /// on the ``PasskeyConfig``.
+@available(iOS 18.0, macOS 15.0, *)
 public class PasskeyClientBuilder {
     private let breezApiKey: String?
     private let config: PasskeyConfig?
@@ -62,6 +63,7 @@ public extension PasskeyClient {
     ///   - breezApiKey: Breez relay key for authenticated (NIP-42) label
     ///     storage. Pass `nil` for public relays only.
     ///   - config: Passkey client config (`rpId` / `rpName` / `defaultLabel`).
+    @available(iOS 18.0, macOS 15.0, *)
     convenience init(breezApiKey: String?, config: PasskeyConfig? = nil) {
         self.init(
             prfProvider: PasskeyProvider(
