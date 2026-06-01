@@ -89,7 +89,11 @@ pub struct ConnectRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectWithSignerRequest {
     pub config: Config,
+    /// External signer for non-Spark SDK signing (LNURL-auth, sync, message
+    /// signing, ECIES).
     pub signer: std::sync::Arc<dyn crate::signer::ExternalSigner>,
+    /// External high-level Spark signer for the Spark wallet flows.
+    pub spark_signer: std::sync::Arc<dyn crate::signer::ExternalSparkSigner>,
     pub storage_dir: String,
 }
 

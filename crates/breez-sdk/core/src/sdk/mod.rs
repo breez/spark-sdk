@@ -173,8 +173,12 @@ pub async fn connect(request: crate::ConnectRequest) -> Result<BreezSdk, SdkErro
 pub async fn connect_with_signer(
     request: crate::ConnectWithSignerRequest,
 ) -> Result<BreezSdk, SdkError> {
-    let builder = super::sdk_builder::SdkBuilder::new_with_signer(request.config, request.signer)
-        .with_default_storage(request.storage_dir);
+    let builder = super::sdk_builder::SdkBuilder::new_with_signer(
+        request.config,
+        request.signer,
+        request.spark_signer,
+    )
+    .with_default_storage(request.storage_dir);
     let sdk = builder.build().await?;
     Ok(sdk)
 }

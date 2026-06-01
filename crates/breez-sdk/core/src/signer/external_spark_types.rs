@@ -184,7 +184,8 @@ impl ExternalOperatorRecipient {
 
     pub fn to_operator_recipient(&self) -> Result<spark_wallet::OperatorRecipient, SdkError> {
         Ok(spark_wallet::OperatorRecipient {
-            id: self.id as usize,
+            id: usize::try_from(self.id)
+                .map_err(|_| SdkError::Generic("operator id out of range".to_string()))?,
             identifier: self.identifier.to_identifier()?,
             public_key: secp256k1::PublicKey::from_slice(&self.public_key)
                 .map_err(|e| SdkError::Generic(format!("Invalid operator public key: {e}")))?,

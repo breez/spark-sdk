@@ -49,63 +49,6 @@ pub trait BreezSigner: Send + Sync {
         path: &DerivationPath,
     ) -> Result<secp256k1::PublicKey, SdkError>;
 
-    async fn generate_random_signing_commitment(
-        &self,
-    ) -> Result<spark_wallet::FrostSigningCommitmentsWithNonces, SdkError>;
-
-    async fn get_public_key_for_node(
-        &self,
-        id: &spark_wallet::TreeNodeId,
-    ) -> Result<secp256k1::PublicKey, SdkError>;
-
-    async fn generate_random_secret(&self) -> Result<spark_wallet::EncryptedSecret, SdkError>;
-
-    async fn static_deposit_secret_encrypted(
-        &self,
-        index: u32,
-    ) -> Result<spark_wallet::SecretSource, SdkError>;
-
-    async fn static_deposit_secret(&self, index: u32) -> Result<secp256k1::SecretKey, SdkError>;
-
-    async fn static_deposit_signing_key(
-        &self,
-        index: u32,
-    ) -> Result<secp256k1::PublicKey, SdkError>;
-
-    async fn subtract_secrets(
-        &self,
-        signing_key: &spark_wallet::SecretSource,
-        new_signing_key: &spark_wallet::SecretSource,
-    ) -> Result<spark_wallet::SecretSource, SdkError>;
-
-    async fn split_secret_with_proofs(
-        &self,
-        secret: &spark_wallet::SecretToSplit,
-        threshold: u32,
-        num_shares: usize,
-    ) -> Result<Vec<spark_wallet::VerifiableSecretShare>, SdkError>;
-
-    async fn encrypt_secret_for_receiver(
-        &self,
-        private_key: &spark_wallet::EncryptedSecret,
-        receiver_public_key: &secp256k1::PublicKey,
-    ) -> Result<Vec<u8>, SdkError>;
-
-    async fn public_key_from_secret(
-        &self,
-        private_key: &spark_wallet::SecretSource,
-    ) -> Result<secp256k1::PublicKey, SdkError>;
-
-    async fn sign_frost<'a>(
-        &self,
-        request: spark_wallet::SignFrostRequest<'a>,
-    ) -> Result<frost_secp256k1_tr::round2::SignatureShare, SdkError>;
-
-    async fn aggregate_frost<'a>(
-        &self,
-        request: spark_wallet::AggregateFrostRequest<'a>,
-    ) -> Result<frost_secp256k1_tr::Signature, SdkError>;
-
     /// Computes HMAC-SHA256 using a key derived at the given path.
     async fn hmac_sha256(
         &self,
@@ -136,9 +79,7 @@ pub use external_types::*;
 // Internal-only exports (used by adapter and builder)
 pub(crate) use adapter::ExternalSignerAdapter;
 pub(crate) use default_external::DefaultExternalSigner;
-// `external_spark_adapter::ExternalSparkSignerAdapter` is wired into the builder
-// during the BreezSigner split.
+pub(crate) use external_spark_adapter::ExternalSparkSignerAdapter;
 pub mod breez;
 pub mod lnurl_auth;
 pub mod rtsync;
-pub mod spark;

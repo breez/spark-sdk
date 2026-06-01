@@ -4,10 +4,6 @@
 //! Converts each native request into its FFI mirror, calls the foreign signer,
 //! and converts the FFI response back into the native type.
 
-// Wired into `SdkBuilder` when `BreezSigner` is split and the builder accepts
-// both external signers; until then the adapter is complete but unconstructed.
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use bitcoin::secp256k1::{PublicKey, ecdsa};
