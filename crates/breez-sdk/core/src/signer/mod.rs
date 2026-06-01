@@ -120,10 +120,12 @@ mod default_external;
 
 // Public external signer API
 pub mod external;
+pub mod external_spark_types;
 pub mod external_types;
 
 // Re-export only the external signer trait and types
 pub use external::ExternalSigner;
+pub use external_spark_types::*;
 pub use external_types::*;
 
 // Internal-only exports (used by adapter and builder)
