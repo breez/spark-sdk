@@ -125,9 +125,9 @@ Call {{#name PasskeyClient.check_availability}} before surfacing the passkey but
 
 ## Onboarding
 
-The recommended flow depends on the platform. Mobile uses a single-call unified flow backed by {{#name PasskeyClient.connect_with_passkey}}. Web uses two buttons (Sign In and Create Account) and lets the user pick. For explicit control over each path, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly.
+The recommended flow depends on the platform. iOS and Android use a single-call unified flow backed by {{#name PasskeyClient.connect_with_passkey}}. Web (browser) uses two buttons (Sign In and Create Account) and lets the user pick. For explicit control over each path, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly.
 
-### Unified flow (mobile)
+### Unified flow (iOS / Android)
 
 One "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's {{#name credential}} field carries whichever credential signed in or was registered; the register path also fills the attestation fields ({{#name aaguid}}, {{#name backup_eligible}}). See [Credential metadata](./passkey_credential_metadata.md) for using these.
 
@@ -135,7 +135,7 @@ Internally the silent attempt pins {{#name prefer_immediately_available_credenti
 
 {{#tabs passkey:connect-with-passkey}}
 
-### Two-button flow (web)
+### Two-button flow (Web)
 
 `connectWithPasskey` is not surfaced on the WASM target. The unified flow needs a silent "no credential here" signal so it can fall through to register, and WebAuthn deliberately collapses that case into the same `NotAllowedError` as a user cancel for privacy reasons. There is no reliable way on web for the SDK to tell the two apart.
 
