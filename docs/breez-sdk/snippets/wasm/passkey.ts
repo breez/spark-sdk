@@ -85,7 +85,7 @@ const connectWithPasskey = async () => {
   // signIn derives the seed for an existing credential. With
   // bulk PRF on iOS+Android this is a single OS prompt that derives
   // master + label seeds in one ceremony.
-  const response = await passkey.signIn({ label: 'personal', allowCredentials: [] })
+  const response = await passkey.signIn({ label: 'personal' })
 
   const config = defaultConfig('mainnet')
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })
@@ -99,7 +99,7 @@ const signInExistingUser = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
-  return await passkey.signIn({ label: 'personal', allowCredentials: [] })
+  return await passkey.signIn({ label: 'personal' })
   // ANCHOR_END: sign-in
 }
 
@@ -112,7 +112,7 @@ const registerNewPasskey = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
-  const response = await passkey.register({ label: 'personal', excludeCredentials: [] })
+  const response = await passkey.register({ label: 'personal' })
 
   // Hosts SHOULD persist credentialId (for excludeCredentials
   // bookkeeping) and userId (for server-side correlation).
@@ -133,7 +133,7 @@ const credentialMetadata = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
-  const response = await passkey.register({ label: 'personal', excludeCredentials: [] })
+  const response = await passkey.register({ label: 'personal' })
 
   // Persist these in synced storage (iCloud Keychain / Block Store) so they
   // survive reinstall and reach the user's other devices. aaguid and
@@ -225,7 +225,7 @@ const recoverFromAlreadyExists = async () => {
     if (error instanceof PasskeyAlreadyExistsError) {
       // Flip to sign-in. The existing credential's PRF output is
       // the same seed the host would have minted on register.
-      const response = await passkey.signIn({ label: 'personal', allowCredentials: [] })
+      const response = await passkey.signIn({ label: 'personal' })
       return response.wallet
     }
     throw error
@@ -244,7 +244,7 @@ const handleTimeout = async () => {
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
   try {
-    const response = await passkey.signIn({ label: 'personal', allowCredentials: [] })
+    const response = await passkey.signIn({ label: 'personal' })
     return response
   } catch (error) {
     if (error instanceof PasskeyTimedOutError) {

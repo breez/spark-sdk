@@ -79,7 +79,7 @@ Future<BreezSdk> connectWithPasskey() async {
       .build();
 
   final response = await passkey.connectWithPasskey(
-    request: ConnectWithPasskeyRequest(label: 'personal', allowCredentials: const [], excludeCredentials: const []),
+    request: ConnectWithPasskeyRequest(label: 'personal'),
   );
 
   // `credential` is the path discriminator (null on sign-in).
@@ -107,7 +107,7 @@ Future<SignInResponse> signInExistingUser() async {
       .withPrfProvider(prfProvider)
       .build();
 
-  return await passkey.signIn(request: SignInRequest(label: 'personal', allowCredentials: const []));
+  return await passkey.signIn(request: SignInRequest(label: 'personal'));
   // ANCHOR_END: sign-in
 }
 
@@ -124,7 +124,7 @@ Future<BreezSdk> registerNewPasskey() async {
       .build();
 
   final response = await passkey.register(
-    request: RegisterRequest(label: 'personal', excludeCredentials: const []),
+    request: RegisterRequest(label: 'personal'),
   );
 
   // Persist credentialId + userId for future excludeCredentials / host-side
@@ -150,7 +150,7 @@ Future<void> credentialMetadata() async {
       .build();
 
   final response = await passkey.register(
-    request: RegisterRequest(label: 'personal', excludeCredentials: const []),
+    request: RegisterRequest(label: 'personal'),
   );
 
   // Persist these in synced storage (iCloud Keychain / Block Store) so they
@@ -245,7 +245,7 @@ Future<Wallet?> recoverFromAlreadyExists() async {
   } on PasskeyPrfException catch (e) {
     if (e.code != 'credentialAlreadyExists') rethrow;
     final response = await passkey.signIn(
-      request: SignInRequest(label: 'personal', allowCredentials: const []),
+      request: SignInRequest(label: 'personal'),
     );
     return response.wallet;
   }
@@ -265,7 +265,7 @@ Future<SignInResponse> handleTimeout() async {
 
   try {
     return await passkey.signIn(
-      request: SignInRequest(label: 'personal', allowCredentials: const []),
+      request: SignInRequest(label: 'personal'),
     );
   } on PasskeyPrfException catch (e) {
     if (e.code == 'userTimedOut') {

@@ -187,7 +187,7 @@ async fn credential_metadata() -> Result<()> {
     let _signed_in = passkey
         .sign_in(SignInRequest {
             label: Some("personal".to_string()),
-            allow_credentials: vec![/* stored credential_id bytes */],
+            allow_credentials: Some(vec![/* stored credential_id bytes */]),
             ..Default::default()
         })
         .await?;
@@ -256,9 +256,9 @@ async fn recover_from_already_exists() -> Result<Wallet> {
     match passkey
         .register(RegisterRequest {
             label: Some("personal".to_string()),
-            exclude_credentials: vec![
+            exclude_credentials: Some(vec![
                 // app-persisted credential IDs from prior registrations
-            ],
+            ]),
         })
         .await
     {

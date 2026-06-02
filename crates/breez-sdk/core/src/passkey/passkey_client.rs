@@ -44,14 +44,14 @@ pub struct RegisterRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// A list of already-registered credential IDs. Prevents
+    /// Optional list of already-registered credential IDs. Prevents
     /// registering the same device twice: when any entry matches a
     /// credential already on the device, the platform raises
     /// [`crate::passkey::PrfProviderError::CredentialAlreadyExists`]
-    /// so the host can flip the user to the sign-in path. Forwarded
-    /// to [`PrfProvider::create_passkey`].
-    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub exclude_credentials: Vec<Vec<u8>>,
+    /// so the host can flip the user to the sign-in path. Unset is
+    /// treated as empty. Forwarded to [`PrfProvider::create_passkey`].
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub exclude_credentials: Option<Vec<Vec<u8>>>,
 }
 
 /// Response from [`PasskeyClient::register`].
@@ -78,12 +78,12 @@ pub struct SignInRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// Credential IDs the assertion is restricted to (reauthentication of
-    /// a known user). Empty / omitted lets the OS pick any matching
-    /// credential for this RP. Forwarded to
+    /// Optional credential IDs the assertion is restricted to
+    /// (reauthentication of a known user). Unset or empty lets the OS
+    /// pick any matching credential for this RP. Forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::allow_credentials`].
-    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub allow_credentials: Vec<Vec<u8>>,
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub allow_credentials: Option<Vec<Vec<u8>>>,
 
     /// Forwarded to
     /// [`crate::passkey::DeriveSeedsRequest::prefer_immediately_available_credentials`].
@@ -117,19 +117,19 @@ pub struct ConnectWithPasskeyRequest {
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub label: Option<String>,
 
-    /// A list of credential IDs to restrict the silent sign-in
+    /// Optional credential IDs to restrict the silent sign-in
     /// attempt to (reauthentication path). See
     /// [`SignInRequest::allow_credentials`]. Ignored on the fallback
     /// registration path.
-    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub allow_credentials: Vec<Vec<u8>>,
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub allow_credentials: Option<Vec<Vec<u8>>>,
 
-    /// A list of already-registered credential IDs to surface
+    /// Optional already-registered credential IDs to surface
     /// duplicates on the fallback registration path. See
     /// [`RegisterRequest::exclude_credentials`]. Ignored on the
     /// silent sign-in attempt.
-    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
-    pub exclude_credentials: Vec<Vec<u8>>,
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub exclude_credentials: Option<Vec<Vec<u8>>>,
 }
 
 /// Response from [`PasskeyClient::connect_with_passkey`].
@@ -199,7 +199,7 @@ impl PasskeyClient {
         let credential = self
             .passkey
             .prf_provider()
-            .create_passkey(request.exclude_credentials)
+            .create_passkey(request.exclude_credentials.unwrap_or_default())
             .await?;
 
         let setup = self
@@ -232,7 +232,7 @@ impl PasskeyClient {
             .setup_wallet(SetupWalletRequest {
                 label: request.label,
                 publish_label: false,
-                allow_credentials: request.allow_credentials,
+                allow_credentials: request.allow_credentials.unwrap_or_default(),
                 prefer_immediately_available_credentials: request
                     .prefer_immediately_available_credentials,
             })

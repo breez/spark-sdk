@@ -27,7 +27,7 @@ For cross-device continuity, back this store with synced storage: iCloud Keychai
 
 ## Reusing stored credential IDs
 
-The IDs you store are passed back to the SDK through two optional request lists (both default to empty):
+The IDs you store are passed back to the SDK through two optional request lists. Both are unset by default, so the simple sign-in and registration paths work without them:
 
 - `allow_credentials` on {{#name sign_in}} lists the registered credentials a sign-in may use. The OS offers only those, which streamlines its picker. Passing the credential a returning user last signed in with also keeps a seed-deriving wallet on that credential, so they re-open the same wallet.
 - `exclude_credentials` on {{#name register}} lists the credentials already registered for this account, so the OS refuses to create a second one on the same device and raises {{#enum PrfProviderError::CredentialAlreadyExists}} instead. Route that to sign-in:

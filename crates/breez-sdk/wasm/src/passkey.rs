@@ -63,7 +63,7 @@ pub struct PasskeyCredential {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::RegisterRequest)]
 pub struct RegisterRequest {
     pub label: Option<String>,
-    pub exclude_credentials: Vec<Vec<u8>>,
+    pub exclude_credentials: Option<Vec<Vec<u8>>>,
 }
 
 /// Response shape for `PasskeyClient.register`.
@@ -77,7 +77,7 @@ pub struct RegisterResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::SignInRequest)]
 pub struct SignInRequest {
     pub label: Option<String>,
-    pub allow_credentials: Vec<Vec<u8>>,
+    pub allow_credentials: Option<Vec<Vec<u8>>>,
     pub prefer_immediately_available_credentials: Option<bool>,
 }
 

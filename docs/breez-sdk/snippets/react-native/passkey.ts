@@ -82,11 +82,7 @@ const connectWithPasskey = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, config.apiKey, undefined)
 
-  const response = await passkey.connectWithPasskey({
-    label: 'personal',
-    allowCredentials: [],
-    excludeCredentials: []
-  })
+  const response = await passkey.connectWithPasskey({ label: 'personal' })
 
   // `credential` is the path discriminator (undefined on sign-in).
   if (response.credential !== undefined) {
@@ -105,7 +101,7 @@ const signInExistingUser = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
-  return await passkey.signIn({ label: 'personal', allowCredentials: [], preferImmediatelyAvailableCredentials: undefined })
+  return await passkey.signIn({ label: 'personal' })
   // ANCHOR_END: sign-in
 }
 
@@ -115,7 +111,7 @@ const registerNewPasskey = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, config.apiKey, undefined)
 
-  const response = await passkey.register({ label: 'personal', excludeCredentials: [] })
+  const response = await passkey.register({ label: 'personal' })
 
   // Persist credentialId for future excludeCredentials.
   const _persist = {
@@ -134,7 +130,7 @@ const credentialMetadata = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, config.apiKey, undefined)
 
-  const response = await passkey.register({ label: 'personal', excludeCredentials: [] })
+  const response = await passkey.register({ label: 'personal' })
 
   // Persist these in synced storage (iCloud Keychain / Block Store) so they
   // survive reinstall and reach the user's other devices. aaguid and
@@ -221,7 +217,7 @@ const recoverFromAlreadyExists = async () => {
     if (error instanceof PasskeyPrfException && error.code === 'credentialAlreadyExists') {
       // Flip to sign-in. The existing credential's PRF output is
       // the same seed the host would have minted on register.
-      const response = await passkey.signIn({ label: 'personal', allowCredentials: [], preferImmediatelyAvailableCredentials: undefined })
+      const response = await passkey.signIn({ label: 'personal' })
       return response.wallet
     }
     throw error
@@ -236,7 +232,7 @@ const handleTimeout = async () => {
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
   try {
-    const response = await passkey.signIn({ label: 'personal', allowCredentials: [], preferImmediatelyAvailableCredentials: undefined })
+    const response = await passkey.signIn({ label: 'personal' })
     return response
   } catch (error) {
     if (error instanceof PasskeyPrfException && error.code === 'userTimedOut') {
