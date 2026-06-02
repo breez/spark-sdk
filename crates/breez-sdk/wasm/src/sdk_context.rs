@@ -4,6 +4,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use platform_utils::tokio::sync::OnceCell;
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -13,6 +14,21 @@ use crate::{
     sdk_builder::{MysqlForeignKeyMode, MysqlStorageConfig, PostgresStorageConfig},
 };
 
+/// A context-shared Postgres pool: the JS pool, its `run_migration` flag, and a
+/// once-guard that limits schema migrations to a single run per pool.
+///
+/// The guard exists because every SDK built from the context reuses the same
+/// pool and (pre-fix) re-ran the four stores' migrations on each build, each
+/// taking a *global* migration lock while holding a connection — serializing
+/// every build across every tenant. Shared via `Rc` so it stays the same guard
+/// after the context's pool is cloned into each `SdkBuilder`. Mirrors the
+/// native `PostgresBackend`/`MysqlBackend` fix.
+pub(crate) type SharedPostgresPool = (Rc<JsPool>, bool, Rc<OnceCell<()>>);
+
+/// A context-shared MySQL pool: like [`SharedPostgresPool`] plus the
+/// foreign-key mode the stores were configured with.
+pub(crate) type SharedMysqlPool = (Rc<JsPool>, bool, MysqlForeignKeyMode, Rc<OnceCell<()>>);
+
 /// Process-shared resources backing one or more `BreezSdk` instances on WASM.
 ///
 /// Construct once via `newSharedSdkContext` and pass the handle to every
@@ -21,8 +37,8 @@ use crate::{
 #[wasm_bindgen]
 pub struct WasmSdkContext {
     pub(crate) inner: Arc<breez_sdk_spark::SdkContext>,
-    pub(crate) postgres_pool: Option<(Rc<JsPool>, bool)>,
-    pub(crate) mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
+    pub(crate) postgres_pool: Option<SharedPostgresPool>,
+    pub(crate) mysql_pool: Option<SharedMysqlPool>,
 }
 
 /// Settings for `newSharedSdkContext`. `network` is required; all other
@@ -74,7 +90,11 @@ pub async fn new_shared_sdk_context(config: WasmSdkContextConfig) -> WasmResult<
     let postgres_pool = match config.postgres_config {
         Some(cfg) => {
             let run_migration = cfg.run_migration;
-            Some((Rc::new(create_postgres_pool(cfg)?), run_migration))
+            Some((
+                Rc::new(create_postgres_pool(cfg)?),
+                run_migration,
+                Rc::new(OnceCell::new()),
+            ))
         }
         None => None,
     };
@@ -87,6 +107,7 @@ pub async fn new_shared_sdk_context(config: WasmSdkContextConfig) -> WasmResult<
                 Rc::new(create_mysql_pool(cfg)?),
                 run_migration,
                 foreign_key_mode,
+                Rc::new(OnceCell::new()),
             ))
         }
         None => None,
