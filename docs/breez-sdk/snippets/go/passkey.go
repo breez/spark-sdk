@@ -178,7 +178,7 @@ func CredentialMetadata() error {
 	// different wallet seed.
 	_, err = passkey.SignIn(breez_sdk_spark.SignInRequest{
 		Label:            &label,
-		AllowCredentials: [][]byte{
+		AllowCredentials: &[][]byte{
 			// stored CredentialId bytes
 		},
 	})
@@ -254,7 +254,7 @@ func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
 	label := "personal"
 	registerResponse, err := passkey.Register(breez_sdk_spark.RegisterRequest{
 		Label: &label,
-		ExcludeCredentials: [][]byte{
+		ExcludeCredentials: &[][]byte{
 			// app-persisted credential IDs from prior registrations
 		},
 	})
