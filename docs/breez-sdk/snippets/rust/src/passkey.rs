@@ -57,10 +57,10 @@ impl PrfProvider for CustomPrfProvider {
 // ANCHOR_END: implement-prf-provider
 
 async fn check_availability() -> Result<()> {
-    // ANCHOR: check-availability
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
+    // ANCHOR: check-availability
     match passkey.check_availability().await? {
         PasskeyAvailability::Available => {
             // Show passkey as primary option.
@@ -87,11 +87,11 @@ fn setup_passkey_client() -> PasskeyClient {
 }
 
 async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
-    // ANCHOR: connect-with-passkey
-    // Single-CTA onboarding: silent sign-in, fall through to register.
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
+    // ANCHOR: connect-with-passkey
+    // Single-CTA onboarding: silent sign-in, fall through to register.
     let response = passkey
         .connect_with_passkey(ConnectWithPasskeyRequest {
             label: Some("personal".to_string()),
@@ -116,11 +116,11 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
 }
 
 async fn sign_in_existing_user() -> Result<SignInResponse> {
-    // ANCHOR: sign-in
-    // Returning-user-only sign-in. No fall-through to register.
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, Some("<breez api key>".to_string()), None);
 
+    // ANCHOR: sign-in
+    // Returning-user-only sign-in. No fall-through to register.
     Ok(passkey
         .sign_in(SignInRequest {
             label: Some("personal".to_string()),
@@ -131,10 +131,10 @@ async fn sign_in_existing_user() -> Result<SignInResponse> {
 }
 
 async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
-    // ANCHOR: register-passkey
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
+    // ANCHOR: register-passkey
     let response = passkey
         .register(RegisterRequest {
             label: Some("personal".to_string()),
@@ -159,10 +159,10 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
 }
 
 async fn credential_metadata() -> Result<()> {
-    // ANCHOR: credential-metadata
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
+    // ANCHOR: credential-metadata
     let response = passkey
         .register(RegisterRequest {
             label: Some("personal".to_string()),
@@ -244,15 +244,15 @@ async fn check_domain() -> Result<()> {
 }
 
 async fn recover_from_already_exists() -> Result<Wallet> {
+    let prf_provider = Arc::new(CustomPrfProvider);
+    let passkey = PasskeyClient::new(prf_provider, None, None);
+
     // ANCHOR: recover-already-exists
     // The OS rejected register because the user's password manager
     // already holds a credential matching `exclude_credentials`.
     // Route the user to the sign-in path: the OS picker will surface
     // the existing credential and the SDK's identity cache will warm
     // up on the assertion.
-    let prf_provider = Arc::new(CustomPrfProvider);
-    let passkey = PasskeyClient::new(prf_provider, None, None);
-
     match passkey
         .register(RegisterRequest {
             label: Some("personal".to_string()),
@@ -280,11 +280,11 @@ async fn recover_from_already_exists() -> Result<Wallet> {
 }
 
 async fn handle_timeout() -> Result<SignInResponse> {
-    // ANCHOR: handle-timeout
-    // Timeout is distinct from a cancel: surface a re-prompt UI.
     let prf_provider = Arc::new(CustomPrfProvider);
     let passkey = PasskeyClient::new(prf_provider, None, None);
 
+    // ANCHOR: handle-timeout
+    // Timeout is distinct from a cancel: surface a re-prompt UI.
     match passkey
         .sign_in(SignInRequest {
             label: Some("personal".to_string()),

@@ -48,10 +48,10 @@ func (p *CustomPrfProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAsso
 // ANCHOR_END: implement-prf-provider
 
 func CheckAvailability() {
-	// ANCHOR: check-availability
 	prfProvider := &CustomPrfProvider{}
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
+	// ANCHOR: check-availability
 	// CheckAvailability collapses IsSupported + CheckDomainAssociation
 	// into a single tagged value. Branch on the variant the host needs.
 	availability, err := passkey.CheckAvailability()
@@ -80,6 +80,9 @@ func SetupPasskeyClient() *breez_sdk_spark.PasskeyClient {
 }
 
 func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
+	prfProvider := &CustomPrfProvider{}
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+
 	// ANCHOR: connect-with-passkey
 	// Single-CTA onboarding: silent sign-in for a returning user,
 	// fall-through to register on a fresh device. Internally pins
@@ -87,9 +90,6 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	// attempt fast-fails (no UI) when no local credential exists; only
 	// `CredentialNotFound` flips to register, all other errors (cancel
 	// / timeout / configuration) propagate unchanged.
-	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
-
 	label := "personal"
 	response, err := passkey.ConnectWithPasskey(breez_sdk_spark.ConnectWithPasskeyRequest{
 		Label: &label,
@@ -118,14 +118,14 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 }
 
 func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
+	prfProvider := &CustomPrfProvider{}
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+
 	// ANCHOR: register-passkey
 	// For a brand-new user with no existing passkey: Register() creates
 	// the credential AND derives the seed in one orchestrated
 	// call. On iOS+Android this is 2 OS prompts total (1 create + 1
 	// dual-salt assert) thanks to the SDK's bulk-PRF path.
-	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
-
 	label := "personal"
 	response, err := passkey.Register(breez_sdk_spark.RegisterRequest{Label: &label})
 	if err != nil {
@@ -154,10 +154,10 @@ func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 }
 
 func CredentialMetadata() error {
-	// ANCHOR: credential-metadata
 	prfProvider := &CustomPrfProvider{}
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
+	// ANCHOR: credential-metadata
 	label := "personal"
 	response, err := passkey.Register(breez_sdk_spark.RegisterRequest{Label: &label})
 	if err != nil {
@@ -242,15 +242,15 @@ func CheckDomain() error {
 }
 
 func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
+	prfProvider := &CustomPrfProvider{}
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+
 	// ANCHOR: recover-already-exists
 	// The OS rejected Register because the user's password manager
 	// already holds a credential matching `ExcludeCredentials`.
 	// Route the user to the sign-in path: the OS picker will surface
 	// the existing credential and the SDK's identity cache will warm
 	// up on the assertion.
-	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
-
 	label := "personal"
 	registerResponse, err := passkey.Register(breez_sdk_spark.RegisterRequest{
 		Label: &label,
@@ -275,15 +275,15 @@ func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
 }
 
 func HandleTimeout() (*breez_sdk_spark.SignInResponse, error) {
+	prfProvider := &CustomPrfProvider{}
+	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
+
 	// ANCHOR: handle-timeout
 	// The OS biometric inactivity timeout (~55s+) tore down the prompt
 	// without user intent. Distinct from a real cancel: hosts may
 	// surface a re-prompt UI without treating it as the user opting
 	// out. The SDK fires PrfProviderErrorUserTimedOut when assertion or
 	// register elapsed time crosses 55_000 ms.
-	prfProvider := &CustomPrfProvider{}
-	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
-
 	label := "personal"
 	response, err := passkey.SignIn(breez_sdk_spark.SignInRequest{Label: &label})
 	if err != nil {

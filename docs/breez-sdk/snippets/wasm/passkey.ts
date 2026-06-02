@@ -41,12 +41,12 @@ class CustomPrfProvider {
 // ANCHOR_END: implement-prf-provider
 
 const checkAvailability = async () => {
-  // ANCHOR: check-availability
   // `rpId` is required. Pass your app's domain, or
   // `PasskeyProvider.BREEZ_RP_ID` if your app is Breez-registered.
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
+  // ANCHOR: check-availability
   // checkAvailability collapses isSupported + checkDomainAssociation
   // into a single tagged value. Branch on the variant the host needs.
   const availability = await passkey.checkAvailability()
@@ -78,13 +78,14 @@ const setupPasskeyClient = () => {
 }
 
 const connectWithPasskey = async () => {
-  // ANCHOR: connect-with-passkey
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
-  // signIn derives the seed for an existing credential. With
-  // bulk PRF on iOS+Android this is a single OS prompt that derives
-  // master + label seeds in one ceremony.
+  // ANCHOR: connect-with-passkey
+  // connectWithPasskey is not surfaced on web: WebAuthn can't hand the
+  // SDK a silent "no credential" signal to fall through on. On web, wire
+  // two buttons instead (Sign In -> signIn, Create Account -> register);
+  // see "Sign in and register". The returning-user path is a plain signIn:
   const response = await passkey.signIn({ label: 'personal' })
 
   const config = defaultConfig('mainnet')
@@ -94,24 +95,24 @@ const connectWithPasskey = async () => {
 }
 
 const signInExistingUser = async () => {
-  // ANCHOR: sign-in
-  // Returning-user-only sign-in. No fall-through to register.
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
+  // ANCHOR: sign-in
+  // Returning-user-only sign-in. No fall-through to register.
   return await passkey.signIn({ label: 'personal' })
   // ANCHOR_END: sign-in
 }
 
 const registerNewPasskey = async () => {
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+
   // ANCHOR: register-passkey
   // For a brand-new user with no existing passkey: register() creates
   // the credential AND derives the seed in one orchestrated call.
   // On iOS+Android this is 2 OS prompts total (1 create + 1 dual-salt
   // assert) thanks to the SDK's bulk-PRF path.
-  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
-
   const response = await passkey.register({ label: 'personal' })
 
   // Hosts SHOULD persist credentialId (for excludeCredentials
@@ -129,10 +130,10 @@ const registerNewPasskey = async () => {
 }
 
 const credentialMetadata = async () => {
-  // ANCHOR: credential-metadata
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
 
+  // ANCHOR: credential-metadata
   const response = await passkey.register({ label: 'personal' })
 
   // Persist these in synced storage (iCloud Keychain / Block Store) so they
@@ -204,15 +205,15 @@ const checkDomain = async () => {
 }
 
 const recoverFromAlreadyExists = async () => {
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+
   // ANCHOR: recover-already-exists
   // The OS rejected register because the user's password manager
   // already holds a credential matching `excludeCredentials`.
   // Route the user to the sign-in path: the OS picker will surface
   // the existing credential and the SDK's identity cache will warm
   // up on the assertion.
-  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
-
   try {
     const response = await passkey.register({
       label: 'personal',
@@ -234,15 +235,15 @@ const recoverFromAlreadyExists = async () => {
 }
 
 const handleTimeout = async () => {
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+
   // ANCHOR: handle-timeout
   // The OS biometric inactivity timeout (~55s+) tore down the prompt
   // without user intent. Distinct from a real cancel: hosts may
   // surface a re-prompt UI without treating it as the user opting
   // out. The SDK fires PasskeyTimedOutError when assertion or
   // register elapsed time crosses 55_000ms.
-  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
-
   try {
     const response = await passkey.signIn({ label: 'personal' })
     return response

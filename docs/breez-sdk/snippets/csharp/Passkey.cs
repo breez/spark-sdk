@@ -40,10 +40,10 @@ namespace BreezSdkSnippets
     {
         async Task CheckAvailability()
         {
-            // ANCHOR: check-availability
             var prfProvider = new CustomPrfProvider();
             var passkey = new PasskeyClient(prfProvider, null, null);
 
+            // ANCHOR: check-availability
             switch (await passkey.CheckAvailability())
             {
                 case PasskeyAvailability.Available:
@@ -72,6 +72,9 @@ namespace BreezSdkSnippets
     {
         async Task<BreezSdk> ConnectWithPasskey()
         {
+            var prfProvider = new CustomPrfProvider();
+            var passkey = new PasskeyClient(prfProvider, null, null);
+
             // ANCHOR: connect-with-passkey
             // Single-CTA onboarding: silent sign-in for a returning user,
             // fall-through to register on a fresh device. Internally pins
@@ -79,9 +82,6 @@ namespace BreezSdkSnippets
             // attempt fast-fails (no UI) when no local credential exists;
             // only `CredentialNotFound` flips to register, all other errors
             // (cancel / timeout / configuration) propagate unchanged.
-            var prfProvider = new CustomPrfProvider();
-            var passkey = new PasskeyClient(prfProvider, null, null);
-
             var response = await passkey.ConnectWithPasskey(
                 new ConnectWithPasskeyRequest(label: "personal")
             );
@@ -105,10 +105,10 @@ namespace BreezSdkSnippets
 
         async Task<BreezSdk> RegisterNewPasskey()
         {
-            // ANCHOR: register-passkey
             var prfProvider = new CustomPrfProvider();
             var passkey = new PasskeyClient(prfProvider, null, null);
 
+            // ANCHOR: register-passkey
             var response = await passkey.Register(new RegisterRequest(label: "personal"));
 
             // Persist credential.credentialId (for excludeCredentials bookkeeping)
@@ -132,10 +132,10 @@ namespace BreezSdkSnippets
 
         async Task CredentialMetadata()
         {
-            // ANCHOR: credential-metadata
             var prfProvider = new CustomPrfProvider();
             var passkey = new PasskeyClient(prfProvider, null, null);
 
+            // ANCHOR: credential-metadata
             var response = await passkey.Register(new RegisterRequest(label: "personal"));
 
             // Persist these in synced storage (iCloud Keychain / Block Store) so
@@ -206,10 +206,10 @@ namespace BreezSdkSnippets
 
         async Task<Wallet> RecoverFromAlreadyExists()
         {
-            // ANCHOR: recover-already-exists
             var prfProvider = new CustomPrfProvider();
             var passkey = new PasskeyClient(prfProvider, null, null);
 
+            // ANCHOR: recover-already-exists
             try
             {
                 var response = await passkey.Register(new RegisterRequest(
@@ -231,10 +231,10 @@ namespace BreezSdkSnippets
 
         async Task<SignInResponse> HandleTimeout()
         {
-            // ANCHOR: handle-timeout
             var prfProvider = new CustomPrfProvider();
             var passkey = new PasskeyClient(prfProvider, null, null);
 
+            // ANCHOR: handle-timeout
             try
             {
                 return await passkey.SignIn(new SignInRequest(label: "personal"));

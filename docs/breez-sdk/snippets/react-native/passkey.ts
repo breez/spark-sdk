@@ -41,12 +41,12 @@ class CustomPrfProvider {
 // ANCHOR_END: implement-prf-provider
 
 const checkAvailability = async () => {
-  // ANCHOR: check-availability
   // Pass `PasskeyProvider.BREEZ_RP_ID` instead of \'<your-rp-domain>\' if your
   // app is Breez-registered (shares credentials with other Breez apps).
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
+  // ANCHOR: check-availability
   const availability = await passkey.checkAvailability()
   switch (availability.tag) {
     case PasskeyAvailability_Tags.Available:
@@ -76,12 +76,12 @@ const setupPasskeyClient = () => {
 }
 
 const connectWithPasskey = async () => {
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
+
   // ANCHOR: connect-with-passkey
   // Single-CTA onboarding: silent sign-in, fall through to register.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, config.apiKey, undefined)
-
   const response = await passkey.connectWithPasskey({ label: 'personal', allowCredentials: undefined, excludeCredentials: undefined })
 
   // `credential` is the path discriminator (undefined on sign-in).
@@ -95,22 +95,22 @@ const connectWithPasskey = async () => {
 }
 
 const signInExistingUser = async () => {
-  // ANCHOR: sign-in
-  // Returning-user-only sign-in. No fall-through to register: use
-  // `connectWithPasskey` when you also want the new-user path.
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
+  // ANCHOR: sign-in
+  // Returning-user-only sign-in. No fall-through to register: use
+  // `connectWithPasskey` when you also want the new-user path.
   return await passkey.signIn({ label: 'personal', allowCredentials: undefined, preferImmediatelyAvailableCredentials: undefined })
   // ANCHOR_END: sign-in
 }
 
 const registerNewPasskey = async () => {
+  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
+
   // ANCHOR: register-passkey
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, config.apiKey, undefined)
-
   const response = await passkey.register({ label: 'personal', excludeCredentials: undefined })
 
   // Persist credentialId for future excludeCredentials.
@@ -125,11 +125,11 @@ const registerNewPasskey = async () => {
 }
 
 const credentialMetadata = async () => {
-  // ANCHOR: credential-metadata
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, config.apiKey, undefined)
 
+  // ANCHOR: credential-metadata
   const response = await passkey.register({ label: 'personal', excludeCredentials: undefined })
 
   // Persist these in synced storage (iCloud Keychain / Block Store) so they
@@ -200,11 +200,11 @@ const checkDomain = async () => {
 }
 
 const recoverFromAlreadyExists = async () => {
-  // ANCHOR: recover-already-exists
-  // Recovery: flip to sign-in so the OS picker surfaces the existing credential.
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
+  // ANCHOR: recover-already-exists
+  // Recovery: flip to sign-in so the OS picker surfaces the existing credential.
   try {
     const response = await passkey.register({
       label: 'personal',
@@ -226,11 +226,11 @@ const recoverFromAlreadyExists = async () => {
 }
 
 const handleTimeout = async () => {
-  // ANCHOR: handle-timeout
-  // Timeout is distinct from a cancel: surface a re-prompt UI.
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
   const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
 
+  // ANCHOR: handle-timeout
+  // Timeout is distinct from a cancel: surface a re-prompt UI.
   try {
     const response = await passkey.signIn({ label: 'personal', allowCredentials: undefined, preferImmediatelyAvailableCredentials: undefined })
     return response

@@ -28,7 +28,6 @@ Future<bool> isSupported() async {
 // ANCHOR_END: implement-prf-provider
 
 Future<void> checkAvailability() async {
-  // ANCHOR: check-availability
   // Pass `PasskeyProvider.breezRpId` instead of \'<your-rp-domain>\' if your
   // app is Breez-registered (shares credentials with other Breez apps).
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(
@@ -39,6 +38,7 @@ Future<void> checkAvailability() async {
       .withPrfProvider(prfProvider)
       .build();
 
+  // ANCHOR: check-availability
   final availability = await passkey.checkAvailability();
   if (availability is PasskeyAvailability_Available) {
     // Show passkey as primary option.
@@ -66,18 +66,18 @@ PasskeyClient setupPasskeyClient() {
 }
 
 Future<BreezSdk> connectWithPasskey() async {
-  // ANCHOR: connect-with-passkey
-  // Single-CTA onboarding: silent sign-in, fall through to register.
-  final config = defaultConfig(network: Network.mainnet)
-      .copyWith(apiKey: '<breez api key>');
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: config.apiKey)
+  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
       .withPrfProvider(prfProvider)
       .build();
 
+  // ANCHOR: connect-with-passkey
+  // Single-CTA onboarding: silent sign-in, fall through to register.
+  final config = defaultConfig(network: Network.mainnet)
+      .copyWith(apiKey: '<breez api key>');
   final response = await passkey.connectWithPasskey(
     request: ConnectWithPasskeyRequest(label: 'personal'),
   );
@@ -96,9 +96,6 @@ Future<BreezSdk> connectWithPasskey() async {
 }
 
 Future<SignInResponse> signInExistingUser() async {
-  // ANCHOR: sign-in
-  // Returning-user-only sign-in. No fall-through to register: use
-  // `connectWithPasskey` when you also want the new-user path.
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
@@ -107,22 +104,25 @@ Future<SignInResponse> signInExistingUser() async {
       .withPrfProvider(prfProvider)
       .build();
 
+  // ANCHOR: sign-in
+  // Returning-user-only sign-in. No fall-through to register: use
+  // `connectWithPasskey` when you also want the new-user path.
   return await passkey.signIn(request: SignInRequest(label: 'personal'));
   // ANCHOR_END: sign-in
 }
 
 Future<BreezSdk> registerNewPasskey() async {
-  // ANCHOR: register-passkey
-  final config = defaultConfig(network: Network.mainnet)
-      .copyWith(apiKey: '<breez api key>');
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
   ));
-  final passkey = PasskeyClientBuilder(breezApiKey: config.apiKey)
+  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
       .withPrfProvider(prfProvider)
       .build();
 
+  // ANCHOR: register-passkey
+  final config = defaultConfig(network: Network.mainnet)
+      .copyWith(apiKey: '<breez api key>');
   final response = await passkey.register(
     request: RegisterRequest(label: 'personal'),
   );
@@ -140,7 +140,6 @@ Future<BreezSdk> registerNewPasskey() async {
 }
 
 Future<void> credentialMetadata() async {
-  // ANCHOR: credential-metadata
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
@@ -149,6 +148,7 @@ Future<void> credentialMetadata() async {
       .withPrfProvider(prfProvider)
       .build();
 
+  // ANCHOR: credential-metadata
   final response = await passkey.register(
     request: RegisterRequest(label: 'personal'),
   );
@@ -222,8 +222,6 @@ Future<void> checkDomain() async {
 }
 
 Future<Wallet?> recoverFromAlreadyExists() async {
-  // ANCHOR: recover-already-exists
-  // Recovery: flip to sign-in so the OS picker surfaces the existing credential.
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
@@ -232,6 +230,8 @@ Future<Wallet?> recoverFromAlreadyExists() async {
       .withPrfProvider(prfProvider)
       .build();
 
+  // ANCHOR: recover-already-exists
+  // Recovery: flip to sign-in so the OS picker surfaces the existing credential.
   try {
     final response = await passkey.register(
       request: RegisterRequest(
@@ -253,8 +253,6 @@ Future<Wallet?> recoverFromAlreadyExists() async {
 }
 
 Future<SignInResponse> handleTimeout() async {
-  // ANCHOR: handle-timeout
-  // Timeout is distinct from a cancel: surface a re-prompt UI.
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
@@ -263,6 +261,8 @@ Future<SignInResponse> handleTimeout() async {
       .withPrfProvider(prfProvider)
       .build();
 
+  // ANCHOR: handle-timeout
+  // Timeout is distinct from a cancel: surface a re-prompt UI.
   try {
     return await passkey.signIn(
       request: SignInRequest(label: 'personal'),

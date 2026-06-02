@@ -61,10 +61,10 @@ class CustomPrfProvider(PrfProvider):
 
 
 async def check_availability():
-    # ANCHOR: check-availability
     prf_provider = CustomPrfProvider()
     passkey = PasskeyClient(prf_provider, None, None)
 
+    # ANCHOR: check-availability
     # check_availability collapses is_supported + check_domain_association
     # into a single tagged value. Branch on the variant the host needs.
     availability = await passkey.check_availability()
@@ -88,6 +88,9 @@ def setup_passkey_client() -> PasskeyClient:
 
 
 async def connect_with_passkey():
+    prf_provider = CustomPrfProvider()
+    passkey = PasskeyClient(prf_provider, None, None)
+
     # ANCHOR: connect-with-passkey
     # Single-CTA onboarding: silent sign-in for a returning user,
     # fall-through to register on a fresh device. Internally pins
@@ -95,9 +98,6 @@ async def connect_with_passkey():
     # attempt fast-fails (no UI) when no local credential exists; only
     # `CredentialNotFound` flips to register, all other errors (cancel
     # / timeout / configuration) propagate unchanged.
-    prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None, None)
-
     response = await passkey.connect_with_passkey(
         ConnectWithPasskeyRequest(label="personal")
     )
@@ -116,14 +116,14 @@ async def connect_with_passkey():
 
 
 async def register_new_passkey():
+    prf_provider = CustomPrfProvider()
+    passkey = PasskeyClient(prf_provider, None, None)
+
     # ANCHOR: register-passkey
     # For a brand-new user with no existing passkey: register() creates
     # the credential AND derives the seed in one orchestrated
     # call. On iOS+Android this is 2 OS prompts total (1 create + 1
     # dual-salt assert) thanks to the SDK's bulk-PRF path.
-    prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None, None)
-
     response = await passkey.register(RegisterRequest(label="personal"))
 
     # Persist credential.credential_id (for exclude_credentials bookkeeping)
@@ -142,10 +142,10 @@ async def register_new_passkey():
 
 
 async def credential_metadata():
-    # ANCHOR: credential-metadata
     prf_provider = CustomPrfProvider()
     passkey = PasskeyClient(prf_provider, None, None)
 
+    # ANCHOR: credential-metadata
     response = await passkey.register(RegisterRequest(label="personal"))
 
     # Persist these in synced storage (iCloud Keychain / Block Store) so they
@@ -209,15 +209,15 @@ async def check_domain():
 
 
 async def recover_from_already_exists():
+    prf_provider = CustomPrfProvider()
+    passkey = PasskeyClient(prf_provider, None, None)
+
     # ANCHOR: recover-already-exists
     # The OS rejected register because the user's password manager
     # already holds a credential matching `exclude_credentials`.
     # Route the user to the sign-in path: the OS picker will surface
     # the existing credential and the SDK's identity cache will warm
     # up on the assertion.
-    prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None, None)
-
     try:
         await passkey.register(
             RegisterRequest(
@@ -236,15 +236,15 @@ async def recover_from_already_exists():
 
 
 async def handle_timeout():
+    prf_provider = CustomPrfProvider()
+    passkey = PasskeyClient(prf_provider, None, None)
+
     # ANCHOR: handle-timeout
     # The OS biometric inactivity timeout (~55s+) tore down the prompt
     # without user intent. Distinct from a real cancel: hosts may
     # surface a re-prompt UI without treating it as the user opting
     # out. The SDK fires PrfProviderError.UserTimedOut when assertion
     # or register elapsed time crosses 55_000 ms.
-    prf_provider = CustomPrfProvider()
-    passkey = PasskeyClient(prf_provider, None, None)
-
     try:
         return await passkey.sign_in(SignInRequest(label="personal"))
     except PrfProviderError.UserTimedOut:

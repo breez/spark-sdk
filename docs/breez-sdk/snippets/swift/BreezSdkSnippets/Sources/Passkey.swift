@@ -41,12 +41,12 @@ class CustomPrfProvider: PrfProvider {
 // ANCHOR_END: implement-prf-provider
 
 func checkAvailability() async throws {
-    // ANCHOR: check-availability
     // Pass `PasskeyProvider.BREEZ_RP_ID` instead of "<your-rp-domain>" if your
     // app is Breez-registered (shares credentials with other Breez apps).
     let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
+    // ANCHOR: check-availability
     switch try await passkey.checkAvailability() {
     case .available:
         break // Show passkey as primary option.
@@ -69,12 +69,13 @@ func setupPasskeyClient() -> PasskeyClient {
 }
 
 func connectWithPasskey() async throws -> BreezSdk {
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+
     // ANCHOR: connect-with-passkey
     // Single-CTA onboarding: silent sign-in, fall through to register.
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: config.apiKey, config: nil)
 
     let response = try await passkey.connectWithPasskey(
         request: ConnectWithPasskeyRequest(label: "personal")
@@ -96,22 +97,23 @@ func connectWithPasskey() async throws -> BreezSdk {
 }
 
 func signInExistingUser() async throws -> SignInResponse {
-    // ANCHOR: sign-in
-    // Returning-user-only sign-in. No fall-through to register: use
-    // `connectWithPasskey` when you also want the new-user path.
     let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
+    // ANCHOR: sign-in
+    // Returning-user-only sign-in. No fall-through to register: use
+    // `connectWithPasskey` when you also want the new-user path.
     return try await passkey.signIn(request: SignInRequest(label: "personal"))
     // ANCHOR_END: sign-in
 }
 
 func registerNewPasskey() async throws -> BreezSdk {
+    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+
     // ANCHOR: register-passkey
     var config = defaultConfig(network: .mainnet)
     config.apiKey = "<breez api key>"
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: config.apiKey, config: nil)
 
     let response = try await passkey.register(
         request: RegisterRequest(label: "personal")
@@ -131,10 +133,10 @@ func registerNewPasskey() async throws -> BreezSdk {
 }
 
 func credentialMetadata() async throws {
-    // ANCHOR: credential-metadata
     let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 
+    // ANCHOR: credential-metadata
     let response = try await passkey.register(
         request: RegisterRequest(label: "personal")
     )
@@ -199,10 +201,10 @@ func checkDomain() async throws {
 }
 
 func recoverFromAlreadyExists() async throws -> Wallet {
-    // ANCHOR: recover-already-exists
     let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
+    // ANCHOR: recover-already-exists
     do {
         let response = try await passkey.register(
             request: RegisterRequest(
@@ -223,10 +225,10 @@ func recoverFromAlreadyExists() async throws -> Wallet {
 }
 
 func handleTimeout() async throws -> SignInResponse {
-    // ANCHOR: handle-timeout
     let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
+    // ANCHOR: handle-timeout
     do {
         return try await passkey.signIn(
             request: SignInRequest(label: "personal")
