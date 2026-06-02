@@ -30,7 +30,7 @@ It’s a nodeless integration that offers a non-custodial, end-to-end solution f
 - [x] Automatic claims
 - [x] WebAssembly support
 - [x] Compatible with external signers
-- [x] Multi-tenant server configuration support
+- [x] Multi-user server mode
 - [x] Free open-source solution
 
 ## Getting Started 
@@ -138,6 +138,7 @@ Contributions are always welcome. Please read our [contribution guide](CONTRIBUT
 - [x] Passkey login for seedless experience
 - [x] Contacts management 
 - [x] Stable balance
+- [x] Multi-user server mode
 - [ ] USDT send support
 - [ ] USDC send support
 - [ ] USDT receive support
