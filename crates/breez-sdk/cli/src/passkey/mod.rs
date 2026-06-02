@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::Seed;
-use breez_sdk_spark::passkey::{NostrRelayConfig, Passkey, PasskeyPrfError, PasskeyPrfProvider};
+use breez_sdk_spark::passkey::{PasskeyClient, PrfProvider, PrfProviderError, SignInRequest};
 
 #[cfg(feature = "fido2")]
 pub mod fido2_prf;
@@ -70,7 +70,7 @@ impl PasskeyProvider {
         self,
         data_dir: &PathBuf,
         fido2_rp_id: Option<String>,
-    ) -> Result<Arc<dyn PasskeyPrfProvider>, PasskeyPrfError> {
+    ) -> Result<Arc<dyn PrfProvider>, PrfProviderError> {
         match self {
             PasskeyProvider::File => Ok(Arc::new(FilePrfProvider::new(data_dir)?)),
             PasskeyProvider::YubiKey => Ok(Arc::new(YubiKeyPrfProvider::new()?)),
@@ -82,46 +82,36 @@ impl PasskeyProvider {
 
 #[allow(clippy::arithmetic_side_effects)]
 pub async fn resolve_passkey_seed(
-    provider: Arc<dyn PasskeyPrfProvider>,
+    provider: Arc<dyn PrfProvider>,
     breez_api_key: Option<String>,
     label: Option<String>,
     list_labels: bool,
     store_label: bool,
 ) -> Result<Seed> {
-    let relay_config = NostrRelayConfig {
-        breez_api_key,
-        ..NostrRelayConfig::default()
-    };
-    let passkey = Passkey::new(provider, Some(relay_config));
+    let client = PasskeyClient::new(provider, breez_api_key, None);
 
-    // --store-label: publish the label to Nostr and exit
-    if store_label && let Some(label) = &label {
-        println!("Publishing label '{label}' to Nostr...");
-        passkey
-            .store_label(label.clone())
-            .await
-            .map_err(|e| anyhow!("Failed to store label: {e}"))?;
-        println!("Label '{label}' published successfully.");
-    }
-
-    // --list-labels: query Nostr and prompt user to select
+    // --list-labels: discovery sign-in (no cached label) returns the
+    // discovered label set; prompt user to pick.
     let label = if list_labels {
         println!("Querying Nostr for available labels...");
-        let labels = passkey
-            .list_labels()
+        let response = client
+            .sign_in(SignInRequest {
+                label: None,
+                ..Default::default()
+            })
             .await
-            .map_err(|e| anyhow!("Failed to list labels: {e}"))?;
+            .map_err(|e| anyhow!("Failed to discover labels: {e}"))?;
 
-        if labels.is_empty() {
+        if response.labels.is_empty() {
             return Err(anyhow!("No labels found on Nostr for this identity"));
         }
 
         println!("Available labels:");
-        for (i, name) in labels.iter().enumerate() {
+        for (i, name) in response.labels.iter().enumerate() {
             println!("  {}: {}", i + 1, name);
         }
 
-        print!("Select label (1-{}): ", labels.len());
+        print!("Select label (1-{}): ", response.labels.len());
         io::stdout().flush()?;
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
@@ -130,18 +120,33 @@ pub async fn resolve_passkey_seed(
             .parse()
             .map_err(|_| anyhow!("Invalid selection"))?;
 
-        if idx < 1 || idx > labels.len() {
+        if idx < 1 || idx > response.labels.len() {
             return Err(anyhow!("Selection out of range"));
         }
 
-        Some(labels[idx - 1].clone())
+        Some(response.labels[idx - 1].clone())
     } else {
         label
     };
 
-    let wallet = passkey
-        .get_wallet(label)
+    // --store-label: publish before signing in so a fresh client can
+    // discover the label later.
+    if store_label && let Some(label) = &label {
+        println!("Publishing label '{label}' to Nostr...");
+        client
+            .labels()
+            .store(label.clone())
+            .await
+            .map_err(|e| anyhow!("Failed to store label: {e}"))?;
+        println!("Label '{label}' published successfully.");
+    }
+
+    let response = client
+        .sign_in(SignInRequest {
+            label,
+            ..Default::default()
+        })
         .await
         .map_err(|e| anyhow!("Failed to derive wallet: {e}"))?;
-    Ok(wallet.seed)
+    Ok(response.wallet.seed)
 }

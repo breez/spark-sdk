@@ -7,11 +7,11 @@ Your job is to update the {{LANG_NAME}} CLI to match the current Rust CLI.
 
 ### Step 1: Learn the {{LANG_NAME}} SDK API
 Before comparing anything, read these {{LANG_NAME}} SDK snippets at `{{SNIPPET_DIR}}`:
-- `sdk_building` — builder pattern, storage setup, configuration
-- `getting_started` — initialization, connection, event listening
-- `passkey` — passkey PRF provider interface, seed derivation pattern
+- `sdk_building`: builder pattern, storage setup, configuration
+- `getting_started`: initialization, connection, event listening
+- `passkey`: passkey PRF provider interface, seed derivation pattern
 
-These snippets are compiled and tested — they are the ground truth for what methods exist and how they are called in {{LANG_NAME}}. You will need this context to identify real divergences vs naming conventions.
+These snippets are compiled and tested: they are the ground truth for what methods exist and how they are called in {{LANG_NAME}}. You will need this context to identify real divergences vs naming conventions.
 
 ### Step 2: Analyze the changes
 If a diff base was provided, run: `git diff {{DIFF_BASE}} HEAD -- 'crates/breez-sdk/cli/src/' 'crates/breez-sdk/cli/README.md'`
@@ -29,29 +29,29 @@ For each SDK call in the Rust file, find the corresponding call in the {{LANG_NA
 - Different function name (e.g., `with_postgres_connection_pool()` vs `create_postgres_storage()`)
 - Different arguments or parameters
 - Extra steps in one version that don't exist in the other (e.g., two-step init vs one-step)
-- Missing calls — an SDK call in Rust with no equivalent in {{LANG_NAME}}
+- Missing calls: an SDK call in Rust with no equivalent in {{LANG_NAME}}
 
 #### 2c. Compare CLI flags and commands
 - List every CLI flag/option in both versions and flag any missing or mismatched ones
 - List every command/subcommand and flag any missing ones
 
 #### 2d. Verify divergences against snippets
-For every divergence found, check the snippets you read in Step 1 (and any additional snippets from `{{SNIPPET_DIR}}` that cover the relevant command). The snippets are always up-to-date — if the Rust CLI uses a function, assume it exists in the {{LANG_NAME}} SDK unless the snippets prove otherwise.
+For every divergence found, check the snippets you read in Step 1 (and any additional snippets from `{{SNIPPET_DIR}}` that cover the relevant command). The snippets are always up-to-date: if the Rust CLI uses a function, assume it exists in the {{LANG_NAME}} SDK unless the snippets prove otherwise.
 
-**Do NOT assume SDK API differences are "binding-level" or "expected."** If the Rust CLI calls `with_postgres_connection_pool()` and the {{LANG_NAME}} CLI calls `create_postgres_storage() + with_storage()`, that is a divergence — check the snippets and fix it.
+**Do NOT assume SDK API differences are "binding-level" or "expected."** If the Rust CLI calls `with_postgres_connection_pool()` and the {{LANG_NAME}} CLI calls `create_postgres_storage() + with_storage()`, that is a divergence: check the snippets and fix it.
 
-Only after completing 2a–2d should you decide which divergences to fix.
+Only after completing 2a: 2d should you decide which divergences to fix.
 
 #### Before marking anything "unsupported"
-When a Rust feature uses a platform-specific crate (e.g., `ctap-hid-fido2`, `yubico-manager`), do NOT immediately skip it. These CLIs serve as **reference implementations for integrators** — the pattern matters more than the specific library.
+When a Rust feature uses a platform-specific crate (e.g., `ctap-hid-fido2`, `yubico-manager`), do NOT immediately skip it. These CLIs serve as **reference implementations for integrators**: the pattern matters more than the specific library.
 
 1. **Read the Rust implementation** to understand: what protocol does the crate implement? What are the inputs/outputs? What's the architecture (trait, providers, orchestration)?
-2. **Check the SDK bindings**: Read the {{LANG_NAME}} SDK snippets and grep for relevant types (e.g., `PasskeyPrfProvider`, `Passkey`). If the SDK exposes a trait/protocol/interface, the CLI should implement it.
+2. **Check the SDK bindings**: Read the {{LANG_NAME}} SDK snippets and grep for relevant types (e.g., `PasskeyProvider`, `Passkey`). If the SDK exposes a trait/protocol/interface, the CLI should implement it.
 3. **Separate portable from platform-specific**: Some providers are pure crypto (e.g., file-based HMAC-SHA256) and trivially portable. Others need hardware access (USB HID, NFC). Implement the portable providers fully. For hardware-dependent providers, implement the provider skeleton with {{UNSUPPORTED_HANDLER}} as the transport layer, but still implement the correct interface so integrators can see the pattern.
-4. **Always implement the orchestration**: If Rust has a `resolve_passkey_seed()` that handles wallet discovery, selection, and seed derivation via SDK types — implement the equivalent in {{LANG_NAME}}. The orchestration uses SDK APIs, not platform crates.
+4. **Always implement the orchestration**: If Rust has a `resolve_passkey_seed()` that handles wallet discovery, selection, and seed derivation via SDK types: implement the equivalent in {{LANG_NAME}}. The orchestration uses SDK APIs, not platform crates.
 5. **Research {{LANG_NAME}} packages**: Check if well-known packages exist on {{PACKAGE_REGISTRY}} for the protocol in question. The Rust crate's README or Cargo.toml often mentions sister projects. Even if you can't verify a package at runtime, note viable candidates in the findings summary so a human reviewer can evaluate them.
 
-**Direction of sync**: Only sync Rust → {{LANG_NAME}} (add missing features, fix outdated API calls). If the {{LANG_NAME}} CLI has additions not in Rust (e.g., success messages, extra help text, UX improvements), keep them — note them in findings as suggestions for the Rust CLI, but do not remove them.
+**Direction of sync**: Only sync Rust → {{LANG_NAME}} (add missing features, fix outdated API calls). If the {{LANG_NAME}} CLI has additions not in Rust (e.g., success messages, extra help text, UX improvements), keep them: note them in findings as suggestions for the Rust CLI, but do not remove them.
 
 ### Step 3: File mapping
 
@@ -61,7 +61,7 @@ When a Rust feature uses a platform-specific crate (e.g., `ctap-hid-fido2`, `yub
 
 **New command subgroup files** (like `contacts.rs`): If the Rust CLI adds a new `command/<name>.rs` subgroup (similar to `issuer.rs`), create a matching {{LANG_NAME}} file at `{{TARGET_DIR}}{{SUBGROUP_PATH_PATTERN}}` following the same pattern as `{{ISSUER_FILE}}`: a dispatch function, a command registry, {{EXTRA_SUBGROUP_COMPONENTS}}
 
-**Platform-specific Rust modules** (like `seedless_restore/`): Some Rust CLI directories contain platform-specific utilities (passkey/FIDO2/YubiKey). If these add new CLI flags or options to `main.rs`, follow the "Before marking anything unsupported" process above — read the Rust code, identify SDK types, implement portable providers fully, and skeleton hardware providers. Always check if the README was also updated and sync documentation accordingly.
+**Platform-specific Rust modules** (like `seedless_restore/`): Some Rust CLI directories contain platform-specific utilities (passkey/FIDO2/YubiKey). If these add new CLI flags or options to `main.rs`, follow the "Before marking anything unsupported" process above: read the Rust code, identify SDK types, implement portable providers fully, and skeleton hardware providers. Always check if the README was also updated and sync documentation accordingly.
 
 ### Step 4: Translation rules
 
@@ -101,7 +101,7 @@ After comparing all file pairs, write `sync-findings.md` using this exact format
 - [one-line description of what was skipped, what protocol/operation was needed, what packages were evaluated, and why none were viable]
 ```
 
-If no differences were found, write only: `No differences found — CLIs are in sync.`
+If no differences were found, write only: `No differences found: CLIs are in sync.`
 
 ### Step 6: Scope constraint
 ONLY modify files under: `{{TARGET_DIR}}`

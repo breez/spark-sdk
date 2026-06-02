@@ -47,7 +47,7 @@ data class PasskeyConfig(
 private const val SECRET_FILE_NAME = "seedless-restore-secret"
 
 /**
- * File-based implementation of [PasskeyPrfProvider].
+ * File-based implementation of [PrfProvider].
  *
  * Uses HMAC-SHA256 with a secret stored in a file. The secret is generated
  * randomly on first use and persisted to disk.
@@ -57,7 +57,7 @@ private const val SECRET_FILE_NAME = "seedless-restore-secret"
  * - This is less secure than hardware-backed solutions like YubiKey
  * - Suitable for development/testing or when hardware keys are unavailable
  */
-class FilePrfProvider(dataDir: String) : PasskeyPrfProvider {
+class FilePrfProvider(dataDir: String) : PrfProvider {
     private val secret: ByteArray
 
     init {
@@ -83,15 +83,27 @@ class FilePrfProvider(dataDir: String) : PasskeyPrfProvider {
         }
     }
 
-    override suspend fun derivePrfSeed(salt: String): ByteArray {
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(secret, "HmacSHA256"))
-        return mac.doFinal(salt.toByteArray(Charsets.UTF_8))
+        val seeds = request.salts.map { salt ->
+            mac.reset()
+            mac.doFinal(salt.toByteArray(Charsets.UTF_8))
+        }
+        return DeriveSeedsOutput(seeds = seeds, credentialId = null)
     }
 
-    override suspend fun isPrfAvailable(): Boolean {
-        return true
+    override suspend fun isSupported(): Boolean = true
+
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential {
+        throw UnsupportedOperationException(
+            "File-backed PRF provider does not implement create-credential; " +
+                "use sign-in by label instead."
+        )
     }
+
+    override suspend fun checkDomainAssociation(): DomainAssociation =
+        DomainAssociation.Skipped("FilePrfProvider does not verify domain association")
 }
 
 // ---------------------------------------------------------------------------
@@ -101,14 +113,18 @@ class FilePrfProvider(dataDir: String) : PasskeyPrfProvider {
 /**
  * Stub provider for hardware-dependent backends that are not yet supported.
  */
-class NotYetSupportedProvider(private val name: String) : PasskeyPrfProvider {
-    override suspend fun derivePrfSeed(salt: String): ByteArray {
+class NotYetSupportedProvider(private val name: String) : PrfProvider {
+    private fun notYet(): Nothing =
         throw UnsupportedOperationException("$name passkey provider is not yet supported in the Kotlin CLI")
-    }
 
-    override suspend fun isPrfAvailable(): Boolean {
-        throw UnsupportedOperationException("$name passkey provider is not yet supported in the Kotlin CLI")
-    }
+    override suspend fun deriveSeeds(request: DeriveSeedsRequest): DeriveSeedsOutput = notYet()
+
+    override suspend fun isSupported(): Boolean = notYet()
+
+    override suspend fun createPasskey(excludeCredentials: List<ByteArray>): PasskeyCredential = notYet()
+
+    override suspend fun checkDomainAssociation(): DomainAssociation =
+        DomainAssociation.Skipped("$name does not verify domain association")
 }
 
 // ---------------------------------------------------------------------------
@@ -116,9 +132,9 @@ class NotYetSupportedProvider(private val name: String) : PasskeyPrfProvider {
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a [PasskeyPrfProvider] for the given provider type.
+ * Creates a [PrfProvider] for the given provider type.
  */
-fun buildPrfProvider(provider: PasskeyProvider, dataDir: String, rpId: String? = null): PasskeyPrfProvider {
+fun buildPrfProvider(provider: PasskeyProvider, dataDir: String, rpId: String? = null): PrfProvider {
     return when (provider) {
         PasskeyProvider.FILE -> FilePrfProvider(dataDir)
         PasskeyProvider.YUBIKEY -> NotYetSupportedProvider("YubiKey")
@@ -135,26 +151,25 @@ fun buildPrfProvider(provider: PasskeyProvider, dataDir: String, rpId: String? =
  * matching the Rust CLI's resolve_passkey_seed logic.
  */
 suspend fun resolvePasskeySeed(
-    provider: PasskeyPrfProvider,
+    provider: PrfProvider,
     breezApiKey: String?,
     label: String?,
     listLabels: Boolean,
     storeLabel: Boolean,
 ): Seed {
-    val relayConfig = NostrRelayConfig(breezApiKey = breezApiKey)
-    val passkey = Passkey(provider, relayConfig)
+    val passkey = PasskeyClient(prfProvider = provider, breezApiKey = breezApiKey, config = null)
 
     // --store-label: publish the label to Nostr
     if (storeLabel && label != null) {
         println("Publishing label '$label' to Nostr...")
-        passkey.storeLabel(label)
+        passkey.labels().store(label)
         println("Label '$label' published successfully.")
     }
 
     // --list-labels: query Nostr and prompt user to select
     val resolvedName: String? = if (listLabels) {
         println("Querying Nostr for available labels...")
-        val labels = passkey.listLabels()
+        val labels = passkey.labels().list()
 
         if (labels.isEmpty()) {
             throw IllegalStateException("No labels found on Nostr for this identity")
@@ -179,6 +194,6 @@ suspend fun resolvePasskeySeed(
         label
     }
 
-    val wallet = passkey.getWallet(resolvedName)
-    return wallet.seed
+    val response = passkey.signIn(SignInRequest(label = resolvedName))
+    return response.wallet.seed
 }

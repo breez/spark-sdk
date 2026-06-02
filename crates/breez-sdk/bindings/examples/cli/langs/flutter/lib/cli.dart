@@ -23,7 +23,7 @@ Future<void> runCli({
   List<StableBalanceToken> stableBalanceTokens = const [],
   String? stableBalanceDefaultActiveLabel,
   BigInt? stableBalanceThreshold,
-  PasskeyConfig? passkeyConfig,
+  CliPasskeyConfig? passkeyConfig,
 }) async {
   await BreezSdkSparkLib.init(externalLibrary: ExternalLibrary.open(_nativeLibPath()));
 

@@ -7,14 +7,14 @@ from pathlib import Path
 from breez_sdk_spark import (
     NostrRelayConfig,
     Passkey,
-    PasskeyPrfProvider,
+    PrfProvider,
     Seed,
 )
 
 SECRET_FILE_NAME = "seedless-restore-secret"
 
 
-class FilePrfProvider(PasskeyPrfProvider):
+class FilePrfProvider(PrfProvider):
     """File-based PRF provider using HMAC-SHA256 with a secret stored on disk.
 
     The secret is generated randomly on first use and persisted.
@@ -42,7 +42,7 @@ class FilePrfProvider(PasskeyPrfProvider):
         return True
 
 
-class YubiKeyPrfProvider(PasskeyPrfProvider):
+class YubiKeyPrfProvider(PrfProvider):
     """YubiKey HMAC-SHA1 challenge-response PRF provider.
 
     Not yet supported in the Python CLI. Requires a YubiKey with
@@ -63,7 +63,7 @@ class YubiKeyPrfProvider(PasskeyPrfProvider):
         return False
 
 
-class Fido2PrfProvider(PasskeyPrfProvider):
+class Fido2PrfProvider(PrfProvider):
     """FIDO2/WebAuthn PRF provider using CTAP2 hmac-secret extension.
 
     Not yet supported in the Python CLI. Requires a FIDO2 authenticator
@@ -85,7 +85,7 @@ class Fido2PrfProvider(PasskeyPrfProvider):
 
 
 def create_provider(provider_name: str, data_dir: Path, rpid=None):
-    """Create a PasskeyPrfProvider based on provider name."""
+    """Create a PrfProvider based on provider name."""
     name = provider_name.lower()
     if name == "file":
         return FilePrfProvider(data_dir)

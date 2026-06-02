@@ -20,7 +20,7 @@ public enum PasskeyProvider
 /// <summary>
 /// Configuration for passkey seed derivation.
 /// </summary>
-public class PasskeyConfig
+public class CliPasskeyConfig
 {
     /// <summary>The PRF provider to use.</summary>
     public PasskeyProvider Provider { get; init; }
@@ -56,9 +56,9 @@ public static class PasskeyProviderExtensions
     }
 
     /// <summary>
-    /// Creates a PasskeyPrfProvider for the given provider type.
+    /// Creates a PrfProvider for the given provider type.
     /// </summary>
-    public static PasskeyPrfProvider BuildPrfProvider(
+    public static PrfProvider BuildPrfProvider(
         PasskeyProvider provider,
         string dataDir,
         string? rpId = null)
@@ -78,7 +78,7 @@ public static class PasskeyProviderExtensions
 // ---------------------------------------------------------------------------
 
 /// <summary>
-/// File-based implementation of PasskeyPrfProvider.
+/// File-based implementation of PrfProvider.
 ///
 /// Uses HMAC-SHA256 with a secret stored in a file. The secret is generated
 /// randomly on first use and persisted to disk.
@@ -88,7 +88,7 @@ public static class PasskeyProviderExtensions
 /// - This is less secure than hardware-backed solutions like YubiKey
 /// - Suitable for development/testing or when hardware keys are unavailable
 /// </summary>
-public class FilePrfProvider : PasskeyPrfProvider
+public class FilePrfProvider : PrfProvider
 {
     private const string SecretFileName = "seedless-restore-secret";
     private readonly byte[] _secret;
@@ -125,18 +125,29 @@ public class FilePrfProvider : PasskeyPrfProvider
         }
     }
 
-    public async Task<byte[]> DerivePrfSeed(string salt)
+    public Task<DeriveSeedsOutput> DeriveSeeds(DeriveSeedsRequest request)
     {
         using var hmac = new HMACSHA256(_secret);
-        var result = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(salt));
-        return await Task.FromResult(result);
+        var seeds = new byte[request.salts.Length][];
+        for (int i = 0; i < request.salts.Length; i++)
+        {
+            seeds[i] = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(request.salts[i]));
+        }
+        return Task.FromResult(new DeriveSeedsOutput(seeds, credentialId: null));
     }
 
-    public async Task<bool> IsPrfAvailable()
+    public Task<bool> IsSupported() => Task.FromResult(true);
+
+    public Task<PasskeyCredential> CreatePasskey(byte[][] excludeCredentials)
     {
-        // File-based PRF is always available once initialized
-        return await Task.FromResult(true);
+        throw new NotSupportedException(
+            "File-backed PRF provider does not implement create-credential; " +
+            "use sign-in by label instead.");
     }
+
+    public Task<DomainAssociation> CheckDomainAssociation() =>
+        Task.FromResult<DomainAssociation>(
+            new DomainAssociation.Skipped("FilePrfProvider does not verify domain association"));
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +157,7 @@ public class FilePrfProvider : PasskeyPrfProvider
 /// <summary>
 /// Stub provider for backends that are not yet supported in the C# CLI.
 /// </summary>
-public class NotYetSupportedProvider : PasskeyPrfProvider
+public class NotYetSupportedProvider : PrfProvider
 {
     private readonly string _name;
 
@@ -155,17 +166,18 @@ public class NotYetSupportedProvider : PasskeyPrfProvider
         _name = name;
     }
 
-    public Task<byte[]> DerivePrfSeed(string salt)
-    {
-        throw new NotSupportedException(
-            $"{_name} passkey provider is not yet supported in the C# CLI");
-    }
+    private NotSupportedException NotYet() =>
+        new($"{_name} passkey provider is not yet supported in the C# CLI");
 
-    public Task<bool> IsPrfAvailable()
-    {
-        throw new NotSupportedException(
-            $"{_name} passkey provider is not yet supported in the C# CLI");
-    }
+    public Task<DeriveSeedsOutput> DeriveSeeds(DeriveSeedsRequest request) => throw NotYet();
+
+    public Task<bool> IsSupported() => throw NotYet();
+
+    public Task<PasskeyCredential> CreatePasskey(byte[][] excludeCredentials) => throw NotYet();
+
+    public Task<DomainAssociation> CheckDomainAssociation() =>
+        Task.FromResult<DomainAssociation>(
+            new DomainAssociation.Skipped($"{_name} does not verify domain association"));
 }
 
 // ---------------------------------------------------------------------------
@@ -175,26 +187,23 @@ public class NotYetSupportedProvider : PasskeyPrfProvider
 public static class PasskeyResolver
 {
     /// <summary>
-    /// Derives a wallet seed using the given PRF provider,
-    /// matching the Rust CLI's resolve_passkey_seed logic.
+    /// Derives a wallet seed using the given PRF provider, matching the Rust
+    /// CLI's resolve_passkey_seed logic.
     /// </summary>
     public static async Task<Seed> ResolvePasskeySeed(
-        PasskeyPrfProvider provider,
+        PrfProvider provider,
         string? breezApiKey,
         string? label,
         bool listLabels,
         bool storeLabel)
     {
-        var relayConfig = new NostrRelayConfig(
-            breezApiKey: breezApiKey
-        );
-        var passkey = new Passkey(provider, relayConfig);
+        var passkey = new PasskeyClient(provider, breezApiKey, config: null);
 
         // --store-label: publish to Nostr
         if (storeLabel && label != null)
         {
             Console.WriteLine($"Publishing label '{label}' to Nostr...");
-            await passkey.StoreLabel(label);
+            await passkey.Labels().Store(label);
             Console.WriteLine($"Label '{label}' published successfully.");
         }
 
@@ -203,7 +212,7 @@ public static class PasskeyResolver
         if (listLabels)
         {
             Console.WriteLine("Querying Nostr for available labels...");
-            var labels = await passkey.ListLabels();
+            var labels = await passkey.Labels().List();
 
             if (labels.Length == 0)
             {
@@ -233,7 +242,7 @@ public static class PasskeyResolver
             resolvedName = labels[idx - 1];
         }
 
-        var wallet = await passkey.GetWallet(label: resolvedName);
-        return wallet.seed;
+        var response = await passkey.SignIn(new SignInRequest(label: resolvedName));
+        return response.wallet.seed;
     }
 }

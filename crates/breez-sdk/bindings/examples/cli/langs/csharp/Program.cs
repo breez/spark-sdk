@@ -163,10 +163,10 @@ if (stableBalanceTokens.Count > 0)
 // Passkey config
 // ---------------------------------------------------------------------------
 
-PasskeyConfig? passkeyConfig = null;
+CliPasskeyConfig? passkeyConfig = null;
 if (passkeyProviderStr != null)
 {
-    passkeyConfig = new PasskeyConfig
+    passkeyConfig = new CliPasskeyConfig
     {
         Provider = PasskeyProviderExtensions.ParseProvider(passkeyProviderStr),
         Label = label,
@@ -236,7 +236,7 @@ static async Task RunInteractiveMode(
     string? postgresConnectionString,
     string? mysqlConnectionString,
     StableBalanceConfig? stableBalanceConfig,
-    PasskeyConfig? passkeyConfig)
+    CliPasskeyConfig? passkeyConfig)
 {
     // Init logging
     try

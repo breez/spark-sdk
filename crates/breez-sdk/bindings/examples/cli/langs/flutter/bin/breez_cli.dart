@@ -114,9 +114,9 @@ Future<void> main(List<String> arguments) async {
     exit(1);
   }
 
-  PasskeyConfig? passkeyConfig;
+  CliPasskeyConfig? passkeyConfig;
   if (passkeyProvider != null) {
-    passkeyConfig = PasskeyConfig(
+    passkeyConfig = CliPasskeyConfig(
       provider: passkeyProvider,
       label: label,
       listLabels: listLabels,

@@ -120,7 +120,7 @@ class CliEventListener: EventListener {
             FileHandle.standardError.write(Data("\r\u{1b}[K\(msg)\n".utf8))
             rl_forced_update_display()
         } else {
-            // Command is running — just print the event normally.
+            // Command is running: just print the event normally.
             FileHandle.standardError.write(Data("\(msg)\n".utf8))
         }
     }
@@ -235,10 +235,10 @@ if !opts.stableBalanceTokens.isEmpty {
 let seed: Seed
 if let passkeyStr = opts.passkey {
     guard let providerType = PasskeyProviderType(rawValue: passkeyStr.lowercased()) else {
-        print("Invalid passkey provider '\(passkeyStr)'. Use 'file', 'yubikey', or 'fido2'.")
+        print("Invalid passkey provider '\(passkeyStr)'. Use 'platform', 'file', 'yubikey', or 'fido2'.")
         exit(1)
     }
-    let prfProvider = try createPrfProvider(type: providerType, dataDir: resolvedDir)
+    let prfProvider = try createPrfProvider(type: providerType, dataDir: resolvedDir, rpId: opts.rpid)
     seed = try await resolvePasskeySeed(
         provider: prfProvider,
         breezApiKey: breezApiKey,
