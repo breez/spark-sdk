@@ -22,12 +22,13 @@ use crate::{
         },
     },
     sdk::BreezSdk,
-    sdk_context::WasmSdkContext,
+    sdk_context::{SharedMysqlPool, SharedPostgresPool, WasmSdkContext},
     token_store::WasmTokenStore,
     tree_store::WasmTreeStore,
 };
 use bitcoin::secp256k1::PublicKey;
 use breez_sdk_spark::{KeySet, PrebuiltBackend, SessionStoreAdapter, StorageBackend};
+use platform_utils::tokio::sync::OnceCell;
 use wasm_bindgen::prelude::*;
 
 /// Configuration for PostgreSQL storage connection pool.
@@ -195,9 +196,9 @@ pub struct SdkBuilder {
     storage_config: Option<WasmStorageConfig>,
     storage: Option<Storage>,
     /// JS Postgres pool supplied via `withSharedContext(ctx_with_pool)`.
-    context_postgres_pool: Option<(Rc<JsPool>, bool)>,
+    context_postgres_pool: Option<SharedPostgresPool>,
     /// JS MySQL pool supplied via `withSharedContext(ctx_with_pool)`.
-    context_mysql_pool: Option<(Rc<JsPool>, bool, MysqlForeignKeyMode)>,
+    context_mysql_pool: Option<SharedMysqlPool>,
     key_set_type: breez_sdk_spark::KeySetType,
     use_address_index: bool,
     account_number: Option<u32>,
@@ -390,12 +391,19 @@ impl SdkBuilder {
                 None,
                 None,
             )),
-            (None, None, Some((pool_rc, run_migration)), None) => {
-                build_postgres_storage(&pool_rc, &identity_bytes, run_migration).await?
-            }
-            (None, None, None, Some((pool_rc, run_migration, foreign_key_mode))) => {
-                build_mysql_storage(&pool_rc, &identity_bytes, foreign_key_mode, run_migration)
+            (None, None, Some((pool_rc, run_migration, migrated)), None) => {
+                build_postgres_storage_shared(&pool_rc, &identity_bytes, run_migration, &migrated)
                     .await?
+            }
+            (None, None, None, Some((pool_rc, run_migration, foreign_key_mode, migrated))) => {
+                build_mysql_storage_shared(
+                    &pool_rc,
+                    &identity_bytes,
+                    foreign_key_mode,
+                    run_migration,
+                    &migrated,
+                )
+                .await?
             }
             _ => {
                 return Err(WasmError::new(
@@ -437,6 +445,53 @@ async fn resolve_storage_config(
             build_mysql_storage(&pool, identity, foreign_key_mode, run_migration).await
         }
     }
+}
+
+/// Builds the Postgres stores over a context-shared `pool`, running schema
+/// migrations at most once for that pool. Mirrors the native `PostgresBackend`:
+/// migrations are global per database (not per tenant) and take a global lock,
+/// so running them on every per-tenant build serializes builds and starves the
+/// pool. The `OnceCell` runs them once; concurrent first-callers await the same
+/// run, and a failure isn't cached so a later build retries.
+async fn build_postgres_storage_shared(
+    pool: &Rc<JsPool>,
+    identity: &[u8],
+    run_migration: bool,
+    migrated: &Rc<OnceCell<()>>,
+) -> WasmResult<Arc<dyn StorageBackend>> {
+    if run_migration {
+        migrated
+            .get_or_try_init(|| async {
+                build_postgres_storage(pool, identity, true)
+                    .await
+                    .map(|_| ())
+            })
+            .await?;
+    }
+    // Migrations handled once above; build the per-tenant stores migration-free.
+    build_postgres_storage(pool, identity, false).await
+}
+
+/// Builds the MySQL stores over a context-shared `pool`, running schema
+/// migrations at most once for that pool. See [`build_postgres_storage_shared`].
+async fn build_mysql_storage_shared(
+    pool: &Rc<JsPool>,
+    identity: &[u8],
+    foreign_key_mode: MysqlForeignKeyMode,
+    run_migration: bool,
+    migrated: &Rc<OnceCell<()>>,
+) -> WasmResult<Arc<dyn StorageBackend>> {
+    if run_migration {
+        migrated
+            .get_or_try_init(|| async {
+                build_mysql_storage(pool, identity, foreign_key_mode, true)
+                    .await
+                    .map(|_| ())
+            })
+            .await?;
+    }
+    // Migrations handled once above; build the per-tenant stores migration-free.
+    build_mysql_storage(pool, identity, foreign_key_mode, false).await
 }
 
 /// Builds the four PostgreSQL-backed JS stores over `pool`.
