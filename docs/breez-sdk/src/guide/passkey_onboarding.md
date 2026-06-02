@@ -12,12 +12,14 @@ Build the platform's {{#name PasskeyProvider}}, then pass it to {{#name PasskeyC
 
 **Parameters:**
 
-- {{#name breez_api_key}}: **Required.** Your Breez API key, used to authenticate to the Breez relay (<a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>) for label storage.
-- {{#name rp_id}}: **Required.** Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` if your app is Breez-registered. Changing it later strands existing credentials.
-- {{#name rp_name}}: **Required.** Maps to the WebAuthn `rp.name`, which current OS prompts still mandate (deprecated in WebAuthn L3 but enforced everywhere). Surfaces in some authenticators' management UIs (Apple Passwords, Google Password Manager); platform UIs increasingly ignore it. Set at registration only; changing it does not affect existing credentials.
-- {{#name user_name}}: **Optional.** Maps to the WebAuthn `user.name`. Treated as the user's unique identifier for the credential and shown in the OS account picker during sign-in. Pass a stable per-user value if each registration should surface as a distinct entry (Apple's Passwords app, in particular, dedupes credentials by `(rpId, user.name)`). Defaults to {{#name rp_name}}. Registration-only.
-- {{#name user_display_name}}: **Optional.** Maps to the WebAuthn `user.displayName`. The user-friendly label the OS / browser MAY (but is not required to) show in the picker; behavior varies by platform. Defaults to {{#name user_name}}. Registration-only.
-- {{#name passkey_config}}: **Optional.** Carries {{#name default_label}}, the label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive no label. Falls back to the SDK's internal `"Default"` when unset.
+| Parameter | Default | Description |
+|---|---|---|
+| {{#name breez_api_key}} | **required** | Your Breez API key, used to authenticate to the Breez relay (<a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>) for label storage. |
+| {{#name rp_id}} | **required** | Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` if your app is Breez-registered. Changing it later strands existing credentials. |
+| {{#name rp_name}} | **required** | Maps to the WebAuthn `rp.name`, which current OS prompts still mandate (deprecated in WebAuthn L3 but enforced everywhere). Surfaces in some authenticators' management UIs (Apple Passwords, Google Password Manager); platform UIs increasingly ignore it. Set at registration only; changing it does not affect existing credentials. |
+| {{#name user_name}} | {{#name rp_name}} | Maps to the WebAuthn `user.name`. Treated as the user's unique identifier for the credential and shown in the OS account picker during sign-in. Pass a stable per-user value if each registration should surface as a distinct entry (Apple's Passwords app, in particular, dedupes credentials by `(rpId, user.name)`). Registration-only. |
+| {{#name user_display_name}} | {{#name user_name}} | Maps to the WebAuthn `user.displayName`. The user-friendly label the OS / browser MAY (but is not required to) show in the picker; behavior varies by platform. Registration-only. |
+| {{#name passkey_config}} | none | Carries {{#name default_label}}, the label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive no label. Falls back to the SDK's internal `"Default"` when unset. |
 
 The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.
 
