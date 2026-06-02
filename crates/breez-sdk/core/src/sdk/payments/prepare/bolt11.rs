@@ -94,13 +94,12 @@ pub(super) async fn prepare(
         None
     };
 
-    if conversion::is_token_denominated(
-        request.amount,
-        request.conversion_options.as_ref(),
-        token_identifier.as_ref(),
-    ) {
+    if let Some(opts) = request.conversion_options.as_ref()
+        && conversion::is_token_denominated(request.amount, Some(opts), token_identifier.as_ref())
+    {
         return prepare_token_denominated(
             sdk,
+            opts,
             request,
             detailed_bolt11_invoice,
             spark_transfer_fee_sats,
@@ -188,6 +187,7 @@ async fn prepare_sats_denominated(
 /// user's `amount` is in token units and would be misinterpreted as sats.
 async fn prepare_token_denominated(
     sdk: &BreezSdk,
+    conversion_options: &ConversionOptions,
     request: &PrepareSendPaymentRequest,
     invoice: &Bolt11InvoiceDetails,
     spark_transfer_fee_sats: Option<u64>,
@@ -200,7 +200,7 @@ async fn prepare_token_denominated(
     })?;
     let (estimated_sats, conversion_estimate) = conversion::estimate_sats_from_token_conversion(
         sdk,
-        request.conversion_options.as_ref(),
+        conversion_options,
         token_identifier,
         token_amount,
         fee_policy,

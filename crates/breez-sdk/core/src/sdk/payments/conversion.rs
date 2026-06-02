@@ -60,56 +60,45 @@ pub(super) async fn estimate_conversion(
     }
 }
 
-// Returns `(is_token_conversion, is_send_all)`.
-async fn is_token_conversion(
+/// Detects whether a token-conversion send should sweep the existing sat balance
+/// alongside the converted output (the documented "send-all with stable balance"
+/// behavior).
+///
+/// True iff: caller supplied a `token_identifier` matching the converter's
+/// `from_token_identifier`, the requested `amount` equals the user's full token
+/// balance, the fee policy is `FeesIncluded`, and stable balance is active for
+/// the same token. A mismatch between the request `token_identifier` and the
+/// conversion options' `from_token_identifier` returns an error.
+async fn is_send_all(
     sdk: &BreezSdk,
-    conversion_options: Option<&ConversionOptions>,
+    from_token_identifier: &str,
     token_identifier: Option<&String>,
-    amount: Option<u128>,
+    amount: u128,
     fee_policy: FeePolicy,
-) -> Result<(bool, bool), SdkError> {
-    let (
-        Some(amount),
-        Some(ConversionOptions {
-            conversion_type:
-                ConversionType::ToBitcoin {
-                    from_token_identifier,
-                },
-            ..
-        }),
-    ) = (amount, conversion_options)
-    else {
-        return Ok((false, false));
+) -> Result<bool, SdkError> {
+    let Some(token_id) = token_identifier else {
+        return Ok(false);
     };
-
-    // If the caller passed a token_identifier it must match conversion options.
-    // If they omitted it, we can't compare against the balance, so is_send_all=false.
-    // Send-all also requires stable balance to be active with a matching active token,
-    // otherwise we shouldn't sweep the existing sat balance.
-    let is_send_all = match token_identifier {
-        Some(token_id) => {
-            if token_id != from_token_identifier {
-                return Err(SdkError::Generic(
-                    "Request token identifier must match conversion options".to_string(),
-                ));
-            }
-            let token_balances = sdk.spark_wallet.get_token_balances().await?;
-            let token_balance = token_balances.get(token_id).map_or(0, |tb| tb.balance);
-            let has_active_stable_token = match &sdk.stable_balance {
-                Some(sb) => sb.get_active_token_identifier().await.as_ref() == Some(token_id),
-                None => false,
-            };
-            amount == token_balance
-                && fee_policy == FeePolicy::FeesIncluded
-                && has_active_stable_token
-        }
+    if token_id != from_token_identifier {
+        return Err(SdkError::Generic(
+            "Request token identifier must match conversion options".to_string(),
+        ));
+    }
+    let token_balances = sdk.spark_wallet.get_token_balances().await?;
+    let token_balance = token_balances.get(token_id).map_or(0, |tb| tb.balance);
+    let has_active_stable_token = match &sdk.stable_balance {
+        Some(sb) => sb.get_active_token_identifier().await.as_ref() == Some(token_id),
         None => false,
     };
-
-    Ok((true, is_send_all))
+    Ok(amount == token_balance && fee_policy == FeePolicy::FeesIncluded && has_active_stable_token)
 }
 
-/// Estimates the sats available for a send that may go through a token→BTC conversion.
+/// Estimates the sats available from a token→BTC conversion.
+///
+/// **Caller precondition**: only invoke when you're committed to a token
+/// conversion (i.e. `conversion_options` is `ToBitcoin` and `amount > 0`).
+/// Callers that may not be in conversion flow should branch upstream — see
+/// [`lnurl::pay::prepare`] for an example.
 ///
 /// Branches on `token_identifier`:
 /// - **Set** → `amount` is in token base units; uses `AmountIn(amount)` (variable
@@ -119,30 +108,36 @@ async fn is_token_conversion(
 ///   the converter is guaranteed to deliver at least `amount` sats or fail.
 ///   `estimated_sats == amount` in this case.
 ///
-/// Returns `(estimated_sats, conversion_estimate)`. When the request is not a
-/// token conversion, `estimated_sats == amount` and `conversion_estimate` is None,
-/// so callers can use `conversion_estimate.is_some()` to detect the conversion path.
-/// The returned `estimated_sats` is the *raw* expected conversion output — callers
-/// that need a defensive lower bound (e.g. LNURL invoice sizing on the `AmountIn`
-/// path) should apply their own slippage buffer.
+/// Returns `(estimated_sats, conversion_estimate)`. The returned `estimated_sats`
+/// is the *raw* expected conversion output — callers that need a defensive lower
+/// bound (e.g. LNURL invoice sizing on the `AmountIn` path) should apply their
+/// own slippage buffer. `conversion_estimate` is `None` only when the converter
+/// soft-refuses (callers must treat this as an error, see the token-denominated
+/// prepare paths).
 pub(in crate::sdk) async fn estimate_sats_from_token_conversion(
     sdk: &BreezSdk,
-    conversion_options: Option<&ConversionOptions>,
+    conversion_options: &ConversionOptions,
     token_identifier: Option<&String>,
     amount: u128,
     fee_policy: FeePolicy,
 ) -> Result<(u128, Option<ConversionEstimate>), SdkError> {
-    let (is_token_conversion, is_send_all) = is_token_conversion(
+    let ConversionType::ToBitcoin {
+        from_token_identifier,
+    } = &conversion_options.conversion_type
+    else {
+        return Err(SdkError::Generic(
+            "estimate_sats_from_token_conversion expects ToBitcoin conversion options".to_string(),
+        ));
+    };
+
+    let is_send_all = is_send_all(
         sdk,
-        conversion_options,
+        from_token_identifier,
         token_identifier,
-        Some(amount),
+        amount,
         fee_policy,
     )
     .await?;
-    if !is_token_conversion {
-        return Ok((amount, None));
-    }
 
     // When token_identifier is provided, `amount` is in token units → AmountIn.
     // When it's omitted, `amount` is in sats → MinAmountOut (we want at least
@@ -150,7 +145,7 @@ pub(in crate::sdk) async fn estimate_sats_from_token_conversion(
     let (conversion_amount, estimated_sats_from_conversion) = if token_identifier.is_some() {
         let estimate = estimate_conversion(
             sdk,
-            conversion_options,
+            Some(conversion_options),
             token_identifier,
             ConversionAmount::AmountIn(amount),
         )
@@ -160,7 +155,7 @@ pub(in crate::sdk) async fn estimate_sats_from_token_conversion(
     } else {
         let estimate = estimate_conversion(
             sdk,
-            conversion_options,
+            Some(conversion_options),
             token_identifier,
             ConversionAmount::MinAmountOut(amount),
         )
@@ -200,15 +195,12 @@ pub(super) async fn resolve_send_amount_with_conversion_estimate(
     // Errors explicitly if the converter can't produce an estimate, since silently
     // falling through to the sats branch would reinterpret the user's token amount
     // as a sat amount.
-    if is_token_denominated(Some(amount), conversion_options, token_identifier) {
-        let (estimated_sats, conversion_estimate) = estimate_sats_from_token_conversion(
-            sdk,
-            conversion_options,
-            token_identifier,
-            amount,
-            fee_policy,
-        )
-        .await?;
+    if let Some(opts) = conversion_options
+        && is_token_denominated(Some(amount), Some(opts), token_identifier)
+    {
+        let (estimated_sats, conversion_estimate) =
+            estimate_sats_from_token_conversion(sdk, opts, token_identifier, amount, fee_policy)
+                .await?;
         if conversion_estimate.is_none() {
             return Err(SdkError::InvalidInput(
                 "Token conversion is not available for the requested token and amount".to_string(),

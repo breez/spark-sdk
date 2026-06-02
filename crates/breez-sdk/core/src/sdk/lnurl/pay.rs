@@ -5,8 +5,8 @@ use breez_sdk_common::lnurl::{
 use tracing::info;
 
 use crate::{
-    ConversionEstimate, FeePolicy, InputType, LnurlPayInfo, LnurlPayRequest, LnurlPayResponse,
-    PrepareLnurlPayRequest, PrepareLnurlPayResponse, SendPaymentMethod,
+    ConversionEstimate, ConversionType, FeePolicy, InputType, LnurlPayInfo, LnurlPayRequest,
+    LnurlPayResponse, PrepareLnurlPayRequest, PrepareLnurlPayResponse, SendPaymentMethod,
     error::SdkError,
     events::SdkEvent,
     models::{PrepareSendPaymentResponse, SendPaymentRequest},
@@ -48,16 +48,22 @@ pub(super) async fn prepare(
     validate_request(&request)?;
     let fee_policy = request.fee_policy.unwrap_or_default();
 
-    // For token conversions, the helper returns the raw estimated sats.
-    // For plain LNURL pay (no conversion) it returns request.amount unchanged.
-    let (estimated_sats, conversion_estimate) = conversion::estimate_sats_from_token_conversion(
-        sdk,
-        request.conversion_options.as_ref(),
-        request.token_identifier.as_ref(),
-        request.amount,
-        fee_policy,
-    )
-    .await?;
+    // Only run the token-conversion estimator when a ToBitcoin conversion is
+    // actually configured. Otherwise the request is plain sats and the user's
+    // amount passes through with no estimate attached.
+    let (estimated_sats, conversion_estimate) = match request.conversion_options.as_ref() {
+        Some(opts) if matches!(opts.conversion_type, ConversionType::ToBitcoin { .. }) => {
+            conversion::estimate_sats_from_token_conversion(
+                sdk,
+                opts,
+                request.token_identifier.as_ref(),
+                request.amount,
+                fee_policy,
+            )
+            .await?
+        }
+        _ => (request.amount, None),
+    };
 
     // If the user is denominating in tokens (`token_identifier` set), the
     // conversion must be available — otherwise the request.amount (in token

@@ -64,15 +64,13 @@ pub(super) async fn prepare(
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
     let amount = validate_request(request)?;
 
-    if conversion::is_token_denominated(
-        Some(amount),
-        request.conversion_options.as_ref(),
-        token_identifier.as_ref(),
-    ) {
+    if let Some(opts) = request.conversion_options.as_ref()
+        && conversion::is_token_denominated(Some(amount), Some(opts), token_identifier.as_ref())
+    {
         return prepare_token_denominated(
             sdk,
+            opts,
             amount,
-            request,
             withdrawal_address,
             token_identifier.as_ref(),
             fee_policy,
@@ -178,15 +176,15 @@ async fn prepare_sats_denominated(
 /// user's `token_amount` is in token units and would be misinterpreted as sats.
 async fn prepare_token_denominated(
     sdk: &BreezSdk,
+    conversion_options: &ConversionOptions,
     token_amount: u128,
-    request: &PrepareSendPaymentRequest,
     withdrawal_address: &BitcoinAddressDetails,
     token_identifier: Option<&String>,
     fee_policy: FeePolicy,
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
     let (estimated_sats, conversion_estimate) = conversion::estimate_sats_from_token_conversion(
         sdk,
-        request.conversion_options.as_ref(),
+        conversion_options,
         token_identifier,
         token_amount,
         fee_policy,
