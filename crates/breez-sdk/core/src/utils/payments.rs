@@ -8,13 +8,15 @@ use spark_wallet::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    ConversionInfo, ConversionStatus, EventEmitter, Payment, PaymentDetails, PaymentMetadata,
-    PaymentStatus, PaymentType, Storage,
+    ConversionInfo, ConversionStatus, EventEmitter, Payment, PaymentMetadata, PaymentStatus,
+    PaymentType, Storage,
     error::SdkError,
     events::SdkEvent,
     persist::{CachedAccountInfo, ObjectCacheRepository},
     sync::SparkSyncService,
-    utils::conversions::{build_amm_conversion, build_crosschain_conversion},
+    utils::conversions::{
+        build_amm_conversion, build_crosschain_conversion, extract_conversion_info,
+    },
     utils::token::token_transaction_to_payments,
 };
 
@@ -39,25 +41,6 @@ pub(crate) async fn record_payment_update(
         true
     } else {
         false
-    }
-}
-
-/// Extract `ConversionInfo` from whichever [`PaymentDetails`] variant carries
-/// it. Cross-chain conversion info can sit on `Lightning` (Boltz hold-invoice
-/// pays), `Spark`, or `Token` details — this helper hides the variant match
-/// so callers can write a single destructure regardless of provider.
-pub(crate) fn extract_conversion_info(details: Option<PaymentDetails>) -> Option<ConversionInfo> {
-    match details? {
-        PaymentDetails::Spark {
-            conversion_info, ..
-        }
-        | PaymentDetails::Token {
-            conversion_info, ..
-        }
-        | PaymentDetails::Lightning {
-            conversion_info, ..
-        } => conversion_info,
-        _ => None,
     }
 }
 
@@ -572,7 +555,9 @@ mod tests {
         ConversionInfo::Boltz {
             swap_id: "swap_1".to_string(),
             chain: "solana".to_string(),
+            chain_id: None,
             asset: "USDT".to_string(),
+            asset_contract: None,
             recipient_address: "So1ana".to_string(),
             invoice: "lnbc1000n1p".to_string(),
             invoice_amount_sats: 100_000,
@@ -583,7 +568,7 @@ mod tests {
             fee: Some(1_500),
             max_slippage_bps: 100,
             quote_degraded: false,
-            asset_decimals: Some(6),
+            asset_decimals: 6,
         }
     }
 
@@ -592,14 +577,16 @@ mod tests {
             order_id: "ord_1".to_string(),
             quote_id: "q_1".to_string(),
             chain: "base".to_string(),
+            chain_id: None,
             asset: "USDC".to_string(),
+            asset_contract: None,
             recipient_address: "0x1234".to_string(),
             estimated_out: 99_500_000,
             delivered_amount: None,
             status: ConversionStatus::Pending,
             fee: Some(500),
             read_token: None,
-            asset_decimals: Some(6),
+            asset_decimals: 6,
         }
     }
 

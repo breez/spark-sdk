@@ -6,6 +6,12 @@
 //! builders, enrichment, and status-folding logic consumed by
 //! `sdk::payments::{list_payments, get_payment, send_payment}` and the
 //! cross-chain event listeners.
+//!
+//! Some helpers (`needs_enrichment`, `enrich_payment`, `fold_conversion_status`,
+//! `build_conversions`, `get_payment_with_conversion_details`) are not yet
+//! called from the rebased call sites — they're the branch's pre-extracted
+//! shape, kept here so follow-up work can wire them in without re-extracting.
+#![allow(dead_code)]
 
 use std::sync::Arc;
 

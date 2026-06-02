@@ -2165,7 +2165,10 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         }),
         conversion_details: None,
     };
-    storage.apply_payment_update(orchestra_payment).await.unwrap();
+    storage
+        .apply_payment_update(orchestra_payment)
+        .await
+        .unwrap();
     storage
         .insert_payment_metadata("orchestra_pending".to_string(), orchestra_pending_metadata)
         .await

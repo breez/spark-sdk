@@ -23,7 +23,7 @@ extension ConfigCopyWith on Config {
     int? maxConcurrentClaims,
     SparkConfig? sparkConfig,
     bool? backgroundTasksEnabled,
-    bool? crossChainEnabled,
+    CrossChainConfig? crossChainConfig,
   }) {
     return Config(
       apiKey: apiKey ?? this.apiKey,
@@ -42,7 +42,7 @@ extension ConfigCopyWith on Config {
       maxConcurrentClaims: maxConcurrentClaims ?? this.maxConcurrentClaims,
       sparkConfig: sparkConfig ?? this.sparkConfig,
       backgroundTasksEnabled: backgroundTasksEnabled ?? this.backgroundTasksEnabled,
-      crossChainEnabled: crossChainEnabled ?? this.crossChainEnabled,
+      crossChainConfig: crossChainConfig ?? this.crossChainConfig,
     );
   }
 }

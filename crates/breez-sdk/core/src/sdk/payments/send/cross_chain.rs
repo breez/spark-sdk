@@ -1,38 +1,49 @@
 use crate::{
-    CrossChainFeeMode, CrossChainProviderContext, CrossChainRoutePair, SendPaymentMethod,
-    SendPaymentResponse,
+    ConversionOptions, SendPaymentMethod, SendPaymentResponse,
     cross_chain::CrossChainPrepared,
     error::SdkError,
     sdk::{BreezSdk, SyncType},
+    token_conversion::{ConversionAmount, ConversionPurpose, TokenConversionResponse},
 };
 
-#[allow(clippy::too_many_arguments)]
+/// Dispatches a `SendPaymentMethod::CrossChainAddress` to its provider.
+///
+/// The caller passes the variant by reference rather than destructured fields;
+/// this fn rebuilds the [`CrossChainPrepared`] internally and hands it to the
+/// provider's `send`, which polls to terminal and returns the [`Payment`].
 pub(in crate::sdk) async fn send(
     sdk: &BreezSdk,
-    route: &CrossChainRoutePair,
-    recipient_address: &str,
-    amount_in: u128,
-    estimated_out: u128,
-    fee_amount: u128,
-    fee_asset: Option<String>,
-    source_transfer_fee_sats: u64,
-    fee_mode: CrossChainFeeMode,
-    expires_at: &str,
-    provider_context: &CrossChainProviderContext,
+    method: &SendPaymentMethod,
     token_identifier: Option<String>,
 ) -> Result<SendPaymentResponse, SdkError> {
-    let service = sdk.cross_chain_providers.get(route.provider)?;
-
-    let prepared = CrossChainPrepared {
+    let SendPaymentMethod::CrossChainAddress {
+        route,
+        recipient_address,
         amount_in,
         estimated_out,
         fee_amount,
-        fee_asset: fee_asset.clone(),
+        fee_asset,
         source_transfer_fee_sats,
         fee_mode,
-        expires_at: expires_at.to_string(),
+        expires_at,
+        provider_context,
+    } = method
+    else {
+        return Err(SdkError::Generic(
+            "send::cross_chain::send called with non-cross-chain payment_method".to_string(),
+        ));
+    };
+
+    let prepared = CrossChainPrepared {
+        amount_in: *amount_in,
+        estimated_out: *estimated_out,
+        fee_amount: *fee_amount,
+        fee_asset: fee_asset.clone(),
+        source_transfer_fee_sats: *source_transfer_fee_sats,
+        fee_mode: *fee_mode,
+        expires_at: expires_at.clone(),
         pair: route.clone(),
-        recipient_address: recipient_address.to_string(),
+        recipient_address: recipient_address.clone(),
         token_identifier: token_identifier.clone(),
         provider_context: provider_context.clone(),
     };
@@ -49,21 +60,54 @@ pub(in crate::sdk) async fn send(
     // Each provider's `send()` polls its own outbound leg to terminal and
     // returns the corresponding `Payment`. The SDK no longer wraps this with
     // an extra `wait_for_payment` step — the provider owns that.
-    let payment = service.send(&prepared).await?;
+    let payment = sdk
+        .cross_chain_providers
+        .get(route.provider)?
+        .send(&prepared)
+        .await?;
 
     Ok(SendPaymentResponse { payment })
 }
 
-/// Cross-chain conversion is not supported on the cross-chain framework
-/// commit — later commits add the AMM conversion leg.
-pub(in crate::sdk::payments) async fn convert_token_unsupported() -> Result<(), SdkError> {
-    Err(SdkError::InvalidInput(
-        "Cross-chain sends do not support AMM conversions".to_string(),
-    ))
-}
+/// Runs the AMM token conversion for a cross-chain send.
+///
+/// - **`AmountIn`**: converter's slippage floor is the prepare-time
+///   `estimate.amount_out`. Pass through.
+/// - **`MinAmountOut`**: pass through unchanged — the cross-chain provider's
+///   `amount_in` already encodes the sats-leg target including the
+///   provider-side `source_transfer_fee_sats`.
+pub(in crate::sdk::payments) async fn convert_token(
+    sdk: &BreezSdk,
+    conversion_options: &ConversionOptions,
+    payment_method: &SendPaymentMethod,
+    token_identifier: Option<&String>,
+    conversion_amount: ConversionAmount,
+) -> Result<(TokenConversionResponse, ConversionPurpose), SdkError> {
+    let recipient_address = match payment_method {
+        SendPaymentMethod::CrossChainAddress {
+            recipient_address, ..
+        } => recipient_address.clone(),
+        _ => {
+            return Err(SdkError::Generic(
+                "convert_token called with non-cross-chain payment_method".to_string(),
+            ));
+        }
+    };
 
-// Stub re-export to keep `payments::conversion::execute_pre_send_conversion`'s
-// CrossChain arm out of the way at this commit; later commits add a real
-// `convert_token` matching the bolt11/spark patterns.
-#[allow(dead_code)]
-pub(in crate::sdk::payments) fn _payment_method_marker(_: &SendPaymentMethod) {}
+    let purpose = ConversionPurpose::OngoingPayment {
+        payment_request: recipient_address,
+    };
+
+    let response = sdk
+        .token_converter
+        .convert(
+            conversion_options,
+            &purpose,
+            token_identifier,
+            conversion_amount,
+            None,
+        )
+        .await?;
+
+    Ok((response, purpose))
+}

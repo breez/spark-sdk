@@ -187,6 +187,7 @@ async fn prepare_sats_denominated(
 /// requested conversion (rare — unsupported config / temporary outage). The
 /// caller must not silently fall back to the sats-denominated path, since the
 /// user's `amount` is in token units and would be misinterpreted as sats.
+#[allow(clippy::too_many_arguments)]
 async fn prepare_token_denominated(
     sdk: &BreezSdk,
     input: &str,

@@ -22,7 +22,7 @@ use super::{
     CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
 };
 use crate::{
-    ConversionInfo, ConversionStatus, Network, PaymentStatus, PaymentMetadata, Storage,
+    ConversionInfo, ConversionStatus, Network, PaymentMetadata, PaymentStatus, Storage,
     error::SdkError,
     sdk::LightningSender,
     utils::{
@@ -323,6 +323,7 @@ impl BoltzService {
 }
 
 #[macros::async_trait]
+#[allow(clippy::too_many_lines)]
 impl CrossChainService for BoltzService {
     async fn get_routes(
         &self,

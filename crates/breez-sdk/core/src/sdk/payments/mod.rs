@@ -1,5 +1,5 @@
 use spark_wallet::LightningReceivePayment;
-use tracing::{instrument, warn};
+use tracing::instrument;
 
 use crate::{
     ClaimHtlcPaymentRequest, ClaimHtlcPaymentResponse, FetchConversionLimitsRequest,
@@ -60,6 +60,7 @@ impl BreezSdk {
                 route,
                 amount,
                 request.token_identifier.clone(),
+                request.conversion_options.clone(),
                 request.fee_policy.unwrap_or_default(),
                 max_slippage_bps,
             )
@@ -128,7 +129,8 @@ impl BreezSdk {
         &self,
         request: ListPaymentsRequest,
     ) -> Result<ListPaymentsResponse, SdkError> {
-        use crate::utils::payments::{build_conversions, extract_conversion_info};
+        use crate::utils::conversions::extract_conversion_info;
+        use crate::utils::payments::build_conversions;
 
         let mut payments = self.storage.list_payments(request.into()).await?;
 

@@ -16,8 +16,9 @@ use breez_sdk_itest::{
 use breez_sdk_spark::{
     BreezSdk, GetInfoRequest, Network, OptimizeLeavesRequest, PaymentRequest,
     PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkContext,
-    SdkContextConfig, SdkEvent, SendPaymentRequest, SyncWalletRequest, default_mysql_storage_config,
-    default_postgres_storage_config, default_server_config, new_shared_sdk_context,
+    SdkContextConfig, SdkEvent, SendPaymentRequest, SyncWalletRequest,
+    default_mysql_storage_config, default_postgres_storage_config, default_server_config,
+    new_shared_sdk_context,
 };
 
 use breez_bench::stats::DurationStats;

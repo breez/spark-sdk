@@ -61,7 +61,9 @@ pub(crate) mod test_helpers {
 
     pub(crate) fn create_test_request() -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
-            payment_request: "test_request".to_string(),
+            payment_request: crate::models::PaymentRequest::Input {
+                input: "test_request".to_string(),
+            },
             amount: None,
             token_identifier: None,
             conversion_options: None,
@@ -71,7 +73,9 @@ pub(crate) mod test_helpers {
 
     pub(crate) fn create_bitcoin_amount_request(amount_sats: u64) -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
-            payment_request: "test_request".to_string(),
+            payment_request: crate::models::PaymentRequest::Input {
+                input: "test_request".to_string(),
+            },
             amount: Some(u128::from(amount_sats)),
             token_identifier: None,
             conversion_options: None,
@@ -84,7 +88,9 @@ pub(crate) mod test_helpers {
         token_identifier: &str,
     ) -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
-            payment_request: "test_request".to_string(),
+            payment_request: crate::models::PaymentRequest::Input {
+                input: "test_request".to_string(),
+            },
             amount: Some(amount),
             token_identifier: Some(token_identifier.to_string()),
             conversion_options: None,
@@ -94,7 +100,9 @@ pub(crate) mod test_helpers {
 
     pub(crate) fn create_fees_included_request(amount: u128) -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
-            payment_request: "test_request".to_string(),
+            payment_request: crate::models::PaymentRequest::Input {
+                input: "test_request".to_string(),
+            },
             amount: Some(amount),
             token_identifier: None,
             conversion_options: None,

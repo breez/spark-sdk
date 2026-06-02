@@ -1356,7 +1356,7 @@ async fn test_10_lightning_completion_timeout_resolves_to_completed(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_invoice,
+            payment_request: PaymentRequest::Input { input: bob_invoice },
             amount: None,
             token_identifier: None,
             conversion_options: None,

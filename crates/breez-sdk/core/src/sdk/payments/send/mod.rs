@@ -147,33 +147,8 @@ pub(super) async fn send_internal(
         SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
             bitcoin_address::send(sdk, address, fee_quote, request, amount_override).await
         }
-        SendPaymentMethod::CrossChainAddress {
-            route,
-            recipient_address,
-            amount_in,
-            estimated_out,
-            fee_amount,
-            fee_asset,
-            source_transfer_fee_sats,
-            fee_mode,
-            expires_at,
-            provider_context,
-        } => {
-            cross_chain::send(
-                sdk,
-                route,
-                recipient_address,
-                *amount_in,
-                *estimated_out,
-                *fee_amount,
-                fee_asset.clone(),
-                *source_transfer_fee_sats,
-                *fee_mode,
-                expires_at,
-                provider_context,
-                token_identifier,
-            )
-            .await
+        method @ SendPaymentMethod::CrossChainAddress { .. } => {
+            cross_chain::send(sdk, method, token_identifier).await
         }
     }
 }

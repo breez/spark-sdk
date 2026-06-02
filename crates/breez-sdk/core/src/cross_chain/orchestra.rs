@@ -337,6 +337,7 @@ impl OrchestraService {
 }
 
 #[macros::async_trait]
+#[allow(clippy::too_many_lines, clippy::items_after_statements)]
 impl CrossChainService for OrchestraService {
     async fn get_routes(
         &self,
@@ -594,8 +595,8 @@ impl CrossChainService for OrchestraService {
         self.trigger_monitor();
 
         // Surface a submit error before kicking off polling.
-        let submit_response = submit_res
-            .map_err(|e| SdkError::Generic(format!("Orchestra submit failed: {e}")))?;
+        let submit_response =
+            submit_res.map_err(|e| SdkError::Generic(format!("Orchestra submit failed: {e}")))?;
         let order_id = submit_response.order_id;
 
         // Poll the outbound Spark transfer until it settles to terminal status.

@@ -2204,6 +2204,7 @@ mod tests {
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
+                conversion_info: None,
             }),
             conversion_details: None,
         };
@@ -2833,7 +2834,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 16, "migration version must be preserved");
+        assert_eq!(version, 17, "migration version must be preserved");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3121,13 +3122,14 @@ mod tests {
             "found orphan unprefixed indexes after upgrade: {orphans:?}"
         );
 
-        // Migration version advanced from 15 to 16.
+        // Migration version advanced from 15 through 17 (16: multi-tenant scope,
+        // 17: conversion_info type-discriminator backfill).
         let version: i32 = client
             .query_one("SELECT MAX(version) FROM brz_schema_migrations", &[])
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 16, "migration must advance to 16");
+        assert_eq!(version, 17, "migration must advance to 17");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

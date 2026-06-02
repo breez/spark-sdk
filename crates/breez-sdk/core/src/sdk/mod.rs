@@ -102,6 +102,7 @@ pub struct BreezSdk {
     /// Shared helper for paying LN invoices and persisting the resulting
     /// payment rows. Reused by cross-chain providers (e.g. Boltz) that
     /// need to pay an LN invoice as part of a larger flow.
+    #[allow(dead_code)]
     pub(crate) lightning_sender: Arc<LightningSender>,
 }
 

@@ -74,7 +74,9 @@ async fn test_send_bolt11_invoice_server_mode(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_invoice.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_invoice.clone(),
+            },
             amount: None,
             token_identifier: None,
             conversion_options: None,

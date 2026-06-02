@@ -11,8 +11,8 @@ use super::models::{
     ExecuteSwapRequest, ExecuteSwapResponse, FeatureName, FeatureStatus,
     FlashnetExecuteSwapResponse, GetMinAmountsRequest, GetMinAmountsResponse, ListPoolsRequest,
     ListPoolsResponse, ListUserSwapsRequest, ListUserSwapsResponse, MinAmount, PingResponse,
-    SignedClawbackRequest, SignedExecuteSwapRequest, SignedExecuteSwapResponse, SimulateSwapRequest,
-    SimulateSwapResponse,
+    SignedClawbackRequest, SignedExecuteSwapRequest, SignedExecuteSwapResponse,
+    SimulateSwapRequest, SimulateSwapResponse,
 };
 use super::utils::generate_nonce;
 use crate::cache::CacheStore;

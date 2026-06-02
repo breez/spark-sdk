@@ -469,6 +469,18 @@ impl MysqlStorage {
                 "ALTER TABLE brz_schema_migrations MODIFY COLUMN applied_at \
                  DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
             )],
+            // Migration 18: Backfill type discriminator on conversion_info for
+            // the ConversionInfo enum refactor. All existing rows are AMM.
+            // Mirrors the postgres-side migration; the serde-level default in
+            // `deserialize_conversion_info_with_default_type` covers reads
+            // either way, but backfilling lets JSON-path filter clauses
+            // (`JSON_EXTRACT(... '$.type') = 'amm'`) match pre-migration rows.
+            vec![Migration::sql(
+                "UPDATE brz_payment_metadata \
+                 SET conversion_info = JSON_SET(conversion_info, '$.type', 'amm') \
+                 WHERE conversion_info IS NOT NULL \
+                   AND JSON_EXTRACT(conversion_info, '$.type') IS NULL",
+            )],
         ]
     }
 }
@@ -918,6 +930,18 @@ impl Storage for MysqlStorage {
                         params.push(Value::from(htlc_status.to_string()));
                     }
                 }
+                // Payment type discriminator: brz_payments.spark is `true` for
+                // Spark transfers and `NULL` for token transactions.
+                match payment_details_filter {
+                    StoragePaymentDetailsFilter::Spark { .. } => {
+                        payment_details_clauses.push("p.spark = true".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Token { .. } => {
+                        payment_details_clauses.push("p.spark IS NULL".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Lightning { .. } => {}
+                }
+
                 let conversion_filter = match payment_details_filter {
                     StoragePaymentDetailsFilter::Spark {
                         conversion_filter: Some(cf),
@@ -1906,6 +1930,9 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             let lnurl_pay_info: Option<LnurlPayInfo> = from_json_string_opt(lnurl_pay_info_str)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> =
                 from_json_string_opt(lnurl_withdraw_info_str)?;
+            let conversion_info_str: Option<String> = get_opt_str(row, 19);
+            let conversion_info: Option<ConversionInfo> =
+                from_json_string_opt(conversion_info_str)?;
 
             let lnurl_receive_metadata = if lnurl_payment_hash.is_some() {
                 Some(LnurlReceiveMetadata {
@@ -1924,7 +1951,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 lnurl_pay_info,
                 lnurl_withdraw_info,
                 lnurl_receive_metadata,
-                conversion_info: None,
+                conversion_info,
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
@@ -2000,8 +2027,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                     s.parse::<ConversionStatus>()
                         .map(|status| ConversionDetails {
                             status,
-                            from: None,
-                            to: None,
+                            conversions: Vec::new(),
                         })
                         .map_err(StorageError::Serialization)
                 })
@@ -2230,6 +2256,19 @@ mod tests {
         crate::persist::tests::test_conversion_status_persistence(Box::new(fixture.storage)).await;
     }
 
+    #[tokio::test]
+    async fn test_insert_boltz_conversion_info() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_insert_boltz_conversion_info(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_boltz_status_to_completed() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_update_boltz_status_to_completed(Box::new(fixture.storage))
+            .await;
+    }
+
     /// A second 33-byte test identity (must differ from `TEST_IDENTITY_A`).
     const TEST_IDENTITY_B: [u8; 33] = [
         0x03, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae,
@@ -2317,6 +2356,7 @@ mod tests {
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
+                conversion_info: None,
             }),
             conversion_details: None,
         };
@@ -2623,9 +2663,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             version,
-            Some(17),
-            "migration version must advance to 17 (the legacy fixture starts at 16, migration 17 \
-             pins applied_at default to UTC)"
+            Some(18),
+            "migration version must advance to 18 (the legacy fixture starts at 16; \
+             migration 17 pins applied_at default to UTC; migration 18 backfills the \
+             conversion_info type discriminator)"
         );
 
         let payment_count: Option<i64> = conn
@@ -2898,7 +2939,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(17), "migration must advance to 17");
+        assert_eq!(version, Some(18), "migration must advance to 18");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

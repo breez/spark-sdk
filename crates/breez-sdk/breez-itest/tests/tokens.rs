@@ -1017,7 +1017,9 @@ async fn test_07_token_payment_realtime_event() -> Result<()> {
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(15),
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
@@ -1145,7 +1147,9 @@ async fn test_07_token_payment_realtime_event() -> Result<()> {
     let prepare2 = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: alice_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: alice_spark_address.clone(),
+            },
             amount: Some(5),
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
