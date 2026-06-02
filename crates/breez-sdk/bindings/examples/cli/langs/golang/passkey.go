@@ -25,11 +25,11 @@ const (
 
 // PasskeyConfig holds passkey-related CLI options.
 type PasskeyConfig struct {
-	Provider    PasskeyProvider
-	Label       *string
-	ListLabels  bool
-	StoreLabel  bool
-	RpID        *string
+	Provider   PasskeyProvider
+	Label      *string
+	ListLabels bool
+	StoreLabel bool
+	RpID       *string
 }
 
 // parsePasskeyProvider parses a provider name string into a PasskeyProvider.
@@ -52,7 +52,7 @@ func parsePasskeyProvider(s string) (PasskeyProvider, error) {
 
 const secretFileName = "seedless-restore-secret"
 
-// FilePrfProvider implements breez_sdk_spark.PasskeyPrfProvider using
+// FilePrfProvider implements breez_sdk_spark.PrfProvider using
 // HMAC-SHA256 with a secret stored in a file.
 type FilePrfProvider struct {
 	secret [32]byte
@@ -92,14 +92,30 @@ func NewFilePrfProvider(dataDir string) (*FilePrfProvider, error) {
 	return &FilePrfProvider{secret: secret}, nil
 }
 
-func (f *FilePrfProvider) DerivePrfSeed(salt string) ([]byte, error) {
-	mac := hmac.New(sha256.New, f.secret[:])
-	mac.Write([]byte(salt))
-	return mac.Sum(nil), nil
+func (f *FilePrfProvider) DeriveSeeds(request breez_sdk_spark.DeriveSeedsRequest) (breez_sdk_spark.DeriveSeedsOutput, error) {
+	seeds := make([][]byte, 0, len(request.Salts))
+	for _, salt := range request.Salts {
+		mac := hmac.New(sha256.New, f.secret[:])
+		mac.Write([]byte(salt))
+		seeds = append(seeds, mac.Sum(nil))
+	}
+	return breez_sdk_spark.DeriveSeedsOutput{Seeds: seeds, CredentialId: nil}, nil
 }
 
-func (f *FilePrfProvider) IsPrfAvailable() (bool, error) {
+func (f *FilePrfProvider) IsSupported() (bool, error) {
 	return true, nil
+}
+
+func (f *FilePrfProvider) CreatePasskey(excludeCredentials [][]byte) (breez_sdk_spark.PasskeyCredential, error) {
+	return breez_sdk_spark.PasskeyCredential{}, fmt.Errorf(
+		"file-backed PRF provider does not implement create-credential; " +
+			"use sign-in by label instead")
+}
+
+func (f *FilePrfProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAssociation, error) {
+	return breez_sdk_spark.DomainAssociationSkipped{
+		Reason: "FilePrfProvider does not verify domain association",
+	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -110,12 +126,26 @@ type notYetSupportedProvider struct {
 	name string
 }
 
-func (p *notYetSupportedProvider) DerivePrfSeed(_ string) ([]byte, error) {
-	return nil, fmt.Errorf("%s passkey provider is not yet supported in the Go CLI", p.name)
+func (p *notYetSupportedProvider) notYet() error {
+	return fmt.Errorf("%s passkey provider is not yet supported in the Go CLI", p.name)
 }
 
-func (p *notYetSupportedProvider) IsPrfAvailable() (bool, error) {
-	return false, fmt.Errorf("%s passkey provider is not yet supported in the Go CLI", p.name)
+func (p *notYetSupportedProvider) DeriveSeeds(_ breez_sdk_spark.DeriveSeedsRequest) (breez_sdk_spark.DeriveSeedsOutput, error) {
+	return breez_sdk_spark.DeriveSeedsOutput{}, p.notYet()
+}
+
+func (p *notYetSupportedProvider) IsSupported() (bool, error) {
+	return false, p.notYet()
+}
+
+func (p *notYetSupportedProvider) CreatePasskey(_ [][]byte) (breez_sdk_spark.PasskeyCredential, error) {
+	return breez_sdk_spark.PasskeyCredential{}, p.notYet()
+}
+
+func (p *notYetSupportedProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAssociation, error) {
+	return breez_sdk_spark.DomainAssociationSkipped{
+		Reason: fmt.Sprintf("%s does not verify domain association", p.name),
+	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -125,21 +155,18 @@ func (p *notYetSupportedProvider) IsPrfAvailable() (bool, error) {
 // resolvePasskeySeed derives a wallet seed using the given PRF provider,
 // matching the Rust CLI's resolve_passkey_seed logic.
 func resolvePasskeySeed(
-	provider breez_sdk_spark.PasskeyPrfProvider,
+	provider breez_sdk_spark.PrfProvider,
 	breezAPIKey *string,
 	label *string,
 	listLabels bool,
 	storeLabel bool,
 ) (breez_sdk_spark.Seed, error) {
-	relayConfig := &breez_sdk_spark.NostrRelayConfig{
-		BreezApiKey: breezAPIKey,
-	}
-	passkey := breez_sdk_spark.NewPasskey(provider, relayConfig)
+	passkey := breez_sdk_spark.NewPasskeyClient(provider, breezAPIKey, nil)
 
 	// --store-label: publish to Nostr
 	if storeLabel && label != nil {
 		fmt.Printf("Publishing label '%s' to Nostr...\n", *label)
-		if err := liftError(passkey.StoreLabel(*label)); err != nil {
+		if err := liftError(passkey.Labels().Store(*label)); err != nil {
 			return nil, fmt.Errorf("failed to store label: %w", err)
 		}
 		fmt.Printf("Label '%s' published successfully.\n", *label)
@@ -149,7 +176,7 @@ func resolvePasskeySeed(
 	resolvedName := label
 	if listLabels {
 		fmt.Println("Querying Nostr for available labels...")
-		labels, err := passkey.ListLabels()
+		labels, err := passkey.Labels().List()
 		if err = liftError(err); err != nil {
 			return nil, fmt.Errorf("failed to list labels: %w", err)
 		}
@@ -178,15 +205,15 @@ func resolvePasskeySeed(
 		resolvedName = &selected
 	}
 
-	wallet, err := passkey.GetWallet(resolvedName)
+	response, err := passkey.SignIn(breez_sdk_spark.SignInRequest{Label: resolvedName})
 	if err = liftError(err); err != nil {
 		return nil, fmt.Errorf("failed to derive wallet: %w", err)
 	}
-	return wallet.Seed, nil
+	return response.Wallet.Seed, nil
 }
 
-// buildPrfProvider creates a PasskeyPrfProvider for the given provider type.
-func buildPrfProvider(provider PasskeyProvider, dataDir string) (breez_sdk_spark.PasskeyPrfProvider, error) {
+// buildPrfProvider creates a PrfProvider for the given provider type.
+func buildPrfProvider(provider PasskeyProvider, dataDir string) (breez_sdk_spark.PrfProvider, error) {
 	switch provider {
 	case PasskeyProviderFile:
 		return NewFilePrfProvider(dataDir)
