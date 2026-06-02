@@ -105,3 +105,107 @@ impl StorageBackend for MysqlBackend {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persist::StorageListPaymentsRequest;
+    use crate::persist::mysql::{MysqlStorageConfig, create_pool};
+    use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+    use spark_wallet::SessionStoreError;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::mysql::Mysql;
+
+    /// Two distinct 33-byte tenant identities sharing one pool / database.
+    const TENANT_A: [u8; 33] = [
+        0x02, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+        0x1e, 0x1f, 0x20,
+    ];
+    const TENANT_B: [u8; 33] = [
+        0x03, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae,
+        0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd,
+        0xbe, 0xbf, 0xc0,
+    ];
+
+    fn dummy_pubkey() -> PublicKey {
+        let secp = Secp256k1::new();
+        let sk = SecretKey::from_slice(&[0x11; 32]).expect("valid secret key");
+        PublicKey::from_secret_key(&secp, &sk)
+    }
+
+    /// Asserts every store in `stores` is present and backed by a fully migrated
+    /// schema by issuing a trivial read against each of the four tables. This is
+    /// what guards the fix: per-tenant stores are built migration-free, so each
+    /// of these reads only succeeds if `ensure_migrated` already created that
+    /// store's schema.
+    async fn assert_all_stores_usable(stores: &ResolvedStores) {
+        stores
+            .storage
+            .list_payments(StorageListPaymentsRequest::default())
+            .await
+            .expect("main storage schema migrated");
+
+        let tree = stores.tree_store.as_ref().expect("tree store present");
+        tree.get_leaves().await.expect("tree store schema migrated");
+
+        let tokens = stores
+            .token_output_store
+            .as_ref()
+            .expect("token store present");
+        tokens
+            .list_tokens_outputs()
+            .await
+            .expect("token store schema migrated");
+
+        let sessions = stores
+            .session_store
+            .as_ref()
+            .expect("session store present");
+        // No session has been written, so a *migrated* (but empty) schema returns
+        // `NotFound` because the query ran and matched no row. A missing table
+        // would surface as a different error, failing this assertion.
+        match sessions.get_session(&dummy_pubkey()).await {
+            Err(SessionStoreError::NotFound) => {}
+            Err(e) => {
+                panic!("expected NotFound from migrated empty session store, got error {e:?}")
+            }
+            Ok(_) => panic!("unexpected session returned from empty session store"),
+        }
+    }
+
+    /// With `run_migration = true`, the backend migrates the shared database once
+    /// via `ensure_migrated`, then builds each tenant's stores migration-free.
+    /// This exercises that path end-to-end: concurrent first-callers race into
+    /// the `OnceCell`, all four stores' migrations must be covered (so the
+    /// migration-free per-tenant builds see a complete schema), and two tenants
+    /// are provisioned over the same pool.
+    #[tokio::test]
+    async fn test_create_stores_migrates_once_for_all_tenants() {
+        let container = Mysql::default()
+            .start()
+            .await
+            .expect("Failed to start MySQL container");
+        let host_port = container
+            .get_host_port_ipv4(3306)
+            .await
+            .expect("Failed to get host port");
+        let connection_string = format!("mysql://root@127.0.0.1:{host_port}/test");
+        let pool = create_pool(&MysqlStorageConfig::with_defaults(connection_string))
+            .expect("Failed to create pool");
+
+        let backend = MysqlBackend::new(pool, true, MysqlForeignKeyMode::Enforced);
+
+        // Provision both tenants concurrently: the first to reach `ensure_migrated`
+        // runs the migrations while the other awaits the same `OnceCell`.
+        let (a, b) = tokio::join!(
+            backend.create_stores(Network::Regtest, TENANT_A.to_vec()),
+            backend.create_stores(Network::Regtest, TENANT_B.to_vec()),
+        );
+        let a = a.expect("tenant A stores created");
+        let b = b.expect("tenant B stores created");
+
+        assert_all_stores_usable(&a).await;
+        assert_all_stores_usable(&b).await;
+    }
+}
