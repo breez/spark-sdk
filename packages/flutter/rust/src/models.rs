@@ -1316,14 +1316,83 @@ pub struct _UnregisterWebhookRequest {
     pub webhook_id: String,
 }
 
-#[frb(mirror(NostrRelayConfig))]
-pub struct _NostrRelayConfig {
-    pub breez_api_key: Option<String>,
-    pub timeout_secs: Option<u32>,
+#[frb(mirror(PasskeyConfig))]
+pub struct _PasskeyConfig {
+    pub default_label: Option<String>,
+    pub rp_id: Option<String>,
+    pub rp_name: Option<String>,
+}
+
+#[frb(mirror(PasskeyAvailability))]
+pub enum _PasskeyAvailability {
+    Available,
+    PrfUnsupported,
+    NotAssociated { source: String, reason: String },
+    Skipped { reason: String },
 }
 
 #[frb(mirror(Wallet))]
 pub struct _Wallet {
     pub seed: Seed,
     pub label: String,
+}
+
+#[frb(mirror(PasskeyCredential))]
+pub struct _PasskeyCredential {
+    pub credential_id: Vec<u8>,
+    pub user_id: Option<Vec<u8>>,
+    pub aaguid: Option<Vec<u8>>,
+    pub backup_eligible: Option<bool>,
+}
+
+#[frb(mirror(RegisterRequest))]
+pub struct _RegisterRequest {
+    pub label: Option<String>,
+    pub exclude_credentials: Option<Vec<Vec<u8>>>,
+}
+
+#[frb(mirror(RegisterResponse))]
+pub struct _RegisterResponse {
+    pub wallet: Wallet,
+    pub credential: Option<PasskeyCredential>,
+}
+
+#[frb(mirror(SignInRequest))]
+pub struct _SignInRequest {
+    pub label: Option<String>,
+    pub allow_credentials: Option<Vec<Vec<u8>>>,
+    pub prefer_immediately_available_credentials: Option<bool>,
+}
+
+#[frb(mirror(DeriveSeedsRequest))]
+pub struct _DeriveSeedsRequest {
+    pub salts: Vec<String>,
+    pub allow_credentials: Vec<Vec<u8>>,
+    pub prefer_immediately_available_credentials: Option<bool>,
+}
+
+#[frb(mirror(DeriveSeedsOutput))]
+pub struct _DeriveSeedsOutput {
+    pub seeds: Vec<Vec<u8>>,
+    pub credential_id: Option<Vec<u8>>,
+}
+
+#[frb(mirror(SignInResponse))]
+pub struct _SignInResponse {
+    pub wallet: Wallet,
+    pub labels: Vec<String>,
+    pub credential: Option<PasskeyCredential>,
+}
+
+#[frb(mirror(ConnectWithPasskeyRequest))]
+pub struct _ConnectWithPasskeyRequest {
+    pub label: Option<String>,
+    pub allow_credentials: Option<Vec<Vec<u8>>>,
+    pub exclude_credentials: Option<Vec<Vec<u8>>>,
+}
+
+#[frb(mirror(ConnectWithPasskeyResponse))]
+pub struct _ConnectWithPasskeyResponse {
+    pub wallet: Wallet,
+    pub credential: Option<PasskeyCredential>,
 }

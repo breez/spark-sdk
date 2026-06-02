@@ -8,5 +8,7 @@ export 'src/rust/logger.dart';
 export 'src/rust/models.dart';
 export 'src/rust/sdk_builder.dart';
 export 'src/rust/sdk.dart';
-export 'src/rust/passkey.dart';
+export 'src/rust/passkey.dart' hide PasskeyClient;
+export 'src/passkey_client.dart';
+export 'src/passkey_prf_provider.dart';
 export 'src/config_extensions.dart';
