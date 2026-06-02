@@ -2,13 +2,13 @@
 
 The built-in {{#name PasskeyProvider}} covers the common case. Reach for this page when:
 
-- You need fine-grained `PasskeyProvider` options (custom `userName`, `userDisplayName`, etc.).
-- You're integrating Python, Go, or C# (no built-in `PasskeyProvider` ships for those bindings).
-- You need a custom `PrfProvider` (CLI YubiKey, FIDO2, air-gapped backup file, hardware module).
+- You need fine-grained {{#name PasskeyProvider}} options (custom {{#name user_name}}, {{#name user_display_name}}, etc.).
+- You're integrating Python, Go, or C# (no built-in {{#name PasskeyProvider}} ships for those bindings).
+- You need a custom {{#name PrfProvider}} (CLI YubiKey, FIDO2, air-gapped backup file, hardware module).
 
 ## Built-in PasskeyProvider options
 
-In addition to `rpId` and `rpName`, the `PasskeyProvider` constructor accepts:
+In addition to {{#name rp_id}} and {{#name rp_name}}, the {{#name PasskeyProvider}} constructor accepts:
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -20,11 +20,11 @@ In addition to `rpId` and `rpName`, the `PasskeyProvider` constructor accepts:
 <div class="warning">
 <h4>C# / Go / Python limitation</h4>
 
-The SDK does not ship a built-in `PasskeyProvider` for C#, Go, or Python (no native passkey API to wrap on those targets). Integrators on those bindings implement their own `PrfProvider` and pass it to `PasskeyClient::new(...)` directly.
+The SDK does not ship a built-in {{#name PasskeyProvider}} for C#, Go, or Python (no native passkey API to wrap on those targets). Integrators on those bindings implement their own {{#name PrfProvider}} and pass it to {{#name PasskeyClient}} directly.
 </div>
 
 ## Custom PrfProvider
 
-If the built-in `PasskeyProvider` does not satisfy your requirements (e.g., you need a hardware security key, a FIDO2/CTAP2 transport, an air-gapped backup file, or a custom authenticator), implement the `PrfProvider` interface directly. The Breez CLI ships [YubiKey](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/yubikey_prf.rs), [FIDO2](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/fido2_prf.rs), and [file-based](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/file_prf.rs) implementations as references.
+If the built-in {{#name PasskeyProvider}} does not satisfy your requirements (e.g., you need a hardware security key, a FIDO2/CTAP2 transport, an air-gapped backup file, or a custom authenticator), implement the {{#name PrfProvider}} interface directly. The Breez CLI ships [YubiKey](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/yubikey_prf.rs), [FIDO2](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/fido2_prf.rs), and [file-based](https://github.com/breez/spark-sdk/blob/main/crates/breez-sdk/cli/src/passkey/file_prf.rs) implementations as references.
 
 {{#tabs passkey:implement-prf-provider}}

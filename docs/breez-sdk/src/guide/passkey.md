@@ -86,7 +86,7 @@ Replace `TEAMID` with your Apple Developer Team ID and `com.example.yourapp` wit
 
 <div class="warning">
 <h4>iOS / macOS: Associated Domains entitlement required</h4>
-Without the Associated Domains entitlement declared in Xcode, passkey operations on iOS / macOS will fail with a configuration error even though {{#name check_availability}} returns {{#enum PasskeyAvailability::Available}} (the OS-level check can't verify entitlements at runtime).
+Without the Associated Domains entitlement declared in Xcode, passkey operations on iOS / macOS will fail with a configuration error even though {{#name PasskeyClient.check_availability}} returns {{#enum PasskeyAvailability::Available}} (the OS-level check can't verify entitlements at runtime).
 </div>
 
 <div class="warning">
@@ -98,7 +98,7 @@ If you're using Expo, the Breez SDK plugin can configure the Associated Domains 
 
 ## Initialization
 
-{{#name PasskeyClient}} is the entry point for every passkey-derived wallet operation. It composes a {{#name PrfProvider}} (the platform-specific bridge to WebAuthn / Credential Manager / AuthenticationServices) with the SDK's internal Nostr-backed label store, then exposes register / sign-in / connect / labels / credentials to your app code. Construct one per app session and reuse it.
+{{#name PasskeyClient}} is the entry point for every passkey-derived wallet operation. It composes a {{#name PrfProvider}} (the platform-specific bridge to WebAuthn / Credential Manager / AuthenticationServices) with the SDK's internal Nostr-backed label store, then exposes register / sign-in / connect / labels to your app code. Construct one per app session and reuse it.
 
 Build the platform's {{#name PasskeyProvider}}, then pass it to {{#name PasskeyClient}} along with your Breez API key:
 
@@ -106,12 +106,12 @@ Build the platform's {{#name PasskeyProvider}}, then pass it to {{#name PasskeyC
 
 Parameters:
 
-- **`rpId`**: Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` if your app is Breez-registered. Required because changing it later strands existing credentials.
-- **`rpName`**: Maps to the WebAuthn `rp.name`. Required by current OS prompts (deprecated in WebAuthn L3 but still enforced everywhere). Surfaces in some credential-management UIs (iCloud Keychain, Google Password Manager, 1Password); platform UIs increasingly ignore it. Set at registration only; changing it does not affect existing credentials.
-- **`userName`** (optional): Maps to the WebAuthn `user.name`. Treated as the user's unique identifier for the credential and shown in the OS account picker during sign-in. Pass a stable per-user value if each registration should surface as a distinct entry (Apple's Passwords app, in particular, dedupes credentials by `(rpId, user.name)`). Defaults to `rpName`. Registration-only.
-- **`userDisplayName`** (optional): Maps to the WebAuthn `user.displayName`. The user-friendly label the OS / browser MAY (but is not required to) show in the picker; behavior varies by platform. Defaults to `userName`. Registration-only.
-- **`breezApiKey`**: Your Breez API key. Used to authenticate to the Breez relay (<a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>) for label storage. Without an API key, label sync falls back to public relays only.
-- **`passkeyConfig`** (optional): Carries {{#name default_label}}, the label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive no label. Falls back to the SDK's internal `"Default"` when unset.
+- {{#name rp_id}}: Relying Party ID. Pass your app's domain, or `PasskeyProvider.BREEZ_RP_ID` if your app is Breez-registered. Required because changing it later strands existing credentials.
+- {{#name rp_name}}: Maps to the WebAuthn `rp.name`. Required by current OS prompts (deprecated in WebAuthn L3 but still enforced everywhere). Surfaces in some credential-management UIs (iCloud Keychain, Google Password Manager, 1Password); platform UIs increasingly ignore it. Set at registration only; changing it does not affect existing credentials.
+- {{#name user_name}} (optional): Maps to the WebAuthn `user.name`. Treated as the user's unique identifier for the credential and shown in the OS account picker during sign-in. Pass a stable per-user value if each registration should surface as a distinct entry (Apple's Passwords app, in particular, dedupes credentials by `(rpId, user.name)`). Defaults to {{#name rp_name}}. Registration-only.
+- {{#name user_display_name}} (optional): Maps to the WebAuthn `user.displayName`. The user-friendly label the OS / browser MAY (but is not required to) show in the picker; behavior varies by platform. Defaults to {{#name user_name}}. Registration-only.
+- {{#name breez_api_key}}: Your Breez API key. Used to authenticate to the Breez relay (<a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/42.md">NIP-42</a>) for label storage. Without an API key, label sync falls back to public relays only.
+- {{#name passkey_config}} (optional): Carries {{#name default_label}}, the label used when {{#name PasskeyClient.register}} / {{#name PasskeyClient.sign_in}} receive no label. Falls back to the SDK's internal `"Default"` when unset.
 
 The SDK also implements <a target="_blank" href="https://github.com/nostr-protocol/nips/blob/master/65.md">NIP-65</a> to discover and publish to additional public relays for redundancy.
 
@@ -129,21 +129,21 @@ The recommended flow depends on the platform. Mobile uses a single-call unified 
 
 ### Unified flow (mobile)
 
-One "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's `credential` field carries whichever credential signed in or was registered; the register path also fills the attestation fields (`aaguid`, `backupEligible`). See [Credential metadata](./passkey_credential_metadata.md) for using these.
+One "Use Passkey" button backed by {{#name PasskeyClient.connect_with_passkey}}: silent sign-in for a returning user, automatic fall-through to registration on a fresh device. The response's {{#name credential}} field carries whichever credential signed in or was registered; the register path also fills the attestation fields ({{#name aaguid}}, {{#name backup_eligible}}). See [Credential metadata](./passkey_credential_metadata.md) for using these.
 
-Internally the silent attempt pins `preferImmediatelyAvailableCredentials = true` so the OS fast-fails (no UI, sub-300ms on iOS / Android) when no local credential exists; only {{#enum PrfProviderError::CredentialNotFound}} flips to register, all other errors (`Cancel`, `Timeout`, `Configuration`) propagate unchanged.
+Internally the silent attempt pins {{#name prefer_immediately_available_credentials}} to true so the OS fast-fails (no UI, sub-300ms on iOS / Android) when no local credential exists; only {{#enum PrfProviderError::CredentialNotFound}} flips to register, all other errors (`Cancel`, `Timeout`, `Configuration`) propagate unchanged.
 
 {{#tabs passkey:connect-with-passkey}}
 
 ### Two-button flow (web)
 
-`connect_with_passkey` is not surfaced on the WASM target. The unified flow needs a silent "no credential here" signal so it can fall through to register, and WebAuthn deliberately collapses that case into the same `NotAllowedError` as a user cancel for privacy reasons. There is no reliable way on web for the SDK to tell the two apart.
+`connectWithPasskey` is not surfaced on the WASM target. The unified flow needs a silent "no credential here" signal so it can fall through to register, and WebAuthn deliberately collapses that case into the same `NotAllowedError` as a user cancel for privacy reasons. There is no reliable way on web for the SDK to tell the two apart.
 
 The recommended UX on web is two buttons: a **Sign In** button calling `signIn` and a separate **Create Account** button calling `register`. Let the user pick the right one instead of trying to auto-detect. See [Direct sign-in / register](#direct-sign-in--register) for the call shapes.
 
 ### Direct sign-in / register
 
-For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly. Use this path when separating Sign-In and Create-Account flows, or when adding a new label on a returning user without going through `connect_with_passkey`.
+For finer control, call {{#name PasskeyClient.sign_in}} and {{#name PasskeyClient.register}} directly. Use this path when separating Sign-In and Create-Account flows, or when adding a new label on a returning user without going through {{#name PasskeyClient.connect_with_passkey}}.
 
 Sign in to an existing credential:
 
@@ -157,19 +157,19 @@ Pass `wallet.seed` to {{#name connect}} in either case.
 
 ### Error recovery
 
-The SDK collapses every passkey failure into seven actionable [`ErrorKind`](https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/enum.ErrorKind.html) values: branching on `error.kind()` is the canonical recovery pattern:
+Every passkey failure normalizes to a {{#name PrfProviderError}} variant. Match on the variant to drive recovery:
 
-| `ErrorKind` | What it means | Recommended action |
+| Variant | What it means | Recommended action |
 |---|---|---|
-| `Cancel` | User dismissed the OS prompt (≥ 300ms, < 55s) | Sticky retry UI with "Try Again" |
-| `NoCredential` | No matching credential on this device (includes iOS sub-300ms fast-fail) | Fall through to {{#name PasskeyClient.register}} |
-| `AlreadyExists` | Register hit a credential in `excludeCredentials` | Flip to {{#name PasskeyClient.sign_in}}; the OS picker surfaces the existing credential |
-| `Timeout` | OS biometric inactivity timeout (≥ 55s): distinct from a user-cancel | Sticky retry with timeout-specific copy. **Do not** auto-retry |
-| `PrfUnsupported` | Authenticator doesn't implement the PRF extension | Fall back to mnemonic onboarding |
-| `Configuration` | Entitlement missing, AASA stale, or assetlinks malformed | Developer-facing error; surface {{#name check_domain_association}}'s `NotAssociated` reason |
-| `Internal` | Network / library / generic failure | Generic "try again later" UI |
+| {{#enum PrfProviderError::UserCancelled}} | User dismissed the OS prompt (≥ 300ms, < 55s) | Sticky retry UI with "Try Again" |
+| {{#enum PrfProviderError::CredentialNotFound}} | No matching credential on this device (includes iOS sub-300ms fast-fail) | Fall through to {{#name PasskeyClient.register}} |
+| {{#enum PrfProviderError::CredentialAlreadyExists}} | Register hit a credential in {{#name exclude_credentials}} | Flip to {{#name PasskeyClient.sign_in}}; the OS picker surfaces the existing credential |
+| {{#enum PrfProviderError::UserTimedOut}} | OS biometric inactivity timeout (≥ 55s): distinct from a user-cancel | Sticky retry with timeout-specific copy. **Do not** auto-retry |
+| {{#enum PrfProviderError::PrfNotSupported}} | Authenticator doesn't implement the PRF extension | Fall back to mnemonic onboarding |
+| {{#enum PrfProviderError::Configuration}} | Entitlement missing, AASA stale, or assetlinks malformed | Developer-facing error; surface {{#name check_domain_association}}'s {{#enum PasskeyAvailability::NotAssociated}} reason |
+| {{#enum PrfProviderError::Generic}} | Network / library / generic failure | Generic "try again later" UI |
 
-Web also exposes typed exception classes (`PasskeyAlreadyExistsError`, `PasskeyTimedOutError`, `PasskeyCredentialNotFoundError`) as an alternative to `error.kind()` for `instanceof` matching.
+Rust callers can branch on the collapsed `error.kind()` / [`ErrorKind`](https://breez.github.io/spark-sdk/breez_sdk_spark/passkey/enum.ErrorKind.html) instead of matching every variant; `kind()` is Rust-only. Web exposes typed exception classes (`PasskeyAlreadyExistsError`, `PasskeyTimedOutError`, `PasskeyCredentialNotFoundError`) for `instanceof` matching.
 
 Two recovery paths are common enough to warrant runnable examples.
 
