@@ -1,40 +1,107 @@
-use serde::{Deserialize, Serialize};
-
 use crate::Seed;
 
-const DEFAULT_TIMEOUT_SECS: u32 = 30;
-
 /// A wallet derived from a passkey.
-///
-/// Contains the derived seed and the label used during derivation.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct Wallet {
-    /// The derived seed.
     pub seed: Seed,
-    /// The label used for derivation (either user-provided or the default).
+    /// Label used for derivation: user-provided or the default.
     pub label: String,
 }
 
-/// Configuration for Nostr relay connections used in `Passkey`.
-///
-/// Relay URLs are managed internally by the client:
-/// - Public relays are always included
-/// - Breez relay is added when `breez_api_key` is provided (enables NIP-42 auth)
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+/// Request for [`crate::passkey::Passkey::setup_wallet`].
+#[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct NostrRelayConfig {
-    /// Optional Breez API key for authenticated access to the Breez relay.
-    /// When provided, the Breez relay is added and NIP-42 authentication is enabled.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub breez_api_key: Option<String>,
-    /// Connection timeout in seconds. Defaults to 30 when `None`.
-    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
-    pub timeout_secs: Option<u32>,
+pub struct SetupWalletRequest {
+    /// Wallet label. Unset uses the configured default label.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub label: Option<String>,
+    /// Publish the label to Nostr after deriving. Leave false for
+    /// speculative derivations (cold restore).
+    #[cfg_attr(feature = "uniffi", uniffi(default = false))]
+    pub publish_label: bool,
+
+    /// Restrict the assertion to these credential IDs. Useful for
+    /// server-driven flows that resolve the credential set out-of-band.
+    #[cfg_attr(feature = "uniffi", uniffi(default = []))]
+    pub allow_credentials: Vec<Vec<u8>>,
+
+    /// Prefer credentials already on this device over the cross-device
+    /// picker. Unset uses the platform default.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub prefer_immediately_available_credentials: Option<bool>,
 }
 
-impl NostrRelayConfig {
-    pub(crate) fn timeout_secs(&self) -> u32 {
-        self.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS)
+/// Response from [`crate::passkey::Passkey::setup_wallet`].
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct WalletSetup {
+    pub wallet: Wallet,
+    /// Credential that derived this wallet. Absent when the provider
+    /// does not surface it.
+    pub credential_id: Option<Vec<u8>>,
+}
+
+/// Derived seeds plus the credential observed in the same assertion.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct DeriveSeedsOutput {
+    pub seeds: Vec<Vec<u8>>,
+    /// Absent when the provider does not surface it.
+    pub credential_id: Option<Vec<u8>>,
+}
+
+/// A passkey credential from a register or sign-in ceremony.
+/// `credential_id` is always set; the attestation fields are
+/// populated on registration and absent on sign-in (an assertion
+/// carries no attestation). Persist `credential_id` to drive
+/// `exclude_credentials` / `allow_credentials` on later calls.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PasskeyCredential {
+    /// The credential used on sign-in or created on registration.
+    pub credential_id: Vec<u8>,
+    /// `WebAuthn` user handle, provider-minted at registration.
+    /// Absent on sign-in.
+    pub user_id: Option<Vec<u8>>,
+    /// Authenticator AAGUID. A display hint only: the attestation is
+    /// unverified. Absent on sign-in.
+    pub aaguid: Option<Vec<u8>>,
+    /// Whether the credential is eligible for cloud backup / sync.
+    /// Absent on sign-in.
+    pub backup_eligible: Option<bool>,
+}
+
+impl PasskeyCredential {
+    /// Build from a bare credential ID observed during a sign-in
+    /// assertion, where no attestation is available.
+    pub(crate) fn from_credential_id(credential_id: Vec<u8>) -> Self {
+        Self {
+            credential_id,
+            user_id: None,
+            aaguid: None,
+            backup_eligible: None,
+        }
     }
+}
+
+/// Configuration for the passkey client. The Relying Party fields apply
+/// only when a binding builds the built-in provider for you; a provider
+/// you construct yourself owns its own RP and ignores them.
+#[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PasskeyConfig {
+    /// Default wallet label when a call provides none. Unset uses
+    /// `"Default"`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub default_label: Option<String>,
+
+    /// Relying Party ID. Unset uses the Breez shared RP
+    /// (`keys.breez.technology`).
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub rp_id: Option<String>,
+
+    /// Relying Party name. Unset uses `"Breez"`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub rp_name: Option<String>,
 }
