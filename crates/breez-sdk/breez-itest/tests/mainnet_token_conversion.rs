@@ -589,3 +589,158 @@ async fn test_token_conversion_failure() -> Result<()> {
     info!("=== Test test_token_conversion_failure PASSED ===");
     Ok(())
 }
+
+/// Bitcoin→Token conversion targeting a Spark **invoice** (not a Spark address).
+/// Exercises the `prepare/spark_invoice.rs` + `send/spark_invoice.rs` paths
+/// introduced by the payments refactor (#919) — Bob creates an invoice asking
+/// for USDB, Alice pays it from BTC with an explicit FromBitcoin conversion.
+#[test_log::test(tokio::test)]
+async fn test_token_conversion_spark_invoice_success() -> Result<()> {
+    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
+        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+        return Ok(());
+    };
+    let (alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, false).await?;
+
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    if alice_balance == 0 {
+        warn!("Skipping mainnet test: test account (Alice) has 0 sats");
+        return Ok(());
+    }
+
+    info!("=== Starting test_token_conversion_spark_invoice_success ===");
+    let token_id = mainnet_test_token_id();
+
+    let to_btc_min_token = tobtc_min_token_input(&alice.sdk, &token_id).await?;
+    let invoice_token_amount = to_btc_min_token.saturating_mul(3);
+
+    let bob_token_balance_before = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    info!("Bob token balance before: {bob_token_balance_before}");
+
+    // Bob creates a token Spark invoice — `token_identifier` set, `amount` in
+    // token base units.
+    let bob_invoice = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkInvoice {
+                amount: Some(invoice_token_amount),
+                token_identifier: Some(token_id.clone()),
+                expiry_time: None,
+                description: Some("token conversion via spark invoice test".to_string()),
+                sender_public_key: None,
+            },
+        })
+        .await?
+        .payment_request;
+    info!("Bob's spark invoice (for {invoice_token_amount} USDB): {bob_invoice}");
+
+    // Alice pays the invoice with an explicit Bitcoin→Token conversion: the
+    // amount + token_identifier come from the invoice, conversion options
+    // attach the BTC funding source.
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_invoice,
+            amount: None,
+            token_identifier: None,
+            conversion_options: Some(ConversionOptions {
+                conversion_type: ConversionType::FromBitcoin,
+                max_slippage_bps: None,
+                completion_timeout_secs: None,
+            }),
+            fee_policy: None,
+        })
+        .await?;
+
+    let conversion_estimate = prepare
+        .conversion_estimate
+        .as_ref()
+        .expect("Conversion estimate should be present");
+    info!(
+        "Prepared: amount={:?}, amount_in={} sats, amount_out={}, fee={}",
+        prepare.amount,
+        conversion_estimate.amount_in,
+        conversion_estimate.amount_out,
+        conversion_estimate.fee
+    );
+
+    let cost = conversion_estimate
+        .amount_in
+        .saturating_add(conversion_estimate.fee);
+    if u128::from(alice_balance) < cost {
+        warn!(
+            "Skipping test_token_conversion_spark_invoice_success: Alice balance {alice_balance} \
+             sats < cost ~{cost} sats"
+        );
+        return Ok(());
+    }
+
+    let send_result = alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+    info!(
+        "Alice sent spark-invoice payment via FromBitcoin conversion: status={:?}, method={:?}",
+        send_result.payment.status, send_result.payment.method
+    );
+    assert!(
+        matches!(
+            send_result.payment.status,
+            PaymentStatus::Completed | PaymentStatus::Pending
+        ),
+        "Bitcoin to Token payment should be completed or pending"
+    );
+
+    let details = send_result
+        .payment
+        .conversion_details
+        .expect("conversion details");
+    let from = details.from.as_ref().expect("conversion 'from' step");
+    let to = details.to.as_ref().expect("conversion 'to' step");
+    assert_eq!(
+        from.method,
+        PaymentMethod::Spark,
+        "From step should be a spark payment"
+    );
+    assert!(
+        from.token_metadata.is_none(),
+        "From step should have no token metadata"
+    );
+    assert_eq!(
+        to.method,
+        PaymentMethod::Token,
+        "To step should be a token payment"
+    );
+    assert!(
+        to.token_metadata.is_some(),
+        "To step should have token metadata"
+    );
+    assert!(from.fee + to.fee > 0, "Conversion should charge a fee");
+
+    let bob_token_balance_after =
+        wait_for_token_balance_increase(&bob.sdk, &token_id, bob_token_balance_before, 120).await?;
+    info!("Bob token balance after: {bob_token_balance_after} (was {bob_token_balance_before})");
+
+    info!("=== Test test_token_conversion_spark_invoice_success PASSED ===");
+    Ok(())
+}

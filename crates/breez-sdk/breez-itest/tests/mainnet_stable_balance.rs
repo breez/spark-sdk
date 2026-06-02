@@ -387,3 +387,181 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
     info!("=== Test test_stable_balance_auto_conversion PASSED ===");
     Ok(())
 }
+
+/// Per-receive auto-conversion: a single Spark receive whose amount is at or
+/// above `pool_min` triggers `per_receive_convert` on the new payment directly,
+/// without waiting for the batch-threshold path tested in
+/// [`test_stable_balance_auto_conversion`].
+#[test_log::test(tokio::test)]
+async fn test_stable_balance_per_receive_conversion() -> Result<()> {
+    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
+        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+        return Ok(());
+    };
+    let (mut alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, true).await?;
+
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    if alice_balance == 0 {
+        warn!("Skipping mainnet test: test account (Alice) has 0 sats");
+        return Ok(());
+    }
+
+    info!("=== Starting test_stable_balance_per_receive_conversion ===");
+    let token_id = mainnet_test_token_id();
+
+    let pool_min_sats = alice
+        .sdk
+        .fetch_conversion_limits(FetchConversionLimitsRequest {
+            conversion_type: ConversionType::FromBitcoin,
+            token_identifier: Some(token_id.clone()),
+        })
+        .await?
+        .min_from_amount
+        .ok_or_else(|| anyhow!("FromBitcoin min_from_amount missing"))?;
+    let pool_min_sats = u64::try_from(pool_min_sats)?;
+
+    // A single payment 10% above the per-receive minimum fires per_receive_convert
+    // on the new payment (a different code path from the batch auto-convert).
+    let payment_sats = pool_min_sats.saturating_mul(11) / 10;
+    let needed = payment_sats.saturating_add(pool_min_sats); // fee headroom
+    if alice_balance < needed {
+        warn!(
+            "Skipping test_stable_balance_per_receive_conversion: Alice balance {alice_balance} \
+             sats < needed ~{needed} sats"
+        );
+        return Ok(());
+    }
+
+    let bob_spark_address = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+
+    let bob_token_balance_before = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    info!("Bob token balance before: {bob_token_balance_before}");
+
+    info!("--- Sending {payment_sats} sats (above per-receive min {pool_min_sats}) ---");
+    let prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark_address,
+            amount: Some(u128::from(payment_sats)),
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 60).await?;
+
+    // Same balance-poll pattern as Part 2: the conversion legs are suppressed
+    // from external listeners by the token_conversion middleware.
+    let bob_token_balance_after =
+        wait_for_token_balance_increase(&bob.sdk, &token_id, bob_token_balance_before, 120).await?;
+    info!(
+        "Bob token balance after per-receive conversion: {bob_token_balance_after} (was {bob_token_balance_before})"
+    );
+
+    info!("=== Test test_stable_balance_per_receive_conversion PASSED ===");
+    Ok(())
+}
+
+/// Stable balance deactivation: when Bob deactivates his stable balance, the
+/// `deactivation_convert` worker drains his held tokens back to BTC. `zz_`
+/// prefix sorts this test last in the binary so it doesn't strand the others
+/// in an inactive state (each test creates its own SDK with a fresh cache, but
+/// running this one last keeps the intent obvious).
+#[test_log::test(tokio::test)]
+async fn test_stable_balance_zz_deactivation() -> Result<()> {
+    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
+        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+        return Ok(());
+    };
+    // `alice` only needed to keep the wallet pool warm / for symmetry; the test
+    // operates entirely on Bob.
+    let (_alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, true).await?;
+
+    info!("=== Starting test_stable_balance_zz_deactivation ===");
+    let token_id = mainnet_test_token_id();
+
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_info_before = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+    let bob_tokens_before = bob_info_before
+        .token_balances
+        .get(&token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    let bob_sats_before = bob_info_before.balance_sats;
+    info!("Bob before deactivation: {bob_tokens_before} tokens, {bob_sats_before} sats");
+
+    if bob_tokens_before == 0 {
+        warn!("Skipping: Bob has no USDB to convert back; deactivation has nothing to do");
+        return Ok(());
+    }
+
+    info!("Deactivating Bob's stable balance...");
+    bob.sdk
+        .update_user_settings(UpdateUserSettingsRequest {
+            spark_private_mode_enabled: None,
+            stable_balance_active_label: Some(StableBalanceActiveLabel::Unset),
+        })
+        .await?;
+
+    // Wait for the deactivation_convert worker to drain Bob's tokens back to
+    // sats. The user-visible signal is Bob's sat balance rising above its prior
+    // value (the conversion legs are suppressed from external listeners).
+    let bob_sats_after =
+        wait_for_balance(&bob.sdk, Some(bob_sats_before.saturating_add(1)), None, 120).await?;
+    info!("Bob sats after deactivation: {bob_sats_after} (was {bob_sats_before})");
+
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_tokens_after = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    info!("Bob tokens after deactivation: {bob_tokens_after}");
+    assert_eq!(
+        bob_tokens_after, 0,
+        "Bob's USDB should be fully converted back to sats after deactivation"
+    );
+
+    info!("=== Test test_stable_balance_zz_deactivation PASSED ===");
+    Ok(())
+}
