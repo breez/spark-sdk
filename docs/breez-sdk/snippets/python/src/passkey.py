@@ -99,7 +99,7 @@ async def connect_with_passkey():
     passkey = PasskeyClient(prf_provider, None, None)
 
     response = await passkey.connect_with_passkey(
-        ConnectWithPasskeyRequest(label="personal", exclude_credentials=[])
+        ConnectWithPasskeyRequest(label="personal")
     )
 
     # The credential is surfaced on both paths when the provider exposes

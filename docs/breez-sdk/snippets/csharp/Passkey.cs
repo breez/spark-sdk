@@ -83,7 +83,7 @@ namespace BreezSdkSnippets
             var passkey = new PasskeyClient(prfProvider, null, null);
 
             var response = await passkey.ConnectWithPasskey(
-                new ConnectWithPasskeyRequest(label: "personal", excludeCredentials: Array.Empty<byte[]>())
+                new ConnectWithPasskeyRequest(label: "personal")
             );
 
             // The credential is surfaced on both paths when the provider

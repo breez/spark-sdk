@@ -95,8 +95,7 @@ async fn connect_with_passkey_unified() -> Result<breez_sdk_spark::BreezSdk> {
     let response = passkey
         .connect_with_passkey(ConnectWithPasskeyRequest {
             label: Some("personal".to_string()),
-            allow_credentials: vec![],
-            exclude_credentials: vec![],
+            ..Default::default()
         })
         .await?;
 
@@ -139,7 +138,7 @@ async fn register_new_passkey() -> Result<breez_sdk_spark::BreezSdk> {
     let response = passkey
         .register(RegisterRequest {
             label: Some("personal".to_string()),
-            exclude_credentials: vec![],
+            ..Default::default()
         })
         .await?;
 
@@ -167,7 +166,7 @@ async fn credential_metadata() -> Result<()> {
     let response = passkey
         .register(RegisterRequest {
             label: Some("personal".to_string()),
-            exclude_credentials: vec![],
+            ..Default::default()
         })
         .await?;
 
