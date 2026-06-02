@@ -2,7 +2,9 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 use breez_sdk_spark::passkey::{
-    NostrRelayConfig, PasskeyPrfError, PasskeyPrfProvider, PasskeyError,
+    ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, DeriveSeedsOutput, DeriveSeedsRequest,
+    PasskeyAvailability, PasskeyConfig, PasskeyCredential, PasskeyError, PrfProvider,
+    PrfProviderError, RegisterRequest, RegisterResponse, SignInRequest, SignInResponse,
 };
 use flutter_rust_bridge::{DartFnFuture, frb};
 use futures::FutureExt;
@@ -15,97 +17,175 @@ fn panic_message(e: Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "Dart callback panicked".to_string())
 }
 
-/// Callback-based implementation of `PasskeyPrfProvider` for Flutter.
-///
-/// This struct wraps Dart callbacks to implement the PRF provider trait,
-/// allowing Flutter to provide the passkey PRF implementation.
+/// Wraps Dart callbacks as a [`PrfProvider`] implementation. Each
+/// callback returns a Result so Dart-side throws (e.g.
+/// `PasskeyPrfException`) propagate cleanly.
 struct CallbackPrfProvider {
-    derive_prf_seed_fn: Arc<dyn Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync>,
-    is_prf_available_fn: Arc<dyn Fn() -> DartFnFuture<bool> + Send + Sync>,
+    /// Bulk PRF callback. Single OS ceremony for N salts on platforms
+    /// that support the WebAuthn dual-salt fast path (saltInput1 +
+    /// saltInput2 on iOS, prfFirst + prfSecond on Android); the Dart
+    /// side internally falls back to looping per-salt where the
+    /// platform doesn't expose the fast path. Returns the seeds plus
+    /// the credential ID observed in the same assertion.
+    derive_seeds_fn: Arc<
+        dyn Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<DeriveSeedsOutput>> + Send + Sync,
+    >,
+    is_supported_fn: Arc<dyn Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync>,
+    create_passkey_fn:
+        Arc<dyn Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<PasskeyCredential>> + Send + Sync>,
+}
+
+/// Convert a Dart-thrown error into a [`PrfProviderError`]. The Dart
+/// side raises `PasskeyPrfException` with a structured `code` field
+/// embedded in the message; we substring-match it back to the typed
+/// variant so callers can pattern-match instead of parsing strings.
+fn dart_error_to_prf(err: anyhow::Error) -> PrfProviderError {
+    let msg = format!("{err}");
+    let lower = msg.to_lowercase();
+    if lower.contains("usercancelled") {
+        PrfProviderError::UserCancelled
+    } else if lower.contains("usertimedout") {
+        PrfProviderError::UserTimedOut
+    } else if lower.contains("nocredential") {
+        PrfProviderError::CredentialNotFound(msg)
+    } else if lower.contains("prfnotsupported") {
+        PrfProviderError::PrfNotSupported
+    } else if lower.contains("credentialalreadyexists") {
+        PrfProviderError::CredentialAlreadyExists(msg)
+    } else if lower.contains("configuration") {
+        PrfProviderError::Configuration(msg)
+    } else {
+        PrfProviderError::Generic(msg)
+    }
 }
 
 #[async_trait::async_trait]
-impl PasskeyPrfProvider for CallbackPrfProvider {
-    async fn derive_prf_seed(&self, salt: String) -> Result<Vec<u8>, PasskeyPrfError> {
-        AssertUnwindSafe((self.derive_prf_seed_fn)(salt))
+impl PrfProvider for CallbackPrfProvider {
+    async fn derive_seeds(
+        &self,
+        request: DeriveSeedsRequest,
+    ) -> Result<DeriveSeedsOutput, PrfProviderError> {
+        let output = AssertUnwindSafe((self.derive_seeds_fn)(request))
             .catch_unwind()
             .await
-            .map_err(|e| PasskeyPrfError::Generic(panic_message(e)))
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
+        // The Dart callback returns the derived seeds plus the credential
+        // ID observed in the same assertion (absent when the backend does
+        // not surface one), matching the other bindings.
+        output.map_err(dart_error_to_prf)
     }
 
-    async fn is_prf_available(&self) -> Result<bool, PasskeyPrfError> {
-        AssertUnwindSafe((self.is_prf_available_fn)())
+    async fn is_supported(&self) -> Result<bool, PrfProviderError> {
+        let result = AssertUnwindSafe((self.is_supported_fn)())
             .catch_unwind()
             .await
-            .map_err(|e| PasskeyPrfError::Generic(panic_message(e)))
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
+        result.map_err(dart_error_to_prf)
+    }
+
+    async fn create_passkey(
+        &self,
+        exclude_credentials: Vec<Vec<u8>>,
+    ) -> Result<PasskeyCredential, PrfProviderError> {
+        let result = AssertUnwindSafe((self.create_passkey_fn)(exclude_credentials))
+            .catch_unwind()
+            .await
+            .map_err(|e| PrfProviderError::Generic(panic_message(e)))?;
+        result.map_err(dart_error_to_prf)
     }
 }
 
-/// Flutter wrapper for passkey-based wallet operations.
-///
-/// Orchestrates wallet derivation and label management using
-/// passkey PRF callbacks and Nostr relays.
+/// High-level orchestrator. See the [`breez_sdk_spark::passkey::PasskeyClient`]
+/// docs for the register / sign_in semantics.
 #[derive(Clone)]
 #[frb(opaque)]
-pub struct Passkey {
-    pub(crate) inner: breez_sdk_spark::passkey::Passkey,
+pub struct PasskeyClient {
+    pub(crate) inner: breez_sdk_spark::passkey::PasskeyClient,
 }
 
-impl Passkey {
-    /// Create a new Passkey instance using Dart callbacks.
-    ///
-    /// # Arguments
-    /// * `derive_prf_seed` - Dart callback to derive a 32-byte seed from passkey PRF with a salt
-    /// * `is_prf_available` - Dart callback to check if PRF-capable passkey is available
-    /// * `relay_config` - Optional configuration for Nostr relay connections (uses default if None)
+impl PasskeyClient {
+    /// Construct using Dart callbacks for the underlying `PrfProvider`.
+    /// Hosts that don't drive registration can have `create_passkey`
+    /// throw `PrfProviderError.PrfNotSupported` on the Dart side.
     #[frb(sync)]
     pub fn new(
-        derive_prf_seed: impl Fn(String) -> DartFnFuture<Vec<u8>> + Send + Sync + 'static,
-        is_prf_available: impl Fn() -> DartFnFuture<bool> + Send + Sync + 'static,
-        relay_config: Option<NostrRelayConfig>,
+        derive_seeds: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<DeriveSeedsOutput>>
+        + Send
+        + Sync
+        + 'static,
+        is_supported: impl Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync + 'static,
+        create_passkey: impl Fn(Vec<Vec<u8>>) -> DartFnFuture<anyhow::Result<PasskeyCredential>>
+        + Send
+        + Sync
+        + 'static,
+        breez_api_key: Option<String>,
+        config: Option<PasskeyConfig>,
     ) -> Self {
         let provider = Arc::new(CallbackPrfProvider {
-            derive_prf_seed_fn: Arc::new(derive_prf_seed),
-            is_prf_available_fn: Arc::new(is_prf_available),
+            derive_seeds_fn: Arc::new(derive_seeds),
+            is_supported_fn: Arc::new(is_supported),
+            create_passkey_fn: Arc::new(create_passkey),
         });
-
         Self {
-            inner: breez_sdk_spark::passkey::Passkey::new(provider, relay_config),
+            inner: breez_sdk_spark::passkey::PasskeyClient::new(provider, breez_api_key, config),
         }
     }
 
-    /// Derive a wallet for a given label.
-    ///
-    /// Uses the passkey PRF to derive a wallet from the label.
-    /// This works for both creating a new wallet and restoring an existing one.
-    ///
-    /// # Arguments
-    /// * `label` - Optional label string (defaults to "Default")
-    pub async fn get_wallet(
+    /// One-shot capability + configuration probe.
+    pub async fn check_availability(&self) -> Result<PasskeyAvailability, PasskeyError> {
+        self.inner.check_availability().await
+    }
+
+    /// First-time setup: drives the Dart-side `create_passkey` callback
+    /// then derives the wallet seed.
+    pub async fn register(
         &self,
-        label: Option<String>,
-    ) -> Result<breez_sdk_spark::passkey::Wallet, PasskeyError> {
-        self.inner.get_wallet(label).await
+        request: RegisterRequest,
+    ) -> Result<RegisterResponse, PasskeyError> {
+        self.inner.register(request).await
     }
 
-    /// List all labels published to Nostr for this passkey's identity.
-    ///
-    /// Requires 1 PRF call (for Nostr identity derivation).
-    pub async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
-        self.inner.list_labels().await
+    /// Returning-user sign-in. Fast path with `label` set; cold-restore
+    /// with discovery when `label` is `None`.
+    pub async fn sign_in(&self, request: SignInRequest) -> Result<SignInResponse, PasskeyError> {
+        self.inner.sign_in(request).await
     }
 
-    /// Publish a label to Nostr relays for this passkey's identity.
-    ///
-    /// Idempotent: if the label already exists, it is not published again.
-    /// Requires 1 PRF call.
-    pub async fn store_label(&self, label: String) -> Result<(), PasskeyError> {
-        self.inner.store_label(label).await
+    /// Single-CTA onboarding: silent sign-in, fall through to register
+    /// on `CredentialNotFound`. Mobile-only (iOS 18+ / Android 9+);
+    /// see the core SDK docs for the cross-browser limitation.
+    pub async fn connect_with_passkey(
+        &self,
+        request: ConnectWithPasskeyRequest,
+    ) -> Result<ConnectWithPasskeyResponse, PasskeyError> {
+        self.inner.connect_with_passkey(request).await
     }
 
-    /// Check if passkey PRF is available on this device.
-    pub async fn is_available(&self) -> Result<bool, PasskeyError> {
-        self.inner.is_available().await
+    /// Label sub-object: list / publish labels for this passkey's identity.
+    #[frb(sync)]
+    pub fn labels(&self) -> PasskeyLabels {
+        PasskeyLabels {
+            inner: self.inner.labels(),
+        }
+    }
+}
+
+/// Label sub-object surfaced from [`PasskeyClient::labels`].
+#[derive(Clone)]
+#[frb(opaque)]
+pub struct PasskeyLabels {
+    pub(crate) inner: Arc<breez_sdk_spark::passkey::PasskeyLabels>,
+}
+
+impl PasskeyLabels {
+    /// List labels published for this passkey's identity.
+    pub async fn list(&self) -> Result<Vec<String>, PasskeyError> {
+        self.inner.list().await
+    }
+
+    /// Idempotently publish `label`.
+    pub async fn store(&self, label: String) -> Result<(), PasskeyError> {
+        self.inner.store(label).await
     }
 }
 
@@ -113,67 +193,133 @@ impl Passkey {
 mod tests {
     use super::*;
 
-    /// Helper to create a `DartFnFuture<T>` from a value.
     fn ready<T: Send + 'static>(val: T) -> DartFnFuture<T> {
         Box::pin(std::future::ready(val))
     }
 
-    /// Helper to create a `DartFnFuture<T>` that panics with the given message.
     fn panicking<T: Send + 'static>(msg: &'static str) -> DartFnFuture<T> {
         Box::pin(async move { panic!("{msg}") })
     }
 
-    #[tokio::test]
-    async fn test_derive_prf_seed_success() {
-        let expected = vec![42u8; 32];
-        let expected_clone = expected.clone();
-        let provider = CallbackPrfProvider {
-            derive_prf_seed_fn: Arc::new(move |_salt| ready(expected_clone.clone())),
-            is_prf_available_fn: Arc::new(|| ready(true)),
-        };
+    fn make_provider(
+        derive_bulk: impl Fn(DeriveSeedsRequest) -> DartFnFuture<anyhow::Result<DeriveSeedsOutput>>
+        + Send
+        + Sync
+        + 'static,
+        is_available: impl Fn() -> DartFnFuture<anyhow::Result<bool>> + Send + Sync + 'static,
+    ) -> CallbackPrfProvider {
+        CallbackPrfProvider {
+            derive_seeds_fn: Arc::new(derive_bulk),
+            is_supported_fn: Arc::new(is_available),
+            create_passkey_fn: Arc::new(|_req| {
+                panicking::<anyhow::Result<PasskeyCredential>>("create_passkey not used")
+            }),
+        }
+    }
 
-        let result = provider.derive_prf_seed("test".to_string()).await;
-        assert_eq!(result.unwrap(), expected);
+    fn req(salts: &[&str]) -> DeriveSeedsRequest {
+        DeriveSeedsRequest {
+            salts: salts.iter().map(|s| (*s).to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     #[tokio::test]
-    async fn test_derive_prf_seed_panic_caught() {
-        let provider = CallbackPrfProvider {
-            derive_prf_seed_fn: Arc::new(|_salt| panicking("Dart threw an exception")),
-            is_prf_available_fn: Arc::new(|| ready(true)),
-        };
+    async fn test_derive_seeds_success() {
+        let expected = vec![42u8; 32];
+        let expected_clone = expected.clone();
+        let provider = make_provider(
+            move |_request| {
+                ready(Ok(DeriveSeedsOutput {
+                    seeds: vec![expected_clone.clone()],
+                    credential_id: Some(vec![7u8; 16]),
+                }))
+            },
+            || ready(Ok(true)),
+        );
+        let output = provider.derive_seeds(req(&["test"])).await.unwrap();
+        assert_eq!(output.seeds, vec![expected]);
+        // The asserted credential ID threads through from the Dart
+        // callback into DeriveSeedsOutput.
+        assert_eq!(output.credential_id, Some(vec![7u8; 16]));
+    }
 
-        let result = provider.derive_prf_seed("test".to_string()).await;
-        let err = result.unwrap_err();
+    #[tokio::test]
+    async fn test_derive_seeds_panic_caught() {
+        let provider = make_provider(
+            |_request| panicking("Dart threw an exception"),
+            || ready(Ok(true)),
+        );
+        let err = provider.derive_seeds(req(&["test"])).await.unwrap_err();
         assert!(
-            matches!(err, PasskeyPrfError::Generic(ref msg) if msg.contains("Dart threw an exception")),
+            matches!(err, PrfProviderError::Generic(ref msg) if msg.contains("Dart threw an exception")),
             "Expected Generic error with panic message, got: {err:?}"
         );
     }
 
     #[tokio::test]
-    async fn test_is_prf_available_success() {
-        let provider = CallbackPrfProvider {
-            derive_prf_seed_fn: Arc::new(|_salt| ready(vec![])),
-            is_prf_available_fn: Arc::new(|| ready(false)),
-        };
-
-        let result = provider.is_prf_available().await;
-        assert_eq!(result.unwrap(), false);
+    async fn test_derive_seeds_dart_error_mapped() {
+        let provider = make_provider(
+            |_request| {
+                ready(Err(anyhow::anyhow!(
+                    "PasskeyPrfException(noCredential): not found"
+                )))
+            },
+            || ready(Ok(true)),
+        );
+        let err = provider.derive_seeds(req(&["test"])).await.unwrap_err();
+        assert!(
+            matches!(err, PrfProviderError::CredentialNotFound(_)),
+            "Expected CredentialNotFound, got: {err:?}"
+        );
     }
 
     #[tokio::test]
-    async fn test_is_prf_available_panic_caught() {
-        let provider = CallbackPrfProvider {
-            derive_prf_seed_fn: Arc::new(|_salt| ready(vec![])),
-            is_prf_available_fn: Arc::new(|| panicking("device check failed")),
-        };
+    async fn test_is_supported_success() {
+        let provider = make_provider(
+            |_request| {
+                ready(Ok(DeriveSeedsOutput {
+                    seeds: vec![],
+                    credential_id: None,
+                }))
+            },
+            || ready(Ok(false)),
+        );
+        assert!(!provider.is_supported().await.unwrap());
+    }
 
-        let result = provider.is_prf_available().await;
-        let err = result.unwrap_err();
+    #[tokio::test]
+    async fn test_is_supported_panic_caught() {
+        let provider = make_provider(
+            |_request| {
+                ready(Ok(DeriveSeedsOutput {
+                    seeds: vec![],
+                    credential_id: None,
+                }))
+            },
+            || panicking("device check failed"),
+        );
+        let err = provider.is_supported().await.unwrap_err();
         assert!(
-            matches!(err, PasskeyPrfError::Generic(ref msg) if msg.contains("device check failed")),
+            matches!(err, PrfProviderError::Generic(ref msg) if msg.contains("device check failed")),
             "Expected Generic error with panic message, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_derive_seeds_propagates_non_prf_errors() {
+        let provider = make_provider(
+            move |_request| {
+                ready(Err(anyhow::anyhow!(
+                    "PasskeyPrfException(userCancelled): user dismissed"
+                )))
+            },
+            || ready(Ok(true)),
+        );
+        let err = provider.derive_seeds(req(&["a", "b"])).await.unwrap_err();
+        assert!(
+            matches!(err, PrfProviderError::UserCancelled),
+            "expected UserCancelled, got {err:?}"
         );
     }
 }

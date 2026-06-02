@@ -4,6 +4,7 @@ group 'technology.breez.spark'
 version '0.1.0' // generated; do not edit
 
 buildscript {
+    ext.kotlin_version = '1.9.22'
     repositories {
         google()
         mavenCentral()
@@ -12,6 +13,7 @@ buildscript {
     dependencies {
         // The Android Gradle Plugin knows how to build native code with the NDK.
         classpath 'com.android.tools.build:gradle:8.4.0'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
 }
 
@@ -23,6 +25,7 @@ rootProject.allprojects {
 }
 
 apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
 
 android {
     if (project.android.hasProperty("namespace")) {
@@ -31,7 +34,7 @@ android {
 
     // Bumping the plugin compileSdkVersion requires all clients of this plugin
     // to bump the version in their app.
-    compileSdkVersion 33
+    compileSdkVersion 34
 
     // Use the NDK version
     // declared in /android/app/build.gradle file of the Flutter project.
@@ -44,9 +47,23 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
     defaultConfig {
         minSdkVersion 23
     }
+
+    sourceSets {
+        main.kotlin.srcDirs += 'src/main/kotlin'
+    }
+}
+
+dependencies {
+    implementation "androidx.credentials:credentials:1.3.0"
+    implementation "androidx.credentials:credentials-play-services-auth:1.3.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0"
 }
 
 apply from: "../cargokit/gradle/plugin.gradle"
