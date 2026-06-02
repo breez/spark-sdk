@@ -10,8 +10,6 @@ Integrating Breez SDK into your application takes just a few minutes. Follow the
 - **[Listening to events](/guide/events.md)**
 - **[Adding logging](/guide/logging.md)**
 - **[Spark status](/guide/spark_status.md)**
-- **[Stable balance](/guide/stable_balance.md)**
-- **[Passkey login](/guide/passkey.md)**
 
 ## API Key
 
