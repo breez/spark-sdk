@@ -288,12 +288,40 @@ fn apply_pool_config(config: &PostgresStorageConfig) -> deadpool_postgres::PoolC
     }
 }
 
+/// Applies TCP liveness defaults so a connection reaped by a managed-`PostgreSQL`
+/// NAT/load balancer fails fast instead of lingering half-open: with
+/// tokio-postgres's 2h idle keepalive a reaped socket passes deadpool's
+/// `is_closed()` recycle check, then the next query hangs ~15 min (`tcp_retries2`)
+/// before `os error 110`. Keepalives keep the NAT mapping warm and detect a dead
+/// idle peer in ~90s; `tcp_user_timeout` bounds an in-flight query on a dead socket.
+///
+/// Each value is applied only when the connection string left it unset, so any
+/// option passed in the URL wins. `keepalives_idle` is detected on the raw string:
+/// tokio-postgres exposes it as a bare `Duration` with no "is set" signal, unlike
+/// the `Option` getters backing the other three.
+fn apply_tcp_liveness_defaults(connection_string: &str, pg_config: &mut PgConfig) {
+    if !connection_string.contains("keepalives_idle") {
+        pg_config.keepalives_idle(Duration::from_mins(1));
+    }
+    if pg_config.get_keepalives_interval().is_none() {
+        pg_config.keepalives_interval(Duration::from_secs(10));
+    }
+    if pg_config.get_keepalives_retries().is_none() {
+        pg_config.keepalives_retries(3);
+    }
+    if pg_config.get_tcp_user_timeout().is_none() {
+        pg_config.tcp_user_timeout(Duration::from_secs(30));
+    }
+}
+
 /// Creates a `PostgreSQL` connection pool from the given configuration.
 pub fn create_pool(config: &PostgresStorageConfig) -> Result<Pool, PostgresError> {
-    let pg_config: PgConfig = config
+    let mut pg_config: PgConfig = config
         .connection_string
         .parse()
         .map_err(|e| PostgresError::Initialization(format!("Invalid connection string: {e}")))?;
+
+    apply_tcp_liveness_defaults(&config.connection_string, &mut pg_config);
 
     let ssl_mode = parse_sslmode_from_connection_string(&config.connection_string);
     let pool_config = apply_pool_config(config);
@@ -477,6 +505,30 @@ mod tests {
             result.is_err(),
             "Expected TLS config with invalid CA to fail"
         );
+    }
+
+    #[test]
+    fn liveness_defaults_applied_when_url_silent() {
+        let url = "postgres://u:p@h:5432/db";
+        let mut cfg: PgConfig = url.parse().expect("valid");
+        apply_tcp_liveness_defaults(url, &mut cfg);
+        assert_eq!(cfg.get_keepalives_idle(), Duration::from_mins(1));
+        assert_eq!(cfg.get_keepalives_interval(), Some(Duration::from_secs(10)));
+        assert_eq!(cfg.get_keepalives_retries(), Some(3));
+        assert_eq!(cfg.get_tcp_user_timeout(), Some(&Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn liveness_defaults_respect_explicit_url_values() {
+        let url = "postgres://u:p@h:5432/db\
+            ?keepalives_idle=600&keepalives_interval=20&keepalives_retries=9&tcp_user_timeout=5";
+        let mut cfg: PgConfig = url.parse().expect("valid");
+        apply_tcp_liveness_defaults(url, &mut cfg);
+        // Every value supplied in the URL must survive untouched.
+        assert_eq!(cfg.get_keepalives_idle(), Duration::from_mins(10));
+        assert_eq!(cfg.get_keepalives_interval(), Some(Duration::from_secs(20)));
+        assert_eq!(cfg.get_keepalives_retries(), Some(9));
+        assert_eq!(cfg.get_tcp_user_timeout(), Some(&Duration::from_secs(5)));
     }
 
     /// Regression: deadpool's `Pool::builder(...).build()` synchronously rejects

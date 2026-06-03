@@ -39,7 +39,7 @@ pub fn create_pool(config: &MysqlStorageConfig) -> Result<Pool, MysqlError> {
     let opts: Opts = Opts::from_url(&connection_string)
         .map_err(|e| MysqlError::Initialization(format!("Invalid connection string: {e}")))?;
 
-    let mut builder = OptsBuilder::from_opts(opts);
+    let mut builder = with_tcp_keepalive_default(opts);
 
     if let Some(ssl_opts) = build_ssl_opts(ssl_mode, config.root_ca_pem.as_deref()) {
         builder = builder.ssl_opts(ssl_opts);
@@ -57,6 +57,22 @@ pub fn create_pool(config: &MysqlStorageConfig) -> Result<Pool, MysqlError> {
     builder = builder.pool_opts(pool_opts);
 
     Ok(Pool::new(builder))
+}
+
+/// Sets a 60s TCP keepalive unless the connection string already specified one.
+///
+/// Without keepalives a managed-`MySQL` NAT/load balancer silently reaps an idle
+/// connection; the pool hands the half-open socket back (it pings only in tests,
+/// not on checkout) and the next query hangs ~15 min on the dead socket. Probing
+/// every 60s keeps the NAT mapping warm. `mysql_async` exposes no probe
+/// interval/retries or `tcp_user_timeout`, so idle time is the only knob here.
+fn with_tcp_keepalive_default(opts: Opts) -> OptsBuilder {
+    let keepalive_set = opts.tcp_keepalive().is_some();
+    let mut builder = OptsBuilder::from_opts(opts);
+    if !keepalive_set {
+        builder = builder.tcp_keepalive(Some(60_000u32));
+    }
+    builder
 }
 
 /// Parses an `ssl-mode` value from a `MySQL` URL connection string and constructs
@@ -178,6 +194,20 @@ impl From<mysql_async::Error> for MysqlError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keepalive_default_applied_when_url_silent() {
+        let opts = Opts::from_url("mysql://u:p@h:3306/db").expect("valid");
+        let built = Opts::from(with_tcp_keepalive_default(opts));
+        assert_eq!(built.tcp_keepalive(), Some(60_000));
+    }
+
+    #[test]
+    fn keepalive_default_respects_explicit_url_value() {
+        let opts = Opts::from_url("mysql://u:p@h:3306/db?tcp_keepalive=5000").expect("valid");
+        let built = Opts::from(with_tcp_keepalive_default(opts));
+        assert_eq!(built.tcp_keepalive(), Some(5000));
+    }
 
     #[test]
     fn extracts_ssl_mode_before_mysql_async_url_parsing() {
