@@ -133,6 +133,20 @@ fn package_wasm_cmd(wasm_package: WasmPackages) -> Result<()> {
         }
     }
 
+    // Remove tarballs from prior `yarn pack` runs before packing. `yarn
+    // pack` bundles any `*.tgz` sitting in the package dir into the new
+    // tarball, so without this the output snowballs by the size of every
+    // previous build (each one nesting all the earlier ones).
+    for entry in fs::read_dir(&pkg_dir)
+        .with_context(|| format!("failed to read package dir {:?}", &pkg_dir))?
+    {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "tgz") {
+            fs::remove_file(&path)
+                .with_context(|| format!("failed to remove stale tarball {path:?}"))?;
+        }
+    }
+
     // Run `yarn pack` in the pkg_dir after packaging WASM targets
     let status = Command::new("yarn")
         .arg("pack")
