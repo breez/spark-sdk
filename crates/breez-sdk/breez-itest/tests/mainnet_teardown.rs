@@ -42,14 +42,56 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
     };
     let token_id = mainnet_test_token_id();
 
-    // Build Bob with the stable token active so send-all-with-conversion engages.
+    // Build Bob with the stable token active so send-all-with-conversion engages
+    // the path that includes his existing sat balance in the same atomic drain.
     let (mut alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, true).await?;
 
     // Reclaim anything stuck mid-conversion first.
     if let Err(e) = bob.sdk.refund_pending_conversions().await {
         warn!("refund_pending_conversions failed (continuing): {e:#}");
     }
+
+    // If Bob inherits sats above the stable-balance auto-conversion threshold from
+    // a prior test in this binary, his worker fires a FromBitcoin auto-conversion
+    // immediately on init. Wait for that to settle before our own ToBitcoin drain
+    // — otherwise the auto-converted tokens land *after* our drain completes and
+    // Bob ends up with fresh tokens instead of empty. (The SDK's payments lock
+    // serializes the two, but the worker wins the race to acquire it first.)
+    let auto_threshold_sats: u64 = bob
+        .sdk
+        .fetch_conversion_limits(FetchConversionLimitsRequest {
+            conversion_type: ConversionType::FromBitcoin,
+            token_identifier: Some(token_id.clone()),
+        })
+        .await?
+        .min_from_amount
+        .and_then(|m| u64::try_from(m).ok())
+        .unwrap_or(u64::MAX);
+
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let pre_info = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+    let pre_tokens = pre_info
+        .token_balances
+        .get(&token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    if pre_info.balance_sats >= auto_threshold_sats {
+        info!(
+            "Teardown: Bob has {} sats ≥ auto-conversion threshold {auto_threshold_sats}; \
+             waiting for in-flight auto-conversion to settle...",
+            pre_info.balance_sats
+        );
+        if let Err(e) = wait_for_token_balance_increase(&bob.sdk, &token_id, pre_tokens, 180).await
+        {
+            warn!("Teardown: auto-conversion didn't complete in 180s ({e:#}); proceeding anyway");
+        }
+        bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    }
 
     let bob_info = bob
         .sdk
@@ -127,25 +169,13 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
             "From step should be a token payment"
         );
 
-        // Confirm Alice receives the converted sats and Bob's tokens are drained.
+        // Confirm Alice receives the converted sats.
         wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 120).await?;
-        bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
-        let after_tokens = bob
-            .sdk
-            .get_info(GetInfoRequest {
-                ensure_synced: Some(false),
-            })
-            .await?
-            .token_balances
-            .get(&token_id)
-            .map(|b| b.balance)
-            .unwrap_or(0);
-        assert_eq!(after_tokens, 0, "Bob's tokens should be fully drained");
     }
 
-    // Drain any remaining sats. Unconditional: the token send-all-with-conversion
-    // above includes Bob's existing sats, but this also covers the tokenless case
-    // and any sats it didn't sweep.
+    // Drain any remaining sats. Unconditional: covers the tokenless case and
+    // any residual after the token drain. Runs before the final assertions so a
+    // partially-drained Bob is still cleaned up.
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let remaining_sats = bob
         .sdk
@@ -175,6 +205,21 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
             .await?;
         wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 60).await?;
     }
+
+    // Final assertion: Bob's tokens are fully drained. Deferred to the end so
+    // the sat drain above still runs even on partial token cleanup.
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let final_tokens = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(&token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    assert_eq!(final_tokens, 0, "Bob's tokens should be fully drained");
 
     info!("Teardown complete: Bob drained to Alice");
     Ok(())

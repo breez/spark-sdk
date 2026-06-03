@@ -98,6 +98,7 @@ breez-itest-mysql-tree-store:
 breez-itest-mainnet:
 	cargo xtask test --package breez-sdk-itest --test mainnet_token_conversion -- --test-threads=1
 	cargo xtask test --package breez-sdk-itest --test mainnet_stable_balance -- --test-threads=1
+	cargo xtask test --package breez-sdk-itest --test mainnet_server_mode_conversion -- --test-threads=1
 
 # Mainnet teardown: drains the deterministic Bob wallet back to the test account,
 # converting tokens to sats. Run last (e.g. as an always() CI step) so funds are

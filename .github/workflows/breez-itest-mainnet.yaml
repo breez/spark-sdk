@@ -22,6 +22,7 @@ on:
           - all
           - mainnet_token_conversion
           - mainnet_stable_balance
+          - mainnet_server_mode_conversion
   workflow_call:
     inputs:
       token_id:
@@ -30,7 +31,7 @@ on:
         type: string
         default: ''
       tests:
-        description: 'Which tests to run (all | mainnet_token_conversion | mainnet_stable_balance)'
+        description: 'Which tests to run (all | mainnet_token_conversion | mainnet_stable_balance | mainnet_server_mode_conversion)'
         required: false
         type: string
         default: all
@@ -65,7 +66,7 @@ jobs:
           TESTS: ${{ inputs.tests }}
         run: |
           case "$TESTS" in
-            mainnet_token_conversion|mainnet_stable_balance)
+            mainnet_token_conversion|mainnet_stable_balance|mainnet_server_mode_conversion)
               cargo xtask test --package breez-sdk-itest --test "$TESTS" -- --test-threads=1
               ;;
             *)
