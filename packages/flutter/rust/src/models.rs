@@ -1420,6 +1420,12 @@ pub struct _BuyBitcoinResponse {
     pub url: String,
 }
 
+#[frb(mirror(RefundPendingConversionsResponse))]
+pub struct _RefundPendingConversionsResponse {
+    pub refunded: u32,
+    pub skipped: u32,
+}
+
 #[frb(mirror(ServiceStatus))]
 pub enum _ServiceStatus {
     Operational,

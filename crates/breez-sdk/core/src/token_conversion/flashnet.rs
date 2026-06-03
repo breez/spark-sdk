@@ -2,21 +2,26 @@ use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::secp256k1::PublicKey;
 use flashnet::{
-    AssetTransfer, BTC_ASSET_ADDRESS, CacheStore, ClawbackRequest, ClawbackResponse,
+    AssetTransfer, BTC_ASSET_ADDRESS, CacheStore, ClawbackRequest, ClawbackTransfer,
     ExecuteSwapRequest, ExecuteSwapResponse, FlashnetClient, FlashnetConfig, FlashnetError,
-    GetMinAmountsRequest, ListPoolsRequest, PoolSortOrder, SimulateSwapRequest,
+    GetMinAmountsRequest, ListClawbackTransfersRequest, ListPoolsRequest, PoolSortOrder,
+    SimulateSwapRequest,
 };
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use spark_wallet::{SparkWallet, TransferId};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     AmountAdjustmentReason, EventEmitter, Network, Payment, PaymentDetails, PaymentMetadata,
-    Storage,
+    RefundPendingConversionsResponse, Storage,
     persist::{StorageListPaymentsRequest, StoragePaymentDetailsFilter},
     token_conversion::{ConversionAmount, DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS},
     utils::{
-        payments::{fetch_and_process_payment, insert_payment_with_metadata},
+        payments::{
+            fetch_and_process_payment, insert_payment_with_metadata,
+            resolve_and_insert_payment_metadata,
+        },
         polling::{PollSchedule, poll_until},
     },
 };
@@ -34,6 +39,27 @@ use super::{
 const RECEIVED_LEG_POLL_INITIAL_DELAY_MS: u64 = 500;
 const RECEIVED_LEG_POLL_MAX_DELAY_MS: u64 = 2000;
 const RECEIVED_LEG_POLL_TIMEOUT_SECS: u64 = 15;
+
+/// Min age before reconcile claws a transfer back — guards against racing a
+/// concurrent same-seed instance's in-flight healthy swap.
+const RECONCILE_MIN_AGE_SECS: u64 = 300;
+/// Reconcile listing page size. Not paginated — subsequent inits pick up any
+/// overflow.
+const RECONCILE_LISTING_LIMIT: u32 = 100;
+
+/// Missing/unparseable timestamps fall back to old-enough/recent respectively.
+fn transfer_is_older_than(transfer: &ClawbackTransfer, cutoff_secs: u64) -> bool {
+    let Some(created_at) = transfer.created_at.as_deref() else {
+        return true;
+    };
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(created_at) else {
+        return false;
+    };
+    let Ok(secs) = u64::try_from(parsed.timestamp()) else {
+        return false;
+    };
+    secs < cutoff_secs
+}
 
 /// Flashnet-based implementation of the `TokenConverter` trait.
 ///
@@ -86,13 +112,13 @@ impl FlashnetTokenConverter {
         }
     }
 
-    /// Process all failed conversions needing refunds.
+    /// Refunds rows marked `ConversionStatus::RefundNeeded`.
     async fn refund_failed_conversions(
-        storage: &Arc<dyn Storage>,
-        flashnet_client: &Arc<FlashnetClient>,
-    ) -> Result<(), ConversionError> {
+        &self,
+    ) -> Result<RefundPendingConversionsResponse, ConversionError> {
         debug!("Checking for failed conversions needing refunds");
-        let payments = storage
+        let payments = self
+            .storage
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![
                     StoragePaymentDetailsFilter::Spark {
@@ -114,111 +140,226 @@ impl FlashnetTokenConverter {
             payments.len()
         );
 
+        let mut report = RefundPendingConversionsResponse::default();
         for payment in payments {
-            if let Err(e) = Self::refund_payment(storage, flashnet_client, &payment).await {
-                error!(
-                    "Failed to refund conversion for payment {}: {e:?}",
-                    payment.id
-                );
+            match self.refund_payment(&payment).await {
+                Ok(true) => report.refunded = report.refunded.saturating_add(1),
+                Ok(false) => report.skipped = report.skipped.saturating_add(1),
+                Err(e) => {
+                    error!(
+                        "Failed to refund conversion for payment {}: {e:?}",
+                        payment.id
+                    );
+                    report.skipped = report.skipped.saturating_add(1);
+                }
             }
         }
-        Ok(())
+        Ok(report)
     }
 
-    /// Refund a single failed conversion payment.
-    async fn refund_payment(
-        storage: &Arc<dyn Storage>,
-        flashnet_client: &Arc<FlashnetClient>,
-        payment: &Payment,
-    ) -> Result<(), ConversionError> {
+    /// Refund a single locally-tracked failed conversion.
+    async fn refund_payment(&self, payment: &Payment) -> Result<bool, ConversionError> {
         let (clawback_id, conversion_info) = match &payment.details {
             Some(PaymentDetails::Spark {
                 conversion_info, ..
-            }) => (payment.id.clone(), conversion_info),
+            }) => (payment.id.clone(), conversion_info.as_ref()),
             Some(PaymentDetails::Token {
                 tx_hash,
                 conversion_info,
                 ..
-            }) => (tx_hash.clone(), conversion_info),
+            }) => (tx_hash.clone(), conversion_info.as_ref()),
             _ => {
                 return Err(ConversionError::RefundFailed(
-                    "Payment is not a Spark or Conversion".into(),
+                    "Payment is not a Spark or Token conversion".into(),
                 ));
             }
         };
-
         let Some(ConversionInfo::Amm {
             pool_id,
-            conversion_id,
             status: ConversionStatus::RefundNeeded,
-            fee,
-            purpose,
-            amount_adjustment,
+            ..
         }) = conversion_info
         else {
             return Err(ConversionError::RefundFailed(
                 "Conversion is not an AMM conversion with refund pending status".into(),
             ));
         };
-
+        let pool_id = PublicKey::from_str(pool_id).map_err(|e| {
+            ConversionError::RefundFailed(format!("Invalid pool_id {pool_id}: {e}"))
+        })?;
         debug!(
             "Conversion refund needed for payment {}: pool_id {pool_id}",
             payment.id
         );
+        // payment.id is the storage row id — pass it as the hint so the
+        // shared helper skips the operator round-trip.
+        self.clawback_and_record_refunded(&clawback_id, pool_id, Some(payment.id.clone()))
+            .await
+    }
 
-        let Ok(pool_id) = PublicKey::from_str(pool_id) else {
-            return Err(ConversionError::RefundFailed(format!(
-                "Invalid pool_id: {pool_id}"
-            )));
-        };
+    /// Refunds transfers Flashnet flags as clawback-eligible. Catches the
+    /// cases the local refunder can't see (storage write failed, process
+    /// killed before mark).
+    async fn reconcile_with_flashnet(
+        &self,
+    ) -> Result<RefundPendingConversionsResponse, ConversionError> {
+        let clawback_transfers = self
+            .flashnet_client
+            .list_clawback_transfers(ListClawbackTransfersRequest {
+                limit: Some(RECONCILE_LISTING_LIMIT),
+                offset: None,
+            })
+            .await?;
 
-        match flashnet_client
+        debug!(
+            "Reconcile: Flashnet listing returned {} clawback transfers",
+            clawback_transfers.transfers.len()
+        );
+
+        let cutoff_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+            .saturating_sub(RECONCILE_MIN_AGE_SECS);
+        // Skip breakdown kept internal; public response collapses to one count.
+        let mut res = RefundPendingConversionsResponse::default();
+        for transfer in clawback_transfers.transfers {
+            if !transfer_is_older_than(&transfer, cutoff_secs) {
+                debug!("Reconcile: skipping {} (within age threshold)", transfer.id);
+                res.skipped = res.skipped.saturating_add(1);
+                continue;
+            }
+            match self
+                .clawback_and_record_refunded(&transfer.id, transfer.lp_identity_public_key, None)
+                .await
+            {
+                Ok(true) => res.refunded = res.refunded.saturating_add(1),
+                _ => res.skipped = res.skipped.saturating_add(1),
+            }
+        }
+        if res.refunded > 0 || res.skipped > 0 {
+            info!(
+                "Reconcile pass complete: refunded={}, skipped={}",
+                res.refunded, res.skipped
+            );
+        }
+        Ok(res)
+    }
+
+    /// Claws back one transfer and writes `Refunded` metadata. `Ok(false)`
+    /// also writes metadata so a prior write-failure can recover. Pass
+    /// `payment_id` when known to skip the operator resolution.
+    async fn clawback_and_record_refunded(
+        &self,
+        clawback_id: &str,
+        pool_id: PublicKey,
+        payment_id: Option<String>,
+    ) -> Result<bool, ConversionError> {
+        let outcome = match self
+            .flashnet_client
             .clawback(ClawbackRequest {
                 pool_id,
-                transfer_id: clawback_id,
+                transfer_id: clawback_id.to_string(),
             })
             .await
         {
-            Ok(ClawbackResponse {
-                accepted: true,
-                spark_status_tracking_id,
-                ..
-            }) => {
+            Ok(r) if r.accepted => {
                 debug!(
-                    "Clawback initiated for payment {}: tracking_id: {}",
-                    payment.id, spark_status_tracking_id
+                    "Clawback accepted for {clawback_id}: tracking_id={}",
+                    r.spark_status_tracking_id
                 );
-                // Update the payment metadata to reflect the refund status
-                storage
-                    .insert_payment_metadata(
-                        payment.id.clone(),
-                        PaymentMetadata {
-                            conversion_info: Some(ConversionInfo::Amm {
-                                pool_id: pool_id.to_string(),
-                                conversion_id: conversion_id.clone(),
-                                status: ConversionStatus::Refunded,
-                                fee: *fee,
-                                purpose: purpose.clone(),
-                                amount_adjustment: amount_adjustment.clone(),
-                            }),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-                Ok(())
+                true
             }
-            Ok(ClawbackResponse {
-                accepted: false,
-                request_id,
-                error,
+            Ok(r) => {
+                warn!("Clawback for {clawback_id} not accepted: {:?}", r.error);
+                false
+            }
+            Err(e) => {
+                error!("Clawback for {clawback_id} failed: {e}");
+                return Err(e.into());
+            }
+        };
+
+        // Preserve the prior ConversionInfo::Amm fields when we can read it;
+        // fall back to a placeholder when storage has nothing (reconcile path
+        // recovering a row whose original metadata write never landed).
+        let prev_amm =
+            self.storage
+                .get_payment_by_id(
+                    payment_id
+                        .clone()
+                        .unwrap_or_else(|| clawback_id.to_string()),
+                )
+                .await
+                .ok()
+                .and_then(|p| match p.details {
+                    Some(
+                        PaymentDetails::Spark {
+                            conversion_info, ..
+                        }
+                        | PaymentDetails::Token {
+                            conversion_info, ..
+                        },
+                    ) => conversion_info,
+                    _ => None,
+                });
+        let conversion_info = match prev_amm {
+            Some(ConversionInfo::Amm {
+                pool_id: prev_pool_id,
+                conversion_id,
+                fee,
+                purpose,
+                amount_adjustment,
                 ..
-            }) => Err(ConversionError::RefundFailed(format!(
-                "Clawback not accepted: request_id: {request_id:?}, error: {error:?}"
-            ))),
-            Err(e) => Err(ConversionError::RefundFailed(format!(
-                "Failed to initiate clawback: {e}"
-            ))),
+            }) => ConversionInfo::Amm {
+                pool_id: prev_pool_id,
+                conversion_id,
+                status: ConversionStatus::Refunded,
+                fee,
+                purpose,
+                amount_adjustment,
+            },
+            _ => ConversionInfo::Amm {
+                pool_id: pool_id.to_string(),
+                conversion_id: uuid::Uuid::now_v7().to_string(),
+                status: ConversionStatus::Refunded,
+                fee: None,
+                purpose: None,
+                amount_adjustment: None,
+            },
+        };
+        let metadata = PaymentMetadata {
+            conversion_info: Some(conversion_info),
+            ..Default::default()
+        };
+
+        // With a payment_id hint, skip resolution and write directly.
+        // Without one, use the shared helper: it resolves (operator round-
+        // trip for tokens) and caches the metadata for the next sync if
+        // resolution fails. That cache fallback covers the otherwise-silent
+        // "clawback accepted server-side, local row unreachable" case.
+        match payment_id {
+            Some(id) => {
+                self.storage
+                    .insert_payment_metadata(id, metadata)
+                    .await
+                    .map_err(|e| {
+                        warn!("Metadata write failed for {clawback_id}: {e}");
+                        ConversionError::from(e)
+                    })?;
+            }
+            None => {
+                resolve_and_insert_payment_metadata(
+                    clawback_id,
+                    metadata,
+                    &self.spark_wallet,
+                    &self.storage,
+                    true,
+                )
+                .await
+                .map_err(ConversionError::Sdk)?;
+            }
         }
+        Ok(outcome)
     }
 
     /// Gets the best conversion pool for the given conversion options and amount.
@@ -354,7 +495,7 @@ impl FlashnetTokenConverter {
     ///
     /// Arguments:
     /// * `pool_id` - The pool id used for the conversion.
-    /// * `outbound_identifier` - The outbound spark transfer id or token transaction hash.
+    /// * `outbound_payment_id` - Pre-derived storage `payment_id` for the sent leg.
     /// * `inbound_identifier` - The inbound spark transfer id or token transaction hash if the conversion was successful.
     /// * `refund_identifier` - The inbound refund spark transfer id or token transaction hash if the conversion was refunded.
     /// * `fee_split` - The fee split between sent and received sides of the conversion.
@@ -785,29 +926,32 @@ impl TokenConverter for FlashnetTokenConverter {
             }
             Err(e) => {
                 error!("Convert token failed: {e:?}");
-                if let FlashnetError::Execution {
-                    outbound_asset_transfer: Some(outbound_asset_transfer),
+                let FlashnetError::Execution {
+                    outbound_asset_transfer: Some(transfer),
                     source,
                 } = &e
-                {
-                    let _ = Box::pin(self.update_payment_conversion_info(
-                        &pool_id,
-                        outbound_asset_transfer,
-                        None,
-                        None,
-                        None,
-                        purpose,
-                        amount_adjustment.clone(),
-                    ))
-                    .await;
-                    let _ = self.refund_trigger.send(());
-                    Err(ConversionError::ConversionFailed(format!(
-                        "Convert token failed, refund pending: {}",
-                        *source.clone()
-                    )))
-                } else {
-                    Err(e.into())
+                else {
+                    return Err(e.into());
+                };
+                // Best-effort RefundNeeded mark; reconcile catches anything we miss.
+                let update_res = Box::pin(self.update_payment_conversion_info(
+                    &pool_id,
+                    transfer,
+                    None,
+                    None,
+                    None,
+                    purpose,
+                    amount_adjustment.clone(),
+                ))
+                .await;
+                if let Err(err) = update_res {
+                    warn!("Could not update {} to RefundNeeded: {err}", transfer.id());
                 }
+                let _ = self.refund_trigger.send(());
+                Err(ConversionError::ConversionFailed(format!(
+                    "Convert token failed, refund pending: {}",
+                    *source.clone()
+                )))
             }
         }
     }
@@ -893,8 +1037,43 @@ impl TokenConverter for FlashnetTokenConverter {
         })
     }
 
-    async fn refund_pending(&self) -> Result<(), ConversionError> {
-        Self::refund_failed_conversions(&self.storage, &self.flashnet_client).await
+    async fn refund_pending(&self) -> Result<RefundPendingConversionsResponse, ConversionError> {
+        let local = match self.refund_failed_conversions().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Local refund pass failed: {e}");
+                RefundPendingConversionsResponse::default()
+            }
+        };
+        let remote = match self.reconcile_with_flashnet().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Reconcile with Flashnet failed: {e}");
+                RefundPendingConversionsResponse::default()
+            }
+        };
+        let combined = RefundPendingConversionsResponse {
+            refunded: local.refunded.saturating_add(remote.refunded),
+            skipped: local.skipped.saturating_add(remote.skipped),
+        };
+        if combined.refunded > 0 || combined.skipped > 0 {
+            info!(
+                "Refund-pending pass: refunded={} (local={}, remote={}), skipped={} (local={}, remote={})",
+                combined.refunded,
+                local.refunded,
+                remote.refunded,
+                combined.skipped,
+                local.skipped,
+                remote.skipped,
+            );
+        }
+        Ok(combined)
+    }
+
+    async fn refund_local_pending(
+        &self,
+    ) -> Result<RefundPendingConversionsResponse, ConversionError> {
+        self.refund_failed_conversions().await
     }
 
     fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<()>> {

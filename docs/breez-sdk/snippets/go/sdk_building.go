@@ -251,6 +251,7 @@ func RefundPendingConversions(sdk *breez_sdk_spark.BreezSdk) error {
 	// The flashnet conversion refunder doesn't run in the background in server
 	// mode. Call this from your own scheduler (e.g. once per minute) to issue
 	// pending refunds for failed conversions.
-	return sdk.RefundPendingConversions()
+	_, err := sdk.RefundPendingConversions()
+	return err
 	// ANCHOR_END: refund-pending-conversions
 }

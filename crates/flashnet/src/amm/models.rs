@@ -73,6 +73,33 @@ pub struct ClawbackResponse {
     pub error: Option<String>,
 }
 
+#[derive(Serialize, Debug, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ListClawbackTransfersRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ListClawbackTransfersResponse {
+    pub transfers: Vec<ClawbackTransfer>,
+}
+
+#[serde_as]
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ClawbackTransfer {
+    /// Spark `transfer_id` for BTC swaps, or token transaction hash for token swaps.
+    pub id: String,
+    #[serde_as(as = "DisplayFromStr")]
+    pub lp_identity_public_key: PublicKey,
+    /// RFC3339 timestamp; absent for some older rows.
+    pub created_at: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CurveType {
