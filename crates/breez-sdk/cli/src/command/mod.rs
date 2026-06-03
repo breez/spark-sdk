@@ -311,7 +311,7 @@ pub enum Command {
         transfer_pubkey: Option<String>,
 
         /// Hex-encoded DER ECDSA signature by the current owner over
-        /// `transfer:{transfer_pubkey}-{username}-{self_pubkey}`. Obtain via
+        /// `transfer:{username}-{self_pubkey}`. Obtain via
         /// `accept-lightning-address-transfer` on the current owner's CLI.
         /// Must be paired with --transfer-pubkey.
         #[arg(long)]

@@ -1246,9 +1246,10 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
     assert_eq!(bob_address.username, username);
 
     // 5. Replay with the same authorization must fail because Alice no
-    //    longer owns the name on the server. Alice's signature is still a
-    //    valid capability over the A->B->username triple (no timestamp), so
-    //    this is the authoritative check that the server-side transfer
+    //    longer owns the name on the server. Both signatures are still
+    //    cryptographically valid over the canonical
+    //    `transfer:{username}-{bob_pubkey}` message (no timestamp), so this
+    //    is the authoritative check that the server-side transfer
     //    happened: the server rejects with `SourceNotOwner`. (We don't
     //    assert via `alice.sdk.get_lightning_address()` because that method
     //    reads Alice's local cache, which still holds her pre-transfer

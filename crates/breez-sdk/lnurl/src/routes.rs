@@ -194,23 +194,16 @@ where
         validate_username(&username)?;
         validate_description(&payload.description)?;
 
-        let to_pk = validate(
-            &to_pubkey,
-            &payload.signature,
-            &username,
-            payload.timestamp,
+        let message = format!("transfer:{username}-{to_pubkey}");
+        let from_pk = verify_transfer_signature(
+            &payload.from_pubkey,
+            &payload.from_signature,
+            &message,
             &state,
         )
         .await?;
-
-        let from_pk = validate_transfer_intent(
-            &payload.transfer.pubkey,
-            &to_pubkey,
-            &username,
-            &payload.transfer.signature,
-            &state,
-        )
-        .await?;
+        let to_pk =
+            verify_transfer_signature(&to_pubkey, &payload.to_signature, &message, &state).await?;
 
         if from_pk == to_pk {
             return Err((
@@ -1389,20 +1382,22 @@ async fn validate<DB>(
     Ok(pubkey)
 }
 
-/// Verify A's transfer-intent signature over
-/// `"transfer:{from_pubkey}-{username}-{to_pubkey}"`. The message has no
-/// timestamp — A's signature acts as a persistent capability authorizing
-/// this specific A -> B -> username triple. The `"transfer:"` prefix
-/// domain-separates from `validate()`'s `"{message}-{timestamp}"` format so a
-/// captured register signature cannot be replayed as a transfer.
-async fn validate_transfer_intent<DB>(
-    from_pubkey: &str,
-    to_pubkey: &str,
-    username: &str,
+/// Verify a transfer-route signature over the canonical message
+/// `"transfer:{username}-{to_pubkey}"`. Used symmetrically on both ends: the
+/// current owner A and the new owner B sign the exact same bytes, and the
+/// route calls this once per signature. No timestamp — replay can only
+/// re-execute the same A → B → username transfer, which the server-side
+/// atomic delete bounds to the case where A still owns the name. The
+/// `"transfer:"` prefix domain-separates from `validate()`'s
+/// `"{message}-{timestamp}"` format so a captured register signature cannot
+/// be replayed as a transfer.
+async fn verify_transfer_signature<DB>(
+    pubkey: &str,
     signature: &str,
+    message: &str,
     state: &State<DB>,
 ) -> Result<PublicKey, (StatusCode, Json<Value>)> {
-    let from_pk = parse_pubkey(from_pubkey)?;
+    let pk = parse_pubkey(pubkey)?;
     let signature = hex::decode(signature).map_err(|e| {
         trace!("invalid transfer signature, could not decode: {}", e);
         (
@@ -1418,10 +1413,9 @@ async fn validate_transfer_intent<DB>(
         )
     })?;
 
-    let message = format!("transfer:{from_pubkey}-{username}-{to_pubkey}");
     state
         .wallet
-        .verify_message(&message, &signature, &from_pk)
+        .verify_message(message, &signature, &pk)
         .await
         .map_err(|e| {
             trace!("invalid transfer signature, could not verify: {}", e);
@@ -1431,7 +1425,7 @@ async fn validate_transfer_intent<DB>(
             )
         })?;
 
-    Ok(from_pk)
+    Ok(pk)
 }
 
 fn parse_pubkey(pubkey: &str) -> Result<PublicKey, (StatusCode, Json<Value>)> {

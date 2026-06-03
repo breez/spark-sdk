@@ -1643,7 +1643,8 @@ pub struct LightningAddressTransfer {
     /// Hex-encoded secp256k1 compressed public key of the current owner.
     pub pubkey: String,
     /// Hex-encoded DER ECDSA signature by the current owner over
-    /// `"transfer:{our_pubkey}-{username}-{transferee_pubkey}"`.
+    /// `"transfer:{username}-{transferee_pubkey}"`. The transferee signs the
+    /// same canonical message with their own key when submitting.
     pub signature: String,
 }
 

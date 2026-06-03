@@ -223,21 +223,28 @@ impl LnurlServerClient for DefaultLnurlServerClient {
     ) -> Result<RegisterLnurlPayResponse, LnurlServerError> {
         let pubkey = self.wallet.get_identity_public_key();
 
-        let (signature, timestamp) = self.sign_message(&request.username).await?;
-
         let (url, body) = if let Some(transfer) = &request.transfer {
+            let message = format!("transfer:{}-{}", request.username, pubkey);
+            let to_signature = self
+                .wallet
+                .sign_message(&message)
+                .await
+                .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
+                .serialize_der()
+                .to_lower_hex_string();
             let api_request = TransferLnurlPayRequest {
                 username: request.username.clone(),
                 description: request.description.clone(),
-                transfer: transfer.clone(),
-                signature,
-                timestamp,
+                from_pubkey: transfer.pubkey.clone(),
+                from_signature: transfer.signature.clone(),
+                to_signature,
             };
             let url = format!("{}/lnurlpay/{}/transfer", self.base_url(), pubkey);
             let body = serde_json::to_string(&api_request)
                 .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
             (url, body)
         } else {
+            let (signature, timestamp) = self.sign_message(&request.username).await?;
             let api_request = RegisterLnurlPayRequest {
                 username: request.username.clone(),
                 description: request.description.clone(),

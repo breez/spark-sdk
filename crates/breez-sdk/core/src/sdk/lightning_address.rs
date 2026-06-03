@@ -86,9 +86,11 @@ impl BreezSdk {
     /// Errors with [`SdkError::Generic`] if no lightning address is
     /// registered on this SDK.
     ///
-    /// The signed intent (`"transfer:{self_pubkey}-{username}-{transferee_pubkey}"`)
-    /// has no timestamp — it is a persistent capability bound to that
-    /// specific A → B → username triple.
+    /// The signed message (`"transfer:{username}-{transferee_pubkey}"`) has
+    /// no timestamp — it is a persistent capability bound to that specific
+    /// (address, transferee) pair. The new owner signs the same canonical
+    /// message with their own key, and the server verifies both signatures
+    /// and swaps ownership atomically.
     pub async fn accept_lightning_address_transfer(
         &self,
         request: AcceptLightningAddressTransferRequest,
@@ -101,7 +103,7 @@ impl BreezSdk {
         };
         let self_pubkey = self.spark_wallet.get_identity_public_key().to_string();
         let message = format!(
-            "transfer:{self_pubkey}-{}-{}",
+            "transfer:{}-{}",
             address_info.username, request.transferee_pubkey,
         );
         let signature = self.spark_wallet.sign_message(&message).await?;

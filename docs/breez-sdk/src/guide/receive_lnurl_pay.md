@@ -75,7 +75,7 @@ The flow has two steps, run on two different SDKs:
 
 **Step 1: Current owner (pubkey A)** calls {{#name accept_lightning_address_transfer}} with the new owner's {{#name identity_pubkey}} (available via {{#name get_info}} on the new owner's SDK). The method returns a {{#name LightningAddressTransfer}} containing `pubkey` and `signature`, which is the authorization that grants B the right to take over the username.
 
-> **Note:** The signed intent (`"transfer:{pubkey_a}-{username}-{pubkey_b}"`) has no timestamp, so A's authorization is a persistent capability for this specific A → B → username triple. Only B can actually submit the transfer, because the server also requires B's own signature over the request; A's authorization alone doesn't let any third party move the username.
+> **Note:** Both owners sign the same canonical message (`"transfer:{username}-{pubkey_b}"`) with no timestamp, so A's authorization is a persistent capability for this specific (address, B) pair. Only B can actually submit the transfer, because the server also requires B's own signature over the same bytes; A's authorization alone doesn't let any third party move the username.
 
 {{#tabs lightning_address:sign-lightning-address-transfer}}
 
