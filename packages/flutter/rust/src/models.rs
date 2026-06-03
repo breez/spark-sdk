@@ -1342,7 +1342,7 @@ pub enum _ConversionInfo {
         swap_id: String,
         invoice: String,
         invoice_amount_sats: u64,
-        lz_guid: Option<String>,
+        bridge_ref: Option<String>,
         max_slippage_bps: u32,
         quote_degraded: bool,
     },

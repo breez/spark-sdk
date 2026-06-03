@@ -12,7 +12,7 @@ use std::time::Duration;
 use boltz_client::{
     BoltzError, BoltzService as BoltzClient,
     config::{BoltzConfig as BoltzClientConfig, MAX_SLIPPAGE_BPS},
-    models::{ChainId, PreparedSwap},
+    models::{Asset, PreparedSwap},
 };
 use spark_wallet::SparkWallet;
 use tracing::{debug, error, info};
@@ -85,7 +85,8 @@ impl BoltzService {
         &self,
         recipient_address: &str,
         route: &CrossChainRoutePair,
-        chain: ChainId,
+        chain: &str,
+        asset: Asset,
         invoice_amount_sats: u64,
         max_slippage_bps: Option<u32>,
     ) -> Result<CrossChainPrepared, SdkError> {
@@ -98,6 +99,7 @@ impl BoltzService {
             .create_swap(
                 recipient_address,
                 chain,
+                asset,
                 invoice_amount_sats,
                 max_slippage_bps,
             )
@@ -129,7 +131,8 @@ impl BoltzService {
         &self,
         recipient_address: &str,
         route: &CrossChainRoutePair,
-        chain: ChainId,
+        chain: &str,
+        asset: Asset,
         total_sats: u64,
         max_slippage_bps: Option<u32>,
     ) -> Result<CrossChainPrepared, SdkError> {
@@ -142,7 +145,8 @@ impl BoltzService {
         let probe_invoice = self
             .fetch_probe_invoice(
                 recipient_address,
-                chain.clone(),
+                chain,
+                asset,
                 total_sats,
                 max_slippage_bps,
             )
@@ -163,6 +167,7 @@ impl BoltzService {
             .prepare_reverse_swap_from_sats(
                 recipient_address,
                 chain,
+                asset,
                 real_invoice_sats,
                 max_slippage_bps,
             )
@@ -205,7 +210,8 @@ impl BoltzService {
     async fn create_swap(
         &self,
         recipient_address: &str,
-        chain: ChainId,
+        chain: &str,
+        asset: Asset,
         invoice_amount_sats: u64,
         max_slippage_bps: Option<u32>,
     ) -> Result<(PreparedSwap, boltz_client::models::CreatedSwap), SdkError> {
@@ -214,6 +220,7 @@ impl BoltzService {
             .prepare_reverse_swap_from_sats(
                 recipient_address,
                 chain,
+                asset,
                 invoice_amount_sats,
                 max_slippage_bps,
             )
@@ -247,7 +254,8 @@ impl BoltzService {
     async fn fetch_probe_invoice(
         &self,
         recipient_address: &str,
-        chain: ChainId,
+        chain: &str,
+        asset: Asset,
         invoice_amount_sats: u64,
         max_slippage_bps: Option<u32>,
     ) -> Result<String, SdkError> {
@@ -256,6 +264,7 @@ impl BoltzService {
             .prepare_reverse_swap_from_sats(
                 recipient_address,
                 chain,
+                asset,
                 invoice_amount_sats,
                 max_slippage_bps,
             )
@@ -296,7 +305,7 @@ impl BoltzService {
             .invoice_amount_sats
             .saturating_sub(prepared.estimated_onchain_amount);
         let fee_amount = u128::from(boltz_spread_sats);
-        let estimated_out = u128::from(prepared.usdt_amount);
+        let estimated_out = u128::from(prepared.output_amount);
         let invoice_amount_sats = created.invoice_amount_sats;
         let resolved_slippage = max_slippage_bps.unwrap_or(prepared.slippage_bps);
 
@@ -337,16 +346,15 @@ impl CrossChainService for BoltzService {
             CrossChainRouteFilter::Receive { .. } => return Ok(Vec::new()),
         };
 
-        // `chains_accepting` validates the raw recipient address against
+        // `destinations_accepting` validates the raw recipient address against
         // every destination's transport and returns only those whose parser
-        // accepts it — this replaces the old hand-written address-family
-        // filter and automatically picks up any new chains that USDT0
-        // publishes.
+        // accepts it. This automatically picks up every supported asset/chain
+        // /bridge combination (USDT0 via OFT, USDC via CCTP, Arbitrum-direct).
         let routes = self
             .client
-            .chains_accepting(&address_details.address)
-            .into_iter()
-            .map(spec_to_route_pair)
+            .destinations_accepting(&address_details.address)
+            .iter()
+            .map(destination_to_route_pair)
             .collect();
         Ok(routes)
     }
@@ -374,7 +382,15 @@ impl CrossChainService for BoltzService {
             ))
         })?;
 
-        let chain = ChainId::new(&route.chain);
+        // The route carries the destination's orthogonal `(chain, asset)`
+        // identity; Boltz selects by that pair, so map the asset ticker back to
+        // its enum and pass both through (no opaque destination handle).
+        let asset = asset_from_ticker(&route.asset).ok_or_else(|| {
+            SdkError::InvalidInput(format!(
+                "Boltz does not support asset '{}' on {}",
+                route.asset, route.chain
+            ))
+        })?;
 
         if let Some(bps) = max_slippage_bps
             && bps > MAX_SLIPPAGE_BPS
@@ -389,7 +405,8 @@ impl CrossChainService for BoltzService {
                 self.prepare_fees_excluded(
                     recipient_address,
                     route,
-                    chain,
+                    &route.chain,
+                    asset,
                     total_sats,
                     max_slippage_bps,
                 )
@@ -399,7 +416,8 @@ impl CrossChainService for BoltzService {
                 self.prepare_fees_included(
                     recipient_address,
                     route,
-                    chain,
+                    &route.chain,
+                    asset,
                     total_sats,
                     max_slippage_bps,
                 )
@@ -496,7 +514,7 @@ impl CrossChainService for BoltzService {
                 invoice_amount_sats,
                 estimated_out: prepared.estimated_out,
                 delivered_amount: None,
-                lz_guid: None,
+                bridge_ref: None,
                 status: ConversionStatus::Pending,
                 fee: Some(prepared.fee_amount),
                 max_slippage_bps: *max_slippage_bps,
@@ -565,6 +583,19 @@ fn boltz_err_to_sdk(err: &BoltzError) -> SdkError {
     SdkError::Generic(format!("Boltz: {err}"))
 }
 
+/// Map a route's asset ticker back to the boltz-client [`Asset`]. Inverse of
+/// `Asset::as_str` (used when building the route): `CrossChainRoutePair.asset`
+/// is a plain string, so the prepare path parses it to select the destination
+/// by `(chain, asset)`. Returns `None` for tickers Boltz does not deliver.
+fn asset_from_ticker(ticker: &str) -> Option<Asset> {
+    match ticker.to_ascii_uppercase().as_str() {
+        "USDT" => Some(Asset::Usdt),
+        "USDT0" => Some(Asset::Usdt0),
+        "USDC" => Some(Asset::Usdc),
+        _ => None,
+    }
+}
+
 /// Phase-1 check for the `FeesIncluded` path: returns the size to use for the
 /// real invoice, or rejects if the probed LN fee already eats the budget.
 fn fees_included_real_invoice_sats(
@@ -579,16 +610,25 @@ fn fees_included_real_invoice_sats(
     Ok(total_sats.saturating_sub(ln_fee_probe_sats))
 }
 
-/// Build a [`CrossChainRoutePair`] from a Boltz [`ChainSpec`]. Surfaces
-/// `chain_id` for EVM chains as a decimal string; non-EVM transports
-/// (Solana, Tron) get `None`, matching the USDT0 deployments feed.
-fn spec_to_route_pair(spec: &boltz_client::models::ChainSpec) -> CrossChainRoutePair {
+/// Build a [`CrossChainRoutePair`] from a Boltz [`DestinationOption`].
+///
+/// Mirrors Orchestra's orthogonal model: `chain` is the human chain label
+/// (`"Arbitrum One"`, `"Base"`, `"Solana"`) and `asset` the delivered
+/// stablecoin (`"USDT"` / `"USDT0"` / `"USDC"`). The `(chain, asset)` pair is
+/// the destination identity Boltz selects by at prepare time.
+///
+/// `chain_id` (EVM chain id as a decimal string) and `contract_address` (the
+/// destination token contract) come from the destination's `evm_chain_id` /
+/// `dest_token_address`; non-EVM transports (Solana, Tron) expose no chain id.
+fn destination_to_route_pair(
+    dest: &boltz_client::models::DestinationOption,
+) -> CrossChainRoutePair {
     CrossChainRoutePair {
         provider: CrossChainProvider::Boltz,
-        chain: spec.id.as_str().to_string(),
-        chain_id: spec.evm_chain_id.map(|id| id.to_string()),
-        asset: spec.asset_symbol().to_string(),
-        contract_address: spec.token_address.clone(),
+        chain: dest.chain_label.clone(),
+        chain_id: dest.evm_chain_id.map(|id| id.to_string()),
+        asset: dest.asset.as_str().to_string(),
+        contract_address: dest.dest_token_address.clone(),
         decimals: 6,
         exact_out_eligible: false,
         supported_sources: vec![SourceAsset::Bitcoin],
@@ -598,34 +638,45 @@ fn spec_to_route_pair(spec: &boltz_client::models::ChainSpec) -> CrossChainRoute
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boltz_client::models::{ChainSpec, NetworkTransport, Usdt0Kind};
+    use boltz_client::models::{Asset, BridgeKind, DestinationOption, NetworkTransport};
 
-    fn test_spec(evm_chain_id: Option<u64>, transport: NetworkTransport) -> ChainSpec {
-        ChainSpec {
-            id: ChainId::new("arbitrum one"),
-            is_source: false,
-            display_name: "Arbitrum One".to_string(),
+    fn test_destination(
+        chain_label: &str,
+        asset: Asset,
+        transport: NetworkTransport,
+        evm_chain_id: Option<u64>,
+        dest_token_address: Option<&str>,
+        bridge_kind: BridgeKind,
+    ) -> DestinationOption {
+        DestinationOption {
+            chain_label: chain_label.to_string(),
+            asset,
             transport,
             evm_chain_id,
-            lz_eid: 30110,
-            oft_address: "0xoft".to_string(),
-            token_address: Some("0xtoken".to_string()),
-            mesh: Usdt0Kind::Native,
+            dest_token_address: dest_token_address.map(str::to_string),
+            bridge_kind,
         }
     }
 
     #[test]
-    fn spec_to_pair_maps_evm_chain_id_to_decimal_string() {
-        let spec = test_spec(Some(42161), NetworkTransport::Evm);
-        let pair = spec_to_route_pair(&spec);
+    fn destination_to_pair_maps_evm_chain_id_to_decimal_string() {
+        let dest = test_destination(
+            "Polygon PoS",
+            Asset::Usdt0,
+            NetworkTransport::Evm,
+            Some(137),
+            Some("0xtoken"),
+            BridgeKind::Oft,
+        );
+        let pair = destination_to_route_pair(&dest);
 
         assert_eq!(pair.provider, CrossChainProvider::Boltz);
         assert_eq!(
             pair.chain_id,
-            Some("42161".to_string()),
+            Some("137".to_string()),
             "EVM chain id should render as a decimal string"
         );
-        assert_eq!(pair.chain, "arbitrum one");
+        assert_eq!(pair.chain, "Polygon PoS", "chain carries the human label");
         assert_eq!(pair.asset, "USDT0");
         assert_eq!(pair.contract_address.as_deref(), Some("0xtoken"));
         assert_eq!(pair.decimals, 6);
@@ -633,9 +684,33 @@ mod tests {
     }
 
     #[test]
-    fn spec_to_pair_preserves_none_for_non_evm_transports() {
-        let spec = test_spec(None, NetworkTransport::Solana);
-        let pair = spec_to_route_pair(&spec);
+    fn destination_to_pair_surfaces_usdc_asset() {
+        let dest = test_destination(
+            "Base",
+            Asset::Usdc,
+            NetworkTransport::Evm,
+            Some(8453),
+            Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
+            BridgeKind::Cctp,
+        );
+        let pair = destination_to_route_pair(&dest);
+
+        assert_eq!(pair.asset, "USDC");
+        assert_eq!(pair.chain, "Base", "chain carries the human label");
+        assert_eq!(pair.chain_id, Some("8453".to_string()));
+    }
+
+    #[test]
+    fn destination_to_pair_preserves_none_for_non_evm_transports() {
+        let dest = test_destination(
+            "Solana",
+            Asset::Usdt,
+            NetworkTransport::Solana,
+            None,
+            None,
+            BridgeKind::Oft,
+        );
+        let pair = destination_to_route_pair(&dest);
 
         assert_eq!(
             pair.chain_id, None,

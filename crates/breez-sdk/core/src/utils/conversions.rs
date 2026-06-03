@@ -534,7 +534,7 @@ mod tests {
             invoice_amount_sats: 100_000,
             estimated_out: 1_450_000,
             delivered_amount: delivered,
-            lz_guid: None,
+            bridge_ref: None,
             status,
             fee: Some(1_500),
             max_slippage_bps: 100,

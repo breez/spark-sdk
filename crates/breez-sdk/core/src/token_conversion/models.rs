@@ -210,9 +210,11 @@ pub enum ConversionInfo {
         invoice: String,
         /// Amount of the hold invoice in sats.
         invoice_amount_sats: u64,
-        /// `LayerZero` message GUID for bridged swaps.
-        #[serde(default)]
-        lz_guid: Option<String>,
+        /// Cross-chain bridge tracking handle for bridged swaps: a `LayerZero`
+        /// message GUID for OFT (USDT0) routes, or a CCTP reference for USDC
+        /// routes. `None` for same-chain (Arbitrum-direct) delivery.
+        #[serde(default, alias = "lz_guid")]
+        bridge_ref: Option<String>,
         /// DEX slippage tolerance (basis points) committed at prepare time.
         max_slippage_bps: u32,
         /// Whether the claim-time DEX quote drifted beyond `max_slippage_bps`.
@@ -311,7 +313,7 @@ mod tests {
             invoice_amount_sats: 150_000,
             estimated_out: 99_000_000,
             delivered_amount: Some(98_750_000),
-            lz_guid: Some("0xdeadbeef".to_string()),
+            bridge_ref: Some("0xdeadbeef".to_string()),
             status: ConversionStatus::Pending,
             fee: Some(2_500),
             max_slippage_bps: 100,
@@ -347,7 +349,7 @@ mod tests {
             invoice_amount_sats: 100,
             estimated_out: 1,
             delivered_amount: None,
-            lz_guid: None,
+            bridge_ref: None,
             status: ConversionStatus::Pending,
             fee: None,
             max_slippage_bps: 100,

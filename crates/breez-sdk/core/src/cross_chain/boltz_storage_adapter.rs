@@ -176,25 +176,6 @@ impl BoltzStorage for BoltzStorageAdapter {
             .map_err(|e| BoltzError::Store(format!("Failed to persist key index: {e}")))?;
         Ok(current)
     }
-
-    async fn set_key_index_if_higher(&self, value: u32) -> Result<(), BoltzError> {
-        let _guard = self.key_index_mutex.lock().await;
-        let key = key_index_cache_key(&self.instance_id);
-        let current = self
-            .storage
-            .get_cached_item(key.clone())
-            .await
-            .map_err(|e| BoltzError::Store(format!("Failed to read key index: {e}")))?
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(0);
-        if value > current {
-            self.storage
-                .set_cached_item(key, value.to_string())
-                .await
-                .map_err(|e| BoltzError::Store(format!("Failed to persist key index: {e}")))?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -203,7 +184,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use boltz_client::models::{BoltzSwap, BoltzSwapStatus, ChainId};
+    use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind};
 
     use super::*;
     use crate::persist::sqlite::SqliteStorage;
@@ -219,24 +200,27 @@ mod tests {
         BoltzSwap {
             id: id.to_string(),
             status,
+            bridge_kind: BridgeKind::Oft,
             claim_key_index: 0,
             chain_id: 42161,
             claim_address: "0xclaim".to_string(),
             destination_address: "0xdest".to_string(),
-            destination_chain: ChainId::new("arbitrum one"),
+            destination_chain: "Arbitrum One".to_string(),
+            asset: Asset::Usdt,
             refund_address: "0xrefund".to_string(),
             erc20swap_address: "0xswap".to_string(),
             router_address: "0xrouter".to_string(),
             invoice: "lnbc1000n".to_string(),
             invoice_amount_sats: 100_000,
             onchain_amount: 99_500,
-            expected_usdt_amount: 71_000_000,
+            expected_output_amount: 71_000_000,
             slippage_bps: 100,
             timeout_block_height: 123_456,
             lockup_tx_id: None,
             claim_tx_hash: None,
+            pending_call_id: None,
             delivered_amount: None,
-            lz_guid: None,
+            bridge_ref: None,
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
         }
@@ -331,22 +315,5 @@ mod tests {
         assert_eq!(first, 0);
         assert_eq!(second, 1);
         assert_eq!(third, 2);
-    }
-
-    #[tokio::test]
-    async fn set_key_index_if_higher_only_grows() {
-        let adapter = make_adapter();
-
-        adapter.increment_key_index().await.unwrap(); // 0 -> 1
-        adapter.increment_key_index().await.unwrap(); // 1 -> 2
-        adapter.set_key_index_if_higher(10).await.unwrap();
-
-        let next = adapter.increment_key_index().await.unwrap();
-        assert_eq!(next, 10);
-
-        // lower values are ignored
-        adapter.set_key_index_if_higher(5).await.unwrap();
-        let after = adapter.increment_key_index().await.unwrap();
-        assert_eq!(after, 11);
     }
 }
