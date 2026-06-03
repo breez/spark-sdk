@@ -1,5 +1,13 @@
 import { PasskeyClient as SdkPasskeyClient } from '../breez_sdk_spark_wasm';
-import type { PasskeyConfig, PrfProvider } from '../breez_sdk_spark_wasm';
+import type {
+    PasskeyConfig,
+    PrfProvider,
+    PasskeyCredential,
+    DeriveSeedsResult,
+    DeriveSeedOptions
+} from '../breez_sdk_spark_wasm';
+
+export type { PasskeyCredential, DeriveSeedsResult, DeriveSeedOptions };
 
 /**
  * Outcome of a domain-association check: whether `rpId` is a valid
@@ -9,32 +17,6 @@ export type DomainAssociation =
     | { kind: 'Associated' }
     | { kind: 'NotAssociated'; source: string; reason: string }
     | { kind: 'Skipped'; reason: string };
-
-/**
- * A passkey credential from a register or sign-in ceremony.
- * `credentialId` is always set. `userId` (provider-generated WebAuthn
- * user handle, never host-supplied), `aaguid` (provider identifier), and
- * `backupEligible` (can sync across devices) are populated on
- * registration and null on sign-in (an assertion carries no
- * attestation). AAGUID is unverified: a display hint only, never a trust
- * signal.
- */
-export interface PasskeyCredential {
-    credentialId: Uint8Array;
-    userId: Uint8Array | null;
-    aaguid: Uint8Array | null;
-    backupEligible: boolean | null;
-}
-
-/**
- * Result of {@link PasskeyProvider.deriveSeeds}: the 32-byte outputs in
- * input order plus the credential ID observed in the same assertion
- * (null when `salts` was empty).
- */
-export interface DeriveSeedsResult {
-    seeds: Uint8Array[];
-    credentialId: Uint8Array | null;
-}
 
 /**
  * Thrown by `createPasskey` when an entry in `excludeCredentials`
@@ -69,23 +51,6 @@ export declare class PasskeyCredentialNotFoundError extends Error {
  */
 export declare class PasskeyUserCancelledError extends Error {
     constructor(message?: string);
-}
-
-/** Per-call options for {@link PasskeyProvider.deriveSeeds}. */
-export interface DeriveSeedOptions {
-    /**
-     * Credential IDs the assertion is restricted to, for
-     * reauthenticating a known user without an account picker. Empty or
-     * unset lets the browser pick any matching credential for this RP.
-     */
-    allowCredentials?: Uint8Array[];
-
-    /**
-     * Requests fast-fail when no local credential is available. Ignored
-     * by the web provider: the WebAuthn flag it maps to is still
-     * experimental, so the standard browser picker is always shown.
-     */
-    preferImmediatelyAvailableCredentials?: boolean;
 }
 
 /**

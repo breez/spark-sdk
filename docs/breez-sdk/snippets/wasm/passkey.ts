@@ -44,7 +44,7 @@ const checkAvailability = async () => {
   // `rpId` is required. Pass your app's domain, or
   // `PasskeyProvider.BREEZ_RP_ID` if your app is Breez-registered.
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const passkey = new PasskeyClient(prfProvider, undefined, undefined)
 
   // ANCHOR: check-availability
   // checkAvailability collapses isSupported + checkDomainAssociation
@@ -72,14 +72,14 @@ const checkAvailability = async () => {
 const setupPasskeyClient = () => {
   // ANCHOR: setup-client
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
+  const passkey = new PasskeyClient(prfProvider, '<breez api key>', undefined)
   // ANCHOR_END: setup-client
   return passkey
 }
 
 const connectWithPasskey = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const passkey = new PasskeyClient(prfProvider, undefined, undefined)
 
   // ANCHOR: connect-with-passkey
   // connectWithPasskey is not surfaced on web: WebAuthn can't hand the
@@ -96,7 +96,7 @@ const connectWithPasskey = async () => {
 
 const signInExistingUser = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const passkey = new PasskeyClient(prfProvider, undefined, undefined)
 
   // ANCHOR: sign-in
   // Returning-user-only sign-in. No fall-through to register.
@@ -106,7 +106,7 @@ const signInExistingUser = async () => {
 
 const registerNewPasskey = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const passkey = new PasskeyClient(prfProvider, undefined, undefined)
 
   // ANCHOR: register-passkey
   // For a brand-new user with no existing passkey: register() creates
@@ -131,7 +131,7 @@ const registerNewPasskey = async () => {
 
 const credentialMetadata = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const passkey = new PasskeyClient(prfProvider, undefined, undefined)
 
   // ANCHOR: credential-metadata
   const response = await passkey.register({ label: 'personal' })
@@ -159,7 +159,7 @@ const credentialMetadata = async () => {
 
 const listLabels = async (): Promise<string[]> => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
+  const passkey = new PasskeyClient(prfProvider, '<breez api key>', undefined)
   // ANCHOR: list-labels
   const labels = await passkey.labels().list()
   for (const label of labels) {
@@ -171,7 +171,7 @@ const listLabels = async (): Promise<string[]> => {
 
 const storeLabel = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, '<breez api key>', undefined)
+  const passkey = new PasskeyClient(prfProvider, '<breez api key>', undefined)
   // ANCHOR: store-label
   await passkey.labels().store('personal')
   // ANCHOR_END: store-label
@@ -206,7 +206,7 @@ const checkDomain = async () => {
 
 const recoverFromAlreadyExists = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const passkey = new PasskeyClient(prfProvider, undefined, undefined)
 
   // ANCHOR: recover-already-exists
   // The OS rejected register because the user's password manager
@@ -236,7 +236,7 @@ const recoverFromAlreadyExists = async () => {
 
 const handleTimeout = async () => {
   const prfProvider = new PasskeyProvider({ rpId: '<your-rp-domain>', rpName: 'Your App' })
-  const passkey = new PasskeyClient(prfProvider as any, undefined, undefined)
+  const passkey = new PasskeyClient(prfProvider, undefined, undefined)
 
   // ANCHOR: handle-timeout
   // The OS biometric inactivity timeout (~55s+) tore down the prompt
