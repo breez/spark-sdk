@@ -37,6 +37,7 @@ macros.workspace = true
 platform-utils.workspace = true
 serde.workspace = true
 serde-wasm-bindgen.workspace = true
+serde_bytes.workspace = true
 spark-wallet.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

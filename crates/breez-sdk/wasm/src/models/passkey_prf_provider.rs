@@ -259,7 +259,7 @@ export interface PrfProvider {
      *   credential ID observed in the same assertion (`null` when the
      *   provider surfaces none, e.g. sources without an OS picker)
      */
-    deriveSeeds(salts: string[], options?: DeriveSeedsOptionsJSON): Promise<DeriveSeedsResultJSON>;
+    deriveSeeds(salts: string[], options?: DeriveSeedOptions): Promise<DeriveSeedsResult>;
 
     /**
      * Optional explicit registration. Platform passkey providers (browser
@@ -275,7 +275,7 @@ export interface PrfProvider {
      * @throws `PasskeyAlreadyExistsError` when an entry in
      *   `excludeCredentials` matches a credential already on the device.
      */
-    createPasskey?(excludeCredentials: Uint8Array[]): Promise<PasskeyCredentialJSON>;
+    createPasskey?(excludeCredentials: Uint8Array[]): Promise<PasskeyCredential>;
 
     /**
      * Whether this provider can produce PRF outputs on the current
@@ -285,12 +285,10 @@ export interface PrfProvider {
 }
 
 /**
- * Plain-object shape passed as the second argument of
- * {@link PrfProvider.deriveSeeds}. Mirrors the bundled
- * `PasskeyProvider`'s `DeriveSeedOptions` so JS providers can apply
- * the same shaping fields the Rust-side `DeriveSeedsRequest` carries.
+ * Per-call options passed as the second argument of
+ * {@link PrfProvider.deriveSeeds}.
  */
-export interface DeriveSeedsOptionsJSON {
+export interface DeriveSeedOptions {
     /**
      * Credential IDs the assertion is restricted to, for reauthenticating
      * a known user without an account picker. Empty or unset lets the
@@ -307,27 +305,14 @@ export interface DeriveSeedsOptionsJSON {
 }
 
 /**
- * Plain-object shape returned by {@link PrfProvider.deriveSeeds}: the
- * derived 32-byte outputs in input order plus the credential ID observed
- * in the same assertion. `credentialId` is `null` when the provider does
- * not surface one (custom deterministic sources without an OS picker).
+ * Returned by {@link PrfProvider.deriveSeeds}: the derived 32-byte outputs
+ * in input order plus the credential ID observed in the same assertion.
+ * `credentialId` is `null` when the provider does not surface one (custom
+ * deterministic sources without an OS picker).
  */
-export interface DeriveSeedsResultJSON {
+export interface DeriveSeedsResult {
     seeds: Uint8Array[];
     credentialId?: Uint8Array | null;
-}
-
-/**
- * Plain-object shape returned by {@link PrfProvider.createPasskey}: the
- * registered credential plus its attestation. `userId` is the WebAuthn
- * user handle the provider generated for this credential, always
- * returned on registration and never host-supplied.
- */
-export interface PasskeyCredentialJSON {
-    credentialId: Uint8Array;
-    userId: Uint8Array;
-    aaguid?: Uint8Array | null;
-    backupEligible?: boolean | null;
 }"#;
 
 #[wasm_bindgen]

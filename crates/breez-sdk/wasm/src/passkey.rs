@@ -53,8 +53,14 @@ pub struct Wallet {
 /// display hint only, never a trust signal.
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyCredential)]
 pub struct PasskeyCredential {
+    #[serde(with = "serde_bytes")]
+    #[tsify(type = "Uint8Array")]
     pub credential_id: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    #[tsify(type = "Uint8Array")]
     pub user_id: Option<Vec<u8>>,
+    #[serde(with = "serde_bytes")]
+    #[tsify(type = "Uint8Array")]
     pub aaguid: Option<Vec<u8>>,
     pub backup_eligible: Option<bool>,
 }
@@ -63,6 +69,7 @@ pub struct PasskeyCredential {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::RegisterRequest)]
 pub struct RegisterRequest {
     pub label: Option<String>,
+    #[tsify(type = "Uint8Array[]")]
     pub exclude_credentials: Option<Vec<Vec<u8>>>,
 }
 
@@ -77,6 +84,7 @@ pub struct RegisterResponse {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::SignInRequest)]
 pub struct SignInRequest {
     pub label: Option<String>,
+    #[tsify(type = "Uint8Array[]")]
     pub allow_credentials: Option<Vec<Vec<u8>>>,
     pub prefer_immediately_available_credentials: Option<bool>,
 }
