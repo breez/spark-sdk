@@ -6,8 +6,7 @@ use std::sync::Arc;
 
 use breez_sdk_common::buy::moonpay::MoonpayProvider;
 
-use spark_wallet::Signer;
-use spark_wallet::{InMemorySessionStore, SparkWalletConfig};
+use spark_wallet::{InMemorySessionStore, SessionStore, Signer, SparkWallet, SparkWalletConfig};
 use tokio::sync::watch;
 use tracing::{debug, info};
 
@@ -23,7 +22,7 @@ use crate::{
     lnurl::{DefaultLnurlServerClient, LnurlServerClient},
     models::Config,
     payment_observer::{PaymentObserver, SparkTransferObserver},
-    persist::backend::StorageBackend,
+    persist::backend::{ResolvedStores, StorageBackend},
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams, SyncCoordinator, runtime_from_config},
     sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context},
@@ -61,6 +60,27 @@ enum SignerSource {
         account_number: Option<u32>,
     },
     External(Arc<dyn crate::signer::ExternalSigner>),
+}
+
+/// The four signers derived from a single base signer.
+struct Signers {
+    base: Arc<dyn crate::signer::BreezSigner>,
+    spark: Arc<SparkSigner>,
+    rtsync: Arc<RTSyncSigner>,
+    lnurl_auth: Arc<LnurlAuthSignerAdapter>,
+}
+
+/// Inputs to [`build_spark_wallet`] — bundled to avoid an >8-argument helper.
+struct BuildSparkWalletParams {
+    config: SparkWalletConfig,
+    spark_signer: Arc<SparkSigner>,
+    session_store: Arc<dyn SessionStore>,
+    shutdown_receiver: watch::Receiver<()>,
+    background_services_enabled: bool,
+    tree_store: Option<Arc<dyn spark_wallet::TreeStore>>,
+    token_output_store: Option<Arc<dyn spark_wallet::TokenOutputStore>>,
+    payment_observer: Option<Arc<dyn PaymentObserver>>,
+    context: Arc<SdkContext>,
 }
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -306,7 +326,7 @@ impl SdkBuilder {
     fn build_spark_wallet_config(
         network: spark_wallet::Network,
         env_config: &crate::models::SparkConfig,
-    ) -> Result<spark_wallet::SparkWalletConfig, SdkError> {
+    ) -> Result<SparkWalletConfig, SdkError> {
         let coordinator_index = env_config
             .signing_operators
             .iter()
@@ -355,336 +375,106 @@ impl SdkBuilder {
         Ok(config)
     }
 
-    /// Builds the `BreezSdk` instance with the configured components.
+    /// Builds the `BreezSdk` instance from the configured components, reading
+    /// top-to-bottom as a sequence of named assembly steps.
     #[allow(clippy::too_many_lines)]
     pub async fn build(self) -> Result<BreezSdk, SdkError> {
-        // Validate configuration
         self.config.validate()?;
         let runtime = runtime_from_config(&self.config);
-        if !runtime.starts_background_services() {
-            if self.config.stable_balance_config.is_some() {
-                return Err(SdkError::InvalidInput(
-                    "stable_balance_config is not supported when background_tasks_enabled is false"
-                        .to_string(),
-                ));
-            }
-            if self.config.real_time_sync_server_url.is_some() {
-                return Err(SdkError::InvalidInput(
-                    "real_time_sync_server_url must be None when background_tasks_enabled is false"
-                        .to_string(),
-                ));
-            }
-            if self.config.leaf_optimization_config.auto_enabled {
-                return Err(SdkError::InvalidInput(
-                    "leaf_optimization_config.auto_enabled must be false when background_tasks_enabled is false"
-                        .to_string(),
-                ));
-            }
-            if self.config.token_optimization_config.auto_enabled {
-                return Err(SdkError::InvalidInput(
-                    "token_optimization_config.auto_enabled must be false when background_tasks_enabled is false"
-                        .to_string(),
-                ));
-            }
-        }
+        let background_services_enabled = runtime.starts_background_services();
+        validate_server_mode(&self.config, background_services_enabled)?;
 
-        // Create the base signer based on the signer source
-        let signer: Arc<dyn crate::signer::BreezSigner> = match self.signer_source {
-            SignerSource::Seed {
-                seed,
-                key_set_type,
-                use_address_index,
-                account_number,
-            } => Arc::new(
-                BreezSignerImpl::new(
-                    &self.config,
-                    &seed,
-                    key_set_type.into(),
-                    use_address_index,
-                    account_number,
-                )
-                .map_err(|e| SdkError::Generic(e.to_string()))?,
-            ),
-            SignerSource::External(external_signer) => {
-                use crate::signer::ExternalSignerAdapter;
-                Arc::new(ExternalSignerAdapter::new(external_signer))
-            }
-        };
-
-        // Create the specialized signers
-        let spark_signer = Arc::new(SparkSigner::new(signer.clone()));
-        let rtsync_signer = Arc::new(
-            RTSyncSigner::new(signer.clone(), self.config.network)
-                .map_err(|e| SdkError::Generic(e.to_string()))?,
+        let signers = build_signers(&self.config, self.signer_source)?;
+        let context = resolve_context(self.context, &self.config).await?;
+        let stores = resolve_storage(self.storage, &context, &signers.spark, &self.config).await?;
+        let chain_service = resolve_chain_service(
+            self.chain_service,
+            self.rest_chain_service_config,
+            &context,
+            self.config.network,
         );
-        let lnurl_auth_signer = Arc::new(LnurlAuthSignerAdapter::new(signer.clone()));
-
-        // Resolve the shared resources: use the caller-supplied context if
-        // present, otherwise spin up a default one. Either way, downstream
-        // wiring reads from `context` for connection managers.
-        let context = match self.context {
-            Some(ctx) => ctx,
-            None => {
-                new_shared_sdk_context(SdkContextConfig {
-                    api_key: self.config.api_key.clone(),
-                    ..SdkContextConfig::new(self.config.network)
-                })
-                .await?
-            }
-        };
-
-        // Ensure the context's parameters are the same as the config parameters.
-        if context.network != self.config.network || context.api_key != self.config.api_key {
-            return Err(SdkError::Generic(
-                "SdkContext network/api_key do not match SdkConfig".to_string(),
-            ));
-        }
-
-        // Resolve the single storage backend. It comes either from the
-        // builder's `with_storage` or from a shared `SdkContext` — exactly one
-        // must supply it. All per-database wiring lives behind
-        // `StorageBackend::create_stores`.
-        let storage_backend: Arc<dyn StorageBackend> =
-            match (self.storage, context.storage_backend.clone()) {
-                (Some(storage), None) => storage,
-                (None, Some(backend)) => backend,
-                (Some(_), Some(_)) => {
-                    return Err(SdkError::Generic(
-                        "storage is configured on both the SdkBuilder and the shared SdkContext"
-                            .to_string(),
-                    ));
-                }
-                (None, None) => {
-                    return Err(SdkError::Generic("No storage configured".to_string()));
-                }
-            };
-        let identity_public_key = spark_signer
-            .get_identity_public_key()
-            .await
-            .map_err(|e| SdkError::Generic(e.to_string()))?;
-        let resolved = storage_backend
-            .create_stores(
-                self.config.network,
-                identity_public_key.serialize().to_vec(),
-            )
-            .await?;
-        let storage = resolved.storage.clone();
-        let tree_store = resolved.tree_store.clone();
-        let token_output_store = resolved.token_output_store.clone();
-        let session_store = resolved.session_store.clone();
-
-        let chain_service: Arc<dyn BitcoinChainService> = if let Some(service) = self.chain_service
-        {
-            service
-        } else if let Some(cfg) = self.rest_chain_service_config {
-            Arc::new(RestClientChainService::new(
-                cfg.url,
-                self.config.network,
-                5,
-                context.http_client.clone(),
-                cfg.credentials
-                    .map(|c| BasicAuth::new(c.username, c.password)),
-                cfg.api_type,
-            ))
-        } else {
-            let inner_client: Arc<dyn platform_utils::HttpClient> = context.http_client.clone();
-            match self.config.network {
-                Network::Mainnet => Arc::new(RestClientChainService::new(
-                    "https://blockstream.info/api".to_string(),
-                    self.config.network,
-                    5,
-                    inner_client,
-                    None,
-                    ChainApiType::Esplora,
-                )),
-                Network::Regtest => Arc::new(RestClientChainService::new(
-                    "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
-                    self.config.network,
-                    5,
-                    inner_client,
-                    match (
-                        std::env::var("CHAIN_SERVICE_USERNAME"),
-                        std::env::var("CHAIN_SERVICE_PASSWORD"),
-                    ) {
-                        (Ok(username), Ok(password)) => Some(BasicAuth::new(username, password)),
-                        _ => Some(BasicAuth::new(
-                            "spark-sdk".to_string(),
-                            "mCMk1JqlBNtetUNy".to_string(),
-                        )),
-                    },
-                    ChainApiType::MempoolSpace,
-                )),
-            }
-        };
 
         let user_agent = crate::default_user_agent();
         info!("Building sdk with user agent: {}", user_agent);
 
-        let breez_server = Arc::clone(&context.breez_server);
-
         let fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService> = match self.fiat_service {
             Some(service) => Arc::new(FiatServiceWrapper::new(service)),
-            None => breez_server.clone(),
+            None => context.breez_server.clone(),
         };
+        let lnurl_client: Arc<dyn platform_utils::HttpClient> = self
+            .lnurl_client
+            .unwrap_or_else(|| context.http_client.clone());
 
-        let lnurl_client: Arc<dyn platform_utils::HttpClient> = match self.lnurl_client {
-            Some(client) => client,
-            None => context.http_client.clone(),
-        };
-        let mut spark_wallet_config = if let Some(env_config) = &self.config.spark_config {
-            Self::build_spark_wallet_config(self.config.network.into(), env_config)?
-        } else {
-            spark_wallet::SparkWalletConfig::default_config(self.config.network.into())
-        };
-        spark_wallet_config.operator_pool = spark_wallet_config
-            .operator_pool
-            .with_user_agent(Some(user_agent.clone()));
-        spark_wallet_config.service_provider_config.user_agent = Some(user_agent.clone());
-        let background_services_enabled = runtime.starts_background_services();
-        spark_wallet_config.leaf_auto_optimize_enabled =
-            background_services_enabled && self.config.leaf_optimization_config.auto_enabled;
-        spark_wallet_config.leaf_optimization_options.multiplicity =
-            self.config.leaf_optimization_config.multiplicity;
-
-        let token_opt = &self.config.token_optimization_config;
-        let token_options = &mut spark_wallet_config.token_outputs_optimization_options;
-        token_options.target_output_count = token_opt.target_output_count;
-        token_options.min_outputs_threshold = token_opt.min_outputs_threshold;
-        // Only override when disabled; enabled keeps the network default interval.
-        if !token_opt.auto_enabled || !background_services_enabled {
-            token_options.auto_optimize_interval = None;
-        }
-        spark_wallet_config.max_concurrent_claims = self.config.max_concurrent_claims;
-
+        let spark_wallet_config =
+            finalize_spark_wallet_config(&self.config, &user_agent, background_services_enabled)?;
         let shutdown_sender = watch::channel::<()>(()).0;
+        let session_store = wrap_session_store(
+            stores.session_store.clone(),
+            &signers.base,
+            self.config.network,
+        )?;
 
-        let inner_session_store =
-            session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
-        let inner_session_store: Arc<dyn spark_wallet::SessionStore> = Arc::new(
-            crate::session_store::EncryptingSessionStore::new(
-                inner_session_store,
-                signer.clone(),
-                self.config.network,
-            )
-            .map_err(|e| {
-                SdkError::Generic(format!("failed to set up session token encryption: {e}"))
-            })?,
-        );
-        let inner_session_store: Arc<dyn spark_wallet::SessionStore> = Arc::new(
-            crate::session_store::CachingSessionStore::new(inner_session_store),
-        );
-        let mut wallet_builder =
-            spark_wallet::WalletBuilder::new(spark_wallet_config, spark_signer)
-                .with_cancellation_token(shutdown_sender.subscribe())
-                .with_session_store(inner_session_store)
-                .with_background_processing(background_services_enabled);
-        if let Some(provider) = &context.jwt_header_provider {
-            wallet_builder = wallet_builder.with_so_extra_header_provider(
-                Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
-            );
-        }
-        if let Some(observer) = self.payment_observer {
-            let observer: Arc<dyn spark_wallet::TransferObserver> =
-                Arc::new(SparkTransferObserver::new(observer));
-            wallet_builder = wallet_builder.with_transfer_observer(observer);
-        }
-        if let Some(tree_store) = tree_store {
-            wallet_builder = wallet_builder.with_tree_store(tree_store);
-        }
-        if let Some(token_output_store) = token_output_store {
-            wallet_builder = wallet_builder.with_token_output_store(token_output_store);
-        }
-        wallet_builder = wallet_builder.with_ssp_http_client(context.http_client.clone());
-        wallet_builder = wallet_builder.with_connection_manager(context.connection_manager.clone());
-        let spark_wallet = Arc::new(wallet_builder.build().await?);
+        let spark_wallet = build_spark_wallet(BuildSparkWalletParams {
+            config: spark_wallet_config,
+            spark_signer: Arc::clone(&signers.spark),
+            session_store,
+            shutdown_receiver: shutdown_sender.subscribe(),
+            background_services_enabled,
+            tree_store: stores.tree_store.clone(),
+            token_output_store: stores.token_output_store.clone(),
+            payment_observer: self.payment_observer,
+            context: Arc::clone(&context),
+        })
+        .await?;
 
-        let lnurl_server_client: Option<Arc<dyn LnurlServerClient>> = match self.lnurl_server_client
-        {
-            Some(client) => Some(client),
-            None => match &self.config.lnurl_domain {
-                Some(domain) => Some(Arc::new(DefaultLnurlServerClient::new(
-                    context.http_client.clone(),
-                    domain.clone(),
-                    self.config.api_key.clone(),
-                    Arc::clone(&spark_wallet),
-                ))),
-                None => None,
-            },
-        };
+        let lnurl_server_client = resolve_lnurl_server_client(
+            self.lnurl_server_client,
+            &self.config,
+            &context,
+            &spark_wallet,
+        );
 
         let real_time_sync_active =
             background_services_enabled && self.config.real_time_sync_server_url.is_some();
         let event_emitter = Arc::new(EventEmitter::new(real_time_sync_active));
 
-        let storage = match &self.config.real_time_sync_server_url {
-            Some(server_url) if background_services_enabled => {
-                init_and_start_real_time_sync(RealTimeSyncParams {
-                    server_url: server_url.clone(),
-                    api_key: self.config.api_key.clone(),
-                    user_agent,
-                    signer: rtsync_signer,
-                    storage: Arc::clone(&storage),
-                    shutdown_receiver: shutdown_sender.subscribe(),
-                    event_emitter: Arc::clone(&event_emitter),
-                    lnurl_server_client: lnurl_server_client.clone(),
-                })
-                .await?
-            }
-            _ => storage,
-        };
-
-        // Create the MoonPay provider for buying Bitcoin
-        let buy_bitcoin_provider = Arc::new(MoonpayProvider::new(breez_server.clone()));
-
-        // Create the FlashnetTokenConverter. Client runtime starts its refunder.
-        let flashnet_config = FlashnetConfig::default_config(
-            self.config.network.into(),
-            DEFAULT_INTEGRATOR_PUBKEY
-                .parse()
-                .ok()
-                .map(|pubkey| IntegratorConfig {
-                    pubkey,
-                    fee_bps: DEFAULT_INTEGRATOR_FEE_BPS,
-                }),
-        );
-        let flashnet_converter = Arc::new(FlashnetTokenConverter::new(
-            flashnet_config,
-            Arc::clone(&storage),
-            Arc::clone(&spark_wallet),
+        let storage = maybe_wrap_storage_with_real_time_sync(
+            Arc::clone(&stores.storage),
+            &self.config,
+            background_services_enabled,
+            user_agent,
+            signers.rtsync,
+            shutdown_sender.subscribe(),
             Arc::clone(&event_emitter),
-            self.config.network,
-            context.http_client.clone(),
-        ));
-        let token_converter: Arc<dyn TokenConverter> = flashnet_converter;
+            lnurl_server_client.clone(),
+        )
+        .await?;
 
-        // Create sync coordinator for the client runtime's sync loop
+        let buy_bitcoin_provider = Arc::new(MoonpayProvider::new(context.breez_server.clone()));
+        let token_converter = build_token_converter(
+            &self.config,
+            &storage,
+            &spark_wallet,
+            &event_emitter,
+            &context,
+        );
+
         let sync_coordinator = SyncCoordinator::new();
-        // Create StableBalance if configured. Client runtime starts its worker.
-        // It registers itself as event middleware (must be before TokenConversionMiddleware
-        // so it can see conversion child payment events for deferred task resolution)
-        let stable_balance = if let Some(config) = &self.config.stable_balance_config {
-            let stable_balance = Arc::new(
-                StableBalance::new(
-                    config.clone(),
-                    Arc::clone(&token_converter),
-                    Arc::clone(&spark_wallet),
-                    Arc::clone(&storage),
-                    Arc::clone(&event_emitter),
-                )
-                .await,
-            );
-            Some(stable_balance)
-        } else {
-            None
-        };
+        let stable_balance = build_stable_balance(
+            &self.config,
+            &token_converter,
+            &spark_wallet,
+            &storage,
+            &event_emitter,
+        )
+        .await;
 
         // Register TokenConversionMiddleware to suppress conversion child events
-        // before they reach external listeners (after StableBalance middleware)
+        // before they reach external listeners (after StableBalance middleware).
         event_emitter
             .add_middleware(Box::new(TokenConversionMiddleware))
             .await;
 
-        // Create the SDK instance
         let sdk = BreezSdk::init_and_start(BreezSdkParams {
             config: self.config,
             storage,
@@ -692,7 +482,7 @@ impl SdkBuilder {
             fiat_service,
             lnurl_client,
             lnurl_server_client,
-            lnurl_auth_signer,
+            lnurl_auth_signer: signers.lnurl_auth,
             shutdown_sender,
             runtime,
             spark_wallet,
@@ -709,11 +499,373 @@ impl SdkBuilder {
     }
 }
 
+/// Rejects server-mode configs that depend on background services.
+fn validate_server_mode(
+    config: &Config,
+    background_services_enabled: bool,
+) -> Result<(), SdkError> {
+    if background_services_enabled {
+        return Ok(());
+    }
+    if config.stable_balance_config.is_some() {
+        return Err(SdkError::InvalidInput(
+            "stable_balance_config is not supported when background_tasks_enabled is false"
+                .to_string(),
+        ));
+    }
+    if config.real_time_sync_server_url.is_some() {
+        return Err(SdkError::InvalidInput(
+            "real_time_sync_server_url must be None when background_tasks_enabled is false"
+                .to_string(),
+        ));
+    }
+    if config.leaf_optimization_config.auto_enabled {
+        return Err(SdkError::InvalidInput(
+            "leaf_optimization_config.auto_enabled must be false when background_tasks_enabled is false"
+                .to_string(),
+        ));
+    }
+    if config.token_optimization_config.auto_enabled {
+        return Err(SdkError::InvalidInput(
+            "token_optimization_config.auto_enabled must be false when background_tasks_enabled is false"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Derives the four signers (base, spark, rtsync, lnurl-auth) from one signer
+/// source.
+fn build_signers(config: &Config, signer_source: SignerSource) -> Result<Signers, SdkError> {
+    let base: Arc<dyn crate::signer::BreezSigner> = match signer_source {
+        SignerSource::Seed {
+            seed,
+            key_set_type,
+            use_address_index,
+            account_number,
+        } => Arc::new(
+            BreezSignerImpl::new(
+                config,
+                &seed,
+                key_set_type.into(),
+                use_address_index,
+                account_number,
+            )
+            .map_err(|e| SdkError::Generic(e.to_string()))?,
+        ),
+        SignerSource::External(external_signer) => {
+            use crate::signer::ExternalSignerAdapter;
+            Arc::new(ExternalSignerAdapter::new(external_signer))
+        }
+    };
+
+    let spark = Arc::new(SparkSigner::new(base.clone()));
+    let rtsync = Arc::new(
+        RTSyncSigner::new(base.clone(), config.network)
+            .map_err(|e| SdkError::Generic(e.to_string()))?,
+    );
+    let lnurl_auth = Arc::new(LnurlAuthSignerAdapter::new(base.clone()));
+
+    Ok(Signers {
+        base,
+        spark,
+        rtsync,
+        lnurl_auth,
+    })
+}
+
+/// Resolves the [`SdkContext`] — either the caller-supplied one or a fresh
+/// default — and validates that its `network`/`api_key` match the SDK config.
+async fn resolve_context(
+    supplied: Option<Arc<SdkContext>>,
+    config: &Config,
+) -> Result<Arc<SdkContext>, SdkError> {
+    let context = match supplied {
+        Some(ctx) => ctx,
+        None => {
+            new_shared_sdk_context(SdkContextConfig {
+                api_key: config.api_key.clone(),
+                ..SdkContextConfig::new(config.network)
+            })
+            .await?
+        }
+    };
+    if context.network != config.network || context.api_key != config.api_key {
+        return Err(SdkError::Generic(
+            "SdkContext network/api_key do not match SdkConfig".to_string(),
+        ));
+    }
+    Ok(context)
+}
+
+/// Resolves the single [`StorageBackend`] — from the builder or the shared
+/// context, never both — and asks it for the per-tenant store set.
+async fn resolve_storage(
+    supplied: Option<Arc<dyn StorageBackend>>,
+    context: &SdkContext,
+    spark_signer: &Arc<SparkSigner>,
+    config: &Config,
+) -> Result<Arc<ResolvedStores>, SdkError> {
+    let storage_backend: Arc<dyn StorageBackend> = match (supplied, context.storage_backend.clone())
+    {
+        (Some(storage), None) => storage,
+        (None, Some(backend)) => backend,
+        (Some(_), Some(_)) => {
+            return Err(SdkError::Generic(
+                "storage is configured on both the SdkBuilder and the shared SdkContext"
+                    .to_string(),
+            ));
+        }
+        (None, None) => return Err(SdkError::Generic("No storage configured".to_string())),
+    };
+    let identity_public_key = spark_signer
+        .get_identity_public_key()
+        .await
+        .map_err(|e| SdkError::Generic(e.to_string()))?;
+    storage_backend
+        .create_stores(config.network, identity_public_key.serialize().to_vec())
+        .await
+}
+
+/// Resolves the chain service: caller-supplied override → REST config → network
+/// default (Esplora on mainnet, mempool.space on regtest).
+fn resolve_chain_service(
+    supplied: Option<Arc<dyn BitcoinChainService>>,
+    rest_config: Option<RestChainServiceConfig>,
+    context: &SdkContext,
+    network: Network,
+) -> Arc<dyn BitcoinChainService> {
+    if let Some(service) = supplied {
+        return service;
+    }
+    if let Some(cfg) = rest_config {
+        return Arc::new(RestClientChainService::new(
+            cfg.url,
+            network,
+            5,
+            context.http_client.clone(),
+            cfg.credentials
+                .map(|c| BasicAuth::new(c.username, c.password)),
+            cfg.api_type,
+        ));
+    }
+    let inner_client: Arc<dyn platform_utils::HttpClient> = context.http_client.clone();
+    match network {
+        Network::Mainnet => Arc::new(RestClientChainService::new(
+            "https://blockstream.info/api".to_string(),
+            network,
+            5,
+            inner_client,
+            None,
+            ChainApiType::Esplora,
+        )),
+        Network::Regtest => Arc::new(RestClientChainService::new(
+            "https://regtest-mempool.us-west-2.sparkinfra.net/api".to_string(),
+            network,
+            5,
+            inner_client,
+            match (
+                std::env::var("CHAIN_SERVICE_USERNAME"),
+                std::env::var("CHAIN_SERVICE_PASSWORD"),
+            ) {
+                (Ok(username), Ok(password)) => Some(BasicAuth::new(username, password)),
+                _ => Some(BasicAuth::new(
+                    "spark-sdk".to_string(),
+                    "mCMk1JqlBNtetUNy".to_string(),
+                )),
+            },
+            ChainApiType::MempoolSpace,
+        )),
+    }
+}
+
+/// Builds the full [`SparkWalletConfig`] with user-agent and SDK-level
+/// optimization overrides applied. `background_services_enabled` gates the
+/// auto-optimization flags so server-mode SDKs don't run background loops.
+fn finalize_spark_wallet_config(
+    config: &Config,
+    user_agent: &str,
+    background_services_enabled: bool,
+) -> Result<SparkWalletConfig, SdkError> {
+    let mut spark_wallet_config = if let Some(env_config) = &config.spark_config {
+        SdkBuilder::build_spark_wallet_config(config.network.into(), env_config)?
+    } else {
+        SparkWalletConfig::default_config(config.network.into())
+    };
+    spark_wallet_config.operator_pool = spark_wallet_config
+        .operator_pool
+        .with_user_agent(Some(user_agent.to_string()));
+    spark_wallet_config.service_provider_config.user_agent = Some(user_agent.to_string());
+    spark_wallet_config.leaf_auto_optimize_enabled =
+        background_services_enabled && config.leaf_optimization_config.auto_enabled;
+    spark_wallet_config.leaf_optimization_options.multiplicity =
+        config.leaf_optimization_config.multiplicity;
+
+    let token_opt = &config.token_optimization_config;
+    let token_options = &mut spark_wallet_config.token_outputs_optimization_options;
+    token_options.target_output_count = token_opt.target_output_count;
+    token_options.min_outputs_threshold = token_opt.min_outputs_threshold;
+    // Only override when disabled; enabled keeps the network default interval.
+    if !token_opt.auto_enabled || !background_services_enabled {
+        token_options.auto_optimize_interval = None;
+    }
+    spark_wallet_config.max_concurrent_claims = config.max_concurrent_claims;
+    Ok(spark_wallet_config)
+}
+
+/// Wraps the resolved session store (or an in-memory default) in the encrypting
+/// + caching layers used by the SDK.
+fn wrap_session_store(
+    session_store: Option<Arc<dyn SessionStore>>,
+    signer: &Arc<dyn crate::signer::BreezSigner>,
+    network: Network,
+) -> Result<Arc<dyn SessionStore>, SdkError> {
+    let inner = session_store.unwrap_or_else(|| Arc::new(InMemorySessionStore::default()));
+    let encrypting: Arc<dyn SessionStore> = Arc::new(
+        crate::session_store::EncryptingSessionStore::new(inner, signer.clone(), network).map_err(
+            |e| SdkError::Generic(format!("failed to set up session token encryption: {e}")),
+        )?,
+    );
+    Ok(Arc::new(crate::session_store::CachingSessionStore::new(
+        encrypting,
+    )))
+}
+
+/// Builds the [`SparkWallet`] from the assembled config, signers and stores.
+async fn build_spark_wallet(params: BuildSparkWalletParams) -> Result<Arc<SparkWallet>, SdkError> {
+    let mut wallet_builder = spark_wallet::WalletBuilder::new(params.config, params.spark_signer)
+        .with_cancellation_token(params.shutdown_receiver)
+        .with_session_store(params.session_store)
+        .with_background_processing(params.background_services_enabled);
+    if let Some(provider) = &params.context.jwt_header_provider {
+        wallet_builder = wallet_builder.with_so_extra_header_provider(
+            Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
+        );
+    }
+    if let Some(observer) = params.payment_observer {
+        let observer: Arc<dyn spark_wallet::TransferObserver> =
+            Arc::new(SparkTransferObserver::new(observer));
+        wallet_builder = wallet_builder.with_transfer_observer(observer);
+    }
+    if let Some(tree_store) = params.tree_store {
+        wallet_builder = wallet_builder.with_tree_store(tree_store);
+    }
+    if let Some(token_output_store) = params.token_output_store {
+        wallet_builder = wallet_builder.with_token_output_store(token_output_store);
+    }
+    wallet_builder = wallet_builder.with_ssp_http_client(params.context.http_client.clone());
+    wallet_builder =
+        wallet_builder.with_connection_manager(params.context.connection_manager.clone());
+    Ok(Arc::new(wallet_builder.build().await?))
+}
+
+/// Resolves the LNURL server client: explicit override → built from
+/// `config.lnurl_domain` → none.
+fn resolve_lnurl_server_client(
+    explicit: Option<Arc<dyn LnurlServerClient>>,
+    config: &Config,
+    context: &SdkContext,
+    spark_wallet: &Arc<SparkWallet>,
+) -> Option<Arc<dyn LnurlServerClient>> {
+    if let Some(client) = explicit {
+        return Some(client);
+    }
+    config.lnurl_domain.as_ref().map(|domain| {
+        Arc::new(DefaultLnurlServerClient::new(
+            context.http_client.clone(),
+            domain.clone(),
+            config.api_key.clone(),
+            Arc::clone(spark_wallet),
+        )) as Arc<dyn LnurlServerClient>
+    })
+}
+
+/// Wraps the base storage with the real-time-sync layer when configured and
+/// background services are enabled. Otherwise returns the storage unchanged.
+#[allow(clippy::too_many_arguments)]
+async fn maybe_wrap_storage_with_real_time_sync(
+    storage: Arc<dyn crate::persist::Storage>,
+    config: &Config,
+    background_services_enabled: bool,
+    user_agent: String,
+    rtsync_signer: Arc<RTSyncSigner>,
+    shutdown_receiver: watch::Receiver<()>,
+    event_emitter: Arc<EventEmitter>,
+    lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
+) -> Result<Arc<dyn crate::persist::Storage>, SdkError> {
+    match &config.real_time_sync_server_url {
+        Some(server_url) if background_services_enabled => {
+            init_and_start_real_time_sync(RealTimeSyncParams {
+                server_url: server_url.clone(),
+                api_key: config.api_key.clone(),
+                user_agent,
+                signer: rtsync_signer,
+                storage,
+                shutdown_receiver,
+                event_emitter,
+                lnurl_server_client,
+            })
+            .await
+        }
+        _ => Ok(storage),
+    }
+}
+
+/// Builds the [`FlashnetTokenConverter`] used for in-SDK token conversion.
+fn build_token_converter(
+    config: &Config,
+    storage: &Arc<dyn crate::persist::Storage>,
+    spark_wallet: &Arc<SparkWallet>,
+    event_emitter: &Arc<EventEmitter>,
+    context: &SdkContext,
+) -> Arc<dyn TokenConverter> {
+    let flashnet_config = FlashnetConfig::default_config(
+        config.network.into(),
+        DEFAULT_INTEGRATOR_PUBKEY
+            .parse()
+            .ok()
+            .map(|pubkey| IntegratorConfig {
+                pubkey,
+                fee_bps: DEFAULT_INTEGRATOR_FEE_BPS,
+            }),
+    );
+    Arc::new(FlashnetTokenConverter::new(
+        flashnet_config,
+        Arc::clone(storage),
+        Arc::clone(spark_wallet),
+        Arc::clone(event_emitter),
+        config.network,
+        context.http_client.clone(),
+    ))
+}
+
+/// Builds the optional [`StableBalance`] middleware, which must be registered
+/// before [`TokenConversionMiddleware`] so it can see conversion child events.
+async fn build_stable_balance(
+    config: &Config,
+    token_converter: &Arc<dyn TokenConverter>,
+    spark_wallet: &Arc<SparkWallet>,
+    storage: &Arc<dyn crate::persist::Storage>,
+    event_emitter: &Arc<EventEmitter>,
+) -> Option<Arc<StableBalance>> {
+    let stable_config = config.stable_balance_config.as_ref()?;
+    Some(Arc::new(
+        StableBalance::new(
+            stable_config.clone(),
+            Arc::clone(token_converter),
+            Arc::clone(spark_wallet),
+            Arc::clone(storage),
+            Arc::clone(event_emitter),
+        )
+        .await,
+    ))
+}
+
 #[cfg(test)]
 #[cfg(feature = "sqlite")]
 mod tests {
     use super::SdkBuilder;
-    use crate::{Network, default_config};
+    use crate::{Network, SdkError, default_config};
 
     #[test]
     fn default_config_spark_config_builds_valid_wallet_config() {
@@ -875,5 +1027,231 @@ mod tests {
                 .to_string(),
             passphrase: None,
         }
+    }
+
+    fn test_spark_signer() -> std::sync::Arc<crate::signer::spark::SparkSigner> {
+        use crate::KeySetType;
+        use crate::signer::breez::BreezSignerImpl;
+        use crate::signer::spark::SparkSigner;
+        use std::sync::Arc;
+
+        let config = default_config(Network::Regtest);
+        let seed = test_seed();
+        let base: Arc<dyn crate::signer::BreezSigner> = Arc::new(
+            BreezSignerImpl::new(&config, &seed, KeySetType::Default.into(), false, None).unwrap(),
+        );
+        Arc::new(SparkSigner::new(base))
+    }
+
+    // ---- validate_server_mode ----
+
+    #[test]
+    fn validate_server_mode_ok_when_background_enabled() {
+        use crate::{StableBalanceConfig, StableBalanceToken, default_server_config};
+        let mut config = default_server_config(Network::Regtest);
+        config.stable_balance_config = Some(StableBalanceConfig {
+            tokens: vec![StableBalanceToken {
+                label: "USDB".to_string(),
+                token_identifier: "btkn1test".to_string(),
+            }],
+            default_active_label: None,
+            threshold_sats: None,
+            max_slippage_bps: None,
+        });
+        config.real_time_sync_server_url = Some("https://example.com".to_string());
+        config.leaf_optimization_config.auto_enabled = true;
+        config.token_optimization_config.auto_enabled = true;
+        // background_services_enabled = true → none of the gates fire.
+        assert!(super::validate_server_mode(&config, true).is_ok());
+    }
+
+    #[test]
+    fn validate_server_mode_ok_in_server_mode_without_background_features() {
+        use crate::default_server_config;
+        let config = default_server_config(Network::Regtest);
+        assert!(super::validate_server_mode(&config, false).is_ok());
+    }
+
+    #[test]
+    fn validate_server_mode_rejects_stable_balance_directly() {
+        use crate::{StableBalanceConfig, StableBalanceToken, default_server_config};
+        let mut config = default_server_config(Network::Regtest);
+        config.stable_balance_config = Some(StableBalanceConfig {
+            tokens: vec![StableBalanceToken {
+                label: "USDB".to_string(),
+                token_identifier: "btkn1test".to_string(),
+            }],
+            default_active_label: None,
+            threshold_sats: None,
+            max_slippage_bps: None,
+        });
+        match super::validate_server_mode(&config, false) {
+            Err(SdkError::InvalidInput(m)) => assert!(m.contains("stable_balance_config")),
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_server_mode_rejects_real_time_sync_directly() {
+        use crate::default_server_config;
+        let mut config = default_server_config(Network::Regtest);
+        config.real_time_sync_server_url = Some("https://example.com".to_string());
+        match super::validate_server_mode(&config, false) {
+            Err(SdkError::InvalidInput(m)) => assert!(m.contains("real_time_sync_server_url")),
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_server_mode_rejects_leaf_auto_optimize_directly() {
+        use crate::default_server_config;
+        let mut config = default_server_config(Network::Regtest);
+        config.leaf_optimization_config.auto_enabled = true;
+        match super::validate_server_mode(&config, false) {
+            Err(SdkError::InvalidInput(m)) => {
+                assert!(m.contains("leaf_optimization_config.auto_enabled"));
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_server_mode_rejects_token_auto_optimize_directly() {
+        use crate::default_server_config;
+        let mut config = default_server_config(Network::Regtest);
+        config.token_optimization_config.auto_enabled = true;
+        match super::validate_server_mode(&config, false) {
+            Err(SdkError::InvalidInput(m)) => {
+                assert!(m.contains("token_optimization_config.auto_enabled"));
+            }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    // ---- finalize_spark_wallet_config ----
+
+    #[test]
+    fn finalize_spark_wallet_config_disabled_background_forces_leaf_auto_off() {
+        let mut config = default_config(Network::Regtest);
+        config.leaf_optimization_config.auto_enabled = true;
+        let result = super::finalize_spark_wallet_config(&config, "test-agent", false).unwrap();
+        assert!(!result.leaf_auto_optimize_enabled);
+    }
+
+    #[test]
+    fn finalize_spark_wallet_config_disabled_background_clears_token_auto_interval() {
+        let mut config = default_config(Network::Regtest);
+        config.token_optimization_config.auto_enabled = true;
+        let result = super::finalize_spark_wallet_config(&config, "test-agent", false).unwrap();
+        assert!(
+            result
+                .token_outputs_optimization_options
+                .auto_optimize_interval
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn finalize_spark_wallet_config_enabled_background_respects_leaf_auto_optimize() {
+        let mut config = default_config(Network::Regtest);
+        config.leaf_optimization_config.auto_enabled = true;
+        let result = super::finalize_spark_wallet_config(&config, "test-agent", true).unwrap();
+        assert!(result.leaf_auto_optimize_enabled);
+    }
+
+    #[test]
+    fn finalize_spark_wallet_config_applies_user_agent() {
+        let config = default_config(Network::Regtest);
+        let result = super::finalize_spark_wallet_config(&config, "my-app/1.0", true).unwrap();
+        assert_eq!(
+            result.service_provider_config.user_agent.as_deref(),
+            Some("my-app/1.0")
+        );
+    }
+
+    // ---- resolve_context ----
+
+    #[tokio::test]
+    async fn resolve_context_errors_on_network_mismatch() {
+        use crate::{SdkContextConfig, new_shared_sdk_context};
+        let config = default_config(Network::Mainnet);
+        let ctx = new_shared_sdk_context(SdkContextConfig::new(Network::Regtest))
+            .await
+            .expect("regtest context");
+        let err = super::resolve_context(Some(ctx), &config)
+            .await
+            .err()
+            .expect("expected mismatch error");
+        assert!(
+            err.to_string().contains("network/api_key do not match"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_context_errors_on_api_key_mismatch() {
+        use crate::{SdkContextConfig, new_shared_sdk_context};
+        let mut config = default_config(Network::Mainnet);
+        config.api_key = Some("intended-key".to_string());
+        let ctx = new_shared_sdk_context(SdkContextConfig {
+            api_key: Some("wrong-key".to_string()),
+            ..SdkContextConfig::new(Network::Mainnet)
+        })
+        .await
+        .expect("mainnet context");
+        let err = super::resolve_context(Some(ctx), &config)
+            .await
+            .err()
+            .expect("expected mismatch error");
+        assert!(
+            err.to_string().contains("network/api_key do not match"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ---- resolve_storage ----
+
+    #[tokio::test]
+    async fn resolve_storage_errors_when_neither_supplied() {
+        use crate::{SdkContextConfig, new_shared_sdk_context};
+        let config = default_config(Network::Regtest);
+        let ctx = new_shared_sdk_context(SdkContextConfig::new(Network::Regtest))
+            .await
+            .expect("regtest context");
+        let signer = test_spark_signer();
+        let err = super::resolve_storage(None, &ctx, &signer, &config)
+            .await
+            .err()
+            .expect("expected no-storage error");
+        assert!(
+            err.to_string().contains("No storage configured"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_storage_errors_when_supplied_on_both_builder_and_context() {
+        use crate::{SdkContextConfig, default_storage, new_shared_sdk_context};
+        let config = default_config(Network::Regtest);
+        let ctx = new_shared_sdk_context(SdkContextConfig {
+            storage: Some(default_storage(
+                "/tmp/breez-sdk-test-resolve-storage-ctx".to_string(),
+            )),
+            ..SdkContextConfig::new(Network::Regtest)
+        })
+        .await
+        .expect("regtest context");
+        let signer = test_spark_signer();
+        let builder_storage =
+            default_storage("/tmp/breez-sdk-test-resolve-storage-builder".to_string());
+        let err = super::resolve_storage(Some(builder_storage), &ctx, &signer, &config)
+            .await
+            .err()
+            .expect("expected duplicate-storage error");
+        assert!(
+            err.to_string()
+                .contains("storage is configured on both the SdkBuilder and the shared SdkContext"),
+            "unexpected error: {err}"
+        );
     }
 }
