@@ -1742,7 +1742,10 @@ impl SparkWallet {
             if let Some(target_amounts) = target_amounts {
                 let available_balance = self.tree_service.get_available_balance().await?;
                 if available_balance < target_amounts.total_sats() {
-                    info!("Not enough funds to select leaves after refresh");
+                    info!(
+                        "Not enough funds to select leaves after refresh: balance={available_balance} target={} (retry {i})",
+                        target_amounts.total_sats()
+                    );
                     return Err(TreeServiceError::InsufficientFunds.into());
                 }
             }

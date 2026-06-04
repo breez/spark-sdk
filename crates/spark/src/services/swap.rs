@@ -370,6 +370,16 @@ impl Swap {
             }
         };
 
+        tracing::info!(
+            "DIAG swap_claim transfer_id={transfer_id} claimed_nodes={} claimed_sum={} statuses={:?}",
+            claimed_nodes.len(),
+            claimed_nodes.iter().map(|n| n.value).sum::<u64>(),
+            claimed_nodes
+                .iter()
+                .map(|n| format!("{:?}", n.status))
+                .collect::<Vec<_>>(),
+        );
+
         Ok(claimed_nodes)
     }
 }

@@ -418,6 +418,12 @@ impl InMemoryTreeStore {
         let old_leaves = std::mem::take(&mut state.leaves);
         let old_missing = std::mem::take(&mut state.missing_operators_leaves);
 
+        let diag_old_available: Vec<(TreeNodeId, u64, SystemTime)> = old_leaves
+            .iter()
+            .filter(|(_, s)| s.node.status == TreeNodeStatus::Available)
+            .map(|(id, s)| (id.clone(), s.node.value, s.added_at))
+            .collect();
+
         let now = SystemTime::now();
         for leaf in leaves {
             if !state.spent_leaf_ids.contains_key(&leaf.id) {
@@ -500,6 +506,28 @@ impl InMemoryTreeStore {
             preserved_count
         );
 
+        let dropped: Vec<(String, u64, SystemTime)> = diag_old_available
+            .iter()
+            .filter(|(id, _, _)| {
+                !state.leaves.contains_key(id) && !state.missing_operators_leaves.contains_key(id)
+            })
+            .map(|(id, v, added)| (id.to_string(), *v, *added))
+            .collect();
+        if !dropped.is_empty() {
+            tracing::warn!(
+                "DIAG set_leaves dropped {} previously-available leaves sum={} refresh_started_at={refresh_started_at:?}: {dropped:?}",
+                dropped.len(),
+                dropped.iter().map(|(_, v, _)| v).sum::<u64>(),
+            );
+        }
+        tracing::info!(
+            "DIAG set_leaves done available_sum={} available_n={} missing_ops_n={} reservations={}",
+            state.available_balance(),
+            state.leaves.values().filter(|s| s.node.status == TreeNodeStatus::Available).count(),
+            state.missing_operators_leaves.len(),
+            state.leaves_reservations.len(),
+        );
+
         Ok(())
     }
 
@@ -517,6 +545,41 @@ impl InMemoryTreeStore {
         let target_amount = target_amounts.map_or(0, |ta| ta.total_sats());
         let available = state.available_balance();
         let pending = state.pending_balance();
+
+        if matches!(purpose, ReservationPurpose::Payment) && available < target_amount {
+            let avail: Vec<(String, u64, String)> = state
+                .leaves
+                .values()
+                .map(|s| {
+                    (
+                        s.node.id.to_string(),
+                        s.node.value,
+                        format!("{:?}", s.node.status),
+                    )
+                })
+                .collect();
+            let missing: Vec<(String, u64)> = state
+                .missing_operators_leaves
+                .values()
+                .map(|s| (s.node.id.to_string(), s.node.value))
+                .collect();
+            let reserved: Vec<(String, u64, String)> = state
+                .leaves_reservations
+                .values()
+                .flat_map(|e| {
+                    let p = format!("{:?}", e.purpose);
+                    e.leaves
+                        .iter()
+                        .map(move |s| (s.node.id.to_string(), s.node.value, p.clone()))
+                })
+                .collect();
+            tracing::warn!(
+                "DIAG payment-short target={target_amount} available={available} pending={pending} missing_ops_sum={} reserved_sum={} spent_ids={} avail_leaves={avail:?} missing_ops={missing:?} reserved={reserved:?}",
+                missing.iter().map(|(_, v)| v).sum::<u64>(),
+                reserved.iter().map(|(_, v, _)| v).sum::<u64>(),
+                state.spent_leaf_ids.len(),
+            );
+        }
 
         // Filter available leaves
         let leaves: Vec<TreeNode> = state
@@ -655,6 +718,15 @@ impl InMemoryTreeStore {
         }
 
         if let Some(resulting_leaves) = new_leaves {
+            tracing::info!(
+                "DIAG finalize reservation={id} new_leaves={} new_sum={} statuses={:?}",
+                resulting_leaves.len(),
+                resulting_leaves.iter().map(|l| l.value).sum::<u64>(),
+                resulting_leaves
+                    .iter()
+                    .map(|l| format!("{:?}", l.status))
+                    .collect::<Vec<_>>(),
+            );
             let now = SystemTime::now();
             for leaf in resulting_leaves {
                 trace!(

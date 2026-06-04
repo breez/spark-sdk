@@ -517,6 +517,13 @@ impl LeafOptimizer {
             }
         };
 
+        tracing::info!(
+            "DIAG optimize round {round}/{total_rounds} give_sum={} receive_sum={} give_n={} receive_n={}",
+            swap.leaves_to_give.iter().sum::<u64>(),
+            swap.leaves_to_receive.iter().sum::<u64>(),
+            swap.leaves_to_give.len(),
+            swap.leaves_to_receive.len(),
+        );
         debug!(
             "Executing optimization round {round}/{total_rounds}: give {} leaves {:?} ({} sats), receive {} leaves {:?} ({} sats)",
             swap.leaves_to_give.len(),
