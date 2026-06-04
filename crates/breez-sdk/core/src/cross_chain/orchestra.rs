@@ -400,7 +400,9 @@ impl CrossChainService for OrchestraService {
                 spark_side
                     .contract_address
                     .as_ref()
-                    .map(|ca| SourceAsset::Token(ca.clone()))
+                    .map(|ca| SourceAsset::Token {
+                        token_identifier: ca.clone(),
+                    })
             };
 
             let entry = grouped.entry(key.clone()).or_insert_with(|| {

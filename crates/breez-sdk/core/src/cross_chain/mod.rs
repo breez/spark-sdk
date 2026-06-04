@@ -39,7 +39,7 @@ pub enum SourceAsset {
     /// Native BTC (sats).
     Bitcoin,
     /// A Spark token, identified by its bech32m `token_identifier` (e.g. `btkn1...`).
-    Token(String),
+    Token { token_identifier: String },
 }
 
 /// How the caller wants fees handled against the request `amount`.

@@ -265,7 +265,7 @@ pub struct _CrossChainAddressDetails {
 #[frb(mirror(SourceAsset))]
 pub enum _SourceAsset {
     Bitcoin,
-    Token(String),
+    Token { token_identifier: String },
 }
 
 #[frb(mirror(CrossChainFeeMode))]

@@ -49,7 +49,9 @@ fn validate_route_supports_effective_source(
         SourceAsset::Bitcoin
     } else {
         match token_identifier {
-            Some(tid) => SourceAsset::Token(tid.clone()),
+            Some(tid) => SourceAsset::Token {
+                token_identifier: tid.clone(),
+            },
             None => SourceAsset::Bitcoin,
         }
     };
@@ -60,7 +62,9 @@ fn validate_route_supports_effective_source(
             .iter()
             .map(|s| match s {
                 SourceAsset::Bitcoin => "sats".to_string(),
-                SourceAsset::Token(t) => t.clone(),
+                SourceAsset::Token {
+                    token_identifier: t,
+                } => t.clone(),
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -344,7 +348,7 @@ fn decide_cross_chain_source(
             let route_accepts_token = route
                 .supported_sources
                 .iter()
-                .any(|s| matches!(s, SourceAsset::Token(t) if t == token_id));
+                .any(|s| matches!(s, SourceAsset::Token { token_identifier: t } if t == token_id));
             if route_accepts_token {
                 // Direct token send — no conversion needed.
                 return CrossChainSourceDecision::UseAsIs(None);
@@ -531,7 +535,9 @@ mod tests {
     #[test_all]
     fn source_resolution_token_directly_supported() {
         let token = "USDB".to_string();
-        let route = route_with_sources(vec![SourceAsset::Token("USDB".to_string())]);
+        let route = route_with_sources(vec![SourceAsset::Token {
+            token_identifier: "USDB".to_string(),
+        }]);
         let result = decide_cross_chain_source(&route, Some(&token), None, None, None);
         assert_eq!(result, CrossChainSourceDecision::UseAsIs(None));
     }
@@ -572,7 +578,9 @@ mod tests {
 
     #[test_all]
     fn source_resolution_no_token_route_token_only() {
-        let route = route_with_sources(vec![SourceAsset::Token("USDB".to_string())]);
+        let route = route_with_sources(vec![SourceAsset::Token {
+            token_identifier: "USDB".to_string(),
+        }]);
         let result = decide_cross_chain_source(&route, None, None, None, None);
         assert_eq!(result, CrossChainSourceDecision::UseAsIs(None));
     }
@@ -590,7 +598,9 @@ mod tests {
             completion_timeout_secs: None,
         };
         let route = route_with_sources(vec![
-            SourceAsset::Token("USDB".to_string()),
+            SourceAsset::Token {
+                token_identifier: "USDB".to_string(),
+            },
             SourceAsset::Bitcoin,
         ]);
         let result =
@@ -616,7 +626,9 @@ mod tests {
         // ToBitcoin.
         let token = "USDB".to_string();
         let route = route_with_sources(vec![
-            SourceAsset::Token("USDB".to_string()),
+            SourceAsset::Token {
+                token_identifier: "USDB".to_string(),
+            },
             SourceAsset::Bitcoin,
         ]);
         let result = decide_cross_chain_source(&route, Some(&token), None, Some(&token), Some(150));
@@ -634,7 +646,9 @@ mod tests {
         // doesn't accept sats. Falls through to UseAsIs(None) and the
         // post-validation will surface the route-mismatch error.
         let token = "USDB".to_string();
-        let route = route_with_sources(vec![SourceAsset::Token("USDC".to_string())]);
+        let route = route_with_sources(vec![SourceAsset::Token {
+            token_identifier: "USDC".to_string(),
+        }]);
         let result = decide_cross_chain_source(&route, Some(&token), None, Some(&token), Some(150));
         assert_eq!(result, CrossChainSourceDecision::UseAsIs(None));
     }
@@ -649,7 +663,9 @@ mod tests {
 
     #[test_all]
     fn validate_effective_source_no_token_no_conversion_route_token_only_errors() {
-        let route = route_with_sources(vec![SourceAsset::Token("USDB".to_string())]);
+        let route = route_with_sources(vec![SourceAsset::Token {
+            token_identifier: "USDB".to_string(),
+        }]);
         let err = validate_route_supports_effective_source(&route, None, None).unwrap_err();
         let SdkError::InvalidInput(msg) = err else {
             panic!("expected InvalidInput, got {err:?}");
@@ -663,7 +679,9 @@ mod tests {
     #[test_all]
     fn validate_effective_source_token_supported_directly() {
         let token = "USDB".to_string();
-        let route = route_with_sources(vec![SourceAsset::Token("USDB".to_string())]);
+        let route = route_with_sources(vec![SourceAsset::Token {
+            token_identifier: "USDB".to_string(),
+        }]);
         assert!(validate_route_supports_effective_source(&route, Some(&token), None).is_ok());
     }
 
@@ -671,7 +689,9 @@ mod tests {
     fn validate_effective_source_token_unsupported_errors() {
         let token = "USDC".to_string();
         let route = route_with_sources(vec![
-            SourceAsset::Token("USDB".to_string()),
+            SourceAsset::Token {
+                token_identifier: "USDB".to_string(),
+            },
             SourceAsset::Bitcoin,
         ]);
         let err = validate_route_supports_effective_source(&route, Some(&token), None).unwrap_err();
@@ -715,7 +735,9 @@ mod tests {
             max_slippage_bps: None,
             completion_timeout_secs: None,
         };
-        let route = route_with_sources(vec![SourceAsset::Token("USDC".to_string())]);
+        let route = route_with_sources(vec![SourceAsset::Token {
+            token_identifier: "USDC".to_string(),
+        }]);
         let err = validate_route_supports_effective_source(&route, Some(&token), Some(&opts))
             .unwrap_err();
         assert!(matches!(err, SdkError::InvalidInput(_)));

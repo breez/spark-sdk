@@ -881,7 +881,7 @@ pub enum CrossChainRouteFilter {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SourceAsset)]
 pub enum SourceAsset {
     Bitcoin,
-    Token(String),
+    Token { token_identifier: String },
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainFeeMode)]
