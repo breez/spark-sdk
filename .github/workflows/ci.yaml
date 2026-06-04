@@ -129,10 +129,10 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run Tests (DIAG lnurl send-all)
+      - name: Run Tests (DIAG full breez-itest)
         env:
-          RUST_LOG: "warn,spark_wallet=info,spark::tree::store=info,spark::tree::leaf_optimizer=info,spark::services::swap=info,spark::tree::service=info,lnurl=info,breez_sdk_itest=info,breez_sdk_spark=info"
-        run: cargo test -p breez-sdk-itest --test lnurl -- --test-threads=8 --nocapture
+          RUST_LOG: "warn,spark_wallet=info,spark::tree::store=info,spark::tree::leaf_optimizer=info,lnurl=info,breez_sdk_itest=info"
+        run: make breez-itest
 
   wasm-clippy:
     name: Wasm clippy
