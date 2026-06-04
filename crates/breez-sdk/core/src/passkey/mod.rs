@@ -72,7 +72,21 @@ use tracing::warn;
 
 use crate::Seed;
 use derivation::derive_nostr_keypair;
-use nostr_client::NostrSaltClient;
+use nostr_client::{LabelStore, NostrSaltClient};
+
+/// Builds the per-identity [`LabelStore`] from the Nostr keys derived in a
+/// PRF ceremony plus the optional Breez API key. The default builds a
+/// network-backed [`NostrSaltClient`]; tests inject an in-memory double so
+/// unit tests never reach the relays.
+type LabelStoreBuilder =
+    Arc<dyn Fn(nostr::Keys, Option<String>) -> Arc<dyn LabelStore> + Send + Sync>;
+
+/// Default store builder: a network-backed [`NostrSaltClient`].
+fn default_label_store_builder() -> LabelStoreBuilder {
+    Arc::new(|keys, breez_api_key| {
+        Arc::new(NostrSaltClient::new(keys, breez_api_key)) as Arc<dyn LabelStore>
+    })
+}
 
 /// The default label used when none is provided.
 pub(super) const DEFAULT_LABEL: &str = "Default";
@@ -107,11 +121,14 @@ pub(crate) struct Passkey {
     prf_provider: Arc<dyn PrfProvider>,
     breez_api_key: Option<String>,
     default_label: String,
-    /// Cached Nostr label store, lazily built on first label op and
+    /// Cached label store, lazily built on first label op and
     /// re-bindable by [`Self::setup_wallet`] when a new derivation
     /// resolves to a different identity (e.g. a follow-up register
     /// on the same [`PasskeyClient`] instance).
-    nostr_client: Arc<RwLock<Option<NostrSaltClient>>>,
+    nostr_client: Arc<RwLock<Option<Arc<dyn LabelStore>>>>,
+    /// Builds the label store once the identity keys are derived.
+    /// Swapped in tests for an in-memory double.
+    store_builder: LabelStoreBuilder,
 }
 
 impl Passkey {
@@ -134,6 +151,22 @@ impl Passkey {
                 .filter(|s| validate_label(s).is_ok())
                 .unwrap_or_else(|| DEFAULT_LABEL.to_string()),
             nostr_client: Arc::new(RwLock::new(None)),
+            store_builder: default_label_store_builder(),
+        }
+    }
+
+    /// Construct with a custom [`LabelStore`] builder. Tests inject an
+    /// in-memory store so unit tests never reach the Nostr relays.
+    #[cfg(test)]
+    pub fn new_with_store_builder(
+        prf_provider: Arc<dyn PrfProvider>,
+        breez_api_key: Option<String>,
+        config: Option<PasskeyConfig>,
+        store_builder: LabelStoreBuilder,
+    ) -> Self {
+        Self {
+            store_builder,
+            ..Self::new(prf_provider, breez_api_key, config)
         }
     }
 
@@ -149,11 +182,11 @@ impl Passkey {
     #[cfg(test)]
     async fn derive_keys(&self) -> Result<nostr::Keys, PasskeyError> {
         let client = self.nostr_client().await?;
-        Ok(client.keys().clone())
+        Ok(client.signing_keys())
     }
 
-    /// Lazily build (or retrieve cached) the Nostr label-store client.
-    async fn nostr_client(&self) -> Result<NostrSaltClient, PasskeyError> {
+    /// Lazily build (or retrieve cached) the label-store client.
+    async fn nostr_client(&self) -> Result<Arc<dyn LabelStore>, PasskeyError> {
         // Fast path: read-lock check.
         if let Some(c) = self.nostr_client.read().await.as_ref() {
             return Ok(c.clone());
@@ -175,7 +208,7 @@ impl Passkey {
             PrfProviderError::Generic("derive_seeds returned no output".to_string())
         })?;
         let keys = derive_nostr_keypair(&account_master)?;
-        let client = NostrSaltClient::new(keys, self.breez_api_key.clone());
+        let client = (self.store_builder)(keys, self.breez_api_key.clone());
         *w = Some(client.clone());
         Ok(client)
     }
@@ -223,7 +256,7 @@ impl Passkey {
         // (a follow-up `register` resolves to a different identity).
         let keys = derive_nostr_keypair(&seeds[0])?;
         *self.nostr_client.write().await =
-            Some(NostrSaltClient::new(keys, self.breez_api_key.clone()));
+            Some((self.store_builder)(keys, self.breez_api_key.clone()));
 
         // Build the wallet before reaching out to the label store so a
         // transient publish failure can't burn the PRF ceremony.
