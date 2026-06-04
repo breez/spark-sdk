@@ -1366,7 +1366,7 @@ impl SparkWallet {
 
         let tx = self
             .token_service
-            .transfer_tokens(outputs, selected_outputs, selection_strategy)
+            .transfer_tokens(outputs, selected_outputs, selection_strategy, None)
             .await?;
         Ok(tx)
     }
@@ -1571,6 +1571,9 @@ impl SparkWallet {
                     "Amount is required when invoice does not include an amount".to_string(),
                 ))?;
 
+                let execute_before_unix_micros =
+                    execute_before_from_expiry(invoice_fields.expiry_time);
+
                 let tx = self
                     .token_service
                     .transfer_tokens(
@@ -1582,6 +1585,7 @@ impl SparkWallet {
                         }],
                         None,
                         None,
+                        execute_before_unix_micros,
                     )
                     .await?;
 
@@ -2399,5 +2403,40 @@ impl BackgroundProcessor {
                 }
             }
         }
+    }
+}
+
+/// `None` when there is no expiry or the instant is out of `i64` micros range, leaving the transfer unbounded.
+fn execute_before_from_expiry(expiry_time: Option<SystemTime>) -> Option<i64> {
+    expiry_time.and_then(|t| {
+        t.duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|d| i64::try_from(d.as_micros()).ok())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn execute_before_from_expiry_none_when_absent() {
+        assert_eq!(execute_before_from_expiry(None), None);
+    }
+
+    #[test]
+    fn execute_before_from_expiry_converts_to_micros() {
+        let expiry = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        assert_eq!(
+            execute_before_from_expiry(Some(expiry)),
+            Some(1_700_000_000_000_000)
+        );
+    }
+
+    #[test]
+    fn execute_before_from_expiry_none_before_epoch() {
+        let before_epoch = UNIX_EPOCH - Duration::from_secs(1);
+        assert_eq!(execute_before_from_expiry(Some(before_epoch)), None);
     }
 }

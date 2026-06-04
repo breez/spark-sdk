@@ -496,8 +496,13 @@ impl TokenService {
             receiver_address: burn_spark_address,
             spark_invoice: None,
         }];
-        self.transfer_tokens(receiver_outputs, preferred_outputs, selection_strategy)
-            .await
+        self.transfer_tokens(
+            receiver_outputs,
+            preferred_outputs,
+            selection_strategy,
+            None,
+        )
+        .await
     }
 
     pub async fn freeze_issuer_token(
@@ -566,6 +571,7 @@ impl TokenService {
         receiver_outputs: Vec<TransferTokenOutput>,
         preferred_outputs: Option<Vec<TokenOutputWithPrevOut>>,
         selection_strategy: Option<SelectionStrategy>,
+        execute_before_unix_micros: Option<i64>,
     ) -> Result<TokenTransaction, ServiceError> {
         if receiver_outputs.is_empty() {
             return Err(ServiceError::Generic(
@@ -609,6 +615,7 @@ impl TokenService {
                     &token_id,
                     reservation.token_outputs.outputs.clone(),
                     receiver_outputs.clone(),
+                    execute_before_unix_micros,
                 ),
                 &reservation,
             )
@@ -672,6 +679,7 @@ impl TokenService {
         token_id: &str,
         inputs: Vec<TokenOutputWithPrevOut>,
         receiver_outputs: Vec<TransferTokenOutput>,
+        execute_before_unix_micros: Option<i64>,
     ) -> Result<TokenTransaction, ServiceError> {
         if inputs.len() > MAX_TOKEN_TX_INPUTS {
             return Err(ServiceError::NeededTooManyOutputs);
@@ -769,7 +777,7 @@ impl TokenService {
                 withdraw_relative_block_locktime: self
                     .tokens_config
                     .expected_withdraw_relative_block_locktime,
-                execute_before_unix_micros: None,
+                execute_before_unix_micros,
             },
         )
         .map_err(|e| ServiceError::Generic(e.to_string()))?;
@@ -1056,6 +1064,7 @@ impl TokenService {
                     &output.metadata.identifier,
                     reservation.token_outputs.outputs.clone(),
                     receiver_outputs,
+                    None,
                 ),
                 &reservation,
             )
