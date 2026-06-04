@@ -145,7 +145,6 @@ async fn test_01_register_lightning_address(#[case] use_postgres: bool) -> Resul
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
             description: Some("Bob's test Lightning address".to_string()),
-            transfer: None,
         })
         .await?;
 
@@ -191,7 +190,6 @@ async fn test_02_check_lightning_address_available(#[case] use_postgres: bool) -
         .register_lightning_address(RegisterLightningAddressRequest {
             username: "takenuser".to_string(),
             description: Some("Test address".to_string()),
-            transfer: None,
         })
         .await?;
 
@@ -228,7 +226,6 @@ async fn test_03_get_lightning_address(#[case] use_postgres: bool) -> Result<()>
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
             description: Some(description.to_string()),
-            transfer: None,
         })
         .await?;
 
@@ -276,7 +273,6 @@ async fn test_04_delete_lightning_address(#[case] use_postgres: bool) -> Result<
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
             description: Some("Address to be deleted".to_string()),
-            transfer: None,
         })
         .await?;
 
@@ -339,7 +335,6 @@ async fn test_05_lnurl_payment_flow(
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
             description: Some(description.to_string()),
-            transfer: None,
         })
         .await?;
 
@@ -481,7 +476,6 @@ async fn test_07_lnurl_send_all_payment(
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
             description: Some(description.to_string()),
-            transfer: None,
         })
         .await?;
 
@@ -623,7 +617,6 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
             description: Some(description.to_string()),
-            transfer: None,
         })
         .await?;
 
@@ -937,7 +930,6 @@ async fn test_09_invoice_expiry_parameter(#[case] use_postgres: bool) -> Result<
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
             description: Some("Expiry test address".to_string()),
-            transfer: None,
         })
         .await?;
 
@@ -1082,7 +1074,6 @@ async fn test_11_lnurl_spark_address_payment(
             .register_lightning_address(RegisterLightningAddressRequest {
                 username: username.to_string(),
                 description: Some(description.to_string()),
-                transfer: None,
             })
             .await?;
 
@@ -1191,7 +1182,6 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
         .register_lightning_address(RegisterLightningAddressRequest {
             username: username.to_string(),
             description: Some(description.to_string()),
-            transfer: None,
         })
         .await?;
 
@@ -1211,24 +1201,22 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
         .identity_pubkey;
     assert_ne!(alice_pubkey, bob_pubkey);
 
-    // 2. Alice produces the transfer authorization by calling
-    //    accept_lightning_address_transfer with Bob's pubkey.
-    let transfer_auth = alice
+    // 2. Alice authorizes the transfer to Bob's pubkey.
+    let authorization = alice
         .sdk
-        .accept_lightning_address_transfer(AcceptLightningAddressTransferRequest {
+        .authorize_lightning_address_transfer(AuthorizeTransferRequest {
             transferee_pubkey: bob_pubkey.clone(),
         })
         .await?;
-    assert_eq!(transfer_auth.pubkey, alice_pubkey);
+    assert_eq!(authorization.pubkey, alice_pubkey);
+    assert_eq!(authorization.username, username);
 
-    // 3. Bob submits the transfer by calling register_lightning_address with
-    //    the transfer authorization populated.
+    // 3. Bob claims the transfer with the authorization Alice produced.
     let transfer_response = bob
         .sdk
-        .register_lightning_address(RegisterLightningAddressRequest {
-            username: username.to_string(),
+        .accept_lightning_address_transfer(AcceptTransferRequest {
+            authorization: authorization.clone(),
             description: Some("Bob's address now".to_string()),
-            transfer: Some(transfer_auth.clone()),
         })
         .await?;
     info!(
@@ -1253,14 +1241,13 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
     //    happened: the server rejects with `SourceNotOwner`. (We don't
     //    assert via `alice.sdk.get_lightning_address()` because that method
     //    reads Alice's local cache, which still holds her pre-transfer
-    //    registration — cache invalidation on remote transfer is out of
+    //    registration. Cache invalidation on remote transfer is out of
     //    scope for this feature.)
     let replay = bob
         .sdk
-        .register_lightning_address(RegisterLightningAddressRequest {
-            username: username.to_string(),
+        .accept_lightning_address_transfer(AcceptTransferRequest {
+            authorization,
             description: Some("Replay".to_string()),
-            transfer: Some(transfer_auth),
         })
         .await;
     assert!(

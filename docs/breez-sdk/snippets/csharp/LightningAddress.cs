@@ -61,38 +61,38 @@ namespace BreezSdkSnippets
             // ANCHOR_END: get-lightning-address
         }
 
-        // Run on the *current owner's* wallet. Produces the authorization that the
-        // new owner needs to take over the username in a single atomic call.
-        async Task<LightningAddressTransfer> SignLightningAddressTransfer(
+        // Step 1: run by the *current owner*. Produces the authorization
+        // the new owner needs to take over the username in a single atomic call.
+        async Task<TransferAuthorization> AuthorizeLightningAddressTransfer(
             BreezSdk currentOwnerSdk,
             string transfereePubkey)
         {
-            // ANCHOR: sign-lightning-address-transfer
-            var transfer = await currentOwnerSdk.AcceptLightningAddressTransfer(
-                new AcceptLightningAddressTransferRequest(
+            // ANCHOR: authorize-lightning-address-transfer
+            var authorization = await currentOwnerSdk.AuthorizeLightningAddressTransfer(
+                new AuthorizeTransferRequest(
                     transfereePubkey: transfereePubkey));
-            // ANCHOR_END: sign-lightning-address-transfer
-            return transfer;
+            // ANCHOR_END: authorize-lightning-address-transfer
+            return authorization;
         }
 
-        // Run on the *new owner's* wallet with the authorization received
-        // out-of-band from the current owner.
-        async Task RegisterLightningAddressViaTransfer(
+        // Step 2: run by the *new owner* with the authorization received
+        // from the current owner (e.g. via QR code or deep link).
+        async Task AcceptLightningAddressTransfer(
             BreezSdk newOwnerSdk,
-            LightningAddressTransfer transfer)
+            TransferAuthorization authorization)
         {
-            var username = "myusername";
             var description = "My Lightning Address";
 
-            // ANCHOR: register-lightning-address-transfer
-            var request = new RegisterLightningAddressRequest(
-                username: username,
-                description: description,
-                transfer: transfer
-            );
-
-            var addressInfo = await newOwnerSdk.RegisterLightningAddress(request);
-            // ANCHOR_END: register-lightning-address-transfer
+            // ANCHOR: accept-lightning-address-transfer
+            var address = await newOwnerSdk.AcceptLightningAddressTransfer(
+                new AcceptTransferRequest(
+                    authorization: authorization,
+                    description: description
+                ));
+            var lightningAddress = address.lightningAddress;
+            var lnurlUrl = address.lnurl.url;
+            var lnurlBech32 = address.lnurl.bech32;
+            // ANCHOR_END: accept-lightning-address-transfer
         }
 
         async Task DeleteLightningAddress(BreezSdk sdk)

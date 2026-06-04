@@ -91,47 +91,49 @@ func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Lightn
 	return addressInfoOpt, nil
 }
 
-// Run on the *current owner's* wallet. Produces the authorization that the
-// new owner needs to take over the username in a single atomic call.
-func SignLightningAddressTransfer(
+// Step 1: run by the *current owner*. Produces the authorization
+// the new owner needs to take over the username in a single atomic call.
+func AuthorizeLightningAddressTransfer(
 	currentOwnerSdk *breez_sdk_spark.BreezSdk,
 	transfereePubkey string,
-) (*breez_sdk_spark.LightningAddressTransfer, error) {
-	// ANCHOR: sign-lightning-address-transfer
-	transfer, err := currentOwnerSdk.AcceptLightningAddressTransfer(
-		breez_sdk_spark.AcceptLightningAddressTransferRequest{
-			TransfereePubkey: transfereePubkey,
-		},
-	)
+) (*breez_sdk_spark.TransferAuthorization, error) {
+	// ANCHOR: authorize-lightning-address-transfer
+	request := breez_sdk_spark.AuthorizeTransferRequest{
+		TransfereePubkey: transfereePubkey,
+	}
+
+	authorization, err := currentOwnerSdk.AuthorizeLightningAddressTransfer(request)
 	if err != nil {
 		return nil, err
 	}
-	// ANCHOR_END: sign-lightning-address-transfer
-	return &transfer, nil
+	// ANCHOR_END: authorize-lightning-address-transfer
+	return &authorization, nil
 }
 
-// Run on the *new owner's* wallet with the authorization received
-// out-of-band from the current owner.
-func RegisterLightningAddressViaTransfer(
+// Step 2: run by the *new owner* with the authorization received
+// from the current owner (e.g. via QR code or deep link).
+func AcceptLightningAddressTransfer(
 	newOwnerSdk *breez_sdk_spark.BreezSdk,
-	transfer breez_sdk_spark.LightningAddressTransfer,
+	authorization breez_sdk_spark.TransferAuthorization,
 ) (*breez_sdk_spark.LightningAddressInfo, error) {
-	username := "myusername"
 	description := "My Lightning Address"
 
-	// ANCHOR: register-lightning-address-transfer
-	request := breez_sdk_spark.RegisterLightningAddressRequest{
-		Username:    username,
-		Description: &description,
-		Transfer:    &transfer,
+	// ANCHOR: accept-lightning-address-transfer
+	request := breez_sdk_spark.AcceptTransferRequest{
+		Authorization: authorization,
+		Description:   &description,
 	}
 
-	addressInfo, err := newOwnerSdk.RegisterLightningAddress(request)
+	address, err := newOwnerSdk.AcceptLightningAddressTransfer(request)
 	if err != nil {
 		return nil, err
 	}
-	// ANCHOR_END: register-lightning-address-transfer
-	return &addressInfo, nil
+
+	_ = address.LightningAddress
+	_ = address.Lnurl.Url
+	_ = address.Lnurl.Bech32
+	// ANCHOR_END: accept-lightning-address-transfer
+	return &address, nil
 }
 
 func DeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {

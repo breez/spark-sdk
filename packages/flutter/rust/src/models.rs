@@ -927,18 +927,24 @@ pub struct _CheckLightningAddressRequest {
 pub struct _RegisterLightningAddressRequest {
     pub username: String,
     pub description: Option<String>,
-    pub transfer: Option<LightningAddressTransfer>,
 }
 
-#[frb(mirror(LightningAddressTransfer))]
-pub struct _LightningAddressTransfer {
+#[frb(mirror(TransferAuthorization))]
+pub struct _TransferAuthorization {
+    pub username: String,
     pub pubkey: String,
     pub signature: String,
 }
 
-#[frb(mirror(AcceptLightningAddressTransferRequest))]
-pub struct _AcceptLightningAddressTransferRequest {
+#[frb(mirror(AuthorizeTransferRequest))]
+pub struct _AuthorizeTransferRequest {
     pub transferee_pubkey: String,
+}
+
+#[frb(mirror(AcceptTransferRequest))]
+pub struct _AcceptTransferRequest {
+    pub authorization: TransferAuthorization,
+    pub description: Option<String>,
 }
 
 #[frb(mirror(LnurlInfo))]

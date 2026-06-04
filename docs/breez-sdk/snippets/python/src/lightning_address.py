@@ -1,9 +1,10 @@
 from breez_sdk_spark import (
-    AcceptLightningAddressTransferRequest,
+    AuthorizeTransferRequest,
     BreezSdk,
     CheckLightningAddressRequest,
+    AcceptTransferRequest,
     GetPaymentRequest,
-    LightningAddressTransfer,
+    TransferAuthorization,
     Network,
     PaymentDetails,
     RegisterLightningAddressRequest,
@@ -59,40 +60,41 @@ async def get_lightning_address(sdk: BreezSdk):
     # ANCHOR_END: get-lightning-address
 
 
-# Run on the *current owner's* wallet. Produces the authorization that the
-# new owner needs to take over the username in a single atomic call.
-async def sign_lightning_address_transfer(
+# Step 1: run by the *current owner*. Produces the authorization
+# the new owner needs to take over the username in a single atomic call.
+async def authorize_lightning_address_transfer(
     current_owner_sdk: BreezSdk,
     transferee_pubkey: str,
-) -> LightningAddressTransfer:
-    # ANCHOR: sign-lightning-address-transfer
-    transfer = await current_owner_sdk.accept_lightning_address_transfer(
-        AcceptLightningAddressTransferRequest(
-            transferee_pubkey=transferee_pubkey,
-        )
+) -> TransferAuthorization:
+    # ANCHOR: authorize-lightning-address-transfer
+    request = AuthorizeTransferRequest(
+        transferee_pubkey=transferee_pubkey
     )
-    # ANCHOR_END: sign-lightning-address-transfer
-    return transfer
+
+    authorization = await current_owner_sdk.authorize_lightning_address_transfer(request)
+    # ANCHOR_END: authorize-lightning-address-transfer
+    return authorization
 
 
-# Run on the *new owner's* wallet with the authorization received
-# out-of-band from the current owner.
-async def register_lightning_address_via_transfer(
+# Step 2: run by the *new owner* with the authorization received
+# from the current owner (e.g. via QR code or deep link).
+async def accept_lightning_address_transfer(
     new_owner_sdk: BreezSdk,
-    transfer: LightningAddressTransfer,
+    authorization: TransferAuthorization,
 ):
-    username = "myusername"
     description = "My Lightning Address"
 
-    # ANCHOR: register-lightning-address-transfer
-    request = RegisterLightningAddressRequest(
-        username=username,
-        description=description,
-        transfer=transfer,
+    # ANCHOR: accept-lightning-address-transfer
+    request = AcceptTransferRequest(
+        authorization=authorization,
+        description=description
     )
 
-    address_info = await new_owner_sdk.register_lightning_address(request)
-    # ANCHOR_END: register-lightning-address-transfer
+    address_info = await new_owner_sdk.accept_lightning_address_transfer(request)
+    lightning_address = address_info.lightning_address
+    lnurl_url = address_info.lnurl.url
+    lnurl_bech32 = address_info.lnurl.bech32
+    # ANCHOR_END: accept-lightning-address-transfer
     return address_info
 
 

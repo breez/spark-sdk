@@ -1076,18 +1076,24 @@ pub struct CheckLightningAddressRequest {
 pub struct RegisterLightningAddressRequest {
     pub username: String,
     pub description: Option<String>,
-    pub transfer: Option<LightningAddressTransfer>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::LightningAddressTransfer)]
-pub struct LightningAddressTransfer {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferAuthorization)]
+pub struct TransferAuthorization {
+    pub username: String,
     pub pubkey: String,
     pub signature: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::AcceptLightningAddressTransferRequest)]
-pub struct AcceptLightningAddressTransferRequest {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AuthorizeTransferRequest)]
+pub struct AuthorizeTransferRequest {
     pub transferee_pubkey: String,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AcceptTransferRequest)]
+pub struct AcceptTransferRequest {
+    pub authorization: TransferAuthorization,
+    pub description: Option<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::LnurlInfo)]

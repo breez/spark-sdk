@@ -51,40 +51,41 @@ func getLightningAddress(sdk: BreezSdk) async throws {
     // ANCHOR_END: get-lightning-address
 }
 
-// Run on the *current owner's* wallet. Produces the authorization that the
-// new owner needs to take over the username in a single atomic call.
-func signLightningAddressTransfer(
+// Step 1: run by the *current owner*. Produces the authorization
+// the new owner needs to take over the username in a single atomic call.
+func authorizeLightningAddressTransfer(
     currentOwnerSdk: BreezSdk,
     transfereePubkey: String
-) async throws -> LightningAddressTransfer {
-    // ANCHOR: sign-lightning-address-transfer
-    let transfer = try await currentOwnerSdk.acceptLightningAddressTransfer(
-        request: AcceptLightningAddressTransferRequest(
+) async throws -> TransferAuthorization {
+    // ANCHOR: authorize-lightning-address-transfer
+    let authorization = try await currentOwnerSdk.authorizeLightningAddressTransfer(
+        request: AuthorizeTransferRequest(
             transfereePubkey: transfereePubkey
         )
     )
-    // ANCHOR_END: sign-lightning-address-transfer
-    return transfer
+    // ANCHOR_END: authorize-lightning-address-transfer
+    return authorization
 }
 
-// Run on the *new owner's* wallet with the authorization received
-// out-of-band from the current owner.
-func registerLightningAddressViaTransfer(
+// Step 2: run by the *new owner* with the authorization received
+// from the current owner (e.g. via QR code or deep link).
+func acceptLightningAddressTransfer(
     newOwnerSdk: BreezSdk,
-    transfer: LightningAddressTransfer
+    authorization: TransferAuthorization
 ) async throws {
-    let username = "myusername"
     let description = "My Lightning Address"
 
-    // ANCHOR: register-lightning-address-transfer
-    let request = RegisterLightningAddressRequest(
-        username: username,
-        description: description,
-        transfer: transfer
+    // ANCHOR: accept-lightning-address-transfer
+    let addressInfo = try await newOwnerSdk.acceptLightningAddressTransfer(
+        request: AcceptTransferRequest(
+            authorization: authorization,
+            description: description
+        )
     )
-
-    let addressInfo = try await newOwnerSdk.registerLightningAddress(request: request)
-    // ANCHOR_END: register-lightning-address-transfer
+    let lightningAddress = addressInfo.lightningAddress
+    let lnurlUrl = addressInfo.lnurl.url
+    let lnurlBech32 = addressInfo.lnurl.bech32
+    // ANCHOR_END: accept-lightning-address-transfer
 }
 
 func deleteLightningAddress(sdk: BreezSdk) async throws {
