@@ -432,45 +432,20 @@ fn wasm_test_cmd(
                 .with_context(|| "Failed to rebuild native modules.")?;
             sh.change_dir(&current_dir);
 
-            // Install postgres-storage dependencies
-            let pg_storage_path = Path::new("crates/breez-sdk/wasm/js/postgres-storage");
-            if pg_storage_path.exists() {
+            // Install pg-wasm/js dependencies. Production needs `pg` (peer
+            // dep, host project supplies it); tests use the dev-deps
+            // copy here, which postgres-test-helpers.cjs also resolves
+            // against.
+            let pg_wasm_js_path = Path::new("crates/pg-wasm/js");
+            if pg_wasm_js_path.exists() {
                 println!(
                     "Installing npm dependencies in {}...",
-                    pg_storage_path.display()
+                    pg_wasm_js_path.display()
                 );
-                sh.change_dir(pg_storage_path);
+                sh.change_dir(pg_wasm_js_path);
                 cmd!(sh, "npm install")
                     .run()
-                    .with_context(|| "Failed to install postgres-storage npm dependencies.")?;
-                sh.change_dir(&current_dir);
-            }
-
-            // Install postgres-tree-store dependencies
-            let pg_tree_store_path = Path::new("crates/breez-sdk/wasm/js/postgres-tree-store");
-            if pg_tree_store_path.exists() {
-                println!(
-                    "Installing npm dependencies in {}...",
-                    pg_tree_store_path.display()
-                );
-                sh.change_dir(pg_tree_store_path);
-                cmd!(sh, "npm install")
-                    .run()
-                    .with_context(|| "Failed to install postgres-tree-store npm dependencies.")?;
-                sh.change_dir(&current_dir);
-            }
-
-            // Install postgres-token-store dependencies
-            let pg_token_store_path = Path::new("crates/breez-sdk/wasm/js/postgres-token-store");
-            if pg_token_store_path.exists() {
-                println!(
-                    "Installing npm dependencies in {}...",
-                    pg_token_store_path.display()
-                );
-                sh.change_dir(pg_token_store_path);
-                cmd!(sh, "npm install")
-                    .run()
-                    .with_context(|| "Failed to install postgres-token-store npm dependencies.")?;
+                    .with_context(|| "Failed to install pg-wasm/js npm dependencies.")?;
                 sh.change_dir(&current_dir);
             }
 

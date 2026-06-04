@@ -9,5 +9,9 @@
   },
   "peerDependencies": {
     "pg": "^8.18.0"
+  },
+  "devDependencies": {
+    "pg": "^8.18.0",
+    "testcontainers": "^10.0.0"
   }
 }

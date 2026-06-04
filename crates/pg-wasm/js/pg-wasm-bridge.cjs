@@ -74,18 +74,10 @@ function loadPg() {
   for (let depth = 0; depth < 16 && dir && dir !== path.dirname(dir); depth++) {
     const candidates = [
       path.join(dir, "node_modules", "pg"),
-      // Breez SDK test layout: pg is installed alongside postgres-storage.
-      path.join(dir, "js", "postgres-storage", "node_modules", "pg"),
-      path.join(
-        dir,
-        "crates",
-        "breez-sdk",
-        "wasm",
-        "js",
-        "postgres-storage",
-        "node_modules",
-        "pg"
-      ),
+      // Breez SDK test layout: pg is installed under crates/pg-wasm/js
+      // as a devDependency of the bridge.
+      path.join(dir, "crates", "pg-wasm", "js", "node_modules", "pg"),
+      path.join(dir, "..", "..", "pg-wasm", "js", "node_modules", "pg"),
     ];
     for (const c of candidates) {
       if (fs.existsSync(c)) {

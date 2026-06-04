@@ -1,6 +1,3 @@
-#[cfg(all(test, not(feature = "browser-tests")))]
-mod tests;
-
 use std::sync::Arc;
 
 use macros::async_trait;

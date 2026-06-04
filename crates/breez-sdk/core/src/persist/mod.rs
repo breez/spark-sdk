@@ -7,16 +7,17 @@ pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite;
 
-// The `sqlite`, `postgres` and `mysql` storage backends use native-only Rust
-// drivers and cannot be built for the wasm32 target. WASM builds use a
-// JS-backed storage backend instead, so none of these features apply there.
+// `sqlite` (rusqlite) and `mysql` (mysql_async) use native-only Rust drivers
+// and can't be built for wasm32. `postgres` is OK on wasm because
+// spark-postgres routes through the `pg-wasm` crate, which bridges to
+// node-postgres over wasm-bindgen.
 #[cfg(all(
-    any(feature = "sqlite", feature = "postgres", feature = "mysql"),
+    any(feature = "sqlite", feature = "mysql"),
     target_family = "wasm",
     target_os = "unknown"
 ))]
 compile_error!(
-    "the `sqlite`, `postgres` and `mysql` storage features are native-only and \
+    "the `sqlite` and `mysql` storage features are native-only and \
      cannot be enabled for the wasm32 target"
 );
 

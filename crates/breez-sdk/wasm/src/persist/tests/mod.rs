@@ -2,9 +2,6 @@
 mod node;
 
 #[cfg(not(feature = "browser-tests"))]
-mod postgres;
-
-#[cfg(not(feature = "browser-tests"))]
 mod pg_wasm_smoke;
 
 #[cfg(not(feature = "browser-tests"))]

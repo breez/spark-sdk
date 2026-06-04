@@ -2,23 +2,41 @@
  * Test helpers for PostgreSQL storage tests.
  * This file is ONLY used by wasm tests, not production code.
  *
- * Requires Docker to be running — spins up a PostgreSQL container via testcontainers.
+ * Requires Docker to be running — spins up a PostgreSQL container via
+ * testcontainers.
+ *
+ * `pg` and `testcontainers` are installed under the `pg-wasm/js`
+ * package (see `crates/pg-wasm/js/package.json` devDependencies). The
+ * production `pg-wasm-bridge.cjs` keeps pg as a peerDependency so the
+ * host project supplies it at runtime; for tests we install our own
+ * copy alongside the bridge.
  */
 
 const path = require("path");
 
-// Resolve dependencies from the postgres-storage package where they're installed
 let GenericContainer, Wait, Pool;
+// __dirname is crates/breez-sdk/wasm/js — three levels up to `crates/`,
+// then into `pg-wasm/js/node_modules`.
+const pgWasmJsDeps = path.resolve(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "pg-wasm",
+  "js",
+  "node_modules"
+);
+
 try {
-  const pgStoragePath = path.join(__dirname, "postgres-storage", "node_modules");
-  const tc = require(path.join(pgStoragePath, "testcontainers"));
+  const tc = require(path.join(pgWasmJsDeps, "testcontainers"));
   GenericContainer = tc.GenericContainer;
   Wait = tc.Wait;
-  Pool = require(path.join(pgStoragePath, "pg")).Pool;
+  Pool = require(path.join(pgWasmJsDeps, "pg")).Pool;
 } catch (error) {
   try {
+    // Fall back to whatever the host process can resolve.
     const mainModule = require.main;
-    if (mainModule) {
+    if (mainModule && typeof mainModule.require === "function") {
       const tc = mainModule.require("testcontainers");
       GenericContainer = tc.GenericContainer;
       Wait = tc.Wait;
@@ -31,8 +49,9 @@ try {
     }
   } catch (fallbackError) {
     throw new Error(
-      `testcontainers or pg not found. Please install them in postgres-storage: cd js/postgres-storage && npm install\n` +
-        `Original error: ${error.message}\nFallback error: ${fallbackError.message}`
+      `testcontainers or pg not found. Install them in crates/pg-wasm/js: cd crates/pg-wasm/js && npm install\n` +
+        `Primary resolution (${pgWasmJsDeps}): ${error.message}\n` +
+        `Fallback resolution: ${fallbackError.message}`
     );
   }
 }
