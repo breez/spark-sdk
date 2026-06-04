@@ -59,8 +59,7 @@ Future<(String, String, String, String, String)> getLightningAddress(
   return (lightningAddress, username, description, lnurlUrl, lnurlBech32);
 }
 
-// Step 1: run by the *current owner*. Produces the authorization
-// the new owner needs to take over the username in a single atomic call.
+// Step 1: run by the current owner.
 Future<LightningAddressTransferAuthorization> authorizeLightningAddressTransfer(
   BreezSdk currentOwnerSdk,
   String transfereePubkey,
@@ -75,9 +74,7 @@ Future<LightningAddressTransferAuthorization> authorizeLightningAddressTransfer(
   return authorization;
 }
 
-// Step 2: run by the *new owner* with the authorization received
-// from the current owner (e.g. via QR code or deep link). The authorization
-// already carries the username, so nothing else is needed to claim.
+// Step 2: run by the new owner with the authorization from step 1.
 Future<(String, String, String)> claimLightningAddressTransfer(
   BreezSdk newOwnerSdk,
   LightningAddressTransferAuthorization authorization,

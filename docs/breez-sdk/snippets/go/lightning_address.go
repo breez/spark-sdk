@@ -91,8 +91,7 @@ func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Lightn
 	return addressInfoOpt, nil
 }
 
-// Step 1: run by the *current owner*. Produces the authorization
-// the new owner needs to take over the username in a single atomic call.
+// Step 1: run by the current owner.
 func AuthorizeLightningAddressTransfer(
 	currentOwnerSdk *breez_sdk_spark.BreezSdk,
 	transfereePubkey string,
@@ -110,8 +109,7 @@ func AuthorizeLightningAddressTransfer(
 	return &authorization, nil
 }
 
-// Step 2: run by the *new owner* with the authorization received
-// from the current owner (e.g. via QR code or deep link).
+// Step 2: run by the new owner with the authorization from step 1.
 func ClaimLightningAddressTransfer(
 	newOwnerSdk *breez_sdk_spark.BreezSdk,
 	authorization breez_sdk_spark.LightningAddressTransferAuthorization,

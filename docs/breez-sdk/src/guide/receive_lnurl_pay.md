@@ -79,7 +79,7 @@ The flow has two steps, one method each, run by the current owner and then the n
 
 {{#tabs lightning_address:authorize-lightning-address-transfer}}
 
-The returned {{#name LightningAddressTransferAuthorization}} is then sent out-of-band to the new owner. Because it already carries the username, B needs nothing else to claim.
+The returned {{#name LightningAddressTransferAuthorization}} is then handed to the new owner over any channel: typically passed directly between two SDK instances in the same app, or shared across devices (e.g. as a QR code or link). It already carries the username, so B needs nothing else to claim.
 
 **Step 2: New owner (pubkey B)** calls {{#name claim_lightning_address_transfer}}, passing A's authorization. The SDK submits the transfer to the server which, in one transaction, verifies B's request signature, verifies A's authorization, and transfers ownership, returning the newly-owned {{#name LightningAddressInfo}}.
 

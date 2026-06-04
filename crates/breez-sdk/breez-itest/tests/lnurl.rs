@@ -1233,16 +1233,10 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
         .expect("Bob should now own the transferred address");
     assert_eq!(bob_address.username, username);
 
-    // 5. Replay with the same authorization must fail because Alice no
-    //    longer owns the name on the server. Both signatures are still
-    //    cryptographically valid over the canonical
-    //    `transfer:{username}-{bob_pubkey}` message (no timestamp), so this
-    //    is the authoritative check that the server-side transfer
-    //    happened: the server rejects with `SourceNotOwner`. (We don't
-    //    assert via `alice.sdk.get_lightning_address()` because that method
-    //    reads Alice's local cache, which still holds her pre-transfer
-    //    registration. Cache invalidation on remote transfer is out of
-    //    scope for this feature.)
+    // 5. Replay must fail: Alice no longer owns the name, so the server
+    //    rejects with `SourceNotOwner` even though both signatures are still
+    //    valid (the message has no timestamp). We check the error rather than
+    //    Alice's cache, which still holds her pre-transfer registration.
     let replay = bob
         .sdk
         .claim_lightning_address_transfer(ClaimLightningAddressTransferRequest {

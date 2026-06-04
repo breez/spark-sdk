@@ -1623,25 +1623,19 @@ pub struct RegisterLightningAddressRequest {
     pub description: Option<String>,
 }
 
-/// Off-band authorization from the current owner of a username, granting a
-/// specific transferee the right to take it over.
-///
-/// Produced by the current owner via
-/// [`BreezSdk::authorize_lightning_address_transfer`] and consumed by the new
-/// owner via [`BreezSdk::claim_lightning_address_transfer`]. The owner shares
-/// it out-of-band (e.g. QR code or messaging) with the new owner; it fully
-/// describes the transfer, so the new owner needs nothing else to claim.
+/// Authorization from the current owner granting a specific new owner the
+/// right to take over a username. Produced by
+/// [`BreezSdk::authorize_lightning_address_transfer`] and handed to the new
+/// owner, who passes it to [`BreezSdk::claim_lightning_address_transfer`]. It
+/// fully describes the transfer, so the new owner needs nothing else to claim.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightningAddressTransferAuthorization {
     /// The username being handed over.
     pub username: String,
-    /// Hex-encoded secp256k1 compressed public key of the current owner.
+    /// The current owner's public key.
     pub pubkey: String,
-    /// Hex-encoded DER ECDSA signature by the current owner over
-    /// `"transfer:{username}-{transferee_pubkey}"`. The new owner signs the
-    /// same canonical message with their own key when claiming, and the
-    /// server verifies both signatures and swaps ownership atomically.
+    /// The current owner's signature authorizing the transfer.
     pub signature: String,
 }
 
@@ -1651,7 +1645,7 @@ pub struct LightningAddressTransferAuthorization {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizeLightningAddressTransferRequest {
-    /// Hex-encoded secp256k1 compressed public key of the new owner.
+    /// The new owner's identity public key.
     pub transferee_pubkey: String,
 }
 
@@ -1664,8 +1658,7 @@ pub struct ClaimLightningAddressTransferRequest {
     /// Authorization produced by the current owner via
     /// [`BreezSdk::authorize_lightning_address_transfer`].
     pub authorization: LightningAddressTransferAuthorization,
-    /// Description for the address under its new owner. Defaults to
-    /// `"Pay to {username}@{domain}"`.
+    /// Description for the address. Defaults to `"Pay to {username}@{domain}"`.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub description: Option<String>,
 }

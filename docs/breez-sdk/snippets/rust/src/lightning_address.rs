@@ -44,8 +44,7 @@ pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(Strin
     Ok((lightning_address, lnurl_url, lnurl_bech32))
 }
 
-// Step 1: run by the *current owner*. Produces the authorization
-// the new owner needs to take over the username in a single atomic call.
+// Step 1: run by the current owner.
 pub async fn authorize_lightning_address_transfer(
     current_owner_sdk: &BreezSdk,
     transferee_pubkey: &str,
@@ -60,9 +59,7 @@ pub async fn authorize_lightning_address_transfer(
     Ok(authorization)
 }
 
-// Step 2: run by the *new owner* with the authorization received
-// from the current owner (e.g. via QR code or deep link). The authorization
-// already carries the username, so nothing else is needed to claim.
+// Step 2: run by the new owner with the authorization from step 1.
 pub async fn claim_lightning_address_transfer(
     new_owner_sdk: &BreezSdk,
     authorization: LightningAddressTransferAuthorization,
