@@ -1,10 +1,24 @@
-//! Stable-balance auto-conversion integration test (mainnet, env-gated).
+//! Stable-balance integration tests (mainnet, env-gated).
 //!
-//! Exercises the stable-balance worker that auto-converts received BTC into a
-//! configured token once a threshold is exceeded. This needs real Flashnet pool
-//! liquidity that regtest lacks, so it runs against **mainnet** and skips
-//! automatically (logging a warning, returning `Ok`) unless the credentials
-//! below are set — normal CI is unaffected.
+//! Exercises the stable-balance worker + its hooks into the payment flow.
+//! Needs real Flashnet pool liquidity that regtest lacks, so runs against
+//! **mainnet** and skips automatically (logging a warning, returning `Ok`)
+//! unless the credentials below are set — normal CI is unaffected.
+//!
+//! # Tests in this binary
+//! - `test_stable_balance_auto_conversion` — cumulative-threshold path: two
+//!   sub-threshold sat receives that together cross the threshold trigger the
+//!   batch auto-convert of Bob's full balance.
+//! - `test_stable_balance_per_receive_conversion` — per-receive path: a single
+//!   sat receive above the pool minimum fires `per_receive_convert` directly,
+//!   bypassing the batch threshold.
+//! - `test_stable_balance_send_lightning_address` — send-side **auto-fill**
+//!   path: Bob pays Alice's LN address denominated in sats with no explicit
+//!   `ConversionOptions`; stable balance auto-populates a Token→BTC conversion
+//!   from his active token because his sat balance can't cover the payment.
+//! - `test_stable_balance_zz_deactivation` — deactivation: unsetting Bob's
+//!   active stable token kicks `deactivation_convert` which drains his held
+//!   tokens back to sats. `zz_` prefix sorts it last in the binary.
 //!
 //! # Required environment variables
 //! - `MAINNET_TEST_MNEMONIC` — mnemonic of a pre-funded mainnet test account
@@ -20,7 +34,7 @@
 //! (fixed passphrase). There is no per-test sweep — the dedicated
 //! `mainnet_teardown` test drains Bob back to Alice (converting tokens to sats)
 //! once per run, and recovers anything a failed run left behind on the next run.
-//! The threshold and amounts are derived from the live pool
+//! Thresholds and amounts are derived from the live pool
 //! (`fetch_conversion_limits`); slippage inherits the SDK default.
 //!
 //! # Run locally
@@ -44,28 +58,10 @@ use tracing::{info, warn};
 ///    from his USDB (no explicit conversion options)
 #[test_log::test(tokio::test)]
 async fn test_stable_balance_auto_conversion() -> Result<()> {
-    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
-        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+    let Some((mut alice, mut bob, token_id)) = mainnet_test_setup(true, true).await? else {
         return Ok(());
     };
-    let (mut alice, mut bob) = mainnet_alice_bob(&mnemonic, &api_key, true).await?;
-
-    // Skip rather than fail spuriously if the test account is unfunded.
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let alice_balance_sats = alice
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .balance_sats;
-    if alice_balance_sats == 0 {
-        warn!("Skipping mainnet test: test account (Alice) has 0 sats");
-        return Ok(());
-    }
-
     info!("=== Starting test_stable_balance_auto_conversion ===");
-    let token_id = mainnet_test_token_id();
 
     // The effective auto-conversion threshold is the pool's minimum
     // FromBitcoin amount (since the config leaves threshold_sats=None).
@@ -394,27 +390,10 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
 /// [`test_stable_balance_auto_conversion`].
 #[test_log::test(tokio::test)]
 async fn test_stable_balance_per_receive_conversion() -> Result<()> {
-    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
-        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+    let Some((mut alice, bob, token_id)) = mainnet_test_setup(true, true).await? else {
         return Ok(());
     };
-    let (mut alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, true).await?;
-
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let alice_balance = alice
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .balance_sats;
-    if alice_balance == 0 {
-        warn!("Skipping mainnet test: test account (Alice) has 0 sats");
-        return Ok(());
-    }
-
     info!("=== Starting test_stable_balance_per_receive_conversion ===");
-    let token_id = mainnet_test_token_id();
 
     let pool_min_sats = alice
         .sdk
@@ -431,6 +410,13 @@ async fn test_stable_balance_per_receive_conversion() -> Result<()> {
     // on the new payment (a different code path from the batch auto-convert).
     let payment_sats = pool_min_sats.saturating_mul(11) / 10;
     let needed = payment_sats.saturating_add(pool_min_sats); // fee headroom
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
     if alice_balance < needed {
         warn!(
             "Skipping test_stable_balance_per_receive_conversion: Alice balance {alice_balance} \
@@ -492,6 +478,207 @@ async fn test_stable_balance_per_receive_conversion() -> Result<()> {
     Ok(())
 }
 
+/// Stable-balance send-side **auto-fill** of conversion options, via a
+/// Lightning Address destination.
+///
+/// Bob holds USDB with stable balance active. He pays Alice's LN address with
+/// `prepare_lnurl_pay(amount=sats, conversion_options=None, token_identifier=None)`
+/// — i.e. denominating the payment in sats, no caller-supplied conversion. The
+/// SDK's stable-balance hook in
+/// [`payments/conversion.rs`](`get_conversion_options_for_payment`) detects
+/// Bob doesn't have enough sats to cover the LN payment and auto-populates a
+/// Token→BTC conversion from his active stable token.
+///
+/// Exercises the LNURL-pay code path together with the stable-balance-driven
+/// send-side auto-fill (distinct from the receive-side auto-conversion the
+/// rest of this file covers).
+///
+/// Alice registers `mainnet-itest-alice@breez.tips` on first run; later runs
+/// recover from the lnurl server (tied to the env mnemonic's pubkey). If the
+/// username has been claimed by a different pubkey, the test logs and skips.
+#[test_log::test(tokio::test)]
+async fn test_stable_balance_send_lightning_address() -> Result<()> {
+    // Bob built with stable balance ON so the LN-pay below picks up his active
+    // token automatically when his sat balance can't cover the payment.
+    let Some((mut alice, bob, token_id)) = mainnet_test_setup(true, true).await? else {
+        return Ok(());
+    };
+    info!("=== Starting test_stable_balance_send_lightning_address ===");
+
+    // Step 1: ensure Alice has a Lightning Address on the mainnet lnurl server.
+    // `get_lightning_address` recovers from the server when the local cache is
+    // empty (the temp-dir storage is fresh per run); the registration only
+    // hits the wire on the very first run for this mnemonic.
+    let alice_la = match alice.sdk.get_lightning_address().await? {
+        Some(info) => info.lightning_address,
+        None => match alice
+            .sdk
+            .register_lightning_address(RegisterLightningAddressRequest {
+                username: "mainnet-itest-alice".to_string(),
+                description: Some("Mainnet itest Alice".to_string()),
+            })
+            .await
+        {
+            Ok(info) => info.lightning_address,
+            Err(e) => {
+                warn!(
+                    "Skipping: failed to register Alice's lightning address \
+                     (likely claimed by another pubkey): {e:#}"
+                );
+                return Ok(());
+            }
+        },
+    };
+    info!("Alice's lightning address: {alice_la}");
+
+    // Step 2: ensure Bob has enough tokens for the auto-fill to source from.
+    let to_btc_min_token = tobtc_min_token_input(&alice.sdk, &token_id).await?;
+    let min_required_tokens = to_btc_min_token.saturating_mul(2);
+    let seed_amount = to_btc_min_token.saturating_mul(3);
+    if !ensure_bob_has_tokens(&alice, &bob, &token_id, min_required_tokens, seed_amount).await? {
+        return Ok(());
+    }
+
+    // Step 3: Bob → Alice's lightning address, denominated in sats, with **no
+    // explicit conversion options**. Stable balance should auto-fill ToBitcoin
+    // from Bob's active token because his sat balance can't cover the payment.
+    //
+    // Size the sats amount off the pool quote: convert `to_btc_min_token` token
+    // units to sats so we know it clears the pool's swap minimums on the way out.
+    let bob_spark_for_quote = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    let send_sats = u64::try_from(
+        estimate_tobtc_sats_out(&bob.sdk, &bob_spark_for_quote, &token_id, to_btc_min_token)
+            .await?,
+    )?;
+    info!("LN-address payment sized at {send_sats} sats (from pool estimate)");
+
+    let alice_sats_before = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    clear_event_receiver(&mut alice.events).await;
+
+    let parsed = bob.sdk.parse(&alice_la).await?;
+    let InputType::LightningAddress(la_details) = parsed else {
+        anyhow::bail!("Expected LightningAddress input, got {parsed:?}");
+    };
+
+    let prepare = bob
+        .sdk
+        .prepare_lnurl_pay(PrepareLnurlPayRequest {
+            amount: u128::from(send_sats),
+            pay_request: la_details.pay_request,
+            comment: Some("mainnet itest LN-address auto-fill conversion".to_string()),
+            validate_success_action_url: None,
+            // Auto-fill path: no explicit token_identifier / conversion_options.
+            // Stable balance config drives the source token + ToBitcoin conversion.
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+
+    let estimate = prepare.conversion_estimate.as_ref().expect(
+        "conversion estimate should be auto-filled from stable balance when Bob has \
+             insufficient sats",
+    );
+    info!(
+        "Prepared LNURL-pay (stable-balance auto-fill): amount_sats={}, token_in={}, sats_out={}, conv_fee={}, ln_fee={}",
+        prepare.amount_sats,
+        estimate.amount_in,
+        estimate.amount_out,
+        estimate.fee,
+        prepare.fee_sats
+    );
+    assert!(
+        matches!(
+            estimate.options.conversion_type,
+            ConversionType::ToBitcoin { .. }
+        ),
+        "Auto-filled conversion type should be ToBitcoin"
+    );
+
+    let resp = bob
+        .sdk
+        .lnurl_pay(LnurlPayRequest {
+            prepare_response: prepare,
+            idempotency_key: None,
+        })
+        .await?;
+    info!(
+        "Bob paid Alice's LN address (auto-filled Token→BTC): status={:?}, method={:?}",
+        resp.payment.status, resp.payment.method
+    );
+    assert!(
+        matches!(
+            resp.payment.status,
+            PaymentStatus::Completed | PaymentStatus::Pending
+        ),
+        "LNURL-pay with auto-filled conversion should be completed or pending"
+    );
+
+    let details = resp
+        .payment
+        .conversion_details
+        .expect("conversion details on LNURL-pay Token→BTC");
+    let from = details.from.as_ref().expect("conversion 'from' step");
+    let to = details.to.as_ref().expect("conversion 'to' step");
+    assert_eq!(
+        from.method,
+        PaymentMethod::Token,
+        "From step should be a token payment"
+    );
+    assert!(
+        from.token_metadata.is_some(),
+        "From step should have token metadata"
+    );
+    assert_eq!(
+        to.method,
+        PaymentMethod::Spark,
+        "To step should be a spark payment (swap pool's sats delivery; the outer \
+         payment's `method` is Lightning)"
+    );
+    assert!(
+        to.token_metadata.is_none(),
+        "To step should have no token metadata"
+    );
+    assert_eq!(
+        resp.payment.method,
+        PaymentMethod::Lightning,
+        "Outer payment method should be Lightning"
+    );
+    assert!(from.fee + to.fee > 0, "Conversion should charge a fee");
+
+    info!("Waiting for Alice to receive lightning payment...");
+    wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 120).await?;
+
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_sats_after = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    info!("Alice balance: {alice_sats_after} sats (was {alice_sats_before})");
+    assert!(
+        alice_sats_after > alice_sats_before,
+        "Alice's sat balance should increase after receiving Token→BTC LNURL-pay"
+    );
+
+    info!("=== Test test_stable_balance_send_lightning_address PASSED ===");
+    Ok(())
+}
+
 /// Stable balance deactivation: when Bob deactivates his stable balance, the
 /// `deactivation_convert` worker drains his held tokens back to BTC. `zz_`
 /// prefix sorts this test last in the binary so it doesn't strand the others
@@ -499,16 +686,11 @@ async fn test_stable_balance_per_receive_conversion() -> Result<()> {
 /// running this one last keeps the intent obvious).
 #[test_log::test(tokio::test)]
 async fn test_stable_balance_zz_deactivation() -> Result<()> {
-    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
-        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+    // Operates entirely on Bob — Alice's balance check is skipped.
+    let Some((_alice, bob, token_id)) = mainnet_test_setup(true, false).await? else {
         return Ok(());
     };
-    // `alice` only needed to keep the wallet pool warm / for symmetry; the test
-    // operates entirely on Bob.
-    let (_alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, true).await?;
-
     info!("=== Starting test_stable_balance_zz_deactivation ===");
-    let token_id = mainnet_test_token_id();
 
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_info_before = bob

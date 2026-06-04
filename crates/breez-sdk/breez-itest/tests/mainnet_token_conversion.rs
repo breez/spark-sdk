@@ -37,28 +37,10 @@ use tracing::{info, warn};
 /// - Part B: Token → Bitcoin (Bob pays Alice's Lightning invoice using received tokens)
 #[test_log::test(tokio::test)]
 async fn test_token_conversion_success() -> Result<()> {
-    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
-        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+    let Some((mut alice, mut bob, token_id)) = mainnet_test_setup(false, true).await? else {
         return Ok(());
     };
-    let (mut alice, mut bob) = mainnet_alice_bob(&mnemonic, &api_key, false).await?;
-
-    // Skip rather than fail spuriously if the test account is unfunded.
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let alice_balance = alice
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .balance_sats;
-    if alice_balance == 0 {
-        warn!("Skipping mainnet test: test account (Alice) has 0 sats");
-        return Ok(());
-    }
-
     info!("=== Starting test_token_conversion_success ===");
-    let token_id = mainnet_test_token_id();
 
     // The pool only exposes input minimums, so size off the Token→BTC
     // minimum token input. Part A delivers Bob 3x that so he has enough
@@ -436,14 +418,11 @@ async fn test_token_conversion_success() -> Result<()> {
 /// - Part B: Insufficient funds (prepare succeeds; send rejects, balance intact).
 #[test_log::test(tokio::test)]
 async fn test_token_conversion_failure() -> Result<()> {
-    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
-        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+    // Part A doesn't need Alice funded; Part B checks her balance inline.
+    let Some((alice, bob, token_id)) = mainnet_test_setup(false, false).await? else {
         return Ok(());
     };
-    let (alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, false).await?;
-
     info!("=== Starting test_token_conversion_failure ===");
-    let token_id = mainnet_test_token_id();
     let bob_spark_address = bob
         .sdk
         .receive_payment(ReceivePaymentRequest {
@@ -596,27 +575,10 @@ async fn test_token_conversion_failure() -> Result<()> {
 /// for USDB, Alice pays it from BTC with an explicit FromBitcoin conversion.
 #[test_log::test(tokio::test)]
 async fn test_token_conversion_spark_invoice_success() -> Result<()> {
-    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
-        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+    let Some((alice, bob, token_id)) = mainnet_test_setup(false, true).await? else {
         return Ok(());
     };
-    let (alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, false).await?;
-
-    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-    let alice_balance = alice
-        .sdk
-        .get_info(GetInfoRequest {
-            ensure_synced: Some(false),
-        })
-        .await?
-        .balance_sats;
-    if alice_balance == 0 {
-        warn!("Skipping mainnet test: test account (Alice) has 0 sats");
-        return Ok(());
-    }
-
     info!("=== Starting test_token_conversion_spark_invoice_success ===");
-    let token_id = mainnet_test_token_id();
 
     let to_btc_min_token = tobtc_min_token_input(&alice.sdk, &token_id).await?;
     let invoice_token_amount = to_btc_min_token.saturating_mul(3);
@@ -683,6 +645,13 @@ async fn test_token_conversion_spark_invoice_success() -> Result<()> {
     let cost = conversion_estimate
         .amount_in
         .saturating_add(conversion_estimate.fee);
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
     if u128::from(alice_balance) < cost {
         warn!(
             "Skipping test_token_conversion_spark_invoice_success: Alice balance {alice_balance} \

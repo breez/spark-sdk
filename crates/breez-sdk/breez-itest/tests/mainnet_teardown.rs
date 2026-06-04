@@ -36,15 +36,12 @@ const TEARDOWN_MAX_SLIPPAGE_BPS: u32 = 500;
 /// sats via a send-all-with-conversion; otherwise return any residual sats.
 #[test_log::test(tokio::test)]
 async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
-    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
-        warn!("Skipping mainnet teardown: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
-        return Ok(());
-    };
-    let token_id = mainnet_test_token_id();
-
     // Build Bob with the stable token active so send-all-with-conversion engages
     // the path that includes his existing sat balance in the same atomic drain.
-    let (mut alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, true).await?;
+    // Teardown doesn't need Alice funded — she's the recipient.
+    let Some((mut alice, bob, token_id)) = mainnet_test_setup(true, false).await? else {
+        return Ok(());
+    };
 
     // Reclaim anything stuck mid-conversion first.
     if let Err(e) = bob.sdk.refund_pending_conversions().await {

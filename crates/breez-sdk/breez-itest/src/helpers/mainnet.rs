@@ -6,9 +6,9 @@ use anyhow::Result;
 use breez_sdk_spark::*;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
-use super::ChannelEventListener;
+use super::{ChannelEventListener, wait_for_token_balance_increase};
 use crate::SdkInstance;
 
 // ============================================================================
@@ -297,4 +297,123 @@ pub async fn estimate_tobtc_sats_out(
         .conversion_estimate
         .ok_or_else(|| anyhow::anyhow!("conversion estimate missing"))?
         .amount_out)
+}
+
+/// Standard mainnet-test preamble: gate on env credentials, build Alice and
+/// Bob, optionally skip if Alice has no sats. Returns `None` if the test should
+/// skip (logged with `warn!`); `Some((alice, bob, token_id))` otherwise.
+///
+/// - `stable_balance_on_bob` — third arg to [`mainnet_alice_bob`].
+/// - `require_alice_funded` — when true, also syncs Alice and returns `None`
+///   if her sat balance is zero.
+pub async fn mainnet_test_setup(
+    stable_balance_on_bob: bool,
+    require_alice_funded: bool,
+) -> Result<Option<(SdkInstance, SdkInstance, String)>> {
+    let Some((mnemonic, api_key)) = mainnet_test_creds() else {
+        warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
+        return Ok(None);
+    };
+    let (alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, stable_balance_on_bob).await?;
+
+    if require_alice_funded {
+        alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+        let balance = alice
+            .sdk
+            .get_info(GetInfoRequest {
+                ensure_synced: Some(false),
+            })
+            .await?
+            .balance_sats;
+        if balance == 0 {
+            warn!("Skipping mainnet test: test account (Alice) has 0 sats");
+            return Ok(None);
+        }
+    }
+
+    let token_id = mainnet_test_token_id();
+    Ok(Some((alice, bob, token_id)))
+}
+
+/// Ensures Bob holds at least `min_required` units of `token_id`. If he
+/// doesn't, runs a Bitcoin→Token conversion from Alice for `seed_amount` to
+/// top him up.
+///
+/// Returns `Ok(true)` when Bob has enough tokens (already, or freshly seeded).
+/// Returns `Ok(false)` when seeding was required but Alice's sat balance can't
+/// cover the conversion — callers should skip the test.
+pub async fn ensure_bob_has_tokens(
+    alice: &SdkInstance,
+    bob: &SdkInstance,
+    token_id: &str,
+    min_required: u128,
+    seed_amount: u128,
+) -> Result<bool> {
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let bob_tokens_before = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .token_balances
+        .get(token_id)
+        .map(|b| b.balance)
+        .unwrap_or(0);
+    info!("Bob token balance: {bob_tokens_before}");
+
+    if bob_tokens_before >= min_required {
+        return Ok(true);
+    }
+
+    info!("Seeding Bob with {seed_amount} units of {token_id} via Bitcoin→Token");
+    let bob_spark = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    let seed_prepare = alice
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: bob_spark,
+            amount: Some(seed_amount),
+            token_identifier: Some(token_id.to_string()),
+            conversion_options: Some(ConversionOptions {
+                conversion_type: ConversionType::FromBitcoin,
+                max_slippage_bps: None,
+                completion_timeout_secs: None,
+            }),
+            fee_policy: None,
+        })
+        .await?;
+    let estimate = seed_prepare
+        .conversion_estimate
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("seed conversion estimate missing"))?;
+    let seed_cost = estimate.amount_in.saturating_add(estimate.fee);
+
+    let alice_balance = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?
+        .balance_sats;
+    if u128::from(alice_balance) < seed_cost {
+        warn!("Cannot seed Bob: Alice balance {alice_balance} sats < seed cost ~{seed_cost} sats");
+        return Ok(false);
+    }
+
+    alice
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: seed_prepare,
+            options: None,
+            idempotency_key: None,
+        })
+        .await?;
+    wait_for_token_balance_increase(&bob.sdk, token_id, bob_tokens_before, 120).await?;
+    Ok(true)
 }
