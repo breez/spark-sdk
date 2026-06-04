@@ -55,8 +55,7 @@ class LightningAddress {
         // ANCHOR_END: get-lightning-address
     }
 
-    // Step 1: run by the *current owner*. Produces the authorization
-    // the new owner needs to take over the username in a single atomic call.
+    // Step 1: run by the current owner.
     suspend fun authorizeLightningAddressTransfer(
         currentOwnerSdk: BreezSdk,
         transfereePubkey: String,
@@ -71,9 +70,7 @@ class LightningAddress {
         return authorization
     }
 
-    // Step 2: run by the *new owner* with the authorization received
-    // from the current owner (e.g. via QR code or deep link). The authorization
-    // already carries the username, so nothing else is needed to claim.
+    // Step 2: run by the new owner with the authorization from step 1.
     suspend fun acceptLightningAddressTransfer(
         newOwnerSdk: BreezSdk,
         authorization: TransferAuthorization,

@@ -5,17 +5,16 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, AuthorizeTransferRequest, BreezSdk, BuyBitcoinRequest,
-    CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
-    AcceptTransferRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
-    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
-    InputType, LightningAddressDetails, TransferAuthorization, ListPaymentsRequest,
-    ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee,
-    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    AcceptTransferRequest, AssetFilter, AuthorizeTransferRequest, BreezSdk, BuyBitcoinRequest,
+    CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest, ConversionOptions,
+    ConversionType, Fee, FeePolicy, FetchConversionLimitsRequest, GetInfoRequest,
+    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
+    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
+    MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
     PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
     RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
     SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
-    TokenTransactionType, UpdateUserSettingsRequest,
+    TokenTransactionType, TransferAuthorization, UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -308,14 +307,15 @@ pub enum Command {
     },
     /// Run by the current owner to authorize transferring their registered
     /// lightning address username to `transferee_pubkey`. Prints the
-    /// authorization (username, pubkey, signature) to share out-of-band with
-    /// the new owner, who passes it to `accept-lightning-address-transfer`.
+    /// authorization (username, pubkey, signature) to hand to the new owner,
+    /// who passes it to `accept-lightning-address-transfer`.
     AuthorizeLightningAddressTransfer {
-        /// Hex-encoded secp256k1 compressed public key of the new owner.
+        /// The new owner's identity public key (hex-encoded compressed
+        /// secp256k1).
         transferee_pubkey: String,
     },
-    /// Run by the new owner to claim a transfer authorized by the current
-    /// owner, taking over `username` in a single atomic operation.
+    /// Run by the new owner to accept a transfer authorized by the current
+    /// owner, taking over `username`.
     AcceptLightningAddressTransfer {
         /// The username being taken over (from the authorization).
         username: String,
@@ -323,13 +323,13 @@ pub enum Command {
         /// Description in the lnurl response and the invoice.
         description: Option<String>,
 
-        /// Hex-encoded pubkey of the current owner, from
-        /// `authorize-lightning-address-transfer`.
+        /// The current owner's identity public key (hex-encoded compressed
+        /// secp256k1), from `authorize-lightning-address-transfer`.
         #[arg(long)]
         from_pubkey: String,
 
-        /// Hex-encoded DER ECDSA signature by the current owner, from
-        /// `authorize-lightning-address-transfer`.
+        /// The current owner's signature authorizing the transfer (hex-encoded
+        /// DER ECDSA), from `authorize-lightning-address-transfer`.
         #[arg(long)]
         from_signature: String,
     },

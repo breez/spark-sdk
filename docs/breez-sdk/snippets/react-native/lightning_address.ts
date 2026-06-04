@@ -58,8 +58,7 @@ const exampleGetLightningAddress = async (sdk: BreezSdk) => {
   // ANCHOR_END: get-lightning-address
 }
 
-// Run by the *current owner*. Produces the authorization that the
-// new owner needs to take over the username in a single atomic call.
+// Run by the current owner.
 const exampleAuthorizeLightningAddressTransfer = async (
   currentOwnerSdk: BreezSdk,
   transfereePubkey: string
@@ -72,8 +71,7 @@ const exampleAuthorizeLightningAddressTransfer = async (
   return authorization
 }
 
-// Run by the *new owner* with the authorization received
-// from the current owner (e.g. via QR code or deep link).
+// Run by the new owner with the authorization from step 1.
 const exampleAcceptLightningAddressTransfer = async (
   newOwnerSdk: BreezSdk,
   authorization: TransferAuthorization

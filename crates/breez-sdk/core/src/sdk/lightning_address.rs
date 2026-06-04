@@ -2,9 +2,8 @@ use bitcoin::hex::DisplayHex;
 use lnurl_models::sanitize_username;
 
 use crate::{
-    AuthorizeTransferRequest, CheckLightningAddressRequest,
-    AcceptTransferRequest, LightningAddressInfo,
-    TransferAuthorization, LnurlInfo, RegisterLightningAddressRequest,
+    AcceptTransferRequest, AuthorizeTransferRequest, CheckLightningAddressRequest,
+    LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest, TransferAuthorization,
     error::SdkError, persist::ObjectCacheRepository,
 };
 
@@ -72,16 +71,10 @@ impl BreezSdk {
     }
 
     /// Authorize transferring the current owner's registered lightning address
-    /// username to a new owner.
-    ///
-    /// Called by the *current owner*. Signs an authorization granting
-    /// `request.transferee_pubkey` the right to take over the username, and
-    /// returns a [`TransferAuthorization`] to share out-of-band
-    /// with the new owner, who passes it to
-    /// [`BreezSdk::accept_lightning_address_transfer`].
-    ///
-    /// Errors with [`SdkError::Generic`] if the current owner has no lightning
-    /// address registered.
+    /// username to `request.transferee_pubkey`. Returns a
+    /// [`TransferAuthorization`] to hand to the new owner, who
+    /// accepts it via [`BreezSdk::accept_lightning_address_transfer`].
+    /// Errors if the current owner has no lightning address registered.
     pub async fn authorize_lightning_address_transfer(
         &self,
         request: AuthorizeTransferRequest,
@@ -105,17 +98,10 @@ impl BreezSdk {
         })
     }
 
-    /// Claim a lightning address username handed over by its current owner.
-    ///
-    /// Called by the *new owner* with the
-    /// [`TransferAuthorization`] produced by the current owner
-    /// via [`BreezSdk::authorize_lightning_address_transfer`]. Completes the
-    /// takeover in a single atomic server operation and returns the
-    /// newly-owned address.
-    ///
-    /// Both parties sign the same canonical message
-    /// (`"transfer:{username}-{transferee_pubkey}"`, no timestamp); the server
-    /// verifies both signatures and swaps ownership atomically.
+    /// Accept a lightning address username handed over by its current owner,
+    /// using the [`TransferAuthorization`] from
+    /// [`BreezSdk::authorize_lightning_address_transfer`]. Completes the
+    /// takeover and returns the newly-owned address.
     pub async fn accept_lightning_address_transfer(
         &self,
         request: AcceptTransferRequest,
