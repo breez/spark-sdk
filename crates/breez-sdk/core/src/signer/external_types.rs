@@ -197,8 +197,8 @@ impl ExternalEncryptedSecret {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum ExternalSecretSource {
-    /// Private key derived from a tree node
-    Derived { node_id: ExternalTreeNodeId },
+    /// Private key derived at a BIP32 path (relative to the account master).
+    Derived { path: String },
     /// Encrypted private key
     Encrypted { key: ExternalEncryptedSecret },
 }
@@ -206,8 +206,8 @@ pub enum ExternalSecretSource {
 impl ExternalSecretSource {
     pub fn from_secret_source(source: &spark_wallet::SecretSource) -> Result<Self, SdkError> {
         match source {
-            spark_wallet::SecretSource::Derived(node_id) => Ok(Self::Derived {
-                node_id: ExternalTreeNodeId::from_tree_node_id(node_id)?,
+            spark_wallet::SecretSource::Derived(path) => Ok(Self::Derived {
+                path: derivation_path_to_string(path),
             }),
             spark_wallet::SecretSource::Encrypted(key) => Ok(Self::Encrypted {
                 key: ExternalEncryptedSecret::from_encrypted_secret(key)?,
@@ -217,8 +217,8 @@ impl ExternalSecretSource {
 
     pub fn to_secret_source(&self) -> Result<spark_wallet::SecretSource, SdkError> {
         match self {
-            Self::Derived { node_id } => Ok(spark_wallet::SecretSource::Derived(
-                node_id.to_tree_node_id()?,
+            Self::Derived { path } => Ok(spark_wallet::SecretSource::Derived(
+                string_to_derivation_path(path)?,
             )),
             Self::Encrypted { key } => Ok(spark_wallet::SecretSource::Encrypted(
                 key.to_encrypted_private_key()?,

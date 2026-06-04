@@ -11,7 +11,7 @@ use crate::services::models::{
     LeafKeyTweak, Transfer, map_signing_nonce_commitments, split_signing_commitments_by_variant,
 };
 use crate::services::{TransferId, TransferObserver, TransferStatus};
-use crate::signer::SecretSource;
+use crate::signer::EncryptedSecret;
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::paging::{PagingFilter, PagingResult, pager};
 use crate::utils::refund::{SignRefundsParams, SignedRefundTransactions, sign_refunds};
@@ -96,7 +96,6 @@ impl TransferService {
         leaves: Vec<TreeNode>,
         receiver_id: &PublicKey,
         transfer_id: Option<TransferId>,
-        signing_key_source: Option<SecretSource>,
         spark_invoice: Option<String>,
     ) -> Result<Transfer, ServiceError> {
         let unwrapped_transfer_id = match &transfer_id {
@@ -125,7 +124,7 @@ impl TransferService {
         }
 
         // build leaf key tweaks with new signing keys that we will send to the receiver
-        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves, signing_key_source);
+        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves);
         let transfer_res = self
             .send_transfer_with_key_tweaks(
                 &unwrapped_transfer_id,
@@ -502,7 +501,7 @@ impl TransferService {
     async fn prepare_leaves_for_claiming(
         &self,
         transfer: &Transfer,
-        leaf_key_map: &HashMap<TreeNodeId, SecretSource>,
+        leaf_key_map: &HashMap<TreeNodeId, EncryptedSecret>,
     ) -> Result<Vec<LeafKeyTweak>, ServiceError> {
         let mut leaves_to_claim = Vec::new();
 
@@ -513,7 +512,7 @@ impl TransferService {
 
             leaves_to_claim.push(LeafKeyTweak {
                 node: leaf.leaf_with_intermediate_txs(),
-                signing_key: leaf_key.clone(),
+                incoming_key: Some(leaf_key.clone()),
             });
         }
 
@@ -613,9 +612,9 @@ impl TransferService {
         let claim_leaves = leaves
             .iter()
             .map(|leaf| {
-                let SecretSource::Encrypted(cipher) = &leaf.signing_key else {
+                let Some(cipher) = &leaf.incoming_key else {
                     return Err(ServiceError::InvalidInput(
-                        "claim leaf signing key must be the encrypted incoming key".to_string(),
+                        "claim leaf must carry the encrypted incoming key".to_string(),
                     ));
                 };
                 let sender_signature = transfer
@@ -818,7 +817,7 @@ impl TransferService {
     pub async fn verify_pending_transfer(
         &self,
         transfer: &Transfer,
-    ) -> Result<HashMap<TreeNodeId, SecretSource>, ServiceError> {
+    ) -> Result<HashMap<TreeNodeId, EncryptedSecret>, ServiceError> {
         let mut leaf_key_map = HashMap::new();
         let secp = bitcoin::secp256k1::Secp256k1::new();
 
@@ -850,7 +849,7 @@ impl TransferService {
 
             // Decrypt the secret cipher and get the corresponding public key
             // The signer persists the private key internally and returns the public key
-            let private_key = SecretSource::new_encrypted(transfer_leaf.secret_cipher.clone());
+            let private_key = EncryptedSecret::new(transfer_leaf.secret_cipher.clone());
 
             leaf_key_map.insert(transfer_leaf.leaf.id.clone(), private_key);
         }

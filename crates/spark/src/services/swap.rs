@@ -19,7 +19,7 @@ use crate::{
         },
     },
     services::{LeafKeyTweak, ServiceError, SigningResult, Transfer, TransferId, TransferService},
-    signer::{AggregateFrostRequest, SecretSource, SparkSigner},
+    signer::{AggregateFrostRequest, SparkSigner},
     ssp::{RequestSwapInput, ServiceProvider, ServiceProviderError, UserLeafInput},
     tree::{TreeNode, TreeNodeId},
     utils::frost::aggregate_frost,
@@ -107,7 +107,7 @@ impl Swap {
         for leaf in leaves {
             leaf_key_tweaks.push(LeafKeyTweak {
                 node: leaf.clone(),
-                signing_key: SecretSource::Derived(leaf.id.clone()),
+                incoming_key: None,
             });
         }
 

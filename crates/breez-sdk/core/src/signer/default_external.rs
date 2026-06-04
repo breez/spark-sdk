@@ -6,7 +6,29 @@ use crate::signer::external_types::{
     RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes, string_to_derivation_path,
 };
 use crate::signer::{BreezSigner, ExternalBreezSigner, breez::BreezSignerImpl};
-use crate::{Network, SdkError, Seed, default_config, models::KeySetType};
+use crate::{Network, SdkError, Seed, models::KeySetType};
+
+/// Derives the identity master Xpriv (the `BreezSigner` derivation root) from a
+/// mnemonic seed. Key derivation lives in the Spark layer (`KeySet`); the
+/// SDK-layer `BreezSigner` just consumes the resulting master.
+fn identity_master_key(
+    seed: &Seed,
+    network: Network,
+    key_set_type: KeySetType,
+    use_address_index: bool,
+    account_number: Option<u32>,
+) -> Result<bitcoin::bip32::Xpriv, SdkError> {
+    let seed_bytes = seed.to_bytes()?;
+    let key_set = spark_wallet::KeySet::new(
+        &seed_bytes,
+        network.into(),
+        key_set_type.into(),
+        use_address_index,
+        account_number,
+    )
+    .map_err(|e| SdkError::Generic(e.to_string()))?;
+    Ok(key_set.identity_master_key)
+}
 
 /// Default implementation of `ExternalBreezSigner` that uses the internal `BreezSignerImpl`.
 ///
@@ -39,14 +61,14 @@ impl DefaultExternalSigner {
             mnemonic,
             passphrase,
         };
-        let config = default_config(network);
-        let inner = BreezSignerImpl::new(
-            &config,
+        let master = identity_master_key(
             &seed,
-            key_set_type.into(),
+            network,
+            key_set_type,
             use_address_index,
             account_number,
         )?;
+        let inner = BreezSignerImpl::new(master);
         Ok(Self { inner })
     }
 }
@@ -203,15 +225,15 @@ mod tests {
             mnemonic,
             passphrase: None,
         };
-        let config = default_config(network);
-        let internal = BreezSignerImpl::new(
-            &config,
+        let master = identity_master_key(
             &seed,
-            key_set_type.into(),
+            network,
+            key_set_type,
             use_address_index,
             account_number,
         )
-        .expect("Failed to create BreezSignerImpl");
+        .expect("Failed to derive identity master key");
+        let internal = BreezSignerImpl::new(master);
 
         (external, internal)
     }

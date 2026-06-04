@@ -75,7 +75,7 @@ impl HtlcService {
             }
         }
 
-        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves, None);
+        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(leaves);
 
         let prepared_transfer_request = self
             .transfer_service

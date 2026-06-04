@@ -10,7 +10,7 @@ use tracing::info;
 
 use crate::core::next_lightning_htlc_sequence;
 use crate::services::SignedTx;
-use crate::signer::{FrostDerivation, FrostJob, SecretSource, SignerError, SparkSigner};
+use crate::signer::{FrostDerivation, FrostJob, SignerError, SparkSigner};
 use crate::utils::htlc_transactions::{
     CreateLightningHtlcRefundTxsParams, create_lightning_htlc_refund_txs,
 };
@@ -209,18 +209,11 @@ async fn sign_refund(
     let sighash = sighash_from_tx(&refund_tx, 0, &tx.output[0])
         .map_err(|e| SignerError::Generic(e.to_string()))?;
 
-    // Refund signing always uses the leaf's current (derived) signing key. The
-    // `signing_key_source` override is unused in current flows, so anything
-    // other than a derived key is unexpected here.
-    let SecretSource::Derived(leaf_id) = &leaf.signing_key else {
-        return Err(SignerError::Generic(
-            "refund signing requires a derived leaf signing key".to_string(),
-        ));
-    };
-
+    // Refund signing always uses the leaf's own (derived) signing key, keyed by
+    // the leaf's node id.
     let job = FrostJob {
         derivation: FrostDerivation::SigningLeaf {
-            leaf_id: leaf_id.clone(),
+            leaf_id: leaf.node.id.clone(),
         },
         sighash: sighash.to_raw_hash().to_byte_array(),
         verifying_key: leaf.node.verifying_public_key,

@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use bitcoin::bip32::{ChildNumber, DerivationPath};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
@@ -42,15 +43,15 @@ impl SparkSignerAdapter {
     }
 
     /// Maps a flow-level [`FrostDerivation`] onto the low-level signer's
-    /// [`SecretSource`], reproducing the current key derivation exactly.
-    async fn secret_source_for(
-        &self,
-        derivation: &FrostDerivation,
-    ) -> Result<SecretSource, SignerError> {
+    /// [`SecretSource`] derivation path, reproducing the current key derivation
+    /// exactly.
+    fn secret_source_for(&self, derivation: &FrostDerivation) -> Result<SecretSource, SignerError> {
         match derivation {
-            FrostDerivation::SigningLeaf { leaf_id } => Ok(SecretSource::Derived(leaf_id.clone())),
+            FrostDerivation::SigningLeaf { leaf_id } => {
+                Ok(SecretSource::Derived(signing_path(leaf_id)?))
+            }
             FrostDerivation::StaticDeposit { index } => {
-                self.signer.static_deposit_secret_encrypted(*index).await
+                Ok(SecretSource::Derived(static_deposit_path(*index)?))
             }
             FrostDerivation::HtlcPreimage => Err(SignerError::Generic(
                 "HtlcPreimage FROST derivation not yet supported by the default adapter"
@@ -72,7 +73,7 @@ impl SparkSignerAdapter {
         operator_commitments: BTreeMap<Identifier, frost_secp256k1_tr::round1::SigningCommitments>,
         adaptor_public_key: Option<&PublicKey>,
     ) -> Result<FrostShareResult, SignerError> {
-        let private_key = self.secret_source_for(derivation).await?;
+        let private_key = self.secret_source_for(derivation)?;
         let public_key = self.signer.public_key_from_secret(&private_key).await?;
         let self_nonce_commitment = self.signer.generate_random_signing_commitment().await?;
         let signature_share = self
@@ -153,6 +154,34 @@ fn transfer_id_bytes(transfer_id: &crate::services::TransferId) -> Result<Vec<u8
         .map_err(|e| SignerError::Generic(format!("Failed to decode transfer ID: {e}")))
 }
 
+/// Derivation path for a leaf's signing key: the `1'` signing purpose followed
+/// by a hardened child derived from the node id (sha256 of the id, first 4 bytes
+/// mod 2^31). Reproduces the derivation the low-level signer did before the path
+/// computation moved up into this adapter.
+fn signing_path(node_id: &crate::tree::TreeNodeId) -> Result<DerivationPath, SignerError> {
+    let hash = sha256::Hash::hash(node_id.to_string().as_bytes());
+    let u32_bytes: [u8; 4] = hash.as_byte_array()[..4]
+        .try_into()
+        .map_err(|_| SignerError::InvalidHash)?;
+    let index = u32::from_be_bytes(u32_bytes) % 0x8000_0000;
+    Ok(DerivationPath::from(vec![
+        ChildNumber::from_hardened_idx(1).map_err(|_| SignerError::InvalidHash)?,
+        ChildNumber::from_hardened_idx(index).map_err(|_| SignerError::InvalidHash)?,
+    ]))
+}
+
+/// Derivation path for a static-deposit key at `index`: the `3'` static-deposit
+/// purpose followed by the index as a hardened child.
+fn static_deposit_path(index: u32) -> Result<DerivationPath, SignerError> {
+    Ok(DerivationPath::from(vec![
+        ChildNumber::from_hardened_idx(3)
+            .map_err(|e| SignerError::Generic(format!("invalid static-deposit purpose: {e}")))?,
+        ChildNumber::from_hardened_idx(index).map_err(|e| {
+            SignerError::Generic(format!("failed to create child from {index}: {e}"))
+        })?,
+    ]))
+}
+
 #[macros::async_trait]
 impl SparkSigner for SparkSignerAdapter {
     async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
@@ -163,11 +192,13 @@ impl SparkSigner for SparkSignerAdapter {
         &self,
         leaf_id: &crate::tree::TreeNodeId,
     ) -> Result<PublicKey, SignerError> {
-        self.signer.get_public_key_for_node(leaf_id).await
+        self.signer.derive_public_key(&signing_path(leaf_id)?).await
     }
 
     async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
-        self.signer.static_deposit_signing_key(index).await
+        self.signer
+            .derive_public_key(&static_deposit_path(index)?)
+            .await
     }
 
     async fn sign_authentication_challenge(
@@ -222,7 +253,7 @@ impl SparkSigner for SparkSignerAdapter {
         let mut new_leaf_keys = Vec::with_capacity(leaves.len());
 
         for leaf in &leaves {
-            let signing_key = SecretSource::Derived(leaf.node.id.clone());
+            let signing_key = SecretSource::Derived(signing_path(&leaf.node.id)?);
             let new_secret = self.signer.generate_random_secret().await?;
             let new_signing_key = SecretSource::Encrypted(new_secret.clone());
 
@@ -252,7 +283,7 @@ impl SparkSigner for SparkSignerAdapter {
             // The new leaf key, encrypted for the receiver to claim with.
             let secret_cipher = self
                 .signer
-                .encrypt_secret_for_receiver(&new_secret, &receiver_public_key)
+                .encrypt_secret_for_receiver(&new_signing_key, &receiver_public_key)
                 .await?;
 
             // Per-leaf signature: leaf_id || transfer_id || secret_cipher.
@@ -340,7 +371,7 @@ impl SparkSigner for SparkSignerAdapter {
             // Incoming leaf key (ECIES-encrypted to our identity key by the
             // sender) and the receiver's new derived key.
             let incoming_key = SecretSource::new_encrypted(leaf.leaf_key_ciphertext.clone());
-            let new_signing_key = SecretSource::Derived(leaf.node.id.clone());
+            let new_signing_key = SecretSource::Derived(signing_path(&leaf.node.id)?);
 
             // tweak = incoming - new
             let privkey_tweak = self
@@ -464,15 +495,12 @@ impl SparkSigner for SparkSignerAdapter {
         } = request;
 
         // Export the static-deposit secret (encrypted) to the SSP.
-        let static_secret = self.signer.static_deposit_secret_encrypted(index).await?;
-        let SecretSource::Encrypted(encrypted_secret) = static_secret else {
-            return Err(SignerError::Generic(
-                "static_deposit_secret_encrypted did not return an encrypted secret".to_string(),
-            ));
-        };
         let exported_secret = self
             .signer
-            .encrypt_secret_for_receiver(&encrypted_secret, &ssp_public_key)
+            .encrypt_secret_for_receiver(
+                &SecretSource::Derived(static_deposit_path(index)?),
+                &ssp_public_key,
+            )
             .await?;
 
         let frost_shares = self.sign_frost(frost_jobs).await?;
@@ -492,7 +520,10 @@ impl SparkSigner for SparkSignerAdapter {
             user_statement,
         } = request;
 
-        let signing_public_key = self.signer.static_deposit_signing_key(index).await?;
+        let signing_public_key = self
+            .signer
+            .derive_public_key(&static_deposit_path(index)?)
+            .await?;
         // User-commits-first: the nonce is generated now and forwarded to the
         // operators; it is consumed later by `sign_static_deposit_refund`.
         let nonce_commitment = self.signer.generate_random_signing_commitment().await?;
@@ -522,8 +553,11 @@ impl SparkSigner for SparkSignerAdapter {
             statechain_public_keys,
         } = request;
 
-        let signing_private_key = self.signer.static_deposit_secret_encrypted(index).await?;
-        let aggregating_public_key = self.signer.static_deposit_signing_key(index).await?;
+        let signing_private_key = SecretSource::Derived(static_deposit_path(index)?);
+        let aggregating_public_key = self
+            .signer
+            .derive_public_key(&static_deposit_path(index)?)
+            .await?;
 
         // User-commits-first: sign with the pre-committed nonce, then aggregate
         // the user share with the operators' shares (pure public math).
@@ -564,7 +598,7 @@ impl SparkSigner for SparkSignerAdapter {
 
         // The SSP co-signs the claim, so it needs the static-deposit secret in
         // the clear (the exported/local-key path).
-        let deposit_secret_key = self.signer.static_deposit_secret(index).await?;
+        let deposit_secret_key = self.signer.secret_key(&static_deposit_path(index)?).await?;
         let user_signature = self
             .signer
             .sign_message_ecdsa_with_identity_key(&user_statement)

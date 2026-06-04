@@ -836,7 +836,6 @@ impl SparkWallet {
                 leaves_reservation.leaves.clone(),
                 &receiver_address.identity_public_key,
                 transfer_id.clone(),
-                None,
                 spark_invoice.clone(),
             )
         )?;

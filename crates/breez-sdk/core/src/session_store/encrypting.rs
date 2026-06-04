@@ -164,12 +164,17 @@ mod tests {
     }
 
     fn test_signer(seed_byte: u8) -> Arc<dyn BreezSigner> {
-        let mut config = crate::default_config(Network::Regtest);
-        config.api_key = None;
         let seed = Seed::Entropy(vec![seed_byte; 32]);
-        Arc::new(
-            BreezSignerImpl::new(&config, &seed, KeySetType::Default.into(), false, None).unwrap(),
+        let seed_bytes = seed.to_bytes().unwrap();
+        let key_set = spark_wallet::KeySet::new(
+            &seed_bytes,
+            Network::Regtest.into(),
+            KeySetType::Default.into(),
+            false,
+            None,
         )
+        .unwrap();
+        Arc::new(BreezSignerImpl::new(key_set.identity_master_key))
     }
 
     #[async_test_all]

@@ -56,7 +56,7 @@ pub struct ExternalEncryptedSecret {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalSecretSource)]
 pub enum ExternalSecretSource {
-    Derived { node_id: ExternalTreeNodeId },
+    Derived { path: String },
     Encrypted { key: ExternalEncryptedSecret },
 }
 

@@ -437,7 +437,7 @@ impl LightningService {
         }
 
         // Prepare leaf tweaks
-        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec(), None);
+        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec());
 
         let prepared_transfer_request = self
             .transfer_service

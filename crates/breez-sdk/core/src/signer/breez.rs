@@ -1,40 +1,22 @@
-use crate::{Seed, error::SdkError, models::Config};
-use bitcoin::bip32::DerivationPath;
+use crate::error::SdkError;
+use bitcoin::bip32::{DerivationPath, Xpriv};
 use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
 use bitcoin::secp256k1::{self, Message, Secp256k1, rand::thread_rng};
-use spark_wallet::{KeySet, KeySetType};
 
 use super::BreezSigner;
 
+/// SDK-layer signer for non-Spark operations (LNURL-auth, real-time sync,
+/// message signing, ECIES). It holds a single master key and derives every key
+/// from it by BIP32 path; the Spark layer decides which master to hand it.
 pub struct BreezSignerImpl {
-    key_set: KeySet,
+    master: Xpriv,
     secp: Secp256k1<secp256k1::All>,
 }
 
 impl BreezSignerImpl {
-    pub fn new(
-        config: &Config,
-        seed: &Seed,
-        key_set_type: KeySetType,
-        use_address_index: bool,
-        account_number: Option<u32>,
-    ) -> Result<Self, SdkError> {
-        let seed_bytes = seed.to_bytes()?;
-        let key_set = KeySet::new(
-            &seed_bytes,
-            config.network.into(),
-            key_set_type,
-            use_address_index,
-            account_number,
-        )
-        .map_err(|e| SdkError::Generic(e.to_string()))?;
-
-        Ok(Self::from_key_set(key_set))
-    }
-
-    pub fn from_key_set(key_set: KeySet) -> Self {
+    pub fn new(master: Xpriv) -> Self {
         Self {
-            key_set,
+            master,
             secp: Secp256k1::new(),
         }
     }
@@ -43,7 +25,7 @@ impl BreezSignerImpl {
 #[macros::async_trait]
 impl BreezSigner for BreezSignerImpl {
     fn identity_public_key(&self) -> Result<secp256k1::PublicKey, SdkError> {
-        Ok(self.key_set.identity_key_pair.public_key())
+        Ok(self.master.private_key.public_key(&self.secp))
     }
 
     async fn derive_public_key(
@@ -51,8 +33,7 @@ impl BreezSigner for BreezSignerImpl {
         path: &DerivationPath,
     ) -> Result<secp256k1::PublicKey, SdkError> {
         let derived = self
-            .key_set
-            .identity_master_key
+            .master
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
         Ok(derived.private_key.public_key(&self.secp))
@@ -64,8 +45,7 @@ impl BreezSigner for BreezSignerImpl {
         path: &DerivationPath,
     ) -> Result<secp256k1::ecdsa::Signature, SdkError> {
         let derived = self
-            .key_set
-            .identity_master_key
+            .master
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
         Ok(self.secp.sign_ecdsa_low_r(&message, &derived.private_key))
@@ -77,8 +57,7 @@ impl BreezSigner for BreezSignerImpl {
         path: &DerivationPath,
     ) -> Result<secp256k1::ecdsa::RecoverableSignature, SdkError> {
         let derived = self
-            .key_set
-            .identity_master_key
+            .master
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
         Ok(self
@@ -92,8 +71,7 @@ impl BreezSigner for BreezSignerImpl {
         path: &DerivationPath,
     ) -> Result<Vec<u8>, SdkError> {
         let derived = self
-            .key_set
-            .identity_master_key
+            .master
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
         let rc_pub = derived.private_key.public_key(&self.secp).serialize();
@@ -107,8 +85,7 @@ impl BreezSigner for BreezSignerImpl {
         path: &DerivationPath,
     ) -> Result<Vec<u8>, SdkError> {
         let derived = self
-            .key_set
-            .identity_master_key
+            .master
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
         let rc_prv = derived.private_key.secret_bytes();
@@ -122,8 +99,7 @@ impl BreezSigner for BreezSignerImpl {
         path: &DerivationPath,
     ) -> Result<secp256k1::schnorr::Signature, SdkError> {
         let derived = self
-            .key_set
-            .identity_master_key
+            .master
             .derive_priv(&self.secp, path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
         let message =
@@ -143,8 +119,7 @@ impl BreezSigner for BreezSignerImpl {
         input: &[u8],
     ) -> Result<Hmac<sha256::Hash>, SdkError> {
         let derived = self
-            .key_set
-            .identity_master_key
+            .master
             .derive_priv(&self.secp, key_path)
             .map_err(|e| SdkError::Generic(e.to_string()))?;
 

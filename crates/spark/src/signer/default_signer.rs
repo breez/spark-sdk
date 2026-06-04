@@ -15,11 +15,9 @@ use frost_secp256k1_tr::{Identifier, VerifyingKey};
 use thiserror::Error;
 
 use crate::signer::{
-    AggregateFrostRequest, EncryptedSecret, FrostSigningCommitmentsWithNonces, SignFrostRequest,
-    secret_sharing,
+    EncryptedSecret, FrostSigningCommitmentsWithNonces, SignFrostRequest, secret_sharing,
 };
 use crate::signer::{SecretSource, SecretToSplit};
-use crate::tree::TreeNodeId;
 use crate::{
     Network,
     signer::{Signer, SignerError},
@@ -68,35 +66,35 @@ impl DerivedKeySet {
         identity_child_number: Option<ChildNumber>,
     ) -> Result<KeySet, DefaultSignerError> {
         let secp = Secp256k1::new();
-        let mut identity_master_key = self.master_key.derive_priv(&secp, &self.derivation_path)?;
+        // The account node. Leaf-signing keys (`base/1'/..`) and static-deposit
+        // keys (`base/3'/..`) derive from it; the higher-level signer supplies
+        // those paths.
+        let account_master_key = self.master_key.derive_priv(&secp, &self.derivation_path)?;
 
-        let signing_master_key =
-            identity_master_key.derive_priv(&secp, &[ChildNumber::from_hardened_idx(1)?])?;
-        let static_deposit_master_key =
-            identity_master_key.derive_priv(&secp, &[ChildNumber::from_hardened_idx(3)?])?;
-        let encryption_master_key = identity_master_key
-            .derive_priv(&secp, &[ChildNumber::from_hardened_idx(712532575)?])?;
+        let mut identity_master_key = account_master_key;
         if let Some(child_number) = identity_child_number {
             identity_master_key =
                 identity_master_key.derive_priv(&secp, &DerivationPath::from(vec![child_number]))?
         }
         Ok(KeySet {
-            identity_key_pair: identity_master_key.private_key.keypair(&secp),
+            account_master_key,
             identity_master_key,
-            encryption_master_key,
-            signing_master_key,
-            static_deposit_master_key,
+            identity_key_pair: identity_master_key.private_key.keypair(&secp),
         })
     }
 }
 
 #[derive(Clone)]
 pub struct KeySet {
-    pub identity_key_pair: Keypair,
+    /// The account node (`base`). Leaf-signing and static-deposit keys derive
+    /// from it via paths supplied by the higher-level Spark signer.
+    pub account_master_key: Xpriv,
+    /// The identity node (`base/0'` for the default key set, `base` otherwise),
+    /// used by the SDK-layer `BreezSigner` as its derivation root.
     pub identity_master_key: Xpriv,
-    pub encryption_master_key: Xpriv,
-    pub signing_master_key: Xpriv,
-    pub static_deposit_master_key: Xpriv,
+    /// The resolved identity keypair (tap-tweaked for the Taproot key set), used
+    /// for identity signing and ECIES.
+    pub identity_key_pair: Keypair,
 }
 
 impl KeySet {
@@ -263,22 +261,14 @@ impl DefaultSigner {
 }
 
 impl DefaultSigner {
-    fn derive_signing_key(&self, node_id: &TreeNodeId) -> Result<SecretKey, SignerError> {
-        let hash = sha256::Hash::hash(node_id.to_string().as_bytes());
-        let u32_bytes = hash.as_byte_array()[..4]
-            .try_into()
-            .map_err(|_| SignerError::InvalidHash)?;
-        let index = u32::from_be_bytes(u32_bytes) % 0x80000000;
-        let child_number =
-            ChildNumber::from_hardened_idx(index).map_err(|_| SignerError::InvalidHash)?;
-        let derivation_path = DerivationPath::from(vec![child_number]);
-        let child = self
+    /// Derives the raw secret key at `path` under the account master.
+    fn derive_at(&self, path: &DerivationPath) -> Result<SecretKey, SignerError> {
+        Ok(self
             .key_set
-            .signing_master_key
-            .derive_priv(&self.secp, &derivation_path)
+            .account_master_key
+            .derive_priv(&self.secp, path)
             .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
-            .private_key;
-        Ok(child)
+            .private_key)
     }
 
     fn encrypt_message_ecies(
@@ -390,10 +380,12 @@ impl Signer for DefaultSigner {
         })
     }
 
-    async fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError> {
-        let signing_key = self.derive_signing_key(id)?;
-        let public_key = signing_key.public_key(&self.secp);
-        Ok(public_key)
+    async fn derive_public_key(&self, path: &DerivationPath) -> Result<PublicKey, SignerError> {
+        Ok(self.derive_at(path)?.public_key(&self.secp))
+    }
+
+    async fn secret_key(&self, path: &DerivationPath) -> Result<SecretKey, SignerError> {
+        self.derive_at(path)
     }
 
     async fn generate_random_secret(&self) -> Result<EncryptedSecret, SignerError> {
@@ -406,38 +398,6 @@ impl Signer for DefaultSigner {
 
     async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
         Ok(self.key_set.identity_key_pair.public_key())
-    }
-
-    async fn static_deposit_secret_encrypted(
-        &self,
-        index: u32,
-    ) -> Result<SecretSource, SignerError> {
-        let secret_key = self.static_deposit_secret(index).await?;
-        Ok(SecretSource::new_encrypted(
-            self.encrypt_private_key_ecies(&secret_key, &self.get_identity_public_key().await?)?,
-        ))
-    }
-
-    async fn static_deposit_secret(&self, index: u32) -> Result<SecretKey, SignerError> {
-        let child_number = ChildNumber::from_hardened_idx(index).map_err(|e| {
-            SignerError::Generic(format!("failed to create child from {index}: {e}"))
-        })?;
-        let derivation_path = DerivationPath::from(vec![child_number]);
-        let private_key = self
-            .key_set
-            .static_deposit_master_key
-            .derive_priv(&self.secp, &derivation_path)
-            .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
-            .private_key;
-        Ok(private_key)
-    }
-
-    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKey, SignerError> {
-        let public_key = self
-            .static_deposit_secret(index)
-            .await?
-            .public_key(&self.secp);
-        Ok(public_key)
     }
 
     async fn subtract_secrets(
@@ -466,11 +426,10 @@ impl Signer for DefaultSigner {
 
     async fn encrypt_secret_for_receiver(
         &self,
-        private_key: &EncryptedSecret,
+        secret: &SecretSource,
         receiver_public_key: &PublicKey,
     ) -> Result<Vec<u8>, SignerError> {
-        let private_key = SecretSource::Encrypted(private_key.clone()).to_secret_key(self)?;
-
+        let private_key = secret.to_secret_key(self)?;
         self.encrypt_private_key_ecies(&private_key, receiver_public_key)
     }
 
@@ -606,21 +565,12 @@ impl Signer for DefaultSigner {
         // from the statechain participants to form a complete threshold signature
         return Ok(signature_share);
     }
-
-    async fn aggregate_frost<'a>(
-        &self,
-        request: AggregateFrostRequest<'a>,
-    ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
-        tracing::trace!("default_signer::aggregate_frost");
-        // Aggregation is pure public math; delegate to the shared free function.
-        crate::utils::frost::aggregate_frost(request)
-    }
 }
 
 impl SecretSource {
     fn to_secret_key(&self, signer: &DefaultSigner) -> Result<SecretKey, SignerError> {
         match self {
-            SecretSource::Derived(node_id) => signer.derive_signing_key(node_id),
+            SecretSource::Derived(path) => signer.derive_at(path),
             SecretSource::Encrypted(ciphertext) => {
                 signer.decrypt_private_key_ecies(ciphertext.as_slice())
             }
@@ -636,9 +586,9 @@ pub(crate) mod tests {
     use std::str::FromStr;
 
     use crate::signer::{EncryptedSecret, SecretSource, Signer, SignerError};
-    use crate::tree::TreeNodeId;
     use crate::utils::verify_signature::verify_signature_ecdsa;
     use crate::{Network, signer::default_signer::DefaultSigner};
+    use bitcoin::bip32::DerivationPath;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -835,7 +785,7 @@ pub(crate) mod tests {
         // Encrypt for receiver
         let result = signer
             .encrypt_secret_for_receiver(
-                &EncryptedSecret::new(encrypted_private_key),
+                &SecretSource::Encrypted(EncryptedSecret::new(encrypted_private_key)),
                 &receiver_public_key,
             )
             .await
@@ -882,19 +832,19 @@ pub(crate) mod tests {
         assert_eq!(expected_public_key, result_public_key);
 
         // Test with derived private key source
-        let node_id = TreeNodeId::from_str("test_node").expect("Failed to create node ID");
-        let derived_source = SecretSource::Derived(node_id.clone());
+        let path = DerivationPath::from_str("m/1'/0'").expect("Failed to parse path");
+        let derived_source = SecretSource::Derived(path.clone());
 
         let result_public_key = signer
             .public_key_from_secret(&derived_source)
             .await
             .expect("Failed to get public key from derived source");
 
-        // Verify it matches what get_public_key_for_node returns
+        // Verify it matches what derive_public_key returns for the same path
         let expected_public_key = signer
-            .get_public_key_for_node(&node_id)
+            .derive_public_key(&path)
             .await
-            .expect("Failed to get public key for node");
+            .expect("Failed to derive public key");
 
         assert_eq!(expected_public_key, result_public_key);
     }
