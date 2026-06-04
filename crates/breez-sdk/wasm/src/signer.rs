@@ -49,43 +49,6 @@ pub struct ExternalTreeNodeId {
     pub id: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalEncryptedSecret)]
-pub struct ExternalEncryptedSecret {
-    pub ciphertext: Vec<u8>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalSecretSource)]
-pub enum ExternalSecretSource {
-    Derived { path: String },
-    Encrypted { key: ExternalEncryptedSecret },
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalSecretToSplit)]
-pub enum ExternalSecretToSplit {
-    SecretSource { source: ExternalSecretSource },
-    Preimage { data: Vec<u8> },
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalScalar)]
-pub struct ExternalScalar {
-    pub bytes: Vec<u8>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalSecretShare)]
-pub struct ExternalSecretShare {
-    pub threshold: u32,
-    pub index: ExternalScalar,
-    pub share: ExternalScalar,
-}
-
-#[macros::extern_wasm_bindgen(
-    breez_sdk_spark::signer::external_types::ExternalVerifiableSecretShare
-)]
-pub struct ExternalVerifiableSecretShare {
-    pub secret_share: ExternalSecretShare,
-    pub proofs: Vec<Vec<u8>>,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalFrostCommitments)]
 pub struct ExternalFrostCommitments {
     pub hiding_commitment: Vec<u8>,
@@ -120,32 +83,6 @@ pub struct IdentifierSignaturePair {
 pub struct IdentifierPublicKeyPair {
     pub identifier: ExternalIdentifier,
     pub public_key: Vec<u8>,
-}
-
-#[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalSignFrostRequest)]
-pub struct ExternalSignFrostRequest {
-    pub message: Vec<u8>,
-    pub public_key: Vec<u8>,
-    pub secret: ExternalSecretSource,
-    pub verifying_key: Vec<u8>,
-    pub self_nonce_commitment: ExternalFrostCommitments,
-    pub statechain_commitments: Vec<IdentifierCommitmentPair>,
-    pub adaptor_public_key: Option<Vec<u8>>,
-}
-
-#[macros::extern_wasm_bindgen(
-    breez_sdk_spark::signer::external_types::ExternalAggregateFrostRequest
-)]
-pub struct ExternalAggregateFrostRequest {
-    pub message: Vec<u8>,
-    pub statechain_signatures: Vec<IdentifierSignaturePair>,
-    pub statechain_public_keys: Vec<IdentifierPublicKeyPair>,
-    pub verifying_key: Vec<u8>,
-    pub statechain_commitments: Vec<IdentifierCommitmentPair>,
-    pub self_commitment: ExternalSigningCommitments,
-    pub public_key: Vec<u8>,
-    pub self_signature: ExternalFrostSignatureShare,
-    pub adaptor_public_key: Option<Vec<u8>>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_types::ExternalFrostSignatureShare)]
