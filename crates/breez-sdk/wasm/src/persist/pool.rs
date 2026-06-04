@@ -1,54 +1,24 @@
-//! Bindings to the JS-side `pg.Pool` / `mysql2.Pool` factories used by the
-//! WASM SDK. The actual pool objects live on the JS side; on the Rust side
-//! we hold opaque handles via the `JsPool` extern type.
+//! Bindings to the JS-side `mysql2.Pool` factory used by the WASM SDK.
+//! The actual pool object lives on the JS side; on the Rust side we
+//! hold an opaque handle via the `JsPool` extern type.
+//!
+//! The Postgres backend used to live here too. It now goes through
+//! `breez_sdk_spark::postgres_storage`, which on wasm dispatches via
+//! `spark-postgres` → `pg-wasm` → node-postgres directly from Rust —
+//! no JS pool, no per-store extern bindings.
 
 use wasm_bindgen::prelude::*;
 
 use crate::logger::Logger;
 use crate::models::session_store::SessionStore;
-use crate::sdk_builder::{MysqlForeignKeyMode, MysqlStorageConfig, PostgresStorageConfig};
+use crate::sdk_builder::{MysqlForeignKeyMode, MysqlStorageConfig};
 use crate::token_store::TokenStoreJs;
 use crate::tree_store::TreeStoreJs;
 
 #[wasm_bindgen]
 extern "C" {
-    /// JS type representing a `pg.Pool` / `mysql2.Pool` instance.
+    /// JS type representing a `mysql2.Pool` instance.
     pub type JsPool;
-
-    #[wasm_bindgen(js_name = "createPostgresPool", catch)]
-    pub fn create_postgres_pool(config: PostgresStorageConfig) -> Result<JsPool, JsValue>;
-
-    #[wasm_bindgen(js_name = "createPostgresStorageWithPool", catch)]
-    pub async fn create_postgres_storage_with_pool(
-        pool: &JsPool,
-        identity: &[u8],
-        logger: Option<&Logger>,
-        run_migration: bool,
-    ) -> Result<crate::persist::Storage, JsValue>;
-
-    #[wasm_bindgen(js_name = "createPostgresTreeStoreWithPool", catch)]
-    pub async fn create_postgres_tree_store_with_pool(
-        pool: &JsPool,
-        identity: &[u8],
-        logger: Option<&Logger>,
-        run_migration: bool,
-    ) -> Result<TreeStoreJs, JsValue>;
-
-    #[wasm_bindgen(js_name = "createPostgresTokenStoreWithPool", catch)]
-    pub async fn create_postgres_token_store_with_pool(
-        pool: &JsPool,
-        identity: &[u8],
-        logger: Option<&Logger>,
-        run_migration: bool,
-    ) -> Result<TokenStoreJs, JsValue>;
-
-    #[wasm_bindgen(js_name = "createPostgresSessionStoreWithPool", catch)]
-    pub async fn create_postgres_session_store_with_pool(
-        pool: &JsPool,
-        identity: &[u8],
-        logger: Option<&Logger>,
-        run_migration: bool,
-    ) -> Result<SessionStore, JsValue>;
 
     #[wasm_bindgen(js_name = "createMysqlPool", catch)]
     pub fn create_mysql_pool(config: MysqlStorageConfig) -> Result<JsPool, JsValue>;

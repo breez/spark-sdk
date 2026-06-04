@@ -1,7 +1,7 @@
 //! Generic `PostgreSQL` migration runner with version tracking and concurrency control.
 
-use deadpool_postgres::Pool;
-use tokio_postgres::Transaction;
+use crate::deadpool_postgres::Pool;
+use crate::tokio_postgres::Transaction;
 
 use crate::error::PostgresError;
 use crate::pool::{map_db_error, map_pool_error};

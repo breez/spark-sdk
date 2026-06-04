@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use platform_utils::time::{Instant, SystemTime};
 
-use deadpool_postgres::Pool;
+use crate::deadpool_postgres::Pool;
 use macros::async_trait;
 use spark_wallet::{
     LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
@@ -342,7 +342,8 @@ impl TreeStore for PostgresTreeStore {
         refresh_started_at: SystemTime,
     ) -> Result<(), TreeServiceError> {
         // Convert SystemTime to chrono for PostgreSQL
-        let refresh_timestamp: chrono::DateTime<chrono::Utc> = refresh_started_at.into();
+        let refresh_timestamp: chrono::DateTime<chrono::Utc> =
+            crate::time_compat::system_time_to_datetime(refresh_started_at);
 
         let mut client = self.pool.get().await.map_err(map_err)?;
         let tx = client.transaction().await.map_err(map_err)?;
@@ -774,7 +775,7 @@ impl TreeStore for PostgresTreeStore {
             .await
             .map_err(map_err)?;
         let now: chrono::DateTime<chrono::Utc> = row.get(0);
-        Ok(now.into())
+        Ok(crate::time_compat::datetime_to_system_time(now))
     }
 
     fn subscribe_balance_changes(&self) -> watch::Receiver<()> {
@@ -978,7 +979,7 @@ impl PostgresTreeStore {
     /// Calculates the pending balance from in-flight swaps within a transaction.
     async fn calculate_pending_balance(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
     ) -> Result<u64, TreeServiceError> {
         let row = tx
             .query_one(
@@ -1010,7 +1011,7 @@ impl PostgresTreeStore {
     /// Uses ON CONFLICT DO UPDATE to replace existing leaves (matching `InMemoryTreeStore` behavior).
     async fn batch_upsert_leaves(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
         leaves: &[TreeNode],
         is_missing_from_operators: bool,
         skip_ids: Option<&HashSet<String>>,
@@ -1078,7 +1079,7 @@ impl PostgresTreeStore {
     /// Batch sets `reservation_id` on leaves using UNNEST.
     async fn batch_set_reservation_id(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
         reservation_id: &str,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
@@ -1103,7 +1104,7 @@ impl PostgresTreeStore {
     /// Batch inserts spent leaf markers using UNNEST.
     async fn batch_insert_spent_leaves(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
         if leaf_ids.is_empty() {
@@ -1129,7 +1130,7 @@ impl PostgresTreeStore {
     /// to clear the "spent" status from when we previously sent it.
     async fn batch_remove_spent_leaves(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
         leaf_ids: &[String],
     ) -> Result<(), TreeServiceError> {
         if leaf_ids.is_empty() {
@@ -1177,7 +1178,7 @@ impl PostgresTreeStore {
     /// even when the slim candidate set was thousands.
     async fn resolve_full_leaves(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
         ids: &[String],
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
         if ids.is_empty() {
@@ -1214,7 +1215,7 @@ impl PostgresTreeStore {
     /// The lock is automatically released when the transaction commits or rolls back.
     async fn acquire_write_lock(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
     ) -> Result<(), TreeServiceError> {
         tx.execute("SELECT pg_advisory_xact_lock($1)", &[&self.lock_key])
             .await
@@ -1230,7 +1231,7 @@ impl PostgresTreeStore {
     /// whole-row SET NULL would try to null `user_id` (NOT NULL).
     async fn cleanup_stale_reservations(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
     ) -> Result<u64, TreeServiceError> {
         // Release leaves still pointing at any soon-to-be-deleted reservation,
         // matching the previous `ON DELETE SET NULL` behavior.
@@ -1271,7 +1272,7 @@ impl PostgresTreeStore {
     /// removed until they exceed this threshold.
     async fn cleanup_spent_markers(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
         refresh_timestamp: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64, TreeServiceError> {
         let threshold = chrono::Duration::milliseconds(SPENT_MARKER_CLEANUP_THRESHOLD_MS);
@@ -1299,7 +1300,7 @@ impl PostgresTreeStore {
     /// Creates a reservation with the given leaves.
     async fn create_reservation(
         &self,
-        tx: &tokio_postgres::Transaction<'_>,
+        tx: &crate::tokio_postgres::Transaction<'_>,
         reservation_id: &str,
         leaves: &[TreeNode],
         purpose: ReservationPurpose,

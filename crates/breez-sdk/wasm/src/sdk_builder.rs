@@ -16,13 +16,11 @@ use crate::{
         pool::{
             JsPool, create_mysql_pool, create_mysql_session_store_with_pool,
             create_mysql_storage_with_pool, create_mysql_token_store_with_pool,
-            create_mysql_tree_store_with_pool, create_postgres_pool,
-            create_postgres_session_store_with_pool, create_postgres_storage_with_pool,
-            create_postgres_token_store_with_pool, create_postgres_tree_store_with_pool,
+            create_mysql_tree_store_with_pool,
         },
     },
     sdk::BreezSdk,
-    sdk_context::{SharedMysqlPool, SharedPostgresPool, WasmSdkContext},
+    sdk_context::{SharedMysqlPool, WasmSdkContext},
     token_store::WasmTokenStore,
     tree_store::WasmTreeStore,
 };
@@ -144,7 +142,10 @@ enum WasmStorageConfigKind {
     /// File-based storage rooted at `storage_dir` (IndexedDB in the browser,
     /// SQLite under Node.js).
     Default { storage_dir: String },
-    /// `PostgreSQL`-backed storage.
+    /// `PostgreSQL`-backed storage. Gated behind `feature = "postgres"`
+    /// because the underlying pg-wasm bridge can't be linked into a
+    /// browser bundle.
+    #[cfg(feature = "postgres")]
     Postgres { config: PostgresStorageConfig },
     /// `MySQL`-backed storage.
     Mysql { config: MysqlStorageConfig },
@@ -170,6 +171,11 @@ pub fn default_storage_config(storage_dir: String) -> WasmStorageConfig {
 }
 
 /// `PostgreSQL`-backed storage built from `config`.
+///
+/// Only available when the wasm SDK is built with `feature = "postgres"`
+/// (the default for Node-target wasm-pack builds; absent from
+/// browser-target builds because the pg-wasm bridge can't run there).
+#[cfg(feature = "postgres")]
 #[wasm_bindgen(js_name = "postgresStorage")]
 #[must_use]
 pub fn postgres_storage(config: PostgresStorageConfig) -> WasmStorageConfig {
@@ -195,8 +201,14 @@ pub struct SdkBuilder {
     /// Storage backend selected via `withDefaultStorage` / `withStorageBackend`.
     storage_config: Option<WasmStorageConfig>,
     storage: Option<Storage>,
-    /// JS Postgres pool supplied via `withSharedContext(ctx_with_pool)`.
-    context_postgres_pool: Option<SharedPostgresPool>,
+    /// Shared Postgres backend inherited from the
+    /// [`WasmSdkContext`](crate::sdk_context::WasmSdkContext) attached via
+    /// `withSharedContext`. The backend internally tracks the pool and a
+    /// once-cell that gates schema migrations per process — all the
+    /// "share across builders" concerns the old `SharedPostgresPool`
+    /// solved are now native-side.
+    #[cfg(feature = "postgres")]
+    context_postgres_backend: Option<Arc<dyn StorageBackend>>,
     /// JS MySQL pool supplied via `withSharedContext(ctx_with_pool)`.
     context_mysql_pool: Option<SharedMysqlPool>,
     key_set_type: breez_sdk_spark::KeySetType,
@@ -217,7 +229,8 @@ impl SdkBuilder {
             builder: breez_sdk_spark::SdkBuilder::new(config, seed),
             storage_config: None,
             storage: None,
-            context_postgres_pool: None,
+            #[cfg(feature = "postgres")]
+            context_postgres_backend: None,
             context_mysql_pool: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
@@ -240,7 +253,8 @@ impl SdkBuilder {
             builder: breez_sdk_spark::SdkBuilder::new_with_signer(config_core, signer_adapter),
             storage_config: None,
             storage: None,
-            context_postgres_pool: None,
+            #[cfg(feature = "postgres")]
+            context_postgres_backend: None,
             context_mysql_pool: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
             use_address_index: false,
@@ -271,6 +285,9 @@ impl SdkBuilder {
     }
 
     /// **Deprecated.** Use `withStorageBackend(postgresStorage(config))`.
+    ///
+    /// Only available when the wasm SDK is built with `feature = "postgres"`.
+    #[cfg(feature = "postgres")]
     #[wasm_bindgen(js_name = "withPostgresBackend")]
     #[allow(clippy::unnecessary_wraps)]
     pub fn with_postgres_backend(self, config: PostgresStorageConfig) -> WasmResult<Self> {
@@ -292,7 +309,10 @@ impl SdkBuilder {
     #[wasm_bindgen(js_name = "withSharedContext")]
     pub fn with_shared_context(mut self, context: &WasmSdkContext) -> Self {
         self.builder = self.builder.with_shared_context(context.inner.clone());
-        self.context_postgres_pool = context.postgres_pool.clone();
+        #[cfg(feature = "postgres")]
+        {
+            self.context_postgres_backend = context.postgres_backend.clone();
+        }
         self.context_mysql_pool = context.mysql_pool.clone();
         self
     }
@@ -376,10 +396,20 @@ impl SdkBuilder {
         .public_key()
         .serialize();
 
+        // The Postgres-backend slot only exists when the wasm SDK is
+        // built with `feature = "postgres"` (the default for Node
+        // wasm-pack targets; off for browser-tests). When it's absent
+        // the match has fewer arms and a Postgres-via-context
+        // configuration is impossible.
+        #[cfg(feature = "postgres")]
+        let context_postgres_backend = self.context_postgres_backend;
+        #[cfg(not(feature = "postgres"))]
+        let context_postgres_backend: Option<Arc<dyn StorageBackend>> = None;
+
         let custom_storage = match (
             self.storage_config,
             self.storage,
-            self.context_postgres_pool,
+            context_postgres_backend,
             self.context_mysql_pool,
         ) {
             (Some(config), None, None, None) => {
@@ -391,10 +421,11 @@ impl SdkBuilder {
                 None,
                 None,
             )),
-            (None, None, Some((pool_rc, run_migration, migrated)), None) => {
-                build_postgres_storage_shared(&pool_rc, &identity_bytes, run_migration, &migrated)
-                    .await?
-            }
+            // The shared Postgres backend already encapsulates its pool and
+            // its once-cell-guarded migration. Just hand it to the SDK
+            // builder — `create_stores` will scope its stores to this
+            // builder's identity.
+            (None, None, Some(backend), None) => backend,
             (None, None, None, Some((pool_rc, run_migration, foreign_key_mode, migrated))) => {
                 build_mysql_storage_shared(
                     &pool_rc,
@@ -433,10 +464,13 @@ async fn resolve_storage_config(
             });
             Ok(Arc::new(PrebuiltBackend::new(storage, None, None, None)))
         }
+        #[cfg(feature = "postgres")]
         WasmStorageConfigKind::Postgres { config } => {
-            let run_migration = config.run_migration;
-            let pool = create_postgres_pool(config)?;
-            build_postgres_storage(&pool, identity, run_migration).await
+            // Build the native PostgresBackend, which goes through
+            // spark-postgres -> pg-wasm -> node-postgres on wasm. The
+            // backend's own `create_stores` will scope the four stores
+            // (storage, tree, token, session) to this builder's identity.
+            breez_sdk_spark::postgres_storage(config.into()).map_err(WasmError::new)
         }
         WasmStorageConfigKind::Mysql { config } => {
             let run_migration = config.run_migration;
@@ -447,33 +481,13 @@ async fn resolve_storage_config(
     }
 }
 
-/// Builds the Postgres stores over a context-shared `pool`, running schema
-/// migrations at most once for that pool. Mirrors the native `PostgresBackend`:
-/// migrations are global per database (not per tenant) and take a global lock,
-/// so running them on every per-tenant build serializes builds and starves the
-/// pool. The `OnceCell` runs them once; concurrent first-callers await the same
-/// run, and a failure isn't cached so a later build retries.
-async fn build_postgres_storage_shared(
-    pool: &Rc<JsPool>,
-    identity: &[u8],
-    run_migration: bool,
-    migrated: &Rc<OnceCell<()>>,
-) -> WasmResult<Arc<dyn StorageBackend>> {
-    if run_migration {
-        migrated
-            .get_or_try_init(|| async {
-                build_postgres_storage(pool, identity, true)
-                    .await
-                    .map(|_| ())
-            })
-            .await?;
-    }
-    // Migrations handled once above; build the per-tenant stores migration-free.
-    build_postgres_storage(pool, identity, false).await
-}
-
 /// Builds the MySQL stores over a context-shared `pool`, running schema
-/// migrations at most once for that pool. See [`build_postgres_storage_shared`].
+/// migrations at most once for that pool. Mirrors the native
+/// `MysqlBackend`: migrations are global per database (not per tenant)
+/// and take a global lock, so running them on every per-tenant build
+/// serializes builds and starves the pool. The `OnceCell` runs them
+/// once; concurrent first-callers await the same run, and a failure
+/// isn't cached so a later build retries.
 async fn build_mysql_storage_shared(
     pool: &Rc<JsPool>,
     identity: &[u8],
@@ -494,33 +508,27 @@ async fn build_mysql_storage_shared(
     build_mysql_storage(pool, identity, foreign_key_mode, false).await
 }
 
-/// Builds the four PostgreSQL-backed JS stores over `pool`.
-async fn build_postgres_storage(
-    pool: &JsPool,
-    identity: &[u8],
-    run_migration: bool,
-) -> WasmResult<Arc<dyn StorageBackend>> {
-    let logger_ref = get_wasm_logger_ref();
-    let storage = Arc::new(WasmStorage {
-        storage: create_postgres_storage_with_pool(pool, identity, logger_ref, run_migration)
-            .await?,
-    });
-    let tree_store_js =
-        create_postgres_tree_store_with_pool(pool, identity, logger_ref, run_migration).await?;
-    let token_store_js =
-        create_postgres_token_store_with_pool(pool, identity, logger_ref, run_migration).await?;
-    let session_store_js =
-        create_postgres_session_store_with_pool(pool, identity, logger_ref, run_migration).await?;
-    Ok(Arc::new(PrebuiltBackend::new(
-        storage,
-        Some(Arc::new(WasmTreeStore::new(tree_store_js))),
-        Some(Arc::new(WasmTokenStore::new(token_store_js))),
-        Some(Arc::new(SessionStoreAdapter::new(Arc::new(
-            WasmSessionStore {
-                session_store: session_store_js,
-            },
-        )))),
-    )))
+/// Convert the wasm-side `PostgresStorageConfig` (camelCase tsify
+/// surface for JS consumers) into the core `PostgresStorageConfig`
+/// (`breez_sdk_spark`). Timeout fields are `u32` here for the JS
+/// boundary; the core represents missing timeouts as `None` and we
+/// treat `0` the same way ("no timeout").
+#[cfg(feature = "postgres")]
+impl From<PostgresStorageConfig> for breez_sdk_spark::PostgresStorageConfig {
+    fn from(cfg: PostgresStorageConfig) -> Self {
+        Self {
+            connection_string: cfg.connection_string,
+            max_pool_size: cfg.max_pool_size,
+            wait_timeout_secs: None,
+            create_timeout_secs: (cfg.create_timeout_secs != 0)
+                .then_some(u64::from(cfg.create_timeout_secs)),
+            recycle_timeout_secs: (cfg.recycle_timeout_secs != 0)
+                .then_some(u64::from(cfg.recycle_timeout_secs)),
+            queue_mode: breez_sdk_spark::PoolQueueMode::default(),
+            root_ca_pem: None,
+            run_migration: cfg.run_migration,
+        }
+    }
 }
 
 /// Builds the four MySQL-backed JS stores over `pool`.

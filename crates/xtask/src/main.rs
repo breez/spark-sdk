@@ -432,45 +432,20 @@ fn wasm_test_cmd(
                 .with_context(|| "Failed to rebuild native modules.")?;
             sh.change_dir(&current_dir);
 
-            // Install postgres-storage dependencies
-            let pg_storage_path = Path::new("crates/breez-sdk/wasm/js/postgres-storage");
-            if pg_storage_path.exists() {
+            // Install pg-wasm/js dependencies. Production needs `pg` (peer
+            // dep, host project supplies it); tests use the dev-deps
+            // copy here, which postgres-test-helpers.cjs also resolves
+            // against.
+            let pg_wasm_js_path = Path::new("crates/pg-wasm/js");
+            if pg_wasm_js_path.exists() {
                 println!(
                     "Installing npm dependencies in {}...",
-                    pg_storage_path.display()
+                    pg_wasm_js_path.display()
                 );
-                sh.change_dir(pg_storage_path);
+                sh.change_dir(pg_wasm_js_path);
                 cmd!(sh, "npm install")
                     .run()
-                    .with_context(|| "Failed to install postgres-storage npm dependencies.")?;
-                sh.change_dir(&current_dir);
-            }
-
-            // Install postgres-tree-store dependencies
-            let pg_tree_store_path = Path::new("crates/breez-sdk/wasm/js/postgres-tree-store");
-            if pg_tree_store_path.exists() {
-                println!(
-                    "Installing npm dependencies in {}...",
-                    pg_tree_store_path.display()
-                );
-                sh.change_dir(pg_tree_store_path);
-                cmd!(sh, "npm install")
-                    .run()
-                    .with_context(|| "Failed to install postgres-tree-store npm dependencies.")?;
-                sh.change_dir(&current_dir);
-            }
-
-            // Install postgres-token-store dependencies
-            let pg_token_store_path = Path::new("crates/breez-sdk/wasm/js/postgres-token-store");
-            if pg_token_store_path.exists() {
-                println!(
-                    "Installing npm dependencies in {}...",
-                    pg_token_store_path.display()
-                );
-                sh.change_dir(pg_token_store_path);
-                cmd!(sh, "npm install")
-                    .run()
-                    .with_context(|| "Failed to install postgres-token-store npm dependencies.")?;
+                    .with_context(|| "Failed to install pg-wasm/js npm dependencies.")?;
                 sh.change_dir(&current_dir);
             }
 
@@ -536,8 +511,18 @@ fn wasm_test_cmd(
                 "chrome" | "chromium" => c.arg("--chrome"),
                 _ => c.arg("--firefox"),
             };
-            // Enable browser-specific tests if gated behind a feature
-            c.args(["--", "--features", "browser-tests"]);
+            // Browser tests: enable the `browser-tests` feature, but
+            // disable defaults so the `postgres` feature (which pulls
+            // in pg-wasm's CommonJS bridge) is off. The pg-wasm
+            // `module = "/js/pg-wasm-bridge.cjs"` snippet can't be
+            // loaded by the browser bundler — including it makes the
+            // wasm-pack test page fail to instantiate.
+            c.args([
+                "--",
+                "--no-default-features",
+                "--features",
+                "browser-tests",
+            ]);
         }
         // On macOS, auto-detect Homebrew LLVM and set CC/AR for wasm cross-compiles
         if cfg!(target_os = "macos")

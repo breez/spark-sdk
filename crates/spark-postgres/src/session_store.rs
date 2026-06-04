@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use bitcoin::secp256k1::PublicKey;
-use deadpool_postgres::Pool;
+use crate::deadpool_postgres::Pool;
 use macros::async_trait;
 use spark_wallet::{Session, SessionStore, SessionStoreError};
 

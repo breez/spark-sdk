@@ -1,0 +1,17 @@
+{
+  "name": "@breez-sdk/pg-wasm-bridge",
+  "version": "0.1.0",
+  "description": "JS half of pg-wasm: Submittable + binary-protocol bridge from wasm-bindgen to node-postgres",
+  "main": "pg-wasm-bridge.cjs",
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "peerDependencies": {
+    "pg": "^8.18.0"
+  },
+  "devDependencies": {
+    "pg": "^8.18.0",
+    "testcontainers": "^10.0.0"
+  }
+}

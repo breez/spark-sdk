@@ -1,0 +1,46 @@
+[package]
+name = "pg-wasm"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+description = "A tokio-postgres-shaped PostgreSQL client for wasm32-unknown-unknown that dispatches queries through node-postgres via wasm-bindgen."
+repository = "https://github.com/breez/spark-sdk"
+documentation = "https://docs.rs/pg-wasm"
+readme = "README.md"
+keywords = ["postgres", "wasm", "tokio-postgres", "deadpool", "nodejs"]
+categories = ["database", "wasm", "asynchronous"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+postgres-types = { workspace = true }
+
+# Native target: just re-export tokio-postgres + deadpool-postgres so
+# downstream code that already uses those crates Just Works on native.
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+tokio-postgres = { workspace = true }
+deadpool-postgres = { workspace = true }
+
+# Wasm target: hand-rolled JS-backed implementation.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+bytes = { workspace = true }
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true, features = ["console"] }
+# Transitively pulled by `postgres-types -> postgres-protocol -> rand` for
+# SCRAM nonces. We never invoke that path on wasm (auth lives JS-side),
+# but the dep tree still needs a wasm-capable getrandom backend at compile
+# time. The workspace already pins getrandom 0.2 with "js" elsewhere; this
+# is the parallel pin for the 0.4 line that the new `rand` brings in.
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
