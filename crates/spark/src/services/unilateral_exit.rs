@@ -7,7 +7,7 @@ use bitcoin::{
     Address, Amount, CompressedPublicKey, OutPoint, Psbt, Transaction, TxIn, TxOut, Txid,
     absolute::LockTime, psbt, secp256k1::PublicKey, transaction::Version,
 };
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::{
     Network,
@@ -50,6 +50,41 @@ pub struct TxCpfpPsbt {
 pub struct LeafTxCpfpPsbts {
     pub leaf_id: TreeNodeId,
     pub tx_cpfp_psbts: Vec<TxCpfpPsbt>,
+    /// Why the ancestor walk that produced `tx_cpfp_psbts` stopped. A value
+    /// other than `ReachedRoot` means the package is incomplete: the Leaf TX
+    /// spends an output of an ancestor whose `node_tx` is not in the package.
+    pub termination: ExitChainTermination,
+}
+
+/// Diagnostic record of why `build_exit_chain` stopped walking from a leaf up
+/// toward the root. Only `ReachedRoot` indicates a complete exit package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExitChainTermination {
+    /// Walked all the way to the root (`parent_node_id` was `None`).
+    ReachedRoot,
+    /// An ancestor's status was outside [`EXIT_CHAIN_STATUSES`] and the walk
+    /// stopped before pushing it. The descendant's `node_tx` spends an output
+    /// of `parent_tx`, which is not in the package.
+    ParentStatusNonExitable {
+        parent_id: TreeNodeId,
+        parent_status: TreeNodeStatus,
+        /// The parent's `node_tx`. Surfacing this lets the caller inspect or
+        /// hand-broadcast the missing tx even though the SDK refused to
+        /// include it in the package.
+        parent_tx: Transaction,
+        /// The parent's own `parent_node_id`, if any. Lets the caller see
+        /// whether the chain would have continued further up.
+        parent_parent_id: Option<TreeNodeId>,
+    },
+    /// The leaf itself had a status outside [`EXIT_CHAIN_STATUSES`] on the
+    /// first iteration, so no nodes were pushed at all.
+    CurrentStatusNonExitable {
+        node_id: TreeNodeId,
+        node_status: TreeNodeStatus,
+        /// The rejected node's `node_tx`, surfaced for the same inspection
+        /// reason as `ParentStatusNonExitable::parent_tx`.
+        node_tx: Transaction,
+    },
 }
 
 pub struct UnilateralExitService {
@@ -109,7 +144,7 @@ impl UnilateralExitService {
 
             // Walk the leaf's ancestors up to the root, re-fetching any parent
             // missing from the initial response by its node ID.
-            let nodes = build_exit_chain(leaf, &mut tree_nodes, async |ids| {
+            let (nodes, termination) = build_exit_chain(leaf, &mut tree_nodes, async |ids| {
                 self.fetch_leaves_parents(ids).await
             })
             .await?;
@@ -149,6 +184,7 @@ impl UnilateralExitService {
             all_leaf_tx_cpfp_psbts.push(LeafTxCpfpPsbts {
                 leaf_id,
                 tx_cpfp_psbts,
+                termination,
             });
         }
 
@@ -211,7 +247,8 @@ impl UnilateralExitService {
 }
 
 /// Walks a leaf's ancestor chain up to the root, returning the nodes ordered
-/// root → leaf.
+/// root → leaf alongside an [`ExitChainTermination`] that records why the walk
+/// stopped.
 ///
 /// `node_map` is seeded with nodes already known to the caller (the leaves and
 /// whatever ancestors the initial `query_nodes(include_parents=true)` returned).
@@ -221,27 +258,55 @@ impl UnilateralExitService {
 ///
 /// The walk stops gracefully when it reaches a node whose status is outside
 /// [`EXIT_CHAIN_STATUSES`] (e.g. an already-exited ancestor), rather than
-/// treating it as an error.
+/// treating it as an error. The returned [`ExitChainTermination`] tells the
+/// caller which case applied: a non-`ReachedRoot` value means the resulting
+/// chain is incomplete and the descendant's `node_tx` cannot be broadcast on
+/// its own.
 async fn build_exit_chain<F>(
     leaf: TreeNode,
     node_map: &mut HashMap<TreeNodeId, TreeNode>,
     mut fetch_by_ids: F,
-) -> Result<Vec<TreeNode>, ServiceError>
+) -> Result<(Vec<TreeNode>, ExitChainTermination), ServiceError>
 where
     F: AsyncFnMut(&[TreeNodeId]) -> Result<Vec<TreeNode>, ServiceError>,
 {
-    let mut chain = Vec::new();
+    let mut chain: Vec<TreeNode> = Vec::new();
     let mut current = leaf;
-    loop {
+    let termination = loop {
         if !EXIT_CHAIN_STATUSES.contains(&current.status) {
-            break;
+            let node_id = current.id.clone();
+            let node_status = current.status;
+            let node_tx = current.node_tx.clone();
+            let parent_parent_id = current.parent_node_id.clone();
+            if chain.is_empty() {
+                warn!(
+                    %node_id, ?node_status, node_txid = %node_tx.compute_txid(),
+                    "Unilateral exit: leaf status outside EXIT_CHAIN_STATUSES; no chain produced"
+                );
+                break ExitChainTermination::CurrentStatusNonExitable {
+                    node_id,
+                    node_status,
+                    node_tx,
+                };
+            }
+            warn!(
+                parent_id = %node_id, parent_status = ?node_status,
+                parent_txid = %node_tx.compute_txid(),
+                "Unilateral exit: ancestor status outside EXIT_CHAIN_STATUSES; chain stops before this parent"
+            );
+            break ExitChainTermination::ParentStatusNonExitable {
+                parent_id: node_id,
+                parent_status: node_status,
+                parent_tx: node_tx,
+                parent_parent_id,
+            };
         }
 
         let parent_node_id = current.parent_node_id.clone();
         chain.insert(0, current);
 
         let Some(parent_node_id) = parent_node_id else {
-            break;
+            break ExitChainTermination::ReachedRoot;
         };
 
         if !node_map.contains_key(&parent_node_id) {
@@ -264,8 +329,8 @@ where
             parent.node_tx.compute_txid()
         );
         current = parent.clone();
-    }
-    Ok(chain)
+    };
+    Ok((chain, termination))
 }
 
 /// Creates a Partially Signed Bitcoin Transaction (PSBT) to CPFP a parent transaction.
@@ -685,18 +750,20 @@ mod tests {
                 .collect();
 
             let mut fetched = false;
-            let chain = super::super::build_exit_chain(leaf, &mut map, async |_ids| {
-                fetched = true;
-                Ok(Vec::new())
-            })
-            .await
-            .unwrap();
+            let (chain, termination) =
+                super::super::build_exit_chain(leaf, &mut map, async |_ids| {
+                    fetched = true;
+                    Ok(Vec::new())
+                })
+                .await
+                .unwrap();
 
             assert!(
                 !fetched,
                 "fetcher must not be called when chain is complete"
             );
             assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
+            assert_eq!(termination, ExitChainTermination::ReachedRoot);
         }
 
         // The bug scenario: the SO omits the root from the bulk response, so it
@@ -718,7 +785,7 @@ mod tests {
                 [(root.id.clone(), root.clone())].into_iter().collect();
             let mut requested: Vec<TreeNodeId> = Vec::new();
 
-            let chain =
+            let (chain, termination) =
                 super::super::build_exit_chain(leaf, &mut map, async |ids: &[TreeNodeId]| {
                     requested.extend_from_slice(ids);
                     Ok(ids.iter().filter_map(|i| server.get(i).cloned()).collect())
@@ -728,9 +795,11 @@ mod tests {
 
             assert_eq!(requested, vec![root.id.clone()]);
             assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
+            assert_eq!(termination, ExitChainTermination::ReachedRoot);
         }
 
-        // An ancestor outside the exitable set ends the walk gracefully.
+        // An ancestor outside the exitable set ends the walk gracefully and
+        // surfaces the offending ancestor in the termination value.
         #[macros::async_test_all]
         async fn stops_on_non_exit_status() {
             let root = node(ROOT, None, TreeNodeStatus::Available);
@@ -742,11 +811,49 @@ mod tests {
                 .map(|n| (n.id.clone(), n.clone()))
                 .collect();
 
-            let chain = super::super::build_exit_chain(leaf, &mut map, async |_ids| Ok(Vec::new()))
-                .await
-                .unwrap();
+            let (chain, termination) =
+                super::super::build_exit_chain(leaf, &mut map, async |_ids| Ok(Vec::new()))
+                    .await
+                    .unwrap();
 
             assert_eq!(chain_ids(&chain), vec![LEAF]);
+            assert_eq!(
+                termination,
+                ExitChainTermination::ParentStatusNonExitable {
+                    parent_id: TreeNodeId::from_str(MID).unwrap(),
+                    parent_status: TreeNodeStatus::Exited,
+                    parent_tx: mid.node_tx.clone(),
+                    parent_parent_id: Some(TreeNodeId::from_str(ROOT).unwrap()),
+                }
+            );
+        }
+
+        // The leaf itself having a non-exitable status produces an empty chain
+        // and a `CurrentStatusNonExitable` termination.
+        #[macros::async_test_all]
+        async fn stops_on_non_exit_status_at_leaf() {
+            let leaf = node(LEAF, Some(MID), TreeNodeStatus::Exited);
+
+            let mut map: HashMap<TreeNodeId, TreeNode> = [&leaf]
+                .into_iter()
+                .map(|n| (n.id.clone(), n.clone()))
+                .collect();
+
+            let leaf_node_tx = leaf.node_tx.clone();
+            let (chain, termination) =
+                super::super::build_exit_chain(leaf, &mut map, async |_ids| Ok(Vec::new()))
+                    .await
+                    .unwrap();
+
+            assert!(chain.is_empty());
+            assert_eq!(
+                termination,
+                ExitChainTermination::CurrentStatusNonExitable {
+                    node_id: TreeNodeId::from_str(LEAF).unwrap(),
+                    node_status: TreeNodeStatus::Exited,
+                    node_tx: leaf_node_tx,
+                }
+            );
         }
 
         // A parent that cannot be fetched by ID is a genuine error.
