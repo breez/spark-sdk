@@ -233,8 +233,8 @@ pub fn default_config(network: Network) -> Config {
 /// explicitly, so an ephemeral SDK instance stays cheap and predictable.
 ///
 /// Config fields whose background services are gated off are reset to their
-/// inactive shape: `real_time_sync_server_url` is set to `None`, and both
-/// `leaf_optimization_config.auto_enabled` and
+/// inactive shape: `real_time_sync_server_url` and `cross_chain_config` are
+/// set to `None`, and both `leaf_optimization_config.auto_enabled` and
 /// `token_optimization_config.auto_enabled` are set to `false`. The SDK
 /// rejects builds where `background_tasks_enabled` is `false` and any of
 /// those fields is left in its active shape, so flip the flag via this
@@ -264,6 +264,7 @@ pub fn default_server_config(network: Network) -> Config {
     config.real_time_sync_server_url = None;
     config.leaf_optimization_config.auto_enabled = false;
     config.token_optimization_config.auto_enabled = false;
+    config.cross_chain_config = None;
     config
 }
 

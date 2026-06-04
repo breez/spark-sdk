@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 use breez_sdk_common::buy::moonpay::MoonpayProvider;
 
-use spark_wallet::Signer;
 use spark_wallet::{InMemorySessionStore, SparkWalletConfig};
+use spark_wallet::{Signer, SparkWallet};
 use tokio::sync::watch;
 use tracing::{debug, info};
 
-use flashnet::{FlashnetConfig, IntegratorConfig};
+use flashnet::{FlashnetConfig, IntegratorConfig, OrchestraConfig};
 
 use crate::{
     Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, Seed,
@@ -386,6 +386,12 @@ impl SdkBuilder {
                         .to_string(),
                 ));
             }
+            if self.config.cross_chain_config.is_some() {
+                return Err(SdkError::InvalidInput(
+                    "cross_chain_config must be None when background_tasks_enabled is false"
+                        .to_string(),
+                ));
+            }
         }
 
         // Create the base signer based on the signer source
@@ -652,6 +658,15 @@ impl SdkBuilder {
             shutdown_sender.clone(),
         ));
 
+        let cross_chain_providers = build_cross_chain_providers(
+            &self.config,
+            &spark_wallet,
+            &storage,
+            &lightning_sender,
+            shutdown_sender.subscribe(),
+        )
+        .await;
+
         // Create the FlashnetTokenConverter. Client runtime starts its refunder.
         let flashnet_config = FlashnetConfig::default_config(
             self.config.network.into(),
@@ -663,46 +678,6 @@ impl SdkBuilder {
                     fee_bps: DEFAULT_INTEGRATOR_FEE_BPS,
                 }),
         );
-        // Build cross-chain providers. Each provider owns its own HTTP
-        // client, route cache, and background monitor task.
-        let mut cross_chain_providers = crate::cross_chain::CrossChainProviders::new();
-        if self.config.cross_chain_config.is_some() {
-            if let Some(orchestra_config) = &flashnet_config.orchestra {
-                cross_chain_providers.insert(
-                    crate::cross_chain::CrossChainProvider::Orchestra,
-                    std::sync::Arc::new(crate::cross_chain::OrchestraService::new(
-                        orchestra_config.clone(),
-                        Arc::clone(&spark_wallet),
-                        Arc::clone(&storage),
-                        shutdown_sender.subscribe(),
-                    )),
-                );
-            }
-
-            match build_boltz_service(
-                self.config.network,
-                Arc::clone(&spark_wallet),
-                Arc::clone(&storage),
-                Arc::clone(&lightning_sender),
-            )
-            .await
-            {
-                Ok(Some(service)) => {
-                    cross_chain_providers
-                        .insert(crate::cross_chain::CrossChainProvider::Boltz, service);
-                }
-                Ok(None) => {
-                    info!(
-                        "Boltz provider skipped: no default configuration for network {:?}",
-                        self.config.network
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("Failed to initialize Boltz provider: {e:?}");
-                }
-            }
-        }
-
         let token_converter: Arc<dyn TokenConverter> = Arc::new(FlashnetTokenConverter::new(
             flashnet_config,
             Arc::clone(&storage),
@@ -762,6 +737,59 @@ impl SdkBuilder {
 
         Ok(sdk)
     }
+}
+
+/// Builds the cross-chain provider map. Each provider owns its own HTTP
+/// client, route cache, and background monitor task. Returns an empty map
+/// when `config.cross_chain_config` is unset.
+async fn build_cross_chain_providers(
+    config: &Config,
+    spark_wallet: &Arc<SparkWallet>,
+    storage: &Arc<dyn crate::persist::Storage>,
+    lightning_sender: &Arc<crate::sdk::LightningSender>,
+    shutdown_receiver: watch::Receiver<()>,
+) -> crate::cross_chain::CrossChainProviders {
+    let mut providers = crate::cross_chain::CrossChainProviders::new();
+    if config.cross_chain_config.is_none() {
+        return providers;
+    }
+
+    let maybe_orchestra_config = OrchestraConfig::default_for_network(config.network.into());
+    if let Some(orchestra_config) = maybe_orchestra_config {
+        providers.insert(
+            crate::cross_chain::CrossChainProvider::Orchestra,
+            Arc::new(crate::cross_chain::OrchestraService::new(
+                orchestra_config,
+                Arc::clone(spark_wallet),
+                Arc::clone(storage),
+                shutdown_receiver,
+            )),
+        );
+    }
+
+    match build_boltz_service(
+        config.network,
+        Arc::clone(spark_wallet),
+        Arc::clone(storage),
+        Arc::clone(lightning_sender),
+    )
+    .await
+    {
+        Ok(Some(service)) => {
+            providers.insert(crate::cross_chain::CrossChainProvider::Boltz, service);
+        }
+        Ok(None) => {
+            info!(
+                "Boltz provider skipped: no default configuration for network {:?}",
+                config.network
+            );
+        }
+        Err(e) => {
+            tracing::error!("Failed to initialize Boltz provider: {e:?}");
+        }
+    }
+
+    providers
 }
 
 #[cfg(test)]
@@ -865,6 +893,24 @@ mod tests {
             }
             Err(err) => panic!("expected InvalidInput error, got {err:?}"),
             Ok(_) => panic!("expected server mode with optimization auto_enabled to fail"),
+        }
+    }
+
+    #[tokio::test]
+    async fn server_mode_rejects_cross_chain_config() {
+        use crate::{CrossChainConfig, SdkError, default_server_config};
+
+        let mut config = default_server_config(Network::Regtest);
+        config.cross_chain_config = Some(CrossChainConfig::default());
+
+        let seed = test_seed();
+        let result = SdkBuilder::new(config, seed).build().await;
+        match result {
+            Err(SdkError::InvalidInput(message)) => {
+                assert!(message.contains("cross_chain_config"));
+            }
+            Err(err) => panic!("expected InvalidInput error, got {err:?}"),
+            Ok(_) => panic!("expected server mode with cross_chain_config to fail"),
         }
     }
 
