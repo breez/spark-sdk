@@ -2,6 +2,13 @@
 name = "pg-wasm"
 version.workspace = true
 edition = "2024"
+license = "MIT"
+description = "A tokio-postgres-shaped PostgreSQL client for wasm32-unknown-unknown that dispatches queries through node-postgres via wasm-bindgen."
+repository = "https://github.com/breez/spark-sdk"
+documentation = "https://docs.rs/pg-wasm"
+readme = "README.md"
+keywords = ["postgres", "wasm", "tokio-postgres", "deadpool", "nodejs"]
+categories = ["database", "wasm", "asynchronous"]
 
 [lints]
 workspace = true
