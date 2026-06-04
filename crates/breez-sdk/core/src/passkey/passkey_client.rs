@@ -9,6 +9,8 @@ use super::Passkey;
 use super::error::{PasskeyError, PrfProviderError};
 use super::models::{PasskeyConfig, PasskeyCredential, SetupWalletRequest, Wallet};
 use super::passkey_prf_provider::PrfProvider;
+#[cfg(test)]
+use super::{LabelStore, LabelStoreBuilder};
 
 /// Single-value result of [`PasskeyClient::check_availability`].
 /// Collapses [`PrfProvider::is_supported`] +
@@ -328,6 +330,25 @@ impl PasskeyClient {
     ) -> Self {
         Self::new(prf_provider, sdk_config.api_key.clone(), passkey_config)
     }
+
+    /// Test-only: construct with a custom [`LabelStore`] builder so unit
+    /// tests inject an in-memory store instead of reaching Nostr relays.
+    #[cfg(test)]
+    pub(crate) fn new_with_store_builder(
+        prf_provider: Arc<dyn PrfProvider>,
+        breez_api_key: Option<String>,
+        config: Option<PasskeyConfig>,
+        store_builder: LabelStoreBuilder,
+    ) -> Self {
+        Self {
+            passkey: Passkey::new_with_store_builder(
+                prf_provider,
+                breez_api_key,
+                config,
+                store_builder,
+            ),
+        }
+    }
 }
 
 /// Label sub-object surfaced from [`PasskeyClient::labels`]. Holds a
@@ -371,6 +392,10 @@ mod tests {
         /// FIFO of errors to return from `derive_seeds`. Each call pops
         /// the front; when empty, `derive_seeds` succeeds.
         derive_errors: Mutex<Vec<PrfProviderError>>,
+        /// Credential ID surfaced from `derive_seeds`, mimicking a
+        /// provider that reports the signed-in credential. `None` mirrors
+        /// providers that don't expose it (CLI / file-backed / hardware).
+        derive_credential_id: Option<Vec<u8>>,
     }
 
     impl MockProvider {
@@ -381,7 +406,15 @@ mod tests {
                 create_calls: Mutex::new(0),
                 fail_create: false,
                 derive_errors: Mutex::new(Vec::new()),
+                derive_credential_id: None,
             }
+        }
+
+        /// Surface `credential_id` from `derive_seeds`, mimicking a
+        /// sign-in assertion that reports which credential the user picked.
+        fn with_derive_credential_id(mut self, credential_id: Vec<u8>) -> Self {
+            self.derive_credential_id = Some(credential_id);
+            self
         }
 
         fn unsupported() -> Self {
@@ -435,7 +468,7 @@ mod tests {
                     .into_iter()
                     .map(|s| self.output_for(&s))
                     .collect(),
-                credential_id: None,
+                credential_id: self.derive_credential_id.clone(),
             })
         }
 
@@ -461,10 +494,76 @@ mod tests {
         }
     }
 
+    /// Records the calls the orchestrator makes against the label store.
+    #[derive(Default)]
+    struct StoreCalls {
+        /// Labels handed to `store_label`, in order.
+        stored: Vec<String>,
+        /// Number of `list_labels` queries.
+        list_calls: usize,
+    }
+
+    /// In-memory [`LabelStore`] so client unit tests never reach the Nostr
+    /// relays. Records every call into a shared [`StoreCalls`] so tests can
+    /// assert the publish / query contract, not just that nothing panicked.
+    struct MockLabelStore {
+        keys: nostr::Keys,
+        calls: Arc<Mutex<StoreCalls>>,
+    }
+
+    #[macros::async_trait]
+    impl LabelStore for MockLabelStore {
+        async fn store_label(&self, label: &str) -> Result<(), PasskeyError> {
+            self.calls.lock().unwrap().stored.push(label.to_string());
+            Ok(())
+        }
+
+        async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
+            let mut calls = self.calls.lock().unwrap();
+            calls.list_calls = calls
+                .list_calls
+                .checked_add(1)
+                .expect("list_calls overflow");
+            Ok(Vec::new())
+        }
+
+        fn signing_keys(&self) -> nostr::Keys {
+            self.keys.clone()
+        }
+    }
+
+    /// A [`PasskeyClient`] backed by the in-memory label store (no network),
+    /// plus the shared [`StoreCalls`] recording what the client published or
+    /// queried. Every store this client builds shares the one recorder.
+    fn client_with_store(
+        prf_provider: Arc<dyn PrfProvider>,
+        config: Option<PasskeyConfig>,
+    ) -> (PasskeyClient, Arc<Mutex<StoreCalls>>) {
+        let calls = Arc::new(Mutex::new(StoreCalls::default()));
+        let store_calls = calls.clone();
+        let builder: LabelStoreBuilder = Arc::new(move |keys, _api_key| {
+            Arc::new(MockLabelStore {
+                keys,
+                calls: store_calls.clone(),
+            }) as Arc<dyn LabelStore>
+        });
+        let client = PasskeyClient::new_with_store_builder(prf_provider, None, config, builder);
+        (client, calls)
+    }
+
+    /// Store-agnostic [`client_with_store`] for tests that don't inspect
+    /// label persistence.
+    fn test_client(
+        prf_provider: Arc<dyn PrfProvider>,
+        config: Option<PasskeyConfig>,
+    ) -> PasskeyClient {
+        client_with_store(prf_provider, config).0
+    }
+
     #[macros::async_test_all]
     async fn register_returns_credential_and_publishes_label() {
         let provider = Arc::new(MockProvider::new([7u8; 32]));
-        let client = PasskeyClient::new(provider.clone(), None, None);
+        let (client, store) = client_with_store(provider.clone(), None);
         let response = client
             .register(RegisterRequest {
                 label: Some("alice".to_string()),
@@ -478,14 +577,21 @@ mod tests {
             .expect("register surfaces the credential");
         assert_eq!(credential.credential_id, vec![0xab, 0xcd, 0xef]);
         assert_eq!(credential.user_id.expect("user_id").len(), 16);
+        // Registration is the one ceremony that carries attestation, so
+        // the full credential shape must round-trip (hosts key UI off it:
+        // aaguid -> provider name, backup_eligible -> sync status).
+        assert_eq!(credential.aaguid.expect("aaguid").len(), 16);
+        assert_eq!(credential.backup_eligible, Some(true));
         assert_eq!(*provider.create_calls.lock().unwrap(), 1);
         assert_eq!(response.wallet.label, "alice");
+        // Registration publishes the label to the store exactly once.
+        assert_eq!(store.lock().unwrap().stored, vec!["alice".to_string()]);
     }
 
     #[macros::async_test_all]
     async fn register_propagates_create_passkey_failure() {
         let provider = Arc::new(MockProvider::unsupported());
-        let client = PasskeyClient::new(provider, None, None);
+        let client = test_client(provider, None);
         let result = client.register(RegisterRequest::default()).await;
         assert!(matches!(
             result.unwrap_err(),
@@ -496,7 +602,7 @@ mod tests {
     #[macros::async_test_all]
     async fn sign_in_fast_path_returns_wallet_without_listing() {
         let provider = Arc::new(MockProvider::new([0u8; 32]));
-        let client = PasskeyClient::new(provider.clone(), None, None);
+        let (client, store) = client_with_store(provider.clone(), None);
         let response = client
             .sign_in(SignInRequest {
                 label: Some("personal".to_string()),
@@ -507,16 +613,43 @@ mod tests {
         assert_eq!(response.wallet.label, "personal");
         // create_passkey is NOT called on the sign-in path.
         assert_eq!(*provider.create_calls.lock().unwrap(), 0);
-        // Fast path: no label-store query, so labels stays empty.
+        // Fast path: the store is never queried (the reason `labels` is
+        // empty), and a known label is never re-published.
+        let calls = store.lock().unwrap();
+        assert_eq!(calls.list_calls, 0);
+        assert!(calls.stored.is_empty());
         assert!(response.labels.is_empty());
+    }
+
+    #[macros::async_test_all]
+    async fn sign_in_surfaces_credential_id_without_attestation() {
+        // Provider reports the signed-in credential; a sign-in assertion
+        // carries no attestation, so only credential_id is populated.
+        let provider = Arc::new(
+            MockProvider::new([0u8; 32]).with_derive_credential_id(vec![0x01, 0x02, 0x03]),
+        );
+        let client = test_client(provider, None);
+        let response = client
+            .sign_in(SignInRequest {
+                label: Some("personal".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let credential = response
+            .credential
+            .expect("sign-in surfaces the asserted credential");
+        assert_eq!(credential.credential_id, vec![0x01, 0x02, 0x03]);
+        assert!(credential.user_id.is_none());
+        assert!(credential.aaguid.is_none());
+        assert!(credential.backup_eligible.is_none());
     }
 
     #[macros::async_test_all]
     async fn default_label_from_config_overrides_internal_default() {
         let provider = Arc::new(MockProvider::new([0u8; 32]));
-        let client = PasskeyClient::new(
+        let (client, store) = client_with_store(
             provider,
-            None,
             Some(PasskeyConfig {
                 default_label: Some("my-app".to_string()),
                 ..Default::default()
@@ -530,12 +663,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.wallet.label, "my-app");
+        // Discovery (label = None) queries the store for the label set;
+        // the positive control for the fast path's zero-query assertion.
+        assert_eq!(store.lock().unwrap().list_calls, 1);
     }
 
     #[macros::async_test_all]
     async fn connect_with_passkey_returns_none_credential_when_sign_in_succeeds() {
         let provider = Arc::new(MockProvider::new([1u8; 32]));
-        let client = PasskeyClient::new(provider.clone(), None, None);
+        let client = test_client(provider.clone(), None);
         let response = client
             .connect_with_passkey(ConnectWithPasskeyRequest {
                 label: Some("personal".to_string()),
@@ -558,7 +694,7 @@ mod tests {
         provider.queue_derive_error(PrfProviderError::CredentialNotFound(
             "no local credential".to_string(),
         ));
-        let client = PasskeyClient::new(provider.clone(), None, None);
+        let client = test_client(provider.clone(), None);
         let response = client
             .connect_with_passkey(ConnectWithPasskeyRequest {
                 label: Some("personal".to_string()),
@@ -578,7 +714,7 @@ mod tests {
     async fn connect_with_passkey_propagates_cancel_without_registering() {
         let provider = Arc::new(MockProvider::new([3u8; 32]));
         provider.queue_derive_error(PrfProviderError::UserCancelled);
-        let client = PasskeyClient::new(provider.clone(), None, None);
+        let client = test_client(provider.clone(), None);
         let result = client
             .connect_with_passkey(ConnectWithPasskeyRequest::default())
             .await;

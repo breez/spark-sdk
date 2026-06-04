@@ -66,14 +66,6 @@ impl NostrSaltClient {
         }
     }
 
-    /// Reference to the owned passkey-derived signing keys. Used by
-    /// the parent `Passkey` (test-only currently) to reuse the same
-    /// identity across the lazy-init boundary.
-    #[cfg(test)]
-    pub fn keys(&self) -> &nostr::Keys {
-        &self.keys
-    }
-
     /// Query all labels published by the owned identity.
     ///
     /// Returns all kind-1 text note events authored by the pubkey.
@@ -491,6 +483,41 @@ impl NostrSaltClient {
         } else {
             Client::new(self.keys.clone())
         })
+    }
+}
+
+/// Internal label store the passkey orchestrator persists wallet labels
+/// through. [`NostrSaltClient`] is the production implementation (Nostr
+/// relays); tests inject an in-memory double so unit tests never reach
+/// the network. Built per-identity from the keys derived in a PRF
+/// ceremony (see [`super::Passkey`]'s store builder).
+#[macros::async_trait]
+pub(crate) trait LabelStore: Send + Sync {
+    /// Idempotently publish `label` for the owned identity.
+    async fn store_label(&self, label: &str) -> Result<(), PasskeyError>;
+
+    /// List labels published by the owned identity.
+    async fn list_labels(&self) -> Result<Vec<String>, PasskeyError>;
+
+    /// The signing identity backing this store. Lets the orchestrator
+    /// verify deterministic key derivation across the lazy-init boundary.
+    #[cfg(test)]
+    fn signing_keys(&self) -> nostr::Keys;
+}
+
+#[macros::async_trait]
+impl LabelStore for NostrSaltClient {
+    async fn store_label(&self, label: &str) -> Result<(), PasskeyError> {
+        NostrSaltClient::store_label(self, label).await
+    }
+
+    async fn list_labels(&self) -> Result<Vec<String>, PasskeyError> {
+        NostrSaltClient::list_labels(self).await
+    }
+
+    #[cfg(test)]
+    fn signing_keys(&self) -> nostr::Keys {
+        self.keys.clone()
     }
 }
 
