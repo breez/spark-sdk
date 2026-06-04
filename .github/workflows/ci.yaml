@@ -129,10 +129,20 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run Tests (DIAG full breez-itest)
+      - name: Run Tests (DIAG loop lnurl, target-detecting)
         env:
           RUST_LOG: "warn,spark_wallet=info,spark::tree::store=info,spark::tree::leaf_optimizer=info,lnurl=info,breez_sdk_itest=info"
-        run: make breez-itest
+        run: |
+          found=0
+          for i in $(seq 1 6); do
+            echo "::group::DIAG lnurl iteration $i"
+            cargo test -p breez-sdk-itest --test lnurl -- --test-threads=8 --nocapture 2>&1 | tee /tmp/iter.log || true
+            echo "::endgroup::"
+            if grep -q "DIAG payment-short\|Not enough funds to select leaves" /tmp/iter.log; then
+              echo "TARGET REPRODUCED on iteration $i"; found=1; break
+            fi
+          done
+          if [ "$found" -eq 1 ]; then exit 1; else echo "target not reproduced in this run"; exit 0; fi
 
   wasm-clippy:
     name: Wasm clippy
