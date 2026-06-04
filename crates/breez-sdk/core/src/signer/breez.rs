@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use crate::{Seed, error::SdkError, models::Config};
 use bitcoin::bip32::DerivationPath;
 use bitcoin::hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256};
 use bitcoin::secp256k1::{self, Message, Secp256k1, rand::thread_rng};
-use spark_wallet::{DefaultSigner, KeySet, KeySetType, SparkSignerAdapter};
+use spark_wallet::{KeySet, KeySetType};
 
 use super::BreezSigner;
 
@@ -31,18 +29,14 @@ impl BreezSignerImpl {
         )
         .map_err(|e| SdkError::Generic(e.to_string()))?;
 
-        Ok(Self {
-            key_set,
-            secp: Secp256k1::new(),
-        })
+        Ok(Self::from_key_set(key_set))
     }
 
-    /// Builds the high-level Spark signer for this wallet's seed by wrapping the
-    /// in-process low-level `DefaultSigner` in a `SparkSignerAdapter`.
-    pub fn spark_signer(&self) -> Arc<dyn spark_wallet::SparkSigner> {
-        Arc::new(SparkSignerAdapter::new(Arc::new(
-            DefaultSigner::from_key_set(self.key_set.clone()),
-        )))
+    pub fn from_key_set(key_set: KeySet) -> Self {
+        Self {
+            key_set,
+            secp: Secp256k1::new(),
+        }
     }
 }
 
