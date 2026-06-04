@@ -5,12 +5,13 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AcceptLightningAddressTransferRequest, AssetFilter, BreezSdk, BuyBitcoinRequest,
-    CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest, ConversionOptions,
-    ConversionType, Fee, FeePolicy, FetchConversionLimitsRequest, GetInfoRequest,
-    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
-    MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
+    AssetFilter, AuthorizeLightningAddressTransferRequest, BreezSdk, BuyBitcoinRequest,
+    CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
+    ClaimLightningAddressTransferRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
+    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
+    InputType, LightningAddressDetails, LightningAddressTransferAuthorization, ListPaymentsRequest,
+    ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest, MaxFee,
+    OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
     PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
     RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
     SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
@@ -304,28 +305,33 @@ pub enum Command {
 
         /// Description in the lnurl response and the invoice.
         description: Option<String>,
-
-        /// Hex-encoded pubkey of the current owner transferring the username.
-        /// Must be paired with --transfer-signature.
-        #[arg(long)]
-        transfer_pubkey: Option<String>,
-
-        /// Hex-encoded DER ECDSA signature by the current owner over
-        /// `transfer:{username}-{self_pubkey}`. Obtain via
-        /// `accept-lightning-address-transfer` on the current owner's CLI.
-        /// Must be paired with --transfer-pubkey.
-        #[arg(long)]
-        transfer_signature: Option<String>,
     },
-    /// Produce a transfer authorization for the lightning address username
-    /// currently registered on this wallet, granting the right to take it
-    /// over to `transferee_pubkey`. Run on the current owner's wallet; share
-    /// the returned pubkey + signature with the new owner who passes them
-    /// via `--transfer-pubkey` / `--transfer-signature` to
-    /// `register-lightning-address`.
-    AcceptLightningAddressTransfer {
+    /// Run by the current owner to authorize transferring their registered
+    /// lightning address username to `transferee_pubkey`. Prints the
+    /// authorization (username, pubkey, signature) to share out-of-band with
+    /// the new owner, who passes it to `claim-lightning-address-transfer`.
+    AuthorizeLightningAddressTransfer {
         /// Hex-encoded secp256k1 compressed public key of the new owner.
         transferee_pubkey: String,
+    },
+    /// Run by the new owner to claim a transfer authorized by the current
+    /// owner, taking over `username` in a single atomic operation.
+    ClaimLightningAddressTransfer {
+        /// The username being taken over (from the authorization).
+        username: String,
+
+        /// Description in the lnurl response and the invoice.
+        description: Option<String>,
+
+        /// Hex-encoded pubkey of the current owner, from
+        /// `authorize-lightning-address-transfer`.
+        #[arg(long)]
+        from_pubkey: String,
+
+        /// Hex-encoded DER ECDSA signature by the current owner, from
+        /// `authorize-lightning-address-transfer`.
+        #[arg(long)]
+        from_signature: String,
     },
     DeleteLightningAddress,
     /// List fiat currencies
@@ -892,34 +898,39 @@ pub(crate) async fn execute_command(
         Command::RegisterLightningAddress {
             username,
             description,
-            transfer_pubkey,
-            transfer_signature,
         } => {
-            let transfer = match (transfer_pubkey, transfer_signature) {
-                (Some(pubkey), Some(signature)) => {
-                    Some(breez_sdk_spark::LightningAddressTransfer { pubkey, signature })
-                }
-                (None, None) => None,
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "--transfer-pubkey and --transfer-signature must be provided together"
-                    ));
-                }
-            };
             let res = sdk
                 .register_lightning_address(RegisterLightningAddressRequest {
                     username,
                     description,
-                    transfer,
                 })
                 .await?;
             print_value(&res)?;
             Ok(true)
         }
-        Command::AcceptLightningAddressTransfer { transferee_pubkey } => {
+        Command::AuthorizeLightningAddressTransfer { transferee_pubkey } => {
             let res = sdk
-                .accept_lightning_address_transfer(AcceptLightningAddressTransferRequest {
+                .authorize_lightning_address_transfer(AuthorizeLightningAddressTransferRequest {
                     transferee_pubkey,
+                })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::ClaimLightningAddressTransfer {
+            username,
+            description,
+            from_pubkey,
+            from_signature,
+        } => {
+            let res = sdk
+                .claim_lightning_address_transfer(ClaimLightningAddressTransferRequest {
+                    authorization: LightningAddressTransferAuthorization {
+                        username,
+                        pubkey: from_pubkey,
+                        signature: from_signature,
+                    },
+                    description,
                 })
                 .await?;
             print_value(&res)?;

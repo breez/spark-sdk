@@ -59,40 +59,43 @@ Future<(String, String, String, String, String)> getLightningAddress(
   return (lightningAddress, username, description, lnurlUrl, lnurlBech32);
 }
 
-// Run on the *current owner's* wallet. Produces the authorization that the
-// new owner needs to take over the username in a single atomic call.
-Future<LightningAddressTransfer> signLightningAddressTransfer(
+// Step 1: run by the *current owner*. Produces the authorization
+// the new owner needs to take over the username in a single atomic call.
+Future<LightningAddressTransferAuthorization> authorizeLightningAddressTransfer(
   BreezSdk currentOwnerSdk,
   String transfereePubkey,
 ) async {
-  // ANCHOR: sign-lightning-address-transfer
-  final transfer = await currentOwnerSdk.acceptLightningAddressTransfer(
-    request: AcceptLightningAddressTransferRequest(
+  // ANCHOR: authorize-lightning-address-transfer
+  final authorization = await currentOwnerSdk.authorizeLightningAddressTransfer(
+    request: AuthorizeLightningAddressTransferRequest(
       transfereePubkey: transfereePubkey,
     ),
   );
-  // ANCHOR_END: sign-lightning-address-transfer
-  return transfer;
+  // ANCHOR_END: authorize-lightning-address-transfer
+  return authorization;
 }
 
-// Run on the *new owner's* wallet with the authorization received
-// out-of-band from the current owner.
-Future<void> registerLightningAddressViaTransfer(
+// Step 2: run by the *new owner* with the authorization received
+// from the current owner (e.g. via QR code or deep link). The authorization
+// already carries the username, so nothing else is needed to claim.
+Future<(String, String, String)> claimLightningAddressTransfer(
   BreezSdk newOwnerSdk,
-  LightningAddressTransfer transfer,
+  LightningAddressTransferAuthorization authorization,
 ) async {
-  final username = 'myusername';
   final description = 'My Lightning Address';
 
-  // ANCHOR: register-lightning-address-transfer
-  final request = RegisterLightningAddressRequest(
-    username: username,
-    description: description,
-    transfer: transfer,
+  // ANCHOR: claim-lightning-address-transfer
+  final address = await newOwnerSdk.claimLightningAddressTransfer(
+    request: ClaimLightningAddressTransferRequest(
+      authorization: authorization,
+      description: description,
+    ),
   );
-
-  await newOwnerSdk.registerLightningAddress(request: request);
-  // ANCHOR_END: register-lightning-address-transfer
+  final lightningAddress = address.lightningAddress;
+  final lnurlUrl = address.lnurl.url;
+  final lnurlBech32 = address.lnurl.bech32;
+  // ANCHOR_END: claim-lightning-address-transfer
+  return (lightningAddress, lnurlUrl, lnurlBech32);
 }
 
 Future<void> deleteLightningAddress(BreezSdk sdk) async {
