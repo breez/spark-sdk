@@ -131,7 +131,7 @@ jobs:
 
       - name: Run Tests (DIAG loop lnurl, target-detecting)
         env:
-          RUST_LOG: "warn,spark_wallet=info,spark::tree::store=info,spark::tree::leaf_optimizer=info,lnurl=info,breez_sdk_itest=info"
+          RUST_LOG: "warn,spark_wallet=debug,spark::tree::store=info,spark::tree::leaf_optimizer=info,lnurl=info,breez_sdk_itest=info"
         run: |
           found=0
           for i in $(seq 1 6); do

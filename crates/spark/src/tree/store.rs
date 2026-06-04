@@ -593,17 +593,13 @@ impl InMemoryTreeStore {
 
         match selected {
             Ok(target_leaves) => {
+                // Can satisfy exactly - no pending change needed
                 let selected = [
                     target_leaves.amount_leaves,
                     target_leaves.fee_leaves.unwrap_or_default(),
                 ]
                 .concat();
-                let pending_change_amount = match purpose {
-                    ReservationPurpose::Swap => selected.iter().map(|l| l.value).sum(),
-                    ReservationPurpose::Payment => 0,
-                };
-                let id =
-                    Self::reserve_internal(state, &selected, purpose, permit, pending_change_amount)?;
+                let id = Self::reserve_internal(state, &selected, purpose, permit, 0)?;
                 Ok(ReserveResult::Success(LeavesReservation::new(selected, id)))
             }
             Err(_) if !exact_only => {
@@ -613,16 +609,13 @@ impl InMemoryTreeStore {
                 {
                     let reserved_amount: u64 = selected.iter().map(|l| l.value).sum();
 
-                    let pending_change_amount = match purpose {
-                        ReservationPurpose::Swap => reserved_amount,
-                        ReservationPurpose::Payment => {
-                            if reserved_amount > target_amount && target_amount > 0 {
-                                reserved_amount - target_amount
-                            } else {
-                                0
-                            }
-                        }
-                    };
+                    // Calculate pending change if we reserved more than needed
+                    let pending_change_amount =
+                        if reserved_amount > target_amount && target_amount > 0 {
+                            reserved_amount - target_amount
+                        } else {
+                            0
+                        };
 
                     let id = Self::reserve_internal(
                         state,
