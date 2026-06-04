@@ -138,9 +138,10 @@ jobs:
             echo "::group::DIAG lnurl iteration $i"
             cargo test -p breez-sdk-itest --test lnurl -- --test-threads=8 --nocapture 2>&1 | tee /tmp/iter.log || true
             echo "::endgroup::"
-            if grep -q "DIAG payment-short\|Not enough funds to select leaves" /tmp/iter.log; then
+            if grep -q "Not enough funds to select leaves\|Tree service error: insufficient funds" /tmp/iter.log; then
               echo "TARGET REPRODUCED on iteration $i"; found=1; break
             fi
+            grep -q "DIAG payment-short" /tmp/iter.log && echo "NOTE iteration $i: swap race observed (DIAG payment-short) but handled"
           done
           if [ "$found" -eq 1 ]; then exit 1; else echo "target not reproduced in this run"; exit 0; fi
 
