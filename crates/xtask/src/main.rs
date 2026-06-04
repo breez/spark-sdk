@@ -511,8 +511,18 @@ fn wasm_test_cmd(
                 "chrome" | "chromium" => c.arg("--chrome"),
                 _ => c.arg("--firefox"),
             };
-            // Enable browser-specific tests if gated behind a feature
-            c.args(["--", "--features", "browser-tests"]);
+            // Browser tests: enable the `browser-tests` feature, but
+            // disable defaults so the `postgres` feature (which pulls
+            // in pg-wasm's CommonJS bridge) is off. The pg-wasm
+            // `module = "/js/pg-wasm-bridge.cjs"` snippet can't be
+            // loaded by the browser bundler — including it makes the
+            // wasm-pack test page fail to instantiate.
+            c.args([
+                "--",
+                "--no-default-features",
+                "--features",
+                "browser-tests",
+            ]);
         }
         // On macOS, auto-detect Homebrew LLVM and set CC/AR for wasm cross-compiles
         if cfg!(target_os = "macos")

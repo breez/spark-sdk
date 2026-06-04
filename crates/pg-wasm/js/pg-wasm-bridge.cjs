@@ -50,10 +50,14 @@
 //      `js/postgres-storage/node_modules/`).
 //
 // If all three fail, surface the standard install hint.
-const path = require("path");
-const fs = require("fs");
-
 function loadPg() {
+  // `path` and `fs` are deferred here so the module file can be parsed
+  // in environments without Node's CommonJS (browser bundles produced
+  // for `wasm-bindgen --target web` / `--target bundler` execute every
+  // snippet at module-init time, even ones whose externs are never
+  // called).
+  const path = require("path");
+  const fs = require("fs");
   const tried = [];
 
   try {
@@ -99,23 +103,43 @@ function loadPg() {
   );
 }
 
-const pg = loadPg();
-const { Client, Pool } = pg;
+// Lazy state: `pg` is loaded the first time a postgres call actually
+// fires, not at module-load time.
+//
+// Why lazy:
+//
+//   wasm-bindgen with `--target web` / `--target bundler` pulls every
+//   `module = "..."` snippet into the page's import graph regardless of
+//   whether the corresponding Rust functions are ever called. If this
+//   file did `require("pg")` at the top level it would fail in any
+//   browser-style target (no Node `pg`, no Node `fs`/`path`) and the
+//   whole wasm binary would refuse to load. By deferring everything
+//   into `ensurePg()` the module evaluates cleanly anywhere; only
+//   actually calling `connectClient` / `createPool` requires Node.
+let pg = null;
+let Client = null;
+let Pool = null;
+let BinaryClient = null;
 
-/// Subclass of pg.Client that turns on binary-DataRow handling for the
-/// underlying connection at construction time. pg.Pool can take a
-/// `Client` option that names a constructor to use for each pooled
-/// client, so subclassing is the cleanest way to make every pooled
-/// client pick up the patch automatically — no need to mutate flags on
-/// already-attached connections.
-class BinaryClient extends Client {
-  constructor(opts) {
-    super(opts);
-    // Patched `Connection.attachListeners` (see patchPgInternals) reads
-    // this flag during `_connect()` to decide whether to install the
-    // binary-DataRow Parser.
-    this.connection.__pgWasmBinaryDataRow = true;
-  }
+function ensurePg() {
+  if (pg) return;
+  pg = loadPg();
+  ({ Client, Pool } = pg);
+  // Subclass of pg.Client that turns on binary-DataRow handling for the
+  // underlying connection at construction time. `pg.Pool` accepts a
+  // `Client` option that names a constructor to use for each pooled
+  // client, so subclassing is the cleanest way to make every pooled
+  // client pick up the patch automatically — no need to mutate flags
+  // on already-attached connections.
+  BinaryClient = class extends Client {
+    constructor(opts) {
+      super(opts);
+      // Patched `Connection.attachListeners` (see patchPgInternals)
+      // reads this flag during `_connect()` to decide whether to
+      // install the binary-DataRow Parser.
+      this.connection.__pgWasmBinaryDataRow = true;
+    }
+  };
 }
 
 // ── pg-protocol DataRow patch (per-connection) ───────────────────────────────
@@ -534,6 +558,7 @@ function parseAffected(tag) {
  * Connect a fresh pg.Client. The Rust side gets a `JsClient` wrapper.
  */
 async function connectClient(connectionString) {
+  ensurePg();
   // Patches are gated on per-instance flags, so they're safe to apply
   // once globally — they only affect connections opted in via
   // `__pgWasmBinaryDataRow`.
@@ -544,6 +569,7 @@ async function connectClient(connectionString) {
 }
 
 function createPool(connectionString) {
+  ensurePg();
   patchPgInternals();
   // pg.Pool's `Client` option specifies the constructor to use for each
   // pooled connection. Using our BinaryClient subclass makes every

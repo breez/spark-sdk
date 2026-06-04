@@ -142,7 +142,10 @@ enum WasmStorageConfigKind {
     /// File-based storage rooted at `storage_dir` (IndexedDB in the browser,
     /// SQLite under Node.js).
     Default { storage_dir: String },
-    /// `PostgreSQL`-backed storage.
+    /// `PostgreSQL`-backed storage. Gated behind `feature = "postgres"`
+    /// because the underlying pg-wasm bridge can't be linked into a
+    /// browser bundle.
+    #[cfg(feature = "postgres")]
     Postgres { config: PostgresStorageConfig },
     /// `MySQL`-backed storage.
     Mysql { config: MysqlStorageConfig },
@@ -168,6 +171,11 @@ pub fn default_storage_config(storage_dir: String) -> WasmStorageConfig {
 }
 
 /// `PostgreSQL`-backed storage built from `config`.
+///
+/// Only available when the wasm SDK is built with `feature = "postgres"`
+/// (the default for Node-target wasm-pack builds; absent from
+/// browser-target builds because the pg-wasm bridge can't run there).
+#[cfg(feature = "postgres")]
 #[wasm_bindgen(js_name = "postgresStorage")]
 #[must_use]
 pub fn postgres_storage(config: PostgresStorageConfig) -> WasmStorageConfig {
@@ -193,13 +201,13 @@ pub struct SdkBuilder {
     /// Storage backend selected via `withDefaultStorage` / `withStorageBackend`.
     storage_config: Option<WasmStorageConfig>,
     storage: Option<Storage>,
-    /// JS Postgres pool supplied via `withSharedContext(ctx_with_pool)`.
     /// Shared Postgres backend inherited from the
     /// [`WasmSdkContext`](crate::sdk_context::WasmSdkContext) attached via
     /// `withSharedContext`. The backend internally tracks the pool and a
     /// once-cell that gates schema migrations per process — all the
     /// "share across builders" concerns the old `SharedPostgresPool`
     /// solved are now native-side.
+    #[cfg(feature = "postgres")]
     context_postgres_backend: Option<Arc<dyn StorageBackend>>,
     /// JS MySQL pool supplied via `withSharedContext(ctx_with_pool)`.
     context_mysql_pool: Option<SharedMysqlPool>,
@@ -221,6 +229,7 @@ impl SdkBuilder {
             builder: breez_sdk_spark::SdkBuilder::new(config, seed),
             storage_config: None,
             storage: None,
+            #[cfg(feature = "postgres")]
             context_postgres_backend: None,
             context_mysql_pool: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
@@ -244,6 +253,7 @@ impl SdkBuilder {
             builder: breez_sdk_spark::SdkBuilder::new_with_signer(config_core, signer_adapter),
             storage_config: None,
             storage: None,
+            #[cfg(feature = "postgres")]
             context_postgres_backend: None,
             context_mysql_pool: None,
             key_set_type: breez_sdk_spark::KeySetType::Default,
@@ -275,6 +285,9 @@ impl SdkBuilder {
     }
 
     /// **Deprecated.** Use `withStorageBackend(postgresStorage(config))`.
+    ///
+    /// Only available when the wasm SDK is built with `feature = "postgres"`.
+    #[cfg(feature = "postgres")]
     #[wasm_bindgen(js_name = "withPostgresBackend")]
     #[allow(clippy::unnecessary_wraps)]
     pub fn with_postgres_backend(self, config: PostgresStorageConfig) -> WasmResult<Self> {
@@ -296,7 +309,10 @@ impl SdkBuilder {
     #[wasm_bindgen(js_name = "withSharedContext")]
     pub fn with_shared_context(mut self, context: &WasmSdkContext) -> Self {
         self.builder = self.builder.with_shared_context(context.inner.clone());
-        self.context_postgres_backend = context.postgres_backend.clone();
+        #[cfg(feature = "postgres")]
+        {
+            self.context_postgres_backend = context.postgres_backend.clone();
+        }
         self.context_mysql_pool = context.mysql_pool.clone();
         self
     }
@@ -380,10 +396,20 @@ impl SdkBuilder {
         .public_key()
         .serialize();
 
+        // The Postgres-backend slot only exists when the wasm SDK is
+        // built with `feature = "postgres"` (the default for Node
+        // wasm-pack targets; off for browser-tests). When it's absent
+        // the match has fewer arms and a Postgres-via-context
+        // configuration is impossible.
+        #[cfg(feature = "postgres")]
+        let context_postgres_backend = self.context_postgres_backend;
+        #[cfg(not(feature = "postgres"))]
+        let context_postgres_backend: Option<Arc<dyn StorageBackend>> = None;
+
         let custom_storage = match (
             self.storage_config,
             self.storage,
-            self.context_postgres_backend,
+            context_postgres_backend,
             self.context_mysql_pool,
         ) {
             (Some(config), None, None, None) => {
@@ -438,6 +464,7 @@ async fn resolve_storage_config(
             });
             Ok(Arc::new(PrebuiltBackend::new(storage, None, None, None)))
         }
+        #[cfg(feature = "postgres")]
         WasmStorageConfigKind::Postgres { config } => {
             // Build the native PostgresBackend, which goes through
             // spark-postgres -> pg-wasm -> node-postgres on wasm. The
@@ -486,6 +513,7 @@ async fn build_mysql_storage_shared(
 /// (`breez_sdk_spark`). Timeout fields are `u32` here for the JS
 /// boundary; the core represents missing timeouts as `None` and we
 /// treat `0` the same way ("no timeout").
+#[cfg(feature = "postgres")]
 impl From<PostgresStorageConfig> for breez_sdk_spark::PostgresStorageConfig {
     fn from(cfg: PostgresStorageConfig) -> Self {
         Self {

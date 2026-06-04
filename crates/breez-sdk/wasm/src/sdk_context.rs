@@ -13,16 +13,21 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[cfg(feature = "postgres")]
 use breez_sdk_spark::StorageBackend;
 use platform_utils::tokio::sync::OnceCell;
 use wasm_bindgen::prelude::*;
 
+#[cfg(feature = "postgres")]
+use crate::error::WasmError;
 use crate::{
-    error::{WasmError, WasmResult},
+    error::WasmResult,
     models::Network,
     persist::pool::{JsPool, create_mysql_pool},
-    sdk_builder::{MysqlForeignKeyMode, MysqlStorageConfig, PostgresStorageConfig},
+    sdk_builder::{MysqlForeignKeyMode, MysqlStorageConfig},
 };
+#[cfg(feature = "postgres")]
+use crate::sdk_builder::PostgresStorageConfig;
 
 /// A context-shared MySQL pool: the JS pool, its `run_migration` flag, the
 /// foreign-key mode the stores were configured with, and a once-guard that
@@ -46,7 +51,9 @@ pub struct WasmSdkContext {
     /// Shared Postgres backend (a `PostgresBackend` produced by
     /// `breez_sdk_spark::postgres_storage`). Encapsulates the pool plus
     /// the once-cell that gates schema migrations across all SDKs built
-    /// from this context.
+    /// from this context. Only present when the wasm SDK is built with
+    /// `feature = "postgres"`.
+    #[cfg(feature = "postgres")]
     pub(crate) postgres_backend: Option<Arc<dyn StorageBackend>>,
     pub(crate) mysql_pool: Option<SharedMysqlPool>,
 }
@@ -75,6 +82,8 @@ pub struct WasmSdkContextConfig {
 
     /// PostgreSQL backend configuration. When set, SDKs constructed with
     /// this context store their data in PostgreSQL via the shared pool.
+    /// Only honoured when the wasm SDK is built with `feature = "postgres"`.
+    #[cfg(feature = "postgres")]
     #[tsify(optional)]
     pub postgres_config: Option<PostgresStorageConfig>,
 
@@ -97,6 +106,7 @@ pub async fn new_shared_sdk_context(config: WasmSdkContextConfig) -> WasmResult<
     })
     .await?;
 
+    #[cfg(feature = "postgres")]
     let postgres_backend = match config.postgres_config {
         Some(cfg) => Some(
             breez_sdk_spark::postgres_storage(cfg.into()).map_err(WasmError::new)?,
@@ -120,6 +130,7 @@ pub async fn new_shared_sdk_context(config: WasmSdkContextConfig) -> WasmResult<
 
     Ok(WasmSdkContext {
         inner,
+        #[cfg(feature = "postgres")]
         postgres_backend,
         mysql_pool,
     })

@@ -22,7 +22,21 @@ version.workspace = true
 wasm-opt = false
 
 [features]
-browser-tests = [] # Enable browser wasm-pack tests
+default = ["postgres"]
+# Postgres backend. Pulls in pg-wasm, whose `module = ".../pg-wasm-bridge.cjs"`
+# snippet imports CommonJS pg/node-postgres — fine for Node-target wasm-pack
+# builds, but the snippet can't load in a browser. Browser-test runs build
+# with `--no-default-features --features browser-tests` to keep this off
+# entirely (the snippet only gets linked into the wasm binary when this
+# feature pulls in pg-wasm + spark-postgres).
+postgres = [
+    "breez-sdk-spark/postgres",
+    "dep:pg-wasm",
+    "dep:spark-postgres",
+]
+# Enable browser wasm-pack tests. Mutually exclusive with the `postgres`
+# feature in practice: the browser bundle can't load the pg-wasm bridge.
+browser-tests = []
 
 [lib]
 name = "breez_sdk_spark_wasm"
@@ -31,7 +45,7 @@ crate-type = ["cdylib"]
 [dependencies]
 async-trait.workspace = true
 bitcoin.workspace = true
-breez-sdk-spark = { workspace = true, features = ["passkey", "postgres"] }
+breez-sdk-spark = { workspace = true, features = ["passkey"] }
 js-sys.workspace = true
 macros.workspace = true
 platform-utils.workspace = true
@@ -45,9 +59,11 @@ tsify-next = { workspace = true, default-features = false, features = ["js"] }
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 web-sys.workspace = true
+# Optional, behind `feature = "postgres"`. Tests for the Rust postgres
+# path (pg_wasm_rust_storage.rs) also rely on these.
+pg-wasm = { workspace = true, optional = true }
+spark-postgres = { workspace = true, optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test.workspace = true
-breez-sdk-spark = { workspace = true, features = ["test-utils", "postgres"] }
-pg-wasm.workspace = true
-spark-postgres.workspace = true
+breez-sdk-spark = { workspace = true, features = ["test-utils"] }
