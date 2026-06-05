@@ -1007,7 +1007,7 @@ async function handleClaimLightningAddressTransfer(sdk: BreezSdkInterface, _toke
   }
 
   const username = positional[0]
-  const description = positional.length > 1 ? positional[1] : parseFlag(args, '--description', '-d')
+  const description = positional.length > 1 ? positional[1] : undefined
   const fromPubkey = parseFlag(args, '--from-pubkey')
   const fromSignature = parseFlag(args, '--from-signature')
 

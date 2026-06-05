@@ -217,11 +217,12 @@ async function resolvePasskeySeed(
 ) {
   const client = new PasskeyClient(provider, breezApiKey, undefined)
 
-  // --list-labels: query Nostr and prompt user to select
+  // --list-labels: discovery sign-in (no cached label) returns the
+  // published label set; prompt the user to pick one.
   let resolvedLabel = label
   if (listLabels) {
     console.log('Querying Nostr for available labels...')
-    const labels = await client.labels().list()
+    const { labels } = await client.signIn({ label: undefined })
 
     if (labels.length === 0) {
       throw new Error('No labels found on Nostr for this identity')

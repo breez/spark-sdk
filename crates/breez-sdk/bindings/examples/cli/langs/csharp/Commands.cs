@@ -1054,7 +1054,6 @@ public static class Commands
 
     private static async Task HandleClaimLightningAddressTransfer(BreezSdk sdk, Func<string, string?> readline, string[] args)
     {
-        var description = GetFlag(args, "-d", "--description");
         var fromPubkey = GetFlag(args, "--from-pubkey");
         var fromSignature = GetFlag(args, "--from-signature");
         var positional = GetPositionalArgs(args);
@@ -1071,7 +1070,7 @@ public static class Commands
                 pubkey: fromPubkey,
                 signature: fromSignature
             ),
-            description: description ?? (positional.Length > 1 ? positional[1] : null)
+            description: positional.Length > 1 ? positional[1] : null
         ));
         Serialization.PrintValue(result);
     }

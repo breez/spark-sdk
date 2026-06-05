@@ -862,10 +862,9 @@ suspend fun handleClaimLightningAddressTransfer(sdk: BreezSdk, reader: LineReade
     val fp = FlagParser(args)
     val fromPubkey = fp.getString("from-pubkey")
     val fromSignature = fp.getString("from-signature")
-    val description = fp.getString("d", "description")
 
     if (fp.positional.isEmpty() || fromPubkey == null || fromSignature == null) {
-        println("Usage: claim-lightning-address-transfer <username> --from-pubkey <pubkey> --from-signature <sig> [-d <description>]")
+        println("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <sig>")
         return
     }
 
@@ -876,7 +875,7 @@ suspend fun handleClaimLightningAddressTransfer(sdk: BreezSdk, reader: LineReade
                 pubkey = fromPubkey,
                 signature = fromSignature,
             ),
-            description = description,
+            description = fp.positional.getOrNull(1),
         )
     )
     printValue(result)
