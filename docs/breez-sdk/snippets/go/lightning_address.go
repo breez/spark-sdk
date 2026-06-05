@@ -110,19 +110,19 @@ func AuthorizeLightningAddressTransfer(
 }
 
 // Step 2: run by the new owner with the authorization from step 1.
-func AcceptLightningAddressTransfer(
+func ClaimLightningAddressTransfer(
 	newOwnerSdk *breez_sdk_spark.BreezSdk,
 	authorization breez_sdk_spark.TransferAuthorization,
 ) (*breez_sdk_spark.LightningAddressInfo, error) {
 	description := "My Lightning Address"
 
-	// ANCHOR: accept-lightning-address-transfer
-	request := breez_sdk_spark.AcceptTransferRequest{
+	// ANCHOR: claim-lightning-address-transfer
+	request := breez_sdk_spark.ClaimTransferRequest{
 		Authorization: authorization,
 		Description:   &description,
 	}
 
-	address, err := newOwnerSdk.AcceptLightningAddressTransfer(request)
+	address, err := newOwnerSdk.ClaimLightningAddressTransfer(request)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +130,7 @@ func AcceptLightningAddressTransfer(
 	_ = address.LightningAddress
 	_ = address.Lnurl.Url
 	_ = address.Lnurl.Bech32
-	// ANCHOR_END: accept-lightning-address-transfer
+	// ANCHOR_END: claim-lightning-address-transfer
 	return &address, nil
 }
 

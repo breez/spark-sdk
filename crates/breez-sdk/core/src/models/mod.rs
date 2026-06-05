@@ -1626,8 +1626,8 @@ pub struct RegisterLightningAddressRequest {
 /// Authorization from the current owner granting a specific new owner the
 /// right to take over a username. Produced by
 /// [`BreezSdk::authorize_lightning_address_transfer`] and handed to the new
-/// owner, who passes it to [`BreezSdk::accept_lightning_address_transfer`]. It
-/// fully describes the transfer, so the new owner needs nothing else to accept.
+/// owner, who passes it to [`BreezSdk::claim_lightning_address_transfer`]. It
+/// fully describes the transfer, so the new owner needs nothing else to claim.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferAuthorization {
@@ -1649,12 +1649,12 @@ pub struct AuthorizeTransferRequest {
     pub transferee_pubkey: String,
 }
 
-/// Request for [`BreezSdk::accept_lightning_address_transfer`]. Called by the
+/// Request for [`BreezSdk::claim_lightning_address_transfer`]. Called by the
 /// *new owner* to complete the takeover using the authorization produced by
 /// the current owner.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcceptTransferRequest {
+pub struct ClaimTransferRequest {
     /// Authorization produced by the current owner via
     /// [`BreezSdk::authorize_lightning_address_transfer`].
     pub authorization: TransferAuthorization,

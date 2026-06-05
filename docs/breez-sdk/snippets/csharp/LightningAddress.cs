@@ -75,22 +75,22 @@ namespace BreezSdkSnippets
         }
 
         // Step 2: run by the new owner with the authorization from step 1.
-        async Task AcceptLightningAddressTransfer(
+        async Task ClaimLightningAddressTransfer(
             BreezSdk newOwnerSdk,
             TransferAuthorization authorization)
         {
             var description = "My Lightning Address";
 
-            // ANCHOR: accept-lightning-address-transfer
-            var address = await newOwnerSdk.AcceptLightningAddressTransfer(
-                new AcceptTransferRequest(
+            // ANCHOR: claim-lightning-address-transfer
+            var address = await newOwnerSdk.ClaimLightningAddressTransfer(
+                new ClaimTransferRequest(
                     authorization: authorization,
                     description: description
                 ));
             var lightningAddress = address.lightningAddress;
             var lnurlUrl = address.lnurl.url;
             var lnurlBech32 = address.lnurl.bech32;
-            // ANCHOR_END: accept-lightning-address-transfer
+            // ANCHOR_END: claim-lightning-address-transfer
         }
 
         async Task DeleteLightningAddress(BreezSdk sdk)

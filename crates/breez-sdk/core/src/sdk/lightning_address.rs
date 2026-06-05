@@ -2,7 +2,7 @@ use bitcoin::hex::DisplayHex;
 use lnurl_models::sanitize_username;
 
 use crate::{
-    AcceptTransferRequest, AuthorizeTransferRequest, CheckLightningAddressRequest,
+    AuthorizeTransferRequest, CheckLightningAddressRequest, ClaimTransferRequest,
     LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest, TransferAuthorization,
     error::SdkError, persist::ObjectCacheRepository,
 };
@@ -73,7 +73,7 @@ impl BreezSdk {
     /// Authorize transferring the current owner's registered lightning address
     /// username to `request.transferee_pubkey`. Returns a
     /// [`TransferAuthorization`] to hand to the new owner, who
-    /// accepts it via [`BreezSdk::accept_lightning_address_transfer`].
+    /// claims it via [`BreezSdk::claim_lightning_address_transfer`].
     /// Errors if the current owner has no lightning address registered.
     pub async fn authorize_lightning_address_transfer(
         &self,
@@ -98,13 +98,13 @@ impl BreezSdk {
         })
     }
 
-    /// Accept a lightning address username handed over by its current owner,
+    /// Claim a lightning address username handed over by its current owner,
     /// using the [`TransferAuthorization`] from
     /// [`BreezSdk::authorize_lightning_address_transfer`]. Completes the
     /// takeover and returns the newly-owned address.
-    pub async fn accept_lightning_address_transfer(
+    pub async fn claim_lightning_address_transfer(
         &self,
-        request: AcceptTransferRequest,
+        request: ClaimTransferRequest,
     ) -> Result<LightningAddressInfo, SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
         let Some(client) = &self.lnurl_server_client else {

@@ -269,14 +269,14 @@ impl BreezSdk {
             .into())
     }
 
-    #[wasm_bindgen(js_name = "acceptLightningAddressTransfer")]
-    pub async fn accept_lightning_address_transfer(
+    #[wasm_bindgen(js_name = "claimLightningAddressTransfer")]
+    pub async fn claim_lightning_address_transfer(
         &self,
-        request: AcceptTransferRequest,
+        request: ClaimTransferRequest,
     ) -> WasmResult<LightningAddressInfo> {
         Ok(self
             .sdk
-            .accept_lightning_address_transfer(request.into())
+            .claim_lightning_address_transfer(request.into())
             .await?
             .into())
     }

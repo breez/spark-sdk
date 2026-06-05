@@ -72,21 +72,21 @@ const exampleAuthorizeLightningAddressTransfer = async (
 }
 
 // Run by the new owner with the authorization from step 1.
-const exampleAcceptLightningAddressTransfer = async (
+const exampleClaimLightningAddressTransfer = async (
   newOwnerSdk: BreezSdk,
   authorization: TransferAuthorization
 ) => {
   const description = 'My Lightning Address'
 
-  // ANCHOR: accept-lightning-address-transfer
-  const addressInfo = await newOwnerSdk.acceptLightningAddressTransfer({
+  // ANCHOR: claim-lightning-address-transfer
+  const addressInfo = await newOwnerSdk.claimLightningAddressTransfer({
     authorization,
     description
   })
   const lightningAddress = addressInfo.lightningAddress
   const lnurlUrl = addressInfo.lnurl.url
   const lnurlBech32 = addressInfo.lnurl.bech32
-  // ANCHOR_END: accept-lightning-address-transfer
+  // ANCHOR_END: claim-lightning-address-transfer
 }
 
 const exampleDeleteLightningAddress = async (sdk: BreezSdk) => {

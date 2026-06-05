@@ -1090,8 +1090,8 @@ pub struct AuthorizeTransferRequest {
     pub transferee_pubkey: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::AcceptTransferRequest)]
-pub struct AcceptTransferRequest {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimTransferRequest)]
+pub struct ClaimTransferRequest {
     pub authorization: TransferAuthorization,
     pub description: Option<String>,
 }

@@ -5,16 +5,17 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AcceptTransferRequest, AssetFilter, AuthorizeTransferRequest, BreezSdk, BuyBitcoinRequest,
-    CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest, ConversionOptions,
-    ConversionType, Fee, FeePolicy, FetchConversionLimitsRequest, GetInfoRequest,
-    GetPaymentRequest, GetTokensMetadataRequest, InputType, LightningAddressDetails,
-    ListPaymentsRequest, ListUnclaimedDepositsRequest, LnurlPayRequest, LnurlWithdrawRequest,
-    MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter, PaymentStatus, PaymentType,
-    PrepareLnurlPayRequest, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest,
-    RefundDepositRequest, RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions,
-    SendPaymentRequest, SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer,
-    TokenTransactionType, TransferAuthorization, UpdateUserSettingsRequest,
+    AssetFilter, AuthorizeTransferRequest, BreezSdk, BuyBitcoinRequest,
+    CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
+    ClaimTransferRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
+    FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
+    InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
+    LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
+    PaymentStatus, PaymentType, PrepareLnurlPayRequest, PrepareSendPaymentRequest,
+    ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
+    RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
+    SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
+    TransferAuthorization, UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -308,15 +309,15 @@ pub enum Command {
     /// Run by the current owner to authorize transferring their registered
     /// lightning address username to `transferee_pubkey`. Prints the
     /// authorization (username, pubkey, signature) to hand to the new owner,
-    /// who passes it to `accept-lightning-address-transfer`.
+    /// who passes it to `claim-lightning-address-transfer`.
     AuthorizeLightningAddressTransfer {
         /// The new owner's identity public key (hex-encoded compressed
         /// secp256k1).
         transferee_pubkey: String,
     },
-    /// Run by the new owner to accept a transfer authorized by the current
+    /// Run by the new owner to claim a transfer authorized by the current
     /// owner, taking over `username`.
-    AcceptLightningAddressTransfer {
+    ClaimLightningAddressTransfer {
         /// The username being taken over (from the authorization).
         username: String,
 
@@ -917,14 +918,14 @@ pub(crate) async fn execute_command(
             print_value(&res)?;
             Ok(true)
         }
-        Command::AcceptLightningAddressTransfer {
+        Command::ClaimLightningAddressTransfer {
             username,
             description,
             from_pubkey,
             from_signature,
         } => {
             let res = sdk
-                .accept_lightning_address_transfer(AcceptTransferRequest {
+                .claim_lightning_address_transfer(ClaimTransferRequest {
                     authorization: TransferAuthorization {
                         username,
                         pubkey: from_pubkey,

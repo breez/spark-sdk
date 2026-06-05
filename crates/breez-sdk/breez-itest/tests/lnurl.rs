@@ -1211,10 +1211,10 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
     assert_eq!(authorization.pubkey, alice_pubkey);
     assert_eq!(authorization.username, username);
 
-    // 3. Bob accepts the transfer with the authorization Alice produced.
+    // 3. Bob claims the transfer with the authorization Alice produced.
     let transfer_response = bob
         .sdk
-        .accept_lightning_address_transfer(AcceptTransferRequest {
+        .claim_lightning_address_transfer(ClaimTransferRequest {
             authorization: authorization.clone(),
             description: Some("Bob's address now".to_string()),
         })
@@ -1239,7 +1239,7 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
     //    Alice's cache, which still holds her pre-transfer registration.
     let replay = bob
         .sdk
-        .accept_lightning_address_transfer(AcceptTransferRequest {
+        .claim_lightning_address_transfer(ClaimTransferRequest {
             authorization,
             description: Some("Replay".to_string()),
         })
@@ -1282,7 +1282,7 @@ async fn test_13_transfer_to_self_rejected(#[case] use_postgres: bool) -> Result
         .await?
         .identity_pubkey;
 
-    // Alice authorizes a transfer to her own pubkey and then tries to accept
+    // Alice authorizes a transfer to her own pubkey and then tries to claim
     // it. Both signatures are made by Alice, so the server sees from_pk ==
     // to_pk and must reject the transfer.
     let authorization = alice
@@ -1294,7 +1294,7 @@ async fn test_13_transfer_to_self_rejected(#[case] use_postgres: bool) -> Result
 
     let result = alice
         .sdk
-        .accept_lightning_address_transfer(AcceptTransferRequest {
+        .claim_lightning_address_transfer(ClaimTransferRequest {
             authorization,
             description: None,
         })

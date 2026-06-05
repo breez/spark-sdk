@@ -941,8 +941,8 @@ pub struct _AuthorizeTransferRequest {
     pub transferee_pubkey: String,
 }
 
-#[frb(mirror(AcceptTransferRequest))]
-pub struct _AcceptTransferRequest {
+#[frb(mirror(ClaimTransferRequest))]
+pub struct _ClaimTransferRequest {
     pub authorization: TransferAuthorization,
     pub description: Option<String>,
 }

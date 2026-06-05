@@ -1,5 +1,5 @@
 use breez_sdk_spark::{
-    default_config, AcceptTransferRequest, AuthorizeTransferRequest, BreezSdk,
+    default_config, ClaimTransferRequest, AuthorizeTransferRequest, BreezSdk,
     CheckLightningAddressRequest, Config, GetPaymentRequest, Network, PaymentDetails,
     RegisterLightningAddressRequest, TransferAuthorization,
 };
@@ -62,15 +62,15 @@ pub async fn authorize_lightning_address_transfer(
 }
 
 // Step 2: run by the new owner with the authorization from step 1.
-pub async fn accept_lightning_address_transfer(
+pub async fn claim_lightning_address_transfer(
     new_owner_sdk: &BreezSdk,
     authorization: TransferAuthorization,
 ) -> anyhow::Result<(String, String, String)> {
     let description = Some("Lightning address description".to_string());
 
-    // ANCHOR: accept-lightning-address-transfer
+    // ANCHOR: claim-lightning-address-transfer
     let address = new_owner_sdk
-        .accept_lightning_address_transfer(AcceptTransferRequest {
+        .claim_lightning_address_transfer(ClaimTransferRequest {
             authorization,
             description,
         })
@@ -78,7 +78,7 @@ pub async fn accept_lightning_address_transfer(
     let lightning_address = address.lightning_address;
     let lnurl_url = address.lnurl.url;
     let lnurl_bech32 = address.lnurl.bech32;
-    // ANCHOR_END: accept-lightning-address-transfer
+    // ANCHOR_END: claim-lightning-address-transfer
     Ok((lightning_address, lnurl_url, lnurl_bech32))
 }
 
