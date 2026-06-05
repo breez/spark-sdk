@@ -58,7 +58,7 @@ use tracing::{info, warn};
 ///    from his USDB (no explicit conversion options)
 #[test_log::test(tokio::test)]
 async fn test_stable_balance_auto_conversion() -> Result<()> {
-    let Some((mut alice, mut bob, token_id)) = mainnet_test_setup(true, true).await? else {
+    let Some((mut alice, mut bob, token_id, snap)) = mainnet_test_setup(true, true).await? else {
         return Ok(());
     };
     info!("=== Starting test_stable_balance_auto_conversion ===");
@@ -380,6 +380,14 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
     );
 
     info!("Part 3 complete: Stable balance spend (auto Token→BTC) successful");
+    log_test_diff(
+        "test_stable_balance_auto_conversion",
+        &alice,
+        &bob,
+        &token_id,
+        &snap,
+    )
+    .await?;
     info!("=== Test test_stable_balance_auto_conversion PASSED ===");
     Ok(())
 }
@@ -390,7 +398,7 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
 /// [`test_stable_balance_auto_conversion`].
 #[test_log::test(tokio::test)]
 async fn test_stable_balance_per_receive_conversion() -> Result<()> {
-    let Some((mut alice, bob, token_id)) = mainnet_test_setup(true, true).await? else {
+    let Some((mut alice, bob, token_id, snap)) = mainnet_test_setup(true, true).await? else {
         return Ok(());
     };
     info!("=== Starting test_stable_balance_per_receive_conversion ===");
@@ -474,6 +482,14 @@ async fn test_stable_balance_per_receive_conversion() -> Result<()> {
         "Bob token balance after per-receive conversion: {bob_token_balance_after} (was {bob_token_balance_before})"
     );
 
+    log_test_diff(
+        "test_stable_balance_per_receive_conversion",
+        &alice,
+        &bob,
+        &token_id,
+        &snap,
+    )
+    .await?;
     info!("=== Test test_stable_balance_per_receive_conversion PASSED ===");
     Ok(())
 }
@@ -500,7 +516,7 @@ async fn test_stable_balance_per_receive_conversion() -> Result<()> {
 async fn test_stable_balance_send_lightning_address() -> Result<()> {
     // Bob built with stable balance ON so the LN-pay below picks up his active
     // token automatically when his sat balance can't cover the payment.
-    let Some((mut alice, bob, token_id)) = mainnet_test_setup(true, true).await? else {
+    let Some((mut alice, bob, token_id, snap)) = mainnet_test_setup(true, true).await? else {
         return Ok(());
     };
     info!("=== Starting test_stable_balance_send_lightning_address ===");
@@ -675,6 +691,14 @@ async fn test_stable_balance_send_lightning_address() -> Result<()> {
         "Alice's sat balance should increase after receiving Token→BTC LNURL-pay"
     );
 
+    log_test_diff(
+        "test_stable_balance_send_lightning_address",
+        &alice,
+        &bob,
+        &token_id,
+        &snap,
+    )
+    .await?;
     info!("=== Test test_stable_balance_send_lightning_address PASSED ===");
     Ok(())
 }
@@ -687,7 +711,7 @@ async fn test_stable_balance_send_lightning_address() -> Result<()> {
 #[test_log::test(tokio::test)]
 async fn test_stable_balance_zz_deactivation() -> Result<()> {
     // Operates entirely on Bob — Alice's balance check is skipped.
-    let Some((_alice, bob, token_id)) = mainnet_test_setup(true, false).await? else {
+    let Some((alice, bob, token_id, snap)) = mainnet_test_setup(true, false).await? else {
         return Ok(());
     };
     info!("=== Starting test_stable_balance_zz_deactivation ===");
@@ -744,6 +768,14 @@ async fn test_stable_balance_zz_deactivation() -> Result<()> {
         "Bob's USDB should be fully converted back to sats after deactivation"
     );
 
+    log_test_diff(
+        "test_stable_balance_zz_deactivation",
+        &alice,
+        &bob,
+        &token_id,
+        &snap,
+    )
+    .await?;
     info!("=== Test test_stable_balance_zz_deactivation PASSED ===");
     Ok(())
 }

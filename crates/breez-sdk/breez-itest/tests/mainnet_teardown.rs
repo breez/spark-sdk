@@ -39,7 +39,7 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
     // Build Bob with the stable token active so send-all-with-conversion engages
     // the path that includes his existing sat balance in the same atomic drain.
     // Teardown doesn't need Alice funded — she's the recipient.
-    let Some((mut alice, bob, token_id)) = mainnet_test_setup(true, false).await? else {
+    let Some((mut alice, bob, token_id, snap)) = mainnet_test_setup(true, false).await? else {
         return Ok(());
     };
 
@@ -218,6 +218,14 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
         .unwrap_or(0);
     assert_eq!(final_tokens, 0, "Bob's tokens should be fully drained");
 
+    log_test_diff(
+        "test_mainnet_teardown_drain_bob_to_alice",
+        &alice,
+        &bob,
+        &token_id,
+        &snap,
+    )
+    .await?;
     info!("Teardown complete: Bob drained to Alice");
     Ok(())
 }

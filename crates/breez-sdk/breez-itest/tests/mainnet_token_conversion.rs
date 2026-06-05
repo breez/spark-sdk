@@ -37,7 +37,7 @@ use tracing::{info, warn};
 /// - Part B: Token → Bitcoin (Bob pays Alice's Lightning invoice using received tokens)
 #[test_log::test(tokio::test)]
 async fn test_token_conversion_success() -> Result<()> {
-    let Some((mut alice, mut bob, token_id)) = mainnet_test_setup(false, true).await? else {
+    let Some((mut alice, mut bob, token_id, snap)) = mainnet_test_setup(false, true).await? else {
         return Ok(());
     };
     info!("=== Starting test_token_conversion_success ===");
@@ -409,6 +409,14 @@ async fn test_token_conversion_success() -> Result<()> {
     );
 
     info!("Part B: Token to Bitcoin conversion completed successfully");
+    log_test_diff(
+        "test_token_conversion_success",
+        &alice,
+        &bob,
+        &token_id,
+        &snap,
+    )
+    .await?;
     info!("=== Test test_token_conversion_success PASSED ===");
     Ok(())
 }
@@ -419,7 +427,9 @@ async fn test_token_conversion_success() -> Result<()> {
 #[test_log::test(tokio::test)]
 async fn test_token_conversion_failure() -> Result<()> {
     // Part A doesn't need Alice funded; Part B checks her balance inline.
-    let Some((alice, bob, token_id)) = mainnet_test_setup(false, false).await? else {
+    // No on-chain sends complete here (Part A's prepare fails; Part B's send
+    // is rejected on insufficient funds), so a `log_test_diff` would be ~0.
+    let Some((alice, bob, token_id, _snap)) = mainnet_test_setup(false, false).await? else {
         return Ok(());
     };
     info!("=== Starting test_token_conversion_failure ===");
@@ -575,7 +585,7 @@ async fn test_token_conversion_failure() -> Result<()> {
 /// for USDB, Alice pays it from BTC with an explicit FromBitcoin conversion.
 #[test_log::test(tokio::test)]
 async fn test_token_conversion_spark_invoice_success() -> Result<()> {
-    let Some((alice, bob, token_id)) = mainnet_test_setup(false, true).await? else {
+    let Some((alice, bob, token_id, snap)) = mainnet_test_setup(false, true).await? else {
         return Ok(());
     };
     info!("=== Starting test_token_conversion_spark_invoice_success ===");
@@ -710,6 +720,14 @@ async fn test_token_conversion_spark_invoice_success() -> Result<()> {
         wait_for_token_balance_increase(&bob.sdk, &token_id, bob_token_balance_before, 120).await?;
     info!("Bob token balance after: {bob_token_balance_after} (was {bob_token_balance_before})");
 
+    log_test_diff(
+        "test_token_conversion_spark_invoice_success",
+        &alice,
+        &bob,
+        &token_id,
+        &snap,
+    )
+    .await?;
     info!("=== Test test_token_conversion_spark_invoice_success PASSED ===");
     Ok(())
 }

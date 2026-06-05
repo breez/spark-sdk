@@ -59,6 +59,7 @@ async fn test_server_mode_bitcoin_to_token() -> Result<()> {
 
     info!("=== Starting test_server_mode_bitcoin_to_token ===");
     let token_id = mainnet_test_token_id();
+    let snap = snapshot_test_pair(&alice, &bob, &token_id).await?;
 
     let to_btc_min_token = tobtc_min_token_input(&alice.sdk, &token_id).await?;
     // 2x the ToBitcoin minimum gives a non-trivial conversion while keeping
@@ -167,6 +168,14 @@ async fn test_server_mode_bitcoin_to_token() -> Result<()> {
         wait_for_token_balance_increase(&bob.sdk, &token_id, bob_token_before, 120).await?;
     info!("Bob token balance after: {bob_token_after} (was {bob_token_before})");
 
+    log_test_diff(
+        "test_server_mode_bitcoin_to_token",
+        &alice,
+        &bob,
+        &token_id,
+        &snap,
+    )
+    .await?;
     info!("=== Test test_server_mode_bitcoin_to_token PASSED ===");
     Ok(())
 }
@@ -189,6 +198,7 @@ async fn test_server_mode_token_to_bitcoin() -> Result<()> {
 
     info!("=== Starting test_server_mode_token_to_bitcoin ===");
     let token_id = mainnet_test_token_id();
+    let snap = snapshot_test_pair(&alice, &bob, &token_id).await?;
 
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
     let bob_token_balance = bob
@@ -322,6 +332,14 @@ async fn test_server_mode_token_to_bitcoin() -> Result<()> {
     .await?;
     info!("Alice sats balance: {alice_sats_after} (was {alice_sats_before})");
 
+    log_test_diff(
+        "test_server_mode_token_to_bitcoin",
+        &alice,
+        &bob,
+        &token_id,
+        &snap,
+    )
+    .await?;
     info!("=== Test test_server_mode_token_to_bitcoin PASSED ===");
     Ok(())
 }

@@ -299,9 +299,114 @@ pub async fn estimate_tobtc_sats_out(
         .amount_out)
 }
 
+/// Pre-test snapshot of Alice + Bob balances + a one-shot pool rate + token
+/// display metadata. Captured by [`mainnet_test_setup`] and consumed by
+/// [`log_test_diff`] to produce a single end-of-test cost line with a
+/// sat-normalized total drain.
+#[derive(Debug, Clone)]
+pub struct MainnetTestSnapshot {
+    pub alice_sats: u64,
+    pub alice_tokens: u128,
+    pub bob_sats: u64,
+    pub bob_tokens: u128,
+    /// Pool rate at snapshot time: how many token base units convert to 1 sat
+    /// via the ToBitcoin pool. `None` if the rate query failed (display will
+    /// fall back to raw deltas without a sat-normalized total).
+    pub tokens_per_sat: Option<u128>,
+    /// Display ticker for the test token (e.g. "USDB"), or "?" if metadata is
+    /// unavailable (token not in either wallet's `token_balances`).
+    pub token_ticker: String,
+    /// Display decimals for the test token (e.g. 6 for USDB), or 0 fallback.
+    pub token_decimals: u32,
+}
+
+/// One-shot pool quote: how many token base units of `token_id` are needed to
+/// produce 1 sat via the ToBitcoin pool. Used by [`snapshot_test_pair`] to
+/// seed the rate field on the snapshot.
+async fn quote_tokens_per_sat(
+    alice: &SdkInstance,
+    bob: &SdkInstance,
+    token_id: &str,
+) -> Result<u128> {
+    // Probe well above the pool minimum so the quote is robust and precise.
+    let probe = tobtc_min_token_input(&alice.sdk, token_id)
+        .await?
+        .saturating_mul(2);
+    let bob_spark = bob
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::SparkAddress,
+        })
+        .await?
+        .payment_request;
+    let sats_out = estimate_tobtc_sats_out(&alice.sdk, &bob_spark, token_id, probe).await?;
+    if sats_out == 0 {
+        anyhow::bail!("ToBitcoin quote returned 0 sats");
+    }
+    Ok(probe / sats_out)
+}
+
+/// Sync + read Alice and Bob, capturing their sat balances and balance of
+/// `token_id`, plus a one-shot pool rate and token display metadata. Used by
+/// [`mainnet_test_setup`] (and any test that builds its wallets through a
+/// different builder, e.g. server mode) to seed [`log_test_diff`].
+pub async fn snapshot_test_pair(
+    alice: &SdkInstance,
+    bob: &SdkInstance,
+    token_id: &str,
+) -> Result<MainnetTestSnapshot> {
+    alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    bob.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let alice_info = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+    let bob_info = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(false),
+        })
+        .await?;
+    let token_balance = |info: &GetInfoResponse| -> u128 {
+        info.token_balances
+            .get(token_id)
+            .map(|b| b.balance)
+            .unwrap_or(0)
+    };
+    let metadata = alice_info
+        .token_balances
+        .get(token_id)
+        .map(|tb| tb.token_metadata.clone())
+        .or_else(|| {
+            bob_info
+                .token_balances
+                .get(token_id)
+                .map(|tb| tb.token_metadata.clone())
+        });
+    let (token_ticker, token_decimals) = metadata
+        .map(|m| (m.ticker, m.decimals))
+        .unwrap_or_else(|| ("?".to_string(), 0));
+    let tokens_per_sat = quote_tokens_per_sat(alice, bob, token_id).await.ok();
+    Ok(MainnetTestSnapshot {
+        alice_sats: alice_info.balance_sats,
+        alice_tokens: token_balance(&alice_info),
+        bob_sats: bob_info.balance_sats,
+        bob_tokens: token_balance(&bob_info),
+        tokens_per_sat,
+        token_ticker,
+        token_decimals,
+    })
+}
+
 /// Standard mainnet-test preamble: gate on env credentials, build Alice and
-/// Bob, optionally skip if Alice has no sats. Returns `None` if the test should
-/// skip (logged with `warn!`); `Some((alice, bob, token_id))` otherwise.
+/// Bob, optionally skip if Alice has no sats, and capture a pre-test balance
+/// snapshot for cost tracking. Returns `None` if the test should skip (logged
+/// with `warn!`); `Some((alice, bob, token_id, snapshot))` otherwise.
+///
+/// Pair with [`log_test_diff`] at the end of the test body to emit a single
+/// per-test cost line covering both wallets + combined totals.
 ///
 /// - `stable_balance_on_bob` — third arg to [`mainnet_alice_bob`].
 /// - `require_alice_funded` — when true, also syncs Alice and returns `None`
@@ -309,30 +414,94 @@ pub async fn estimate_tobtc_sats_out(
 pub async fn mainnet_test_setup(
     stable_balance_on_bob: bool,
     require_alice_funded: bool,
-) -> Result<Option<(SdkInstance, SdkInstance, String)>> {
+) -> Result<Option<(SdkInstance, SdkInstance, String, MainnetTestSnapshot)>> {
     let Some((mnemonic, api_key)) = mainnet_test_creds() else {
         warn!("Skipping mainnet test: set MAINNET_TEST_MNEMONIC and BREEZ_API_KEY to run it");
         return Ok(None);
     };
     let (alice, bob) = mainnet_alice_bob(&mnemonic, &api_key, stable_balance_on_bob).await?;
 
-    if require_alice_funded {
-        alice.sdk.sync_wallet(SyncWalletRequest {}).await?;
-        let balance = alice
-            .sdk
-            .get_info(GetInfoRequest {
-                ensure_synced: Some(false),
-            })
-            .await?
-            .balance_sats;
-        if balance == 0 {
-            warn!("Skipping mainnet test: test account (Alice) has 0 sats");
-            return Ok(None);
-        }
+    let token_id = mainnet_test_token_id();
+    let snapshot = snapshot_test_pair(&alice, &bob, &token_id).await?;
+
+    if require_alice_funded && snapshot.alice_sats == 0 {
+        warn!("Skipping mainnet test: test account (Alice) has 0 sats");
+        return Ok(None);
     }
 
-    let token_id = mainnet_test_token_id();
-    Ok(Some((alice, bob, token_id)))
+    Ok(Some((alice, bob, token_id, snapshot)))
+}
+
+/// Format a signed token base-unit amount with the token's `decimals` and
+/// `ticker`, e.g. `+0.999342 USDB` or `-2.890307 USDB`. Falls back to raw base
+/// units when `decimals == 0`.
+fn format_token_amount(amount: i128, decimals: u32, ticker: &str) -> String {
+    if decimals == 0 {
+        return format!("{amount:+} {ticker}");
+    }
+    let sign = if amount < 0 { '-' } else { '+' };
+    let abs = amount.unsigned_abs();
+    let divisor = 10_u128.pow(decimals);
+    let int = abs / divisor;
+    let frac = abs % divisor;
+    let width = decimals as usize;
+    format!("{sign}{int}.{frac:0width$} {ticker}")
+}
+
+/// Log the per-wallet + combined sat/token deltas a test caused, normalized to
+/// a single `net Δ ≈ N sats` headline using the pool rate captured by
+/// [`mainnet_test_setup`]. The combined total captures actual drain on the
+/// funder (fees + anything stranded in pools); Alice and Bob per-wallet deltas
+/// show what was shifted between them.
+pub async fn log_test_diff(
+    test_name: &str,
+    alice: &SdkInstance,
+    bob: &SdkInstance,
+    token_id: &str,
+    pre: &MainnetTestSnapshot,
+) -> Result<()> {
+    let post = snapshot_test_pair(alice, bob, token_id).await?;
+    let alice_sats = i128::from(post.alice_sats) - i128::from(pre.alice_sats);
+    #[allow(clippy::cast_possible_wrap)]
+    let alice_tokens = post.alice_tokens as i128 - pre.alice_tokens as i128;
+    let bob_sats = i128::from(post.bob_sats) - i128::from(pre.bob_sats);
+    #[allow(clippy::cast_possible_wrap)]
+    let bob_tokens = post.bob_tokens as i128 - pre.bob_tokens as i128;
+    let total_sats = alice_sats + bob_sats;
+    let total_tokens = alice_tokens + bob_tokens;
+
+    let ticker = pre.token_ticker.as_str();
+    let decimals = pre.token_decimals;
+    let alice_tok = format_token_amount(alice_tokens, decimals, ticker);
+    let bob_tok = format_token_amount(bob_tokens, decimals, ticker);
+    let total_tok = format_token_amount(total_tokens, decimals, ticker);
+
+    let (headline, combined_extra, rate_str) = match pre.tokens_per_sat {
+        Some(rate) if rate > 0 => {
+            #[allow(clippy::cast_possible_wrap)]
+            let rate_i = rate as i128;
+            let token_sats = total_tokens / rate_i;
+            let net = total_sats + token_sats;
+            (
+                format!("net Δ ≈ {net:+} sats"),
+                format!(" (≈ {token_sats:+} sats)"),
+                format!("rate ≈ {rate} {ticker}-units/sat"),
+            )
+        }
+        _ => (
+            "net Δ N/A".to_string(),
+            String::new(),
+            "rate unavailable".to_string(),
+        ),
+    };
+
+    info!(
+        "[mainnet-cost] {test_name}: {headline} | \
+         alice {alice_sats:+} sats {alice_tok} | \
+         bob {bob_sats:+} sats {bob_tok} | \
+         combined {total_sats:+} sats {total_tok}{combined_extra} | {rate_str}"
+    );
+    Ok(())
 }
 
 /// Ensures Bob holds at least `min_required` units of `token_id`. If he
