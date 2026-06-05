@@ -4,7 +4,7 @@ use breez_sdk_spark::passkey::{
     PasskeyAvailability, PasskeyClient, PasskeyCredential, PrfProvider, PrfProviderError,
     RegisterRequest, SignInRequest, SignInResponse, Wallet,
 };
-use breez_sdk_spark::{ConnectRequest, Network, connect, default_config};
+use breez_sdk_spark::{connect, default_config, ConnectRequest, Network};
 use std::sync::Arc;
 
 // ANCHOR: implement-prf-provider

@@ -1,5 +1,5 @@
-use breez_sdk_spark::*;
 use anyhow::Result;
+use breez_sdk_spark::*;
 use log::info;
 
 async fn withdraw(sdk: &BreezSdk) -> Result<()> {

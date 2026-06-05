@@ -88,9 +88,7 @@ impl EventListener for SdkEventListener {
             SdkEvent::AutoOptimization { optimization_event } => {
                 // An auto-optimization event occurred
             }
-            SdkEvent::LightningAddressChanged {
-                lightning_address,
-            } => {
+            SdkEvent::LightningAddressChanged { lightning_address } => {
                 // The lightning address has changed
             }
         }
@@ -146,4 +144,3 @@ pub(crate) async fn disconnect(sdk: &BreezSdk) -> Result<()> {
     Ok(())
 }
 // ANCHOR_END: disconnect
-
