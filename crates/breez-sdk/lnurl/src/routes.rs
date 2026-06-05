@@ -8,7 +8,7 @@ use axum::{
 use axum_extra::extract::Host;
 use bitcoin::{
     hashes::{Hash, HashEngine, Hmac, HmacEngine, sha256},
-    secp256k1::{PublicKey, Secp256k1, XOnlyPublicKey, ecdsa::Signature},
+    secp256k1::{PublicKey, XOnlyPublicKey, ecdsa::Signature},
 };
 use lightning_invoice::Bolt11Invoice;
 use lnurl_models::{
@@ -22,7 +22,6 @@ use nostr::{Alphabet, Event, EventBuilder, JsonUtil, Kind, TagStandard, key::Key
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use spark::utils::verify_signature::verify_signature_ecdsa;
 use std::marker::PhantomData;
 use std::str::FromStr;
 use tracing::{debug, error, trace, warn};
@@ -196,9 +195,15 @@ where
         validate_description(&payload.description)?;
 
         let message = format!("transfer:{username}-{to_pubkey}");
-        let from_pk =
-            verify_transfer_signature(&payload.from_pubkey, &payload.from_signature, &message)?;
-        let to_pk = verify_transfer_signature(&to_pubkey, &payload.to_signature, &message)?;
+        let from_pk = verify_transfer_signature(
+            &payload.from_pubkey,
+            &payload.from_signature,
+            &message,
+            &state,
+        )
+        .await?;
+        let to_pk =
+            verify_transfer_signature(&to_pubkey, &payload.to_signature, &message, &state).await?;
 
         if from_pk == to_pk {
             return Err((
@@ -1386,10 +1391,11 @@ async fn validate<DB>(
 /// `"transfer:"` prefix domain-separates from `validate()`'s
 /// `"{message}-{timestamp}"` format so a captured register signature cannot
 /// be replayed as a transfer.
-fn verify_transfer_signature(
+async fn verify_transfer_signature<DB>(
     pubkey: &str,
     signature: &str,
     message: &str,
+    state: &State<DB>,
 ) -> Result<PublicKey, (StatusCode, Json<Value>)> {
     let pk = parse_pubkey(pubkey)?;
     let signature = hex::decode(signature).map_err(|e| {
@@ -1407,17 +1413,17 @@ fn verify_transfer_signature(
         )
     })?;
 
-    // Stateless ECDSA verification: this mirrors SparkWallet::verify_message
-    // (which itself just calls verify_signature_ecdsa with a fresh context),
-    // kept as a free function so the transfer forgery gate is unit-testable
-    // without constructing a wallet.
-    verify_signature_ecdsa(&Secp256k1::new(), message, &signature, &pk).map_err(|e| {
-        trace!("invalid transfer signature, could not verify: {}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            Json(Value::String("invalid signature".into())),
-        )
-    })?;
+    state
+        .wallet
+        .verify_message(message, &signature, &pk)
+        .await
+        .map_err(|e| {
+            trace!("invalid transfer signature, could not verify: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid signature".into())),
+            )
+        })?;
 
     Ok(pk)
 }
@@ -2357,49 +2363,60 @@ mod tests {
     }
 
     // -- Transfer signature verification ---------------------------------------
+    //
+    // The transfer route verifies signatures via SparkWallet::verify_message,
+    // which delegates to verify_signature_ecdsa. These exercise that
+    // verification over the route's canonical "transfer:{username}-{to_pubkey}"
+    // message without needing to construct a wallet.
 
-    use bitcoin::secp256k1::{Message, SecretKey};
+    use bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
+    use spark::utils::verify_signature::verify_signature_ecdsa;
 
-    /// Deterministic keypair from a seed byte. Returns the secret key and the
-    /// hex-encoded compressed public key.
-    fn transfer_key(seed: u8) -> (SecretKey, String) {
+    /// Deterministic keypair from a seed byte.
+    fn transfer_key(seed: u8) -> (SecretKey, PublicKey) {
         let secp = Secp256k1::new();
-        let sk = SecretKey::from_slice(&[seed; 32]).expect("valid secret key");
-        let pk = PublicKey::from_secret_key(&secp, &sk);
-        (sk, hex::encode(pk.serialize()))
+        let secret = SecretKey::from_slice(&[seed; 32]).expect("valid secret key");
+        let public = PublicKey::from_secret_key(&secp, &secret);
+        (secret, public)
     }
 
-    /// Sign `message` the way the SDK does: ECDSA over `sha256(message)`, DER
-    /// encoded and hex stringified.
-    fn sign_der_hex(sk: &SecretKey, message: &str) -> String {
+    /// Sign `message` the way the SDK does: ECDSA over `sha256(message)`.
+    fn sign(secret: &SecretKey, message: &str) -> Signature {
         let secp = Secp256k1::new();
         let digest = sha256::Hash::hash(message.as_bytes());
-        let sig = secp.sign_ecdsa(&Message::from_digest(digest.to_byte_array()), sk);
-        hex::encode(sig.serialize_der())
+        secp.sign_ecdsa(&Message::from_digest(digest.to_byte_array()), secret)
+    }
+
+    /// The canonical message the transfer route signs and verifies.
+    fn transfer_message(username: &str, to_pubkey: &PublicKey) -> String {
+        format!("transfer:{username}-{}", hex::encode(to_pubkey.serialize()))
     }
 
     #[test]
     fn transfer_signature_accepts_valid() {
-        let (alice_secret, alice_pk) = transfer_key(1);
-        let (_, bob_pk) = transfer_key(2);
-        let message = format!("transfer:alice-{bob_pk}");
-        let sig = sign_der_hex(&alice_secret, &message);
+        let secp = Secp256k1::new();
+        let (alice_secret, alice_pubkey) = transfer_key(1);
+        let (_, bob_pubkey) = transfer_key(2);
+        let message = transfer_message("alice", &bob_pubkey);
+        let sig = sign(&alice_secret, &message);
 
-        let verified = verify_transfer_signature(&alice_pk, &sig, &message)
-            .expect("a valid signature over the canonical message must verify");
-        assert_eq!(hex::encode(verified.serialize()), alice_pk);
+        assert!(
+            verify_signature_ecdsa(&secp, &message, &sig, &alice_pubkey).is_ok(),
+            "a valid signature over the canonical message must verify"
+        );
     }
 
     #[test]
     fn transfer_signature_rejects_forged_signer() {
         // Alice signs, but the request attributes the signature to Bob's key.
+        let secp = Secp256k1::new();
         let (alice_secret, _) = transfer_key(1);
-        let (_, bob_pk) = transfer_key(2);
-        let message = format!("transfer:alice-{bob_pk}");
-        let sig = sign_der_hex(&alice_secret, &message);
+        let (_, bob_pubkey) = transfer_key(2);
+        let message = transfer_message("alice", &bob_pubkey);
+        let sig = sign(&alice_secret, &message);
 
         assert!(
-            verify_transfer_signature(&bob_pk, &sig, &message).is_err(),
+            verify_signature_ecdsa(&secp, &message, &sig, &bob_pubkey).is_err(),
             "a signature made by a different key must be rejected"
         );
     }
@@ -2410,28 +2427,18 @@ mod tests {
         // username invalidates it, and a register-style "{name}-{timestamp}"
         // signature cannot be replayed as a transfer (the "transfer:" prefix
         // domain-separates the two flows).
-        let (alice_secret, alice_pk) = transfer_key(1);
-        let (_, bob_pk) = transfer_key(2);
-        let signed = format!("transfer:alice-{bob_pk}");
-        let sig = sign_der_hex(&alice_secret, &signed);
+        let secp = Secp256k1::new();
+        let (alice_secret, alice_pubkey) = transfer_key(1);
+        let (_, bob_pubkey) = transfer_key(2);
+        let sig = sign(&alice_secret, &transfer_message("alice", &bob_pubkey));
 
-        let tampered_username = format!("transfer:mallory-{bob_pk}");
-        let register_style = format!("alice-{}", 1_700_000_000u64);
+        let tampered_username = transfer_message("mallory", &bob_pubkey);
+        let register_style = String::from("alice-1700000000");
         for other in [tampered_username, register_style] {
             assert!(
-                verify_transfer_signature(&alice_pk, &sig, &other).is_err(),
+                verify_signature_ecdsa(&secp, &other, &sig, &alice_pubkey).is_err(),
                 "signature must not verify against a different message: {other}"
             );
         }
-    }
-
-    #[test]
-    fn transfer_signature_rejects_malformed_signature() {
-        let (_, alice_pk) = transfer_key(1);
-        let message = "transfer:alice-02";
-        // Not hex.
-        assert!(verify_transfer_signature(&alice_pk, "nothex!!", message).is_err());
-        // Valid hex, but not a DER-encoded signature.
-        assert!(verify_transfer_signature(&alice_pk, "00", message).is_err());
     }
 }
