@@ -26,12 +26,21 @@ use crate::{
     },
 };
 
-/// Statuses where a node can still contribute to an exit chain. `OnChain` is
-/// included because the SO marks a node `ON_CHAIN` once its raw or direct tx
-/// confirms, which is a normal in-progress state for an exit.
-const EXIT_CHAIN_STATUSES: [TreeNodeStatus; 3] = [
+/// Statuses where a node can still contribute to an exit chain.
+///
+/// `OnChain` is included because the SO marks a node `ON_CHAIN` once its raw
+/// or direct tx confirms, which is a normal in-progress state for an exit.
+///
+/// `SplitLocked` is included because the SO sets it permanently on the
+/// zero-timelock intermediate node introduced by a timelock renewal (see
+/// the SO's `finalizeRenewNodeTimelockDB` / `finalizeRenewNodeZeroTimelockDB`).
+/// Without it, any leaf that has been renewed has a `SplitLocked` parent that
+/// silently terminates the walk, leaving the Leaf TX referencing an input
+/// that is not in the exit package.
+const EXIT_CHAIN_STATUSES: [TreeNodeStatus; 4] = [
     TreeNodeStatus::Available,
     TreeNodeStatus::Splitted,
+    TreeNodeStatus::SplitLocked,
     TreeNodeStatus::OnChain,
 ];
 
@@ -794,6 +803,30 @@ mod tests {
                 .unwrap();
 
             assert_eq!(requested, vec![root.id.clone()]);
+            assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
+            assert_eq!(termination, ExitChainTermination::ReachedRoot);
+        }
+
+        // The renewal scenario: the SO inserts a SplitLocked parent above a
+        // renewed leaf and never advances it. The walk must include the
+        // SplitLocked parent and continue up to the root, otherwise the Leaf
+        // TX is unbroadcastable.
+        #[macros::async_test_all]
+        async fn walks_through_split_locked_parent() {
+            let root = node(ROOT, None, TreeNodeStatus::Available);
+            let mid = node(MID, Some(ROOT), TreeNodeStatus::SplitLocked);
+            let leaf = node(LEAF, Some(MID), TreeNodeStatus::Available);
+
+            let mut map: HashMap<TreeNodeId, TreeNode> = [&root, &mid, &leaf]
+                .into_iter()
+                .map(|n| (n.id.clone(), n.clone()))
+                .collect();
+
+            let (chain, termination) =
+                super::super::build_exit_chain(leaf, &mut map, async |_ids| Ok(Vec::new()))
+                    .await
+                    .unwrap();
+
             assert_eq!(chain_ids(&chain), vec![ROOT, MID, LEAF]);
             assert_eq!(termination, ExitChainTermination::ReachedRoot);
         }
