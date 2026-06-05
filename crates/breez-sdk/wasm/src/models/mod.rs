@@ -1078,21 +1078,21 @@ pub struct RegisterLightningAddressRequest {
     pub description: Option<String>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::LightningAddressTransferAuthorization)]
-pub struct LightningAddressTransferAuthorization {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferAuthorization)]
+pub struct TransferAuthorization {
     pub username: String,
     pub pubkey: String,
     pub signature: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::AuthorizeLightningAddressTransferRequest)]
-pub struct AuthorizeLightningAddressTransferRequest {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AuthorizeTransferRequest)]
+pub struct AuthorizeTransferRequest {
     pub transferee_pubkey: String,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::ClaimLightningAddressTransferRequest)]
-pub struct ClaimLightningAddressTransferRequest {
-    pub authorization: LightningAddressTransferAuthorization,
+#[macros::extern_wasm_bindgen(breez_sdk_spark::AcceptTransferRequest)]
+pub struct AcceptTransferRequest {
+    pub authorization: TransferAuthorization,
     pub description: Option<String>,
 }
 

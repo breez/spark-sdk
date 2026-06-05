@@ -1626,11 +1626,11 @@ pub struct RegisterLightningAddressRequest {
 /// Authorization from the current owner granting a specific new owner the
 /// right to take over a username. Produced by
 /// [`BreezSdk::authorize_lightning_address_transfer`] and handed to the new
-/// owner, who passes it to [`BreezSdk::claim_lightning_address_transfer`]. It
-/// fully describes the transfer, so the new owner needs nothing else to claim.
+/// owner, who passes it to [`BreezSdk::accept_lightning_address_transfer`]. It
+/// fully describes the transfer, so the new owner needs nothing else to accept.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LightningAddressTransferAuthorization {
+pub struct TransferAuthorization {
     /// The username being handed over.
     pub username: String,
     /// The current owner's public key.
@@ -1644,20 +1644,20 @@ pub struct LightningAddressTransferAuthorization {
 /// `transferee_pubkey`.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthorizeLightningAddressTransferRequest {
+pub struct AuthorizeTransferRequest {
     /// The new owner's identity public key.
     pub transferee_pubkey: String,
 }
 
-/// Request for [`BreezSdk::claim_lightning_address_transfer`]. Called by the
+/// Request for [`BreezSdk::accept_lightning_address_transfer`]. Called by the
 /// *new owner* to complete the takeover using the authorization produced by
 /// the current owner.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClaimLightningAddressTransferRequest {
+pub struct AcceptTransferRequest {
     /// Authorization produced by the current owner via
     /// [`BreezSdk::authorize_lightning_address_transfer`].
-    pub authorization: LightningAddressTransferAuthorization,
+    pub authorization: TransferAuthorization,
     /// Description for the address. Defaults to `"Pay to {username}@{domain}"`.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub description: Option<String>,

@@ -73,17 +73,17 @@ A user who already owns a registered Lightning address can hand it over to a dif
 
 The flow has two steps, one method each, run by the current owner and then the new owner:
 
-**Step 1: Current owner (pubkey A)** calls {{#name authorize_lightning_address_transfer}} with the new owner's {{#name identity_pubkey}} (which the new owner obtains via {{#name get_info}}). It returns a {{#name LightningAddressTransferAuthorization}} (carrying the `username`, A's `pubkey`, and `signature`), which grants B the right to take over the username.
+**Step 1: Current owner (pubkey A)** calls {{#name authorize_lightning_address_transfer}} with the new owner's {{#name identity_pubkey}} (which the new owner obtains via {{#name get_info}}). It returns a {{#name TransferAuthorization}} (carrying the `username`, A's `pubkey`, and `signature`), which grants B the right to take over the username.
 
 > **Note:** Both owners sign the same canonical message (`"transfer:{username}-{pubkey_b}"`) with no timestamp, so A's authorization is a persistent capability for this specific (address, B) pair. Only B can actually submit the transfer, because the server also requires B's own signature over the same bytes; A's authorization alone doesn't let any third party move the username.
 
 {{#tabs lightning_address:authorize-lightning-address-transfer}}
 
-The returned {{#name LightningAddressTransferAuthorization}} is then handed to the new owner over any channel: typically passed directly between two SDK instances in the same app, or shared across devices (e.g. as a QR code or link). It already carries the username, so B needs nothing else to claim.
+The returned {{#name TransferAuthorization}} is then handed to the new owner over any channel. In an in-app migration, where a user moves their username from an old wallet to a new one, the app holds both SDK instances and passes it directly between them; to hand the username to a separate wallet, share it as a QR code or link. It already carries the username, so B needs nothing else to accept.
 
-**Step 2: New owner (pubkey B)** calls {{#name claim_lightning_address_transfer}}, passing A's authorization. The SDK submits the transfer to the server which, in one transaction, verifies B's request signature, verifies A's authorization, and transfers ownership, returning the newly-owned {{#name LightningAddressInfo}}.
+**Step 2: New owner (pubkey B)** calls {{#name accept_lightning_address_transfer}}, passing A's authorization. The SDK submits the transfer to the server which, in one transaction, verifies B's request signature, verifies A's authorization, and transfers ownership, returning the newly-owned {{#name LightningAddressInfo}}.
 
-{{#tabs lightning_address:claim-lightning-address-transfer}}
+{{#tabs lightning_address:accept-lightning-address-transfer}}
 
 If pubkey B had a different username registered, it is replaced by the transferred one. The server rejects the call if pubkey A does not currently own the username (e.g. the name was already transferred to a third pubkey).
 

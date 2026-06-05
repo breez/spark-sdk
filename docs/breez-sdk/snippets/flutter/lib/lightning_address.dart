@@ -60,13 +60,13 @@ Future<(String, String, String, String, String)> getLightningAddress(
 }
 
 // Step 1: run by the current owner.
-Future<LightningAddressTransferAuthorization> authorizeLightningAddressTransfer(
+Future<TransferAuthorization> authorizeLightningAddressTransfer(
   BreezSdk currentOwnerSdk,
   String transfereePubkey,
 ) async {
   // ANCHOR: authorize-lightning-address-transfer
   final authorization = await currentOwnerSdk.authorizeLightningAddressTransfer(
-    request: AuthorizeLightningAddressTransferRequest(
+    request: AuthorizeTransferRequest(
       transfereePubkey: transfereePubkey,
     ),
   );
@@ -75,15 +75,15 @@ Future<LightningAddressTransferAuthorization> authorizeLightningAddressTransfer(
 }
 
 // Step 2: run by the new owner with the authorization from step 1.
-Future<(String, String, String)> claimLightningAddressTransfer(
+Future<(String, String, String)> acceptLightningAddressTransfer(
   BreezSdk newOwnerSdk,
-  LightningAddressTransferAuthorization authorization,
+  TransferAuthorization authorization,
 ) async {
   final description = 'My Lightning Address';
 
-  // ANCHOR: claim-lightning-address-transfer
-  final address = await newOwnerSdk.claimLightningAddressTransfer(
-    request: ClaimLightningAddressTransferRequest(
+  // ANCHOR: accept-lightning-address-transfer
+  final address = await newOwnerSdk.acceptLightningAddressTransfer(
+    request: AcceptTransferRequest(
       authorization: authorization,
       description: description,
     ),
@@ -91,7 +91,7 @@ Future<(String, String, String)> claimLightningAddressTransfer(
   final lightningAddress = address.lightningAddress;
   final lnurlUrl = address.lnurl.url;
   final lnurlBech32 = address.lnurl.bech32;
-  // ANCHOR_END: claim-lightning-address-transfer
+  // ANCHOR_END: accept-lightning-address-transfer
   return (lightningAddress, lnurlUrl, lnurlBech32);
 }
 

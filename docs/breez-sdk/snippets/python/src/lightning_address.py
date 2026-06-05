@@ -1,10 +1,10 @@
 from breez_sdk_spark import (
-    AuthorizeLightningAddressTransferRequest,
+    AuthorizeTransferRequest,
     BreezSdk,
     CheckLightningAddressRequest,
-    ClaimLightningAddressTransferRequest,
+    AcceptTransferRequest,
     GetPaymentRequest,
-    LightningAddressTransferAuthorization,
+    TransferAuthorization,
     Network,
     PaymentDetails,
     RegisterLightningAddressRequest,
@@ -64,9 +64,9 @@ async def get_lightning_address(sdk: BreezSdk):
 async def authorize_lightning_address_transfer(
     current_owner_sdk: BreezSdk,
     transferee_pubkey: str,
-) -> LightningAddressTransferAuthorization:
+) -> TransferAuthorization:
     # ANCHOR: authorize-lightning-address-transfer
-    request = AuthorizeLightningAddressTransferRequest(
+    request = AuthorizeTransferRequest(
         transferee_pubkey=transferee_pubkey
     )
 
@@ -76,23 +76,23 @@ async def authorize_lightning_address_transfer(
 
 
 # Step 2: run by the new owner with the authorization from step 1.
-async def claim_lightning_address_transfer(
+async def accept_lightning_address_transfer(
     new_owner_sdk: BreezSdk,
-    authorization: LightningAddressTransferAuthorization,
+    authorization: TransferAuthorization,
 ):
     description = "My Lightning Address"
 
-    # ANCHOR: claim-lightning-address-transfer
-    request = ClaimLightningAddressTransferRequest(
+    # ANCHOR: accept-lightning-address-transfer
+    request = AcceptTransferRequest(
         authorization=authorization,
         description=description
     )
 
-    address_info = await new_owner_sdk.claim_lightning_address_transfer(request)
+    address_info = await new_owner_sdk.accept_lightning_address_transfer(request)
     lightning_address = address_info.lightning_address
     lnurl_url = address_info.lnurl.url
     lnurl_bech32 = address_info.lnurl.bech32
-    # ANCHOR_END: claim-lightning-address-transfer
+    # ANCHOR_END: accept-lightning-address-transfer
     return address_info
 
 

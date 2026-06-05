@@ -929,21 +929,21 @@ pub struct _RegisterLightningAddressRequest {
     pub description: Option<String>,
 }
 
-#[frb(mirror(LightningAddressTransferAuthorization))]
-pub struct _LightningAddressTransferAuthorization {
+#[frb(mirror(TransferAuthorization))]
+pub struct _TransferAuthorization {
     pub username: String,
     pub pubkey: String,
     pub signature: String,
 }
 
-#[frb(mirror(AuthorizeLightningAddressTransferRequest))]
-pub struct _AuthorizeLightningAddressTransferRequest {
+#[frb(mirror(AuthorizeTransferRequest))]
+pub struct _AuthorizeTransferRequest {
     pub transferee_pubkey: String,
 }
 
-#[frb(mirror(ClaimLightningAddressTransferRequest))]
-pub struct _ClaimLightningAddressTransferRequest {
-    pub authorization: LightningAddressTransferAuthorization,
+#[frb(mirror(AcceptTransferRequest))]
+pub struct _AcceptTransferRequest {
+    pub authorization: TransferAuthorization,
     pub description: Option<String>,
 }
 

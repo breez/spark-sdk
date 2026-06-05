@@ -180,18 +180,18 @@ impl BreezSdk {
 
     pub async fn authorize_lightning_address_transfer(
         &self,
-        request: AuthorizeLightningAddressTransferRequest,
-    ) -> Result<LightningAddressTransferAuthorization, SdkError> {
+        request: AuthorizeTransferRequest,
+    ) -> Result<TransferAuthorization, SdkError> {
         self.inner
             .authorize_lightning_address_transfer(request)
             .await
     }
 
-    pub async fn claim_lightning_address_transfer(
+    pub async fn accept_lightning_address_transfer(
         &self,
-        request: ClaimLightningAddressTransferRequest,
+        request: AcceptTransferRequest,
     ) -> Result<LightningAddressInfo, SdkError> {
-        self.inner.claim_lightning_address_transfer(request).await
+        self.inner.accept_lightning_address_transfer(request).await
     }
 
     pub async fn delete_lightning_address(&self) -> Result<(), SdkError> {

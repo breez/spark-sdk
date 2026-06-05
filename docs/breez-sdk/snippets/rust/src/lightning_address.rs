@@ -1,7 +1,7 @@
 use breez_sdk_spark::{
-    default_config, AuthorizeLightningAddressTransferRequest, BreezSdk,
-    CheckLightningAddressRequest, ClaimLightningAddressTransferRequest, Config, GetPaymentRequest,
-    LightningAddressTransferAuthorization, Network, PaymentDetails, RegisterLightningAddressRequest,
+    default_config, AcceptTransferRequest, AuthorizeTransferRequest, BreezSdk,
+    CheckLightningAddressRequest, Config, GetPaymentRequest, Network, PaymentDetails,
+    RegisterLightningAddressRequest, TransferAuthorization,
 };
 
 pub fn configure_lightning_address() -> Config {
@@ -25,7 +25,9 @@ pub async fn check_lightning_address_availability(sdk: &BreezSdk) -> anyhow::Res
     Ok(is_available)
 }
 
-pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(String, String, String)> {
+pub async fn register_lightning_address(
+    sdk: &BreezSdk,
+) -> anyhow::Result<(String, String, String)> {
     // Define the parameters
     let username = "a username".to_string();
     let description = Some("Lightning address description".to_string());
@@ -48,10 +50,10 @@ pub async fn register_lightning_address(sdk: &BreezSdk) -> anyhow::Result<(Strin
 pub async fn authorize_lightning_address_transfer(
     current_owner_sdk: &BreezSdk,
     transferee_pubkey: &str,
-) -> anyhow::Result<LightningAddressTransferAuthorization> {
+) -> anyhow::Result<TransferAuthorization> {
     // ANCHOR: authorize-lightning-address-transfer
     let authorization = current_owner_sdk
-        .authorize_lightning_address_transfer(AuthorizeLightningAddressTransferRequest {
+        .authorize_lightning_address_transfer(AuthorizeTransferRequest {
             transferee_pubkey: transferee_pubkey.to_string(),
         })
         .await?;
@@ -60,15 +62,15 @@ pub async fn authorize_lightning_address_transfer(
 }
 
 // Step 2: run by the new owner with the authorization from step 1.
-pub async fn claim_lightning_address_transfer(
+pub async fn accept_lightning_address_transfer(
     new_owner_sdk: &BreezSdk,
-    authorization: LightningAddressTransferAuthorization,
+    authorization: TransferAuthorization,
 ) -> anyhow::Result<(String, String, String)> {
     let description = Some("Lightning address description".to_string());
 
-    // ANCHOR: claim-lightning-address-transfer
+    // ANCHOR: accept-lightning-address-transfer
     let address = new_owner_sdk
-        .claim_lightning_address_transfer(ClaimLightningAddressTransferRequest {
+        .accept_lightning_address_transfer(AcceptTransferRequest {
             authorization,
             description,
         })
@@ -76,7 +78,7 @@ pub async fn claim_lightning_address_transfer(
     let lightning_address = address.lightning_address;
     let lnurl_url = address.lnurl.url;
     let lnurl_bech32 = address.lnurl.bech32;
-    // ANCHOR_END: claim-lightning-address-transfer
+    // ANCHOR_END: accept-lightning-address-transfer
     Ok((lightning_address, lnurl_url, lnurl_bech32))
 }
 

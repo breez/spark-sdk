@@ -1204,7 +1204,7 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
     // 2. Alice authorizes the transfer to Bob's pubkey.
     let authorization = alice
         .sdk
-        .authorize_lightning_address_transfer(AuthorizeLightningAddressTransferRequest {
+        .authorize_lightning_address_transfer(AuthorizeTransferRequest {
             transferee_pubkey: bob_pubkey.clone(),
         })
         .await?;
@@ -1214,7 +1214,7 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
     // 3. Bob claims the transfer with the authorization Alice produced.
     let transfer_response = bob
         .sdk
-        .claim_lightning_address_transfer(ClaimLightningAddressTransferRequest {
+        .accept_lightning_address_transfer(AcceptTransferRequest {
             authorization: authorization.clone(),
             description: Some("Bob's address now".to_string()),
         })
@@ -1239,7 +1239,7 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
     //    Alice's cache, which still holds her pre-transfer registration.
     let replay = bob
         .sdk
-        .claim_lightning_address_transfer(ClaimLightningAddressTransferRequest {
+        .accept_lightning_address_transfer(AcceptTransferRequest {
             authorization,
             description: Some("Replay".to_string()),
         })

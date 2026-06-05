@@ -59,10 +59,10 @@ class LightningAddress {
     suspend fun authorizeLightningAddressTransfer(
         currentOwnerSdk: BreezSdk,
         transfereePubkey: String,
-    ): LightningAddressTransferAuthorization {
+    ): TransferAuthorization {
         // ANCHOR: authorize-lightning-address-transfer
         val authorization = currentOwnerSdk.authorizeLightningAddressTransfer(
-            AuthorizeLightningAddressTransferRequest(
+            AuthorizeTransferRequest(
                 transfereePubkey = transfereePubkey,
             )
         )
@@ -71,15 +71,15 @@ class LightningAddress {
     }
 
     // Step 2: run by the new owner with the authorization from step 1.
-    suspend fun claimLightningAddressTransfer(
+    suspend fun acceptLightningAddressTransfer(
         newOwnerSdk: BreezSdk,
-        authorization: LightningAddressTransferAuthorization,
+        authorization: TransferAuthorization,
     ) {
         val description = "My Lightning Address"
 
-        // ANCHOR: claim-lightning-address-transfer
-        val address = newOwnerSdk.claimLightningAddressTransfer(
-            ClaimLightningAddressTransferRequest(
+        // ANCHOR: accept-lightning-address-transfer
+        val address = newOwnerSdk.acceptLightningAddressTransfer(
+            AcceptTransferRequest(
                 authorization = authorization,
                 description = description,
             )
@@ -87,7 +87,7 @@ class LightningAddress {
         val lightningAddress = address.lightningAddress
         val lnurlUrl = address.lnurl.url
         val lnurlBech32 = address.lnurl.bech32
-        // ANCHOR_END: claim-lightning-address-transfer
+        // ANCHOR_END: accept-lightning-address-transfer
     }
 
     suspend fun deleteLightningAddress(sdk: BreezSdk) {
