@@ -1211,7 +1211,7 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
     assert_eq!(authorization.pubkey, alice_pubkey);
     assert_eq!(authorization.username, username);
 
-    // 3. Bob claims the transfer with the authorization Alice produced.
+    // 3. Bob accepts the transfer with the authorization Alice produced.
     let transfer_response = bob
         .sdk
         .accept_lightning_address_transfer(AcceptTransferRequest {
@@ -1250,5 +1250,60 @@ async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Resul
     );
 
     info!("=== Test test_12_transfer_lightning_address PASSED ===");
+    Ok(())
+}
+
+/// A transfer whose new owner is the current owner (`from_pk == to_pk`) must be
+/// rejected by the server, not silently succeed.
+#[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
+#[test_log::test(tokio::test)]
+async fn test_13_transfer_to_self_rejected(#[case] use_postgres: bool) -> Result<()> {
+    info!("=== Starting test_13_transfer_to_self_rejected ===");
+
+    let lnurl = Arc::new(setup_lnurl(use_postgres).await);
+    let alice = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-self-transfer-alice").await?;
+
+    let username = "selftransfer";
+    alice
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: None,
+        })
+        .await?;
+
+    let alice_pubkey = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?
+        .identity_pubkey;
+
+    // Alice authorizes a transfer to her own pubkey and then tries to accept
+    // it. Both signatures are made by Alice, so the server sees from_pk ==
+    // to_pk and must reject the transfer.
+    let authorization = alice
+        .sdk
+        .authorize_lightning_address_transfer(AuthorizeTransferRequest {
+            transferee_pubkey: alice_pubkey,
+        })
+        .await?;
+
+    let result = alice
+        .sdk
+        .accept_lightning_address_transfer(AcceptTransferRequest {
+            authorization,
+            description: None,
+        })
+        .await;
+    assert!(
+        result.is_err(),
+        "transferring a username to its current owner must be rejected"
+    );
+
+    info!("=== Test test_13_transfer_to_self_rejected PASSED ===");
     Ok(())
 }
