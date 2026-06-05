@@ -929,6 +929,24 @@ pub struct _RegisterLightningAddressRequest {
     pub description: Option<String>,
 }
 
+#[frb(mirror(TransferAuthorization))]
+pub struct _TransferAuthorization {
+    pub username: String,
+    pub pubkey: String,
+    pub signature: String,
+}
+
+#[frb(mirror(AuthorizeTransferRequest))]
+pub struct _AuthorizeTransferRequest {
+    pub transferee_pubkey: String,
+}
+
+#[frb(mirror(ClaimTransferRequest))]
+pub struct _ClaimTransferRequest {
+    pub authorization: TransferAuthorization,
+    pub description: Option<String>,
+}
+
 #[frb(mirror(LnurlInfo))]
 pub struct _LnurlInfo {
     pub url: String,

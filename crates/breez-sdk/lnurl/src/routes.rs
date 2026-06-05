@@ -15,7 +15,8 @@ use lnurl_models::{
     CheckUsernameAvailableResponse, InvoicePaidRequest, InvoicesPaidRequest, ListMetadataRequest,
     ListMetadataResponse, PublishZapReceiptRequest, PublishZapReceiptResponse,
     RecoverLnurlPayRequest, RecoverLnurlPayResponse, RegisterLnurlPayRequest,
-    RegisterLnurlPayResponse, UnregisterLnurlPayRequest, sanitize_username,
+    RegisterLnurlPayResponse, TransferLnurlPayRequest, TransferLnurlPayResponse,
+    UnregisterLnurlPayRequest, sanitize_username,
 };
 use nostr::{Alphabet, Event, EventBuilder, JsonUtil, Kind, TagStandard, key::Keys};
 use regex::Regex;
@@ -150,12 +151,7 @@ where
             &state,
         )
         .await?;
-        if payload.description.chars().take(256).count() > 255 {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(Value::String("description too long".into())),
-            ));
-        }
+        validate_description(&payload.description)?;
 
         let user = User {
             domain: sanitize_domain(&state, &host).await?,
@@ -185,6 +181,84 @@ where
         Ok(Json(RegisterLnurlPayResponse {
             lnurl,
             lightning_address: format!("{}@{}", user.name, user.domain),
+        }))
+    }
+
+    pub async fn transfer(
+        Host(host): Host,
+        Path(to_pubkey): Path<String>,
+        Extension(state): Extension<State<DB>>,
+        Json(payload): Json<TransferLnurlPayRequest>,
+    ) -> Result<Json<TransferLnurlPayResponse>, (StatusCode, Json<Value>)> {
+        let username = sanitize_username(&payload.username);
+        validate_username(&username)?;
+        validate_description(&payload.description)?;
+
+        let message = format!("transfer:{username}-{to_pubkey}");
+        let from_pk = verify_transfer_signature(
+            &payload.from_pubkey,
+            &payload.from_signature,
+            &message,
+            &state,
+        )
+        .await?;
+        let to_pk =
+            verify_transfer_signature(&to_pubkey, &payload.to_signature, &message, &state).await?;
+
+        if from_pk == to_pk {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(Value::String(
+                    "transfer source and target are the same pubkey".into(),
+                )),
+            ));
+        }
+
+        let domain = sanitize_domain(&state, &host).await?;
+
+        if let Err(e) = state
+            .db
+            .transfer_username(
+                &domain,
+                &from_pk.to_string(),
+                &to_pk.to_string(),
+                &username,
+                &payload.description,
+            )
+            .await
+        {
+            return Err(match e {
+                LnurlRepositoryError::SourceNotOwner => {
+                    trace!("transfer source pubkey does not own username '{username}'");
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(Value::String(
+                            "source pubkey does not own this username".into(),
+                        )),
+                    )
+                }
+                LnurlRepositoryError::NameTaken => {
+                    trace!("name already taken during transfer: {username}");
+                    (
+                        StatusCode::CONFLICT,
+                        Json(Value::String("name already taken".into())),
+                    )
+                }
+                LnurlRepositoryError::General(err) => {
+                    error!("failed to execute transfer query: {err}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(Value::String("internal server error".into())),
+                    )
+                }
+            });
+        }
+
+        debug!("transferred '{username}' from {from_pk} to {to_pk}");
+        let lnurl = format!("lnurlp://{domain}/lnurlp/{username}");
+        Ok(Json(TransferLnurlPayResponse {
+            lnurl,
+            lightning_address: format!("{username}@{domain}"),
         }))
     }
 
@@ -1247,6 +1321,16 @@ fn validate_username(username: &str) -> Result<(), (StatusCode, Json<Value>)> {
     Ok(())
 }
 
+fn validate_description(description: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    if description.chars().take(256).count() > 255 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("description too long".into())),
+        ));
+    }
+    Ok(())
+}
+
 async fn validate<DB>(
     pubkey: &str,
     signature: &str,
@@ -1296,6 +1380,52 @@ async fn validate<DB>(
         })?;
 
     Ok(pubkey)
+}
+
+/// Verify a transfer-route signature over the canonical message
+/// `"transfer:{username}-{to_pubkey}"`. Used symmetrically on both ends: the
+/// current owner A and the new owner B sign the exact same bytes, and the
+/// route calls this once per signature. No timestamp — replay can only
+/// re-execute the same A → B → username transfer, which the server-side
+/// atomic delete bounds to the case where A still owns the name. The
+/// `"transfer:"` prefix domain-separates from `validate()`'s
+/// `"{message}-{timestamp}"` format so a captured register signature cannot
+/// be replayed as a transfer.
+async fn verify_transfer_signature<DB>(
+    pubkey: &str,
+    signature: &str,
+    message: &str,
+    state: &State<DB>,
+) -> Result<PublicKey, (StatusCode, Json<Value>)> {
+    let pk = parse_pubkey(pubkey)?;
+    let signature = hex::decode(signature).map_err(|e| {
+        trace!("invalid transfer signature, could not decode: {}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid signature".into())),
+        )
+    })?;
+    let signature = Signature::from_der(&signature).map_err(|e| {
+        trace!("invalid transfer signature, could not parse: {:?}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            Json(Value::String("invalid signature".into())),
+        )
+    })?;
+
+    state
+        .wallet
+        .verify_message(message, &signature, &pk)
+        .await
+        .map_err(|e| {
+            trace!("invalid transfer signature, could not verify: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(Value::String("invalid signature".into())),
+            )
+        })?;
+
+    Ok(pk)
 }
 
 fn parse_pubkey(pubkey: &str) -> Result<PublicKey, (StatusCode, Json<Value>)> {
@@ -1410,6 +1540,16 @@ mod tests {
             Ok(None)
         }
         async fn upsert_user(&self, _: &User) -> Result<(), LnurlRepositoryError> {
+            Ok(())
+        }
+        async fn transfer_username(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<(), LnurlRepositoryError> {
             Ok(())
         }
         async fn upsert_zap(&self, _: &Zap) -> Result<(), LnurlRepositoryError> {
@@ -2220,5 +2360,85 @@ mod tests {
         )
         .await;
         assert!(result.is_ok());
+    }
+
+    // -- Transfer signature verification ---------------------------------------
+    //
+    // The transfer route verifies signatures via SparkWallet::verify_message,
+    // which delegates to verify_signature_ecdsa. These exercise that
+    // verification over the route's canonical "transfer:{username}-{to_pubkey}"
+    // message without needing to construct a wallet.
+
+    use bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
+    use spark::utils::verify_signature::verify_signature_ecdsa;
+
+    /// Deterministic keypair from a seed byte.
+    fn transfer_key(seed: u8) -> (SecretKey, PublicKey) {
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[seed; 32]).expect("valid secret key");
+        let public = PublicKey::from_secret_key(&secp, &secret);
+        (secret, public)
+    }
+
+    /// Sign `message` the way the SDK does: ECDSA over `sha256(message)`.
+    fn sign(secret: &SecretKey, message: &str) -> Signature {
+        let secp = Secp256k1::new();
+        let digest = sha256::Hash::hash(message.as_bytes());
+        secp.sign_ecdsa(&Message::from_digest(digest.to_byte_array()), secret)
+    }
+
+    /// The canonical message the transfer route signs and verifies.
+    fn transfer_message(username: &str, to_pubkey: &PublicKey) -> String {
+        format!("transfer:{username}-{}", hex::encode(to_pubkey.serialize()))
+    }
+
+    #[test]
+    fn transfer_signature_accepts_valid() {
+        let secp = Secp256k1::new();
+        let (alice_secret, alice_pubkey) = transfer_key(1);
+        let (_, bob_pubkey) = transfer_key(2);
+        let message = transfer_message("alice", &bob_pubkey);
+        let sig = sign(&alice_secret, &message);
+
+        assert!(
+            verify_signature_ecdsa(&secp, &message, &sig, &alice_pubkey).is_ok(),
+            "a valid signature over the canonical message must verify"
+        );
+    }
+
+    #[test]
+    fn transfer_signature_rejects_forged_signer() {
+        // Alice signs, but the request attributes the signature to Bob's key.
+        let secp = Secp256k1::new();
+        let (alice_secret, _) = transfer_key(1);
+        let (_, bob_pubkey) = transfer_key(2);
+        let message = transfer_message("alice", &bob_pubkey);
+        let sig = sign(&alice_secret, &message);
+
+        assert!(
+            verify_signature_ecdsa(&secp, &message, &sig, &bob_pubkey).is_err(),
+            "a signature made by a different key must be rejected"
+        );
+    }
+
+    #[test]
+    fn transfer_signature_is_bound_to_message() {
+        // A signature verifies only for the exact bytes signed: changing the
+        // username invalidates it, and a register-style "{name}-{timestamp}"
+        // signature cannot be replayed as a transfer (the "transfer:" prefix
+        // domain-separates the two flows).
+        let secp = Secp256k1::new();
+        let (alice_secret, alice_pubkey) = transfer_key(1);
+        let (_, bob_pubkey) = transfer_key(2);
+        let sig = sign(&alice_secret, &transfer_message("alice", &bob_pubkey));
+
+        let tampered_username = transfer_message("mallory", &bob_pubkey);
+        let register_style = String::from("alice-1700000000");
+        for other in [tampered_username, register_style] {
+            assert!(
+                verify_signature_ecdsa(&secp, &other, &sig, &alice_pubkey).is_err(),
+                "signature must not verify against a different message: {other}"
+            );
+        }
     }
 }

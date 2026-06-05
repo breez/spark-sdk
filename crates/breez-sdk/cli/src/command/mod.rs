@@ -5,8 +5,9 @@ mod webhooks;
 
 use bitcoin::hashes::{Hash, sha256};
 use breez_sdk_spark::{
-    AssetFilter, BreezSdk, BuyBitcoinRequest, CheckLightningAddressRequest, ClaimDepositRequest,
-    ClaimHtlcPaymentRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
+    AssetFilter, AuthorizeTransferRequest, BreezSdk, BuyBitcoinRequest,
+    CheckLightningAddressRequest, ClaimDepositRequest, ClaimHtlcPaymentRequest,
+    ClaimTransferRequest, ConversionOptions, ConversionType, Fee, FeePolicy,
     FetchConversionLimitsRequest, GetInfoRequest, GetPaymentRequest, GetTokensMetadataRequest,
     InputType, LightningAddressDetails, ListPaymentsRequest, ListUnclaimedDepositsRequest,
     LnurlPayRequest, LnurlWithdrawRequest, MaxFee, OnchainConfirmationSpeed, PaymentDetailsFilter,
@@ -14,7 +15,7 @@ use breez_sdk_spark::{
     ReceivePaymentMethod, ReceivePaymentRequest, RefundDepositRequest,
     RegisterLightningAddressRequest, SendPaymentMethod, SendPaymentOptions, SendPaymentRequest,
     SparkHtlcOptions, SparkHtlcStatus, SyncWalletRequest, TokenIssuer, TokenTransactionType,
-    UpdateUserSettingsRequest,
+    TransferAuthorization, UpdateUserSettingsRequest,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngCore;
@@ -304,6 +305,34 @@ pub enum Command {
 
         /// Description in the lnurl response and the invoice.
         description: Option<String>,
+    },
+    /// Run by the current owner to authorize transferring their registered
+    /// lightning address username to `transferee_pubkey`. Prints the
+    /// authorization (username, pubkey, signature) to hand to the new owner,
+    /// who passes it to `claim-lightning-address-transfer`.
+    AuthorizeLightningAddressTransfer {
+        /// The new owner's identity public key (hex-encoded compressed
+        /// secp256k1).
+        transferee_pubkey: String,
+    },
+    /// Run by the new owner to claim a transfer authorized by the current
+    /// owner, taking over `username`.
+    ClaimLightningAddressTransfer {
+        /// The username being taken over (from the authorization).
+        username: String,
+
+        /// Description in the lnurl response and the invoice.
+        description: Option<String>,
+
+        /// The current owner's identity public key (hex-encoded compressed
+        /// secp256k1), from `authorize-lightning-address-transfer`.
+        #[arg(long)]
+        from_pubkey: String,
+
+        /// The current owner's signature authorizing the transfer (hex-encoded
+        /// DER ECDSA), from `authorize-lightning-address-transfer`.
+        #[arg(long)]
+        from_signature: String,
     },
     DeleteLightningAddress,
     /// List fiat currencies
@@ -874,6 +903,34 @@ pub(crate) async fn execute_command(
             let res = sdk
                 .register_lightning_address(RegisterLightningAddressRequest {
                     username,
+                    description,
+                })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::AuthorizeLightningAddressTransfer { transferee_pubkey } => {
+            let res = sdk
+                .authorize_lightning_address_transfer(AuthorizeTransferRequest {
+                    transferee_pubkey,
+                })
+                .await?;
+            print_value(&res)?;
+            Ok(true)
+        }
+        Command::ClaimLightningAddressTransfer {
+            username,
+            description,
+            from_pubkey,
+            from_signature,
+        } => {
+            let res = sdk
+                .claim_lightning_address_transfer(ClaimTransferRequest {
+                    authorization: TransferAuthorization {
+                        username,
+                        pubkey: from_pubkey,
+                        signature: from_signature,
+                    },
                     description,
                 })
                 .await?;

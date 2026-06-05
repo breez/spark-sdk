@@ -51,6 +51,41 @@ func getLightningAddress(sdk: BreezSdk) async throws {
     // ANCHOR_END: get-lightning-address
 }
 
+// Step 1: run by the current owner.
+func authorizeLightningAddressTransfer(
+    currentOwnerSdk: BreezSdk,
+    transfereePubkey: String
+) async throws -> TransferAuthorization {
+    // ANCHOR: authorize-lightning-address-transfer
+    let authorization = try await currentOwnerSdk.authorizeLightningAddressTransfer(
+        request: AuthorizeTransferRequest(
+            transfereePubkey: transfereePubkey
+        )
+    )
+    // ANCHOR_END: authorize-lightning-address-transfer
+    return authorization
+}
+
+// Step 2: run by the new owner with the authorization from step 1.
+func claimLightningAddressTransfer(
+    newOwnerSdk: BreezSdk,
+    authorization: TransferAuthorization
+) async throws {
+    let description = "My Lightning Address"
+
+    // ANCHOR: claim-lightning-address-transfer
+    let addressInfo = try await newOwnerSdk.claimLightningAddressTransfer(
+        request: ClaimTransferRequest(
+            authorization: authorization,
+            description: description
+        )
+    )
+    let lightningAddress = addressInfo.lightningAddress
+    let lnurlUrl = addressInfo.lnurl.url
+    let lnurlBech32 = addressInfo.lnurl.bech32
+    // ANCHOR_END: claim-lightning-address-transfer
+}
+
 func deleteLightningAddress(sdk: BreezSdk) async throws {
     // ANCHOR: delete-lightning-address
     try await sdk.deleteLightningAddress()

@@ -65,6 +65,28 @@ You can retrieve information about the currently registered Lightning address.
 
 {{#tabs lightning_address:get-lightning-address}}
 
+### Transferring a Lightning address
+
+A user who already owns a registered Lightning address can hand it over to a different owner (pubkey) in a single atomic server operation: ownership is removed from the old pubkey and the new pubkey takes it in one step, without exposing a window during which the username could be snatched by a third party.
+
+> **Note:** Existing payments are not transferred to the new owner. Only the address.
+
+The flow has two steps, one method each, run by the current owner and then the new owner:
+
+**Step 1: Current owner (pubkey A)** calls {{#name authorize_lightning_address_transfer}} with the new owner's {{#name identity_pubkey}} (which the new owner obtains via {{#name get_info}}). It returns a {{#name TransferAuthorization}} (carrying the `username`, A's `pubkey`, and `signature`), which grants B the right to take over the username.
+
+> **Note:** Both owners sign the same canonical message (`"transfer:{username}-{pubkey_b}"`) with no timestamp, so A's authorization is a persistent capability for this specific (address, B) pair. Only B can actually submit the transfer, because the server also requires B's own signature over the same bytes; A's authorization alone doesn't let any third party move the username.
+
+{{#tabs lightning_address:authorize-lightning-address-transfer}}
+
+The returned {{#name TransferAuthorization}} is then handed to the new owner over any channel. In an in-app migration, where a user moves their username from an old wallet to a new one, the app holds both SDK instances and passes it directly between them; to hand the username to a separate wallet, share it as a QR code or link. It already carries the username, so B needs nothing else to claim.
+
+**Step 2: New owner (pubkey B)** calls {{#name claim_lightning_address_transfer}}, passing A's authorization. The SDK submits the transfer to the server which, in one transaction, verifies B's request signature, verifies A's authorization, and transfers ownership, returning the newly-owned {{#name LightningAddressInfo}}.
+
+{{#tabs lightning_address:claim-lightning-address-transfer}}
+
+If pubkey B had a different username registered, it is replaced by the transferred one. The server rejects the call if pubkey A does not currently own the username (e.g. the name was already transferred to a third pubkey).
+
 ### Deleting a Lightning address
 
 When a user no longer wants to use the Lightning address, you can delete it.

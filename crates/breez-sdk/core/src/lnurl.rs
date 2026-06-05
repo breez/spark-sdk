@@ -2,7 +2,7 @@ use bitcoin::hex::DisplayHex;
 use lnurl_models::{
     CheckUsernameAvailableResponse, ListMetadataResponse, RecoverLnurlPayRequest,
     RecoverLnurlPayResponse, RegisterLnurlPayRequest, RegisterLnurlPayResponse,
-    UnregisterLnurlPayRequest,
+    TransferLnurlPayRequest, UnregisterLnurlPayRequest,
 };
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
@@ -44,6 +44,17 @@ pub struct RegisterLightningAddressRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct TransferLightningAddressRequest {
+    pub username: String,
+    pub description: String,
+    /// Hex-encoded secp256k1 compressed public key of the current owner.
+    pub from_pubkey: String,
+    /// Hex-encoded DER ECDSA signature by the current owner over
+    /// `"transfer:{username}-{to_pubkey}"`.
+    pub from_signature: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct UnregisterLightningAddressRequest {
     pub username: String,
 }
@@ -65,6 +76,10 @@ pub trait LnurlServerClient: Send + Sync {
     async fn register_lightning_address(
         &self,
         request: &RegisterLightningAddressRequest,
+    ) -> Result<RegisterLnurlPayResponse, LnurlServerError>;
+    async fn transfer_lightning_address(
+        &self,
+        request: &TransferLightningAddressRequest,
     ) -> Result<RegisterLnurlPayResponse, LnurlServerError>;
     async fn unregister_lightning_address(
         &self,
@@ -223,15 +238,47 @@ impl LnurlServerClient for DefaultLnurlServerClient {
         let pubkey = self.wallet.get_identity_public_key();
 
         let (signature, timestamp) = self.sign_message(&request.username).await?;
-
         let api_request = RegisterLnurlPayRequest {
             username: request.username.clone(),
             description: request.description.clone(),
             signature,
             timestamp,
         };
-
         let url = format!("{}/lnurlpay/{}", self.base_url(), pubkey);
+        let body = serde_json::to_string(&api_request)
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
+
+        let response = self
+            .http_client
+            .post(url, Some(self.get_post_headers()), Some(body))
+            .await
+            .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
+
+        Self::handle_response(response.status, &response.body)
+    }
+
+    async fn transfer_lightning_address(
+        &self,
+        request: &TransferLightningAddressRequest,
+    ) -> Result<RegisterLnurlPayResponse, LnurlServerError> {
+        let pubkey = self.wallet.get_identity_public_key();
+
+        let message = format!("transfer:{}-{}", request.username, pubkey);
+        let to_signature = self
+            .wallet
+            .sign_message(&message)
+            .await
+            .map_err(|e| LnurlServerError::SigningError(e.to_string()))?
+            .serialize_der()
+            .to_lower_hex_string();
+        let api_request = TransferLnurlPayRequest {
+            username: request.username.clone(),
+            description: request.description.clone(),
+            from_pubkey: request.from_pubkey.clone(),
+            from_signature: request.from_signature.clone(),
+            to_signature,
+        };
+        let url = format!("{}/lnurlpay/{}/transfer", self.base_url(), pubkey);
         let body = serde_json::to_string(&api_request)
             .map_err(|e| LnurlServerError::RequestFailure(e.to_string()))?;
 

@@ -48,7 +48,10 @@ async fn pay(sdk: &BreezSdk, prepare_response: PrepareLnurlPayResponse) -> Resul
     Ok(())
 }
 
-async fn prepare_pay_fees_included(sdk: &BreezSdk, pay_request: LnurlPayRequestDetails) -> Result<()> {
+async fn prepare_pay_fees_included(
+    sdk: &BreezSdk,
+    pay_request: LnurlPayRequestDetails,
+) -> Result<()> {
     // ANCHOR: prepare-lnurl-pay-fees-included
     // By default (FeePolicy::FeesExcluded), fees are added on top of the amount.
     // Use FeePolicy::FeesIncluded to deduct fees from the amount instead.

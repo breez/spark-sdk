@@ -385,6 +385,10 @@ where
         .route("/lnurlpay/{pubkey}", post(LnurlServer::<DB>::register))
         .route("/lnurlpay/{pubkey}", delete(LnurlServer::<DB>::unregister))
         .route(
+            "/lnurlpay/{pubkey}/transfer",
+            post(LnurlServer::<DB>::transfer),
+        )
+        .route(
             "/lnurlpay/{pubkey}/recover",
             post(LnurlServer::<DB>::recover),
         )

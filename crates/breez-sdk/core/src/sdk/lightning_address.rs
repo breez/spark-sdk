@@ -1,7 +1,9 @@
+use bitcoin::hex::DisplayHex;
 use lnurl_models::sanitize_username;
 
 use crate::{
-    CheckLightningAddressRequest, LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest,
+    AuthorizeTransferRequest, CheckLightningAddressRequest, ClaimTransferRequest,
+    LightningAddressInfo, LnurlInfo, RegisterLightningAddressRequest, TransferAuthorization,
     error::SdkError, persist::ObjectCacheRepository,
 };
 
@@ -58,6 +60,73 @@ impl BreezSdk {
         };
 
         let response = client.register_lightning_address(&params).await?;
+        let address_info = LightningAddressInfo {
+            lightning_address: response.lightning_address,
+            description,
+            lnurl: LnurlInfo::new(response.lnurl),
+            username,
+        };
+        cache.save_lightning_address(&address_info, false).await?;
+        Ok(address_info)
+    }
+
+    /// Authorize transferring the current owner's registered lightning address
+    /// username to `request.transferee_pubkey`. Returns a
+    /// [`TransferAuthorization`] to hand to the new owner, who
+    /// claims it via [`BreezSdk::claim_lightning_address_transfer`].
+    /// Errors if the current owner has no lightning address registered.
+    pub async fn authorize_lightning_address_transfer(
+        &self,
+        request: AuthorizeTransferRequest,
+    ) -> Result<TransferAuthorization, SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let Some(address_info) = cache.fetch_lightning_address().await?.flatten() else {
+            return Err(SdkError::Generic(
+                "No lightning address registered to transfer".to_string(),
+            ));
+        };
+        let self_pubkey = self.spark_wallet.get_identity_public_key().to_string();
+        let message = format!(
+            "transfer:{}-{}",
+            address_info.username, request.transferee_pubkey
+        );
+        let signature = self.spark_wallet.sign_message(&message).await?;
+        Ok(TransferAuthorization {
+            username: address_info.username,
+            pubkey: self_pubkey,
+            signature: signature.serialize_der().to_lower_hex_string(),
+        })
+    }
+
+    /// Claim a lightning address username handed over by its current owner,
+    /// using the [`TransferAuthorization`] from
+    /// [`BreezSdk::authorize_lightning_address_transfer`]. Completes the
+    /// takeover and returns the newly-owned address.
+    pub async fn claim_lightning_address_transfer(
+        &self,
+        request: ClaimTransferRequest,
+    ) -> Result<LightningAddressInfo, SdkError> {
+        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let Some(client) = &self.lnurl_server_client else {
+            return Err(SdkError::Generic(
+                "LNURL server is not configured".to_string(),
+            ));
+        };
+
+        let username = sanitize_username(&request.authorization.username);
+        let description = match request.description {
+            Some(description) => description,
+            None => format!("Pay to {}@{}", username, client.domain()),
+        };
+
+        let params = crate::lnurl::TransferLightningAddressRequest {
+            username: username.clone(),
+            description: description.clone(),
+            from_pubkey: request.authorization.pubkey,
+            from_signature: request.authorization.signature,
+        };
+
+        let response = client.transfer_lightning_address(&params).await?;
         let address_info = LightningAddressInfo {
             lightning_address: response.lightning_address,
             description,

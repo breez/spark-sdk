@@ -53,7 +53,10 @@ async fn prepare_send_payment_onchain(sdk: &BreezSdk) -> Result<()> {
     // Review the fee quote for each confirmation speed
     if let SendPaymentMethod::BitcoinAddress { fee_quote, .. } = &prepare_response.payment_method {
         info!("Slow fee: {} sats", fee_quote.speed_slow.total_fee_sat());
-        info!("Medium fee: {} sats", fee_quote.speed_medium.total_fee_sat());
+        info!(
+            "Medium fee: {} sats",
+            fee_quote.speed_medium.total_fee_sat()
+        );
         info!("Fast fee: {} sats", fee_quote.speed_fast.total_fee_sat());
     }
     // ANCHOR_END: prepare-send-payment-onchain
@@ -134,8 +137,14 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
 
     // If the fees are acceptable, continue to create the Send Payment
     if let Some(conversion_estimate) = &prepare_response.conversion_estimate {
-        info!("Estimated conversion: {} token units → {} sats", conversion_estimate.amount_in, conversion_estimate.amount_out);
-        info!("Estimated conversion fee: {} token units", conversion_estimate.fee);
+        info!(
+            "Estimated conversion: {} token units → {} sats",
+            conversion_estimate.amount_in, conversion_estimate.amount_out
+        );
+        info!(
+            "Estimated conversion fee: {} token units",
+            conversion_estimate.fee
+        );
     }
     // ANCHOR_END: prepare-send-payment-with-conversion
     Ok(())
@@ -271,7 +280,10 @@ async fn prepare_send_payment_send_all(sdk: &BreezSdk) -> Result<()> {
     info!("Total sats available: {}", prepare_response.amount);
 
     if let Some(conversion_estimate) = &prepare_response.conversion_estimate {
-        info!("Converting {} token units → ~{} sats", conversion_estimate.amount_in, conversion_estimate.amount_out);
+        info!(
+            "Converting {} token units → ~{} sats",
+            conversion_estimate.amount_in, conversion_estimate.amount_out
+        );
         info!("Conversion fee: {} token units", conversion_estimate.fee);
     }
     // ANCHOR_END: prepare-send-payment-send-all

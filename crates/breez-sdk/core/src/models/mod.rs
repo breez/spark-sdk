@@ -1623,6 +1623,46 @@ pub struct RegisterLightningAddressRequest {
     pub description: Option<String>,
 }
 
+/// Authorization from the current owner granting a specific new owner the
+/// right to take over a username. Produced by
+/// [`BreezSdk::authorize_lightning_address_transfer`] and handed to the new
+/// owner, who passes it to [`BreezSdk::claim_lightning_address_transfer`]. It
+/// fully describes the transfer, so the new owner needs nothing else to claim.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferAuthorization {
+    /// The username being handed over.
+    pub username: String,
+    /// The current owner's public key.
+    pub pubkey: String,
+    /// The current owner's signature authorizing the transfer.
+    pub signature: String,
+}
+
+/// Request for [`BreezSdk::authorize_lightning_address_transfer`]. Called by
+/// the *current owner* to authorize handing their registered username over to
+/// `transferee_pubkey`.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorizeTransferRequest {
+    /// The new owner's identity public key.
+    pub transferee_pubkey: String,
+}
+
+/// Request for [`BreezSdk::claim_lightning_address_transfer`]. Called by the
+/// *new owner* to complete the takeover using the authorization produced by
+/// the current owner.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimTransferRequest {
+    /// Authorization produced by the current owner via
+    /// [`BreezSdk::authorize_lightning_address_transfer`].
+    pub authorization: TransferAuthorization,
+    /// Description for the address. Defaults to `"Pay to {username}@{domain}"`.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub description: Option<String>,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct LnurlInfo {

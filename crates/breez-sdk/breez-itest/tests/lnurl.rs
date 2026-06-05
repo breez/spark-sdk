@@ -59,6 +59,34 @@ async fn alice_sdk() -> Result<SdkInstance> {
     .await
 }
 
+/// Build an SDK instance configured against the given LNURL fixture.
+async fn build_sdk_for_lnurl(
+    lnurl: Arc<LnurlFixture>,
+    temp_dir_prefix: &str,
+) -> Result<SdkInstance> {
+    let temp_dir = tempfile::Builder::new().prefix(temp_dir_prefix).tempdir()?;
+
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = Some(lnurl.http_url().to_string());
+    config.sync_interval_secs = 1;
+    config.real_time_sync_server_url = None;
+
+    let mut sdk_instance = build_sdk_with_custom_config(
+        temp_dir.path().to_string_lossy().to_string(),
+        seed,
+        config,
+        Some(temp_dir),
+        false,
+    )
+    .await?;
+    sdk_instance.lnurl_fixture = Some(lnurl);
+    Ok(sdk_instance)
+}
+
 /// Set up Bob SDK with an LNURL server (receiver).
 /// When `use_postgres` is true the LNURL server runs against a PostgreSQL
 /// testcontainer; otherwise it uses in-memory SQLite.
@@ -1129,5 +1157,153 @@ async fn test_11_lnurl_spark_address_payment(
     );
 
     info!("=== Test test_11_lnurl_spark_address_payment PASSED ===");
+    Ok(())
+}
+
+/// Transfer an already-registered username from pubkey A to pubkey B in a
+/// single atomic operation.
+#[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
+#[test_log::test(tokio::test)]
+async fn test_12_transfer_lightning_address(#[case] use_postgres: bool) -> Result<()> {
+    info!("=== Starting test_12_transfer_lightning_address ===");
+
+    let lnurl = Arc::new(setup_lnurl(use_postgres).await);
+    let alice = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-transfer-alice").await?;
+    let bob = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-transfer-bob").await?;
+
+    let username = "transferuser";
+    let description = "Alice's address, soon to be Bob's";
+
+    // 1. Alice registers the username.
+    alice
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: Some(description.to_string()),
+        })
+        .await?;
+
+    let alice_pubkey = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?
+        .identity_pubkey;
+    let bob_pubkey = bob
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?
+        .identity_pubkey;
+    assert_ne!(alice_pubkey, bob_pubkey);
+
+    // 2. Alice authorizes the transfer to Bob's pubkey.
+    let authorization = alice
+        .sdk
+        .authorize_lightning_address_transfer(AuthorizeTransferRequest {
+            transferee_pubkey: bob_pubkey.clone(),
+        })
+        .await?;
+    assert_eq!(authorization.pubkey, alice_pubkey);
+    assert_eq!(authorization.username, username);
+
+    // 3. Bob claims the transfer with the authorization Alice produced.
+    let transfer_response = bob
+        .sdk
+        .claim_lightning_address_transfer(ClaimTransferRequest {
+            authorization: authorization.clone(),
+            description: Some("Bob's address now".to_string()),
+        })
+        .await?;
+    info!(
+        "Transferred Lightning address to Bob: {}",
+        transfer_response.lightning_address
+    );
+    assert!(transfer_response.lightning_address.starts_with(username));
+
+    // 4. Bob owns the address now.
+    let bob_address = bob
+        .sdk
+        .get_lightning_address()
+        .await?
+        .expect("Bob should now own the transferred address");
+    assert_eq!(bob_address.username, username);
+
+    // 5. Replay must fail: Alice no longer owns the name, so the server
+    //    rejects with `SourceNotOwner` even though both signatures are still
+    //    valid (the message has no timestamp). We check the error rather than
+    //    Alice's cache, which still holds her pre-transfer registration.
+    let replay = bob
+        .sdk
+        .claim_lightning_address_transfer(ClaimTransferRequest {
+            authorization,
+            description: Some("Replay".to_string()),
+        })
+        .await;
+    assert!(
+        replay.is_err(),
+        "Replay after Alice no longer owns the name must fail"
+    );
+
+    info!("=== Test test_12_transfer_lightning_address PASSED ===");
+    Ok(())
+}
+
+/// A transfer whose new owner is the current owner (`from_pk == to_pk`) must be
+/// rejected by the server, not silently succeed.
+#[rstest]
+#[case::sqlite(false)]
+#[case::postgres(true)]
+#[test_log::test(tokio::test)]
+async fn test_13_transfer_to_self_rejected(#[case] use_postgres: bool) -> Result<()> {
+    info!("=== Starting test_13_transfer_to_self_rejected ===");
+
+    let lnurl = Arc::new(setup_lnurl(use_postgres).await);
+    let alice = build_sdk_for_lnurl(Arc::clone(&lnurl), "breez-sdk-self-transfer-alice").await?;
+
+    let username = "selftransfer";
+    alice
+        .sdk
+        .register_lightning_address(RegisterLightningAddressRequest {
+            username: username.to_string(),
+            description: None,
+        })
+        .await?;
+
+    let alice_pubkey = alice
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?
+        .identity_pubkey;
+
+    // Alice authorizes a transfer to her own pubkey and then tries to claim
+    // it. Both signatures are made by Alice, so the server sees from_pk ==
+    // to_pk and must reject the transfer.
+    let authorization = alice
+        .sdk
+        .authorize_lightning_address_transfer(AuthorizeTransferRequest {
+            transferee_pubkey: alice_pubkey,
+        })
+        .await?;
+
+    let result = alice
+        .sdk
+        .claim_lightning_address_transfer(ClaimTransferRequest {
+            authorization,
+            description: None,
+        })
+        .await;
+    assert!(
+        result.is_err(),
+        "transferring a username to its current owner must be rejected"
+    );
+
+    info!("=== Test test_13_transfer_to_self_rejected PASSED ===");
     Ok(())
 }

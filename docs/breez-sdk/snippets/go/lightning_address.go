@@ -91,6 +91,49 @@ func GetLightningAddress(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.Lightn
 	return addressInfoOpt, nil
 }
 
+// Step 1: run by the current owner.
+func AuthorizeLightningAddressTransfer(
+	currentOwnerSdk *breez_sdk_spark.BreezSdk,
+	transfereePubkey string,
+) (*breez_sdk_spark.TransferAuthorization, error) {
+	// ANCHOR: authorize-lightning-address-transfer
+	request := breez_sdk_spark.AuthorizeTransferRequest{
+		TransfereePubkey: transfereePubkey,
+	}
+
+	authorization, err := currentOwnerSdk.AuthorizeLightningAddressTransfer(request)
+	if err != nil {
+		return nil, err
+	}
+	// ANCHOR_END: authorize-lightning-address-transfer
+	return &authorization, nil
+}
+
+// Step 2: run by the new owner with the authorization from step 1.
+func ClaimLightningAddressTransfer(
+	newOwnerSdk *breez_sdk_spark.BreezSdk,
+	authorization breez_sdk_spark.TransferAuthorization,
+) (*breez_sdk_spark.LightningAddressInfo, error) {
+	description := "My Lightning Address"
+
+	// ANCHOR: claim-lightning-address-transfer
+	request := breez_sdk_spark.ClaimTransferRequest{
+		Authorization: authorization,
+		Description:   &description,
+	}
+
+	address, err := newOwnerSdk.ClaimLightningAddressTransfer(request)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = address.LightningAddress
+	_ = address.Lnurl.Url
+	_ = address.Lnurl.Bech32
+	// ANCHOR_END: claim-lightning-address-transfer
+	return &address, nil
+}
+
 func DeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: delete-lightning-address
 	err := sdk.DeleteLightningAddress()
