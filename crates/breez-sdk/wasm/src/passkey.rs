@@ -10,20 +10,31 @@ use crate::{
     },
 };
 
-/// Configuration for `PasskeyClient`. `rpId` / `rpName` configure the
-/// built-in provider on the zero-config path (ignored when you inject
-/// your own provider, which owns its RP).
+/// Relying Party and user identity for the built-in provider on the
+/// zero-config path (ignored when you inject your own provider).
+#[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyProviderOptions)]
+pub struct PasskeyProviderOptions {
+    /// Relying Party ID. Unset uses the Breez shared RP.
+    pub rp_id: Option<String>,
+    /// Relying Party name. Unset uses the SDK default (`"Breez"`).
+    pub rp_name: Option<String>,
+    /// `user.name`: the account identifier the picker shows beneath the
+    /// display name (e.g. `john@doe.com`). Unset uses `rpName`.
+    pub user_name: Option<String>,
+    /// `user.displayName`: the human-friendly name shown most
+    /// prominently (e.g. `John Doe`). Unset uses `userName`.
+    pub user_display_name: Option<String>,
+}
+
+/// Configuration for `PasskeyClient`.
 #[macros::extern_wasm_bindgen(breez_sdk_spark::passkey::PasskeyConfig)]
 pub struct PasskeyConfig {
     /// Wallet label for `register` / `signIn` when no label is given.
     /// Unset falls back to the internal default `"Default"`.
     pub default_label: Option<String>,
-    /// Relying Party ID for the built-in provider. Unset uses the Breez
-    /// shared RP.
-    pub rp_id: Option<String>,
-    /// Relying Party name for the built-in provider. Unset uses the SDK
-    /// default (`"Breez"`).
-    pub rp_name: Option<String>,
+    /// Relying Party and user identity for the built-in provider on the
+    /// zero-config path.
+    pub provider_options: Option<PasskeyProviderOptions>,
 }
 
 /// One-shot capability + configuration probe returned by

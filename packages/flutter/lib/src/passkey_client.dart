@@ -10,12 +10,13 @@ import 'rust/models.dart'
         PasskeyAvailability,
         PasskeyConfig,
         PasskeyCredential,
+        PasskeyProviderOptions,
         RegisterRequest,
         RegisterResponse,
         SignInRequest,
         SignInResponse;
 import 'rust/passkey.dart' as rust;
-import 'passkey_prf_provider.dart' show PasskeyProvider, PasskeyProviderOptions, PrfProvider;
+import 'passkey_prf_provider.dart' show PasskeyProvider, PrfProvider;
 
 /// Passkey-based wallet client. The default constructor wires the built-in
 /// [PasskeyProvider] on the Breez shared RP, so a Breez-registered app needs
@@ -27,12 +28,7 @@ class PasskeyClient {
   /// `rpId` / `rpName` on the [config] to use your own RP.
   PasskeyClient({String? breezApiKey, PasskeyConfig? config})
     : this._fromProvider(
-        PasskeyProvider(
-          PasskeyProviderOptions(
-            rpId: config?.rpId ?? PasskeyProvider.breezRpId,
-            rpName: config?.rpName ?? PasskeyProvider.defaultRpName,
-          ),
-        ),
+        PasskeyProvider(config?.providerOptions ?? const PasskeyProviderOptions()),
         breezApiKey: breezApiKey,
         config: config,
       );
@@ -107,14 +103,7 @@ class PasskeyClientBuilder {
   /// the config's `rpId` / `rpName` (default: the Breez RP) when no
   /// provider was injected.
   PasskeyClient build() {
-    final provider =
-        _provider ??
-        PasskeyProvider(
-          PasskeyProviderOptions(
-            rpId: config?.rpId ?? PasskeyProvider.breezRpId,
-            rpName: config?.rpName ?? PasskeyProvider.defaultRpName,
-          ),
-        );
+    final provider = _provider ?? PasskeyProvider(config?.providerOptions ?? const PasskeyProviderOptions());
     return PasskeyClient._fromProvider(provider, breezApiKey: breezApiKey, config: config);
   }
 }

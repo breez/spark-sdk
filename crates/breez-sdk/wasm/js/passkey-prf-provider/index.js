@@ -136,62 +136,45 @@ export class PasskeyProvider {
     static get DEFAULT_RP_NAME() { return DEFAULT_RP_NAME; }
 
     /**
-     * @param {object} options
-     * @param {string} options.rpId - **Required.** Relying Party ID, the
-     *   domain hosting your passkeys; on web a registrable suffix of
-     *   `window.location.hostname` or equal to it. Pass
-     *   `PasskeyProvider.BREEZ_RP_ID` to use Breez's shared RP
-     *   (Breez-registered apps only).
-     * @param {string} options.rpName - **Required.** WebAuthn `rp.name`,
-     *   shown in some credential-manager UIs (iCloud Keychain, Google
-     *   Password Manager). Deprecated in L3 but still required by current
-     *   browsers, so empty is rejected. Used only at registration.
-     * @param {string} [options.userName] - WebAuthn `user.name`, shown in
-     *   the sign-in picker. Apple's Passwords app dedupes by
-     *   `(rpId, user.name)`, so pass a stable per-user value for distinct
-     *   entries. Defaults to `rpName`. Used only at registration.
-     * @param {string} [options.userDisplayName] - WebAuthn
-     *   `user.displayName`, a label the browser may show in the picker
-     *   (behavior varies). Defaults to `userName`. Used only at
-     *   registration.
-     * @param {'platform'|'cross-platform'} [options.authenticatorAttachment]
+     * @param {import('../breez_sdk_spark_wasm.js').PasskeyProviderOptions} [options]
+     *   Relying Party and user identity. `rpId` defaults to
+     *   `PasskeyProvider.BREEZ_RP_ID`, `rpName` to `"Breez"`, `userName` to
+     *   `rpName`, `userDisplayName` to `userName`. The same
+     *   `PasskeyProviderOptions` is settable on `PasskeyConfig` for the
+     *   zero-config client.
+     * @param {object} [webOptions] - Web-only knobs.
+     * @param {'platform'|'cross-platform'} [webOptions.authenticatorAttachment]
      *   Narrows the create-time chooser to one authenticator class.
      *   `'platform'` allows only the local authenticator (Touch ID, Face
      *   ID, Windows Hello, iCloud Keychain); `'cross-platform'` only
      *   roaming keys (USB, NFC, BLE, hybrid). Unset shows all.
-     * @param {Array<'client-device'|'security-key'|'hybrid'>} [options.hints]
+     * @param {Array<'client-device'|'security-key'|'hybrid'>} [webOptions.hints]
      *   WebAuthn L3 priority hints applied to both create and get,
      *   ordering the classes a supporting browser offers first (ignored
      *   otherwise). Pass `['client-device']` to favor the platform
      *   authenticator. Only standards-track lever for the sign-in picker,
      *   where `authenticatorAttachment` is not allowed.
+     * @param {number} [webOptions.defaultTimeoutMs] - Default WebAuthn
+     *   `timeout` (ms) for create and get. A hint only: platforms cap
+     *   around 60s. Set it 5 to 10s under the cap so a host-side timeout
+     *   heuristic can fire first.
      */
-    constructor(options) {
-        if (!options || typeof options.rpId !== 'string' || options.rpId.length === 0) {
-            throw new Error(
-                'PasskeyProvider: rpId is required. Pass your app\'s RP domain, '
-                + 'or PasskeyProvider.BREEZ_RP_ID if you registered with Breez.'
-            );
+    constructor(options = {}, webOptions = {}) {
+        const rpId = options.rpId ?? BREEZ_RP_ID;
+        const rpName = options.rpName ?? DEFAULT_RP_NAME;
+        if (typeof rpId !== 'string' || rpId.length === 0) {
+            throw new Error('PasskeyProvider: rpId must be a non-empty string.');
         }
-        if (typeof options.rpName !== 'string' || options.rpName.length === 0) {
-            throw new Error(
-                'PasskeyProvider: rpName is required. Pass your app name; it is '
-                + 'shown to the user in the OS passkey picker.'
-            );
+        if (typeof rpName !== 'string' || rpName.length === 0) {
+            throw new Error('PasskeyProvider: rpName must be a non-empty string.');
         }
-        this.rpId = options.rpId;
-        this.rpName = options.rpName;
+        this.rpId = rpId;
+        this.rpName = rpName;
         this.userName = options.userName || this.rpName;
         this.userDisplayName = options.userDisplayName || this.userName;
-        this.authenticatorAttachment = options.authenticatorAttachment;
-        this.hints = options.hints;
-        /**
-         * Default WebAuthn `timeout` (ms) for create and get. A hint
-         * only: platforms cap around 60s. Set it 5 to 10s under the cap
-         * so a host-side timeout heuristic can fire first.
-         * @type {number | undefined}
-         */
-        this.defaultTimeoutMs = options.defaultTimeoutMs;
+        this.authenticatorAttachment = webOptions.authenticatorAttachment;
+        this.hints = webOptions.hints;
+        this.defaultTimeoutMs = webOptions.defaultTimeoutMs;
 
         /**
          * Credential ID asserted in the most recent ceremony. Reset at
@@ -712,10 +695,7 @@ export class PasskeyClientBuilder {
     build() {
         const provider =
             this._provider ??
-            new PasskeyProvider({
-                rpId: this._config.rpId ?? BREEZ_RP_ID,
-                rpName: this._config.rpName ?? DEFAULT_RP_NAME,
-            });
+            new PasskeyProvider(this._config.providerOptions ?? {});
         return new SdkPasskeyClient(provider, this._breezApiKey, this._config);
     }
 }

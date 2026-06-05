@@ -41,10 +41,7 @@ public class PasskeyClientBuilder {
     /// on the config's `rpId` / `rpName` (default: the Breez RP) when no
     /// provider was injected.
     public func build() -> PasskeyClient {
-        let resolved = provider ?? PasskeyProvider(
-            rpId: config?.rpId ?? PasskeyProvider.BREEZ_RP_ID,
-            rpName: config?.rpName ?? PasskeyProvider.defaultRpName
-        )
+        let resolved = provider ?? PasskeyProvider(options: config?.providerOptions ?? PasskeyProviderOptions())
         return PasskeyClient(prfProvider: resolved, breezApiKey: breezApiKey, config: config)
     }
 }
@@ -66,10 +63,7 @@ public extension PasskeyClient {
     @available(iOS 18.0, macOS 15.0, *)
     convenience init(breezApiKey: String?, config: PasskeyConfig? = nil) {
         self.init(
-            prfProvider: PasskeyProvider(
-                rpId: config?.rpId ?? PasskeyProvider.BREEZ_RP_ID,
-                rpName: config?.rpName ?? PasskeyProvider.defaultRpName
-            ),
+            prfProvider: PasskeyProvider(options: config?.providerOptions ?? PasskeyProviderOptions()),
             breezApiKey: breezApiKey,
             config: config
         )

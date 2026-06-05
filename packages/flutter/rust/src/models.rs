@@ -1334,11 +1334,18 @@ pub struct _UnregisterWebhookRequest {
     pub webhook_id: String,
 }
 
+#[frb(mirror(PasskeyProviderOptions))]
+pub struct _PasskeyProviderOptions {
+    pub rp_id: Option<String>,
+    pub rp_name: Option<String>,
+    pub user_name: Option<String>,
+    pub user_display_name: Option<String>,
+}
+
 #[frb(mirror(PasskeyConfig))]
 pub struct _PasskeyConfig {
     pub default_label: Option<String>,
-    pub rp_id: Option<String>,
-    pub rp_name: Option<String>,
+    pub provider_options: Option<PasskeyProviderOptions>,
 }
 
 #[frb(mirror(PasskeyAvailability))]

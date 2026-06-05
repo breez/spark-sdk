@@ -3,6 +3,7 @@ package technology.breez.spark.passkey
 import android.app.Activity
 import breez_sdk_spark.PasskeyClient
 import breez_sdk_spark.PasskeyConfig
+import breez_sdk_spark.PasskeyProviderOptions
 import breez_sdk_spark.PrfProvider
 
 /**
@@ -29,8 +30,7 @@ public fun PasskeyClient(
 ): PasskeyClient {
     val provider = PasskeyProvider(
         activityProvider = activityProvider,
-        rpId = config?.rpId ?: PasskeyProvider.BREEZ_RP_ID,
-        rpName = config?.rpName ?: PasskeyProvider.DEFAULT_RP_NAME,
+        options = config?.providerOptions ?: PasskeyProviderOptions(),
     )
     return PasskeyClient(provider, breezApiKey, config)
 }
