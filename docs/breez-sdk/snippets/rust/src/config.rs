@@ -62,7 +62,8 @@ pub(crate) fn configure_stable_balance() -> Result<()> {
     config.stable_balance_config = Some(StableBalanceConfig {
         tokens: vec![StableBalanceToken {
             label: "USDB".to_string(),
-            token_identifier: "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87".to_string(),
+            token_identifier: "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87"
+                .to_string(),
         }],
         default_active_label: Some("USDB".to_string()),
         threshold_sats: None,
@@ -85,40 +86,33 @@ pub(crate) fn configure_spark_config() -> Result<()> {
         signing_operators: vec![
             SparkSigningOperator {
                 id: 0,
-                identifier:
-                    "0000000000000000000000000000000000000000000000000000000000000001"
-                        .to_string(),
+                identifier: "0000000000000000000000000000000000000000000000000000000000000001"
+                    .to_string(),
                 address: "https://0.spark.example.com".to_string(),
                 identity_public_key:
-                    "03acd9a5a88db102730ff83dee69d69088cc4c9d93bbee893e90fd5051b7da9651"
-                        .to_string(),
+                    "03acd9a5a88db102730ff83dee69d69088cc4c9d93bbee893e90fd5051b7da9651".to_string(),
             },
             SparkSigningOperator {
                 id: 1,
-                identifier:
-                    "0000000000000000000000000000000000000000000000000000000000000002"
-                        .to_string(),
+                identifier: "0000000000000000000000000000000000000000000000000000000000000002"
+                    .to_string(),
                 address: "https://1.spark.example.com".to_string(),
                 identity_public_key:
-                    "02d2d103cacb1d6355efeab27637c74484e2a7459e49110c3fe885210369782e23"
-                        .to_string(),
+                    "02d2d103cacb1d6355efeab27637c74484e2a7459e49110c3fe885210369782e23".to_string(),
             },
             SparkSigningOperator {
                 id: 2,
-                identifier:
-                    "0000000000000000000000000000000000000000000000000000000000000003"
-                        .to_string(),
+                identifier: "0000000000000000000000000000000000000000000000000000000000000003"
+                    .to_string(),
                 address: "https://2.spark.example.com".to_string(),
                 identity_public_key:
-                    "0350f07ffc21bfd59d31e0a7a600e2995273938444447cb9bc4c75b8a895dbb853"
-                        .to_string(),
+                    "0350f07ffc21bfd59d31e0a7a600e2995273938444447cb9bc4c75b8a895dbb853".to_string(),
             },
         ],
         ssp_config: SparkSspConfig {
             base_url: "https://api.example.com".to_string(),
             identity_public_key:
-                "02e0b8d42c5d3b5fe4c5beb6ea796ab3bc8aaf28a3d3195407482c67e0b58228a5"
-                    .to_string(),
+                "02e0b8d42c5d3b5fe4c5beb6ea796ab3bc8aaf28a3d3195407482c67e0b58228a5".to_string(),
             schema_endpoint: Some("graphql/spark/rc".to_string()),
         },
         expected_withdraw_bond_sats: 10_000,

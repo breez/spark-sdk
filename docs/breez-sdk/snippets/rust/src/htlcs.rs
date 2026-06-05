@@ -98,8 +98,7 @@ async fn list_claimable_htlc_payments(sdk: &BreezSdk) -> Result<Vec<Payment>> {
                 info!("Spark HTLC expiry time: {}", htlc.expiry_time);
             }
             Some(PaymentDetails::Lightning {
-                htlc_details: htlc,
-                ..
+                htlc_details: htlc, ..
             }) => {
                 info!("Lightning HTLC expiry time: {}", htlc.expiry_time);
             }

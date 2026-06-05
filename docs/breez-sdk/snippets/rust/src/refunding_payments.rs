@@ -42,11 +42,8 @@ async fn list_pending_deposits(sdk: &BreezSdk) -> Result<()> {
     let request = ListUnclaimedDepositsRequest {};
     let response = sdk.list_unclaimed_deposits(request).await?;
 
-    let pending_deposits: Vec<&DepositInfo> = response
-        .deposits
-        .iter()
-        .filter(|d| !d.is_mature)
-        .collect();
+    let pending_deposits: Vec<&DepositInfo> =
+        response.deposits.iter().filter(|d| !d.is_mature).collect();
 
     for deposit in pending_deposits {
         info!("Pending deposit: {}:{}", deposit.txid, deposit.vout);

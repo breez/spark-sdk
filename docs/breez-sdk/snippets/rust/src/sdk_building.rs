@@ -75,10 +75,7 @@ impl PaymentObserver for ExamplePaymentObserver {
         Ok(())
     }
 
-    async fn after_send(
-        &self,
-        updates: Vec<PaymentIdUpdate>,
-    ) -> Result<(), PaymentObserverError> {
+    async fn after_send(&self, updates: Vec<PaymentIdUpdate>) -> Result<(), PaymentObserverError> {
         for update in updates {
             info!(
                 "Token tx broadcast: {} -> {}",
@@ -116,6 +113,7 @@ pub(crate) async fn init_sdk_postgres() -> Result<BreezSdk> {
     // Optionally pool settings can be adjusted. Some examples:
     postgres_config.max_pool_size = 8; // Max connections in pool
     postgres_config.wait_timeout_secs = Some(30); // Timeout waiting for connection
+
     // If your service owns SDK-compatible schema migrations:
     postgres_config.run_migration = false;
 
@@ -147,12 +145,12 @@ pub(crate) async fn init_sdk_mysql() -> Result<BreezSdk> {
     // Configure MySQL backend (MySQL 8.0+).
     // Connection string format (URL only):
     //   "mysql://user:password@host:3306/dbname?ssl-mode=required"
-    let mut mysql_config = default_mysql_storage_config(
-        "mysql://user:password@localhost:3306/spark".to_string(),
-    );
+    let mut mysql_config =
+        default_mysql_storage_config("mysql://user:password@localhost:3306/spark".to_string());
     // Optionally pool settings can be adjusted. Some examples:
     mysql_config.max_pool_size = 8; // Max connections in pool
     mysql_config.recycle_timeout_secs = Some(60); // Recycle idle connections after this many seconds
+
     // Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
     // mysql_config.root_ca_pem = Some("-----BEGIN CERTIFICATE-----\n...".to_string());
 
