@@ -115,6 +115,7 @@ jobs:
   breez-test:
     name: Breez integration tests
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     env:
       FAUCET_USERNAME: ${{ secrets.FAUCET_USERNAME }}
       FAUCET_PASSWORD: ${{ secrets.FAUCET_PASSWORD }}
