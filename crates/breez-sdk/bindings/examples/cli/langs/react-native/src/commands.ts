@@ -162,6 +162,8 @@ export const COMMAND_NAMES = [
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
+  'authorize-lightning-address-transfer',
+  'claim-lightning-address-transfer',
   'delete-lightning-address',
   'list-fiat-currencies',
   'list-fiat-rates',
@@ -203,6 +205,8 @@ export function buildCommandRegistry(): Map<string, CommandDef> {
     { name: 'check-lightning-address-available', description: 'Check if a lightning address username is available', run: handleCheckLightningAddress },
     { name: 'get-lightning-address', description: 'Get registered lightning address', run: handleGetLightningAddress },
     { name: 'register-lightning-address', description: 'Register a lightning address', run: handleRegisterLightningAddress },
+    { name: 'authorize-lightning-address-transfer', description: 'Authorize transferring your lightning address to another pubkey', run: handleAuthorizeLightningAddressTransfer },
+    { name: 'claim-lightning-address-transfer', description: 'Claim a lightning address transfer', run: handleClaimLightningAddressTransfer },
     { name: 'delete-lightning-address', description: 'Delete lightning address', run: handleDeleteLightningAddress },
     { name: 'list-fiat-currencies', description: 'List fiat currencies', run: handleListFiatCurrencies },
     { name: 'list-fiat-rates', description: 'List available fiat rates', run: handleListFiatRates },
@@ -983,6 +987,45 @@ async function handleRegisterLightningAddress(sdk: BreezSdkInterface, _tokenIssu
   return formatValue(result)
 }
 
+// --- authorize-lightning-address-transfer ---
+
+async function handleAuthorizeLightningAddressTransfer(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  if (args.length < 1) {
+    return 'Usage: authorize-lightning-address-transfer <transferee_pubkey>'
+  }
+
+  const result = await sdk.authorizeLightningAddressTransfer({ transfereePubkey: args[0] })
+  return formatValue(result)
+}
+
+// --- claim-lightning-address-transfer ---
+
+async function handleClaimLightningAddressTransfer(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
+  const positional = args.filter(a => !a.startsWith('-'))
+  if (positional.length < 1) {
+    return 'Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature>'
+  }
+
+  const username = positional[0]
+  const description = positional.length > 1 ? positional[1] : parseFlag(args, '--description', '-d')
+  const fromPubkey = parseFlag(args, '--from-pubkey')
+  const fromSignature = parseFlag(args, '--from-signature')
+
+  if (!fromPubkey || !fromSignature) {
+    return 'Error: --from-pubkey and --from-signature are required'
+  }
+
+  const result = await sdk.claimLightningAddressTransfer({
+    authorization: {
+      username,
+      pubkey: fromPubkey,
+      signature: fromSignature,
+    },
+    description,
+  })
+  return formatValue(result)
+}
+
 // --- delete-lightning-address ---
 
 async function handleDeleteLightningAddress(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, _args: string[]): Promise<string> {
@@ -1074,6 +1117,7 @@ async function handleSetUserSettings(sdk: BreezSdkInterface, _tokenIssuer: Token
 
   await sdk.updateUserSettings({
     sparkPrivateModeEnabled,
+    stableBalanceActiveLabel: undefined,
   })
   return 'User settings updated'
 }

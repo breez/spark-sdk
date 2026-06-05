@@ -44,6 +44,7 @@ dotnet run --project BreezCli.csproj -- [OPTIONS]
 | `--list-labels` | - | List and select from labels published to Nostr (requires `--passkey`) |
 | `--store-label` | - | Publish the label to Nostr (requires `--passkey` and `--label`) |
 | `--rpid` | - | Relying party ID for FIDO2 provider (requires `--passkey`) |
+| `--server-mode` | - | Run in server mode (background tasks disabled; drive `sync` manually) |
 
 ### Passkey Support
 
@@ -83,7 +84,7 @@ Once inside the REPL, type `help` for all commands:
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
-**Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`
+**Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
 

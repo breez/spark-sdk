@@ -34,6 +34,8 @@ const COMMAND_NAMES = [
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
+  'authorize-lightning-address-transfer',
+  'claim-lightning-address-transfer',
   'delete-lightning-address',
   'list-fiat-currencies',
   'list-fiat-rates',
@@ -648,6 +650,38 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       const sdk = getSdk()
       const res = await sdk.registerLightningAddress({
         username,
+        description
+      })
+      printValue(res)
+    })
+
+  // --- authorize-lightning-address-transfer ---
+  program
+    .command('authorize-lightning-address-transfer')
+    .description('Authorize transferring the registered lightning address to another pubkey')
+    .argument('<transferee_pubkey>', 'The new owner\'s identity public key (hex-encoded compressed secp256k1)')
+    .action(async (transfereePubkey) => {
+      const sdk = getSdk()
+      const res = await sdk.authorizeLightningAddressTransfer({ transfereePubkey })
+      printValue(res)
+    })
+
+  // --- claim-lightning-address-transfer ---
+  program
+    .command('claim-lightning-address-transfer')
+    .description('Claim a lightning address transfer authorized by the current owner')
+    .argument('<username>', 'The username being taken over')
+    .argument('[description]', 'Description in the lnurl response and the invoice')
+    .requiredOption('--from-pubkey <pubkey>', 'The current owner\'s identity public key (hex-encoded compressed secp256k1)')
+    .requiredOption('--from-signature <signature>', 'The current owner\'s signature authorizing the transfer (hex-encoded DER ECDSA)')
+    .action(async (username, description, options) => {
+      const sdk = getSdk()
+      const res = await sdk.claimLightningAddressTransfer({
+        authorization: {
+          username,
+          pubkey: options.fromPubkey,
+          signature: options.fromSignature
+        },
         description
       })
       printValue(res)

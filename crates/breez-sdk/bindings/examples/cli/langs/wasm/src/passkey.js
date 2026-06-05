@@ -5,7 +5,7 @@ const fs = require('fs')
 const path = require('path')
 const readline = require('readline')
 
-const { Passkey } = require('@breeztech/breez-sdk-spark/nodejs')
+const { PasskeyClient } = require('@breeztech/breez-sdk-spark/nodejs')
 
 // ---------------------------------------------------------------------------
 // Passkey provider constants
@@ -103,15 +103,18 @@ class FilePrfProvider {
   }
 
   /**
-   * Derive a PRF seed using HMAC-SHA256(secret, salt).
+   * Derive PRF seeds using HMAC-SHA256(secret, salt) for each salt.
    *
-   * @param {string} salt - The salt string
-   * @returns {Promise<Uint8Array>} 32-byte PRF output
+   * @param {string[]} salts - The salt strings
+   * @returns {Promise<{seeds: Uint8Array[], credentialId: Uint8Array | null}>}
    */
-  derivePrfSeed = async (salt) => {
-    const hmac = crypto.createHmac('sha256', this.secret)
-    hmac.update(salt)
-    return new Uint8Array(hmac.digest())
+  deriveSeeds = async (salts) => {
+    const seeds = salts.map((salt) => {
+      const hmac = crypto.createHmac('sha256', this.secret)
+      hmac.update(salt)
+      return new Uint8Array(hmac.digest())
+    })
+    return { seeds, credentialId: null }
   }
 
   /**
@@ -119,7 +122,7 @@ class FilePrfProvider {
    *
    * @returns {Promise<boolean>}
    */
-  isPrfAvailable = async () => {
+  isSupported = async () => {
     return true
   }
 }
@@ -136,11 +139,11 @@ class NotYetSupportedProvider {
     this.name = name
   }
 
-  derivePrfSeed = async (_salt) => {
+  deriveSeeds = async (_salts) => {
     throw new Error(`${this.name} passkey provider is not yet supported in the Node.js CLI`)
   }
 
-  isPrfAvailable = async () => {
+  isSupported = async () => {
     return false
   }
 }
@@ -212,23 +215,13 @@ async function resolvePasskeySeed(
   listLabels,
   storeLabel
 ) {
-  const relayConfig = {
-    breezApiKey
-  }
-  const passkey = new Passkey(provider, relayConfig)
-
-  // --store-label: publish to Nostr
-  if (storeLabel && label) {
-    console.log(`Publishing label '${label}' to Nostr...`)
-    await passkey.storeLabel(label)
-    console.log(`Label '${label}' published successfully.`)
-  }
+  const client = new PasskeyClient(provider, breezApiKey, undefined)
 
   // --list-labels: query Nostr and prompt user to select
-  let resolvedName = label
+  let resolvedLabel = label
   if (listLabels) {
     console.log('Querying Nostr for available labels...')
-    const labels = await passkey.listLabels()
+    const labels = await client.labels().list()
 
     if (labels.length === 0) {
       throw new Error('No labels found on Nostr for this identity')
@@ -245,11 +238,18 @@ async function resolvePasskeySeed(
       throw new Error('Invalid selection')
     }
 
-    resolvedName = labels[idx - 1]
+    resolvedLabel = labels[idx - 1]
   }
 
-  const wallet = await passkey.getWallet(resolvedName)
-  return wallet.seed
+  // --store-label: publish to Nostr before signing in
+  if (storeLabel && resolvedLabel) {
+    console.log(`Publishing label '${resolvedLabel}' to Nostr...`)
+    await client.labels().store(resolvedLabel)
+    console.log(`Label '${resolvedLabel}' published successfully.`)
+  }
+
+  const response = await client.signIn({ label: resolvedLabel })
+  return response.wallet.seed
 }
 
 module.exports = {

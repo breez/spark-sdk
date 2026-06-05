@@ -15,7 +15,6 @@ from breez_sdk_spark import (
     KeySetType,
     Network,
     SdkBuilder,
-    SdkContextConfig,
     SdkEvent,
     Seed,
     StableBalanceConfig,
@@ -23,8 +22,10 @@ from breez_sdk_spark import (
     default_config,
     default_mysql_storage_config,
     default_postgres_storage_config,
+    default_server_config,
     init_logging,
-    new_shared_sdk_context,
+    mysql_storage,
+    postgres_storage,
 )
 
 from breez_cli.commands import COMMAND_NAMES, build_command_registry
@@ -69,6 +70,8 @@ def expand_path(path: str) -> Path:
 @click.option("--stable-balance-default-active-label", default=None,
               help="Default active label for stable balance (must match a token label)")
 @click.option("--stable-balance-threshold", type=int, default=None, help="Stable balance threshold in sats")
+@click.option("--server-mode", is_flag=True, default=False,
+              help="Run in server mode (background_tasks_enabled=false)")
 @click.option("--passkey", "passkey_provider", default=None, help="Use passkey with file, yubikey, or fido2 provider")
 @click.option("--label", default=None, help="Label for seed derivation (requires --passkey)")
 @click.option("--list-labels", is_flag=True, default=False, help="List and select from labels published to Nostr (requires --passkey)")
@@ -78,6 +81,7 @@ async def main(data_dir, network, account_number, postgres_connection_string,
                mysql_connection_string,
                stable_balance_tokens, stable_balance_default_active_label,
                stable_balance_threshold,
+               server_mode,
                passkey_provider, label, list_labels, store_label, rpid):
     """CLI client for Breez SDK with Spark."""
     data_dir = expand_path(data_dir)
@@ -106,7 +110,11 @@ async def main(data_dir, network, account_number, postgres_connection_string,
 
     network_enum = Network.MAINNET if network == "mainnet" else Network.REGTEST
     breez_api_key = os.environ.get("BREEZ_API_KEY")
-    config = default_config(network=network_enum)
+    if server_mode:
+        print("Server mode enabled. Run `sync` between operations.")
+        config = default_server_config(network=network_enum)
+    else:
+        config = default_config(network=network_enum)
     config.api_key = breez_api_key
 
     if stable_balance_tokens:
@@ -136,19 +144,17 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     builder = SdkBuilder(config=config, seed=seed)
 
     if postgres_connection_string:
-        context = await new_shared_sdk_context(config=SdkContextConfig(
-            network=network_enum,
-            api_key=breez_api_key,
-            postgres_config=default_postgres_storage_config(connection_string=postgres_connection_string),
-        ))
-        await builder.with_shared_context(context=context)
+        await builder.with_storage_backend(
+            storage=postgres_storage(config=default_postgres_storage_config(
+                connection_string=postgres_connection_string,
+            ))
+        )
     elif mysql_connection_string:
-        context = await new_shared_sdk_context(config=SdkContextConfig(
-            network=network_enum,
-            api_key=breez_api_key,
-            mysql_config=default_mysql_storage_config(connection_string=mysql_connection_string),
-        ))
-        await builder.with_shared_context(context=context)
+        await builder.with_storage_backend(
+            storage=mysql_storage(config=default_mysql_storage_config(
+                connection_string=mysql_connection_string,
+            ))
+        )
     else:
         await builder.with_default_storage(storage_dir=str(data_dir))
 

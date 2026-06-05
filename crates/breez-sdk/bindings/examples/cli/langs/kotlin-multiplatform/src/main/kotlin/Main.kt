@@ -62,13 +62,15 @@ fun main(args: Array<String>) {
     var accountNumber: String? = null
     var postgresConnectionString: String? = null
     var mysqlConnectionString: String? = null
-    var stableBalanceTokenIdentifier: String? = null
+    val stableBalanceTokens = mutableListOf<String>()
+    var stableBalanceDefaultActiveLabel: String? = null
     var stableBalanceThreshold: ULong? = null
     var passkeyProviderStr: String? = null
     var label: String? = null
     var listLabels = false
     var storeLabel = false
     var rpId: String? = null
+    var serverMode = false
 
     // Simple argument parsing
     var i = 0
@@ -94,9 +96,13 @@ fun main(args: Array<String>) {
                 i++
                 if (i < args.size) mysqlConnectionString = args[i]
             }
-            "--stable-balance-token-identifier" -> {
+            "--stable-balance-token" -> {
                 i++
-                if (i < args.size) stableBalanceTokenIdentifier = args[i]
+                if (i < args.size) stableBalanceTokens.add(args[i])
+            }
+            "--stable-balance-default-active-label" -> {
+                i++
+                if (i < args.size) stableBalanceDefaultActiveLabel = args[i]
             }
             "--stable-balance-threshold" -> {
                 i++
@@ -120,6 +126,9 @@ fun main(args: Array<String>) {
                 i++
                 if (i < args.size) rpId = args[i]
             }
+            "--server-mode" -> {
+                serverMode = true
+            }
             "--help", "-h" -> {
                 println("Usage: breez-sdk-spark-cli [OPTIONS]")
                 println()
@@ -129,13 +138,15 @@ fun main(args: Array<String>) {
                 println("  --account-number <NUM>                       Account number for the Spark signer")
                 println("  --postgres-connection-string <CONN>          PostgreSQL connection string (uses SQLite by default)")
                 println("  --mysql-connection-string <CONN>             MySQL connection string (mutually exclusive with --postgres-connection-string)")
-                println("  --stable-balance-token-identifier <ID>       Stable balance token identifier")
+                println("  --stable-balance-token <TICKER:ID>           Stable balance token in TICKER:token_identifier format (repeatable)")
+                println("  --stable-balance-default-active-label <LBL>  Default active label for stable balance")
                 println("  --stable-balance-threshold <SATS>            Stable balance threshold in sats")
                 println("  --passkey <PROVIDER>                         Use passkey with PRF provider (file, yubikey, or fido2)")
                 println("  --label <NAME>                               Label for seed derivation (requires --passkey)")
                 println("  --list-labels                                List and select from labels on Nostr (requires --passkey)")
                 println("  --store-label                                Publish the label to Nostr (requires --passkey and --label)")
                 println("  --rpid <ID>                                  Relying party ID for FIDO2 provider (requires --passkey)")
+                println("  --server-mode                                Run in server mode (no background tasks)")
                 println("  -h, --help                                   Show this help message")
                 return
             }
@@ -180,13 +191,21 @@ fun main(args: Array<String>) {
     }
 
     // Build stable balance config
-    val stableBalanceConfig = if (stableBalanceTokenIdentifier != null) {
+    val stableBalanceConfig = if (stableBalanceTokens.isNotEmpty()) {
+        val tokens = stableBalanceTokens.map { s ->
+            val parts = s.split(":", limit = 2)
+            if (parts.size != 2) {
+                System.err.println("Invalid token format '$s', expected LABEL:token_identifier")
+                return
+            }
+            StableBalanceToken(
+                label = parts[0],
+                tokenIdentifier = parts[1],
+            )
+        }
         StableBalanceConfig(
-            tokens = listOf(StableBalanceToken(
-                label = "USDB",
-                tokenIdentifier = stableBalanceTokenIdentifier,
-            )),
-            defaultActiveLabel = "USDB",
+            tokens = tokens,
+            defaultActiveLabel = stableBalanceDefaultActiveLabel,
             thresholdSats = stableBalanceThreshold,
             maxSlippageBps = null,
         )
@@ -213,6 +232,7 @@ fun main(args: Array<String>) {
         runInteractiveMode(
             resolvedDir,
             networkEnum,
+            serverMode,
             accountNumber,
             postgresConnectionString,
             mysqlConnectionString,
@@ -225,6 +245,7 @@ fun main(args: Array<String>) {
 suspend fun runInteractiveMode(
     dataDir: String,
     network: Network,
+    serverMode: Boolean,
     accountNumber: String?,
     postgresConnectionString: String?,
     mysqlConnectionString: String?,
@@ -242,7 +263,12 @@ suspend fun runInteractiveMode(
     val persistence = CliPersistence(dataDir)
 
     // Config
-    val config = defaultConfig(network)
+    val config = if (serverMode) {
+        println("Server mode enabled. Run `sync` between operations.")
+        defaultServerConfig(network)
+    } else {
+        defaultConfig(network)
+    }
     val apiKey = System.getenv("BREEZ_API_KEY")
     if (!apiKey.isNullOrEmpty()) {
         config.apiKey = apiKey
@@ -267,19 +293,9 @@ suspend fun runInteractiveMode(
     // Build SDK
     val builder = SdkBuilder(config, seed)
     if (postgresConnectionString != null) {
-        val context = newSharedSdkContext(SdkContextConfig(
-            network = network,
-            apiKey = if (!apiKey.isNullOrEmpty()) apiKey else null,
-            storage = postgresStorage(defaultPostgresStorageConfig(postgresConnectionString)),
-        ))
-        builder.withSharedContext(context)
+        builder.withStorageBackend(postgresStorage(defaultPostgresStorageConfig(postgresConnectionString)))
     } else if (mysqlConnectionString != null) {
-        val context = newSharedSdkContext(SdkContextConfig(
-            network = network,
-            apiKey = if (!apiKey.isNullOrEmpty()) apiKey else null,
-            storage = mysqlStorage(defaultMysqlStorageConfig(mysqlConnectionString)),
-        ))
-        builder.withSharedContext(context)
+        builder.withStorageBackend(mysqlStorage(defaultMysqlStorageConfig(mysqlConnectionString)))
     } else {
         builder.withDefaultStorage(dataDir)
     }
@@ -307,6 +323,8 @@ suspend fun runInteractiveMode(
     val commandRegistry = buildCommandRegistry()
     val issuerRegistry = buildIssuerRegistry()
     val contactsRegistry = buildContactsRegistry()
+    val webhooksRegistry = buildWebhooksRegistry()
+    val stableBalanceRegistry = buildStableBalanceRegistry()
 
     // Build completion list
     val allCommands = mutableListOf<String>()
@@ -315,6 +333,10 @@ suspend fun runInteractiveMode(
     allCommands.add("issuer")
     allCommands.addAll(CONTACTS_COMMAND_NAMES.map { "contacts $it" })
     allCommands.add("contacts")
+    allCommands.addAll(WEBHOOKS_COMMAND_NAMES.map { "webhooks $it" })
+    allCommands.add("webhooks")
+    allCommands.addAll(STABLE_BALANCE_COMMAND_NAMES.map { "stable-balance $it" })
+    allCommands.add("stable-balance")
     allCommands.addAll(listOf("exit", "quit", "help"))
 
     val networkLabel = when (network) {
@@ -357,7 +379,7 @@ suspend fun runInteractiveMode(
         }
 
         if (trimmed == "help") {
-            printHelp(commandRegistry, issuerRegistry, contactsRegistry)
+            printHelp(commandRegistry, issuerRegistry, contactsRegistry, webhooksRegistry, stableBalanceRegistry)
             continue
         }
 
@@ -369,6 +391,8 @@ suspend fun runInteractiveMode(
             when (cmdName) {
                 "issuer" -> dispatchIssuerCommand(cmdArgs, tokenIssuer, issuerRegistry, lineReader)
                 "contacts" -> dispatchContactsCommand(cmdArgs, sdk, contactsRegistry, lineReader)
+                "webhooks" -> dispatchWebhooksCommand(cmdArgs, sdk, webhooksRegistry, lineReader)
+                "stable-balance" -> dispatchStableBalanceCommand(cmdArgs, sdk, stableBalanceRegistry, lineReader)
                 else -> {
                     val cmd = commandRegistry[cmdName]
                     if (cmd != null) {
@@ -395,7 +419,9 @@ suspend fun runInteractiveMode(
 fun printHelp(
     commandRegistry: Map<String, CliCommand>,
     issuerRegistry: Map<String, IssuerCliCommand>,
-    contactsRegistry: Map<String, ContactsCliCommand>
+    contactsRegistry: Map<String, ContactsCliCommand>,
+    webhooksRegistry: Map<String, WebhooksCliCommand>,
+    stableBalanceRegistry: Map<String, StableBalanceCliCommand>,
 ) {
     println()
     println("Available commands:")
@@ -405,6 +431,8 @@ fun printHelp(
     }
     println("  %-40s %s".format("issuer <subcommand>", "Token issuer commands (use 'issuer help' for details)"))
     println("  %-40s %s".format("contacts <subcommand>", "Contacts commands (use 'contacts help' for details)"))
+    println("  %-40s %s".format("webhooks <subcommand>", "Webhook commands (use 'webhooks help' for details)"))
+    println("  %-40s %s".format("stable-balance <subcommand>", "Stable balance commands (use 'stable-balance help' for details)"))
     println("  %-40s %s".format("exit / quit", "Exit the CLI"))
     println("  %-40s %s".format("help", "Show this help message"))
     println()

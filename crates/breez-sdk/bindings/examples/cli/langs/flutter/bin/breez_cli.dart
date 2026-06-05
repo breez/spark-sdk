@@ -39,6 +39,11 @@ Future<void> main(List<String> arguments) async {
           help: 'Publish label to Nostr (requires --passkey and --label)',
         )
         ..addOption('rpid', help: 'Relying party ID for FIDO2 provider (requires --passkey)')
+        ..addFlag(
+          'server-mode',
+          negatable: false,
+          help: 'Run in server mode (background_tasks_enabled=false)',
+        )
         ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
 
   final ArgResults results;
@@ -135,6 +140,7 @@ Future<void> main(List<String> arguments) async {
     stableBalanceDefaultActiveLabel: stableBalanceDefaultActiveLabel,
     stableBalanceThreshold: stableBalanceThreshold,
     passkeyConfig: passkeyConfig,
+    serverMode: results.flag('server-mode'),
   );
 
   // Force exit — the native FFI library may keep background threads alive

@@ -61,6 +61,7 @@ node src/main.js [OPTIONS]
 | `--list-labels` | false | Requires `--passkey`. Select label from Nostr |
 | `--store-label` | false | Requires `--passkey`. Publish label to Nostr |
 | `--rpid` | `keys.breez.technology` | Requires `--passkey`. Relying party ID for FIDO2 provider |
+| `--server-mode` | false | Run in server mode (`background_tasks_enabled=false`) |
 
 ### Examples
 
@@ -88,7 +89,7 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
-**Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`
+**Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
 

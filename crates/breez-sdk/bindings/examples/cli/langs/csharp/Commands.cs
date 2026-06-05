@@ -39,6 +39,8 @@ public static class CommandNames
         "check-lightning-address-available",
         "get-lightning-address",
         "register-lightning-address",
+        "authorize-lightning-address-transfer",
+        "claim-lightning-address-transfer",
         "delete-lightning-address",
         "list-fiat-currencies",
         "list-fiat-rates",
@@ -170,6 +172,18 @@ public static class Commands
                 Name = "register-lightning-address",
                 Description = "Register a lightning address",
                 Run = HandleRegisterLightningAddress
+            },
+            ["authorize-lightning-address-transfer"] = new()
+            {
+                Name = "authorize-lightning-address-transfer",
+                Description = "Authorize transferring your lightning address to another user",
+                Run = HandleAuthorizeLightningAddressTransfer
+            },
+            ["claim-lightning-address-transfer"] = new()
+            {
+                Name = "claim-lightning-address-transfer",
+                Description = "Claim a lightning address transfer authorized by the current owner",
+                Run = HandleClaimLightningAddressTransfer
             },
             ["delete-lightning-address"] = new()
             {
@@ -1015,6 +1029,49 @@ public static class Commands
         var result = await sdk.RegisterLightningAddress(new RegisterLightningAddressRequest(
             username: positional[0],
             description: description
+        ));
+        Serialization.PrintValue(result);
+    }
+
+    // --- authorize-lightning-address-transfer ---
+
+    private static async Task HandleAuthorizeLightningAddressTransfer(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var positional = GetPositionalArgs(args);
+        if (positional.Length < 1)
+        {
+            Console.WriteLine("Usage: authorize-lightning-address-transfer <transferee_pubkey>");
+            return;
+        }
+
+        var result = await sdk.AuthorizeLightningAddressTransfer(new AuthorizeTransferRequest(
+            transfereePubkey: positional[0]
+        ));
+        Serialization.PrintValue(result);
+    }
+
+    // --- claim-lightning-address-transfer ---
+
+    private static async Task HandleClaimLightningAddressTransfer(BreezSdk sdk, Func<string, string?> readline, string[] args)
+    {
+        var description = GetFlag(args, "-d", "--description");
+        var fromPubkey = GetFlag(args, "--from-pubkey");
+        var fromSignature = GetFlag(args, "--from-signature");
+        var positional = GetPositionalArgs(args);
+
+        if (positional.Length < 1 || fromPubkey == null || fromSignature == null)
+        {
+            Console.WriteLine("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pk> --from-signature <sig>");
+            return;
+        }
+
+        var result = await sdk.ClaimLightningAddressTransfer(new ClaimTransferRequest(
+            authorization: new TransferAuthorization(
+                username: positional[0],
+                pubkey: fromPubkey,
+                signature: fromSignature
+            ),
+            description: description ?? (positional.Length > 1 ? positional[1] : null)
         ));
         Serialization.PrintValue(result);
     }
