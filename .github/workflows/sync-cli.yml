@@ -521,15 +521,19 @@ jobs:
             REVIEWER_FLAG="--reviewer $REVIEWER"
           fi
 
-          # Reuse existing open PR or create a new one
+          # The bot branch is throwaway (rebuilt from main each run), so
+          # force-push unconditionally. Force-pushing only when an open PR
+          # exists lets a branch left over from a closed PR block the plain
+          # push with a non-fast-forward rejection.
+          git push --force origin HEAD
+
+          # Reuse the existing open PR if one is still open, else open a new one.
           EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')
           if [ -n "$EXISTING_PR" ]; then
-            git push --force-with-lease -u origin HEAD
             gh pr edit "$EXISTING_PR" --body "$BODY"
             echo "::notice::Updated existing PR #${EXISTING_PR}"
             echo "action=updated" >> "$GITHUB_OUTPUT"
           else
-            git push -u origin HEAD
             gh pr create --title "chore: sync CLI languages with Rust CLI changes" \
               --body "$BODY" \
               --label "CLI" \
@@ -539,11 +543,15 @@ jobs:
           fi
 
       - name: Cleanup branch on failure
-        if: failure() && steps.create-pr.outputs.action == 'created'
+        if: failure()
         env:
           GH_TOKEN: ${{ secrets.SYNC_CLI_PR_TOKEN }}
         run: |
-          git push origin --delete "claude/sync-cli" 2>/dev/null || true
+          # Delete the bot branch only when no open PR still points at it, so a
+          # failed run never orphans a branch nor deletes one a live PR needs.
+          if [ -z "$(gh pr list --head claude/sync-cli --state open --json number --jq '.[0].number')" ]; then
+            git push origin --delete claude/sync-cli 2>/dev/null || true
+          fi
 
       # ── Job summary ─────────────────────────────────────────────────
       - name: Summary
