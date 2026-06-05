@@ -130,8 +130,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Tests (DIAG full breez-itest as-is)
-        env:
-          RUST_LOG: "warn,spark_wallet=debug,spark::tree::store=info,spark::tree::leaf_optimizer=info,lnurl=info,breez_sdk_itest=info"
         run: make breez-itest
 
   wasm-clippy:
