@@ -27,21 +27,14 @@ from breez_sdk_spark import (
 # create_passkey for registration is optional.
 class CustomPrfProvider(PrfProvider):
     async def derive_seeds(self, request: DeriveSeedsRequest) -> DeriveSeedsOutput:
-        # Call platform passkey API with PRF extension. Use the dual-salt
-        # ceremony when the authenticator supports it (one OS prompt for
-        # N salts) and fall back to per-salt assertions otherwise.
-        # Returns one 32-byte PRF output per salt in input order.
+        # Return one 32-byte PRF output per salt, in input order.
         raise NotImplementedError("Implement using WebAuthn or native passkey APIs")
 
     async def is_supported(self) -> bool:
-        # Check if a PRF-capable authenticator is reachable from this
-        # platform / device.
         raise NotImplementedError("Check platform passkey availability")
 
     async def create_passkey(self, exclude_credentials: list[bytes]) -> PasskeyCredential:
-        # Register a new credential and return its ID, the WebAuthn
-        # user.id the platform recorded (returned for host-side
-        # correlation, never host-supplied), AAGUID, and BE flag.
+        # Register a credential and return its ID plus attestation.
         raise NotImplementedError("Implement registration via native passkey API")
 
     async def check_domain_association(self) -> DomainAssociation:
@@ -65,8 +58,6 @@ async def check_availability():
     passkey = PasskeyClient(prf_provider, None, None)
 
     # ANCHOR: check-availability
-    # check_availability collapses is_supported + check_domain_association
-    # into a single tagged value. Branch on the variant the host needs.
     availability = await passkey.check_availability()
     if isinstance(availability, PasskeyAvailability.AVAILABLE):
         pass  # Show passkey as primary option.
@@ -92,20 +83,10 @@ async def connect_with_passkey():
     passkey = PasskeyClient(prf_provider, None, None)
 
     # ANCHOR: connect-with-passkey
-    # Single-CTA onboarding: silent sign-in for a returning user,
-    # fall-through to register on a fresh device. Internally pins
-    # `prefer_immediately_available_credentials = True` so the silent
-    # attempt fast-fails (no UI) when no local credential exists; only
-    # `CredentialNotFound` flips to register, all other errors (cancel
-    # / timeout / configuration) propagate unchanged.
+    # Silent sign-in for a returning user, fall-through to register on a fresh device.
     response = await passkey.connect_with_passkey(
         ConnectWithPasskeyRequest(label="personal")
     )
-
-    # The credential is surfaced on both paths when the provider exposes
-    # it. Persist credential_id for future exclude_credentials.
-    if response.credential is not None:
-        _persist = response.credential.credential_id
 
     config = default_config(network=Network.MAINNET)
     sdk = await connect(
@@ -120,18 +101,7 @@ async def register_new_passkey():
     passkey = PasskeyClient(prf_provider, None, None)
 
     # ANCHOR: register-passkey
-    # For a brand-new user with no existing passkey: register() creates
-    # the credential AND derives the seed in one orchestrated
-    # call. On iOS+Android this is 2 OS prompts total (1 create + 1
-    # dual-salt assert) thanks to the SDK's bulk-PRF path.
     response = await passkey.register(RegisterRequest(label="personal"))
-
-    # Persist credential.credential_id (for exclude_credentials bookkeeping)
-    # and credential.user_id (for server-side correlation). The SDK
-    # generates user_id; it is never host-supplied.
-    if response.credential is not None:
-        _persisted_credential_id = response.credential.credential_id
-        _persisted_user_id = response.credential.user_id
 
     config = default_config(network=Network.MAINNET)
     sdk = await connect(
@@ -148,18 +118,14 @@ async def credential_metadata():
     # ANCHOR: credential-metadata
     response = await passkey.register(RegisterRequest(label="personal"))
 
-    # Persist these in synced storage (iCloud Keychain / Block Store) so they
-    # survive reinstall and reach the user's other devices. aaguid and
-    # backup_eligible are only available here, on registration.
     if response.credential is not None:
-        _persisted_credential_id = response.credential.credential_id
-        _persisted_aaguid = response.credential.aaguid
-        _persisted_backup_eligible = response.credential.backup_eligible
+        print(response.credential.credential_id)  # Persist to reopen the same wallet on sign-in
+        print(response.credential.aaguid)  # Authenticator model (display hint, unverified)
+        print(response.credential.backup_eligible)  # Whether the passkey syncs across devices
 
-    # On a later sign-in, pin the stored credential ID via allow_credentials so
-    # the OS cannot substitute a sibling credential, which would derive a
-    # different wallet seed.
-    await passkey.sign_in(
+    # Pin the stored credential ID so the OS can't substitute a sibling
+    # credential, which would derive a different wallet.
+    sign_in_response = await passkey.sign_in(
         SignInRequest(
             label="personal",
             allow_credentials=[
@@ -167,6 +133,10 @@ async def credential_metadata():
             ],
         )
     )
+    print(sign_in_response.wallet.seed)  # Pass to connect() to open the wallet
+    print(sign_in_response.wallet.label)  # Label this wallet was derived from
+    print(sign_in_response.labels)  # This passkey's labels (populated on discovery sign-in)
+    print(sign_in_response.credential)  # Credential signed in with (credential_id only)
     # ANCHOR_END: credential-metadata
 
 
@@ -193,8 +163,7 @@ async def store_label():
 
 async def check_domain():
     # ANCHOR: domain-association
-    # Verify Apple AASA / Android Asset Links / Web Related Origins
-    # before the first WebAuthn ceremony. Diagnostic only: never blocks.
+    # Diagnostic only: never blocks the ceremony.
     prf_provider = CustomPrfProvider()
     result = await prf_provider.check_domain_association()
 
@@ -213,11 +182,6 @@ async def recover_from_already_exists():
     passkey = PasskeyClient(prf_provider, None, None)
 
     # ANCHOR: recover-already-exists
-    # The OS rejected register because the user's password manager
-    # already holds a credential matching `exclude_credentials`.
-    # Route the user to the sign-in path: the OS picker will surface
-    # the existing credential and the SDK's identity cache will warm
-    # up on the assertion.
     try:
         await passkey.register(
             RegisterRequest(
@@ -228,8 +192,7 @@ async def recover_from_already_exists():
             )
         )
     except PrfProviderError.CredentialAlreadyExists:
-        # Flip to sign-in. The existing credential's PRF output is
-        # the same seed the host would have minted on register.
+        # A matching credential already exists; sign in to it instead.
         response = await passkey.sign_in(SignInRequest(label="personal"))
         return response.wallet
     # ANCHOR_END: recover-already-exists
@@ -240,14 +203,11 @@ async def handle_timeout():
     passkey = PasskeyClient(prf_provider, None, None)
 
     # ANCHOR: handle-timeout
-    # The OS biometric inactivity timeout (~55s+) tore down the prompt
-    # without user intent. Distinct from a real cancel: hosts may
-    # surface a re-prompt UI without treating it as the user opting
-    # out. The SDK fires PrfProviderError.UserTimedOut when assertion
-    # or register elapsed time crosses 55_000 ms.
+    # Biometric inactivity timeout, distinct from a user cancel.
     try:
         return await passkey.sign_in(SignInRequest(label="personal"))
     except PrfProviderError.UserTimedOut:
+        # Show a retry UI. Do NOT auto-retry without user input.
         print("Sign-in timed out: show \"Try Again\" UI.")
         raise
     # ANCHOR_END: handle-timeout

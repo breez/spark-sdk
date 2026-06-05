@@ -2,48 +2,31 @@ import BreezSdkSpark
 import Foundation
 
 // ANCHOR: implement-prf-provider
-// Implement the PrfProvider interface for custom logic if the built-in
-// PasskeyProvider doesn't fit your needs (hardware key, FIDO2 transport,
-// air-gapped backup file, etc.). Three required methods: deriveSeeds for
-// derivation, isSupported for the capability probe; createPasskey for
-// registration is optional.
+// Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
+// file-backed). Only deriveSeeds and isSupported are required.
 class CustomPrfProvider: PrfProvider {
     func deriveSeeds(request: DeriveSeedsRequest) async throws -> DeriveSeedsOutput {
-        // Call platform passkey API with PRF extension. Use the dual-salt
-        // ceremony when the authenticator supports it (one OS prompt for
-        // N salts) and fall back to per-salt assertions otherwise.
-        // Returns one 32-byte PRF output per salt in input order.
+        // Return one 32-byte PRF output per salt, in input order.
         fatalError("Implement using WebAuthn or native passkey APIs")
     }
 
     func isSupported() async throws -> Bool {
-        // Check if a PRF-capable authenticator is reachable from this
-        // platform / device.
         fatalError("Check platform passkey availability")
     }
 
     func createPasskey(excludeCredentials: [Data]) async throws -> PasskeyCredential {
-        // Register a new credential and return its ID, the WebAuthn
-        // user.id the platform recorded (returned for host-side
-        // correlation, never host-supplied), AAGUID, and BE flag.
+        // Register a credential and return its ID plus attestation.
         fatalError("Implement registration via WebAuthn create() / native API")
     }
 
     func checkDomainAssociation() async throws -> DomainAssociation {
-        // Optional: verify the app's identity against the platform's
-        // domain verification source (e.g., iOS AASA CDN, Android
-        // assetlinks). Custom providers without a verification source
-        // return `.skipped`, which tells callers "proceed with WebAuthn
-        // as normal".
         return .skipped(reason: "CustomPrfProvider does not verify domain association")
     }
 }
 // ANCHOR_END: implement-prf-provider
 
 func checkAvailability() async throws {
-    // Pass `PasskeyProvider.BREEZ_RP_ID` instead of "<your-rp-domain>" if your
-    // app is Breez-registered (shares credentials with other Breez apps).
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let prfProvider = PasskeyProvider(options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: check-availability
@@ -62,14 +45,16 @@ func checkAvailability() async throws {
 
 func setupPasskeyClient() -> PasskeyClient {
     // ANCHOR: setup-client
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
-    let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
+    let passkey = PasskeyClient(
+        breezApiKey: "<breez api key>",
+        config: PasskeyConfig(providerOptions: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
+    )
     // ANCHOR_END: setup-client
     return passkey
 }
 
 func connectWithPasskey() async throws -> BreezSdk {
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let prfProvider = PasskeyProvider(options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: connect-with-passkey
@@ -80,11 +65,6 @@ func connectWithPasskey() async throws -> BreezSdk {
     let response = try await passkey.connectWithPasskey(
         request: ConnectWithPasskeyRequest(label: "personal")
     )
-
-    // `credential` is the path discriminator (nil on sign-in).
-    if let credential = response.credential {
-        let _ = credential.credentialId
-    }
 
     let sdk = try await connect(
         request: ConnectRequest(
@@ -97,18 +77,17 @@ func connectWithPasskey() async throws -> BreezSdk {
 }
 
 func signInExistingUser() async throws -> SignInResponse {
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let prfProvider = PasskeyProvider(options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: sign-in
-    // Returning-user-only sign-in. No fall-through to register: use
-    // `connectWithPasskey` when you also want the new-user path.
+    // Returning-user sign-in. No fall-through to register.
     return try await passkey.signIn(request: SignInRequest(label: "personal"))
     // ANCHOR_END: sign-in
 }
 
 func registerNewPasskey() async throws -> BreezSdk {
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let prfProvider = PasskeyProvider(options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: register-passkey
@@ -118,9 +97,6 @@ func registerNewPasskey() async throws -> BreezSdk {
     let response = try await passkey.register(
         request: RegisterRequest(label: "personal")
     )
-
-    // Persist credentialId for future excludeCredentials.
-    let _ = (response.credential?.credentialId, response.credential?.userId)
 
     let sdk = try await connect(
         request: ConnectRequest(
@@ -133,7 +109,7 @@ func registerNewPasskey() async throws -> BreezSdk {
 }
 
 func credentialMetadata() async throws {
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let prfProvider = PasskeyProvider(options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: nil, config: nil)
 
     // ANCHOR: credential-metadata
@@ -141,17 +117,15 @@ func credentialMetadata() async throws {
         request: RegisterRequest(label: "personal")
     )
 
-    // Persist these in synced storage (iCloud Keychain) so they survive
-    // reinstall and reach the user's other devices. aaguid and backupEligible
-    // are only available here, on registration.
     if let credential = response.credential {
-        let _ = (credential.credentialId, credential.aaguid, credential.backupEligible)
+        print(credential.credentialId) // Persist to reopen the same wallet on sign-in
+        print(credential.aaguid) // Authenticator model (display hint, unverified)
+        print(credential.backupEligible) // Whether the passkey syncs across devices
     }
 
-    // On a later sign-in, pin the stored credential ID via allowCredentials so
-    // the OS cannot substitute a sibling credential, which would derive a
-    // different wallet seed.
-    let _ = try await passkey.signIn(
+    // Pin the stored credential ID so the OS can't substitute a sibling
+    // credential, which would derive a different wallet.
+    let signInResponse = try await passkey.signIn(
         request: SignInRequest(
             label: "personal",
             allowCredentials: [
@@ -159,11 +133,15 @@ func credentialMetadata() async throws {
             ]
         )
     )
+    print(signInResponse.wallet.seed) // Pass to connect() to open the wallet
+    print(signInResponse.wallet.label) // Label this wallet was derived from
+    print(signInResponse.labels) // This passkey's labels (populated on discovery sign-in)
+    print(signInResponse.credential) // Credential signed in with (credential_id only)
     // ANCHOR_END: credential-metadata
 }
 
 func listLabels() async throws -> [String] {
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let prfProvider = PasskeyProvider(options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
     // ANCHOR: list-labels
     let labels = try await passkey.labels().list()
@@ -175,7 +153,7 @@ func listLabels() async throws -> [String] {
 }
 
 func storeLabel() async throws {
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let prfProvider = PasskeyProvider(options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
     // ANCHOR: store-label
     try await passkey.labels().store(label: "personal")
@@ -185,7 +163,7 @@ func storeLabel() async throws {
 func checkDomain() async throws {
     // ANCHOR: domain-association
     // Lower-level provider call. Most hosts use `checkAvailability` instead.
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let prfProvider = PasskeyProvider(options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
     let result = try await prfProvider.checkDomainAssociation()
 
     switch result {
@@ -201,7 +179,7 @@ func checkDomain() async throws {
 }
 
 func recoverFromAlreadyExists() async throws -> Wallet {
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let prfProvider = PasskeyProvider(options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: recover-already-exists
@@ -216,6 +194,7 @@ func recoverFromAlreadyExists() async throws -> Wallet {
         )
         return response.wallet
     } catch PrfProviderError.CredentialAlreadyExists {
+        // A matching credential already exists; sign in instead.
         let response = try await passkey.signIn(
             request: SignInRequest(label: "personal")
         )
@@ -225,7 +204,7 @@ func recoverFromAlreadyExists() async throws -> Wallet {
 }
 
 func handleTimeout() async throws -> SignInResponse {
-    let prfProvider = PasskeyProvider(rpId: "<your-rp-domain>", rpName: "Your App")
+    let prfProvider = PasskeyProvider(options: PasskeyProviderOptions(rpId: "<your-rp-domain>", rpName: "Your App"))
     let passkey = PasskeyClient(prfProvider: prfProvider, breezApiKey: "<breez api key>", config: nil)
 
     // ANCHOR: handle-timeout
@@ -234,6 +213,7 @@ func handleTimeout() async throws -> SignInResponse {
             request: SignInRequest(label: "personal")
         )
     } catch PrfProviderError.UserTimedOut {
+        // Show a retry UI. Do NOT auto-retry without user input.
         print("Sign-in timed out: show \"Try Again\" UI.")
         throw PrfProviderError.UserTimedOut
     }

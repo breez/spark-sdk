@@ -6,30 +6,21 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 // fit your needs. Pass them to PasskeyClient.fromCallbacks instead
 // of going through PasskeyClientBuilder.withPrfProvider.
 Future<DeriveSeedsOutput> deriveSeeds(DeriveSeedsRequest request) async {
-  // Call platform passkey API with PRF extension. Use the dual-salt
-  // ceremony when the authenticator supports it (one OS prompt for N
-  // salts) and fall back to per-salt assertions otherwise. Returns
-  // one 32-byte PRF output per salt in input order.
+  // Return one 32-byte PRF output per salt, in input order.
   throw UnimplementedError('Implement using platform passkey APIs');
 }
 
 Future<PasskeyCredential> createPasskey(List<Uint8List> excludeCredentials) async {
-  // Register a new credential and return its ID, the WebAuthn user.id
-  // the native plugin minted for it (returned for host-side
-  // correlation, never host-supplied), AAGUID, and BE flag.
+  // Register a credential and return its ID plus attestation.
   throw UnimplementedError('Implement registration via native passkey API');
 }
 
 Future<bool> isSupported() async {
-  // Check if a PRF-capable authenticator is reachable from this
-  // platform / device.
   throw UnimplementedError('Check platform passkey availability');
 }
 // ANCHOR_END: implement-prf-provider
 
 Future<void> checkAvailability() async {
-  // Pass `PasskeyProvider.breezRpId` instead of \'<your-rp-domain>\' if your
-  // app is Breez-registered (shares credentials with other Breez apps).
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(
     rpId: '<your-rp-domain>',
     rpName: 'Your App',
@@ -54,13 +45,10 @@ Future<void> checkAvailability() async {
 
 PasskeyClient setupPasskeyClient() {
   // ANCHOR: setup-client
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(
-    rpId: '<your-rp-domain>',
-    rpName: 'Your App',
-  ));
-  final passkey = PasskeyClientBuilder(breezApiKey: '<breez api key>')
-      .withPrfProvider(prfProvider)
-      .build();
+  final passkey = PasskeyClient(
+    breezApiKey: '<breez api key>',
+    config: PasskeyConfig(providerOptions: PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App')),
+  );
   // ANCHOR_END: setup-client
   return passkey;
 }
@@ -82,12 +70,6 @@ Future<BreezSdk> connectWithPasskey() async {
     request: ConnectWithPasskeyRequest(label: 'personal'),
   );
 
-  // `credential` is the path discriminator (null on sign-in).
-  final credential = response.credential;
-  if (credential != null) {
-    final _ = credential.credentialId;
-  }
-
   final sdk = await connect(
       request: ConnectRequest(
           config: config, seed: response.wallet.seed, storageDir: "./.data"));
@@ -105,8 +87,7 @@ Future<SignInResponse> signInExistingUser() async {
       .build();
 
   // ANCHOR: sign-in
-  // Returning-user-only sign-in. No fall-through to register: use
-  // `connectWithPasskey` when you also want the new-user path.
+  // Returning-user sign-in. No fall-through to register.
   return await passkey.signIn(request: SignInRequest(label: 'personal'));
   // ANCHOR_END: sign-in
 }
@@ -126,11 +107,6 @@ Future<BreezSdk> registerNewPasskey() async {
   final response = await passkey.register(
     request: RegisterRequest(label: 'personal'),
   );
-
-  // Persist credentialId + userId for future excludeCredentials / host-side
-  // correlation. Replace the prints with your own persistence call.
-  print('credentialId: ${response.credential?.credentialId}');
-  print('userId: ${response.credential?.userId}');
 
   final sdk = await connect(
       request: ConnectRequest(
@@ -153,24 +129,23 @@ Future<void> credentialMetadata() async {
     request: RegisterRequest(label: 'personal'),
   );
 
-  // Persist these in synced storage (iCloud Keychain / Block Store) so they
-  // survive reinstall and reach the user's other devices. aaguid and
-  // backupEligible are only available here, on registration.
   final credential = response.credential;
   if (credential != null) {
-    print('credentialId: ${credential.credentialId}');
-    print('aaguid: ${credential.aaguid}');
-    print('backupEligible: ${credential.backupEligible}');
+    print(credential.credentialId); // Persist to reopen the same wallet on sign-in
+    print(credential.aaguid); // Authenticator model (display hint, unverified)
+    print(credential.backupEligible); // Whether the passkey syncs across devices
   }
 
-  // On a later sign-in, pin the stored credential ID via allowCredentials so
-  // the OS cannot substitute a sibling credential, which would derive a
-  // different wallet seed.
-  await passkey.signIn(
+  // Pin the stored credential ID so the OS can't substitute a sibling.
+  final signInResponse = await passkey.signIn(
     request: SignInRequest(label: 'personal', allowCredentials: const [
       // stored credentialId bytes
     ]),
   );
+  print(signInResponse.wallet.seed); // Pass to connect() to open the wallet
+  print(signInResponse.wallet.label); // Label this wallet was derived from
+  print(signInResponse.labels); // This passkey's labels (populated on discovery sign-in)
+  print(signInResponse.credential); // Credential signed in with (credential_id only)
   // ANCHOR_END: credential-metadata
 }
 
@@ -206,7 +181,7 @@ Future<void> storeLabel() async {
 
 Future<void> checkDomain() async {
   // ANCHOR: domain-association
-  // Lower-level provider call. Most hosts use `checkAvailability` instead.
+  // Diagnostic only: never blocks the ceremony.
   final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App'));
   final result = await prfProvider.checkDomainAssociation();
 
@@ -231,7 +206,6 @@ Future<Wallet?> recoverFromAlreadyExists() async {
       .build();
 
   // ANCHOR: recover-already-exists
-  // Recovery: flip to sign-in so the OS picker surfaces the existing credential.
   try {
     final response = await passkey.register(
       request: RegisterRequest(
@@ -244,6 +218,7 @@ Future<Wallet?> recoverFromAlreadyExists() async {
     return response.wallet;
   } on PasskeyPrfException catch (e) {
     if (e.code != 'credentialAlreadyExists') rethrow;
+    // A matching credential already exists; sign in instead.
     final response = await passkey.signIn(
       request: SignInRequest(label: 'personal'),
     );
@@ -269,6 +244,7 @@ Future<SignInResponse> handleTimeout() async {
     );
   } on PasskeyPrfException catch (e) {
     if (e.code == 'userTimedOut') {
+      // Show a retry UI. Do NOT auto-retry without user input.
       print("Sign-in timed out: show \"Try Again\" UI.");
     }
     rethrow;
