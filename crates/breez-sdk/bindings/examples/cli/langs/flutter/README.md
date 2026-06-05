@@ -56,6 +56,7 @@ make run-mainnet
     --list-labels                       List and select labels from Nostr (requires --passkey)
     --store-label                       Publish label to Nostr (requires --passkey and --label)
     --rpid                              Relying party ID for FIDO2 provider (requires --passkey)
+    --server-mode                       Run in server mode (background_tasks_enabled=false)
 -h, --help                              Show usage
 ```
 
@@ -81,6 +82,8 @@ Once the CLI is running, type `help` to see all available commands:
 - `check-lightning-address-available` — Check username availability
 - `get-lightning-address` — Get registered lightning address
 - `register-lightning-address` — Register a lightning address
+- `authorize-lightning-address-transfer` — Authorize transferring your lightning address
+- `claim-lightning-address-transfer` — Claim a lightning address transfer
 - `delete-lightning-address` — Delete lightning address
 - `list-fiat-currencies` — List fiat currencies
 - `list-fiat-rates` — List fiat exchange rates

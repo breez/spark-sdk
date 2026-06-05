@@ -18,6 +18,7 @@ struct CliOptions {
     var listLabels: Bool = false
     var storeLabel: Bool = false
     var rpid: String?
+    var serverMode: Bool = false
 }
 
 func parseCliFlags() -> CliOptions {
@@ -63,6 +64,8 @@ func parseCliFlags() -> CliOptions {
         case "--rpid":
             i += 1
             if i < args.count { opts.rpid = args[i] }
+        case "--server-mode":
+            opts.serverMode = true
         default:
             break
         }
@@ -204,7 +207,13 @@ try initLogging(logDir: resolvedDir, appLogger: nil, logFilter: nil)
 let persistence = CliPersistence(dataDir: resolvedDir)
 
 // Config
-var config = defaultConfig(network: network)
+var config: Config
+if opts.serverMode {
+    print("Server mode enabled. Run `sync` between operations.")
+    config = defaultServerConfig(network: network)
+} else {
+    config = defaultConfig(network: network)
+}
 let breezApiKey: String? = {
     if let key = ProcessInfo.processInfo.environment["BREEZ_API_KEY"], !key.isEmpty {
         return key
@@ -254,19 +263,13 @@ if let passkeyStr = opts.passkey {
 // Build SDK
 let builder = SdkBuilder(config: config, seed: seed)
 if let connectionString = opts.postgresConnectionString {
-    let context = try await newSharedSdkContext(config: SdkContextConfig(
-        network: network,
-        apiKey: breezApiKey,
-        storage: try postgresStorage(config: defaultPostgresStorageConfig(connectionString: connectionString))
+    await builder.withStorageBackend(storage: try postgresStorage(
+        config: defaultPostgresStorageConfig(connectionString: connectionString)
     ))
-    await builder.withSharedContext(context: context)
 } else if let connectionString = opts.mysqlConnectionString {
-    let context = try await newSharedSdkContext(config: SdkContextConfig(
-        network: network,
-        apiKey: breezApiKey,
-        storage: try mysqlStorage(config: defaultMysqlStorageConfig(connectionString: connectionString))
+    await builder.withStorageBackend(storage: try mysqlStorage(
+        config: defaultMysqlStorageConfig(connectionString: connectionString)
     ))
-    await builder.withSharedContext(context: context)
 } else {
     await builder.withDefaultStorage(storageDir: resolvedDir)
 }
@@ -290,7 +293,7 @@ let tokenIssuer = sdk.getTokenIssuer()
 let registry = buildCommandRegistry()
 
 // Set up tab completion
-allCompletionCommands = commandNames + issuerCommandNames + contactsCommandNames + ["help", "exit", "quit"]
+allCompletionCommands = commandNames + issuerCommandNames + contactsCommandNames + webhooksCommandNames + stableBalanceCommandNames + ["help", "exit", "quit"]
 rl_attempted_completion_function = attemptedCompletion
 
 // Load history
@@ -336,6 +339,10 @@ replLoop: while true {
         await dispatchIssuerCommand(cmdArgs, tokenIssuer: tokenIssuer)
     } else if cmdName == "contacts" {
         await dispatchContactsCommand(cmdArgs, sdk: sdk)
+    } else if cmdName == "webhooks" {
+        await dispatchWebhooksCommand(cmdArgs, sdk: sdk)
+    } else if cmdName == "stable-balance" {
+        await dispatchStableBalanceCommand(cmdArgs, sdk: sdk)
     } else if let cmd = registry[cmdName] {
         do {
             try await cmd.run(sdk, cmdArgs)

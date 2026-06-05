@@ -80,6 +80,8 @@ let commandNames: [String] = [
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
+    "authorize-lightning-address-transfer",
+    "claim-lightning-address-transfer",
     "delete-lightning-address",
     "list-fiat-currencies",
     "list-fiat-rates",
@@ -113,6 +115,8 @@ func buildCommandRegistry() -> [String: CommandEntry] {
         "check-lightning-address-available": CommandEntry(name: "check-lightning-address-available", description: "Check if a lightning address username is available", run: handleCheckLightningAddress),
         "get-lightning-address":             CommandEntry(name: "get-lightning-address", description: "Get registered lightning address", run: handleGetLightningAddress),
         "register-lightning-address":        CommandEntry(name: "register-lightning-address", description: "Register a lightning address", run: handleRegisterLightningAddress),
+        "authorize-lightning-address-transfer": CommandEntry(name: "authorize-lightning-address-transfer", description: "Authorize transferring your lightning address", run: handleAuthorizeLightningAddressTransfer),
+        "claim-lightning-address-transfer":     CommandEntry(name: "claim-lightning-address-transfer", description: "Claim a lightning address transfer", run: handleClaimLightningAddressTransfer),
         "delete-lightning-address":          CommandEntry(name: "delete-lightning-address", description: "Delete lightning address", run: handleDeleteLightningAddress),
         "list-fiat-currencies":              CommandEntry(name: "list-fiat-currencies", description: "List fiat currencies", run: handleListFiatCurrencies),
         "list-fiat-rates":                   CommandEntry(name: "list-fiat-rates", description: "List available fiat rates", run: handleListFiatRates),
@@ -136,6 +140,8 @@ func printHelp(_ registry: [String: CommandEntry]) {
     }
     print("\n  \("issuer <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Token issuer commands (use 'issuer help' for details)")
     print("  \("contacts <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Contacts commands (use 'contacts help' for details)")
+    print("  \("webhooks <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Webhook commands (use 'webhooks help' for details)")
+    print("  \("stable-balance <subcommand>".padding(toLength: 40, withPad: " ", startingAt: 0))Stable balance commands (use 'stable-balance help' for details)")
     print("  \("exit / quit".padding(toLength: 40, withPad: " ", startingAt: 0))Exit the CLI")
     print("  \("help".padding(toLength: 40, withPad: " ", startingAt: 0))Show this help message")
     print()
@@ -487,7 +493,7 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
 func handleLnurlPay(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
     guard let lnurl = fp.positional.first else {
-        print("Usage: lnurl-pay <lnurl> [-c <comment>] [-v <validate>] [-i <idempotency_key>] [--from-token <id>] [-s <slippage_bps>] [--fees-included]")
+        print("Usage: lnurl-pay <lnurl> [-c <comment>] [-v <validate>] [-i <idempotency_key>] [-t <token_identifier>] [--from-token <id>] [-s <slippage_bps>] [--fees-included]")
         return
     }
 
@@ -495,6 +501,7 @@ func handleLnurlPay(_ sdk: BreezSdk, _ args: [String]) async throws {
     let validateStr = fp.get("v", "validate")
     let validateSuccessUrl: Bool? = validateStr.map { $0 == "true" }
     let idempotencyKey = fp.get("i", "idempotency-key")
+    let tokenIdentifier = fp.get("t", "token-identifier")
     let fromTokenId = fp.get("from-token")
     let maxSlippageBps = fp.get("s", "convert-max-slippage-bps").flatMap { UInt32($0) }
     let feesIncluded = fp.has("fees-included")
@@ -523,19 +530,24 @@ func handleLnurlPay(_ sdk: BreezSdk, _ args: [String]) async throws {
 
     let minSendable = (payRequest.minSendable + 999) / 1000
     let maxSendable = payRequest.maxSendable / 1000
-    let prompt = "Amount to pay (min \(minSendable) sat, max \(maxSendable) sat): "
+    let prompt: String
+    if tokenIdentifier == nil {
+        prompt = "Amount to pay (min \(minSendable) sat, max \(maxSendable) sat): "
+    } else {
+        prompt = "Amount to pay (min \(minSendable) sat, max \(maxSendable) sat) in token base units: "
+    }
     guard let amountLine = readlinePrompt(prompt),
-          let amountSats = UInt64(amountLine.trimmingCharacters(in: .whitespaces)) else {
+          let amount = BInt(amountLine.trimmingCharacters(in: .whitespaces)) else {
         print("Invalid amount")
         return
     }
 
     let prepareResponse = try await sdk.prepareLnurlPay(request: PrepareLnurlPayRequest(
-        amount: BInt(amountSats),
+        amount: amount,
         payRequest: payRequest,
         comment: comment,
         validateSuccessActionUrl: validateSuccessUrl,
-        tokenIdentifier: nil,
+        tokenIdentifier: tokenIdentifier,
         conversionOptions: conversionOptions,
         feePolicy: feePolicy
     ))
@@ -741,13 +753,23 @@ func handleListUnclaimedDeposits(_ sdk: BreezSdk, _ args: [String]) async throws
 
 func handleBuyBitcoin(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
-    let lockedAmount = fp.get("locked-amount-sat").flatMap { UInt64($0) }
+    let provider = fp.get("provider") ?? "moonpay"
+    let amountSat = fp.get("amount-sat").flatMap { UInt64($0) }
     let redirectUrl = fp.get("redirect-url")
 
-    let result = try await sdk.buyBitcoin(request: .moonpay(
-        lockedAmountSat: lockedAmount,
-        redirectUrl: redirectUrl
-    ))
+    let request: BuyBitcoinRequest
+    switch provider.lowercased() {
+    case "cashapp", "cash_app", "cash-app":
+        guard let amountSats = amountSat else {
+            print("--amount-sat is required when --provider is cashapp")
+            return
+        }
+        request = .cashApp(amountSats: amountSats)
+    default:
+        request = .moonpay(lockedAmountSat: amountSat, redirectUrl: redirectUrl)
+    }
+
+    let result = try await sdk.buyBitcoin(request: request)
     print("Open this URL in a browser to complete the purchase:")
     print(result.url)
 }
@@ -794,6 +816,51 @@ func handleRegisterLightningAddress(_ sdk: BreezSdk, _ args: [String]) async thr
 
     let result = try await sdk.registerLightningAddress(request: RegisterLightningAddressRequest(
         username: username,
+        description: description
+    ))
+    printValue(result)
+}
+
+// --- authorize-lightning-address-transfer ---
+
+func handleAuthorizeLightningAddressTransfer(_ sdk: BreezSdk, _ args: [String]) async throws {
+    guard !args.isEmpty else {
+        print("Usage: authorize-lightning-address-transfer <transferee_pubkey>")
+        return
+    }
+
+    let result = try await sdk.authorizeLightningAddressTransfer(request: AuthorizeTransferRequest(
+        transfereePubkey: args[0]
+    ))
+    printValue(result)
+}
+
+// --- claim-lightning-address-transfer ---
+
+func handleClaimLightningAddressTransfer(_ sdk: BreezSdk, _ args: [String]) async throws {
+    let fp = FlagParser(args)
+    guard let username = fp.positional.first else {
+        print("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature>")
+        return
+    }
+
+    let description: String? = fp.positional.count > 1 ? fp.positional[1] : nil
+
+    guard let fromPubkey = fp.get("from-pubkey") else {
+        print("--from-pubkey is required")
+        return
+    }
+    guard let fromSignature = fp.get("from-signature") else {
+        print("--from-signature is required")
+        return
+    }
+
+    let result = try await sdk.claimLightningAddressTransfer(request: ClaimTransferRequest(
+        authorization: TransferAuthorization(
+            username: username,
+            pubkey: fromPubkey,
+            signature: fromSignature
+        ),
         description: description
     ))
     printValue(result)

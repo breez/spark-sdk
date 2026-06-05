@@ -188,18 +188,12 @@ func resolvePasskeySeed(
 ) async throws -> Seed {
     let passkey = PasskeyClient(prfProvider: provider, breezApiKey: breezApiKey, config: nil)
 
-    // --store-label: publish the label to Nostr
-    if storeLabel, let label {
-        print("Publishing label '\(label)' to Nostr...")
-        try await passkey.labels().store(label: label)
-        print("Label '\(label)' published successfully.")
-    }
-
-    // --list-labels: query Nostr and prompt user to select
+    // --list-labels: discovery sign-in (no cached label) returns the
+    // published label set; prompt the user to pick one.
     let resolvedName: String?
     if listLabels {
         print("Querying Nostr for available labels...")
-        let labels = try await passkey.labels().list()
+        let labels = try await passkey.signIn(request: SignInRequest(label: nil)).labels
 
         if labels.isEmpty {
             throw PrfProviderError.Generic(
@@ -222,6 +216,14 @@ func resolvePasskeySeed(
         resolvedName = labels[idx - 1]
     } else {
         resolvedName = label
+    }
+
+    // --store-label: publish before signing in so a fresh client can
+    // discover the label later.
+    if storeLabel, let resolvedName {
+        print("Publishing label '\(resolvedName)' to Nostr...")
+        try await passkey.labels().store(label: resolvedName)
+        print("Label '\(resolvedName)' published successfully.")
     }
 
     let response = try await passkey.signIn(request: SignInRequest(label: resolvedName))

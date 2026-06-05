@@ -43,9 +43,10 @@ Three PRF providers are available:
 
 | Provider | Description |
 |----------|-------------|
+| `platform` | Platform-native passkey (iOS AuthenticationServices / Android CredentialManager) |
 | `file` | File-based HMAC-SHA256 provider (for development/testing) |
-| `yubikey` | YubiKey hardware key (stub - not yet implemented) |
-| `fido2` | FIDO2/WebAuthn PRF (stub - not yet implemented) |
+| `yubikey` | YubiKey hardware key (stub, not yet implemented) |
+| `fido2` | FIDO2/WebAuthn PRF (stub, not yet implemented) |
 
 ### Configuration
 
@@ -81,9 +82,11 @@ Once the app is running, type commands in the text input at the bottom:
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
-**Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`
+**Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
+
+**Stable balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
 **Contacts**: `contacts <subcommand>`
 
@@ -92,6 +95,24 @@ Once the app is running, type commands in the text input at the bottom:
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 Type `help` for a full list of commands. Each command mirrors the Rust CLI behavior.
+
+### Server Mode
+
+The setup screen includes a Client/Server mode toggle. Server mode uses `defaultServerConfig`
+which disables background tasks (periodic sync, real-time sync client, optimizers).
+Run `sync` manually between operations.
+
+### Lightning Address Transfers
+
+Transfer a lightning address to another user:
+
+```
+# Current owner authorizes the transfer
+authorize-lightning-address-transfer <transferee_pubkey>
+
+# New owner claims the transfer
+claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature>
+```
 
 ### HODL Invoices
 

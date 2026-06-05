@@ -28,6 +28,8 @@ const commandNames = [
   'check-lightning-address-available',
   'get-lightning-address',
   'register-lightning-address',
+  'authorize-lightning-address-transfer',
+  'claim-lightning-address-transfer',
   'delete-lightning-address',
   'list-fiat-currencies',
   'list-fiat-rates',
@@ -73,6 +75,14 @@ Map<String, CommandEntry> buildCommandRegistry() {
     'register-lightning-address': CommandEntry(
       'Register a lightning address',
       _handleRegisterLightningAddress,
+    ),
+    'authorize-lightning-address-transfer': CommandEntry(
+      'Authorize transferring your lightning address to another pubkey',
+      _handleAuthorizeLightningAddressTransfer,
+    ),
+    'claim-lightning-address-transfer': CommandEntry(
+      'Claim a lightning address transfer authorized by the current owner',
+      _handleClaimLightningAddressTransfer,
     ),
     'delete-lightning-address': CommandEntry('Delete lightning address', _handleDeleteLightningAddress),
     'list-fiat-currencies': CommandEntry('List fiat currencies', _handleListFiatCurrencies),
@@ -419,9 +429,11 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
 
   if (prepareResponse.conversionEstimate != null) {
     final est = prepareResponse.conversionEstimate!;
-    final units = est.options.conversionType is ConversionType_FromBitcoin ? 'sats' : 'token base units';
+    final inUnits = est.options.conversionType is ConversionType_FromBitcoin ? 'sats' : 'token base units';
+    final outUnits = est.options.conversionType is ConversionType_FromBitcoin ? 'token base units' : 'sats';
     print(
-      'Estimated conversion of ${est.amountIn} $units → ${est.amountOut} $units with a ${est.fee} $units fee',
+      'Estimated conversion from ${est.amountIn} $inUnits to ${est.amountOut} $outUnits '
+      'with a ${est.fee} token base units fee',
     );
     final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
     if (answer.toLowerCase() != 'y') {
@@ -791,6 +803,62 @@ Future<void> _handleRegisterLightningAddress(BreezSdk sdk, TokenIssuer tokenIssu
   final description = args.length > 1 ? args[1] : null;
   final result = await sdk.registerLightningAddress(
     request: RegisterLightningAddressRequest(username: username, description: description),
+  );
+  printValue(result);
+}
+
+// --- authorize-lightning-address-transfer ---
+
+Future<void> _handleAuthorizeLightningAddressTransfer(
+  BreezSdk sdk,
+  TokenIssuer tokenIssuer,
+  List<String> args,
+) async {
+  if (args.isEmpty || args.first == 'help' || args.first == '--help') {
+    print('Usage: authorize-lightning-address-transfer <transferee_pubkey>');
+    return;
+  }
+  final transfereePubkey = args.first;
+  final result = await sdk.authorizeLightningAddressTransfer(
+    request: AuthorizeTransferRequest(transfereePubkey: transfereePubkey),
+  );
+  printValue(result);
+}
+
+// --- claim-lightning-address-transfer ---
+
+Future<void> _handleClaimLightningAddressTransfer(
+  BreezSdk sdk,
+  TokenIssuer tokenIssuer,
+  List<String> args,
+) async {
+  final parser =
+      _parser('claim-lightning-address-transfer')
+        ..addOption('from-pubkey', mandatory: true, help: 'Current owner identity pubkey (hex)')
+        ..addOption('from-signature', mandatory: true, help: 'Current owner authorization signature (hex)');
+  final results = _parseArgs(
+    parser,
+    args,
+    'claim-lightning-address-transfer <username> [description] --from-pubkey <pubkey> --from-signature <sig>',
+  );
+  if (results == null) return;
+
+  if (results.rest.isEmpty) {
+    print(
+      'Usage: claim-lightning-address-transfer <username> [description] --from-pubkey <pubkey> --from-signature <sig>',
+    );
+    return;
+  }
+  final username = results.rest[0];
+  final description = results.rest.length > 1 ? results.rest[1] : null;
+  final fromPubkey = results.option('from-pubkey')!;
+  final fromSignature = results.option('from-signature')!;
+
+  final result = await sdk.claimLightningAddressTransfer(
+    request: ClaimTransferRequest(
+      authorization: TransferAuthorization(username: username, pubkey: fromPubkey, signature: fromSignature),
+      description: description,
+    ),
   );
   printValue(result);
 }

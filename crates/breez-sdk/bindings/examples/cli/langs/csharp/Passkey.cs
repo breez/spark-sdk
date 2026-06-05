@@ -199,34 +199,27 @@ public static class PasskeyResolver
     {
         var passkey = new PasskeyClient(provider, breezApiKey, config: null);
 
-        // --store-label: publish to Nostr
-        if (storeLabel && label != null)
-        {
-            Console.WriteLine($"Publishing label '{label}' to Nostr...");
-            await passkey.Labels().Store(label);
-            Console.WriteLine($"Label '{label}' published successfully.");
-        }
-
-        // --list-labels: query Nostr and prompt user to select
+        // --list-labels: discovery sign-in (null label) returns the
+        // discovered label set; prompt user to pick.
         string? resolvedName = label;
         if (listLabels)
         {
             Console.WriteLine("Querying Nostr for available labels...");
-            var labels = await passkey.Labels().List();
+            var discoveryResponse = await passkey.SignIn(new SignInRequest(label: null));
 
-            if (labels.Length == 0)
+            if (discoveryResponse.labels == null || discoveryResponse.labels.Length == 0)
             {
                 throw new InvalidOperationException(
                     "No labels found on Nostr for this identity");
             }
 
             Console.WriteLine("Available labels:");
-            for (int i = 0; i < labels.Length; i++)
+            for (int i = 0; i < discoveryResponse.labels.Length; i++)
             {
-                Console.WriteLine($"  {i + 1}: {labels[i]}");
+                Console.WriteLine($"  {i + 1}: {discoveryResponse.labels[i]}");
             }
 
-            Console.Write($"Select label (1-{labels.Length}): ");
+            Console.Write($"Select label (1-{discoveryResponse.labels.Length}): ");
             Console.Out.Flush();
             var input = Console.ReadLine();
             if (!int.TryParse(input?.Trim(), out int idx))
@@ -234,12 +227,21 @@ public static class PasskeyResolver
                 throw new InvalidOperationException("Invalid selection");
             }
 
-            if (idx < 1 || idx > labels.Length)
+            if (idx < 1 || idx > discoveryResponse.labels.Length)
             {
                 throw new InvalidOperationException("Selection out of range");
             }
 
-            resolvedName = labels[idx - 1];
+            resolvedName = discoveryResponse.labels[idx - 1];
+        }
+
+        // --store-label: publish before final sign-in so a fresh client
+        // can discover the label later.
+        if (storeLabel && resolvedName != null)
+        {
+            Console.WriteLine($"Publishing label '{resolvedName}' to Nostr...");
+            await passkey.Labels().Store(resolvedName);
+            Console.WriteLine($"Label '{resolvedName}' published successfully.");
         }
 
         var response = await passkey.SignIn(new SignInRequest(label: resolvedName));

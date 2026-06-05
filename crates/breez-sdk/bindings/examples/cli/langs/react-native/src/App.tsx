@@ -24,6 +24,7 @@ import {
 } from 'react-native'
 import {
   defaultConfig,
+  defaultServerConfig,
   Network,
   Seed,
   SdkBuilder,
@@ -61,6 +62,7 @@ function getDataDir(network: Network): string {
 
 interface SetupConfig {
   network: Network
+  serverMode: boolean
   passkeyConfig: PasskeyConfig | undefined
   /** If provided, use this mnemonic instead of generating/loading one. */
   restoreMnemonic: string | undefined
@@ -91,6 +93,7 @@ interface SetupScreenProps {
 
 const SetupScreen: React.FC<SetupScreenProps> = ({ onStart }) => {
   const [network, setNetwork] = useState<Network>(Network.Regtest as Network)
+  const [serverMode, setServerMode] = useState(false)
   const [seedMethod, setSeedMethod] = useState<'mnemonic' | 'passkey'>('mnemonic')
   const [mnemonicMode, setMnemonicMode] = useState<'new' | 'restore'>('new')
   const [mnemonicInput, setMnemonicInput] = useState('')
@@ -106,6 +109,7 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onStart }) => {
     }
     onStart({
       network,
+      serverMode,
       passkeyConfig: seedMethod === 'passkey' ? {
         provider: passkeyProvider,
         label: 'Default',
@@ -178,6 +182,28 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onStart }) => {
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* Server Mode */}
+        <Text style={styles.sectionLabel}>Mode</Text>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[styles.optionButton, !serverMode && styles.optionButtonActive]}
+            onPress={() => setServerMode(false)}
+          >
+            <Text style={[styles.optionText, !serverMode && styles.optionTextActive]}>Client</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.optionButton, serverMode && styles.optionButtonActive]}
+            onPress={() => setServerMode(true)}
+          >
+            <Text style={[styles.optionText, serverMode && styles.optionTextActive]}>Server</Text>
+          </TouchableOpacity>
+        </View>
+        {serverMode && (
+          <Text style={styles.hint}>
+            No background tasks. Run `sync` between operations.
+          </Text>
+        )}
 
         {/* Seed Method */}
         <Text style={styles.sectionLabel}>Seed Method</Text>
@@ -373,7 +399,12 @@ const CliScreen: React.FC<CliScreenProps> = ({ config, onDisconnect }) => {
         appendLog('Initializing SDK...')
 
         const persistence = persistenceRef.current
-        const sdkConfig = defaultConfig(config.network)
+        const sdkConfig = config.serverMode
+          ? defaultServerConfig(config.network)
+          : defaultConfig(config.network)
+        if (config.serverMode) {
+          appendLog('Server mode enabled. Run `sync` between operations.')
+        }
         const apiKey = getApiKey()
         if (apiKey) {
           sdkConfig.apiKey = apiKey

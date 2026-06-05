@@ -306,20 +306,20 @@ export async function resolvePasskeySeed(
 ): Promise<{ seed: SeedType; labels?: string[] }> {
   const passkey = new PasskeyClient(provider, breezApiKey, undefined)
 
-  // --store-label: publish to Nostr
-  if (storeLabel && label) {
-    await passkey.labels().store(label)
-  }
-
-  // --list-labels: query Nostr for all labels published by this identity.
-  // App.tsx does not prompt for selection; default to the explicit label if
-  // provided, otherwise the first discovered label.
+  // --list-labels: discovery sign-in (no cached label) returns the published
+  // label set. App.tsx does not prompt for selection; default to the explicit
+  // label if provided, otherwise the first discovered label.
   let returnedLabels: string[] | undefined
   let resolvedLabel = label
   if (listLabels) {
-    const labels = await passkey.labels().list()
+    const { labels } = await passkey.signIn({ label: undefined })
     returnedLabels = labels
     resolvedLabel = label ?? labels[0]
+  }
+
+  // --store-label: publish to Nostr
+  if (storeLabel && resolvedLabel) {
+    await passkey.labels().store(resolvedLabel)
   }
 
   const response = await passkey.connectWithPasskey({

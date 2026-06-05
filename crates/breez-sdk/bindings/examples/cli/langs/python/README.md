@@ -52,6 +52,7 @@ make clean            Remove venv and build artifacts
 | `--stable-balance-token` | - | Stable balance tokens in `LABEL:token_identifier` format (repeatable) |
 | `--stable-balance-default-active-label` | - | Default active label for stable balance (must match a token label) |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
+| `--server-mode` | false | Run in server mode (`background_tasks_enabled=false`) |
 | `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
 | `--label` | `Default` | Requires `--passkey`. The label to use |
 | `--list-labels` | false | Requires `--passkey`. Select label from NOSTR |
@@ -74,7 +75,7 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
-**Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`
+**Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
 

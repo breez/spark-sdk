@@ -64,6 +64,7 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
 
   // --- values only ---
   export const defaultConfig: any;
+  export const defaultServerConfig: any;
   export const SdkEvent_Tags: any;
   export const InputType_Tags: any;
   export const ReceivePaymentMethod: any;

@@ -55,8 +55,11 @@ make clean            Remove binary
 | `--network` | `regtest` | Network to use (`regtest` or `mainnet`) |
 | `--account-number` | - | Account number for the Spark signer |
 | `--postgres-connection-string` | - | PostgreSQL connection string (uses SQLite by default) |
-| `--stable-balance-token-identifier` | - | Stable balance token identifier |
+| `--mysql-connection-string` | - | MySQL connection string (uses SQLite by default) |
+| `--stable-balance-token` | - | Stable balance token in `LABEL:token_identifier` format (repeatable) |
+| `--stable-balance-default-active-label` | - | Default active label for stable balance |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
+| `--server-mode` | false | Run in server mode (`background_tasks_enabled=false`) |
 | `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
 | `--label` | `Default` | Requires `--passkey`. The label to use |
 | `--list-labels` | false | Requires `--passkey`. Select label from Nostr |
@@ -79,11 +82,15 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
-**Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`
+**Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
 
 **Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list`
+
+**Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
+
+**Stable Balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
 
 **Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 

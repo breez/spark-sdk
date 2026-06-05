@@ -33,6 +33,8 @@ val COMMAND_NAMES = listOf(
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
+    "authorize-lightning-address-transfer",
+    "claim-lightning-address-transfer",
     "delete-lightning-address",
     "list-fiat-currencies",
     "list-fiat-rates",
@@ -63,10 +65,12 @@ fun buildCommandRegistry(): Map<String, CliCommand> {
         "parse" to CliCommand("parse", "Parse an input (invoice, address, LNURL)", ::handleParse),
         "refund-deposit" to CliCommand("refund-deposit", "Refund an on-chain deposit", ::handleRefundDeposit),
         "list-unclaimed-deposits" to CliCommand("list-unclaimed-deposits", "List unclaimed on-chain deposits", ::handleListUnclaimedDeposits),
-        "buy-bitcoin" to CliCommand("buy-bitcoin", "Buy Bitcoin via MoonPay", ::handleBuyBitcoin),
+        "buy-bitcoin" to CliCommand("buy-bitcoin", "Buy Bitcoin via an external provider", ::handleBuyBitcoin),
         "check-lightning-address-available" to CliCommand("check-lightning-address-available", "Check if a lightning address username is available", ::handleCheckLightningAddress),
         "get-lightning-address" to CliCommand("get-lightning-address", "Get registered lightning address", ::handleGetLightningAddress),
         "register-lightning-address" to CliCommand("register-lightning-address", "Register a lightning address", ::handleRegisterLightningAddress),
+        "authorize-lightning-address-transfer" to CliCommand("authorize-lightning-address-transfer", "Authorize transferring a lightning address to a new owner", ::handleAuthorizeLightningAddressTransfer),
+        "claim-lightning-address-transfer" to CliCommand("claim-lightning-address-transfer", "Claim a lightning address transfer from the current owner", ::handleClaimLightningAddressTransfer),
         "delete-lightning-address" to CliCommand("delete-lightning-address", "Delete lightning address", ::handleDeleteLightningAddress),
         "list-fiat-currencies" to CliCommand("list-fiat-currencies", "List fiat currencies", ::handleListFiatCurrencies),
         "list-fiat-rates" to CliCommand("list-fiat-rates", "List available fiat rates", ::handleListFiatRates),
@@ -475,6 +479,7 @@ suspend fun handleLnurlPay(sdk: BreezSdk, reader: LineReader, args: List<String>
     val comment = fp.getString("c", "comment")
     val validateStr = fp.getString("v", "validate")
     val idempotencyKey = fp.getString("i", "idempotency-key")
+    val tokenIdentifier = fp.getString("t", "token-identifier")
     val convertFromToken = fp.getString("from-token")
     val maxSlippageBps = fp.getUInt("s", "convert-max-slippage-bps")
     val feesIncluded = fp.hasFlag("fees-included")
@@ -485,6 +490,7 @@ suspend fun handleLnurlPay(sdk: BreezSdk, reader: LineReader, args: List<String>
         println("  -c, --comment <comment>          Comment for the invoice")
         println("  -v, --validate <true/false>      Validate success action URL")
         println("  -i, --idempotency-key <key>      Idempotency key")
+        println("  -t, --token-identifier <id>      Token identifier (amount in token base units)")
         println("  --from-token <token_id>          Convert from token to Bitcoin")
         println("  -s, --convert-max-slippage-bps   Max slippage in basis points")
         println("  --fees-included                  Deduct fees from amount")
@@ -515,7 +521,12 @@ suspend fun handleLnurlPay(sdk: BreezSdk, reader: LineReader, args: List<String>
 
     val minSendable = (payRequest.minSendable + 999u) / 1000u
     val maxSendable = payRequest.maxSendable / 1000u
-    val amountLine = readlinePrompt(reader, "Amount to pay (min $minSendable sat, max $maxSendable sat): ")
+    val prompt = if (tokenIdentifier == null) {
+        "Amount to pay (min $minSendable sat, max $maxSendable sat): "
+    } else {
+        "Amount to pay (min $minSendable sat, max $maxSendable sat) in token base units: "
+    }
+    val amountLine = readlinePrompt(reader, prompt)
     val amountSats = amountLine.toULongOrNull()
     if (amountSats == null) {
         println("Invalid amount: $amountLine")
@@ -530,7 +541,7 @@ suspend fun handleLnurlPay(sdk: BreezSdk, reader: LineReader, args: List<String>
             payRequest = payRequest,
             comment = comment,
             validateSuccessActionUrl = validateSuccessUrl,
-            tokenIdentifier = null,
+            tokenIdentifier = tokenIdentifier,
             conversionOptions = conversionOptions,
             feePolicy = feePolicy,
         )
@@ -757,15 +768,25 @@ suspend fun handleListUnclaimedDeposits(sdk: BreezSdk, reader: LineReader, args:
 
 suspend fun handleBuyBitcoin(sdk: BreezSdk, reader: LineReader, args: List<String>) {
     val fp = FlagParser(args)
-    val lockedAmount = fp.getULong("amount", "locked-amount-sat")
+    val provider = fp.getString("provider") ?: "moonpay"
+    val amountSat = fp.getULong("amount-sat")
     val redirectUrl = fp.getString("redirect-url")
 
-    val result = sdk.buyBitcoin(
-        BuyBitcoinRequest.Moonpay(
-            lockedAmountSat = lockedAmount,
+    val request = when (provider.lowercase()) {
+        "cashapp", "cash_app", "cash-app" -> {
+            if (amountSat == null) {
+                println("--amount-sat is required when --provider is cashapp")
+                return
+            }
+            BuyBitcoinRequest.CashApp(amountSats = amountSat)
+        }
+        else -> BuyBitcoinRequest.Moonpay(
+            lockedAmountSat = amountSat,
             redirectUrl = redirectUrl,
         )
-    )
+    }
+
+    val result = sdk.buyBitcoin(request)
     println("Open this URL in a browser to complete the purchase:")
     println(result.url)
 }
@@ -814,6 +835,47 @@ suspend fun handleRegisterLightningAddress(sdk: BreezSdk, reader: LineReader, ar
         RegisterLightningAddressRequest(
             username = fp.positional[0],
             description = description,
+        )
+    )
+    printValue(result)
+}
+
+// --- authorize-lightning-address-transfer ---
+
+suspend fun handleAuthorizeLightningAddressTransfer(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    if (args.isEmpty()) {
+        println("Usage: authorize-lightning-address-transfer <transferee_pubkey>")
+        return
+    }
+
+    val result = sdk.authorizeLightningAddressTransfer(
+        AuthorizeTransferRequest(
+            transfereePubkey = args[0],
+        )
+    )
+    printValue(result)
+}
+
+// --- claim-lightning-address-transfer ---
+
+suspend fun handleClaimLightningAddressTransfer(sdk: BreezSdk, reader: LineReader, args: List<String>) {
+    val fp = FlagParser(args)
+    val fromPubkey = fp.getString("from-pubkey")
+    val fromSignature = fp.getString("from-signature")
+
+    if (fp.positional.isEmpty() || fromPubkey == null || fromSignature == null) {
+        println("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <sig>")
+        return
+    }
+
+    val result = sdk.claimLightningAddressTransfer(
+        ClaimTransferRequest(
+            authorization = TransferAuthorization(
+                username = fp.positional[0],
+                pubkey = fromPubkey,
+                signature = fromSignature,
+            ),
+            description = fp.positional.getOrNull(1),
         )
     )
     printValue(result)

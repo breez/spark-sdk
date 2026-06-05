@@ -99,18 +99,13 @@ Future<Seed> resolvePasskeySeed(CliPasskeyConfig config, String dataDir, String?
   final filePrf = FilePrfProvider.create(dataDir);
   final passkey = PasskeyClientBuilder(breezApiKey: breezApiKey).withPrfProvider(filePrf).build();
 
-  // --store-label: publish the label to Nostr
-  if (config.storeLabel && config.label != null) {
-    print("Publishing label '${config.label}' to Nostr...");
-    await passkey.labels().store(label: config.label!);
-    print("Label '${config.label}' published successfully.");
-  }
-
-  // --list-labels: query Nostr and prompt user to select
+  // --list-labels: discovery sign-in (no cached label) returns the
+  // published label set; prompt the user to pick one.
   String? label;
   if (config.listLabels) {
     print('Querying Nostr for available labels...');
-    final labels = await passkey.labels().list();
+    final discovery = await passkey.signIn(request: SignInRequest(label: null, allowCredentials: const []));
+    final labels = discovery.labels;
 
     if (labels.isEmpty) {
       throw Exception('No labels found on Nostr for this identity');
@@ -129,6 +124,14 @@ Future<Seed> resolvePasskeySeed(CliPasskeyConfig config, String dataDir, String?
     label = labels[idx - 1];
   } else {
     label = config.label;
+  }
+
+  // --store-label: publish before signing in so a fresh client can
+  // discover the label later.
+  if (config.storeLabel && label != null) {
+    print("Publishing label '$label' to Nostr...");
+    await passkey.labels().store(label: label);
+    print("Label '$label' published successfully.");
   }
 
   final response = await passkey.signIn(request: SignInRequest(label: label, allowCredentials: const []));

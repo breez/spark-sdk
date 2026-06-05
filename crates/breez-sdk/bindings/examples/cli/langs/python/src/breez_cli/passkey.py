@@ -5,10 +5,13 @@ import sys
 from pathlib import Path
 
 from breez_sdk_spark import (
-    NostrRelayConfig,
-    Passkey,
+    DeriveSeedsOutput,
+    DeriveSeedsRequest,
+    DomainAssociation,
+    PasskeyClient,
     PrfProvider,
     Seed,
+    SignInRequest,
 )
 
 SECRET_FILE_NAME = "seedless-restore-secret"
@@ -35,11 +38,23 @@ class FilePrfProvider(PrfProvider):
             data_dir.mkdir(parents=True, exist_ok=True)
             secret_path.write_bytes(self._secret)
 
-    async def derive_prf_seed(self, salt: str):
+    def _derive_one(self, salt: str) -> bytes:
         return hmac.new(self._secret, salt.encode(), hashlib.sha256).digest()
 
-    async def is_prf_available(self):
+    async def derive_seeds(self, request: DeriveSeedsRequest) -> DeriveSeedsOutput:
+        seeds = [self._derive_one(s) for s in request.salts]
+        return DeriveSeedsOutput(seeds=seeds, credential_id=None)
+
+    async def is_supported(self) -> bool:
         return True
+
+    async def create_passkey(self, exclude_credentials):
+        raise NotImplementedError
+
+    async def check_domain_association(self) -> DomainAssociation:
+        return DomainAssociation.SKIPPED(
+            reason="File provider does not verify domain association"
+        )
 
 
 class YubiKeyPrfProvider(PrfProvider):
@@ -56,11 +71,17 @@ class YubiKeyPrfProvider(PrfProvider):
         )
         raise SystemExit(1)
 
-    async def derive_prf_seed(self, salt: str):
+    async def derive_seeds(self, request: DeriveSeedsRequest) -> DeriveSeedsOutput:
         raise NotImplementedError
 
-    async def is_prf_available(self):
+    async def is_supported(self) -> bool:
         return False
+
+    async def create_passkey(self, exclude_credentials):
+        raise NotImplementedError
+
+    async def check_domain_association(self) -> DomainAssociation:
+        raise NotImplementedError
 
 
 class Fido2PrfProvider(PrfProvider):
@@ -77,11 +98,17 @@ class Fido2PrfProvider(PrfProvider):
         )
         raise SystemExit(1)
 
-    async def derive_prf_seed(self, salt: str):
+    async def derive_seeds(self, request: DeriveSeedsRequest) -> DeriveSeedsOutput:
         raise NotImplementedError
 
-    async def is_prf_available(self):
+    async def is_supported(self) -> bool:
         return False
+
+    async def create_passkey(self, exclude_credentials):
+        raise NotImplementedError
+
+    async def check_domain_association(self) -> DomainAssociation:
+        raise NotImplementedError
 
 
 def create_provider(provider_name: str, data_dir: Path, rpid=None):
@@ -106,40 +133,37 @@ async def resolve_passkey_seed(
     store_label,
 ) -> Seed:
     """Resolve a Seed from a passkey PRF provider, with optional Nostr label operations."""
-    relay_config = NostrRelayConfig(breez_api_key=breez_api_key)
-    passkey = Passkey(provider, relay_config)
+    client = PasskeyClient(provider, breez_api_key, None)
 
-    # --store-label: publish the label to Nostr
-    if store_label and label:
-        print(f"Publishing label '{label}' to Nostr...")
-        await passkey.store_label(label=label)
-        print(f"Label '{label}' published successfully.")
-
-    # --list-labels: query Nostr and prompt user to select
     if list_labels:
         print("Querying Nostr for available labels...")
-        labels = await passkey.list_labels()
+        response = await client.sign_in(request=SignInRequest(label=None))
 
-        if not labels:
+        if not response.labels:
             print("No labels found on Nostr for this identity")
             raise SystemExit(1)
 
         print("Available labels:")
-        for i, name in enumerate(labels, 1):
+        for i, name in enumerate(response.labels, 1):
             print(f"  {i}: {name}")
 
-        selection = input(f"Select label (1-{len(labels)}): ").strip()
+        selection = input(f"Select label (1-{len(response.labels)}): ").strip()
         try:
             idx = int(selection)
         except ValueError:
             print("Invalid selection")
             raise SystemExit(1)
 
-        if idx < 1 or idx > len(labels):
+        if idx < 1 or idx > len(response.labels):
             print("Selection out of range")
             raise SystemExit(1)
 
-        label = labels[idx - 1]
+        label = response.labels[idx - 1]
 
-    wallet = await passkey.get_wallet(label)
-    return wallet.seed
+    if store_label and label:
+        print(f"Publishing label '{label}' to Nostr...")
+        await client.labels().store(label=label)
+        print(f"Label '{label}' published successfully.")
+
+    response = await client.sign_in(request=SignInRequest(label=label))
+    return response.wallet.seed

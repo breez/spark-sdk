@@ -24,6 +24,7 @@ Future<void> runCli({
   String? stableBalanceDefaultActiveLabel,
   BigInt? stableBalanceThreshold,
   CliPasskeyConfig? passkeyConfig,
+  bool serverMode = false,
 }) async {
   await BreezSdkSparkLib.init(externalLibrary: ExternalLibrary.open(_nativeLibPath()));
 
@@ -35,7 +36,13 @@ Future<void> runCli({
   final persistence = CliPersistence(dataDir);
 
   final networkEnum = network == 'mainnet' ? Network.mainnet : Network.regtest;
-  var config = defaultConfig(network: networkEnum);
+  Config config;
+  if (serverMode) {
+    stdout.writeln('Server mode enabled. Run `sync` between operations.');
+    config = defaultServerConfig(network: networkEnum);
+  } else {
+    config = defaultConfig(network: networkEnum);
+  }
   final apiKey = Platform.environment['BREEZ_API_KEY'];
   if (apiKey != null) {
     config = config.copyWith(apiKey: apiKey);

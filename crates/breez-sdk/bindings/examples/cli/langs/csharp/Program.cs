@@ -13,6 +13,7 @@ string? mysqlConnectionString = null;
 var stableBalanceTokens = new List<string>();
 string? stableBalanceDefaultActiveLabel = null;
 ulong? stableBalanceThreshold = null;
+bool serverMode = false;
 string? passkeyProviderStr = null;
 string? label = null;
 bool listLabels = false;
@@ -62,6 +63,9 @@ for (int i = 0; i < args.Length; i++)
             break;
         case "--rpid":
             if (i + 1 < args.Length) rpId = args[++i];
+            break;
+        case "--server-mode":
+            serverMode = true;
             break;
         case "--help":
         case "-h":
@@ -183,6 +187,7 @@ if (passkeyProviderStr != null)
 await RunInteractiveMode(
     resolvedDir,
     networkEnum,
+    serverMode,
     accountNumber,
     postgresConnectionString,
     mysqlConnectionString,
@@ -226,12 +231,14 @@ static void PrintUsage()
     Console.WriteLine("  --list-labels                               List and select from labels on Nostr (requires --passkey)");
     Console.WriteLine("  --store-label                               Publish label to Nostr (requires --passkey and --label)");
     Console.WriteLine("  --rpid <RPID>                               Relying party ID for FIDO2 provider (requires --passkey)");
+    Console.WriteLine("  --server-mode                               Run in server mode (background tasks disabled)");
     Console.WriteLine("  -h, --help                                  Show this help");
 }
 
 static async Task RunInteractiveMode(
     string dataDir,
     Network network,
+    bool serverMode,
     uint? accountNumber,
     string? postgresConnectionString,
     string? mysqlConnectionString,
@@ -253,7 +260,16 @@ static async Task RunInteractiveMode(
     Directory.CreateDirectory(dataDir);
 
     // Config
-    var config = BreezSdkSparkMethods.DefaultConfig(network);
+    Config config;
+    if (serverMode)
+    {
+        Console.WriteLine("Server mode enabled. Run `sync` between operations.");
+        config = BreezSdkSparkMethods.DefaultServerConfig(network);
+    }
+    else
+    {
+        config = BreezSdkSparkMethods.DefaultConfig(network);
+    }
     var apiKey = Environment.GetEnvironmentVariable("BREEZ_API_KEY");
     if (!string.IsNullOrEmpty(apiKey))
     {
@@ -289,23 +305,13 @@ static async Task RunInteractiveMode(
     var builder = new SdkBuilder(config: config, seed: seed);
     if (postgresConnectionString != null)
     {
-        var context = await BreezSdkSparkMethods.NewSharedSdkContext(config: new SdkContextConfig(
-            network: network,
-            apiKey: apiKey,
-            connectionsPerOperator: null,
-            storage: BreezSdkSparkMethods.PostgresStorage(BreezSdkSparkMethods.DefaultPostgresStorageConfig(postgresConnectionString))
-        ));
-        await builder.WithSharedContext(context: context);
+        await builder.WithStorageBackend(storage: BreezSdkSparkMethods.PostgresStorage(
+            BreezSdkSparkMethods.DefaultPostgresStorageConfig(postgresConnectionString)));
     }
     else if (mysqlConnectionString != null)
     {
-        var context = await BreezSdkSparkMethods.NewSharedSdkContext(config: new SdkContextConfig(
-            network: network,
-            apiKey: apiKey,
-            connectionsPerOperator: null,
-            storage: BreezSdkSparkMethods.MysqlStorage(BreezSdkSparkMethods.DefaultMysqlStorageConfig(mysqlConnectionString))
-        ));
-        await builder.WithSharedContext(context: context);
+        await builder.WithStorageBackend(storage: BreezSdkSparkMethods.MysqlStorage(
+            BreezSdkSparkMethods.DefaultMysqlStorageConfig(mysqlConnectionString)));
     }
     else
     {

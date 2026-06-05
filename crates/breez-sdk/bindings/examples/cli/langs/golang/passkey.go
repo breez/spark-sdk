@@ -163,23 +163,16 @@ func resolvePasskeySeed(
 ) (breez_sdk_spark.Seed, error) {
 	passkey := breez_sdk_spark.NewPasskeyClient(provider, breezAPIKey, nil)
 
-	// --store-label: publish to Nostr
-	if storeLabel && label != nil {
-		fmt.Printf("Publishing label '%s' to Nostr...\n", *label)
-		if err := liftError(passkey.Labels().Store(*label)); err != nil {
-			return nil, fmt.Errorf("failed to store label: %w", err)
-		}
-		fmt.Printf("Label '%s' published successfully.\n", *label)
-	}
-
-	// --list-labels: query Nostr and prompt user to select
+	// --list-labels: discovery sign-in (no cached label) returns the
+	// published label set; prompt the user to pick one.
 	resolvedName := label
 	if listLabels {
 		fmt.Println("Querying Nostr for available labels...")
-		labels, err := passkey.Labels().List()
+		discovery, err := passkey.SignIn(breez_sdk_spark.SignInRequest{Label: nil})
 		if err = liftError(err); err != nil {
-			return nil, fmt.Errorf("failed to list labels: %w", err)
+			return nil, fmt.Errorf("failed to discover labels: %w", err)
 		}
+		labels := discovery.Labels
 
 		if len(labels) == 0 {
 			return nil, fmt.Errorf("no labels found on Nostr for this identity")
@@ -203,6 +196,15 @@ func resolvePasskeySeed(
 
 		selected := labels[idx-1]
 		resolvedName = &selected
+	}
+
+	// --store-label: publish to Nostr
+	if storeLabel && resolvedName != nil {
+		fmt.Printf("Publishing label '%s' to Nostr...\n", *resolvedName)
+		if err := liftError(passkey.Labels().Store(*resolvedName)); err != nil {
+			return nil, fmt.Errorf("failed to store label: %w", err)
+		}
+		fmt.Printf("Label '%s' published successfully.\n", *resolvedName)
 	}
 
 	response, err := passkey.SignIn(breez_sdk_spark.SignInRequest{Label: resolvedName})

@@ -7,10 +7,12 @@ import time
 import breez_sdk_spark
 from breez_sdk_spark import (
     AssetFilter,
+    AuthorizeTransferRequest,
     BuyBitcoinRequest,
     CheckLightningAddressRequest,
     ClaimDepositRequest,
     ClaimHtlcPaymentRequest,
+    ClaimTransferRequest,
     ConversionOptions,
     ConversionType,
     Fee,
@@ -42,6 +44,7 @@ from breez_sdk_spark import (
     SparkHtlcStatus,
     SyncWalletRequest,
     TokenTransactionType,
+    TransferAuthorization,
     UpdateUserSettingsRequest,
 )
 
@@ -67,6 +70,8 @@ COMMAND_NAMES = [
     "check-lightning-address-available",
     "get-lightning-address",
     "register-lightning-address",
+    "authorize-lightning-address-transfer",
+    "claim-lightning-address-transfer",
     "delete-lightning-address",
     "list-fiat-currencies",
     "list-fiat-rates",
@@ -685,6 +690,52 @@ async def _handle_register_lightning_address(sdk, _token_issuer, _session, args)
     print_value(result)
 
 
+# --- authorize-lightning-address-transfer ---
+
+def _build_authorize_lightning_address_transfer_parser():
+    p = _parser("authorize-lightning-address-transfer",
+                "Authorize transferring lightning address to another pubkey")
+    p.add_argument("transferee_pubkey",
+                   help="The new owner's identity public key (hex-encoded compressed secp256k1)")
+    return p
+
+async def _handle_authorize_lightning_address_transfer(sdk, _token_issuer, _session, args):
+    result = await sdk.authorize_lightning_address_transfer(
+        request=AuthorizeTransferRequest(
+            transferee_pubkey=args.transferee_pubkey,
+        )
+    )
+    print_value(result)
+
+
+# --- claim-lightning-address-transfer ---
+
+def _build_claim_lightning_address_transfer_parser():
+    p = _parser("claim-lightning-address-transfer",
+                "Claim a lightning address transfer authorized by the current owner")
+    p.add_argument("username", help="The username being taken over (from the authorization)")
+    p.add_argument("description", nargs="?", default=None,
+                   help="Description in the lnurl response and the invoice")
+    p.add_argument("--from-pubkey", required=True,
+                   help="The current owner's identity public key (hex-encoded compressed secp256k1)")
+    p.add_argument("--from-signature", required=True,
+                   help="The current owner's signature authorizing the transfer (hex-encoded DER ECDSA)")
+    return p
+
+async def _handle_claim_lightning_address_transfer(sdk, _token_issuer, _session, args):
+    result = await sdk.claim_lightning_address_transfer(
+        request=ClaimTransferRequest(
+            authorization=TransferAuthorization(
+                username=args.username,
+                pubkey=args.from_pubkey,
+                signature=args.from_signature,
+            ),
+            description=args.description,
+        )
+    )
+    print_value(result)
+
+
 # --- delete-lightning-address ---
 
 def _build_delete_lightning_address_parser():
@@ -784,6 +835,7 @@ async def _handle_set_user_settings(sdk, _token_issuer, _session, args):
     await sdk.update_user_settings(
         request=UpdateUserSettingsRequest(
             spark_private_mode_enabled=args.spark_private_mode_enabled,
+            stable_balance_active_label=None,
         )
     )
     print("User settings updated")
@@ -902,6 +954,8 @@ def build_command_registry():
         "check-lightning-address-available": (_build_check_lightning_address_available_parser(), _handle_check_lightning_address_available),
         "get-lightning-address": (_build_get_lightning_address_parser(), _handle_get_lightning_address),
         "register-lightning-address": (_build_register_lightning_address_parser(), _handle_register_lightning_address),
+        "authorize-lightning-address-transfer": (_build_authorize_lightning_address_transfer_parser(), _handle_authorize_lightning_address_transfer),
+        "claim-lightning-address-transfer": (_build_claim_lightning_address_transfer_parser(), _handle_claim_lightning_address_transfer),
         "delete-lightning-address": (_build_delete_lightning_address_parser(), _handle_delete_lightning_address),
         "list-fiat-currencies": (_build_list_fiat_currencies_parser(), _handle_list_fiat_currencies),
         "list-fiat-rates": (_build_list_fiat_rates_parser(), _handle_list_fiat_rates),

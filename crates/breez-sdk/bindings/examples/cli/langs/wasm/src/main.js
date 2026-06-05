@@ -11,9 +11,11 @@ const { parse: parseShell } = require('shell-quote')
 const {
   SdkBuilder,
   defaultConfig,
+  defaultServerConfig,
   defaultMysqlStorageConfig,
   defaultPostgresStorageConfig,
-  newSharedSdkContext,
+  postgresStorage,
+  mysqlStorage,
   initLogging,
   getSparkStatus
 } = require('@breeztech/breez-sdk-spark/nodejs')
@@ -37,6 +39,7 @@ function parseCliArgs() {
     stableBalanceTokens: [],
     stableBalanceDefaultActiveLabel: undefined,
     stableBalanceThreshold: undefined,
+    serverMode: false,
     passkey: undefined,
     label: undefined,
     listLabels: false,
@@ -86,6 +89,9 @@ function parseCliArgs() {
       case '--rpid':
         opts.rpid = args[++i]
         break
+      case '--server-mode':
+        opts.serverMode = true
+        break
       case '-h':
       case '--help':
         console.log('Usage: node src/main.js [OPTIONS]')
@@ -104,6 +110,7 @@ function parseCliArgs() {
         console.log('  --list-labels                                List and select from labels on Nostr (requires --passkey)')
         console.log('  --store-label                                Publish the label to Nostr (requires --passkey and --label)')
         console.log('  --rpid <id>                                  Relying party ID for FIDO2 provider (requires --passkey)')
+        console.log('  --server-mode                                Run in server mode (background_tasks_enabled=false)')
         console.log('  -h, --help                                   Show this help message')
         process.exit(0)
         break
@@ -222,7 +229,13 @@ async function main() {
   const persistence = new CliPersistence(dataDir)
 
   // Config
-  const config = defaultConfig(network)
+  let config
+  if (opts.serverMode) {
+    console.log('Server mode enabled. Run `sync` between operations.')
+    config = defaultServerConfig(network)
+  } else {
+    config = defaultConfig(network)
+  }
   const breezApiKey = process.env.BREEZ_API_KEY
   if (breezApiKey) {
     config.apiKey = breezApiKey
@@ -269,19 +282,13 @@ async function main() {
   let sdkBuilder = SdkBuilder.new(config, seed)
 
   if (opts.postgresConnectionString) {
-    const context = await newSharedSdkContext({
-      network,
-      apiKey: breezApiKey,
-      postgresConfig: defaultPostgresStorageConfig(opts.postgresConnectionString)
-    })
-    sdkBuilder = sdkBuilder.withSharedContext(context)
+    sdkBuilder = sdkBuilder.withStorageBackend(
+      postgresStorage(defaultPostgresStorageConfig(opts.postgresConnectionString))
+    )
   } else if (opts.mysqlConnectionString) {
-    const context = await newSharedSdkContext({
-      network,
-      apiKey: breezApiKey,
-      mysqlConfig: defaultMysqlStorageConfig(opts.mysqlConnectionString)
-    })
-    sdkBuilder = sdkBuilder.withSharedContext(context)
+    sdkBuilder = sdkBuilder.withStorageBackend(
+      mysqlStorage(defaultMysqlStorageConfig(opts.mysqlConnectionString))
+    )
   } else {
     sdkBuilder = await sdkBuilder.withDefaultStorage(dataDir)
   }

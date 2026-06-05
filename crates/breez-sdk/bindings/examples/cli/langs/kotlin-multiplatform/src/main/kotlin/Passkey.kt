@@ -159,41 +159,43 @@ suspend fun resolvePasskeySeed(
 ): Seed {
     val passkey = PasskeyClient(prfProvider = provider, breezApiKey = breezApiKey, config = null)
 
-    // --store-label: publish the label to Nostr
-    if (storeLabel && label != null) {
-        println("Publishing label '$label' to Nostr...")
-        passkey.labels().store(label)
-        println("Label '$label' published successfully.")
-    }
-
-    // --list-labels: query Nostr and prompt user to select
-    val resolvedName: String? = if (listLabels) {
+    // --list-labels: discovery sign-in (no cached label) returns the
+    // discovered label set; prompt user to pick.
+    val resolvedLabel: String? = if (listLabels) {
         println("Querying Nostr for available labels...")
-        val labels = passkey.labels().list()
+        val response = passkey.signIn(SignInRequest(label = null))
 
-        if (labels.isEmpty()) {
+        if (response.labels.isEmpty()) {
             throw IllegalStateException("No labels found on Nostr for this identity")
         }
 
         println("Available labels:")
-        labels.forEachIndexed { i, name ->
+        response.labels.forEachIndexed { i, name ->
             println("  ${i + 1}: $name")
         }
 
-        print("Select label (1-${labels.size}): ")
+        print("Select label (1-${response.labels.size}): ")
         System.out.flush()
         val input = readlnOrNull()?.trim() ?: throw IllegalStateException("No input")
         val idx = input.toIntOrNull() ?: throw IllegalArgumentException("Invalid selection")
 
-        if (idx < 1 || idx > labels.size) {
+        if (idx < 1 || idx > response.labels.size) {
             throw IllegalArgumentException("Selection out of range")
         }
 
-        labels[idx - 1]
+        response.labels[idx - 1]
     } else {
         label
     }
 
-    val response = passkey.signIn(SignInRequest(label = resolvedName))
+    // --store-label: publish before signing in so a fresh client can
+    // discover the label later.
+    if (storeLabel && resolvedLabel != null) {
+        println("Publishing label '$resolvedLabel' to Nostr...")
+        passkey.labels().store(resolvedLabel)
+        println("Label '$resolvedLabel' published successfully.")
+    }
+
+    val response = passkey.signIn(SignInRequest(label = resolvedLabel))
     return response.wallet.seed
 }

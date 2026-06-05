@@ -58,6 +58,7 @@ make clean            Remove build artifacts
 | `--stable-balance-token` | - | Stable balance token in `LABEL:token_identifier` format (repeatable) |
 | `--stable-balance-default-active-label` | - | Default active label for stable balance |
 | `--stable-balance-threshold` | - | Stable balance threshold in sats |
+| `--server-mode` | false | Run in server mode (no background tasks, drive `sync` yourself) |
 | `--passkey` | - | Use Passkey with PRF provider (`file`, `yubikey` or `fido2`) |
 | `--label` | `Default` | Requires `--passkey`. The label to use |
 | `--list-labels` | false | Requires `--passkey`. Select label from Nostr |
@@ -76,19 +77,23 @@ Once inside the REPL, type `help` to see all commands. The REPL supports **comma
 
 The CLI supports:
 
-**Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`
+**Wallet**: `get-info`, `sync`, `get-payment`, `list-payments`, `recommended-fees`
 
 **Payments**: `receive`, `pay`, `lnurl-pay`, `lnurl-withdraw`, `lnurl-auth`, `claim-htlc-payment`
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
-**Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`
+**Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`
 
 **Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
 
 **Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list`
 
-**Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`, `recommended-fees`
+**Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
+
+**Stable balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
+
+**Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 ## Passkey
 

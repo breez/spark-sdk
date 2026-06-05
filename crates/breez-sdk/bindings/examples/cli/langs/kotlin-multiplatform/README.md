@@ -57,13 +57,15 @@ make clean            Remove build artifacts
 | `--account-number` | | Account number for the Spark signer |
 | `--postgres-connection-string` | | PostgreSQL connection string (uses SQLite by default) |
 | `--mysql-connection-string` | | MySQL connection string (mutually exclusive with `--postgres-connection-string`) |
-| `--stable-balance-token-identifier` | | Stable balance token identifier |
-| `--stable-balance-threshold` | | Stable balance threshold in sats |
+| `--stable-balance-token` | | Stable balance token in `TICKER:token_identifier` format (repeatable) |
+| `--stable-balance-default-active-label` | | Default active label for stable balance (requires `--stable-balance-token`) |
+| `--stable-balance-threshold` | | Stable balance threshold in sats (requires `--stable-balance-token`) |
 | `--passkey` | | Use passkey with PRF provider (`file`, `yubikey`, or `fido2`) |
 | `--label` | | Label for seed derivation (requires `--passkey`) |
 | `--list-labels` | | List and select from labels on Nostr (requires `--passkey`) |
 | `--store-label` | | Publish the label to Nostr (requires `--passkey` + `--label`) |
 | `--rpid` | | Relying party ID for FIDO2 provider (requires `--passkey`) |
+| `--server-mode` | | Run in server mode (no background tasks) |
 
 ## Environment Variables
 
@@ -111,19 +113,19 @@ Once inside the REPL, type `help` to see all commands. The CLI supports:
 
 **On-chain**: `claim-deposit`, `refund-deposit`, `list-unclaimed-deposits`, `buy-bitcoin`
 
-**Lightning address**: `get-lightning-address`, `register-lightning-address`, `delete-lightning-address`, `check-lightning-address-available`
+**Lightning address**: `get-lightning-address`, `register-lightning-address`, `authorize-lightning-address-transfer`, `claim-lightning-address-transfer`, `delete-lightning-address`, `check-lightning-address-available`
 
-**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`
+**Tokens**: `get-tokens-metadata`, `fetch-conversion-limits`, `issuer <subcommand>`
 
-**Fiat**: `list-fiat-currencies`, `list-fiat-rates`
+**Webhooks**: `webhooks register`, `webhooks unregister`, `webhooks list`
 
-**Settings**: `get-user-settings`, `set-user-settings`, `get-spark-status`
+**Stable balance**: `stable-balance get`, `stable-balance set`, `stable-balance unset`
+
+**Other**: `parse`, `list-fiat-currencies`, `list-fiat-rates`, `get-user-settings`, `set-user-settings`, `get-spark-status`
 
 **Token issuer**: `issuer create-token`, `issuer mint-token`, `issuer burn-token`, `issuer token-balance`, `issuer token-metadata`, `issuer freeze-token`, `issuer unfreeze-token`
 
 **Contacts**: `contacts add`, `contacts update`, `contacts delete`, `contacts list`
-
-**Input parsing**: `parse`
 
 Each command supports its own usage help.
 
