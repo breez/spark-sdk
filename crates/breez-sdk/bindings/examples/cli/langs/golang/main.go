@@ -79,8 +79,12 @@ func main() {
 	network := flag.String("network", "regtest", "Network to use (regtest or mainnet)")
 	accountNumber := flag.String("account-number", "", "Account number for the Spark signer")
 	postgresConnectionString := flag.String("postgres-connection-string", "", "PostgreSQL connection string (uses SQLite by default)")
-	stableBalanceTokenIdentifier := flag.String("stable-balance-token-identifier", "", "Stable balance token identifier")
+	mysqlConnectionString := flag.String("mysql-connection-string", "", "MySQL connection string (uses SQLite by default)")
+	var stableBalanceTokens stringSliceFlag
+	flag.Var(&stableBalanceTokens, "stable-balance-token", "Stable balance token in LABEL:token_identifier format (repeatable)")
+	stableBalanceDefaultActiveLabel := flag.String("stable-balance-default-active-label", "", "Default active label for stable balance")
 	stableBalanceThreshold := flag.Uint64("stable-balance-threshold", 0, "Stable balance threshold in sats")
+	serverMode := flag.Bool("server-mode", false, "Run in server mode (background_tasks_enabled=false)")
 	passkeyProviderStr := flag.String("passkey", "", "Use passkey with PRF provider (file, yubikey, or fido2)")
 	label := flag.String("label", "", "Label for seed derivation (requires --passkey)")
 	listLabels := flag.Bool("list-labels", false, "List and select from labels published to Nostr (requires --passkey)")
@@ -112,19 +116,33 @@ func main() {
 
 	// Config
 	config := breez_sdk_spark.DefaultConfig(networkEnum)
+	if *serverMode {
+		fmt.Println("Server mode enabled. Run `sync` between operations.")
+		config = breez_sdk_spark.DefaultServerConfig(networkEnum)
+	}
 	apiKey := os.Getenv("BREEZ_API_KEY")
 	if apiKey != "" {
 		config.ApiKey = &apiKey
 	}
 
 	// Stable balance config
-	if *stableBalanceTokenIdentifier != "" {
-		defaultActiveLabel := "USDB"
+	if len(stableBalanceTokens) > 0 {
+		var tokens []breez_sdk_spark.StableBalanceToken
+		for _, s := range stableBalanceTokens {
+			parts := strings.SplitN(s, ":", 2)
+			if len(parts) != 2 {
+				log.Fatalf("Invalid token format '%s', expected LABEL:token_identifier", s)
+			}
+			tokens = append(tokens, breez_sdk_spark.StableBalanceToken{
+				Label:           parts[0],
+				TokenIdentifier: parts[1],
+			})
+		}
 		sbc := breez_sdk_spark.StableBalanceConfig{
-			Tokens: []breez_sdk_spark.StableBalanceToken{
-				{Label: "USDB", TokenIdentifier: *stableBalanceTokenIdentifier},
-			},
-			DefaultActiveLabel: &defaultActiveLabel,
+			Tokens: tokens,
+		}
+		if *stableBalanceDefaultActiveLabel != "" {
+			sbc.DefaultActiveLabel = stableBalanceDefaultActiveLabel
 		}
 		if *stableBalanceThreshold > 0 {
 			sbc.ThresholdSats = stableBalanceThreshold
@@ -164,12 +182,22 @@ func main() {
 	}
 
 	// Build SDK
+	if *postgresConnectionString != "" && *mysqlConnectionString != "" {
+		log.Fatalf("Cannot specify both --postgres-connection-string and --mysql-connection-string")
+	}
 	builder := breez_sdk_spark.NewSdkBuilder(config, seed)
 	if *postgresConnectionString != "" {
 		pgConfig := breez_sdk_spark.DefaultPostgresStorageConfig(*postgresConnectionString)
 		storage, err := breez_sdk_spark.PostgresStorage(pgConfig)
 		if err != nil {
 			log.Fatalf("Failed to create postgres storage: %v", err)
+		}
+		builder.WithStorageBackend(storage)
+	} else if *mysqlConnectionString != "" {
+		mysqlConfig := breez_sdk_spark.DefaultMysqlStorageConfig(*mysqlConnectionString)
+		storage, err := breez_sdk_spark.MysqlStorage(mysqlConfig)
+		if err != nil {
+			log.Fatalf("Failed to create mysql storage: %v", err)
 		}
 		builder.WithStorageBackend(storage)
 	} else {
@@ -218,6 +246,8 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 	allCommands = append(allCommands, CommandNames...)
 	allCommands = append(allCommands, IssuerCommandNames...)
 	allCommands = append(allCommands, ContactCommandNames...)
+	allCommands = append(allCommands, WebhookCommandNames...)
+	allCommands = append(allCommands, StableBalanceCommandNames...)
 	allCommands = append(allCommands, "exit", "quit", "help")
 
 	// Build prefix completer items
@@ -287,6 +317,10 @@ func runRepl(sdk *breez_sdk_spark.BreezSdk, tokenIssuer *breez_sdk_spark.TokenIs
 			DispatchIssuerCommand(cmdArgs, tokenIssuer, rl)
 		} else if cmdName == "contacts" {
 			DispatchContactCommand(cmdArgs, sdk, rl)
+		} else if cmdName == "webhooks" {
+			DispatchWebhookCommand(cmdArgs, sdk, rl)
+		} else if cmdName == "stable-balance" {
+			DispatchStableBalanceCommand(cmdArgs, sdk, rl)
 		} else if cmd, ok := registry[cmdName]; ok {
 			if err := cmd.Run(sdk, rl, cmdArgs); err != nil {
 				fmt.Printf("Error: %v\n", err)

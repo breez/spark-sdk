@@ -120,6 +120,7 @@ func isVariantType(name string) bool {
 		"AssetFilter", "OnchainConfirmationSpeed", "FeePolicy",
 		"PaymentType", "PaymentStatus", "SparkHtlcStatus",
 		"TokenTransactionType", "ServiceStatus",
+		"StableBalanceActiveLabel", "BuyBitcoinRequest",
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(name, prefix) && name != prefix {
@@ -139,6 +140,7 @@ func extractVariantName(name string) string {
 		"SparkHtlcStatus", "PaymentStatus", "PaymentType",
 		"ServiceStatus", "SdkEvent", "InputType",
 		"AssetFilter", "FeePolicy", "MaxFee", "Fee",
+		"StableBalanceActiveLabel", "BuyBitcoinRequest",
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(name, prefix) && len(name) > len(prefix) {

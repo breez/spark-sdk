@@ -43,6 +43,8 @@ var CommandNames = []string{
 	"check-lightning-address-available",
 	"get-lightning-address",
 	"register-lightning-address",
+	"authorize-lightning-address-transfer",
+	"claim-lightning-address-transfer",
 	"delete-lightning-address",
 	"list-fiat-currencies",
 	"list-fiat-rates",
@@ -57,33 +59,35 @@ var CommandNames = []string{
 // BuildCommandRegistry returns a map of command name → Command.
 func BuildCommandRegistry() map[string]Command {
 	return map[string]Command{
-		"get-info":                          {Name: "get-info", Description: "Get balance information", Run: handleGetInfo},
-		"get-payment":                       {Name: "get-payment", Description: "Get the payment with the given ID", Run: handleGetPayment},
-		"sync":                              {Name: "sync", Description: "Sync wallet state", Run: handleSync},
-		"list-payments":                     {Name: "list-payments", Description: "List payments", Run: handleListPayments},
-		"receive":                           {Name: "receive", Description: "Receive a payment", Run: handleReceive},
-		"pay":                               {Name: "pay", Description: "Pay the given payment request", Run: handlePay},
-		"lnurl-pay":                         {Name: "lnurl-pay", Description: "Pay using LNURL", Run: handleLnurlPay},
-		"lnurl-withdraw":                    {Name: "lnurl-withdraw", Description: "Withdraw using LNURL", Run: handleLnurlWithdraw},
-		"lnurl-auth":                        {Name: "lnurl-auth", Description: "Authenticate using LNURL", Run: handleLnurlAuth},
-		"claim-htlc-payment":                {Name: "claim-htlc-payment", Description: "Claim an HTLC payment", Run: handleClaimHtlcPayment},
-		"claim-deposit":                     {Name: "claim-deposit", Description: "Claim an on-chain deposit", Run: handleClaimDeposit},
-		"parse":                             {Name: "parse", Description: "Parse an input (invoice, address, LNURL)", Run: handleParse},
-		"refund-deposit":                    {Name: "refund-deposit", Description: "Refund an on-chain deposit", Run: handleRefundDeposit},
-		"list-unclaimed-deposits":           {Name: "list-unclaimed-deposits", Description: "List unclaimed on-chain deposits", Run: handleListUnclaimedDeposits},
-		"buy-bitcoin":                       {Name: "buy-bitcoin", Description: "Buy Bitcoin via MoonPay", Run: handleBuyBitcoin},
-		"check-lightning-address-available": {Name: "check-lightning-address-available", Description: "Check if a lightning address username is available", Run: handleCheckLightningAddress},
-		"get-lightning-address":             {Name: "get-lightning-address", Description: "Get registered lightning address", Run: handleGetLightningAddress},
-		"register-lightning-address":        {Name: "register-lightning-address", Description: "Register a lightning address", Run: handleRegisterLightningAddress},
-		"delete-lightning-address":          {Name: "delete-lightning-address", Description: "Delete lightning address", Run: handleDeleteLightningAddress},
-		"list-fiat-currencies":              {Name: "list-fiat-currencies", Description: "List fiat currencies", Run: handleListFiatCurrencies},
-		"list-fiat-rates":                   {Name: "list-fiat-rates", Description: "List available fiat rates", Run: handleListFiatRates},
-		"recommended-fees":                  {Name: "recommended-fees", Description: "Get recommended BTC fees", Run: handleRecommendedFees},
-		"get-tokens-metadata":               {Name: "get-tokens-metadata", Description: "Get metadata for token(s)", Run: handleGetTokensMetadata},
-		"fetch-conversion-limits":           {Name: "fetch-conversion-limits", Description: "Fetch conversion limits for a token", Run: handleFetchConversionLimits},
-		"get-user-settings":                 {Name: "get-user-settings", Description: "Get user settings", Run: handleGetUserSettings},
-		"set-user-settings":                 {Name: "set-user-settings", Description: "Update user settings", Run: handleSetUserSettings},
-		"get-spark-status":                  {Name: "get-spark-status", Description: "Get Spark network service status", Run: handleGetSparkStatus},
+		"get-info":                             {Name: "get-info", Description: "Get balance information", Run: handleGetInfo},
+		"get-payment":                          {Name: "get-payment", Description: "Get the payment with the given ID", Run: handleGetPayment},
+		"sync":                                 {Name: "sync", Description: "Sync wallet state", Run: handleSync},
+		"list-payments":                        {Name: "list-payments", Description: "List payments", Run: handleListPayments},
+		"receive":                              {Name: "receive", Description: "Receive a payment", Run: handleReceive},
+		"pay":                                  {Name: "pay", Description: "Pay the given payment request", Run: handlePay},
+		"lnurl-pay":                            {Name: "lnurl-pay", Description: "Pay using LNURL", Run: handleLnurlPay},
+		"lnurl-withdraw":                       {Name: "lnurl-withdraw", Description: "Withdraw using LNURL", Run: handleLnurlWithdraw},
+		"lnurl-auth":                           {Name: "lnurl-auth", Description: "Authenticate using LNURL", Run: handleLnurlAuth},
+		"claim-htlc-payment":                   {Name: "claim-htlc-payment", Description: "Claim an HTLC payment", Run: handleClaimHtlcPayment},
+		"claim-deposit":                        {Name: "claim-deposit", Description: "Claim an on-chain deposit", Run: handleClaimDeposit},
+		"parse":                                {Name: "parse", Description: "Parse an input (invoice, address, LNURL)", Run: handleParse},
+		"refund-deposit":                       {Name: "refund-deposit", Description: "Refund an on-chain deposit", Run: handleRefundDeposit},
+		"list-unclaimed-deposits":              {Name: "list-unclaimed-deposits", Description: "List unclaimed on-chain deposits", Run: handleListUnclaimedDeposits},
+		"buy-bitcoin":                          {Name: "buy-bitcoin", Description: "Buy Bitcoin using an external provider", Run: handleBuyBitcoin},
+		"check-lightning-address-available":    {Name: "check-lightning-address-available", Description: "Check if a lightning address username is available", Run: handleCheckLightningAddress},
+		"get-lightning-address":                {Name: "get-lightning-address", Description: "Get registered lightning address", Run: handleGetLightningAddress},
+		"register-lightning-address":           {Name: "register-lightning-address", Description: "Register a lightning address", Run: handleRegisterLightningAddress},
+		"authorize-lightning-address-transfer": {Name: "authorize-lightning-address-transfer", Description: "Authorize transferring lightning address to a new owner", Run: handleAuthorizeLightningAddressTransfer},
+		"claim-lightning-address-transfer":     {Name: "claim-lightning-address-transfer", Description: "Claim a lightning address transfer", Run: handleClaimLightningAddressTransfer},
+		"delete-lightning-address":             {Name: "delete-lightning-address", Description: "Delete lightning address", Run: handleDeleteLightningAddress},
+		"list-fiat-currencies":                 {Name: "list-fiat-currencies", Description: "List fiat currencies", Run: handleListFiatCurrencies},
+		"list-fiat-rates":                      {Name: "list-fiat-rates", Description: "List available fiat rates", Run: handleListFiatRates},
+		"recommended-fees":                     {Name: "recommended-fees", Description: "Get recommended BTC fees", Run: handleRecommendedFees},
+		"get-tokens-metadata":                  {Name: "get-tokens-metadata", Description: "Get metadata for token(s)", Run: handleGetTokensMetadata},
+		"fetch-conversion-limits":              {Name: "fetch-conversion-limits", Description: "Fetch conversion limits for a token", Run: handleFetchConversionLimits},
+		"get-user-settings":                    {Name: "get-user-settings", Description: "Get user settings", Run: handleGetUserSettings},
+		"set-user-settings":                    {Name: "set-user-settings", Description: "Update user settings", Run: handleSetUserSettings},
+		"get-spark-status":                     {Name: "get-spark-status", Description: "Get Spark network service status", Run: handleGetSparkStatus},
 	}
 }
 
@@ -101,6 +105,8 @@ func PrintHelp(registry map[string]Command) {
 	}
 	fmt.Printf("\n  %-40s %s\n", "issuer <subcommand>", "Token issuer commands (use 'issuer help' for details)")
 	fmt.Printf("  %-40s %s\n", "contacts <subcommand>", "Contacts commands (use 'contacts help' for details)")
+	fmt.Printf("  %-40s %s\n", "webhooks <subcommand>", "Webhook commands (use 'webhooks help' for details)")
+	fmt.Printf("  %-40s %s\n", "stable-balance <subcommand>", "Stable balance commands (use 'stable-balance help' for details)")
 	fmt.Printf("  %-40s %s\n", "exit / quit", "Exit the CLI")
 	fmt.Printf("  %-40s %s\n", "help", "Show this help message")
 	fmt.Println()
@@ -454,11 +460,13 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 	// Show conversion estimate and confirm
 	if prepareResponse.ConversionEstimate != nil {
 		est := prepareResponse.ConversionEstimate
-		units := "token base units"
+		inUnits := "token base units"
+		outUnits := "sats"
 		if _, ok := est.Options.ConversionType.(breez_sdk_spark.ConversionTypeFromBitcoin); ok {
-			units = "sats"
+			inUnits = "sats"
+			outUnits = "token base units"
 		}
-		fmt.Printf("Estimated conversion of %v %s → %v %s with a %v %s fee\n", est.AmountIn, units, est.AmountOut, units, est.Fee, units)
+		fmt.Printf("Estimated conversion from %v %s to %v %s with a %v token base units fee\n", est.AmountIn, inUnits, est.AmountOut, outUnits, est.Fee)
 		line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
 		if err != nil {
 			return err
@@ -500,6 +508,8 @@ func handleLnurlPay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 	fs.StringVar(validateStr, "validate", "", "Validate success URL")
 	idempotencyKey := fs.String("i", "", "Optional idempotency key")
 	fs.StringVar(idempotencyKey, "idempotency-key", "", "Optional idempotency key")
+	tokenId := fs.String("t", "", "Optional token identifier (amount in token base units)")
+	fs.StringVar(tokenId, "token-identifier", "", "Optional token identifier")
 	fromToken := fs.String("from-token", "", "Convert from token to Bitcoin to fulfill payment")
 	maxSlippage := fs.String("s", "", "Max slippage in basis points for conversion")
 	fs.StringVar(maxSlippage, "convert-max-slippage-bps", "", "Max slippage in basis points")
@@ -532,18 +542,23 @@ func handleLnurlPay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 
 	minSendable := (payRequest.MinSendable + 999) / 1000
 	maxSendable := payRequest.MaxSendable / 1000
-	prompt := fmt.Sprintf("Amount to pay (min %d sat, max %d sat): ", minSendable, maxSendable)
+	var prompt string
+	if *tokenId == "" {
+		prompt = fmt.Sprintf("Amount to pay (min %d sat, max %d sat): ", minSendable, maxSendable)
+	} else {
+		prompt = fmt.Sprintf("Amount to pay (min %d sat, max %d sat) in token base units: ", minSendable, maxSendable)
+	}
 	amountLine, err := readlinePrompt(rl, prompt)
 	if err != nil {
 		return err
 	}
-	amountSats, err := strconv.ParseUint(strings.TrimSpace(amountLine), 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid amount: %w", err)
+	amount, ok := new(big.Int).SetString(strings.TrimSpace(amountLine), 10)
+	if !ok {
+		return fmt.Errorf("invalid amount: %s", strings.TrimSpace(amountLine))
 	}
 
 	prepareReq := breez_sdk_spark.PrepareLnurlPayRequest{
-		Amount: new(big.Int).SetUint64(amountSats),
+		Amount:     amount,
 		PayRequest: payRequest,
 	}
 	if *comment != "" {
@@ -552,6 +567,9 @@ func handleLnurlPay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 	if *validateStr != "" {
 		val := *validateStr == "true"
 		prepareReq.ValidateSuccessActionUrl = &val
+	}
+	if *tokenId != "" {
+		prepareReq.TokenIdentifier = tokenId
 	}
 
 	// Conversion options
@@ -586,7 +604,13 @@ func handleLnurlPay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 	// Show conversion estimate and confirm
 	if prepareResponse.ConversionEstimate != nil {
 		est := prepareResponse.ConversionEstimate
-		fmt.Printf("Estimated conversion of %v token base units → %v sats with a %v token base units fee\n", est.AmountIn, est.AmountOut, est.Fee)
+		inUnits := "token base units"
+		outUnits := "sats"
+		if _, ok := est.Options.ConversionType.(breez_sdk_spark.ConversionTypeFromBitcoin); ok {
+			inUnits = "sats"
+			outUnits = "token base units"
+		}
+		fmt.Printf("Estimated conversion from %v %s to %v %s with a %v token base units fee\n", est.AmountIn, inUnits, est.AmountOut, outUnits, est.Fee)
 		line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
 		if err != nil {
 			return err
@@ -865,18 +889,29 @@ func handleListUnclaimedDeposits(sdk *breez_sdk_spark.BreezSdk, _ *readline.Inst
 
 func handleBuyBitcoin(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
 	fs := flag.NewFlagSet("buy-bitcoin", flag.ContinueOnError)
-	lockedAmount := fs.Uint64("amount", 0, "Lock purchase to this amount in sats")
-	redirectUrl := fs.String("redirect-url", "", "Redirect URL after purchase")
+	provider := fs.String("provider", "moonpay", "Provider: moonpay or cashapp")
+	amountSat := fs.Uint64("amount-sat", 0, "Amount in satoshis")
+	redirectUrl := fs.String("redirect-url", "", "Redirect URL after purchase (MoonPay only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	req := breez_sdk_spark.BuyBitcoinRequestMoonpay{}
-	if *lockedAmount > 0 {
-		req.LockedAmountSat = lockedAmount
-	}
-	if *redirectUrl != "" {
-		req.RedirectUrl = redirectUrl
+	var req breez_sdk_spark.BuyBitcoinRequest
+	switch strings.ToLower(*provider) {
+	case "cashapp", "cash_app", "cash-app":
+		if *amountSat == 0 {
+			return fmt.Errorf("--amount-sat is required when --provider is cashapp")
+		}
+		req = breez_sdk_spark.BuyBitcoinRequestCashApp{AmountSats: *amountSat}
+	default:
+		moonpayReq := breez_sdk_spark.BuyBitcoinRequestMoonpay{}
+		if *amountSat > 0 {
+			moonpayReq.LockedAmountSat = amountSat
+		}
+		if *redirectUrl != "" {
+			moonpayReq.RedirectUrl = redirectUrl
+		}
+		req = moonpayReq
 	}
 
 	result, err := sdk.BuyBitcoin(req)
@@ -956,6 +991,60 @@ func handleRegisterLightningAddress(sdk *breez_sdk_spark.BreezSdk, _ *readline.I
 	return nil
 }
 
+// --- authorize-lightning-address-transfer ---
+
+func handleAuthorizeLightningAddressTransfer(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
+	if len(args) < 1 {
+		fmt.Println("Usage: authorize-lightning-address-transfer <transferee_pubkey>")
+		return nil
+	}
+
+	result, err := sdk.AuthorizeLightningAddressTransfer(breez_sdk_spark.AuthorizeTransferRequest{
+		TransfereePubkey: args[0],
+	})
+	if err = liftError(err); err != nil {
+		return err
+	}
+	printValue(result)
+	return nil
+}
+
+// --- claim-lightning-address-transfer ---
+
+func handleClaimLightningAddressTransfer(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
+	fs := flag.NewFlagSet("claim-lightning-address-transfer", flag.ContinueOnError)
+	fromPubkey := fs.String("from-pubkey", "", "Current owner's identity public key")
+	fromSignature := fs.String("from-signature", "", "Current owner's authorization signature")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	positional := fs.Args()
+	if len(positional) < 1 || *fromPubkey == "" || *fromSignature == "" {
+		fmt.Println("Usage: claim-lightning-address-transfer <username> [<description>] --from-pubkey <pubkey> --from-signature <signature>")
+		return nil
+	}
+
+	req := breez_sdk_spark.ClaimTransferRequest{
+		Authorization: breez_sdk_spark.TransferAuthorization{
+			Username:  positional[0],
+			Pubkey:    *fromPubkey,
+			Signature: *fromSignature,
+		},
+	}
+	if len(positional) > 1 {
+		description := positional[1]
+		req.Description = &description
+	}
+
+	result, err := sdk.ClaimLightningAddressTransfer(req)
+	if err = liftError(err); err != nil {
+		return err
+	}
+	printValue(result)
+	return nil
+}
+
 // --- delete-lightning-address ---
 
 func handleDeleteLightningAddress(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, _ []string) error {
@@ -1021,29 +1110,31 @@ func handleGetTokensMetadata(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance
 
 func handleFetchConversionLimits(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
 	fs := flag.NewFlagSet("fetch-conversion-limits", flag.ContinueOnError)
-	fromBitcoin := fs.Bool("from-bitcoin", false, "Convert from bitcoin to token")
-	tokenId := fs.String("token", "", "Token identifier (required)")
+	fromBitcoin := fs.Bool("f", false, "Convert from bitcoin to token")
+	fs.BoolVar(fromBitcoin, "from-bitcoin", false, "Convert from bitcoin to token")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *tokenId == "" {
-		fmt.Println("Usage: fetch-conversion-limits --token <token_id> [--from-bitcoin]")
+	positional := fs.Args()
+	if len(positional) < 1 {
+		fmt.Println("Usage: fetch-conversion-limits [-f/--from-bitcoin] <token_identifier>")
 		return nil
 	}
+	tokenId := positional[0]
 
 	var convType breez_sdk_spark.ConversionType
 	if *fromBitcoin {
 		convType = breez_sdk_spark.ConversionTypeFromBitcoin{}
 	} else {
-		convType = breez_sdk_spark.ConversionTypeToBitcoin{FromTokenIdentifier: *tokenId}
+		convType = breez_sdk_spark.ConversionTypeToBitcoin{FromTokenIdentifier: tokenId}
 	}
 
 	req := breez_sdk_spark.FetchConversionLimitsRequest{
 		ConversionType: convType,
 	}
 	if *fromBitcoin {
-		req.TokenIdentifier = tokenId
+		req.TokenIdentifier = &tokenId
 	}
 
 	result, err := sdk.FetchConversionLimits(req)
@@ -1069,7 +1160,8 @@ func handleGetUserSettings(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, 
 
 func handleSetUserSettings(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, args []string) error {
 	fs := flag.NewFlagSet("set-user-settings", flag.ContinueOnError)
-	privateMode := fs.String("spark-private-mode", "", "Enable spark private mode (true/false)")
+	privateMode := fs.String("p", "", "Enable spark private mode (true/false)")
+	fs.StringVar(privateMode, "private", "", "Enable spark private mode (true/false)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
