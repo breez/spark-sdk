@@ -113,6 +113,29 @@ impl From<flashnet::FlashnetError> for SdkError {
     }
 }
 
+impl From<boltz_client::BoltzError> for SdkError {
+    fn from(e: boltz_client::BoltzError) -> Self {
+        use boltz_client::BoltzError;
+        match e {
+            BoltzError::Api { reason, code } => {
+                let code = match code {
+                    Some(c) => format!(" (code: {c})"),
+                    None => String::new(),
+                };
+                SdkError::NetworkError(format!("Boltz API: {reason}{code}"))
+            }
+            BoltzError::WebSocket(s) => SdkError::NetworkError(format!("Boltz WebSocket: {s}")),
+            BoltzError::Store(s) => SdkError::StorageError(format!("Boltz store: {s}")),
+            BoltzError::AmountOutOfRange { .. }
+            | BoltzError::QuoteExpired
+            | BoltzError::InvalidQuote(_)
+            | BoltzError::QuoteDegradedBeyondSlippage { .. }
+            | BoltzError::DuplicatePreimage => SdkError::InvalidInput(e.to_string()),
+            _ => SdkError::Generic(format!("Boltz: {e}")),
+        }
+    }
+}
+
 impl From<crate::token_conversion::ConversionError> for SdkError {
     fn from(e: crate::token_conversion::ConversionError) -> Self {
         use crate::token_conversion::ConversionError;

@@ -228,53 +228,16 @@ fn map_boltz_status_to_conversion(status: &BoltzSwapStatus) -> ConversionStatus 
 }
 
 #[cfg(test)]
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 mod tests {
-    use std::path::PathBuf;
-
-    use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind};
+    use boltz_client::models::BoltzSwapStatus;
 
     use super::*;
-    use crate::persist::sqlite::SqliteStorage;
+    use macros::test_all;
 
-    fn create_temp_dir(name: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!("breez-test-{}-{}", name, uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&path).unwrap();
-        path
-    }
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    fn make_swap(id: &str, status: BoltzSwapStatus) -> BoltzSwap {
-        BoltzSwap {
-            id: id.to_string(),
-            status,
-            bridge_kind: BridgeKind::Oft,
-            claim_key_index: 0,
-            chain_id: 42161,
-            claim_address: "0xclaim".to_string(),
-            destination_address: "0xdest".to_string(),
-            destination_chain: "Arbitrum One".to_string(),
-            asset: Asset::Usdt,
-            refund_address: "0xrefund".to_string(),
-            erc20swap_address: "0xswap".to_string(),
-            router_address: "0xrouter".to_string(),
-            invoice: "lnbc1000n".to_string(),
-            invoice_amount_sats: 100_000,
-            onchain_amount: 99_500,
-            expected_output_amount: 70_900_000,
-            slippage_bps: 100,
-            timeout_block_height: 123_456,
-            lockup_tx_id: None,
-            claim_tx_hash: None,
-            pending_call_id: None,
-            delivered_amount: None,
-            bridge_ref: None,
-            created_at: 1_700_000_000,
-            updated_at: 1_700_000_000,
-        }
-    }
-
-    #[test]
+    #[test_all]
     fn status_mapping_covers_all_variants() {
         assert_eq!(
             map_boltz_status_to_conversion(&BoltzSwapStatus::Created),
@@ -312,15 +275,63 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn missing_payment_is_silent_noop() {
-        let dir = create_temp_dir("boltz_event_missing_payment");
-        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
-        let listener = BoltzSdkEventListener::new(Arc::clone(&storage));
+    #[cfg(feature = "sqlite")]
+    mod storage_tests {
+        use std::path::PathBuf;
+        use std::sync::Arc;
 
-        // No payment row carrying this invoice — the listener should
-        // short-circuit without erroring.
-        let swap = make_swap("orphan_swap", BoltzSwapStatus::InvoicePaid);
-        listener.handle_swap_updated(&swap).await.unwrap();
+        use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind};
+
+        use super::super::*;
+        use crate::persist::sqlite::SqliteStorage;
+
+        fn create_temp_dir(name: &str) -> PathBuf {
+            let mut path = std::env::temp_dir();
+            path.push(format!("breez-test-{}-{}", name, uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        }
+
+        fn make_swap(id: &str, status: BoltzSwapStatus) -> BoltzSwap {
+            BoltzSwap {
+                id: id.to_string(),
+                status,
+                bridge_kind: BridgeKind::Oft,
+                claim_key_index: 0,
+                chain_id: 42161,
+                claim_address: "0xclaim".to_string(),
+                destination_address: "0xdest".to_string(),
+                destination_chain: "Arbitrum One".to_string(),
+                asset: Asset::Usdt,
+                refund_address: "0xrefund".to_string(),
+                erc20swap_address: "0xswap".to_string(),
+                router_address: "0xrouter".to_string(),
+                invoice: "lnbc1000n".to_string(),
+                invoice_amount_sats: 100_000,
+                onchain_amount: 99_500,
+                expected_output_amount: 70_900_000,
+                slippage_bps: 100,
+                timeout_block_height: 123_456,
+                lockup_tx_id: None,
+                claim_tx_hash: None,
+                pending_call_id: None,
+                delivered_amount: None,
+                bridge_ref: None,
+                created_at: 1_700_000_000,
+                updated_at: 1_700_000_000,
+            }
+        }
+
+        #[tokio::test]
+        async fn missing_payment_is_silent_noop() {
+            let dir = create_temp_dir("boltz_event_missing_payment");
+            let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&dir).unwrap());
+            let listener = BoltzSdkEventListener::new(Arc::clone(&storage));
+
+            // No payment row carrying this invoice — the listener should
+            // short-circuit without erroring.
+            let swap = make_swap("orphan_swap", BoltzSwapStatus::InvoicePaid);
+            listener.handle_swap_updated(&swap).await.unwrap();
+        }
     }
 }

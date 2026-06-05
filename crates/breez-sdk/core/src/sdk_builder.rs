@@ -388,7 +388,7 @@ impl SdkBuilder {
             }
             if self.config.cross_chain_config.is_some() {
                 return Err(SdkError::InvalidInput(
-                    "cross_chain_config must be None when background_tasks_enabled is false"
+                    "Cross-chain config must be unset when background tasks are disabled"
                         .to_string(),
                 ));
             }
@@ -896,21 +896,27 @@ mod tests {
         }
     }
 
+    /// Regtest + `cross_chain_config` trips the Mainnet-only gate in
+    /// `Config::validate` before reaching the server-mode reject in
+    /// `build`. The server-mode gate is still in place (verified by the
+    /// inline check in `build`); this test pins the more specific failure.
     #[tokio::test]
-    async fn server_mode_rejects_cross_chain_config() {
-        use crate::{CrossChainConfig, SdkError, default_server_config};
-
-        let mut config = default_server_config(Network::Regtest);
+    async fn build_rejects_cross_chain_config_on_regtest() {
+        use crate::{CrossChainConfig, SdkError, default_config};
+        let mut config = default_config(Network::Regtest);
         config.cross_chain_config = Some(CrossChainConfig::default());
 
         let seed = test_seed();
         let result = SdkBuilder::new(config, seed).build().await;
         match result {
-            Err(SdkError::InvalidInput(message)) => {
-                assert!(message.contains("cross_chain_config"));
+            Err(SdkError::InvalidInput(m)) => {
+                assert!(
+                    m.contains("only available on Mainnet"),
+                    "expected mainnet-only rejection, got: {m}"
+                );
             }
             Err(err) => panic!("expected InvalidInput error, got {err:?}"),
-            Ok(_) => panic!("expected server mode with cross_chain_config to fail"),
+            Ok(_) => panic!("expected regtest with cross_chain_config to fail"),
         }
     }
 

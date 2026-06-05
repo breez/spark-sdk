@@ -4,17 +4,17 @@
 //! Handles quoting, sending (deposit + submit), and background monitoring
 //! of in-flight orders.
 
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use breez_sdk_common::input::CrossChainAddressFamily;
+use chrono::DateTime;
 use flashnet::OrchestraClient;
 use flashnet::orchestra::{
-    AmountMode, OrderStatus, QuoteRequest, QuoteResponse, Route, RouteAsset, SubmitResponse,
+    AmountMode, OrderStatus, QuoteRequest, QuoteResponse, Route, RouteAsset, StatusResponse,
+    SubmitResponse,
 };
-use platform_utils::time::Duration;
+use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
 use spark_wallet::SparkWallet;
 use tokio::{
@@ -50,8 +50,6 @@ fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
         .parse::<u128>()
         .map_err(|e| SdkError::Generic(format!("Orchestra returned invalid {field}: {e}")))
 }
-
-const DEFAULT_SLIPPAGE_BPS: u32 = 50;
 
 /// How often the background monitor polls in-flight orders.
 const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
@@ -149,14 +147,10 @@ impl OrchestraService {
                 ]),
                 ..Default::default()
             })
-            .await
-            .map_err(|e| {
-                SdkError::Generic(format!("Failed to list pending Orchestra orders: {e}"))
-            })?;
+            .await?;
 
         debug!("Orchestra monitor: found {} pending orders", pending.len());
         for payment in &pending {
-            // Extract all Orchestra metadata fields in one destructure.
             let Some(
                 PaymentDetails::Spark {
                     conversion_info: Some(conversion_info),
@@ -169,7 +163,7 @@ impl OrchestraService {
             ) = &payment.details
             else {
                 debug!(
-                    "Orchestra monitor: payment {} has no Orchestra conversion_info, skipping",
+                    "Orchestra monitor: payment {} has no conversion_info, skipping",
                     payment.id
                 );
                 continue;
@@ -178,17 +172,11 @@ impl OrchestraService {
             let ConversionInfo::Orchestra {
                 order_id,
                 quote_id,
-                chain,
-                chain_id,
-                asset,
-                recipient_address,
-                estimated_out,
-                fee,
                 read_token,
-                asset_decimals,
-                asset_contract,
+                chain,
+                asset,
                 ..
-            } = conversion_info.clone()
+            } = conversion_info
             else {
                 debug!(
                     "Orchestra monitor: payment {} conversion_info is not Orchestra variant, skipping",
@@ -198,9 +186,9 @@ impl OrchestraService {
             };
 
             let lookup_id = if order_id.is_empty() {
-                &quote_id
+                quote_id
             } else {
-                &order_id
+                order_id
             };
             debug!(
                 "Orchestra monitor: checking payment {} (order={order_id}, quote={quote_id}, dest={chain}/{asset})",
@@ -211,9 +199,9 @@ impl OrchestraService {
             // (can happen if /submit failed but we still want to track).
             let rt = read_token.as_deref();
             let status_response = if order_id.is_empty() {
-                client.status_by_quote_id(&quote_id, rt).await
+                client.status_by_quote_id(quote_id, rt).await
             } else {
-                client.status_by_id(&order_id, rt).await
+                client.status_by_id(order_id, rt).await
             };
 
             let status_response = match status_response {
@@ -224,57 +212,24 @@ impl OrchestraService {
                 }
             };
 
-            let order_status = status_response.order.status;
             debug!(
-                "Orchestra monitor: payment {} order status: {order_status:?} (amount_out={:?})",
-                payment.id, status_response.order.amount_out,
+                "Orchestra monitor: payment {} order status: {:?} (amount_out={:?})",
+                payment.id, status_response.order.status, status_response.order.amount_out,
             );
 
-            if !order_status.is_terminal() {
+            let Some(updated_metadata) = apply_terminal_status(conversion_info, &status_response)
+            else {
                 debug!(
                     "Orchestra monitor: payment {} still in progress",
                     payment.id
                 );
                 continue;
-            }
-
-            let new_status = match order_status {
-                OrderStatus::Completed => ConversionStatus::Completed,
-                OrderStatus::Refunded => ConversionStatus::Refunded,
-                _ => ConversionStatus::Failed,
             };
-
-            // Use the real amounts from Orchestra status if available.
-            // Keep estimated_out frozen; set delivered_amount with the actual.
-            let delivered_amount = status_response
-                .order
-                .amount_out
-                .as_deref()
-                .and_then(|s| s.parse::<u128>().ok());
 
             debug!(
-                "Orchestra monitor: payment {} terminal → {new_status:?}, delivered={delivered_amount:?} (estimated was {estimated_out})",
+                "Orchestra monitor: payment {} terminal update built",
                 payment.id
             );
-
-            let updated_metadata = crate::PaymentMetadata {
-                conversion_info: Some(ConversionInfo::Orchestra {
-                    order_id,
-                    quote_id,
-                    chain,
-                    chain_id,
-                    asset,
-                    recipient_address,
-                    estimated_out,
-                    delivered_amount,
-                    status: new_status.clone(),
-                    fee,
-                    read_token,
-                    asset_decimals,
-                    asset_contract,
-                }),
-                ..Default::default()
-            };
 
             if let Err(e) = storage
                 .insert_payment_metadata(payment.id.clone(), updated_metadata)
@@ -286,7 +241,7 @@ impl OrchestraService {
                 );
             } else {
                 info!(
-                    "Orchestra order for payment {} reached terminal state: {new_status:?}",
+                    "Orchestra order for payment {} reached terminal state",
                     payment.id
                 );
             }
@@ -311,21 +266,8 @@ impl OrchestraService {
         dest: &CrossChainRoutePair,
         token_identifier: Option<&str>,
     ) -> Result<String, SdkError> {
-        let raw_routes =
-            self.client.spark_routes(true).await.map_err(|e| {
-                SdkError::Generic(format!("Failed to fetch cross-chain routes: {e}"))
-            })?;
-        let matched = raw_routes.iter().find(|r| {
-            let dest_matches = r.destination.chain == dest.chain
-                && r.destination.asset == dest.asset
-                && r.destination.contract_address == dest.contract_address;
-            let source_matches = match token_identifier {
-                None => r.source.asset.eq_ignore_ascii_case("BTC"),
-                Some(tid) => r.source.contract_address.as_deref() == Some(tid),
-            };
-            dest_matches && source_matches
-        });
-        matched.map(|r| r.source.asset.clone()).ok_or_else(|| {
+        let raw_routes = self.client.spark_routes(true).await?;
+        find_source_asset(&raw_routes, dest, token_identifier).ok_or_else(|| {
             SdkError::InvalidInput(format!(
                 "Orchestra does not offer a route for source {} → {}/{}",
                 token_identifier.unwrap_or("BTC"),
@@ -336,8 +278,40 @@ impl OrchestraService {
     }
 }
 
+/// Finds the Orchestra-side source asset wire symbol for the given
+/// `(dest, source)` pair.
+///
+/// Match semantics:
+/// - destination matches by `(chain, asset, contract_address)` exactly.
+/// - source matches by **case-insensitive** asset symbol when
+///   `token_identifier` is `None` (BTC source); otherwise by the source's
+///   `contract_address` (which on the Spark side is the bech32m token
+///   identifier) equalling `token_identifier`.
+///
+/// Returns the matched route's `source.asset` string (e.g. `"BTC"`,
+/// `"USDB"`). `None` if no route matches.
+fn find_source_asset(
+    routes: &[Route],
+    dest: &CrossChainRoutePair,
+    token_identifier: Option<&str>,
+) -> Option<String> {
+    routes
+        .iter()
+        .find(|r| {
+            let dest_matches = r.destination.chain == dest.chain
+                && r.destination.asset == dest.asset
+                && r.destination.contract_address == dest.contract_address;
+            let source_matches = match token_identifier {
+                None => r.source.asset.eq_ignore_ascii_case("BTC"),
+                Some(tid) => r.source.contract_address.as_deref() == Some(tid),
+            };
+            dest_matches && source_matches
+        })
+        .map(|r| r.source.asset.clone())
+}
+
 #[macros::async_trait]
-#[allow(clippy::too_many_lines, clippy::items_after_statements)]
+#[allow(clippy::too_many_lines)]
 impl CrossChainService for OrchestraService {
     async fn get_routes(
         &self,
@@ -357,71 +331,14 @@ impl CrossChainService for OrchestraService {
             }
         };
 
-        let routes =
-            self.client.spark_routes(is_send).await.map_err(|e| {
-                SdkError::Generic(format!("Failed to fetch cross-chain routes: {e}"))
-            })?;
+        let routes = self.client.spark_routes(is_send).await?;
 
-        // The non-Spark side of the route: for send it's the destination,
-        // for receive it's the source (the chain the user sends from).
-        fn non_spark_side(r: &Route, is_send: bool) -> &RouteAsset {
-            if is_send { &r.destination } else { &r.source }
-        }
-
-        // Multiple raw routes may exist for the same external chain (e.g.
-        // BTC→USDT-on-tron and USDB→USDT-on-tron). Dedup by (chain, asset,
-        // contract_address) so the caller only sees one route per external
-        // endpoint, but accumulate the Spark-side source variants into
-        // `supported_sources`.
-        type Key = (String, String, Option<String>);
-        let mut order: Vec<Key> = Vec::new();
-        let mut grouped: HashMap<Key, CrossChainRoutePair> = HashMap::new();
-
-        for r in routes.iter().filter(|r| {
-            let side = non_spark_side(r, is_send);
-            let ca = side.contract_address.as_deref();
-            family_filter.is_none_or(|f| f.matches_chain(&side.chain, ca))
-                && contract_filter.is_none_or(|filter_ca| ca.is_some_and(|c| c == filter_ca))
-        }) {
-            let side = non_spark_side(r, is_send);
-            let key: Key = (
-                side.chain.clone(),
-                side.asset.clone(),
-                side.contract_address.clone(),
-            );
-
-            // On send, the Spark side is `source`; on receive, it's `destination`.
-            let spark_side = if is_send { &r.source } else { &r.destination };
-            let source_variant = if spark_side.asset.eq_ignore_ascii_case("BTC") {
-                Some(SourceAsset::Bitcoin)
-            } else {
-                // Non-BTC Spark source without contract_address: defensive
-                // skip. Shouldn't happen per current Orchestra behavior.
-                spark_side
-                    .contract_address
-                    .as_ref()
-                    .map(|ca| SourceAsset::Token {
-                        token_identifier: ca.clone(),
-                    })
-            };
-
-            let entry = grouped.entry(key.clone()).or_insert_with(|| {
-                order.push(key.clone());
-                side_to_route_pair(side, r.exact_out_eligible)
-            });
-
-            if let Some(variant) = source_variant
-                && !entry.supported_sources.contains(&variant)
-            {
-                entry.supported_sources.push(variant);
-            }
-        }
-
-        let pairs: Vec<CrossChainRoutePair> = order
-            .into_iter()
-            .filter_map(|k| grouped.remove(&k))
-            .collect();
-        Ok(pairs)
+        Ok(dedupe_routes(
+            &routes,
+            is_send,
+            family_filter,
+            contract_filter,
+        ))
     }
 
     async fn prepare(
@@ -430,7 +347,7 @@ impl CrossChainService for OrchestraService {
         route: &CrossChainRoutePair,
         amount: u128,
         token_identifier: Option<String>,
-        max_slippage_bps: Option<u32>,
+        max_slippage_bps: u32,
         fee_mode: CrossChainFeeMode,
     ) -> Result<CrossChainPrepared, SdkError> {
         let source_asset = self
@@ -446,7 +363,7 @@ impl CrossChainService for OrchestraService {
             recipient_address: recipient_address.to_string(),
             amount_mode: Some(AmountMode::ExactIn),
             refund_address: None,
-            slippage_bps: Some(max_slippage_bps.unwrap_or(DEFAULT_SLIPPAGE_BPS)),
+            slippage_bps: Some(max_slippage_bps),
             zeroconf_enabled: None,
             app_fees: Vec::new(),
             affiliate_id: None,
@@ -460,11 +377,7 @@ impl CrossChainService for OrchestraService {
             request.destination_asset,
             request.amount
         );
-        let quote: QuoteResponse = self
-            .client
-            .quote(request)
-            .await
-            .map_err(|e| SdkError::Generic(format!("Orchestra: {e}")))?;
+        let quote: QuoteResponse = self.client.quote(request).await?;
         debug!("Orchestra: quote response: {:?}", quote);
 
         let amount_in = parse_amount(&quote.amount_in, "amountIn")?;
@@ -512,6 +425,8 @@ impl CrossChainService for OrchestraService {
             ));
         };
 
+        validate_quote_expiry(&prepared.expires_at)?;
+
         // Step 1: Spark transfer to the Orchestra deposit address.
         let spark_tx_hash = self
             .client
@@ -520,8 +435,7 @@ impl CrossChainService for OrchestraService {
                 prepared.amount_in,
                 prepared.token_identifier.as_deref(),
             )
-            .await
-            .map_err(|e| SdkError::Generic(format!("Orchestra deposit transfer failed: {e}")))?;
+            .await?;
         debug!("Orchestra: deposit transfer {spark_tx_hash} sent for quote {quote_id}");
 
         // Step 2: Submit the deposit to Orchestra.
@@ -597,8 +511,7 @@ impl CrossChainService for OrchestraService {
         self.trigger_monitor();
 
         // Surface a submit error before kicking off polling.
-        let submit_response =
-            submit_res.map_err(|e| SdkError::Generic(format!("Orchestra submit failed: {e}")))?;
+        let submit_response = submit_res?;
         let order_id = submit_response.order_id;
 
         // Poll the outbound Spark transfer until it settles to terminal status.
@@ -627,6 +540,189 @@ impl CrossChainService for OrchestraService {
     }
 }
 
+/// Returns the route side opposite the Spark wallet — destination for sends,
+/// source for receives.
+fn non_spark_side(r: &Route, is_send: bool) -> &RouteAsset {
+    if is_send { &r.destination } else { &r.source }
+}
+
+/// Whether a raw Orchestra route should appear in the deduplicated list,
+/// given the caller's address-family and contract-address filters.
+///
+/// Both filters operate on the non-Spark side of the route:
+/// - `family_filter` restricts to routes whose chain/contract matches the
+///   address family (e.g. EVM, Solana).
+/// - `contract_filter` restricts to routes whose contract address equals
+///   the supplied value.
+///
+/// `None` for either filter is a pass-through.
+fn route_passes_filters(
+    r: &Route,
+    is_send: bool,
+    family_filter: Option<CrossChainAddressFamily>,
+    contract_filter: Option<&str>,
+) -> bool {
+    let side = non_spark_side(r, is_send);
+    let contract = side.contract_address.as_deref();
+    let family_ok = family_filter.is_none_or(|f| f.matches_chain(&side.chain, contract));
+    let contract_ok = contract_filter.is_none_or(|wanted| contract == Some(wanted));
+    family_ok && contract_ok
+}
+
+/// Given the current Orchestra [`ConversionInfo`] on a payment plus a fresh
+/// [`StatusResponse`], computes the [`PaymentMetadata`] to write back if the
+/// order has reached terminal state, otherwise `None`.
+///
+/// Status mapping:
+/// - `Completed` → `ConversionStatus::Completed`
+/// - `Refunded`  → `ConversionStatus::Refunded`
+/// - any other terminal status → `ConversionStatus::Failed`
+/// - non-terminal → `None` (caller skips)
+///
+/// `delivered_amount` is parsed from `status_response.order.amount_out` when
+/// the field is present and parses as `u128`; `estimated_out` is frozen at
+/// prepare-time and preserved verbatim.
+fn apply_terminal_status(
+    info: &ConversionInfo,
+    status_response: &StatusResponse,
+) -> Option<crate::PaymentMetadata> {
+    let ConversionInfo::Orchestra {
+        order_id,
+        quote_id,
+        chain,
+        chain_id,
+        asset,
+        recipient_address,
+        estimated_out,
+        fee,
+        read_token,
+        asset_decimals,
+        asset_contract,
+        ..
+    } = info
+    else {
+        return None;
+    };
+
+    let order_status = status_response.order.status;
+    if !order_status.is_terminal() {
+        return None;
+    }
+    let new_status = match order_status {
+        OrderStatus::Completed => ConversionStatus::Completed,
+        OrderStatus::Refunded => ConversionStatus::Refunded,
+        _ => ConversionStatus::Failed,
+    };
+
+    let delivered_amount = status_response
+        .order
+        .amount_out
+        .as_deref()
+        .and_then(|s| s.parse::<u128>().ok());
+
+    Some(crate::PaymentMetadata {
+        conversion_info: Some(ConversionInfo::Orchestra {
+            order_id: order_id.clone(),
+            quote_id: quote_id.clone(),
+            chain: chain.clone(),
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            recipient_address: recipient_address.clone(),
+            estimated_out: *estimated_out,
+            delivered_amount,
+            status: new_status,
+            fee: *fee,
+            read_token: read_token.clone(),
+            asset_decimals: *asset_decimals,
+            asset_contract: asset_contract.clone(),
+        }),
+        ..Default::default()
+    })
+}
+
+/// Orchestra quotes carry `expires_at` as an RFC3339 timestamp. Reject at
+/// send time if the wall clock has passed it so the user sees a clean
+/// "quote expired, re-prepare" rather than the API rejecting the submit.
+fn validate_quote_expiry(expires_at: &str) -> Result<(), SdkError> {
+    let exp = DateTime::parse_from_rfc3339(expires_at).map_err(|e| {
+        SdkError::Generic(format!("Orchestra: invalid expires_at {expires_at:?}: {e}"))
+    })?;
+    let exp_secs = u64::try_from(exp.timestamp()).unwrap_or(0);
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| SdkError::Generic("Failed to read current time".to_string()))?
+        .as_secs();
+    if now_secs >= exp_secs {
+        return Err(SdkError::InvalidInput(
+            "Cross-chain quote has expired. Please re-prepare.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Dedupes Orchestra's raw `Route` list into the SDK's [`CrossChainRoutePair`]
+/// shape — one pair per `(chain, asset, contract_address)` endpoint with the
+/// supported Spark-side source variants accumulated into `supported_sources`.
+///
+/// Multiple raw routes can exist for the same external chain (e.g.
+/// `BTC→USDT-on-tron` and `USDB→USDT-on-tron`); the caller wants to see one
+/// `USDT-on-tron` route advertising both source variants.
+fn dedupe_routes(
+    routes: &[Route],
+    is_send: bool,
+    family_filter: Option<CrossChainAddressFamily>,
+    contract_filter: Option<&str>,
+) -> Vec<CrossChainRoutePair> {
+    type Key = (String, String, Option<String>);
+    let mut order: Vec<Key> = Vec::new();
+    let mut grouped: HashMap<Key, CrossChainRoutePair> = HashMap::new();
+
+    for r in routes
+        .iter()
+        .filter(|r| route_passes_filters(r, is_send, family_filter, contract_filter))
+    {
+        let side = non_spark_side(r, is_send);
+        let key: Key = (
+            side.chain.clone(),
+            side.asset.clone(),
+            side.contract_address.clone(),
+        );
+
+        // On send, the Spark side is `source`; on receive, it's `destination`.
+        // Orchestra's `contract_address` on the Spark side is the bech32m
+        // token identifier (`btkn1...`).
+        let spark_side = if is_send { &r.source } else { &r.destination };
+        let source_variant = if spark_side.asset.eq_ignore_ascii_case("BTC") {
+            Some(SourceAsset::Bitcoin)
+        } else {
+            // Non-BTC Spark source without a token identifier: defensive skip.
+            // Shouldn't happen per current Orchestra behavior.
+            spark_side
+                .contract_address
+                .as_ref()
+                .map(|tid| SourceAsset::Token {
+                    token_identifier: tid.clone(),
+                })
+        };
+
+        let entry = grouped.entry(key.clone()).or_insert_with(|| {
+            order.push(key.clone());
+            side_to_route_pair(side, r.exact_out_eligible)
+        });
+
+        if let Some(variant) = source_variant
+            && !entry.supported_sources.contains(&variant)
+        {
+            entry.supported_sources.push(variant);
+        }
+    }
+
+    order
+        .into_iter()
+        .filter_map(|k| grouped.remove(&k))
+        .collect()
+}
+
 /// Build a [`CrossChainRoutePair`] from one side of an Orchestra [`Route`].
 ///
 /// Chain/asset/identifier/decimals pass through verbatim from the route's
@@ -648,6 +744,10 @@ fn side_to_route_pair(side: &RouteAsset, exact_out_eligible: bool) -> CrossChain
 #[cfg(test)]
 mod tests {
     use super::*;
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     fn test_route_asset(chain: &str, chain_id: Option<&str>) -> RouteAsset {
         RouteAsset {
@@ -659,7 +759,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_all]
     fn side_to_pair_passes_through_chain_id() {
         let side = test_route_asset("base", Some("8453"));
         let pair = side_to_route_pair(&side, true);
@@ -680,7 +780,7 @@ mod tests {
         assert!(pair.exact_out_eligible);
     }
 
-    #[test]
+    #[test_all]
     fn side_to_pair_preserves_missing_chain_id() {
         let side = test_route_asset("solana", None);
         let pair = side_to_route_pair(&side, false);
@@ -690,5 +790,453 @@ mod tests {
             "chain_id stays None when the route asset doesn't expose one"
         );
         assert!(!pair.exact_out_eligible);
+    }
+
+    // ---- dedupe_routes ----
+
+    fn ra(chain: &str, asset: &str, contract: Option<&str>) -> RouteAsset {
+        RouteAsset {
+            chain: chain.to_string(),
+            asset: asset.to_string(),
+            contract_address: contract.map(str::to_string),
+            decimals: 6,
+            chain_id: None,
+        }
+    }
+
+    fn route(source: RouteAsset, destination: RouteAsset) -> Route {
+        Route {
+            source_chain: source.chain.clone(),
+            source_asset: source.asset.clone(),
+            destination_chain: destination.chain.clone(),
+            destination_asset: destination.asset.clone(),
+            exact_out_eligible: false,
+            source,
+            destination,
+        }
+    }
+
+    #[test_all]
+    fn dedupe_routes_accumulates_source_variants() {
+        // Same external endpoint (tron/USDT) fronted by two Spark sources
+        // (BTC and a USDB token). Caller should see one pair with both
+        // variants in `supported_sources`.
+        let usdb_contract = "btkn1usdb_contract";
+        let routes = vec![
+            route(
+                ra("spark", "BTC", None),
+                ra("tron", "USDT", Some("TXYZtronUsdt")),
+            ),
+            route(
+                ra("spark", "USDB", Some(usdb_contract)),
+                ra("tron", "USDT", Some("TXYZtronUsdt")),
+            ),
+        ];
+
+        let pairs = dedupe_routes(&routes, true, None, None);
+
+        assert_eq!(
+            pairs.len(),
+            1,
+            "same external endpoint must dedup to one pair"
+        );
+        let p = &pairs[0];
+        assert_eq!(p.chain, "tron");
+        assert_eq!(p.asset, "USDT");
+        assert!(p.supported_sources.contains(&SourceAsset::Bitcoin));
+        assert!(p.supported_sources.contains(&SourceAsset::Token {
+            token_identifier: usdb_contract.to_string(),
+        }));
+    }
+
+    #[test_all]
+    fn dedupe_routes_separates_different_endpoints() {
+        let routes = vec![
+            route(ra("spark", "BTC", None), ra("tron", "USDT", Some("TXYZ1"))),
+            route(ra("spark", "BTC", None), ra("base", "USDC", Some("0xABC"))),
+        ];
+
+        let pairs = dedupe_routes(&routes, true, None, None);
+
+        assert_eq!(pairs.len(), 2);
+        // Insertion order preserved.
+        assert_eq!(pairs[0].chain, "tron");
+        assert_eq!(pairs[0].asset, "USDT");
+        assert_eq!(pairs[1].chain, "base");
+        assert_eq!(pairs[1].asset, "USDC");
+    }
+
+    #[test_all]
+    fn dedupe_routes_applies_contract_filter() {
+        let routes = vec![
+            route(ra("spark", "BTC", None), ra("base", "USDC", Some("0xAAA"))),
+            route(ra("spark", "BTC", None), ra("base", "USDC", Some("0xBBB"))),
+        ];
+
+        let pairs = dedupe_routes(&routes, true, None, Some("0xBBB"));
+
+        assert_eq!(pairs.len(), 1, "contract filter narrows the result set");
+        assert_eq!(pairs[0].contract_address.as_deref(), Some("0xBBB"));
+    }
+
+    #[test_all]
+    fn dedupe_routes_receive_swaps_spark_side() {
+        // For receives, the non-Spark side is the *source* and the Spark
+        // side is the *destination*. The same dedup logic should group
+        // by the source side.
+        let routes = vec![
+            route(ra("base", "USDC", Some("0xABC")), ra("spark", "BTC", None)),
+            route(
+                ra("base", "USDC", Some("0xABC")),
+                ra("spark", "USDB", Some("btkn1usdb")),
+            ),
+        ];
+
+        let pairs = dedupe_routes(&routes, false, None, None);
+
+        assert_eq!(pairs.len(), 1, "receive dedup groups by source side");
+        assert_eq!(pairs[0].chain, "base");
+        assert!(pairs[0].supported_sources.contains(&SourceAsset::Bitcoin));
+        assert!(pairs[0].supported_sources.contains(&SourceAsset::Token {
+            token_identifier: "btkn1usdb".to_string(),
+        }));
+    }
+
+    // ---- route_passes_filters ----
+
+    #[test_all]
+    fn route_passes_filters_accepts_when_both_filters_none() {
+        let r = route(ra("spark", "BTC", None), ra("base", "USDC", Some("0xAAA")));
+        assert!(route_passes_filters(&r, true, None, None));
+    }
+
+    #[test_all]
+    fn route_passes_filters_contract_filter_rejects_mismatch() {
+        let r = route(ra("spark", "BTC", None), ra("base", "USDC", Some("0xAAA")));
+        assert!(!route_passes_filters(&r, true, None, Some("0xBBB")));
+        assert!(route_passes_filters(&r, true, None, Some("0xAAA")));
+    }
+
+    #[test_all]
+    fn route_passes_filters_family_filter_evm_matches_via_contract_address() {
+        // EVM family matches when the contract_address parses as EVM hex.
+        let r = route(
+            ra("spark", "BTC", None),
+            ra(
+                "arbitrum",
+                "USDT",
+                Some("0x1234567890123456789012345678901234567890"),
+            ),
+        );
+        assert!(route_passes_filters(
+            &r,
+            true,
+            Some(CrossChainAddressFamily::Evm),
+            None
+        ));
+    }
+
+    #[test_all]
+    fn route_passes_filters_family_filter_rejects_wrong_family() {
+        // Tron chain shouldn't match Solana family.
+        let r = route(
+            ra("spark", "BTC", None),
+            ra("tron", "USDT", Some("TXYZtronUsdt")),
+        );
+        assert!(!route_passes_filters(
+            &r,
+            true,
+            Some(CrossChainAddressFamily::Solana),
+            None
+        ));
+    }
+
+    #[test_all]
+    fn route_passes_filters_both_filters_must_match() {
+        let r = route(
+            ra("spark", "BTC", None),
+            ra(
+                "arbitrum",
+                "USDT",
+                Some("0x1234567890123456789012345678901234567890"),
+            ),
+        );
+        // Family matches but contract doesn't → reject.
+        assert!(!route_passes_filters(
+            &r,
+            true,
+            Some(CrossChainAddressFamily::Evm),
+            Some("0xdeadbeef")
+        ));
+        // Both match → accept.
+        assert!(route_passes_filters(
+            &r,
+            true,
+            Some(CrossChainAddressFamily::Evm),
+            Some("0x1234567890123456789012345678901234567890")
+        ));
+    }
+
+    // ---- apply_terminal_status ----
+
+    fn orchestra_info(order_id: &str, quote_id: &str) -> ConversionInfo {
+        ConversionInfo::Orchestra {
+            order_id: order_id.to_string(),
+            quote_id: quote_id.to_string(),
+            chain: "base".to_string(),
+            chain_id: Some("8453".to_string()),
+            asset: "USDC".to_string(),
+            recipient_address: "0xabc".to_string(),
+            estimated_out: 1_000_000,
+            delivered_amount: None,
+            status: ConversionStatus::Pending,
+            fee: Some(50),
+            read_token: Some("rt_token".to_string()),
+            asset_decimals: 6,
+            asset_contract: Some("0xUSDC".to_string()),
+        }
+    }
+
+    fn status_response(status: OrderStatus, amount_out: Option<&str>) -> StatusResponse {
+        StatusResponse {
+            order: flashnet::orchestra::Order {
+                id: "ord1".to_string(),
+                status,
+                quote_id: "q1".to_string(),
+                source_chain: "spark".to_string(),
+                source_asset: "BTC".to_string(),
+                source_address: None,
+                source_tx_hash: "txh".to_string(),
+                source_tx_vout: None,
+                deposit_address: "dep".to_string(),
+                destination_chain: "base".to_string(),
+                destination_asset: "USDC".to_string(),
+                recipient_address: "0xabc".to_string(),
+                amount_in: "1000".to_string(),
+                amount_out: amount_out.map(str::to_string),
+                fee_bps: 50,
+                fee_amount: "50".to_string(),
+                slippage_bps: 100,
+                error_code: None,
+                error_message: None,
+                created_at: "0".to_string(),
+                updated_at: "0".to_string(),
+                completed_at: None,
+            },
+            stages: Vec::new(),
+        }
+    }
+
+    fn assert_orchestra_status(metadata: &crate::PaymentMetadata, expected: &ConversionStatus) {
+        let info = metadata
+            .conversion_info
+            .as_ref()
+            .expect("metadata should have conversion_info");
+        match info {
+            ConversionInfo::Orchestra { status, .. } => assert_eq!(status, expected),
+            other => panic!("expected Orchestra variant, got {other:?}"),
+        }
+    }
+
+    #[test_all]
+    fn apply_terminal_status_skips_pending() {
+        let info = orchestra_info("ord1", "q1");
+        let resp = status_response(OrderStatus::Processing, Some("999000"));
+        assert!(apply_terminal_status(&info, &resp).is_none());
+    }
+
+    #[test_all]
+    fn apply_terminal_status_skips_non_orchestra_variant() {
+        let amm_info = ConversionInfo::Amm {
+            pool_id: "pool".to_string(),
+            conversion_id: "cid".to_string(),
+            status: ConversionStatus::Pending,
+            fee: None,
+            purpose: None,
+            amount_adjustment: None,
+        };
+        let resp = status_response(OrderStatus::Completed, Some("999000"));
+        assert!(apply_terminal_status(&amm_info, &resp).is_none());
+    }
+
+    #[test_all]
+    fn apply_terminal_status_maps_completed() {
+        let info = orchestra_info("ord1", "q1");
+        let resp = status_response(OrderStatus::Completed, Some("999000"));
+        let updated = apply_terminal_status(&info, &resp).expect("terminal");
+        assert_orchestra_status(&updated, &ConversionStatus::Completed);
+        if let Some(ConversionInfo::Orchestra {
+            delivered_amount,
+            estimated_out,
+            ..
+        }) = &updated.conversion_info
+        {
+            assert_eq!(*delivered_amount, Some(999_000));
+            assert_eq!(*estimated_out, 1_000_000, "estimated_out stays frozen");
+        }
+    }
+
+    #[test_all]
+    fn apply_terminal_status_maps_refunded() {
+        let info = orchestra_info("ord1", "q1");
+        let resp = status_response(OrderStatus::Refunded, None);
+        let updated = apply_terminal_status(&info, &resp).expect("terminal");
+        assert_orchestra_status(&updated, &ConversionStatus::Refunded);
+        if let Some(ConversionInfo::Orchestra {
+            delivered_amount, ..
+        }) = &updated.conversion_info
+        {
+            assert_eq!(*delivered_amount, None, "no amount_out → None");
+        }
+    }
+
+    #[test_all]
+    fn apply_terminal_status_maps_failed() {
+        let info = orchestra_info("ord1", "q1");
+        let resp = status_response(OrderStatus::Failed, None);
+        let updated = apply_terminal_status(&info, &resp).expect("terminal");
+        assert_orchestra_status(&updated, &ConversionStatus::Failed);
+    }
+
+    #[test_all]
+    fn apply_terminal_status_ignores_unparseable_amount_out() {
+        let info = orchestra_info("ord1", "q1");
+        let resp = status_response(OrderStatus::Completed, Some("not-a-number"));
+        let updated = apply_terminal_status(&info, &resp).expect("terminal");
+        if let Some(ConversionInfo::Orchestra {
+            delivered_amount, ..
+        }) = &updated.conversion_info
+        {
+            assert_eq!(*delivered_amount, None, "unparseable amount_out → None");
+        }
+    }
+
+    // ---- find_source_asset ----
+
+    fn dest_pair(chain: &str, asset: &str, contract: Option<&str>) -> CrossChainRoutePair {
+        CrossChainRoutePair {
+            provider: CrossChainProvider::Orchestra,
+            chain: chain.to_string(),
+            chain_id: None,
+            asset: asset.to_string(),
+            contract_address: contract.map(str::to_string),
+            decimals: 6,
+            exact_out_eligible: false,
+            supported_sources: Vec::new(),
+        }
+    }
+
+    #[test_all]
+    fn find_source_asset_matches_btc_source_case_insensitively() {
+        // Source side asset is "btc" lowercase; lookup should still match.
+        let routes = vec![route(
+            ra("spark", "btc", None),
+            ra("base", "USDC", Some("0xUSDC")),
+        )];
+        let dest = dest_pair("base", "USDC", Some("0xUSDC"));
+        assert_eq!(
+            find_source_asset(&routes, &dest, None).as_deref(),
+            Some("btc")
+        );
+    }
+
+    #[test_all]
+    fn find_source_asset_matches_token_source_by_contract_address() {
+        let routes = vec![
+            route(ra("spark", "BTC", None), ra("base", "USDC", Some("0xUSDC"))),
+            route(
+                ra("spark", "USDB", Some("btkn1usdb_contract")),
+                ra("base", "USDC", Some("0xUSDC")),
+            ),
+        ];
+        let dest = dest_pair("base", "USDC", Some("0xUSDC"));
+        assert_eq!(
+            find_source_asset(&routes, &dest, Some("btkn1usdb_contract")).as_deref(),
+            Some("USDB")
+        );
+    }
+
+    #[test_all]
+    fn find_source_asset_returns_none_when_destination_mismatch() {
+        let routes = vec![route(
+            ra("spark", "BTC", None),
+            ra("base", "USDC", Some("0xUSDC")),
+        )];
+        // Different destination chain.
+        let dest = dest_pair("tron", "USDC", Some("0xUSDC"));
+        assert!(find_source_asset(&routes, &dest, None).is_none());
+    }
+
+    #[test_all]
+    fn find_source_asset_returns_none_when_token_identifier_mismatch() {
+        let routes = vec![route(
+            ra("spark", "USDB", Some("btkn1usdb")),
+            ra("base", "USDC", Some("0xUSDC")),
+        )];
+        let dest = dest_pair("base", "USDC", Some("0xUSDC"));
+        assert!(find_source_asset(&routes, &dest, Some("btkn1other")).is_none());
+    }
+
+    #[test_all]
+    fn find_source_asset_distinguishes_contract_address_when_chain_repeats() {
+        // Two routes to the same chain/asset but different destination contracts.
+        let routes = vec![
+            route(ra("spark", "BTC", None), ra("base", "USDC", Some("0xAAA"))),
+            route(ra("spark", "BTC", None), ra("base", "USDC", Some("0xBBB"))),
+        ];
+        let dest = dest_pair("base", "USDC", Some("0xBBB"));
+        // The match logic uses contract_address as part of the destination
+        // identity, so this picks the second route.
+        assert_eq!(
+            find_source_asset(&routes, &dest, None).as_deref(),
+            Some("BTC")
+        );
+    }
+
+    // ---- validate_quote_expiry ----
+
+    #[test_all]
+    fn validate_quote_expiry_accepts_future_rfc3339() {
+        use platform_utils::time::{SystemTime, UNIX_EPOCH};
+        let future_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_add(600);
+        let dt =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(future_secs.cast_signed(), 0).unwrap();
+        let s = dt.to_rfc3339();
+        assert!(validate_quote_expiry(&s).is_ok());
+    }
+
+    #[test_all]
+    fn validate_quote_expiry_rejects_past_rfc3339() {
+        // 2001-09-09 — well in the past.
+        let err = validate_quote_expiry("2001-09-09T01:46:40Z").unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(ref m) if m.contains("expired")));
+    }
+
+    #[test_all]
+    fn validate_quote_expiry_rejects_malformed() {
+        let err = validate_quote_expiry("not-a-timestamp").unwrap_err();
+        assert!(matches!(err, SdkError::Generic(ref m) if m.contains("invalid expires_at")));
+    }
+
+    #[test_all]
+    fn dedupe_routes_skips_non_btc_spark_source_without_contract() {
+        // Defensive: a non-BTC Spark side missing `contract_address` would
+        // be silently dropped as a source variant. This shouldn't happen
+        // in practice but the path is exercised here.
+        let routes = vec![route(
+            ra("spark", "MYSTERY", None),
+            ra("base", "USDC", Some("0xABC")),
+        )];
+
+        let pairs = dedupe_routes(&routes, true, None, None);
+
+        // The route still produces a pair (the destination still matters),
+        // but `supported_sources` is empty.
+        assert_eq!(pairs.len(), 1);
+        assert!(pairs[0].supported_sources.is_empty());
     }
 }

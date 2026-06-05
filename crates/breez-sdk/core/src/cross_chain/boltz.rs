@@ -14,6 +14,7 @@ use boltz_client::{
     config::{BoltzConfig as BoltzClientConfig, MAX_SLIPPAGE_BPS},
     models::{Asset, PreparedSwap},
 };
+use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use spark_wallet::SparkWallet;
 use tracing::{debug, error, info};
 
@@ -156,12 +157,11 @@ impl BoltzService {
         let real_invoice_sats = fees_included_real_invoice_sats(total_sats, ln_fee_probe_sats)?;
 
         // Phase 2: real invoice sized to leave room for the probed fee.
-        // Translate `AmountOutOfRange` here (rather than in `boltz_err_to_sdk`)
-        // so the message names the user's `total_sats` and the probed fee —
-        // the raw boltz error references `real_invoice_sats`, a number the
-        // caller never chose. The phase-2 prepare validates against the Boltz
-        // pair limits before `create_reverse_swap` is called, so a failure
-        // here commits no state.
+        // Override `AmountOutOfRange` with a message that names the user's
+        // `total_sats` and the probed fee — the raw Boltz error references
+        // `real_invoice_sats`, a number the caller never chose. The phase-2
+        // prepare validates against the Boltz pair limits before
+        // `create_reverse_swap` is called, so a failure here commits no state.
         let prepared = self
             .client
             .prepare_reverse_swap_from_sats(
@@ -178,13 +178,9 @@ impl BoltzService {
                     after subtracting LN fee ({ln_fee_probe_sats} sats), the remaining \
                     invoice ({real_invoice_sats} sats) is below Boltz minimum ({min} sats)."
                 )),
-                _ => boltz_err_to_sdk(&e),
+                _ => e.into(),
             })?;
-        let created = self
-            .client
-            .create_reverse_swap(&prepared)
-            .await
-            .map_err(|e| boltz_err_to_sdk(&e))?;
+        let created = self.client.create_reverse_swap(&prepared).await?;
         let ln_fee_final_sats = self.fetch_ln_fee(&created.invoice).await?;
 
         // Mirrors LNURL's guard: if fee moved between queries, fail so caller retries.
@@ -224,18 +220,13 @@ impl BoltzService {
                 invoice_amount_sats,
                 max_slippage_bps,
             )
-            .await
-            .map_err(|e| boltz_err_to_sdk(&e))?;
+            .await?;
 
         // `create_reverse_swap` commits a HD key index, POSTs to Boltz to
         // create the swap on the server, and writes a `BoltzSwap` row into
         // the adapter cache KV. After this call Boltz is holding the swap
         // state, so the only path back to a clean state is a timeout.
-        let created = self
-            .client
-            .create_reverse_swap(&prepared)
-            .await
-            .map_err(|e| boltz_err_to_sdk(&e))?;
+        let created = self.client.create_reverse_swap(&prepared).await?;
 
         Ok((prepared, created))
     }
@@ -268,13 +259,12 @@ impl BoltzService {
                 invoice_amount_sats,
                 max_slippage_bps,
             )
-            .await
-            .map_err(|e| boltz_err_to_sdk(&e))?;
+            .await?;
 
         self.client
             .create_probe_invoice(&prepared)
             .await
-            .map_err(|e| boltz_err_to_sdk(&e))
+            .map_err(Into::into)
     }
 
     async fn fetch_ln_fee(&self, invoice: &str) -> Result<u64, SdkError> {
@@ -365,7 +355,7 @@ impl CrossChainService for BoltzService {
         route: &CrossChainRoutePair,
         amount: u128,
         token_identifier: Option<String>,
-        max_slippage_bps: Option<u32>,
+        max_slippage_bps: u32,
         fee_mode: CrossChainFeeMode,
     ) -> Result<CrossChainPrepared, SdkError> {
         // v1 Boltz is BTC-only. Tokens must be rejected before we commit any
@@ -392,14 +382,13 @@ impl CrossChainService for BoltzService {
             ))
         })?;
 
-        if let Some(bps) = max_slippage_bps
-            && bps > MAX_SLIPPAGE_BPS
-        {
+        if max_slippage_bps > MAX_SLIPPAGE_BPS {
             return Err(SdkError::InvalidInput(format!(
-                "max_slippage_bps {bps} exceeds Boltz maximum {MAX_SLIPPAGE_BPS}"
+                "max_slippage_bps {max_slippage_bps} exceeds Boltz maximum {MAX_SLIPPAGE_BPS}"
             )));
         }
 
+        let slippage = Some(max_slippage_bps);
         match fee_mode {
             CrossChainFeeMode::FeesExcluded => {
                 self.prepare_fees_excluded(
@@ -408,7 +397,7 @@ impl CrossChainService for BoltzService {
                     &route.chain,
                     asset,
                     total_sats,
-                    max_slippage_bps,
+                    slippage,
                 )
                 .await
             }
@@ -419,7 +408,7 @@ impl CrossChainService for BoltzService {
                     &route.chain,
                     asset,
                     total_sats,
-                    max_slippage_bps,
+                    slippage,
                 )
                 .await
             }
@@ -438,6 +427,8 @@ impl CrossChainService for BoltzService {
                 "Boltz send called with non-Boltz provider context".to_string(),
             ));
         };
+
+        validate_quote_expiry(&prepared.expires_at)?;
 
         let invoice_amount_sats = u64::try_from(prepared.amount_in)
             .map_err(|e| SdkError::Generic(format!("Boltz invoice amount exceeds u64: {e}")))?;
@@ -549,38 +540,70 @@ impl CrossChainService for BoltzService {
             max_delay: Duration::from_millis(SEND_POLL_MAX_DELAY_MS),
             timeout: Duration::from_secs(SEND_POLL_TIMEOUT_SECS),
         };
-        let storage = Arc::clone(&self.storage);
-        let poll_payment_id = payment_id.clone();
-        let polled = poll_until(schedule, None, || {
-            let storage = Arc::clone(&storage);
-            let payment_id = poll_payment_id.clone();
-            async move {
-                match storage.get_payment_by_id(payment_id.clone()).await {
-                    Ok(payment) if payment.status != PaymentStatus::Pending => Ok(Some(payment)),
-                    Ok(_) => Ok(None),
-                    Err(e) => Err(SdkError::Generic(format!(
-                        "Failed to fetch Boltz payment {payment_id}: {e}"
-                    ))),
-                }
-            }
-        })
-        .await;
+        Ok(poll_to_terminal_or_fallback(
+            Arc::clone(&self.storage),
+            payment_id,
+            sdk_payment,
+            schedule,
+        )
+        .await)
+    }
+}
 
-        match polled {
-            Ok(payment) => Ok(payment),
-            Err(e) => {
-                debug!(
-                    "Boltz: terminal status not reached within timeout for swap {swap_id}: {e}; \
-                     returning pending payment"
-                );
-                Ok(sdk_payment)
+/// Polls storage for a terminal status on `payment_id`. Returns the terminal
+/// `Payment` on success; on timeout or storage error returns `fallback` (the
+/// pending payment we already have in hand). The background SSP poll continues
+/// after we return.
+async fn poll_to_terminal_or_fallback(
+    storage: Arc<dyn Storage>,
+    payment_id: String,
+    fallback: crate::Payment,
+    schedule: PollSchedule,
+) -> crate::Payment {
+    let polled = poll_until(schedule, None, || {
+        let storage = Arc::clone(&storage);
+        let payment_id = payment_id.clone();
+        async move {
+            match storage.get_payment_by_id(payment_id.clone()).await {
+                Ok(payment) if payment.status != PaymentStatus::Pending => Ok(Some(payment)),
+                Ok(_) => Ok(None),
+                Err(e) => Err(SdkError::Generic(format!(
+                    "Failed to fetch Boltz payment {payment_id}: {e}"
+                ))),
             }
+        }
+    })
+    .await;
+
+    match polled {
+        Ok(payment) => payment,
+        Err(e) => {
+            debug!(
+                "Boltz: terminal status not reached within timeout: {e}; returning pending payment"
+            );
+            fallback
         }
     }
 }
 
-fn boltz_err_to_sdk(err: &BoltzError) -> SdkError {
-    SdkError::Generic(format!("Boltz: {err}"))
+/// Boltz quotes carry `expires_at` as a Unix epoch seconds string. Reject
+/// at send time if the wall clock has passed it so the user sees a clean
+/// "quote expired, re-prepare" rather than a server-side error after the LN
+/// pay attempt.
+fn validate_quote_expiry(expires_at: &str) -> Result<(), SdkError> {
+    let exp_secs: u64 = expires_at
+        .parse()
+        .map_err(|e| SdkError::Generic(format!("Boltz: invalid expires_at {expires_at:?}: {e}")))?;
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| SdkError::Generic("Failed to read current time".to_string()))?
+        .as_secs();
+    if now_secs >= exp_secs {
+        return Err(SdkError::InvalidInput(
+            "Cross-chain quote has expired. Please re-prepare.".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Phase-1 check for the `FeesIncluded` path: returns the size to use for the
@@ -626,6 +649,10 @@ fn destination_to_route_pair(
 mod tests {
     use super::*;
     use boltz_client::models::{Asset, BridgeKind, DestinationOption, NetworkTransport};
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     fn test_destination(
         chain_label: &str,
@@ -645,7 +672,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test_all]
     fn destination_to_pair_maps_evm_chain_id_to_decimal_string() {
         let dest = test_destination(
             "Polygon PoS",
@@ -670,7 +697,7 @@ mod tests {
         assert!(!pair.exact_out_eligible);
     }
 
-    #[test]
+    #[test_all]
     fn destination_to_pair_surfaces_usdc_asset() {
         let dest = test_destination(
             "Base",
@@ -687,7 +714,7 @@ mod tests {
         assert_eq!(pair.chain_id, Some("8453".to_string()));
     }
 
-    #[test]
+    #[test_all]
     fn destination_to_pair_preserves_none_for_non_evm_transports() {
         let dest = test_destination(
             "Solana",
@@ -705,7 +732,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test_all]
     fn fees_included_real_invoice_sats_subtracts_probe_fee() {
         let real = fees_included_real_invoice_sats(10_000, 250).expect("fits within budget");
         assert_eq!(
@@ -714,7 +741,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test_all]
     fn fees_included_real_invoice_sats_rejects_when_fee_eats_budget() {
         // Fee exactly equals total: no room for any invoice → reject.
         let err = fees_included_real_invoice_sats(500, 500)
@@ -731,5 +758,157 @@ mod tests {
         let err =
             fees_included_real_invoice_sats(100, 250).expect_err("probe fee greater than total");
         assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    // ---- poll_to_terminal_or_fallback ----
+
+    #[cfg(feature = "sqlite")]
+    mod poll_to_terminal_tests {
+        use super::*;
+
+        fn create_temp_dir(name: &str) -> std::path::PathBuf {
+            let mut path = std::env::temp_dir();
+            path.push(format!(
+                "breez-test-boltz-{}-{}",
+                name,
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            path
+        }
+
+        fn make_pending_payment(id: &str) -> crate::Payment {
+            crate::Payment {
+                id: id.to_string(),
+                payment_type: crate::PaymentType::Send,
+                status: PaymentStatus::Pending,
+                amount: 1_000,
+                fees: 10,
+                timestamp: 1,
+                method: crate::PaymentMethod::Lightning,
+                details: None,
+                conversion_details: None,
+            }
+        }
+
+        fn fast_schedule() -> PollSchedule {
+            PollSchedule {
+                initial_delay: Duration::from_millis(10),
+                max_delay: Duration::from_millis(20),
+                timeout: Duration::from_millis(100),
+            }
+        }
+
+        #[tokio::test]
+        async fn poll_to_terminal_returns_terminal_when_status_settles() {
+            let dir = create_temp_dir("poll_settles");
+            let storage: Arc<dyn Storage> =
+                Arc::new(crate::persist::sqlite::SqliteStorage::new(&dir).unwrap());
+
+            let pending = make_pending_payment("pay_settles");
+            storage.apply_payment_update(pending.clone()).await.unwrap();
+
+            let mut completed = pending.clone();
+            completed.status = PaymentStatus::Completed;
+
+            // Settle the payment mid-poll.
+            let storage_w = Arc::clone(&storage);
+            let completed_w = completed.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                storage_w.apply_payment_update(completed_w).await.unwrap();
+            });
+
+            let fallback = pending.clone();
+            let result = poll_to_terminal_or_fallback(
+                Arc::clone(&storage),
+                "pay_settles".to_string(),
+                fallback,
+                fast_schedule(),
+            )
+            .await;
+
+            assert_eq!(result.status, PaymentStatus::Completed);
+        }
+
+        #[tokio::test]
+        async fn poll_to_terminal_returns_fallback_on_timeout() {
+            let dir = create_temp_dir("poll_timeout");
+            let storage: Arc<dyn Storage> =
+                Arc::new(crate::persist::sqlite::SqliteStorage::new(&dir).unwrap());
+
+            let pending = make_pending_payment("pay_timeout");
+            storage.apply_payment_update(pending.clone()).await.unwrap();
+
+            let mut fallback = pending.clone();
+            // Sentinel field on the fallback to prove the returned value is the
+            // fallback we passed in, not a fresh read from storage.
+            fallback.timestamp = 99_999;
+
+            let result = poll_to_terminal_or_fallback(
+                Arc::clone(&storage),
+                "pay_timeout".to_string(),
+                fallback,
+                fast_schedule(),
+            )
+            .await;
+
+            assert_eq!(
+                result.timestamp, 99_999,
+                "timeout should surface the supplied fallback payment as-is"
+            );
+            assert_eq!(result.status, PaymentStatus::Pending);
+        }
+
+        #[tokio::test]
+        async fn poll_to_terminal_returns_fallback_on_storage_error() {
+            // `get_payment_by_id` returns an error when the row is missing.
+            let dir = create_temp_dir("poll_missing");
+            let storage: Arc<dyn Storage> =
+                Arc::new(crate::persist::sqlite::SqliteStorage::new(&dir).unwrap());
+
+            // No payment inserted — get_payment_by_id will error every probe,
+            // poll_until propagates the last error, and we fall back.
+            let mut fallback = make_pending_payment("pay_missing");
+            fallback.timestamp = 42_424;
+
+            let result = poll_to_terminal_or_fallback(
+                Arc::clone(&storage),
+                "pay_missing".to_string(),
+                fallback,
+                fast_schedule(),
+            )
+            .await;
+
+            assert_eq!(
+                result.timestamp, 42_424,
+                "storage errors must fall through to the fallback"
+            );
+        }
+    }
+
+    // ---- validate_quote_expiry ----
+
+    #[test_all]
+    fn validate_quote_expiry_accepts_future_unix_secs() {
+        use platform_utils::time::{SystemTime, UNIX_EPOCH};
+        let future = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_add(600);
+        assert!(validate_quote_expiry(&future.to_string()).is_ok());
+    }
+
+    #[test_all]
+    fn validate_quote_expiry_rejects_past_unix_secs() {
+        let err = validate_quote_expiry("1000000000").unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(ref m) if m.contains("expired")));
+    }
+
+    #[test_all]
+    fn validate_quote_expiry_rejects_malformed() {
+        let err = validate_quote_expiry("not-a-number").unwrap_err();
+        assert!(matches!(err, SdkError::Generic(ref m) if m.contains("invalid expires_at")));
     }
 }

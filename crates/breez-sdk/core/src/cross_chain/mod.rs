@@ -118,7 +118,9 @@ impl CrossChainProviders {
         provider: CrossChainProvider,
     ) -> Result<&Arc<dyn CrossChainService>, SdkError> {
         self.0.get(&provider).ok_or_else(|| {
-            SdkError::Generic(format!("Cross-chain provider {provider:?} not available"))
+            SdkError::InvalidInput(format!(
+                "Cross-chain provider {provider:?} is not available."
+            ))
         })
     }
 
@@ -209,7 +211,7 @@ pub(crate) trait CrossChainService: Send + Sync {
         route: &CrossChainRoutePair,
         amount: u128,
         source_token_identifier: Option<String>,
-        max_slippage_bps: Option<u32>,
+        max_slippage_bps: u32,
         fee_mode: CrossChainFeeMode,
     ) -> Result<CrossChainPrepared, SdkError>;
 

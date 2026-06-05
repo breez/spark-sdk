@@ -178,8 +178,7 @@ impl BoltzStorage for BoltzStorageAdapter {
     }
 }
 
-#[cfg(test)]
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;

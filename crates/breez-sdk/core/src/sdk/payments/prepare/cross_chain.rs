@@ -203,8 +203,8 @@ pub(crate) async fn prepare(
         effective_conversion_options.as_ref(),
     )?;
 
-    let is_conversion = effective_conversion_options.is_some();
-    let effective_fee_policy = effective_fee_policy(is_conversion, fee_policy);
+    let effective_fee_policy =
+        effective_fee_policy(effective_conversion_options.is_some(), fee_policy);
 
     let fee_mode = match effective_fee_policy {
         FeePolicy::FeesExcluded => CrossChainFeeMode::FeesExcluded,
@@ -216,22 +216,21 @@ pub(crate) async fn prepare(
     // `source_token_identifier` is `None` on the conversion path because the
     // converted output is sats — both the provider leg and the response use
     // it directly without a token denomination.
-    let (provider_amount, conversion_estimate, source_token_identifier) = if is_conversion {
-        let opts = effective_conversion_options
-            .as_ref()
-            .expect("is_conversion implies effective_conversion_options is_some");
-        let (sats, estimate) = estimate_and_validate_conversion(
-            sdk,
-            opts,
-            token_identifier.as_ref(),
-            amount,
-            effective_fee_policy,
-        )
-        .await?;
-        (sats, estimate, None)
-    } else {
-        (amount, None, token_identifier.clone())
-    };
+    let (provider_amount, conversion_estimate, source_token_identifier) =
+        match effective_conversion_options.as_ref() {
+            Some(opts) => {
+                let (sats, estimate) = estimate_and_validate_conversion(
+                    sdk,
+                    opts,
+                    token_identifier.as_ref(),
+                    amount,
+                    effective_fee_policy,
+                )
+                .await?;
+                (sats, estimate, None)
+            }
+            None => (amount, None, token_identifier.clone()),
+        };
 
     let service = sdk.cross_chain_providers.get(route.provider)?;
     let prepared = service
@@ -240,7 +239,7 @@ pub(crate) async fn prepare(
             route,
             provider_amount,
             source_token_identifier.clone(),
-            Some(provider_slippage_bps),
+            provider_slippage_bps,
             fee_mode,
         )
         .await?;

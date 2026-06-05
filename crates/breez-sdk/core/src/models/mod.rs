@@ -941,17 +941,24 @@ impl Config {
             ));
         }
 
-        if let Some(cc) = &self.cross_chain_config
-            && let Some(bps) = cc.default_slippage_bps
-            && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
-                ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
-                .contains(&bps)
-        {
-            return Err(SdkError::InvalidInput(format!(
-                "cross_chain_config.default_slippage_bps {bps} must be in {}..={}",
-                crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
-                crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
-            )));
+        if let Some(cc) = &self.cross_chain_config {
+            if self.network != Network::Mainnet {
+                return Err(SdkError::InvalidInput(format!(
+                    "Cross-chain sends are only available on Mainnet, not on {}.",
+                    self.network,
+                )));
+            }
+            if let Some(bps) = cc.default_slippage_bps
+                && !(crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS
+                    ..=crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS)
+                    .contains(&bps)
+            {
+                return Err(SdkError::InvalidInput(format!(
+                    "Default cross-chain slippage must be between {} and {} basis points, but got {bps}.",
+                    crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
+                    crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+                )));
+            }
         }
 
         Ok(())
