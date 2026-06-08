@@ -103,7 +103,12 @@ impl KeySet {
 
 #[derive(Clone)]
 pub struct DefaultSigner {
-    key_set: KeySet,
+    /// The master node every key is derived from.
+    master: Xpriv,
+    /// Path of the key used for ECIES (encrypt-to-self, decrypt). This is the
+    /// key counterparties encrypt secrets to; the Spark layer derives the wallet
+    /// identity at the same path.
+    encryption_path: DerivationPath,
     secp: Secp256k1<All>,
 }
 
@@ -134,20 +139,33 @@ impl DefaultSigner {
     }
 
     pub fn from_key_set(key_set: KeySet) -> Self {
-        let secp = Secp256k1::new();
-        DefaultSigner { key_set, secp }
+        // The Spark identity / ECIES key is the account master's `0'` child.
+        let encryption_path = DerivationPath::from(vec![
+            ChildNumber::from_hardened_idx(0).expect("0 is a valid hardened index"),
+        ]);
+        DefaultSigner {
+            master: key_set.account_master_key,
+            encryption_path,
+            secp: Secp256k1::new(),
+        }
     }
 }
 
 impl DefaultSigner {
-    /// Derives the raw secret key at `path` under the account master.
+    /// Derives the raw secret key at `path` under the master.
     fn derive_at(&self, path: &DerivationPath) -> Result<SecretKey, SignerError> {
         Ok(self
-            .key_set
-            .account_master_key
+            .master
             .derive_priv(&self.secp, path)
             .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
             .private_key)
+    }
+
+    /// Public key used for ECIES (the key counterparties encrypt to).
+    fn encryption_public_key(&self) -> Result<PublicKey, SignerError> {
+        Ok(self
+            .derive_at(&self.encryption_path)?
+            .public_key(&self.secp))
     }
 
     fn encrypt_message_ecies(
@@ -160,7 +178,8 @@ impl DefaultSigner {
     }
 
     fn decrypt_message_ecies(&self, ciphertext: &[u8]) -> Result<Vec<u8>, SignerError> {
-        utils::ecies::decrypt(&self.key_set.identity_key_pair.secret_bytes(), ciphertext)
+        let secret = self.derive_at(&self.encryption_path)?;
+        utils::ecies::decrypt(&secret.secret_bytes(), ciphertext)
             .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))
     }
 
@@ -203,20 +222,22 @@ impl DefaultSigner {
 
 #[macros::async_trait]
 impl Signer for DefaultSigner {
-    async fn sign_message_ecdsa_with_identity_key(
+    async fn sign_message_ecdsa(
         &self,
+        path: &DerivationPath,
         message: &[u8],
     ) -> Result<Signature, SignerError> {
         let digest = sha256::Hash::hash(message);
         let sig = self.secp.sign_ecdsa(
             &Message::from_digest(digest.to_byte_array()),
-            &self.key_set.identity_key_pair.secret_key(),
+            &self.derive_at(path)?,
         );
         Ok(sig)
     }
 
-    async fn sign_hash_schnorr_with_identity_key(
+    async fn sign_hash_schnorr(
         &self,
+        path: &DerivationPath,
         hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError> {
         if hash.len() != 32 {
@@ -226,13 +247,12 @@ impl Signer for DefaultSigner {
         }
         let mut hash_array = [0u8; 32];
         hash_array.copy_from_slice(hash);
+        let keypair = self.derive_at(path)?.keypair(&self.secp);
         // Always use auxiliary randomness for enhanced security
         let mut rng = thread_rng();
-        let sig = self.secp.sign_schnorr_with_rng(
-            &Message::from_digest(hash_array),
-            &self.key_set.identity_key_pair,
-            &mut rng,
-        );
+        let sig =
+            self.secp
+                .sign_schnorr_with_rng(&Message::from_digest(hash_array), &keypair, &mut rng);
         Ok(sig)
     }
 
@@ -250,7 +270,7 @@ impl Signer for DefaultSigner {
 
         let nonces = SigningNonces::from_nonces(hiding, binding);
         let nonces_ciphertext =
-            self.encrypt_nonces_ecies(&nonces, &self.get_identity_public_key().await?)?;
+            self.encrypt_nonces_ecies(&nonces, &self.encryption_public_key()?)?;
         let commitments = *nonces.commitments();
 
         Ok(FrostSigningCommitmentsWithNonces {
@@ -271,12 +291,8 @@ impl Signer for DefaultSigner {
         let (secret_key, _) = self.secp.generate_keypair(&mut thread_rng());
         Ok(EncryptedSecret::new(self.encrypt_private_key_ecies(
             &secret_key,
-            &self.get_identity_public_key().await?,
+            &self.encryption_public_key()?,
         )?))
-    }
-
-    async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        Ok(self.key_set.identity_key_pair.public_key())
     }
 
     async fn subtract_secrets(
@@ -297,8 +313,7 @@ impl Signer for DefaultSigner {
             .add_tweak(&new_signing_key.negate().into())
             .map_err(|e| SignerError::Generic(format!("failed to add tweak: {e}")))?;
 
-        let ciphertext =
-            self.encrypt_private_key_ecies(&res, &self.get_identity_public_key().await?)?;
+        let ciphertext = self.encrypt_private_key_ecies(&res, &self.encryption_public_key()?)?;
 
         Ok(SecretSource::new_encrypted(ciphertext))
     }
@@ -482,7 +497,10 @@ pub(crate) mod tests {
         let signer = create_test_signer();
         let message = "test message";
         let signature = signer
-            .sign_message_ecdsa_with_identity_key(message.as_bytes())
+            .sign_message_ecdsa(
+                &"m/0'".parse::<DerivationPath>().unwrap(),
+                message.as_bytes(),
+            )
             .await
             .expect("Failed to sign message");
 
@@ -490,7 +508,10 @@ pub(crate) mod tests {
             &signer.secp,
             message,
             &signature,
-            &signer.get_identity_public_key().await.unwrap(),
+            &signer
+                .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
+                .await
+                .unwrap(),
         )
         .expect("Failed to verify signature");
     }
@@ -499,7 +520,10 @@ pub(crate) mod tests {
     async fn test_verify_signature_ecdsa_invalid_signature() {
         let signer = create_test_signer();
         let signature = signer
-            .sign_message_ecdsa_with_identity_key("signed message".as_bytes())
+            .sign_message_ecdsa(
+                &"m/0'".parse::<DerivationPath>().unwrap(),
+                "signed message".as_bytes(),
+            )
             .await
             .expect("Failed to sign message");
 
@@ -508,7 +532,10 @@ pub(crate) mod tests {
             &signer.secp,
             "another message",
             &signature,
-            &signer.get_identity_public_key().await.unwrap(),
+            &signer
+                .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
+                .await
+                .unwrap(),
         );
         assert!(result.is_err());
         assert!(matches!(result, Err(secp256k1::Error::IncorrectSignature)));
@@ -535,7 +562,7 @@ pub(crate) mod tests {
 
         // Get the signer's identity public key (receiver)
         let receiver_public_key = signer
-            .get_identity_public_key()
+            .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
             .await
             .expect("Failed to get identity public key");
 
@@ -575,7 +602,7 @@ pub(crate) mod tests {
 
         // Encrypt both keys using the signer's identity public key
         let identity_public_key = signer
-            .get_identity_public_key()
+            .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
             .await
             .expect("Failed to get identity public key");
 
@@ -619,7 +646,7 @@ pub(crate) mod tests {
 
         // Encrypt the key using the signer's identity public key
         let identity_public_key = signer
-            .get_identity_public_key()
+            .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
             .await
             .expect("Failed to get identity public key");
 
@@ -649,7 +676,7 @@ pub(crate) mod tests {
         // Generate a private key and encrypt it with identity key
         let private_key = SecretKey::new(&mut rng);
         let identity_public_key = signer
-            .get_identity_public_key()
+            .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
             .await
             .expect("Failed to get identity public key");
 
@@ -693,7 +720,7 @@ pub(crate) mod tests {
         let expected_public_key = private_key.public_key(&secp);
 
         let identity_public_key = signer
-            .get_identity_public_key()
+            .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
             .await
             .expect("Failed to get identity public key");
 

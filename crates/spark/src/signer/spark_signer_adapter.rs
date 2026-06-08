@@ -182,10 +182,19 @@ fn static_deposit_path(index: u32) -> Result<DerivationPath, SignerError> {
     ]))
 }
 
+/// Derivation path of the wallet identity / ECIES key: the `0'` child of the
+/// account master. Identity signing and authentication use this key.
+fn identity_path() -> Result<DerivationPath, SignerError> {
+    Ok(DerivationPath::from(vec![
+        ChildNumber::from_hardened_idx(0)
+            .map_err(|e| SignerError::Generic(format!("invalid identity purpose: {e}")))?,
+    ]))
+}
+
 #[macros::async_trait]
 impl SparkSigner for SparkSignerAdapter {
     async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        self.signer.get_identity_public_key().await
+        self.signer.derive_public_key(&identity_path()?).await
     }
 
     async fn get_public_key_for_leaf(
@@ -206,7 +215,7 @@ impl SparkSigner for SparkSignerAdapter {
         challenge: &[u8],
     ) -> Result<bitcoin::secp256k1::ecdsa::Signature, SignerError> {
         self.signer
-            .sign_message_ecdsa_with_identity_key(challenge)
+            .sign_message_ecdsa(&identity_path()?, challenge)
             .await
     }
 
@@ -215,7 +224,7 @@ impl SparkSigner for SparkSignerAdapter {
         message: &[u8],
     ) -> Result<bitcoin::secp256k1::ecdsa::Signature, SignerError> {
         self.signer
-            .sign_message_ecdsa_with_identity_key(message)
+            .sign_message_ecdsa(&identity_path()?, message)
             .await
     }
 
@@ -292,7 +301,7 @@ impl SparkSigner for SparkSignerAdapter {
             payload.extend_from_slice(&secret_cipher);
             let signature = self
                 .signer
-                .sign_message_ecdsa_with_identity_key(&payload)
+                .sign_message_ecdsa(&identity_path()?, &payload)
                 .await?;
 
             for recipient in &operator_recipients {
@@ -342,7 +351,7 @@ impl SparkSigner for SparkSignerAdapter {
             .signable_message();
         let transfer_user_signature = self
             .signer
-            .sign_message_ecdsa_with_identity_key(&signing_payload)
+            .sign_message_ecdsa(&identity_path()?, &signing_payload)
             .await?;
 
         Ok(PreparedTransfer {
@@ -429,7 +438,7 @@ impl SparkSigner for SparkSignerAdapter {
             .signable_message();
         let claim_user_signature = self
             .signer
-            .sign_message_ecdsa_with_identity_key(&signing_payload)
+            .sign_message_ecdsa(&identity_path()?, &signing_payload)
             .await?;
 
         Ok(PreparedClaim {
@@ -528,7 +537,7 @@ impl SparkSigner for SparkSignerAdapter {
         let nonce_commitment = self.signer.generate_random_signing_commitment().await?;
         let user_signature = self
             .signer
-            .sign_message_ecdsa_with_identity_key(&user_statement)
+            .sign_message_ecdsa(&identity_path()?, &user_statement)
             .await?;
 
         Ok(StartedStaticDepositRefund {
@@ -600,7 +609,7 @@ impl SparkSigner for SparkSignerAdapter {
         let deposit_secret_key = self.signer.secret_key(&static_deposit_path(index)?).await?;
         let user_signature = self
             .signer
-            .sign_message_ecdsa_with_identity_key(&user_statement)
+            .sign_message_ecdsa(&identity_path()?, &user_statement)
             .await?;
 
         Ok(PreparedStaticDepositClaim {
@@ -615,7 +624,7 @@ impl SparkSigner for SparkSignerAdapter {
     ) -> Result<SignedSparkInvoice, SignerError> {
         let signature = self
             .signer
-            .sign_hash_schnorr_with_identity_key(&request.invoice_hash)
+            .sign_hash_schnorr(&identity_path()?, &request.invoice_hash)
             .await?;
         Ok(SignedSparkInvoice { signature })
     }
@@ -626,7 +635,7 @@ impl SparkSigner for SparkSignerAdapter {
     ) -> Result<PreparedTokenTransaction, SignerError> {
         let signature = self
             .signer
-            .sign_hash_schnorr_with_identity_key(&request.digest)
+            .sign_hash_schnorr(&identity_path()?, &request.digest)
             .await?;
         Ok(PreparedTokenTransaction { signature })
     }

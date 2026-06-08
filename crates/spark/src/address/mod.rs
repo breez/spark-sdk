@@ -615,7 +615,7 @@ fn encode_spark_address_canonical(address: &ProtoSparkAddress) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
 
-    use crate::signer::{Signer, SparkSignerAdapter, create_test_signer};
+    use crate::signer::{SparkSignerAdapter, create_test_signer};
 
     use super::*;
     use bitcoin::secp256k1::Secp256k1;
@@ -837,7 +837,7 @@ mod tests {
     async fn test_invoice_roundtrip() {
         let signer = std::sync::Arc::new(create_test_signer());
         let spark_signer = SparkSignerAdapter::new(signer.clone());
-        let public_key = signer.get_identity_public_key().await.unwrap();
+        let public_key = spark_signer.get_identity_public_key().await.unwrap();
         let sender_public_key = create_test_public_key();
         let invoice_fields = SparkInvoiceFields {
             id: uuid::Uuid::now_v7(),
@@ -902,7 +902,7 @@ mod tests {
     async fn test_invoice_minimal_data() {
         let signer = std::sync::Arc::new(create_test_signer());
         let spark_signer = SparkSignerAdapter::new(signer.clone());
-        let public_key = signer.get_identity_public_key().await.unwrap();
+        let public_key = spark_signer.get_identity_public_key().await.unwrap();
         let invoice_fields = SparkInvoiceFields {
             id: uuid::Uuid::now_v7(),
             version: 1,
@@ -939,7 +939,7 @@ mod tests {
     async fn test_compare_addresses_with_and_without_invoice_fields() {
         let signer = std::sync::Arc::new(create_test_signer());
         let spark_signer = SparkSignerAdapter::new(signer.clone());
-        let public_key = signer.get_identity_public_key().await.unwrap();
+        let public_key = spark_signer.get_identity_public_key().await.unwrap();
         let sender_public_key = create_test_public_key();
 
         // Create address without invoice fields

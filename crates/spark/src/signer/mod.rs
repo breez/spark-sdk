@@ -21,26 +21,25 @@ pub(crate) use default_signer::tests::create_test_signer;
 
 #[macros::async_trait]
 pub trait Signer: Send + Sync + 'static {
-    /// ECDSA-sign `message` (hashed with SHA-256 internally) with the identity key.
-    async fn sign_message_ecdsa_with_identity_key(
+    /// Public key of the key derived at `path` under the master.
+    async fn derive_public_key(&self, path: &DerivationPath) -> Result<PublicKey, SignerError>;
+
+    /// Raw secret key derived at `path` under the master.
+    async fn secret_key(&self, path: &DerivationPath) -> Result<SecretKey, SignerError>;
+
+    /// ECDSA-sign `message` (hashed with SHA-256 internally) with the key at `path`.
+    async fn sign_message_ecdsa(
         &self,
+        path: &DerivationPath,
         message: &[u8],
     ) -> Result<Signature, SignerError>;
 
-    /// Schnorr-sign a 32-byte `hash` with the identity key.
-    async fn sign_hash_schnorr_with_identity_key(
+    /// Schnorr-sign a 32-byte `hash` with the key at `path`.
+    async fn sign_hash_schnorr(
         &self,
+        path: &DerivationPath,
         hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError>;
-
-    /// The identity public key (tap-tweaked for the Taproot key set).
-    async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
-
-    /// Public key of the key derived at `path` under the account master.
-    async fn derive_public_key(&self, path: &DerivationPath) -> Result<PublicKey, SignerError>;
-
-    /// Raw secret key derived at `path` under the account master.
-    async fn secret_key(&self, path: &DerivationPath) -> Result<SecretKey, SignerError>;
 
     async fn generate_random_signing_commitment(
         &self,
