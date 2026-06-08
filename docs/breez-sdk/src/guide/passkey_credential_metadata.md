@@ -39,7 +39,7 @@ If your backend ties passkeys to your own user accounts, {{#name user_id}} is a 
 
 This enables account-level controls the passkey layer can't enforce on its own:
 
-- Cap how many passkeys (and wallet) one account may register.
+- Cap how many passkeys (and wallets) one account may register.
 - Revoke a lost credential server-side.
 - List a user's registered devices in their settings.
 
@@ -51,6 +51,6 @@ This enables account-level controls the passkey layer can't enforce on its own:
 
 ## Persisting the values
 
-The use cases above require these values to be persisted across app launches. {{#name credential_id}} is returned on every authentication response, while {{#name aaguid}},{{#name backup_eligible}}, and {{#name user_id}} are only returned during registration and should be stored at that time.
+The use cases above require these values to be persisted across app launches. {{#name credential_id}} is returned on every authentication response, while {{#name aaguid}}, {{#name backup_eligible}}, and {{#name user_id}} are only returned during registration and should be stored at that time.
 
 Use synced storage such as iCloud Keychain (iOS), Block Store (Android), or your own synced backend. Local-only storage is insufficient because it is lost on app reinstall and cannot be accessed from another device.

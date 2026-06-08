@@ -25,7 +25,7 @@ class PasskeyClient {
   final rust.PasskeyClient _inner;
 
   /// Zero-config client on the Breez shared RP (`keys.breez.technology`); set
-  /// `rpId` / `rpName` on the [config] to use your own RP.
+  /// `providerOptions` on the [config] to use your own RP.
   PasskeyClient({String? breezApiKey, PasskeyConfig? config})
     : this._fromProvider(
         PasskeyProvider(config?.providerOptions ?? const PasskeyProviderOptions()),
@@ -75,8 +75,8 @@ class PasskeyClient {
 }
 
 /// Builds a [PasskeyClient] backed by a caller-supplied [PrfProvider]. Use
-/// this when you need a configured provider (custom `rpId` / `rpName`,
-/// rotating `userName`).
+/// this for a custom PRF backend (hardware key, FIDO2, file-backed); set
+/// `providerOptions` on the [config] for the built-in provider instead.
 class PasskeyClientBuilder {
   PasskeyClientBuilder({this.breezApiKey, this.config});
 
@@ -84,7 +84,7 @@ class PasskeyClientBuilder {
   /// `null` for public relays only.
   final String? breezApiKey;
 
-  /// Passkey client config. `rpId` / `rpName` configure the default
+  /// Passkey client config. `providerOptions` configures the default
   /// provider (ignored when a provider is injected via [withPrfProvider]);
   /// `defaultLabel` is the label-store default.
   final PasskeyConfig? config;
@@ -93,14 +93,14 @@ class PasskeyClientBuilder {
 
   /// Inject the [PrfProvider] the client derives seeds through: the
   /// built-in [PasskeyProvider] or any custom PRF backend. Supersedes the
-  /// config's `rpId` / `rpName`.
+  /// config's `providerOptions`.
   PasskeyClientBuilder withPrfProvider(PrfProvider provider) {
     _provider = provider;
     return this;
   }
 
   /// Construct the client. Falls back to a default [PasskeyProvider] on
-  /// the config's `rpId` / `rpName` (default: the Breez RP) when no
+  /// the config's `providerOptions` (default: the Breez RP) when no
   /// provider was injected.
   PasskeyClient build() {
     final provider = _provider ?? PasskeyProvider(config?.providerOptions ?? const PasskeyProviderOptions());
