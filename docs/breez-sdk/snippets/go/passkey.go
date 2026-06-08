@@ -45,13 +45,16 @@ func CheckAvailability() {
 	}
 	switch r := availability.(type) {
 	case breez_sdk_spark.PasskeyAvailabilityAvailable:
-		_ = r // Show passkey as primary option.
+		// Show passkey as primary option.
+		_ = r
 	case breez_sdk_spark.PasskeyAvailabilityPrfUnsupported:
-		_ = r // Fall back to mnemonic flow.
+		// Fall back to mnemonic flow.
+		_ = r
 	case breez_sdk_spark.PasskeyAvailabilityNotAssociated:
 		log.Printf("Domain association failed (source=%s): %s", r.Source, r.Reason)
 	case breez_sdk_spark.PasskeyAvailabilitySkipped:
-		_ = r // No verification source on this platform; proceed normally.
+		// No verification source on this platform; proceed normally.
+		_ = r
 	}
 	// ANCHOR_END: check-availability
 }
@@ -198,12 +201,14 @@ func CheckDomain() error {
 
 	switch r := result.(type) {
 	case breez_sdk_spark.DomainAssociationAssociated:
-		_ = r // Safe to proceed.
+		// Safe to proceed.
+		_ = r
 	case breez_sdk_spark.DomainAssociationNotAssociated:
 		log.Printf("Domain association failed (source=%s): %s", r.Source, r.Reason)
 		return nil
 	case breez_sdk_spark.DomainAssociationSkipped:
-		_ = r // Verification could not be performed; proceed normally.
+		// Verification could not be performed; proceed normally.
+		_ = r
 	}
 	// ANCHOR_END: domain-association
 	return nil

@@ -146,7 +146,8 @@ class PasskeySnippets(private val activity: Activity) {
         val signInResponse = passkey.signIn(
             SignInRequest(
                 label = "personal",
-                allowCredentials = emptyList(), // stored credentialId bytes
+                // stored credentialId bytes
+                allowCredentials = emptyList(),
             )
         )
         // Log.v("Breez", "${signInResponse.wallet.seed}") // Pass to connect() to open the wallet
@@ -225,7 +226,8 @@ class PasskeySnippets(private val activity: Activity) {
             val response = passkey.register(
                 RegisterRequest(
                     label = "personal",
-                    excludeCredentials = emptyList(), // app-persisted credential IDs from prior registrations
+                    // app-persisted credential IDs from prior registrations
+                    excludeCredentials = emptyList(),
                 )
             )
             response.wallet

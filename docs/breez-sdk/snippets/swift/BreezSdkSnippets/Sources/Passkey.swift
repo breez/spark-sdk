@@ -34,13 +34,16 @@ func checkAvailability() async throws {
     // ANCHOR: check-availability
     switch try await passkey.checkAvailability() {
     case .available:
-        break // Show passkey as primary option.
+        // Show passkey as primary option.
+        break
     case .prfUnsupported:
-        break // Fall back to mnemonic flow.
+        // Fall back to mnemonic flow.
+        break
     case .notAssociated(let source, let reason):
         print("Domain association failed (source=\(source)): \(reason)")
     case .skipped:
-        break // No verification source on this platform; proceed normally.
+        // No verification source on this platform; proceed normally.
+        break
     }
     // ANCHOR_END: check-availability
 }

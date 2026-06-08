@@ -60,13 +60,16 @@ async def check_availability():
     # ANCHOR: check-availability
     availability = await passkey.check_availability()
     if isinstance(availability, PasskeyAvailability.AVAILABLE):
-        pass  # Show passkey as primary option.
+        # Show passkey as primary option.
+        pass
     elif isinstance(availability, PasskeyAvailability.PRF_UNSUPPORTED):
-        pass  # Fall back to mnemonic flow.
+        # Fall back to mnemonic flow.
+        pass
     elif isinstance(availability, PasskeyAvailability.NOT_ASSOCIATED):
         print(f"Domain association failed (source={availability.source}): {availability.reason}")
     elif isinstance(availability, PasskeyAvailability.SKIPPED):
-        pass  # No verification source on this platform; proceed normally.
+        # No verification source on this platform; proceed normally.
+        pass
     # ANCHOR_END: check-availability
 
 
@@ -175,12 +178,14 @@ async def check_domain():
     result = await prf_provider.check_domain_association()
 
     if isinstance(result, DomainAssociation.ASSOCIATED):
-        pass  # Safe to proceed.
+        # Safe to proceed.
+        pass
     elif isinstance(result, DomainAssociation.NOT_ASSOCIATED):
         print(f"Domain association failed (source={result.source}): {result.reason}")
         return
     elif isinstance(result, DomainAssociation.SKIPPED):
-        pass  # Verification could not be performed; proceed normally.
+        # Verification could not be performed; proceed normally.
+        pass
     # ANCHOR_END: domain-association
 
 
