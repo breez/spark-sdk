@@ -1,4 +1,4 @@
-//! `SparkSigner` implementation backed by Turnkey.
+//! `ExternalSparkSigner` implementation backed by Turnkey.
 //!
 //! Spark keys are hardened children of `m/8797555'/{account}'`: identity at
 //! `/0'`, signing leaf at `/1'/{u32_be(sha256(leaf_id)[..4]) % 2^31}'`, static
@@ -7,6 +7,13 @@
 //! the path (deterministic from the wallet seed, so recoverable without local
 //! state) and read its compressed key.
 //!
+//! The trait surface is the FFI [`ExternalSparkSigner`] (so the signer is
+//! exposable over uniffi and consumed via `ExternalSparkSignerAdapter`). It
+//! carries exactly the signer-relevant subset of each request (leaf ids, not
+//! full tree nodes), which is all this signer ever reads; the native-typed
+//! inherent helpers below do the Turnkey work, and the trait methods are thin
+//! conversions to and from the FFI types.
+//!
 //! The pubkey maps are a performance memoization only. Each derivation's key is
 //! deterministic and immutable, so caching avoids repeat Turnkey round-trips
 //! (and re-issuing a `CREATE_WALLET_ACCOUNTS` activity for a path already
@@ -14,7 +21,7 @@
 //! in-memory, lost on restart, rebuilt from Turnkey on demand. Correctness does
 //! not depend on them.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -27,16 +34,25 @@ use frost_secp256k1_tr::round2::SignatureShare;
 use spark_wallet::{
     AggregateFrostRequest, DefaultSigner, FrostDerivation, FrostJob, FrostShareResult,
     FrostSigningCommitmentsWithNonces, NewLeafKey, OperatorPackage, OperatorRecipient,
-    PrepareClaimRequest, PrepareLightningReceiveRequest, PrepareStaticDepositClaimRequest,
-    PrepareStaticDepositRequest, PrepareTokenTransactionRequest, PrepareTransferRequest,
-    PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit, PreparedStaticDepositClaim,
-    PreparedTokenTransaction, PreparedTransfer, SecretSource, SignFrostRequest,
-    SignSparkInvoiceRequest, SignStaticDepositRefundRequest, SignedSparkInvoice, Signer,
-    SignerError, SparkSigner, StartStaticDepositRefundRequest, StartedStaticDepositRefund,
-    TreeNodeId, aggregate_frost,
+    SecretSource, SignFrostRequest, Signer, TreeNodeId, aggregate_frost,
 };
 
 use crate::Network;
+use crate::error::SignerError;
+use crate::signer::{
+    EcdsaSignatureBytes, ExternalFrostCommitments, ExternalFrostJob, ExternalFrostShareResult,
+    ExternalFrostSignature, ExternalNewLeafKey, ExternalOperatorPackage, ExternalOperatorRecipient,
+    ExternalPrepareClaimRequest, ExternalPrepareLightningReceiveRequest,
+    ExternalPrepareStaticDepositClaimRequest, ExternalPrepareStaticDepositRequest,
+    ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest, ExternalPreparedClaim,
+    ExternalPreparedLightningReceive, ExternalPreparedStaticDeposit,
+    ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
+    ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
+    ExternalSignedSparkInvoice, ExternalSparkSigner, ExternalStartStaticDepositRefundRequest,
+    ExternalStartedStaticDepositRefund, ExternalTreeNodeId, IdentifierCommitmentPair,
+    IdentifierPublicKeyPair, IdentifierSignaturePair, PublicKeyBytes, SchnorrSignatureBytes,
+    SecretBytes,
+};
 
 use turnkey_enclave_encrypt::{ExportClient, QuorumPublicKey};
 
@@ -169,6 +185,90 @@ fn new_leaf_keys_from(leaves: &[SparkLeafPublicKey]) -> Result<Vec<NewLeafKey>, 
         .collect()
 }
 
+/// Converts the FFI operator recipients into the native shape consumed by
+/// [`operator_recipients`].
+fn native_recipients(
+    recipients: &[ExternalOperatorRecipient],
+) -> Result<Vec<OperatorRecipient>, SignerError> {
+    recipients
+        .iter()
+        .map(|r| r.to_operator_recipient().map_err(to_spark_err))
+        .collect()
+}
+
+/// Decodes Turnkey's encrypted operator packages into FFI packages.
+fn external_operator_packages(
+    pkgs: &[SparkEncryptedOperatorPackage],
+) -> Result<Vec<ExternalOperatorPackage>, SignerError> {
+    pkgs.iter()
+        .map(|pkg| {
+            let native = operator_package_from(pkg).map_err(to_spark_err)?;
+            ExternalOperatorPackage::from_operator_package(&native).map_err(to_spark_err)
+        })
+        .collect()
+}
+
+/// Decodes Turnkey's new-leaf public keys into FFI new-leaf keys (validating
+/// each id and key via [`new_leaf_keys_from`]).
+fn external_new_leaf_keys(
+    leaves: &[SparkLeafPublicKey],
+) -> Result<Vec<ExternalNewLeafKey>, SignerError> {
+    new_leaf_keys_from(leaves)?
+        .into_iter()
+        .map(|nlk| {
+            Ok(ExternalNewLeafKey {
+                node_id: ExternalTreeNodeId::from_tree_node_id(&nlk.node_id)
+                    .map_err(to_spark_err)?,
+                new_signing_public_key: nlk.new_signing_public_key.serialize().to_vec(),
+            })
+        })
+        .collect()
+}
+
+fn ffi_commitment_map(
+    pairs: &[IdentifierCommitmentPair],
+) -> Result<BTreeMap<Identifier, SigningCommitments>, SignerError> {
+    pairs
+        .iter()
+        .map(|p| {
+            Ok((
+                p.identifier.to_identifier().map_err(to_spark_err)?,
+                p.commitment
+                    .to_signing_commitments()
+                    .map_err(to_spark_err)?,
+            ))
+        })
+        .collect()
+}
+
+fn ffi_signature_map(
+    pairs: &[IdentifierSignaturePair],
+) -> Result<BTreeMap<Identifier, SignatureShare>, SignerError> {
+    pairs
+        .iter()
+        .map(|p| {
+            Ok((
+                p.identifier.to_identifier().map_err(to_spark_err)?,
+                p.signature.to_signature_share().map_err(to_spark_err)?,
+            ))
+        })
+        .collect()
+}
+
+fn ffi_public_key_map(
+    pairs: &[IdentifierPublicKeyPair],
+) -> Result<BTreeMap<Identifier, PublicKey>, SignerError> {
+    pairs
+        .iter()
+        .map(|p| {
+            Ok((
+                p.identifier.to_identifier().map_err(to_spark_err)?,
+                PublicKey::from_slice(&p.public_key).map_err(to_spark_err)?,
+            ))
+        })
+        .collect()
+}
+
 pub(crate) struct TurnkeySparkSigner {
     client: Arc<TurnkeyClient>,
     account: u32,
@@ -219,6 +319,53 @@ impl TurnkeySparkSigner {
         PublicKey::from_str(&hex).map_err(to_spark_err)
     }
 
+    /// The wallet identity public key, memoized. Native-typed: internal callers
+    /// (identity signing) need the `PublicKey`, not its FFI bytes.
+    async fn identity_public_key(&self) -> Result<PublicKey, SignerError> {
+        if let Some(pk) = *self.identity_pubkey.lock().unwrap() {
+            return Ok(pk);
+        }
+        let pk = self
+            .pubkey_at_path(format!("{}/0'", self.base_path()))
+            .await?;
+        *self.identity_pubkey.lock().unwrap() = Some(pk);
+        Ok(pk)
+    }
+
+    /// The signing public key for a tree leaf, memoized.
+    async fn leaf_public_key(&self, leaf_id: &TreeNodeId) -> Result<PublicKey, SignerError> {
+        if let Some(pk) = self.leaf_pubkeys.lock().unwrap().get(leaf_id).copied() {
+            return Ok(pk);
+        }
+        let path = format!("{}/1'/{}'", self.base_path(), Self::leaf_index(leaf_id));
+        let pk = self.pubkey_at_path(path).await?;
+        self.leaf_pubkeys
+            .lock()
+            .unwrap()
+            .insert(leaf_id.clone(), pk);
+        Ok(pk)
+    }
+
+    /// The static-deposit signing public key at `index`, memoized.
+    async fn static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
+        if let Some(pk) = self
+            .static_deposit_pubkeys
+            .lock()
+            .unwrap()
+            .get(&index)
+            .copied()
+        {
+            return Ok(pk);
+        }
+        let path = format!("{}/3'/{index}'", self.base_path());
+        let pk = self.pubkey_at_path(path).await?;
+        self.static_deposit_pubkeys
+            .lock()
+            .unwrap()
+            .insert(index, pk);
+        Ok(pk)
+    }
+
     /// The Spark-format identity address, used as `signWith` for Spark-protocol
     /// activities and BIP-340 Schnorr signing.
     async fn spark_identity_address(&self) -> Result<String, SignerError> {
@@ -254,7 +401,7 @@ impl TurnkeySparkSigner {
     /// ECDSA (the Spark-format address would instead select BIP-340 Schnorr).
     /// Turnkey applies SHA-256 to the payload, matching the local signer.
     async fn sign_identity_ecdsa(&self, message: &[u8]) -> Result<ecdsa::Signature, SignerError> {
-        let identity = self.get_identity_public_key().await?;
+        let identity = self.identity_public_key().await?;
         let result = self
             .client
             .sign_raw(
@@ -265,6 +412,44 @@ impl TurnkeySparkSigner {
             .await
             .map_err(to_spark_err)?;
         ecdsa_from_rs(&result.r, &result.s).map_err(to_spark_err)
+    }
+
+    /// Native FROST signing over a batch of jobs: the shared path for the trait
+    /// `sign_frost` and the in-process `prepare_static_deposit` call.
+    async fn sign_frost_native(
+        &self,
+        jobs: &[FrostJob],
+    ) -> Result<Vec<FrostShareResult>, SignerError> {
+        let sign_with = self.spark_identity_address().await?;
+        let mut signatures = Vec::with_capacity(jobs.len());
+        for job in jobs {
+            signatures.push(frost_job_to_request(job).map_err(to_spark_err)?);
+        }
+        let result: SparkSignFrostResult = self
+            .client
+            .submit_activity(
+                SPARK_SIGN_FROST_PATH,
+                SPARK_SIGN_FROST_TYPE,
+                SparkSignFrostIntent {
+                    sign_with,
+                    signatures,
+                },
+                SPARK_SIGN_FROST_RESULT,
+            )
+            .await
+            .map_err(to_spark_err)?;
+        if result.signatures.len() != jobs.len() {
+            return Err(SignerError::Generic(format!(
+                "turnkey sign_frost: expected {} shares, got {}",
+                jobs.len(),
+                result.signatures.len()
+            )));
+        }
+        result
+            .signatures
+            .iter()
+            .map(|sig| partial_signature_to_share(sig).map_err(to_spark_err))
+            .collect()
     }
 
     /// Seeds the leaf cache from a claim/transfer result. Each leaf's signing key
@@ -336,122 +521,91 @@ impl TurnkeySparkSigner {
 }
 
 #[macros::async_trait]
-impl spark_wallet::SparkSigner for TurnkeySparkSigner {
-    async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        if let Some(pk) = *self.identity_pubkey.lock().unwrap() {
-            return Ok(pk);
-        }
-        let pk = self
-            .pubkey_at_path(format!("{}/0'", self.base_path()))
-            .await?;
-        *self.identity_pubkey.lock().unwrap() = Some(pk);
-        Ok(pk)
+impl ExternalSparkSigner for TurnkeySparkSigner {
+    async fn get_identity_public_key(&self) -> Result<PublicKeyBytes, SignerError> {
+        Ok(PublicKeyBytes::from_public_key(
+            &self.identity_public_key().await?,
+        ))
     }
 
     async fn get_public_key_for_leaf(
         &self,
-        leaf_id: &TreeNodeId,
-    ) -> Result<PublicKey, SignerError> {
-        if let Some(pk) = self.leaf_pubkeys.lock().unwrap().get(leaf_id).copied() {
-            return Ok(pk);
-        }
-        let path = format!("{}/1'/{}'", self.base_path(), Self::leaf_index(leaf_id));
-        let pk = self.pubkey_at_path(path).await?;
-        self.leaf_pubkeys
-            .lock()
-            .unwrap()
-            .insert(leaf_id.clone(), pk);
-        Ok(pk)
+        leaf_id: ExternalTreeNodeId,
+    ) -> Result<PublicKeyBytes, SignerError> {
+        let id = leaf_id.to_tree_node_id().map_err(to_spark_err)?;
+        Ok(PublicKeyBytes::from_public_key(
+            &self.leaf_public_key(&id).await?,
+        ))
     }
 
-    async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError> {
-        if let Some(pk) = self
-            .static_deposit_pubkeys
-            .lock()
-            .unwrap()
-            .get(&index)
-            .copied()
-        {
-            return Ok(pk);
-        }
-        let path = format!("{}/3'/{index}'", self.base_path());
-        let pk = self.pubkey_at_path(path).await?;
-        self.static_deposit_pubkeys
-            .lock()
-            .unwrap()
-            .insert(index, pk);
-        Ok(pk)
+    async fn get_static_deposit_public_key(
+        &self,
+        index: u32,
+    ) -> Result<PublicKeyBytes, SignerError> {
+        Ok(PublicKeyBytes::from_public_key(
+            &self.static_deposit_public_key(index).await?,
+        ))
     }
 
     async fn sign_authentication_challenge(
         &self,
-        challenge: &[u8],
-    ) -> Result<ecdsa::Signature, SignerError> {
-        self.sign_identity_ecdsa(challenge).await
+        challenge: Vec<u8>,
+    ) -> Result<EcdsaSignatureBytes, SignerError> {
+        let sig = self.sign_identity_ecdsa(&challenge).await?;
+        Ok(EcdsaSignatureBytes::from_signature(&sig))
     }
 
-    async fn sign_message(&self, message: &[u8]) -> Result<ecdsa::Signature, SignerError> {
-        self.sign_identity_ecdsa(message).await
+    async fn sign_message(&self, message: Vec<u8>) -> Result<EcdsaSignatureBytes, SignerError> {
+        let sig = self.sign_identity_ecdsa(&message).await?;
+        Ok(EcdsaSignatureBytes::from_signature(&sig))
     }
 
-    async fn sign_frost(&self, jobs: Vec<FrostJob>) -> Result<Vec<FrostShareResult>, SignerError> {
-        let sign_with = self.spark_identity_address().await?;
-        let mut signatures = Vec::with_capacity(jobs.len());
-        for job in &jobs {
-            signatures.push(frost_job_to_request(job).map_err(to_spark_err)?);
-        }
-        let result: SparkSignFrostResult = self
-            .client
-            .submit_activity(
-                SPARK_SIGN_FROST_PATH,
-                SPARK_SIGN_FROST_TYPE,
-                SparkSignFrostIntent {
-                    sign_with,
-                    signatures,
-                },
-                SPARK_SIGN_FROST_RESULT,
-            )
-            .await
-            .map_err(to_spark_err)?;
-        if result.signatures.len() != jobs.len() {
-            return Err(SignerError::Generic(format!(
-                "turnkey sign_frost: expected {} shares, got {}",
-                jobs.len(),
-                result.signatures.len()
-            )));
-        }
-        result
-            .signatures
+    async fn sign_frost(
+        &self,
+        jobs: Vec<ExternalFrostJob>,
+    ) -> Result<Vec<ExternalFrostShareResult>, SignerError> {
+        let native_jobs = jobs
             .iter()
-            .map(|sig| partial_signature_to_share(sig).map_err(to_spark_err))
+            .map(|j| j.to_frost_job().map_err(to_spark_err))
+            .collect::<Result<Vec<_>, _>>()?;
+        let shares = self.sign_frost_native(&native_jobs).await?;
+        shares
+            .iter()
+            .map(|s| ExternalFrostShareResult::from_frost_share_result(s).map_err(to_spark_err))
             .collect()
     }
 
     async fn prepare_transfer(
         &self,
-        request: PrepareTransferRequest,
-    ) -> Result<PreparedTransfer, SignerError> {
+        request: ExternalPrepareTransferRequest,
+    ) -> Result<ExternalPreparedTransfer, SignerError> {
         let sign_with = self.spark_identity_address().await?;
         let leaves = request
             .leaves
             .iter()
-            .map(|leaf| SparkTransferLeaf {
-                leaf_id: leaf.node.id.to_string(),
-                old_leaf_derivation: SparkKeyDerivation::signing_leaf(leaf.node.id.to_string()),
-                new_leaf_derivation: SparkKeyDerivation::signing_leaf(leaf.new_leaf_id.to_string()),
-                refund_signature: None,
-                direct_refund_signature: None,
-                direct_from_cpfp_refund_signature: None,
+            .map(|leaf| {
+                let node_id = leaf.node_id.to_tree_node_id().map_err(to_spark_err)?;
+                let new_leaf_id = leaf.new_leaf_id.to_tree_node_id().map_err(to_spark_err)?;
+                Ok(SparkTransferLeaf {
+                    leaf_id: node_id.to_string(),
+                    old_leaf_derivation: SparkKeyDerivation::signing_leaf(node_id.to_string()),
+                    new_leaf_derivation: SparkKeyDerivation::signing_leaf(new_leaf_id.to_string()),
+                    refund_signature: None,
+                    direct_refund_signature: None,
+                    direct_from_cpfp_refund_signature: None,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, SignerError>>()?;
         let intent = SparkPrepareTransferIntent {
             sign_with,
             transfer: SparkTransferPackage {
-                transfer_id: request.transfer_id.to_string(),
+                transfer_id: request.transfer_id.clone(),
                 leaves,
                 threshold: request.threshold,
-                operator_recipients: operator_recipients(&request.operator_recipients),
-                receiver_public_key: hex::encode(request.receiver_public_key.serialize()),
+                operator_recipients: operator_recipients(&native_recipients(
+                    &request.operator_recipients,
+                )?),
+                receiver_public_key: hex::encode(&request.receiver_public_key),
             },
         };
         let result: SparkPrepareTransferResult = self
@@ -464,47 +618,46 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
             )
             .await
             .map_err(to_spark_err)?;
-        let operator_packages = result
-            .operator_packages
-            .iter()
-            .map(|pkg| operator_package_from(pkg).map_err(to_spark_err))
-            .collect::<Result<Vec<_>, _>>()?;
-        let new_leaf_keys = new_leaf_keys_from(&result.new_leaf_public_keys)?;
+        let operator_packages = external_operator_packages(&result.operator_packages)?;
+        let new_leaf_keys = external_new_leaf_keys(&result.new_leaf_public_keys)?;
         let der = hex::decode(&result.transfer_user_signature)
             .map_err(|e| TurnkeyError::Deserialize(format!("transferUserSignature: {e}")))
             .map_err(to_spark_err)?;
-        let transfer_user_signature = ecdsa::Signature::from_der(&der).map_err(to_spark_err)?;
-        Ok(PreparedTransfer {
+        let signature = ecdsa::Signature::from_der(&der).map_err(to_spark_err)?;
+        Ok(ExternalPreparedTransfer {
             operator_packages,
             new_leaf_keys,
-            transfer_user_signature,
+            transfer_user_signature: EcdsaSignatureBytes::from_signature(&signature),
         })
     }
 
     async fn prepare_claim(
         &self,
-        request: PrepareClaimRequest,
-    ) -> Result<PreparedClaim, SignerError> {
+        request: ExternalPrepareClaimRequest,
+    ) -> Result<ExternalPreparedClaim, SignerError> {
         let sign_with = self.spark_identity_address().await?;
         let leaves = request
             .leaves
             .iter()
-            .map(|leaf| SparkClaimLeaf {
-                leaf_id: leaf.node.id.to_string(),
-                ciphertext: hex::encode(&leaf.leaf_key_ciphertext),
-                sender_signature: hex::encode(&leaf.sender_signature),
+            .map(|leaf| {
+                let node_id = leaf.node_id.to_tree_node_id().map_err(to_spark_err)?;
+                Ok(SparkClaimLeaf {
+                    leaf_id: node_id.to_string(),
+                    ciphertext: hex::encode(&leaf.leaf_key_ciphertext),
+                    sender_signature: hex::encode(&leaf.sender_signature),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, SignerError>>()?;
         let intent = SparkClaimTransferIntent {
             sign_with,
             claim: SparkClaimPackage {
                 leaves,
                 threshold: request.threshold,
-                transfer_id: request.transfer_id.to_string(),
-                operator_recipients: operator_recipients(&request.operator_recipients),
-                sender_identity_public_key: hex::encode(
-                    request.sender_identity_public_key.serialize(),
-                ),
+                transfer_id: request.transfer_id.clone(),
+                operator_recipients: operator_recipients(&native_recipients(
+                    &request.operator_recipients,
+                )?),
+                sender_identity_public_key: hex::encode(&request.sender_identity_public_key),
             },
         };
         let result: SparkClaimTransferResult = self
@@ -518,24 +671,22 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
             .await
             .map_err(to_spark_err)?;
         self.cache_new_leaf_keys(&result.new_leaf_public_keys)?;
-        let operator_packages = result
-            .operator_packages
-            .iter()
-            .map(|pkg| operator_package_from(pkg).map_err(to_spark_err))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(PreparedClaim { operator_packages })
+        let operator_packages = external_operator_packages(&result.operator_packages)?;
+        Ok(ExternalPreparedClaim { operator_packages })
     }
 
     async fn prepare_lightning_receive(
         &self,
-        request: PrepareLightningReceiveRequest,
-    ) -> Result<PreparedLightningReceive, SignerError> {
+        request: ExternalPrepareLightningReceiveRequest,
+    ) -> Result<ExternalPreparedLightningReceive, SignerError> {
         let sign_with = self.spark_identity_address().await?;
         let intent = SparkPrepareLightningReceiveIntent {
             sign_with,
             lightning_receive: SparkLightningReceivePackage {
                 threshold: request.threshold,
-                operator_recipients: operator_recipients(&request.operator_recipients),
+                operator_recipients: operator_recipients(&native_recipients(
+                    &request.operator_recipients,
+                )?),
             },
         };
         let result: SparkPrepareLightningReceiveResult = self
@@ -548,13 +699,11 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
             )
             .await
             .map_err(to_spark_err)?;
-        let payment_hash = decode_scalar_32(&result.payment_hash).map_err(to_spark_err)?;
-        let operator_preimage_packages = result
-            .operator_packages
-            .iter()
-            .map(|pkg| operator_package_from(pkg).map_err(to_spark_err))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(PreparedLightningReceive {
+        let payment_hash = decode_scalar_32(&result.payment_hash)
+            .map_err(to_spark_err)?
+            .to_vec();
+        let operator_preimage_packages = external_operator_packages(&result.operator_packages)?;
+        Ok(ExternalPreparedLightningReceive {
             payment_hash,
             operator_preimage_packages,
         })
@@ -562,13 +711,18 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
 
     async fn prepare_static_deposit(
         &self,
-        request: PrepareStaticDepositRequest,
-    ) -> Result<PreparedStaticDeposit, SignerError> {
-        let PrepareStaticDepositRequest {
+        request: ExternalPrepareStaticDepositRequest,
+    ) -> Result<ExternalPreparedStaticDeposit, SignerError> {
+        let ExternalPrepareStaticDepositRequest {
             index,
             ssp_public_key,
             frost_jobs,
         } = request;
+        let ssp_public_key = PublicKey::from_slice(&ssp_public_key).map_err(to_spark_err)?;
+        let native_jobs = frost_jobs
+            .iter()
+            .map(|j| j.to_frost_job().map_err(to_spark_err))
+            .collect::<Result<Vec<_>, _>>()?;
         // Export the static-deposit secret and ECIES-encrypt it to the SSP via a
         // local signer rooted at that key (empty path = the key itself).
         let local = self.local_static_deposit_signer(index).await?;
@@ -577,10 +731,16 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
                 &SecretSource::Derived(DerivationPath::master()),
                 &ssp_public_key,
             )
-            .await?;
+            .await
+            .map_err(to_spark_err)?;
         // The deposit tree-tx FROST stays in Turnkey (SPARK_SIGN_FROST).
-        let frost_shares = self.sign_frost(frost_jobs).await?;
-        Ok(PreparedStaticDeposit {
+        let frost_shares = self
+            .sign_frost_native(&native_jobs)
+            .await?
+            .iter()
+            .map(|s| ExternalFrostShareResult::from_frost_share_result(s).map_err(to_spark_err))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ExternalPreparedStaticDeposit {
             exported_secret,
             frost_shares,
         })
@@ -588,43 +748,46 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
 
     async fn start_static_deposit_refund(
         &self,
-        request: StartStaticDepositRefundRequest,
-    ) -> Result<StartedStaticDepositRefund, SignerError> {
-        let StartStaticDepositRefundRequest {
+        request: ExternalStartStaticDepositRefundRequest,
+    ) -> Result<ExternalStartedStaticDepositRefund, SignerError> {
+        let ExternalStartStaticDepositRefundRequest {
             index,
             user_statement,
         } = request;
-        let signing_public_key = self.get_static_deposit_public_key(index).await?;
+        let signing_public_key = self.static_deposit_public_key(index).await?;
         // User-commits-first: the nonce (encrypted to the local signer) is
         // generated now and reconstructed in sign_static_deposit_refund.
         let nonce_commitment = self
             .local_static_deposit_signer(index)
             .await?
             .generate_random_signing_commitment()
-            .await?;
+            .await
+            .map_err(to_spark_err)?;
         let user_signature = self.sign_identity_ecdsa(&user_statement).await?;
-        Ok(StartedStaticDepositRefund {
-            signing_public_key,
-            nonce_commitment,
-            user_signature,
+        Ok(ExternalStartedStaticDepositRefund {
+            signing_public_key: signing_public_key.serialize().to_vec(),
+            nonce_commitment: ExternalFrostCommitments::from_frost_commitments(&nonce_commitment)
+                .map_err(to_spark_err)?,
+            user_signature: EcdsaSignatureBytes::from_signature(&user_signature),
         })
     }
 
     async fn sign_static_deposit_refund(
         &self,
-        request: SignStaticDepositRefundRequest,
-    ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
-        let SignStaticDepositRefundRequest {
-            index,
-            sighash,
-            verifying_key,
-            nonce_commitment,
-            statechain_commitments,
-            statechain_signatures,
-            statechain_public_keys,
-        } = request;
+        request: ExternalSignStaticDepositRefundRequest,
+    ) -> Result<ExternalFrostSignature, SignerError> {
+        let index = request.index;
+        let sighash = request.sighash;
+        let verifying_key = PublicKey::from_slice(&request.verifying_key).map_err(to_spark_err)?;
+        let nonce_commitment = request
+            .nonce_commitment
+            .to_frost_commitments()
+            .map_err(to_spark_err)?;
+        let statechain_commitments = ffi_commitment_map(&request.statechain_commitments)?;
+        let statechain_signatures = ffi_signature_map(&request.statechain_signatures)?;
+        let statechain_public_keys = ffi_public_key_map(&request.statechain_public_keys)?;
         let local = self.local_static_deposit_signer(index).await?;
-        let aggregating_public_key = self.get_static_deposit_public_key(index).await?;
+        let aggregating_public_key = self.static_deposit_public_key(index).await?;
         // Sign with the pre-committed nonce, then aggregate (pure public math).
         let user_signature = local
             .sign_frost(SignFrostRequest {
@@ -636,8 +799,9 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
                 statechain_commitments: statechain_commitments.clone(),
                 adaptor_public_key: None,
             })
-            .await?;
-        aggregate_frost(AggregateFrostRequest {
+            .await
+            .map_err(to_spark_err)?;
+        let signature = aggregate_frost(AggregateFrostRequest {
             message: &sighash,
             statechain_signatures,
             statechain_public_keys,
@@ -648,33 +812,39 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
             self_signature: &user_signature,
             adaptor_public_key: None,
         })
-    }
-
-    async fn prepare_static_deposit_claim(
-        &self,
-        request: PrepareStaticDepositClaimRequest,
-    ) -> Result<PreparedStaticDepositClaim, SignerError> {
-        let deposit_secret_key = self.export_static_deposit_key(request.index).await?;
-        let user_signature = self.sign_identity_ecdsa(&request.user_statement).await?;
-        Ok(PreparedStaticDepositClaim {
-            deposit_secret_key,
-            user_signature,
-        })
+        .map_err(to_spark_err)?;
+        ExternalFrostSignature::from_frost_signature(&signature).map_err(to_spark_err)
     }
 
     async fn sign_spark_invoice(
         &self,
-        request: SignSparkInvoiceRequest,
-    ) -> Result<SignedSparkInvoice, SignerError> {
+        request: ExternalSignSparkInvoiceRequest,
+    ) -> Result<ExternalSignedSparkInvoice, SignerError> {
         let signature = self.sign_identity_schnorr(&request.invoice_hash).await?;
-        Ok(SignedSparkInvoice { signature })
+        Ok(ExternalSignedSparkInvoice {
+            signature: SchnorrSignatureBytes::from_signature(&signature),
+        })
     }
 
     async fn prepare_token_transaction(
         &self,
-        request: PrepareTokenTransactionRequest,
-    ) -> Result<PreparedTokenTransaction, SignerError> {
+        request: ExternalPrepareTokenTransactionRequest,
+    ) -> Result<ExternalPreparedTokenTransaction, SignerError> {
         let signature = self.sign_identity_schnorr(&request.digest).await?;
-        Ok(PreparedTokenTransaction { signature })
+        Ok(ExternalPreparedTokenTransaction {
+            signature: SchnorrSignatureBytes::from_signature(&signature),
+        })
+    }
+
+    async fn prepare_static_deposit_claim(
+        &self,
+        request: ExternalPrepareStaticDepositClaimRequest,
+    ) -> Result<ExternalPreparedStaticDepositClaim, SignerError> {
+        let deposit_secret_key = self.export_static_deposit_key(request.index).await?;
+        let user_signature = self.sign_identity_ecdsa(&request.user_statement).await?;
+        Ok(ExternalPreparedStaticDepositClaim {
+            deposit_secret_key: SecretBytes::from_secret_key(&deposit_secret_key),
+            user_signature: EcdsaSignatureBytes::from_signature(&user_signature),
+        })
     }
 }
