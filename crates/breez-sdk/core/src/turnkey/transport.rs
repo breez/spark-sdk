@@ -54,6 +54,26 @@ struct ActivityResponse {
     activity: Option<Activity>,
 }
 
+/// Wraps an activity intent in the `{type, timestampMs, organizationId,
+/// parameters}` envelope Turnkey's submit endpoints expect.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivityEnvelope<'a, P> {
+    #[serde(rename = "type")]
+    activity_type: &'a str,
+    timestamp_ms: String,
+    organization_id: &'a str,
+    parameters: P,
+}
+
+fn current_timestamp_ms() -> String {
+    platform_utils::time::SystemTime::now()
+        .duration_since(platform_utils::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+        .to_string()
+}
+
 pub(crate) struct TurnkeyClient {
     http: Arc<dyn HttpClient>,
     base_url: String,
@@ -153,5 +173,31 @@ impl TurnkeyClient {
                 }
             }
         }
+    }
+
+    /// Submits `parameters` as `activity_type` to `path`, polls to completion,
+    /// and deserializes `activity.result.{result_field}` into `R`.
+    pub(crate) async fn submit_activity<P, R>(
+        &self,
+        path: &str,
+        activity_type: &str,
+        parameters: P,
+        result_field: &str,
+    ) -> Result<R, TurnkeyError>
+    where
+        P: Serialize,
+        R: DeserializeOwned,
+    {
+        let envelope = ActivityEnvelope {
+            activity_type,
+            timestamp_ms: current_timestamp_ms(),
+            organization_id: &self.organization_id,
+            parameters,
+        };
+        let activity = self.process_activity(path, &envelope).await?;
+        let value = activity.result.get(result_field).ok_or_else(|| {
+            TurnkeyError::UnexpectedResponse(format!("missing {result_field} in activity result"))
+        })?;
+        serde_json::from_value(value.clone()).map_err(|e| TurnkeyError::Deserialize(e.to_string()))
     }
 }

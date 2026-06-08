@@ -8,8 +8,10 @@
 
 mod config;
 mod error;
+mod spark_signer;
 mod stamp;
 mod transport;
+mod types;
 
 pub use config::{TurnkeyConfig, TurnkeyRetryConfig};
 pub use error::TurnkeyError;
