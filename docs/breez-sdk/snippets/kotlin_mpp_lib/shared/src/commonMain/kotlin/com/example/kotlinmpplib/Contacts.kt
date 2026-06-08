@@ -41,7 +41,8 @@ class Contacts {
             limit = 10u
         ))
         for (contact in contacts) {
-            // Log.v("Breez", "Contact: id=${contact.id}, name=${contact.name}, identifier=${contact.paymentIdentifier}")
+            // Log.v("Breez", "Contact: id=${contact.id}, name=${contact.name},
+            // identifier=${contact.paymentIdentifier}")
         }
         // ANCHOR_END: list-contacts
     }

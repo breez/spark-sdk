@@ -22,7 +22,9 @@ class RefundingPayments {
                                 is Fee.Rate -> "${maxFee.satPerVbyte} sats/vByte"
                                 null -> "none"
                             }
-                            // Log.v("Breez", "Max claim fee exceeded. Max: $maxFeeStr, Required: ${claimError.requiredFeeSats} sats or ${claimError.requiredFeeRateSatPerVbyte} sats/vByte")
+                            // Log.v("Breez", "Max claim fee exceeded. Max: $maxFeeStr,
+                            // Required: ${claimError.requiredFeeSats} sats or
+                            // ${claimError.requiredFeeRateSatPerVbyte} sats/vByte")
                         }
                         is DepositClaimError.MissingUtxo -> {
                             // Log.v("Breez", "UTXO not found when claiming deposit")

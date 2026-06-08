@@ -9,7 +9,9 @@ import (
 
 func RunFullOptimization(sdk *breez_sdk_spark.BreezSdk) error {
 	// ANCHOR: optimize-leaves-full
-	response, err := sdk.OptimizeLeaves(breez_sdk_spark.OptimizeLeavesRequest{Mode: breez_sdk_spark.OptimizationModeFull})
+	response, err := sdk.OptimizeLeaves(breez_sdk_spark.OptimizeLeavesRequest{
+		Mode: breez_sdk_spark.OptimizationModeFull,
+	})
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError
 		if errors.As(err, &sdkErr) {

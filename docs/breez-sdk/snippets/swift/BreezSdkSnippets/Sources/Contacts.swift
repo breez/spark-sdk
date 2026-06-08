@@ -41,7 +41,9 @@ func listContacts(sdk: BreezSdk) async throws {
             limit: 10
         ))
     for contact in contacts {
-        print("Contact: id=\(contact.id), name=\(contact.name), identifier=\(contact.paymentIdentifier)")
+        print(
+            "Contact: id=\(contact.id), name=\(contact.name), "
+                + "identifier=\(contact.paymentIdentifier)")
     }
     // ANCHOR_END: list-contacts
 }

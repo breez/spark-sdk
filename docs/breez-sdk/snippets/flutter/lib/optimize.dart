@@ -2,7 +2,9 @@ import 'package:breez_sdk_spark_flutter/breez_sdk_spark.dart';
 
 Future<void> runFullOptimization(BreezSdk sdk) async {
   // ANCHOR: optimize-leaves-full
-  final outcome = (await sdk.optimizeLeaves(request: OptimizeLeavesRequest(mode: OptimizationMode.full))).outcome;
+  final outcome = (await sdk.optimizeLeaves(
+          request: OptimizeLeavesRequest(mode: OptimizationMode.full)))
+      .outcome;
 
   switch (outcome) {
     case OptimizationOutcome_Completed(:final roundsExecuted):
@@ -50,7 +52,10 @@ void handleAutoOptimizationEvent(AutoOptimizationEvent optimizationEvent) {
     case AutoOptimizationEvent_Started(totalRounds: var totalRounds):
       print("Auto-optimization started with $totalRounds rounds");
       break;
-    case AutoOptimizationEvent_RoundCompleted(currentRound: var currentRound, totalRounds: var totalRounds):
+    case AutoOptimizationEvent_RoundCompleted(
+        currentRound: var currentRound,
+        totalRounds: var totalRounds
+      ):
       print("Auto-optimization round $currentRound of $totalRounds completed");
       break;
     case AutoOptimizationEvent_Completed():

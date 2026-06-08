@@ -49,7 +49,11 @@ func ParseInput(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.InputType, erro
 		invoice := inputType.Field0
 		log.Println("Input is Spark invoice:")
 		if invoice.TokenIdentifier != nil {
-			log.Printf("  Amount: %d base units of token with id %s", invoice.Amount, *invoice.TokenIdentifier)
+			log.Printf(
+				"  Amount: %d base units of token with id %s",
+				invoice.Amount,
+				*invoice.TokenIdentifier,
+			)
 		} else {
 			log.Printf("  Amount: %d sats", invoice.Amount)
 		}

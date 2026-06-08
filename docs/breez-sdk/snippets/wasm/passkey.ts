@@ -13,7 +13,9 @@ import {
 // Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
 // file-backed). Only deriveSeeds and isSupported are required.
 class CustomPrfProvider {
-  deriveSeeds = async (salts: string[]): Promise<{ seeds: Uint8Array[], credentialId: Uint8Array | null }> => {
+  deriveSeeds = async (
+    salts: string[]
+  ): Promise<{ seeds: Uint8Array[], credentialId: Uint8Array | null }> => {
     // Return one 32-byte PRF output per salt, in input order.
     throw new Error('Implement using WebAuthn or native passkey APIs')
   }

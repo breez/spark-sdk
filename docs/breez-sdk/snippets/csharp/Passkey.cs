@@ -48,7 +48,8 @@ namespace BreezSdkSnippets
                 case PasskeyAvailability.PrfUnsupported:
                     break;
                 case PasskeyAvailability.NotAssociated notAssociated:
-                    Console.WriteLine($"Domain association failed (source={notAssociated.source}): {notAssociated.reason}");
+                    Console.WriteLine($"Domain association failed (source={notAssociated.source}): " +
+                                      $"{notAssociated.reason}");
                     break;
                 case PasskeyAvailability.Skipped:
                     break;
@@ -73,7 +74,8 @@ namespace BreezSdkSnippets
             var passkey = new PasskeyClient(prfProvider, null, null);
 
             // ANCHOR: connect-with-passkey
-            // Single-CTA onboarding: silent sign-in for a returning user, fall-through to register on a fresh device.
+            // Single-CTA onboarding: silent sign-in for a returning user,
+            // fall-through to register on a fresh device.
             var response = await passkey.ConnectWithPasskey(
                 new ConnectWithPasskeyRequest(label: "personal")
             );
@@ -124,7 +126,8 @@ namespace BreezSdkSnippets
                 Console.WriteLine(response.credential.backupEligible);
             }
 
-            // Pin the stored credential ID so the OS can't substitute a sibling credential, which would derive a different wallet.
+            // Pin the stored credential ID so the OS can't substitute a sibling
+            // credential, which would derive a different wallet.
             var signInResponse = await passkey.SignIn(new SignInRequest(
                 label: "personal",
                 allowCredentials: new byte[][]
@@ -178,7 +181,8 @@ namespace BreezSdkSnippets
                 case DomainAssociation.Associated:
                     break;
                 case DomainAssociation.NotAssociated notAssociated:
-                    Console.WriteLine($"Domain association failed (source={notAssociated.source}): {notAssociated.reason}");
+                    Console.WriteLine($"Domain association failed (source={notAssociated.source}): " +
+                                      $"{notAssociated.reason}");
                     return;
                 case DomainAssociation.Skipped:
                     break;

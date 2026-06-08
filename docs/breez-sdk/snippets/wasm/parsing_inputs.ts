@@ -21,13 +21,15 @@ const parseInputs = async (sdk: BreezSdk) => {
 
     case 'lnurlPay':
       console.log(
-        `Input is LNURL-Pay/Lightning address accepting min/max ${parsed.minSendable}/${parsed.maxSendable} msats`
+        'Input is LNURL-Pay/Lightning address accepting min/max ' +
+        `${parsed.minSendable}/${parsed.maxSendable} msats`
       )
       break
 
     case 'lnurlWithdraw':
       console.log(
-        `Input is LNURL-Withdraw for min/max ${parsed.minWithdrawable}/${parsed.maxWithdrawable} msats`
+        'Input is LNURL-Withdraw for min/max ' +
+        `${parsed.minWithdrawable}/${parsed.maxWithdrawable} msats`
       )
       break
 

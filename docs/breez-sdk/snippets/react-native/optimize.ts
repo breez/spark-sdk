@@ -21,7 +21,9 @@ const exampleOptimizeLeavesSingleRound = async (sdk: BreezSdk) => {
   // ANCHOR: optimize-leaves-single-round
   let roundsExecuted = 0
   while (true) {
-    const outcome: OptimizationOutcome = (await sdk.optimizeLeaves({ mode: OptimizationMode.SingleRound })).outcome
+    const outcome: OptimizationOutcome = (
+      await sdk.optimizeLeaves({ mode: OptimizationMode.SingleRound })
+    ).outcome
 
     if (outcome.tag === OptimizationOutcome_Tags.InProgress) {
       roundsExecuted += 1
@@ -44,7 +46,10 @@ const exampleAutoOptimizationEvents = async (optimizationEvent: AutoOptimization
   if (optimizationEvent.tag === AutoOptimizationEvent_Tags.Started) {
     console.log(`Auto-optimization started with ${optimizationEvent.inner.totalRounds} rounds`)
   } else if (optimizationEvent.tag === AutoOptimizationEvent_Tags.RoundCompleted) {
-    console.log(`Auto-optimization round ${optimizationEvent.inner.currentRound} of ${optimizationEvent.inner.totalRounds} completed`)
+    console.log(
+      `Auto-optimization round ${optimizationEvent.inner.currentRound} of ` +
+      `${optimizationEvent.inner.totalRounds} completed`
+    )
   } else if (optimizationEvent.tag === AutoOptimizationEvent_Tags.Completed) {
     console.log('Auto-optimization completed successfully')
   } else if (optimizationEvent.tag === AutoOptimizationEvent_Tags.Cancelled) {

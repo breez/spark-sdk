@@ -122,7 +122,9 @@ func prepareSendTokenPaymentTokenConversion(sdk: BreezSdk) async throws {
         ))
 
     if let conversionEstimate = prepareResponse.conversionEstimate {
-        print("Estimated conversion: \(conversionEstimate.amountIn) token units → \(conversionEstimate.amountOut) sats")
+        print(
+            "Estimated conversion: \(conversionEstimate.amountIn) token units "
+                + "→ \(conversionEstimate.amountOut) sats")
         print("Estimated conversion fee: \(conversionEstimate.fee) token units")
     }
     // ANCHOR_END: prepare-send-payment-with-conversion
@@ -234,7 +236,9 @@ func prepareSendPaymentSendAll(sdk: BreezSdk) async throws {
     print("Total sats available: \(prepareResponse.amount)")
 
     if let conversionEstimate = prepareResponse.conversionEstimate {
-        print("Converting \(conversionEstimate.amountIn) token units → ~\(conversionEstimate.amountOut) sats")
+        print(
+            "Converting \(conversionEstimate.amountIn) token units "
+                + "→ ~\(conversionEstimate.amountOut) sats")
         print("Conversion fee: \(conversionEstimate.fee) token units")
     }
     // ANCHOR_END: prepare-send-payment-send-all

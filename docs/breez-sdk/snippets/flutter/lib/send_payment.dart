@@ -135,7 +135,8 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
   // If the fees are acceptable, continue to create the Send Payment
   if (response.conversionEstimate != null) {
     print(
-        "Estimated conversion: ${response.conversionEstimate!.amountIn} token units → ${response.conversionEstimate!.amountOut} sats");
+        "Estimated conversion: ${response.conversionEstimate!.amountIn} token units "
+        "→ ${response.conversionEstimate!.amountOut} sats");
     print(
         "Estimated conversion fee: ${response.conversionEstimate!.fee} token units");
   }
@@ -248,7 +249,8 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSendAll(
 
   if (response.conversionEstimate != null) {
     print(
-        "Converting ${response.conversionEstimate!.amountIn} token units → ~${response.conversionEstimate!.amountOut} sats");
+        "Converting ${response.conversionEstimate!.amountIn} token units "
+        "→ ~${response.conversionEstimate!.amountOut} sats");
     print(
         "Conversion fee: ${response.conversionEstimate!.fee} token units");
   }

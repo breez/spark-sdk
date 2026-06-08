@@ -47,7 +47,8 @@ namespace BreezSdkSnippets
             ));
             foreach (var contact in contacts)
             {
-                Console.WriteLine($"Contact: id={contact.id}, name={contact.name}, identifier={contact.paymentIdentifier}");
+                Console.WriteLine($"Contact: id={contact.id}, name={contact.name}, " +
+                                $"identifier={contact.paymentIdentifier}");
             }
             // ANCHOR_END: list-contacts
         }

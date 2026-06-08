@@ -138,7 +138,8 @@ class SendPayment {
             // Log.v("Breez", "Total sats available: ${prepareResponse.amount}")
 
             prepareResponse.conversionEstimate?.let { conversionEstimate ->
-                // Log.v("Breez", "Converting ${conversionEstimate.amountIn} token units → ~${conversionEstimate.amountOut} sats")
+                // Log.v("Breez", "Converting ${conversionEstimate.amountIn} token
+                // units → ~${conversionEstimate.amountOut} sats")
                 // Log.v("Breez", "Conversion fee: ${conversionEstimate.fee} token units")
             }
         } catch (e: Exception) {
@@ -235,7 +236,8 @@ class SendPayment {
 
             // If the fees are acceptable, continue to create the Send Payment
             prepareResponse.conversionEstimate?.let { conversionEstimate ->
-                // Log.v("Breez", "Estimated conversion: ${conversionEstimate.amountIn} token units → ${conversionEstimate.amountOut} sats")
+                // Log.v("Breez", "Estimated conversion: ${conversionEstimate.amountIn}
+                // token units → ${conversionEstimate.amountOut} sats")
                 // Log.v("Breez", "Estimated conversion fee: ${conversionEstimate.fee} token units")
             }
         } catch (e: Exception) {

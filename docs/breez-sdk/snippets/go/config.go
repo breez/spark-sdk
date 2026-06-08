@@ -26,7 +26,9 @@ func ConfigureSdk() {
 
 	// Set the maximum fee to the fastest network recommended fee at the time of claim
 	// with a leeway of 1 sats/vbyte
-	networkRecommendedInterface := breez_sdk_spark.MaxFee(breez_sdk_spark.MaxFeeNetworkRecommended{LeewaySatPerVbyte: 1})
+	networkRecommendedInterface := breez_sdk_spark.MaxFee(
+		breez_sdk_spark.MaxFeeNetworkRecommended{LeewaySatPerVbyte: 1},
+	)
 	config.MaxDepositClaimFee = &networkRecommendedInterface
 	// ANCHOR_END: max-deposit-claim-fee
 	log.Printf("Config: %+v", config)
@@ -65,7 +67,10 @@ func ConfigureStableBalance() {
 	defaultActiveLabel := "USDB"
 	stableBalanceConfig := breez_sdk_spark.StableBalanceConfig{
 		Tokens: []breez_sdk_spark.StableBalanceToken{
-			{Label: "USDB", TokenIdentifier: "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87"},
+			{
+				Label:           "USDB",
+				TokenIdentifier: "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87",
+			},
 		},
 		DefaultActiveLabel: &defaultActiveLabel,
 	}

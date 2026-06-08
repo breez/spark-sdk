@@ -192,7 +192,8 @@ namespace BreezSdkSnippets
             if (prepareResponse.conversionEstimate != null)
             {
                 Console.WriteLine("Estimated conversion: " +
-                    $"{prepareResponse.conversionEstimate.amountIn} token units → {prepareResponse.conversionEstimate.amountOut} sats");
+                    $"{prepareResponse.conversionEstimate.amountIn} token units " +
+                    $"→ {prepareResponse.conversionEstimate.amountOut} sats");
                 Console.WriteLine("Estimated conversion fee: " +
                     $"{prepareResponse.conversionEstimate.fee} token units");
             }

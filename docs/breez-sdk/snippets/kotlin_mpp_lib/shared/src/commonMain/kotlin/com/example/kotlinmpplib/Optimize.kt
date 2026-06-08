@@ -28,7 +28,9 @@ class Optimize {
         // ANCHOR: optimize-leaves-single-round
         var roundsExecuted: UInt = 0u
         while (true) {
-            val outcome = sdk.optimizeLeaves(OptimizeLeavesRequest(mode = OptimizationMode.SINGLE_ROUND)).outcome
+            val outcome = sdk.optimizeLeaves(
+                OptimizeLeavesRequest(mode = OptimizationMode.SINGLE_ROUND)
+            ).outcome
             when (outcome) {
                 is OptimizationOutcome.InProgress -> {
                     roundsExecuted += 1u
@@ -55,7 +57,9 @@ class Optimize {
                 // Log.v("Breez", "Auto-optimization started with ${optimizationEvent.totalRounds} rounds")
             }
             is AutoOptimizationEvent.RoundCompleted -> {
-                // Log.v("Breez", "Auto-optimization round ${optimizationEvent.currentRound} of ${optimizationEvent.totalRounds} completed")
+                // Log.v("Breez", "Auto-optimization round
+                // ${optimizationEvent.currentRound} of
+                // ${optimizationEvent.totalRounds} completed")
             }
             is AutoOptimizationEvent.Completed -> {
                 // Log.v("Breez", "Auto-optimization completed successfully")

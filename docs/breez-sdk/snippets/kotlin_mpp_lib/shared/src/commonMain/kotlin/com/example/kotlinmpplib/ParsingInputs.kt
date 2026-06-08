@@ -37,7 +37,8 @@ class ParsingInputs {
                     println("Input is Spark invoice:")
                     if (invoice.tokenIdentifier != null) {
                         println(
-                                "  Amount: ${invoice.amount} base units of token with id ${invoice.tokenIdentifier}"
+                                "  Amount: ${invoice.amount} base units of token " +
+                                        "with id ${invoice.tokenIdentifier}"
                         )
                     } else {
                         println("  Amount: ${invoice.amount} sats")

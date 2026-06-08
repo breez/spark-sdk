@@ -187,7 +187,11 @@ func PrepareSendPaymentTokenConversion(sdk *breez_sdk_spark.BreezSdk) (*breez_sd
 
 	// If the fees are acceptable, continue to create the Send Payment
 	if response.ConversionEstimate != nil {
-		log.Printf("Estimated conversion: %v token units → %v sats", response.ConversionEstimate.AmountIn, response.ConversionEstimate.AmountOut)
+		log.Printf(
+			"Estimated conversion: %v token units → %v sats",
+			response.ConversionEstimate.AmountIn,
+			response.ConversionEstimate.AmountOut,
+		)
 		log.Printf("Estimated conversion fee: %v token units", response.ConversionEstimate.Fee)
 	}
 	// ANCHOR_END: prepare-send-payment-with-conversion
@@ -358,7 +362,11 @@ func PrepareSendPaymentSendAll(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.
 	log.Printf("Total sats available: %v", response.Amount)
 
 	if response.ConversionEstimate != nil {
-		log.Printf("Converting %v token units → ~%v sats", response.ConversionEstimate.AmountIn, response.ConversionEstimate.AmountOut)
+		log.Printf(
+			"Converting %v token units → ~%v sats",
+			response.ConversionEstimate.AmountIn,
+			response.ConversionEstimate.AmountOut,
+		)
 		log.Printf("Conversion fee: %v token units", response.ConversionEstimate.Fee)
 	}
 	// ANCHOR_END: prepare-send-payment-send-all

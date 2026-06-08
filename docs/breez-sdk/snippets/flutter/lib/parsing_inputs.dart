@@ -13,11 +13,11 @@ Future<void> parseInput(BreezSdk sdk) async {
         : "unknown";
     print("Input is BOLT11 invoice for $amountStr msats");
   } else if (inputType is InputType_LnurlPay) {
-    print(
-        "Input is LNURL-Pay/Lightning address accepting min/max ${inputType.field0.minSendable}/${inputType.field0.maxSendable} msats");
+    print("Input is LNURL-Pay/Lightning address accepting min/max "
+        "${inputType.field0.minSendable}/${inputType.field0.maxSendable} msats");
   } else if (inputType is InputType_LnurlWithdraw) {
-    print(
-        "Input is LNURL-Withdraw for min/max ${inputType.field0.minWithdrawable}/${inputType.field0.maxWithdrawable} msats");
+    print("Input is LNURL-Withdraw for min/max "
+        "${inputType.field0.minWithdrawable}/${inputType.field0.maxWithdrawable} msats");
   } else if (inputType is InputType_SparkAddress) {
     print("Input is Spark address ${inputType.field0.address}");
   } else if (inputType is InputType_SparkInvoice) {
@@ -34,7 +34,8 @@ Future<void> parseInput(BreezSdk sdk) async {
     }
     
     if (invoice.expiryTime != null) {
-      print("  Expiry time: ${DateTime.fromMillisecondsSinceEpoch(invoice.expiryTime!.toInt() * 1000)}");
+      print("  Expiry time: "
+          "${DateTime.fromMillisecondsSinceEpoch(invoice.expiryTime!.toInt() * 1000)}");
     }
     
     if (invoice.senderPublicKey != null) {

@@ -19,20 +19,24 @@ namespace BreezSdkSnippets
 
                 case InputType.Bolt11Invoice bolt11:
                     var bolt11Details = bolt11.v1;
-                    var amount = bolt11Details.amountMsat.HasValue ? bolt11Details.amountMsat.Value.ToString() : "unknown";
+                    var amount = bolt11Details.amountMsat.HasValue
+                        ? bolt11Details.amountMsat.Value.ToString()
+                        : "unknown";
                     Console.WriteLine($"Input is BOLT11 invoice for {amount} msats");
                     break;
 
                 case InputType.LnurlPay lnurlPay:
                     var lnurlPayDetails = lnurlPay.v1;
                     Console.WriteLine($"Input is LNURL-Pay/Lightning address accepting " +
-                                    $"min/max {lnurlPayDetails.minSendable}/{lnurlPayDetails.maxSendable} msats");
+                                    $"min/max {lnurlPayDetails.minSendable}/" +
+                                    $"{lnurlPayDetails.maxSendable} msats");
                     break;
 
                 case InputType.LnurlWithdraw lnurlWithdraw:
                     var lnurlWithdrawDetails = lnurlWithdraw.v1;
                     Console.WriteLine($"Input is LNURL-Withdraw for min/max " +
-                                    $"{lnurlWithdrawDetails.minWithdrawable}/{lnurlWithdrawDetails.maxWithdrawable} msats");
+                                    $"{lnurlWithdrawDetails.minWithdrawable}/" +
+                                    $"{lnurlWithdrawDetails.maxWithdrawable} msats");
                     break;
 
                 case InputType.SparkAddress sparkAddress:

@@ -25,7 +25,9 @@ func listUnclaimedDeposits(sdk: BreezSdk) async throws {
                     maxFeeStr = "none"
                 }
                 print(
-                    "Max claim fee exceeded. Max: \(maxFeeStr), Required: \(requiredFeeSats) sats or \(requiredFeeRateSatPerVbyte) sats/vByte"
+                    "Max claim fee exceeded. Max: \(maxFeeStr), "
+                        + "Required: \(requiredFeeSats) sats or "
+                        + "\(requiredFeeRateSatPerVbyte) sats/vByte"
                 )
             case .missingUtxo(let tx, let vout):
                 print("UTXO not found when claiming deposit")
@@ -111,7 +113,9 @@ func setMaxFeeToRecommendedFees() async throws {
 
 func customClaimLogic(sdk: BreezSdk, deposit: DepositInfo) async throws {
     // ANCHOR: custom-claim-logic
-    if case .maxDepositClaimFeeExceeded(_, _, _, _, let requiredFeeRateSatPerVbyte) = deposit.claimError {
+    if case .maxDepositClaimFeeExceeded(_, _, _, _, let requiredFeeRateSatPerVbyte) =
+        deposit.claimError
+    {
         let recommendedFees = try await sdk.recommendedFees()
 
         if requiredFeeRateSatPerVbyte <= recommendedFees.fastestFee {

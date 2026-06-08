@@ -19,7 +19,9 @@ import {
 // Implement PrfProvider for a custom authenticator (hardware key, FIDO2,
 // file-backed). Only deriveSeeds and isSupported are required.
 class CustomPrfProvider {
-  deriveSeeds = async (_request: { salts: string[] }): Promise<{ seeds: Uint8Array[], credentialId?: Uint8Array }> => {
+  deriveSeeds = async (
+    _request: { salts: string[] }
+  ): Promise<{ seeds: Uint8Array[], credentialId?: Uint8Array }> => {
     // Return one 32-byte PRF output per salt, in input order.
     throw new Error('Implement using WebAuthn or native passkey APIs')
   }
@@ -56,7 +58,8 @@ const checkAvailability = async () => {
       break
     case PasskeyAvailability_Tags.NotAssociated:
       console.error(
-        `Domain association failed (source=${availability.inner.source}): ${availability.inner.reason}`
+        `Domain association failed (source=${availability.inner.source}): ` +
+        `${availability.inner.reason}`
       )
       break
     case PasskeyAvailability_Tags.Skipped:
@@ -89,7 +92,11 @@ const connectWithPasskey = async () => {
   // ANCHOR: connect-with-passkey
   // Silent sign-in, fall through to register.
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
-  const response = await passkey.connectWithPasskey({ label: 'personal', allowCredentials: undefined, excludeCredentials: undefined })
+  const response = await passkey.connectWithPasskey({
+    label: 'personal',
+    allowCredentials: undefined,
+    excludeCredentials: undefined
+  })
 
   const sdk = await connect({ config, seed: response.wallet.seed, storageDir: './.data' })
   // ANCHOR_END: connect-with-passkey
@@ -106,7 +113,11 @@ const signInExistingUser = async () => {
 
   // ANCHOR: sign-in
   // Returning-user sign-in. No fall-through to register.
-  return await passkey.signIn({ label: 'personal', allowCredentials: undefined, preferImmediatelyAvailableCredentials: undefined })
+  return await passkey.signIn({
+    label: 'personal',
+    allowCredentials: undefined,
+    preferImmediatelyAvailableCredentials: undefined
+  })
   // ANCHOR_END: sign-in
 }
 
@@ -196,7 +207,9 @@ const storeLabel = async () => {
 const checkDomain = async () => {
   // ANCHOR: domain-association
   // Diagnostic only: never blocks the ceremony.
-  const prfProvider = new PasskeyProvider(PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }))
+  const prfProvider = new PasskeyProvider(
+    PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+  )
   const result = await prfProvider.checkDomainAssociation()
 
   switch (result.kind) {
@@ -236,7 +249,11 @@ const recoverFromAlreadyExists = async () => {
   } catch (error) {
     if (error instanceof PasskeyPrfException && error.code === 'credentialAlreadyExists') {
       // A matching credential already exists; sign in to it instead.
-      const response = await passkey.signIn({ label: 'personal', allowCredentials: undefined, preferImmediatelyAvailableCredentials: undefined })
+      const response = await passkey.signIn({
+        label: 'personal',
+        allowCredentials: undefined,
+        preferImmediatelyAvailableCredentials: undefined
+      })
       return response.wallet
     }
     throw error
@@ -255,7 +272,11 @@ const handleTimeout = async () => {
   // ANCHOR: handle-timeout
   // Biometric inactivity timeout, distinct from a user cancel.
   try {
-    const response = await passkey.signIn({ label: 'personal', allowCredentials: undefined, preferImmediatelyAvailableCredentials: undefined })
+    const response = await passkey.signIn({
+      label: 'personal',
+      allowCredentials: undefined,
+      preferImmediatelyAvailableCredentials: undefined
+    })
     return response
   } catch (error) {
     if (error instanceof PasskeyPrfException && error.code === 'userTimedOut') {
