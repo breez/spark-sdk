@@ -233,3 +233,55 @@ pub(crate) struct SparkPrepareLightningReceiveResult {
     pub operator_packages: Vec<SparkEncryptedOperatorPackage>,
     pub payment_hash: String,
 }
+
+pub(crate) const SPARK_PREPARE_TRANSFER_PATH: &str = "/public/v1/submit/spark_prepare_transfer";
+pub(crate) const SPARK_PREPARE_TRANSFER_TYPE: &str = "ACTIVITY_TYPE_SPARK_PREPARE_TRANSFER";
+pub(crate) const SPARK_PREPARE_TRANSFER_RESULT: &str = "sparkPrepareTransferResult";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkTransferLeaf {
+    pub leaf_id: String,
+    pub old_leaf_derivation: SparkKeyDerivation,
+    pub new_leaf_derivation: SparkKeyDerivation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refund_signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_refund_signature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_from_cpfp_refund_signature: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkTransferPackage {
+    pub transfer_id: String,
+    pub leaves: Vec<SparkTransferLeaf>,
+    pub threshold: u32,
+    pub operator_recipients: Vec<SparkOperatorRecipient>,
+    pub receiver_public_key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkPrepareTransferIntent {
+    pub sign_with: String,
+    pub transfer: SparkTransferPackage,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkLeafPublicKey {
+    pub leaf_id: String,
+    pub public_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkPrepareTransferResult {
+    #[serde(default)]
+    pub operator_packages: Vec<SparkEncryptedOperatorPackage>,
+    pub transfer_user_signature: String,
+    #[serde(default)]
+    pub new_leaf_public_keys: Vec<SparkLeafPublicKey>,
+}

@@ -24,7 +24,7 @@ use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::{NonceCommitment, SigningCommitments};
 use frost_secp256k1_tr::round2::SignatureShare;
 use spark_wallet::{
-    FrostDerivation, FrostJob, FrostShareResult, FrostSigningCommitmentsWithNonces,
+    FrostDerivation, FrostJob, FrostShareResult, FrostSigningCommitmentsWithNonces, NewLeafKey,
     OperatorPackage, OperatorRecipient, PrepareClaimRequest, PrepareLightningReceiveRequest,
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
     PrepareTransferRequest, PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit,
@@ -45,11 +45,14 @@ use super::types::{
     HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256, PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH,
     SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SPARK_PREPARE_LIGHTNING_RECEIVE_PATH,
     SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT, SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE,
+    SPARK_PREPARE_TRANSFER_PATH, SPARK_PREPARE_TRANSFER_RESULT, SPARK_PREPARE_TRANSFER_TYPE,
     SPARK_SIGN_FROST_PATH, SPARK_SIGN_FROST_RESULT, SPARK_SIGN_FROST_TYPE, SignRawPayloadIntent,
     SignRawPayloadResult, SparkEncryptedOperatorPackage, SparkFrostCommitment, SparkKeyDerivation,
-    SparkLightningReceivePackage, SparkOperatorRecipient, SparkPartialSignature,
-    SparkPrepareLightningReceiveIntent, SparkPrepareLightningReceiveResult, SparkSignFrostIntent,
-    SparkSignFrostResult, SparkSignatureRequest, WalletAccountParams,
+    SparkLeafPublicKey, SparkLightningReceivePackage, SparkOperatorRecipient,
+    SparkPartialSignature, SparkPrepareLightningReceiveIntent, SparkPrepareLightningReceiveResult,
+    SparkPrepareTransferIntent, SparkPrepareTransferResult, SparkSignFrostIntent,
+    SparkSignFrostResult, SparkSignatureRequest, SparkTransferLeaf, SparkTransferPackage,
+    WalletAccountParams,
 };
 
 fn to_spark_err<E: std::fmt::Display>(e: E) -> SignerError {
@@ -179,6 +182,19 @@ fn operator_package_from(
         operator_identifier,
         encrypted_package,
     })
+}
+
+fn new_leaf_keys_from(leaves: &[SparkLeafPublicKey]) -> Result<Vec<NewLeafKey>, SignerError> {
+    leaves
+        .iter()
+        .map(|lpk| {
+            Ok(NewLeafKey {
+                node_id: TreeNodeId::from_str(&lpk.leaf_id).map_err(to_spark_err)?,
+                new_signing_public_key: PublicKey::from_str(&lpk.public_key)
+                    .map_err(to_spark_err)?,
+            })
+        })
+        .collect()
 }
 
 pub(crate) struct TurnkeySparkSigner {
@@ -434,15 +450,58 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
             .collect()
     }
 
-    // Open: SPARK_PREPARE_TRANSFER takes a `newLeafDerivation` tag, but this trait
-    // generates a fresh (non-HD) new leaf key, so there is no tag to supply.
     async fn prepare_transfer(
         &self,
-        _request: PrepareTransferRequest,
+        request: PrepareTransferRequest,
     ) -> Result<PreparedTransfer, SignerError> {
-        Err(SignerError::Generic(
-            "turnkey signer: prepare_transfer not yet implemented".to_string(),
-        ))
+        let sign_with = self.spark_identity_address().await?;
+        let leaves = request
+            .leaves
+            .iter()
+            .map(|leaf| SparkTransferLeaf {
+                leaf_id: leaf.node.id.to_string(),
+                old_leaf_derivation: SparkKeyDerivation::signing_leaf(leaf.node.id.to_string()),
+                new_leaf_derivation: SparkKeyDerivation::signing_leaf(leaf.new_leaf_id.to_string()),
+                refund_signature: None,
+                direct_refund_signature: None,
+                direct_from_cpfp_refund_signature: None,
+            })
+            .collect();
+        let intent = SparkPrepareTransferIntent {
+            sign_with,
+            transfer: SparkTransferPackage {
+                transfer_id: request.transfer_id.to_string(),
+                leaves,
+                threshold: request.threshold,
+                operator_recipients: operator_recipients(&request.operator_recipients),
+                receiver_public_key: hex::encode(request.receiver_public_key.serialize()),
+            },
+        };
+        let result: SparkPrepareTransferResult = self
+            .client
+            .submit_activity(
+                SPARK_PREPARE_TRANSFER_PATH,
+                SPARK_PREPARE_TRANSFER_TYPE,
+                intent,
+                SPARK_PREPARE_TRANSFER_RESULT,
+            )
+            .await
+            .map_err(to_spark_err)?;
+        let operator_packages = result
+            .operator_packages
+            .iter()
+            .map(|pkg| operator_package_from(pkg).map_err(to_spark_err))
+            .collect::<Result<Vec<_>, _>>()?;
+        let new_leaf_keys = new_leaf_keys_from(&result.new_leaf_public_keys)?;
+        let der = hex::decode(&result.transfer_user_signature)
+            .map_err(|e| TurnkeyError::Deserialize(format!("transferUserSignature: {e}")))
+            .map_err(to_spark_err)?;
+        let transfer_user_signature = ecdsa::Signature::from_der(&der).map_err(to_spark_err)?;
+        Ok(PreparedTransfer {
+            operator_packages,
+            new_leaf_keys,
+            transfer_user_signature,
+        })
     }
 
     // Open: SPARK_CLAIM_TRANSFER returns no claim user signature, which
