@@ -876,6 +876,7 @@ pub fn turnkey_config_from_env() -> Option<breez_sdk_spark::turnkey::TurnkeyConf
 /// without failing. Every signing operation routes through Turnkey; the wallet
 /// must already be provisioned there.
 pub async fn build_sdk_with_turnkey(
+    config: Config,
     storage_dir: String,
     temp_dir: Option<TempDir>,
 ) -> Result<Option<SdkInstance>> {
@@ -886,13 +887,6 @@ pub async fn build_sdk_with_turnkey(
     let signers = breez_sdk_spark::turnkey::create_turnkey_signer(turnkey_config)
         .await
         .map_err(|e| anyhow::anyhow!("create_turnkey_signer failed: {e}"))?;
-
-    let mut config = default_config(Network::Regtest);
-    config.api_key = None;
-    config.lnurl_domain = None;
-    config.prefer_spark_over_lightning = true;
-    config.sync_interval_secs = 5;
-    config.real_time_sync_server_url = None;
 
     let builder = SdkBuilder::new_with_signer(config, signers.breez, signers.spark);
     let builder = apply_storage(builder, storage_dir).await?;
@@ -925,22 +919,67 @@ pub enum SignerBackend {
     Turnkey,
 }
 
-/// Builds a Regtest SDK for the given signer backend, so one test body can run
-/// against multiple signers. `Turnkey` requires a provisioned wallet and
-/// `TURNKEY_*` credentials; callers should skip the case when they are absent
-/// (e.g. via `turnkey_config_from_env`).
+/// The standard Regtest test config used by [`build_backend_sdk`]: no API key,
+/// no LNURL server, prefer-spark routing, fast sync, and real-time sync off.
+pub fn regtest_test_config() -> Config {
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+    config
+}
+
+/// Builds a Regtest SDK for the given signer backend with the standard test
+/// config, so one test body can run against multiple signers.
 pub async fn build_backend_sdk(backend: SignerBackend) -> Result<SdkInstance> {
+    build_backend_sdk_with_config(backend, regtest_test_config()).await
+}
+
+/// Like [`build_backend_sdk`], but with a caller-supplied config (e.g. to block
+/// auto-claim with `max_deposit_claim_fee = None` for refund tests). `Turnkey`
+/// requires a provisioned wallet and `TURNKEY_*` credentials; callers should
+/// skip the case when they are absent (e.g. via `turnkey_config_from_env`).
+pub async fn build_backend_sdk_with_config(
+    backend: SignerBackend,
+    config: Config,
+) -> Result<SdkInstance> {
     let temp = TempDir::new()?;
     let dir = temp.path().to_string_lossy().to_string();
     match backend {
         SignerBackend::Seed => {
             let mut seed = [0u8; 32];
             rand::thread_rng().fill_bytes(&mut seed);
-            build_sdk_with_dir(dir, seed, Some(temp)).await
+            build_sdk_with_custom_config(dir, seed, config, Some(temp), false).await
         }
-        SignerBackend::Turnkey => build_sdk_with_turnkey(dir, Some(temp))
+        SignerBackend::Turnkey => build_sdk_with_turnkey(config, dir, Some(temp))
             .await?
             .ok_or_else(|| anyhow::anyhow!("Turnkey credentials unavailable")),
+    }
+}
+
+/// Waits for an `UnclaimedDeposits` event, returning the unclaimed deposits.
+pub async fn wait_for_unclaimed_event(
+    event_rx: &mut mpsc::Receiver<SdkEvent>,
+    timeout_secs: u64,
+) -> Result<Vec<DepositInfo>> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!("Timeout waiting for UnclaimedDeposits event");
+        }
+        match tokio::time::timeout(remaining, event_rx.recv()).await {
+            Ok(Some(SdkEvent::UnclaimedDeposits { unclaimed_deposits })) => {
+                return Ok(unclaimed_deposits);
+            }
+            Ok(Some(other)) => {
+                info!("Ignored SDK event while waiting for unclaimed: {other:?}");
+            }
+            Ok(None) => anyhow::bail!("Event channel closed"),
+            Err(_) => anyhow::bail!("Timeout waiting for UnclaimedDeposits event"),
+        }
     }
 }
 

@@ -145,3 +145,171 @@ async fn send_receive_spark(
     );
     Ok(())
 }
+
+/// Receive a Lightning payment: `backend` creates a Bolt11 invoice (exercising
+/// prepare_lightning_receive) and a seed-based sender pays it over Lightning.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn lightning_receive(#[case] backend: SignerBackend) -> Result<()> {
+    if skip_without_turnkey(&[backend]) {
+        return Ok(());
+    }
+    let mut receiver = build_backend_sdk(backend).await?;
+    let mut sender = build_backend_sdk(SignerBackend::Seed).await?;
+    ensure_funded(&mut sender, 5000).await?;
+
+    let invoice = receiver
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::Bolt11Invoice {
+                description: "turnkey itest".to_string(),
+                amount_sats: Some(100),
+                expiry_secs: None,
+                payment_hash: None,
+            },
+        })
+        .await?
+        .payment_request;
+
+    let prepare = sender
+        .sdk
+        .prepare_send_payment(PrepareSendPaymentRequest {
+            payment_request: invoice,
+            amount: None,
+            token_identifier: None,
+            conversion_options: None,
+            fee_policy: None,
+        })
+        .await?;
+    sender
+        .sdk
+        .send_payment(SendPaymentRequest {
+            prepare_response: prepare,
+            options: Some(SendPaymentOptions::Bolt11Invoice {
+                prefer_spark: false,
+                completion_timeout_secs: Some(10),
+            }),
+            idempotency_key: None,
+        })
+        .await?;
+
+    let received =
+        wait_for_payment_succeeded_event(&mut receiver.events, PaymentType::Receive, 60).await?;
+    assert_eq!(received.amount, 100);
+    info!(
+        "[{backend:?}] received {} sats over Lightning",
+        received.amount
+    );
+    Ok(())
+}
+
+/// Refund an unclaimed on-chain deposit (exercises start_static_deposit_refund +
+/// sign_static_deposit_refund). Auto-claim is blocked via `max_deposit_claim_fee
+/// = None` so the deposit stays unclaimed and can be refunded on-chain.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn static_deposit_refund(#[case] backend: SignerBackend) -> Result<()> {
+    if skip_without_turnkey(&[backend]) {
+        return Ok(());
+    }
+    let mut config = regtest_test_config();
+    config.max_deposit_claim_fee = None;
+    let mut sdk = build_backend_sdk_with_config(backend, config).await?;
+
+    let address = sdk
+        .sdk
+        .receive_payment(ReceivePaymentRequest {
+            payment_method: ReceivePaymentMethod::BitcoinAddress { new_address: None },
+        })
+        .await?
+        .payment_request;
+
+    let faucet = RegtestFaucet::new()?;
+    let txid = faucet.fund_address(&address, 25_000).await?;
+    info!("[{backend:?}] funded deposit {txid}, awaiting unclaimed event");
+
+    sdk.sdk.sync_wallet(SyncWalletRequest {}).await?;
+    let unclaimed = wait_for_unclaimed_event(&mut sdk.events, 180).await?;
+    assert!(!unclaimed.is_empty(), "expected an unclaimed deposit");
+
+    let deposit = sdk
+        .sdk
+        .list_unclaimed_deposits(ListUnclaimedDepositsRequest {})
+        .await?
+        .deposits
+        .into_iter()
+        .find(|d| d.txid == txid)
+        .ok_or_else(|| anyhow::anyhow!("unclaimed deposit not found"))?;
+
+    // Refund to the same static address (acceptable for the test).
+    let refund = sdk
+        .sdk
+        .refund_deposit(RefundDepositRequest {
+            txid: deposit.txid,
+            vout: deposit.vout,
+            destination_address: address,
+            fee: Fee::Rate { sat_per_vbyte: 2 },
+        })
+        .await?;
+    assert!(!refund.tx_id.is_empty(), "expected a refund tx id");
+    info!("[{backend:?}] refunded deposit via {}", refund.tx_id);
+    Ok(())
+}
+
+/// Issue and mint a token (exercises prepare_token_transaction). The Turnkey
+/// wallet persists across runs, so a pre-existing issuer token is tolerated:
+/// only the mint, which signs, is required.
+#[apply(each_backend)]
+#[test_log::test(tokio::test)]
+async fn token_mint(#[case] backend: SignerBackend) -> Result<()> {
+    if skip_without_turnkey(&[backend]) {
+        return Ok(());
+    }
+    let sdk = build_backend_sdk(backend).await?;
+    let issuer = sdk.sdk.get_token_issuer();
+
+    let token_id = match issuer
+        .create_issuer_token(CreateIssuerTokenRequest {
+            name: "breez turnkey itest".to_string(),
+            ticker: "BTKI".to_string(),
+            decimals: 2,
+            is_freezable: false,
+            max_supply: 1_000_000_000,
+        })
+        .await
+    {
+        Ok(metadata) => metadata.identifier,
+        Err(e) => {
+            info!("create_issuer_token failed ({e}); assuming token already exists");
+            sdk.sdk
+                .get_info(GetInfoRequest {
+                    ensure_synced: Some(true),
+                })
+                .await?
+                .token_balances
+                .keys()
+                .next()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("no existing issuer token to mint"))?
+        }
+    };
+
+    let before = sdk
+        .sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?
+        .token_balances
+        .get(&token_id)
+        .map_or(0, |b| b.balance);
+
+    issuer
+        .mint_issuer_token(MintIssuerTokenRequest { amount: 1000 })
+        .await?;
+
+    let after = wait_for_token_balance_increase(&sdk.sdk, &token_id, before, 30).await?;
+    assert!(after > before, "expected minted balance to increase");
+    info!("[{backend:?}] minted token {token_id}: {before} -> {after}");
+    Ok(())
+}
