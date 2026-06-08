@@ -388,15 +388,7 @@ fn wasm_test_cmd(
     }
 
     // Prefer cargo test with wasm-bindgen-test runner. Allow browser or node mode.
-    //
-    // Raise the per-test timeout above the 20s wasm-bindgen default: the heaviest
-    // crypto tests (passkey wallet derivation) run unoptimized in the browser and
-    // can exceed 20s on slower CI, which the runner reports as a hang and kills
-    // the driver (SIGKILL). 120s leaves ample headroom without masking real hangs.
-    let mut envs = vec![
-        ("RUSTFLAGS".to_string(), String::new()),
-        ("WASM_BINDGEN_TEST_TIMEOUT".to_string(), "120".to_string()),
-    ];
+    let mut envs = vec![("RUSTFLAGS".to_string(), String::new())];
     if node {
         // Node is default for wasm-bindgen-test when browser env not set
     } else {
