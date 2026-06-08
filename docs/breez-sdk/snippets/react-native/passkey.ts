@@ -139,9 +139,12 @@ const credentialMetadata = async () => {
   const response = await passkey.register({ label: 'personal', excludeCredentials: undefined })
 
   if (response.credential !== undefined) {
-    console.log(response.credential.credentialId) // Persist to reopen the same wallet on sign-in
-    console.log(response.credential.aaguid) // Authenticator model (display hint, unverified)
-    console.log(response.credential.backupEligible) // Whether the passkey syncs across devices
+    // Persist to reopen the same wallet on sign-in
+    console.log(response.credential.credentialId)
+    // Authenticator model (display hint, unverified)
+    console.log(response.credential.aaguid)
+    // Whether the passkey syncs across devices
+    console.log(response.credential.backupEligible)
   }
 
   // Pin the stored credential ID so the OS can't substitute a sibling
@@ -151,10 +154,14 @@ const credentialMetadata = async () => {
     allowCredentials: [/* stored credentialId bytes */],
     preferImmediatelyAvailableCredentials: undefined
   })
-  console.log(signInResponse.wallet.seed) // Pass to connect() to open the wallet
-  console.log(signInResponse.wallet.label) // Label this wallet was derived from
-  console.log(signInResponse.labels) // This passkey's labels (populated on discovery sign-in)
-  console.log(signInResponse.credential) // Credential signed in with (credential_id only)
+  // Pass to connect() to open the wallet
+  console.log(signInResponse.wallet.seed)
+  // Label this wallet was derived from
+  console.log(signInResponse.wallet.label)
+  // This passkey's labels (populated on discovery sign-in)
+  console.log(signInResponse.labels)
+  // Credential signed in with (credential_id only)
+  console.log(signInResponse.credential)
   // ANCHOR_END: credential-metadata
 }
 

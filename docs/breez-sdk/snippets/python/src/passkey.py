@@ -119,9 +119,12 @@ async def credential_metadata():
     response = await passkey.register(RegisterRequest(label="personal"))
 
     if response.credential is not None:
-        print(response.credential.credential_id)  # Persist to reopen the same wallet on sign-in
-        print(response.credential.aaguid)  # Authenticator model (display hint, unverified)
-        print(response.credential.backup_eligible)  # Whether the passkey syncs across devices
+        # Persist to reopen the same wallet on sign-in
+        print(response.credential.credential_id)
+        # Authenticator model (display hint, unverified)
+        print(response.credential.aaguid)
+        # Whether the passkey syncs across devices
+        print(response.credential.backup_eligible)
 
     # Pin the stored credential ID so the OS can't substitute a sibling
     # credential, which would derive a different wallet.
@@ -133,10 +136,14 @@ async def credential_metadata():
             ],
         )
     )
-    print(sign_in_response.wallet.seed)  # Pass to connect() to open the wallet
-    print(sign_in_response.wallet.label)  # Label this wallet was derived from
-    print(sign_in_response.labels)  # This passkey's labels (populated on discovery sign-in)
-    print(sign_in_response.credential)  # Credential signed in with (credential_id only)
+    # Pass to connect() to open the wallet
+    print(sign_in_response.wallet.seed)
+    # Label this wallet was derived from
+    print(sign_in_response.wallet.label)
+    # This passkey's labels (populated on discovery sign-in)
+    print(sign_in_response.labels)
+    # Credential signed in with (credential_id only)
+    print(sign_in_response.credential)
     # ANCHOR_END: credential-metadata
 
 

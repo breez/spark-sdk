@@ -127,9 +127,12 @@ func CredentialMetadata() error {
 	}
 
 	if response.Credential != nil {
-		log.Println(response.Credential.CredentialId)   // Persist to reopen the same wallet on sign-in
-		log.Println(response.Credential.Aaguid)         // Authenticator model (display hint, unverified)
-		log.Println(response.Credential.BackupEligible) // Whether the passkey syncs across devices
+		// Persist to reopen the same wallet on sign-in
+		log.Println(response.Credential.CredentialId)
+		// Authenticator model (display hint, unverified)
+		log.Println(response.Credential.Aaguid)
+		// Whether the passkey syncs across devices
+		log.Println(response.Credential.BackupEligible)
 	}
 
 	// Pin the stored credential ID so the OS can't substitute a sibling
@@ -143,10 +146,14 @@ func CredentialMetadata() error {
 	if err != nil {
 		return err
 	}
-	log.Println(signInResponse.Wallet.Seed)  // Pass to connect() to open the wallet
-	log.Println(signInResponse.Wallet.Label) // Label this wallet was derived from
-	log.Println(signInResponse.Labels)       // This passkey's labels (populated on discovery sign-in)
-	log.Println(signInResponse.Credential)   // Credential signed in with (credential_id only)
+	// Pass to connect() to open the wallet
+	log.Println(signInResponse.Wallet.Seed)
+	// Label this wallet was derived from
+	log.Println(signInResponse.Wallet.Label)
+	// This passkey's labels (populated on discovery sign-in)
+	log.Println(signInResponse.Labels)
+	// Credential signed in with (credential_id only)
+	log.Println(signInResponse.Credential)
 	// ANCHOR_END: credential-metadata
 	return nil
 }
