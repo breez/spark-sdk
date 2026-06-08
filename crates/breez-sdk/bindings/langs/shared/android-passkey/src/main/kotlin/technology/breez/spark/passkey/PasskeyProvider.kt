@@ -5,6 +5,7 @@ import breez_sdk_spark.DeriveSeedsOutput
 import breez_sdk_spark.DeriveSeedsRequest
 import breez_sdk_spark.DomainAssociation
 import breez_sdk_spark.PasskeyCredential
+import breez_sdk_spark.PasskeyProviderOptions
 import breez_sdk_spark.PrfProvider
 import breez_sdk_spark.PrfProviderException
 import technology.breez.spark.passkey.core.CredentialManagerPrfCore
@@ -30,24 +31,15 @@ import technology.breez.spark.passkey.core.DomainAssociationResult
  *   the foreground, RESUMED, non-finishing Activity (a stale or background
  *   instance surfaces as opaque Credential Manager failures). A lambda
  *   avoids holding a stale reference across configuration changes.
- * @param rpId Relying Party ID (your app's domain), or [BREEZ_RP_ID] to opt
- *   into Breez's shared RP. Changing it after users register makes their
- *   existing credentials undiscoverable.
- * @param rpName WebAuthn `rp.name`, shown in some credential-manager UIs.
- *   Deprecated in L3 but still required by current prompts. Used only at
- *   registration.
- * @param userName WebAuthn `user.name`, shown in the sign-in picker. Pass a
- *   stable per-user value if each registration should be a distinct entry.
- *   Defaults to [rpName]. Used only at registration.
- * @param userDisplayName WebAuthn `user.displayName`, a label the picker MAY
- *   show (varies by backend). Defaults to [userName]. Used only at registration.
+ * @param options Relying Party and user identity (`rpId`, `rpName`,
+ *   `userName`, `userDisplayName`). Unset `rpId` / `rpName` default to
+ *   [BREEZ_RP_ID] / [DEFAULT_RP_NAME]; `userName` defaults to `rpName` and
+ *   `userDisplayName` to `userName`. The same [PasskeyProviderOptions] is
+ *   settable on `PasskeyConfig` for the zero-config client.
  */
 public class PasskeyProvider(
     private val activityProvider: () -> Activity,
-    private val rpId: String,
-    private val rpName: String,
-    userName: String? = null,
-    userDisplayName: String? = null,
+    options: PasskeyProviderOptions = PasskeyProviderOptions(),
 ) : PrfProvider {
 
     public companion object {
@@ -68,8 +60,10 @@ public class PasskeyProvider(
         public const val DEFAULT_RP_NAME: String = "Breez"
     }
 
-    private val resolvedUserName: String = userName ?: rpName
-    private val resolvedUserDisplayName: String = userDisplayName ?: resolvedUserName
+    private val rpId: String = options.rpId ?: BREEZ_RP_ID
+    private val rpName: String = options.rpName ?: DEFAULT_RP_NAME
+    private val resolvedUserName: String = options.userName ?: rpName
+    private val resolvedUserDisplayName: String = options.userDisplayName ?: resolvedUserName
 
     /** The configured PRF engine; holds the rp identity. */
     private val core = CredentialManagerPrfCore(

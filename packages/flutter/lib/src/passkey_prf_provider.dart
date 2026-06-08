@@ -2,7 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
-import 'rust/models.dart' show DeriveSeedsOutput, DeriveSeedsRequest, PasskeyCredential;
+import 'rust/models.dart'
+    show DeriveSeedsOutput, DeriveSeedsRequest, PasskeyCredential, PasskeyProviderOptions;
 
 /// Result of verifying that the app is associated with its RP domain.
 /// Switch on the subtype to handle each outcome.
@@ -31,36 +32,6 @@ class DomainAssociationSkipped extends DomainAssociation {
   final String reason;
 
   const DomainAssociationSkipped({required this.reason});
-}
-
-/// Options for constructing a [PasskeyProvider]. `rpId` is required: pass
-/// [PasskeyProvider.breezRpId] to opt into Breez's shared RP.
-class PasskeyProviderOptions {
-  /// Relying Party ID: the domain configured for credential sharing.
-  /// Changing it after users register passkeys makes their existing
-  /// credentials undiscoverable. Pass [PasskeyProvider.breezRpId] for the
-  /// Breez-managed RP (only valid for Breez-registered apps).
-  final String rpId;
-
-  /// Display name shown in the OS passkey picker and credential-manager
-  /// UIs. Only used at registration; changing it does not affect existing
-  /// credentials.
-  final String rpName;
-
-  /// Secondary label shown in some passkey managers. Defaults to [rpName].
-  /// Only used at registration.
-  final String? userName;
-
-  /// Primary label shown in the passkey picker. Defaults to [userName].
-  /// Only used at registration.
-  final String? userDisplayName;
-
-  const PasskeyProviderOptions({
-    required this.rpId,
-    required this.rpName,
-    this.userName,
-    this.userDisplayName,
-  });
 }
 
 /// Error thrown by [PasskeyProvider] when a passkey operation fails.
@@ -121,10 +92,10 @@ class PasskeyProvider implements PrfProvider {
   final String _userDisplayName;
 
   PasskeyProvider(PasskeyProviderOptions options)
-    : _rpId = options.rpId,
-      _rpName = options.rpName,
-      _userName = options.userName ?? options.rpName,
-      _userDisplayName = options.userDisplayName ?? (options.userName ?? options.rpName);
+    : _rpId = options.rpId ?? breezRpId,
+      _rpName = options.rpName ?? defaultRpName,
+      _userName = options.userName ?? options.rpName ?? defaultRpName,
+      _userDisplayName = options.userDisplayName ?? options.userName ?? options.rpName ?? defaultRpName;
 
   /// Derive one 32-byte seed per salt from passkey PRF, in as few OS prompts
   /// as the platform supports. Returns the seeds plus the credential ID

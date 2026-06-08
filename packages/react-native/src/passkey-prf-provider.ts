@@ -1,6 +1,7 @@
 import { NativeModules, Platform } from 'react-native';
 import {
   PasskeyClient as SdkPasskeyClient,
+  PasskeyProviderOptions,
   type PasskeyConfig,
   type PrfProvider,
 } from './generated/breez_sdk_spark';
@@ -66,40 +67,6 @@ export type DomainAssociation =
   | { kind: 'Associated' }
   | { kind: 'NotAssociated'; source: string; reason: string }
   | { kind: 'Skipped'; reason: string };
-
-/**
- * Options for constructing a PasskeyProvider.
- */
-export interface PasskeyProviderOptions {
-  /**
-   * Relying Party ID: the domain configured for credential sharing.
-   * Changing it after users register passkeys makes their existing
-   * credentials undiscoverable. Pass {@link PasskeyProvider.BREEZ_RP_ID} for
-   * the Breez-managed RP (only valid for Breez-registered apps).
-   */
-  rpId: string;
-
-  /**
-   * Display name shown in the OS passkey picker and credential-manager
-   * UIs. Only used at registration; changing it does not affect existing
-   * credentials.
-   */
-  rpName: string;
-
-  /**
-   * Per-credential identifier shown in the account picker during sign-in.
-   * Pass a stable per-user value to surface each registration distinctly
-   * (Apple's Passwords app dedupes by `(rpId, userName)`). Defaults to
-   * `rpName`. Only used at registration.
-   */
-  userName?: string;
-
-  /**
-   * User-friendly label some platforms show in the picker. Defaults to
-   * `userName`. Only used at registration.
-   */
-  userDisplayName?: string;
-}
 
 /**
  * Error thrown when a passkey operation fails, with a structured `code` for
@@ -171,20 +138,8 @@ export class PasskeyProvider {
   private userDisplayName: string;
 
   constructor(options: PasskeyProviderOptions) {
-    if (!options?.rpId || options.rpId.length === 0) {
-      throw new Error(
-        "PasskeyProvider: rpId is required. Pass your app's RP domain, " +
-          'or PasskeyProvider.BREEZ_RP_ID if you registered with Breez.'
-      );
-    }
-    if (!options.rpName || options.rpName.length === 0) {
-      throw new Error(
-        'PasskeyProvider: rpName is required. Pass your app name; it is ' +
-          'shown to the user in the OS passkey picker.'
-      );
-    }
-    this.rpId = options.rpId;
-    this.rpName = options.rpName;
+    this.rpId = options.rpId ?? PasskeyProvider.BREEZ_RP_ID;
+    this.rpName = options.rpName ?? PasskeyProvider.DEFAULT_RP_NAME;
     this.userName = options.userName ?? this.rpName;
     this.userDisplayName = options.userDisplayName ?? this.userName;
   }
@@ -348,9 +303,8 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 
 /**
  * Builds a `PasskeyClient` backed by a caller-supplied provider. Use this
- * when you need a configured {@link PasskeyProvider} (custom `rpId` /
- * `rpName`) or a custom PRF backend; omit the provider for the zero-config
- * Breez-RP default.
+ * for a custom PRF backend; omit the provider for the zero-config Breez-RP
+ * default and set `providerOptions` on the config to use your own RP.
  */
 export class PasskeyClientBuilder {
   private provider?: PrfProvider;
@@ -358,7 +312,7 @@ export class PasskeyClientBuilder {
   /**
    * @param breezApiKey Breez relay key for authenticated (NIP-42) label
    *   storage. Omit for public relays only.
-   * @param config Passkey client config. `rpId` / `rpName` configure the
+   * @param config Passkey client config. `providerOptions` configures the
    *   default provider (ignored when a provider is injected via
    *   {@link withPrfProvider}, which owns its RP); `defaultLabel` is the
    *   label-store default.
@@ -371,7 +325,7 @@ export class PasskeyClientBuilder {
   /**
    * Inject the provider the client derives seeds through: the built-in
    * {@link PasskeyProvider} or any custom `PrfProvider` implementation.
-   * Supersedes the config's `rpId` / `rpName` (the injected provider owns
+   * Supersedes the config's `providerOptions` (the injected provider owns
    * its RP).
    */
   withPrfProvider(provider: PrfProvider): this {
@@ -381,7 +335,7 @@ export class PasskeyClientBuilder {
 
   /**
    * Construct the client. Falls back to a default {@link PasskeyProvider}
-   * on the config's `rpId` / `rpName` (default: the Breez RP) when no
+   * on the config's `providerOptions` (default: the Breez RP) when no
    * provider was injected.
    */
   build(): SdkPasskeyClient {
@@ -389,10 +343,9 @@ export class PasskeyClientBuilder {
     // generated PrfProvider foreign interface.
     const provider: PrfProvider =
       this.provider ??
-      (new PasskeyProvider({
-        rpId: this.config?.rpId ?? PasskeyProvider.BREEZ_RP_ID,
-        rpName: this.config?.rpName ?? PasskeyProvider.DEFAULT_RP_NAME,
-      }) as unknown as PrfProvider);
+      (new PasskeyProvider(
+        this.config?.providerOptions ?? PasskeyProviderOptions.create({})
+      ) as unknown as PrfProvider);
     return new SdkPasskeyClient(provider, this.breezApiKey, this.config);
   }
 }
@@ -407,7 +360,7 @@ function buildPasskeyClient(
 
 /**
  * Zero-config passkey client on the Breez shared RP (`keys.breez.technology`),
- * so a Breez-registered app needs only its relay key; set `rpId` / `rpName` on
+ * so a Breez-registered app needs only its relay key; set `providerOptions` on
  * the config to use your own RP. For a custom PRF backend, build the provider
  * and inject it via {@link PasskeyClientBuilder}.
  */

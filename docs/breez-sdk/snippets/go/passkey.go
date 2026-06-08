@@ -8,38 +8,25 @@ import (
 )
 
 // ANCHOR: implement-prf-provider
-// Implement the PrfProvider interface for custom logic if no built-in
-// PasskeyProvider ships for your target. Three required methods:
-// DeriveSeeds for derivation, IsSupported for the capability probe;
-// CreatePasskey for registration is optional.
+// Implement the PrfProvider interface for a custom authenticator (hardware
+// key, FIDO2, file-backed). Only DeriveSeeds and IsSupported are required.
 type CustomPrfProvider struct{}
 
 func (p *CustomPrfProvider) DeriveSeeds(request breez_sdk_spark.DeriveSeedsRequest) (breez_sdk_spark.DeriveSeedsOutput, error) {
-	// Call platform passkey API with PRF extension. Use the dual-salt
-	// ceremony when the authenticator supports it (one OS prompt for
-	// N salts) and fall back to per-salt assertions otherwise.
-	// Returns one 32-byte PRF output per salt in input order.
+	// Return one 32-byte PRF output per salt, in input order.
 	panic("Implement using WebAuthn or native passkey APIs")
 }
 
 func (p *CustomPrfProvider) IsSupported() (bool, error) {
-	// Check if a PRF-capable authenticator is reachable from this
-	// platform / device.
 	panic("Check platform passkey availability")
 }
 
 func (p *CustomPrfProvider) CreatePasskey(excludeCredentials [][]byte) (breez_sdk_spark.PasskeyCredential, error) {
-	// Register a new credential and return its ID, the WebAuthn user.id
-	// the platform recorded (returned for host-side correlation, never
-	// host-supplied), AAGUID, and BE flag.
+	// Register a credential and return its ID plus attestation.
 	panic("Implement registration via native passkey API")
 }
 
 func (p *CustomPrfProvider) CheckDomainAssociation() (breez_sdk_spark.DomainAssociation, error) {
-	// Optional: verify the app's identity against the platform's domain
-	// verification source (e.g., Apple AASA CDN, Google Digital Asset
-	// Links). Custom providers without a verification source return
-	// Skipped, which tells callers "proceed with WebAuthn as normal".
 	return breez_sdk_spark.DomainAssociationSkipped{
 		Reason: "CustomPrfProvider does not verify domain association",
 	}, nil
@@ -52,8 +39,6 @@ func CheckAvailability() {
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: check-availability
-	// CheckAvailability collapses IsSupported + CheckDomainAssociation
-	// into a single tagged value. Branch on the variant the host needs.
 	availability, err := passkey.CheckAvailability()
 	if err != nil {
 		return
@@ -84,24 +69,13 @@ func ConnectWithPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: connect-with-passkey
-	// Single-CTA onboarding: silent sign-in for a returning user,
-	// fall-through to register on a fresh device. Internally pins
-	// `PreferImmediatelyAvailableCredentials = true` so the silent
-	// attempt fast-fails (no UI) when no local credential exists; only
-	// `CredentialNotFound` flips to register, all other errors (cancel
-	// / timeout / configuration) propagate unchanged.
+	// Silent sign-in for a returning user, fall-through to register on a fresh device.
 	label := "personal"
 	response, err := passkey.ConnectWithPasskey(breez_sdk_spark.ConnectWithPasskeyRequest{
 		Label: &label,
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	// The credential is surfaced on both paths when the provider exposes
-	// it. Persist CredentialId for future ExcludeCredentials / AllowCredentials.
-	if response.Credential != nil {
-		_ = response.Credential.CredentialId
 	}
 
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
@@ -122,22 +96,10 @@ func RegisterNewPasskey() (*breez_sdk_spark.BreezSdk, error) {
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: register-passkey
-	// For a brand-new user with no existing passkey: Register() creates
-	// the credential AND derives the seed in one orchestrated
-	// call. On iOS+Android this is 2 OS prompts total (1 create + 1
-	// dual-salt assert) thanks to the SDK's bulk-PRF path.
 	label := "personal"
 	response, err := passkey.Register(breez_sdk_spark.RegisterRequest{Label: &label})
 	if err != nil {
 		return nil, err
-	}
-
-	// Persist Credential.CredentialId (for ExcludeCredentials bookkeeping)
-	// and Credential.UserId (for server-side correlation). The SDK
-	// generates UserId; it is never host-supplied.
-	if response.Credential != nil {
-		_ = response.Credential.CredentialId
-		_ = response.Credential.UserId
 	}
 
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
@@ -164,19 +126,15 @@ func CredentialMetadata() error {
 		return err
 	}
 
-	// Persist these in synced storage (iCloud Keychain / Block Store) so they
-	// survive reinstall and reach the user's other devices. Aaguid and
-	// BackupEligible are only available here, on registration.
 	if response.Credential != nil {
-		_ = response.Credential.CredentialId
-		_ = response.Credential.Aaguid
-		_ = response.Credential.BackupEligible
+		log.Println(response.Credential.CredentialId)   // Persist to reopen the same wallet on sign-in
+		log.Println(response.Credential.Aaguid)         // Authenticator model (display hint, unverified)
+		log.Println(response.Credential.BackupEligible) // Whether the passkey syncs across devices
 	}
 
-	// On a later sign-in, pin the stored credential ID via AllowCredentials so
-	// the OS cannot substitute a sibling credential, which would derive a
-	// different wallet seed.
-	_, err = passkey.SignIn(breez_sdk_spark.SignInRequest{
+	// Pin the stored credential ID so the OS can't substitute a sibling
+	// credential, which would derive a different wallet.
+	signInResponse, err := passkey.SignIn(breez_sdk_spark.SignInRequest{
 		Label:            &label,
 		AllowCredentials: &[][]byte{
 			// stored CredentialId bytes
@@ -185,6 +143,10 @@ func CredentialMetadata() error {
 	if err != nil {
 		return err
 	}
+	log.Println(signInResponse.Wallet.Seed)  // Pass to connect() to open the wallet
+	log.Println(signInResponse.Wallet.Label) // Label this wallet was derived from
+	log.Println(signInResponse.Labels)       // This passkey's labels (populated on discovery sign-in)
+	log.Println(signInResponse.Credential)   // Credential signed in with (credential_id only)
 	// ANCHOR_END: credential-metadata
 	return nil
 }
@@ -220,8 +182,7 @@ func StoreLabel() error {
 
 func CheckDomain() error {
 	// ANCHOR: domain-association
-	// Verify Apple AASA / Android Asset Links / Web Related Origins
-	// before the first WebAuthn ceremony. Diagnostic only: never blocks.
+	// Diagnostic only: never blocks the ceremony.
 	prfProvider := &CustomPrfProvider{}
 	result, err := prfProvider.CheckDomainAssociation()
 	if err != nil {
@@ -246,11 +207,6 @@ func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: recover-already-exists
-	// The OS rejected Register because the user's password manager
-	// already holds a credential matching `ExcludeCredentials`.
-	// Route the user to the sign-in path: the OS picker will surface
-	// the existing credential and the SDK's identity cache will warm
-	// up on the assertion.
 	label := "personal"
 	registerResponse, err := passkey.Register(breez_sdk_spark.RegisterRequest{
 		Label: &label,
@@ -266,6 +222,7 @@ func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
 		return nil, err
 	}
 
+	// A matching credential already exists; sign in to it instead.
 	signInResponse, err := passkey.SignIn(breez_sdk_spark.SignInRequest{Label: &label})
 	if err != nil {
 		return nil, err
@@ -279,15 +236,12 @@ func HandleTimeout() (*breez_sdk_spark.SignInResponse, error) {
 	passkey := breez_sdk_spark.NewPasskeyClient(prfProvider, nil, nil)
 
 	// ANCHOR: handle-timeout
-	// The OS biometric inactivity timeout (~55s+) tore down the prompt
-	// without user intent. Distinct from a real cancel: hosts may
-	// surface a re-prompt UI without treating it as the user opting
-	// out. The SDK fires PrfProviderErrorUserTimedOut when assertion or
-	// register elapsed time crosses 55_000 ms.
+	// Biometric inactivity timeout, distinct from a user cancel.
 	label := "personal"
 	response, err := passkey.SignIn(breez_sdk_spark.SignInRequest{Label: &label})
 	if err != nil {
 		if errors.Is(err, breez_sdk_spark.ErrPrfProviderErrorUserTimedOut) {
+			// Show a retry UI. Do NOT auto-retry without user input.
 			log.Print("Sign-in timed out: show \"Try Again\" UI.")
 		}
 		return nil, err

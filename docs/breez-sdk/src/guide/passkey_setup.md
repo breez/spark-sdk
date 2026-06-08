@@ -29,11 +29,11 @@ Same code paths in either case; only the `rpId` value and who hosts the JSON dif
 <div class="warning">
 <h4>Related Origins: developer notes</h4>
 
-**Firefox does not implement Related Origins.** Users on Firefox can only use credentials whose RP ID matches their current origin's eTLD+1. If you need Firefox support across multiple domains, host your own RP ID per domain or accept that Firefox users register fresh on each origin.
+**Firefox does not implement Related Origins.** Its users register fresh on each origin. For multi-domain support, host a separate RP ID per domain.
 
-**Chrome and Edge cap the number of distinct labels** in `related_origins` (around 5 distinct eTLD+1 labels per RP). For larger app families, partition into multiple RP IDs.
+**Chrome and Edge cap the number of distinct origins** in `related_origins` (around 5 per RP). For larger app families, partition into multiple RP IDs.
 
-**Browsers cache the `.well-known/webauthn` file aggressively.** Adding or removing an origin won't propagate immediately; expect a delay until the cache TTL expires.
+**Browsers cache `.well-known/webauthn` aggressively.** Adding or removing an origin takes effect only after the cache TTL expires.
 </div>
 
 ## Android: Asset Links
@@ -80,7 +80,7 @@ Replace `TEAMID` with your Apple Developer Team ID and `com.example.yourapp` wit
 
 <div class="warning">
 <h4>iOS / macOS: Associated Domains entitlement required</h4>
-Without the Associated Domains entitlement declared in Xcode, passkey operations on iOS / macOS will fail with a configuration error even though {{#name PasskeyClient.check_availability}} returns {{#enum PasskeyAvailability::Available}} (the OS-level check can't verify entitlements at runtime).
+Without the Associated Domains entitlement declared in Xcode, passkey operations on iOS / macOS fail with a configuration error, even when {{#name PasskeyClient.check_availability}} returns {{#enum PasskeyAvailability::Available}}.
 </div>
 
 <div class="warning">

@@ -56,7 +56,8 @@ pub use derivation::ACCOUNT_MASTER_SALT;
 use derivation::prf_to_mnemonic;
 pub use error::{ErrorKind, PasskeyError, PrfProviderError};
 pub use models::{
-    DeriveSeedsOutput, PasskeyConfig, PasskeyCredential, SetupWalletRequest, Wallet, WalletSetup,
+    DeriveSeedsOutput, PasskeyConfig, PasskeyCredential, PasskeyProviderOptions,
+    SetupWalletRequest, Wallet, WalletSetup,
 };
 pub use passkey_client::{
     ConnectWithPasskeyRequest, ConnectWithPasskeyResponse, PasskeyAvailability, PasskeyClient,

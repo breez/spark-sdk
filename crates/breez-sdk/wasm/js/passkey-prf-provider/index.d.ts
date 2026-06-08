@@ -1,13 +1,14 @@
-import { PasskeyClient as SdkPasskeyClient } from '../breez_sdk_spark_wasm';
+import { PasskeyClient as SdkPasskeyClient } from '../breez_sdk_spark_wasm.js';
 import type {
     PasskeyConfig,
+    PasskeyProviderOptions,
     PrfProvider,
     PasskeyCredential,
     DeriveSeedsResult,
     DeriveSeedOptions
-} from '../breez_sdk_spark_wasm';
+} from '../breez_sdk_spark_wasm.js';
 
-export type { PasskeyCredential, DeriveSeedsResult, DeriveSeedOptions };
+export type { PasskeyCredential, DeriveSeedsResult, DeriveSeedOptions, PasskeyProviderOptions };
 
 /**
  * Outcome of a domain-association check: whether `rpId` is a valid
@@ -54,42 +55,12 @@ export declare class PasskeyUserCancelledError extends Error {
 }
 
 /**
- * Options for constructing a PasskeyProvider. `rpId` is required: pass
- * {@link PasskeyProvider.BREEZ_RP_ID} to opt into Breez's shared RP.
+ * Web-only options for the built-in {@link PasskeyProvider}, passed as the
+ * second constructor argument. The cross-platform Relying Party / user
+ * fields live on {@link PasskeyProviderOptions} (the first argument), and
+ * are also settable on `PasskeyConfig` for the zero-config client.
  */
-export interface PasskeyProviderOptions {
-    /**
-     * Relying Party ID, the domain hosting your passkeys. On web it must
-     * be a registrable suffix of `window.location.hostname` or equal to
-     * it. Changing it after users register makes existing credentials
-     * undiscoverable. Pass {@link PasskeyProvider.BREEZ_RP_ID} to use
-     * Breez's shared RP (Breez-registered apps only).
-     */
-    rpId: string;
-
-    /**
-     * WebAuthn `rp.name`, shown in some credential-manager UIs (iCloud
-     * Keychain, Google Password Manager). Deprecated in L3 but still
-     * required by current browsers, so an empty string is rejected at
-     * construction. Used only at registration.
-     */
-    rpName: string;
-
-    /**
-     * WebAuthn `user.name`, shown in the sign-in account picker. Apple's
-     * Passwords app dedupes by `(rpId, user.name)`, so pass a stable
-     * per-user value if each registration should be a distinct entry.
-     * Defaults to `rpName`. Used only at registration.
-     */
-    userName?: string;
-
-    /**
-     * WebAuthn `user.displayName`, a user-friendly label the browser may
-     * show in the picker (behavior varies by platform). Defaults to
-     * `userName`. Used only at registration.
-     */
-    userDisplayName?: string;
-
+export interface PasskeyProviderWebOptions {
     /**
      * Narrows the create-time chooser to one authenticator class.
      * `'platform'` allows only the local authenticator (Touch ID, Face
@@ -144,7 +115,7 @@ export declare class PasskeyProvider {
      */
     static readonly DEFAULT_RP_NAME: string;
 
-    constructor(options: PasskeyProviderOptions);
+    constructor(options?: PasskeyProviderOptions, webOptions?: PasskeyProviderWebOptions);
 
     /**
      * Derive one 32-byte PRF output per salt (in input order), pairing

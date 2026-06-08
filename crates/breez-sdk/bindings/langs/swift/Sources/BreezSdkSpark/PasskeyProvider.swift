@@ -70,35 +70,27 @@ public class PasskeyProvider: PrfProvider {
     /// Create a new platform passkey PRF provider.
     ///
     /// - Parameters:
-    ///   - rpId: **Required.** Relying Party ID (your app's domain), or
-    ///     `PasskeyProvider.BREEZ_RP_ID` to opt into Breez's shared RP
-    ///     (Breez-registered apps only). Changing it after users register
-    ///     makes their existing credentials undiscoverable.
-    ///   - rpName: **Required.** WebAuthn `rp.name`, shown in some
-    ///     credential-manager UIs. Deprecated in L3 but still required by
-    ///     current prompts. Used only at registration.
-    ///   - userName: WebAuthn `user.name`, shown in the sign-in picker.
-    ///     Pass a stable per-user value if each registration should be a
-    ///     distinct entry (iCloud Keychain dedupes by `(rpId, user.name)`).
-    ///     Defaults to `rpName`. Used only at registration.
-    ///   - userDisplayName: WebAuthn `user.displayName`. Defaults to
-    ///     `userName`. Silently dropped at registration on current iOS SDKs
-    ///     (the create overload omits it); kept for cross-platform parity.
+    ///   - options: Relying Party and user identity (`rpId`, `rpName`,
+    ///     `userName`, `userDisplayName`). Unset `rpId` / `rpName` default to
+    ///     `PasskeyProvider.BREEZ_RP_ID` / `"Breez"`; `userName` defaults to
+    ///     `rpName` and `userDisplayName` to `userName`. The same
+    ///     `PasskeyProviderOptions` is settable on `PasskeyConfig` for the
+    ///     zero-config client.
     ///   - iosOptions: iOS / macOS-specific knobs (team ID, URLSession,
     ///     presentation anchor). Defaults work for any signed build.
     public init(
-        rpId: String,
-        rpName: String,
-        userName: String? = nil,
-        userDisplayName: String? = nil,
+        options: PasskeyProviderOptions = PasskeyProviderOptions(),
         iosOptions: IOSOptions? = nil
     ) {
+        let rpId = options.rpId ?? PasskeyProvider.BREEZ_RP_ID
+        let rpName = options.rpName ?? PasskeyProvider.defaultRpName
+        let userName = options.userName ?? rpName
         self.rpId = rpId
         self.core = PasskeyAssertionCore(
             rpId: rpId,
             rpName: rpName,
-            userName: userName ?? rpName,
-            userDisplayName: userDisplayName ?? (userName ?? rpName),
+            userName: userName,
+            userDisplayName: options.userDisplayName ?? userName,
             explicitTeamId: iosOptions?.teamId,
             urlSession: iosOptions?.urlSession ?? .shared,
             anchorProvider: iosOptions?.anchorProvider

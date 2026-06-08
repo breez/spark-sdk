@@ -85,17 +85,13 @@ impl PasskeyCredential {
     }
 }
 
-/// Configuration for the passkey client. The Relying Party fields apply
-/// only when a binding builds the built-in provider for you; a provider
-/// you construct yourself owns its own RP and ignores them.
+/// Relying Party and user identity for the built-in passkey provider.
+/// Applies only when a binding builds the provider for you (the
+/// zero-config path); a provider you construct yourself owns these and
+/// ignores them.
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct PasskeyConfig {
-    /// Default wallet label when a call provides none. Unset uses
-    /// `"Default"`.
-    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
-    pub default_label: Option<String>,
-
+pub struct PasskeyProviderOptions {
     /// Relying Party ID. Unset uses the Breez shared RP
     /// (`keys.breez.technology`).
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
@@ -104,4 +100,34 @@ pub struct PasskeyConfig {
     /// Relying Party name. Unset uses `"Breez"`.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub rp_name: Option<String>,
+
+    /// `WebAuthn` `user.name`: the account identifier the OS sign-in
+    /// picker shows beneath the display name, typically an email or
+    /// handle (e.g. `john@doe.com`). Set a stable per-user
+    /// value to keep each registration a distinct entry. Unset uses
+    /// `rp_name`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub user_name: Option<String>,
+
+    /// `WebAuthn` `user.display_name`: the human-friendly name the
+    /// picker shows most prominently (e.g. `John Doe`). Unset uses
+    /// `user_name`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub user_display_name: Option<String>,
+}
+
+/// Configuration for the passkey client.
+#[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PasskeyConfig {
+    /// Default wallet label when a call provides none. Unset uses
+    /// `"Default"`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub default_label: Option<String>,
+
+    /// Relying Party and user identity for the built-in provider, used
+    /// on the zero-config path. Ignored when you inject your own
+    /// provider.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub provider_options: Option<PasskeyProviderOptions>,
 }
