@@ -47,7 +47,9 @@ PasskeyClient setupPasskeyClient() {
   // ANCHOR: setup-client
   final passkey = PasskeyClient(
     breezApiKey: '<breez api key>',
-    config: PasskeyConfig(providerOptions: PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App')),
+    config: PasskeyConfig(
+      providerOptions: PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App'),
+    ),
   );
   // ANCHOR_END: setup-client
   return passkey;
@@ -182,7 +184,10 @@ Future<void> storeLabel() async {
 Future<void> checkDomain() async {
   // ANCHOR: domain-association
   // Diagnostic only: never blocks the ceremony.
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
+  ));
   final result = await prfProvider.checkDomainAssociation();
 
   if (result is DomainAssociationAssociated) {

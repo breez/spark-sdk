@@ -38,7 +38,12 @@ class CustomPrfProvider {
 // ANCHOR_END: implement-prf-provider
 
 const checkAvailability = async () => {
-  const passkey = new PasskeyClient('<breez api key>', PasskeyConfig.create({ providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }) }))
+  const passkey = new PasskeyClient(
+    '<breez api key>',
+    PasskeyConfig.create({
+      providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+    })
+  )
 
   // ANCHOR: check-availability
   const availability = await passkey.checkAvailability()
@@ -63,13 +68,23 @@ const checkAvailability = async () => {
 
 const setupPasskeyClient = () => {
   // ANCHOR: setup-client
-  const passkey = new PasskeyClient('<breez api key>', PasskeyConfig.create({ providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }) }))
+  const passkey = new PasskeyClient(
+    '<breez api key>',
+    PasskeyConfig.create({
+      providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+    })
+  )
   // ANCHOR_END: setup-client
   return passkey
 }
 
 const connectWithPasskey = async () => {
-  const passkey = new PasskeyClient('<breez api key>', PasskeyConfig.create({ providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }) }))
+  const passkey = new PasskeyClient(
+    '<breez api key>',
+    PasskeyConfig.create({
+      providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+    })
+  )
 
   // ANCHOR: connect-with-passkey
   // Silent sign-in, fall through to register.
@@ -82,7 +97,12 @@ const connectWithPasskey = async () => {
 }
 
 const signInExistingUser = async () => {
-  const passkey = new PasskeyClient('<breez api key>', PasskeyConfig.create({ providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }) }))
+  const passkey = new PasskeyClient(
+    '<breez api key>',
+    PasskeyConfig.create({
+      providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+    })
+  )
 
   // ANCHOR: sign-in
   // Returning-user sign-in. No fall-through to register.
@@ -91,7 +111,12 @@ const signInExistingUser = async () => {
 }
 
 const registerNewPasskey = async () => {
-  const passkey = new PasskeyClient('<breez api key>', PasskeyConfig.create({ providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }) }))
+  const passkey = new PasskeyClient(
+    '<breez api key>',
+    PasskeyConfig.create({
+      providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+    })
+  )
 
   // ANCHOR: register-passkey
   const config = { ...defaultConfig(Network.Mainnet), apiKey: '<breez api key>' }
@@ -103,7 +128,12 @@ const registerNewPasskey = async () => {
 }
 
 const credentialMetadata = async () => {
-  const passkey = new PasskeyClient('<breez api key>', PasskeyConfig.create({ providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }) }))
+  const passkey = new PasskeyClient(
+    '<breez api key>',
+    PasskeyConfig.create({
+      providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+    })
+  )
 
   // ANCHOR: credential-metadata
   const response = await passkey.register({ label: 'personal', excludeCredentials: undefined })
@@ -129,7 +159,12 @@ const credentialMetadata = async () => {
 }
 
 const listLabels = async (): Promise<string[]> => {
-  const passkey = new PasskeyClient('<breez api key>', PasskeyConfig.create({ providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }) }))
+  const passkey = new PasskeyClient(
+    '<breez api key>',
+    PasskeyConfig.create({
+      providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+    })
+  )
   // ANCHOR: list-labels
   const labels = await passkey.labels().list()
   for (const label of labels) {
@@ -140,7 +175,12 @@ const listLabels = async (): Promise<string[]> => {
 }
 
 const storeLabel = async () => {
-  const passkey = new PasskeyClient('<breez api key>', PasskeyConfig.create({ providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }) }))
+  const passkey = new PasskeyClient(
+    '<breez api key>',
+    PasskeyConfig.create({
+      providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+    })
+  )
   // ANCHOR: store-label
   await passkey.labels().store('personal')
   // ANCHOR_END: store-label
@@ -170,7 +210,12 @@ const checkDomain = async () => {
 }
 
 const recoverFromAlreadyExists = async () => {
-  const passkey = new PasskeyClient('<breez api key>', PasskeyConfig.create({ providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }) }))
+  const passkey = new PasskeyClient(
+    '<breez api key>',
+    PasskeyConfig.create({
+      providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+    })
+  )
 
   // ANCHOR: recover-already-exists
   try {
@@ -193,7 +238,12 @@ const recoverFromAlreadyExists = async () => {
 }
 
 const handleTimeout = async () => {
-  const passkey = new PasskeyClient('<breez api key>', PasskeyConfig.create({ providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' }) }))
+  const passkey = new PasskeyClient(
+    '<breez api key>',
+    PasskeyConfig.create({
+      providerOptions: PasskeyProviderOptions.create({ rpId: '<your-rp-domain>', rpName: 'Your App' })
+    })
+  )
 
   // ANCHOR: handle-timeout
   // Biometric inactivity timeout, distinct from a user cancel.

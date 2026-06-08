@@ -33,7 +33,10 @@ class PasskeySnippets(private val activity: Activity) {
     suspend fun checkAvailability() {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            options = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            options = PasskeyProviderOptions(
+                rpId = "<your-rp-domain>",
+                rpName = "Your App",
+            ),
         )
         val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
 
@@ -54,7 +57,9 @@ class PasskeySnippets(private val activity: Activity) {
         val passkey = PasskeyClient(
             breezApiKey = "<breez api key>",
             activityProvider = { activity },
-            config = PasskeyConfig(providerOptions = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App")),
+            config = PasskeyConfig(
+                providerOptions = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            ),
         )
         // ANCHOR_END: setup-client
         return passkey
@@ -63,7 +68,10 @@ class PasskeySnippets(private val activity: Activity) {
     suspend fun connectWithPasskey(): BreezSdk {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            options = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            options = PasskeyProviderOptions(
+                rpId = "<your-rp-domain>",
+                rpName = "Your App",
+            ),
         )
         val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
 
@@ -82,7 +90,10 @@ class PasskeySnippets(private val activity: Activity) {
     suspend fun signInExistingUser(): SignInResponse {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            options = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            options = PasskeyProviderOptions(
+                rpId = "<your-rp-domain>",
+                rpName = "Your App",
+            ),
         )
         val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
 
@@ -95,7 +106,10 @@ class PasskeySnippets(private val activity: Activity) {
     suspend fun registerNewPasskey(): BreezSdk {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            options = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            options = PasskeyProviderOptions(
+                rpId = "<your-rp-domain>",
+                rpName = "Your App",
+            ),
         )
         val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
 
@@ -111,7 +125,10 @@ class PasskeySnippets(private val activity: Activity) {
     suspend fun credentialMetadata() {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            options = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            options = PasskeyProviderOptions(
+                rpId = "<your-rp-domain>",
+                rpName = "Your App",
+            ),
         )
         val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
 
@@ -142,7 +159,10 @@ class PasskeySnippets(private val activity: Activity) {
     suspend fun listLabels(): List<String> {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            options = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            options = PasskeyProviderOptions(
+                rpId = "<your-rp-domain>",
+                rpName = "Your App",
+            ),
         )
         val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
         // ANCHOR: list-labels
@@ -157,7 +177,10 @@ class PasskeySnippets(private val activity: Activity) {
     suspend fun storeLabel() {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            options = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            options = PasskeyProviderOptions(
+                rpId = "<your-rp-domain>",
+                rpName = "Your App",
+            ),
         )
         val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
         // ANCHOR: store-label
@@ -170,7 +193,10 @@ class PasskeySnippets(private val activity: Activity) {
         // Diagnostic only: never blocks the ceremony.
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            options = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            options = PasskeyProviderOptions(
+                rpId = "<your-rp-domain>",
+                rpName = "Your App",
+            ),
         )
         val result = prfProvider.checkDomainAssociation()
 
@@ -187,7 +213,10 @@ class PasskeySnippets(private val activity: Activity) {
     suspend fun recoverFromAlreadyExists(): Wallet {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            options = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            options = PasskeyProviderOptions(
+                rpId = "<your-rp-domain>",
+                rpName = "Your App",
+            ),
         )
         val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
 
@@ -211,7 +240,10 @@ class PasskeySnippets(private val activity: Activity) {
     suspend fun handleTimeout(): SignInResponse {
         val prfProvider = PasskeyProvider(
             activityProvider = { activity },
-            options = PasskeyProviderOptions(rpId = "<your-rp-domain>", rpName = "Your App"),
+            options = PasskeyProviderOptions(
+                rpId = "<your-rp-domain>",
+                rpName = "Your App",
+            ),
         )
         val passkey = PasskeyClient(prfProvider, "<breez api key>", null)
 
