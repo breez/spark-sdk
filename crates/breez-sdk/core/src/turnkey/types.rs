@@ -285,3 +285,41 @@ pub(crate) struct SparkPrepareTransferResult {
     #[serde(default)]
     pub new_leaf_public_keys: Vec<SparkLeafPublicKey>,
 }
+
+pub(crate) const SPARK_CLAIM_TRANSFER_PATH: &str = "/public/v1/submit/spark_claim_transfer";
+pub(crate) const SPARK_CLAIM_TRANSFER_TYPE: &str = "ACTIVITY_TYPE_SPARK_CLAIM_TRANSFER";
+pub(crate) const SPARK_CLAIM_TRANSFER_RESULT: &str = "sparkClaimTransferResult";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkClaimLeaf {
+    pub leaf_id: String,
+    pub ciphertext: String,
+    pub sender_signature: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkClaimPackage {
+    pub leaves: Vec<SparkClaimLeaf>,
+    pub threshold: u32,
+    pub transfer_id: String,
+    pub operator_recipients: Vec<SparkOperatorRecipient>,
+    pub sender_identity_public_key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkClaimTransferIntent {
+    pub sign_with: String,
+    pub claim: SparkClaimPackage,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkClaimTransferResult {
+    #[serde(default)]
+    pub operator_packages: Vec<SparkEncryptedOperatorPackage>,
+    #[serde(default)]
+    pub new_leaf_public_keys: Vec<SparkLeafPublicKey>,
+}

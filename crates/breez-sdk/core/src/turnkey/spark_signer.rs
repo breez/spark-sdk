@@ -43,12 +43,14 @@ use super::types::{
     CURVE_SECP256K1, CreateWalletAccountsIntent, CreateWalletAccountsResult, ENCODING_HEXADECIMAL,
     GET_WALLET_ACCOUNT_PATH, GetWalletAccountRequest, GetWalletAccountResponse,
     HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256, PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH,
-    SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SPARK_PREPARE_LIGHTNING_RECEIVE_PATH,
+    SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SPARK_CLAIM_TRANSFER_PATH,
+    SPARK_CLAIM_TRANSFER_RESULT, SPARK_CLAIM_TRANSFER_TYPE, SPARK_PREPARE_LIGHTNING_RECEIVE_PATH,
     SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT, SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE,
     SPARK_PREPARE_TRANSFER_PATH, SPARK_PREPARE_TRANSFER_RESULT, SPARK_PREPARE_TRANSFER_TYPE,
     SPARK_SIGN_FROST_PATH, SPARK_SIGN_FROST_RESULT, SPARK_SIGN_FROST_TYPE, SignRawPayloadIntent,
-    SignRawPayloadResult, SparkEncryptedOperatorPackage, SparkFrostCommitment, SparkKeyDerivation,
-    SparkLeafPublicKey, SparkLightningReceivePackage, SparkOperatorRecipient,
+    SignRawPayloadResult, SparkClaimLeaf, SparkClaimPackage, SparkClaimTransferIntent,
+    SparkClaimTransferResult, SparkEncryptedOperatorPackage, SparkFrostCommitment,
+    SparkKeyDerivation, SparkLeafPublicKey, SparkLightningReceivePackage, SparkOperatorRecipient,
     SparkPartialSignature, SparkPrepareLightningReceiveIntent, SparkPrepareLightningReceiveResult,
     SparkPrepareTransferIntent, SparkPrepareTransferResult, SparkSignFrostIntent,
     SparkSignFrostResult, SparkSignatureRequest, SparkTransferLeaf, SparkTransferPackage,
@@ -356,6 +358,18 @@ impl TurnkeySparkSigner {
             .map_err(to_spark_err)?;
         ecdsa_from_rs(&result.r, &result.s).map_err(to_spark_err)
     }
+
+    /// Seeds the leaf cache from a claim/transfer result. Each leaf's signing key
+    /// is `HD(leaf_id)`, matching what `get_public_key_for_leaf` derives.
+    fn cache_new_leaf_keys(&self, leaves: &[SparkLeafPublicKey]) -> Result<(), SignerError> {
+        let mut cache = self.leaf_pubkeys.lock().unwrap();
+        for lpk in leaves {
+            let id = TreeNodeId::from_str(&lpk.leaf_id).map_err(to_spark_err)?;
+            let pk = PublicKey::from_str(&lpk.public_key).map_err(to_spark_err)?;
+            cache.insert(id, pk);
+        }
+        Ok(())
+    }
 }
 
 #[macros::async_trait]
@@ -504,16 +518,49 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
         })
     }
 
-    // Open: SPARK_CLAIM_TRANSFER returns no claim user signature, which
-    // PreparedClaim requires; reconstructing it needs spark-internal payload
-    // hashing (TaggedHasher) not reachable from this crate.
     async fn prepare_claim(
         &self,
-        _request: PrepareClaimRequest,
+        request: PrepareClaimRequest,
     ) -> Result<PreparedClaim, SignerError> {
-        Err(SignerError::Generic(
-            "turnkey signer: prepare_claim not yet implemented".to_string(),
-        ))
+        let sign_with = self.spark_identity_address().await?;
+        let leaves = request
+            .leaves
+            .iter()
+            .map(|leaf| SparkClaimLeaf {
+                leaf_id: leaf.node.id.to_string(),
+                ciphertext: hex::encode(&leaf.leaf_key_ciphertext),
+                sender_signature: hex::encode(&leaf.sender_signature),
+            })
+            .collect();
+        let intent = SparkClaimTransferIntent {
+            sign_with,
+            claim: SparkClaimPackage {
+                leaves,
+                threshold: request.threshold,
+                transfer_id: request.transfer_id.to_string(),
+                operator_recipients: operator_recipients(&request.operator_recipients),
+                sender_identity_public_key: hex::encode(
+                    request.sender_identity_public_key.serialize(),
+                ),
+            },
+        };
+        let result: SparkClaimTransferResult = self
+            .client
+            .submit_activity(
+                SPARK_CLAIM_TRANSFER_PATH,
+                SPARK_CLAIM_TRANSFER_TYPE,
+                intent,
+                SPARK_CLAIM_TRANSFER_RESULT,
+            )
+            .await
+            .map_err(to_spark_err)?;
+        self.cache_new_leaf_keys(&result.new_leaf_public_keys)?;
+        let operator_packages = result
+            .operator_packages
+            .iter()
+            .map(|pkg| operator_package_from(pkg).map_err(to_spark_err))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(PreparedClaim { operator_packages })
     }
 
     async fn prepare_lightning_receive(
