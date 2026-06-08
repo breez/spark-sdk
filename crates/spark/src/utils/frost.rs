@@ -66,7 +66,7 @@ pub(crate) fn frost_signing_package(
 /// free function callable without a [`Signer`]. Flows that already hold a valid
 /// user signature share (e.g. the atomic-swap adaptor step) can aggregate it
 /// directly rather than re-signing.
-pub(crate) fn aggregate_frost(
+pub fn aggregate_frost(
     request: AggregateFrostRequest<'_>,
 ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
     // Derive an identifier for the local user

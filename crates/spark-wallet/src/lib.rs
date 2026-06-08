@@ -55,6 +55,7 @@ pub use spark::{
         TreeNodeStatus, TreeServiceError, TreeStore, select_leaves_by_minimum_amount,
         select_leaves_by_target_amounts,
     },
+    utils::frost::aggregate_frost,
     utils::{
         paging::{Order, PagingFilter, PagingResult},
         transactions::is_ephemeral_anchor_output,
