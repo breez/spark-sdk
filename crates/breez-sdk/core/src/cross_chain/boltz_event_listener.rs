@@ -105,7 +105,7 @@ impl BoltzSdkEventListener {
                 invoice_amount_sats,
                 estimated_out,
                 delivered_amount: swap.delivered_amount.map(u128::from),
-                lz_guid: swap.lz_guid.clone(),
+                bridge_ref: swap.bridge_ref.clone(),
                 status: new_status,
                 fee,
                 max_slippage_bps,
@@ -151,7 +151,7 @@ impl BoltzSdkEventListener {
             invoice_amount_sats,
             estimated_out,
             delivered_amount,
-            lz_guid,
+            bridge_ref,
             status,
             fee,
             max_slippage_bps,
@@ -179,7 +179,7 @@ impl BoltzSdkEventListener {
                 invoice_amount_sats,
                 estimated_out,
                 delivered_amount,
-                lz_guid,
+                bridge_ref,
                 status,
                 fee,
                 max_slippage_bps,
@@ -220,7 +220,8 @@ fn map_boltz_status_to_conversion(status: &BoltzSwapStatus) -> ConversionStatus 
         BoltzSwapStatus::Created
         | BoltzSwapStatus::InvoicePaid
         | BoltzSwapStatus::TbtcLocked
-        | BoltzSwapStatus::Claiming => ConversionStatus::Pending,
+        | BoltzSwapStatus::Claiming
+        | BoltzSwapStatus::Settling => ConversionStatus::Pending,
         BoltzSwapStatus::Completed => ConversionStatus::Completed,
         BoltzSwapStatus::Failed { .. } | BoltzSwapStatus::Expired => ConversionStatus::Failed,
     }
@@ -231,7 +232,7 @@ fn map_boltz_status_to_conversion(status: &BoltzSwapStatus) -> ConversionStatus 
 mod tests {
     use std::path::PathBuf;
 
-    use boltz_client::models::{BoltzSwap, BoltzSwapStatus, ChainId};
+    use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind};
 
     use super::*;
     use crate::persist::sqlite::SqliteStorage;
@@ -247,24 +248,27 @@ mod tests {
         BoltzSwap {
             id: id.to_string(),
             status,
+            bridge_kind: BridgeKind::Oft,
             claim_key_index: 0,
             chain_id: 42161,
             claim_address: "0xclaim".to_string(),
             destination_address: "0xdest".to_string(),
-            destination_chain: ChainId::new("arbitrum one"),
+            destination_chain: "Arbitrum One".to_string(),
+            asset: Asset::Usdt,
             refund_address: "0xrefund".to_string(),
             erc20swap_address: "0xswap".to_string(),
             router_address: "0xrouter".to_string(),
             invoice: "lnbc1000n".to_string(),
             invoice_amount_sats: 100_000,
             onchain_amount: 99_500,
-            expected_usdt_amount: 70_900_000,
+            expected_output_amount: 70_900_000,
             slippage_bps: 100,
             timeout_block_height: 123_456,
             lockup_tx_id: None,
             claim_tx_hash: None,
+            pending_call_id: None,
             delivered_amount: None,
-            lz_guid: None,
+            bridge_ref: None,
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
         }
@@ -286,6 +290,10 @@ mod tests {
         );
         assert_eq!(
             map_boltz_status_to_conversion(&BoltzSwapStatus::Claiming),
+            ConversionStatus::Pending
+        );
+        assert_eq!(
+            map_boltz_status_to_conversion(&BoltzSwapStatus::Settling),
             ConversionStatus::Pending
         );
         assert_eq!(

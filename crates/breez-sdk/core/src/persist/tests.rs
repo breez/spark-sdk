@@ -3415,7 +3415,7 @@ fn boltz_conversion_info(
     status: crate::ConversionStatus,
     estimated_out: u128,
     delivered_amount: Option<u128>,
-    lz_guid: Option<String>,
+    bridge_ref: Option<String>,
 ) -> crate::ConversionInfo {
     crate::ConversionInfo::Boltz {
         swap_id: swap_id.to_string(),
@@ -3427,7 +3427,7 @@ fn boltz_conversion_info(
         invoice_amount_sats: 100_000,
         estimated_out,
         delivered_amount,
-        lz_guid,
+        bridge_ref,
         status,
         fee: Some(1_500),
         max_slippage_bps: 100,
@@ -3497,7 +3497,7 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
                 invoice_amount_sats,
                 estimated_out,
                 delivered_amount,
-                lz_guid,
+                bridge_ref,
                 status,
                 fee,
                 max_slippage_bps,
@@ -3519,7 +3519,7 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
     assert_eq!(invoice_amount_sats, 100_000);
     assert_eq!(estimated_out, 71_000_000);
     assert_eq!(delivered_amount, None);
-    assert_eq!(lz_guid, None);
+    assert_eq!(bridge_ref, None);
     assert_eq!(status, crate::ConversionStatus::Pending);
     assert_eq!(fee, Some(1_500));
     assert_eq!(max_slippage_bps, 100);
@@ -3547,7 +3547,7 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
         .unwrap();
 
     // Simulate the event listener transitioning the swap to Completed and
-    // populating delivered_amount + lz_guid from the claim receipt.
+    // populating delivered_amount + bridge_ref from the claim receipt.
     // estimated_out must stay frozen at the prepare-time value.
     let completed_metadata = PaymentMetadata {
         conversion_info: Some(boltz_conversion_info(
@@ -3574,7 +3574,7 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
                 status,
                 estimated_out,
                 delivered_amount,
-                lz_guid,
+                bridge_ref,
                 ..
             }),
         ..
@@ -3587,6 +3587,6 @@ pub async fn test_update_boltz_status_to_completed(storage: Box<dyn Storage>) {
     // overwritten by the event listener.
     assert_eq!(estimated_out, 71_000_000);
     assert_eq!(delivered_amount, Some(70_900_000));
-    assert_eq!(lz_guid, Some("0xabc123".to_string()));
+    assert_eq!(bridge_ref, Some("0xabc123".to_string()));
     assert!(fetched.conversion_details.is_none());
 }

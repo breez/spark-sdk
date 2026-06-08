@@ -1566,7 +1566,7 @@ pub enum ConversionInfo {
         invoice: String,
         invoice_amount_sats: u64,
         #[serde(default)]
-        lz_guid: Option<String>,
+        bridge_ref: Option<String>,
         max_slippage_bps: u32,
         #[serde(default)]
         quote_degraded: bool,
