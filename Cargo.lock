@@ -776,6 +776,7 @@ dependencies = [
  "macros",
  "nostr",
  "nostr-sdk",
+ "p256 0.13.2",
  "platform-utils",
  "rcgen",
  "rusqlite",
@@ -1470,6 +1471,7 @@ dependencies = [
  "const-oid 0.9.6",
  "der_derive",
  "flagset",
+ "pem-rfc7468",
  "zeroize",
 ]
 
@@ -1677,6 +1679,7 @@ dependencies = [
  "generic-array",
  "group 0.13.0",
  "hkdf",
+ "pem-rfc7468",
  "pkcs8",
  "rand_core 0.6.4",
  "sec1 0.7.3",
@@ -3631,6 +3634,15 @@ checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
  "base64 0.22.1",
  "serde_core",
+]
+
+[[package]]
+name = "pem-rfc7468"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412"
+dependencies = [
+ "base64ct",
 ]
 
 [[package]]
