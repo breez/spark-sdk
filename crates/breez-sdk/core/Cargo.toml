@@ -25,6 +25,7 @@ mysql = [
 # binaries built without this feature contain none of the bench-layer
 # setup code.
 span-trace = []
+turnkey = []
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]

@@ -21,6 +21,8 @@ pub mod signer;
 mod stable_balance;
 mod sync;
 pub mod token_conversion;
+#[cfg(feature = "turnkey")]
+pub mod turnkey;
 mod utils;
 
 pub use chain::{
