@@ -21,15 +21,6 @@ impl ExternalBreezSignerAdapter {
 
 #[macros::async_trait]
 impl BreezSigner for ExternalBreezSignerAdapter {
-    fn identity_public_key(&self) -> Result<secp256k1::PublicKey, SdkError> {
-        let pk_bytes = self.external.identity_public_key().map_err(|e| {
-            SdkError::Signer(format!("External signer identity_public_key failed: {e}"))
-        })?;
-        pk_bytes
-            .to_public_key()
-            .map_err(|e| SdkError::Signer(e.to_string()))
-    }
-
     async fn derive_public_key(
         &self,
         path: &DerivationPath,

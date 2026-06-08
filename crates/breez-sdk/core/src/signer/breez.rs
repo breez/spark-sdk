@@ -24,10 +24,6 @@ impl BreezSignerImpl {
 
 #[macros::async_trait]
 impl BreezSigner for BreezSignerImpl {
-    fn identity_public_key(&self) -> Result<secp256k1::PublicKey, SdkError> {
-        Ok(self.master.private_key.public_key(&self.secp))
-    }
-
     async fn derive_public_key(
         &self,
         path: &DerivationPath,

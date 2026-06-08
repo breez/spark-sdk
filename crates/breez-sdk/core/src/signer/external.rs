@@ -19,11 +19,6 @@ use super::external_types::{
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[macros::async_trait]
 pub trait ExternalBreezSigner: Send + Sync {
-    /// Returns the identity public key as 33 bytes (compressed secp256k1 key).
-    ///
-    /// See also: [JavaScript `getIdentityPublicKey`](https://docs.spark.money/wallets/spark-signer#get-identity-public-key)
-    fn identity_public_key(&self) -> Result<PublicKeyBytes, SignerError>;
-
     /// Derives a public key for the given BIP32 derivation path.
     ///
     /// # Arguments

@@ -5,9 +5,6 @@ use bitcoin::secp256k1::{self, Message, ecdsa::RecoverableSignature};
 
 #[macros::async_trait]
 pub trait BreezSigner: Send + Sync {
-    /// Returns the identity public key.
-    fn identity_public_key(&self) -> Result<secp256k1::PublicKey, SdkError>;
-
     /// Signs a pre-hashed message using ECDSA at the given derivation path.
     ///
     /// The caller must create the Message from a 32-byte hash digest before calling this method.

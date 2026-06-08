@@ -128,14 +128,6 @@ impl DefaultSigner {
 
 #[wasm_bindgen]
 impl DefaultSigner {
-    #[wasm_bindgen(js_name = "identityPublicKey")]
-    pub fn identity_public_key(&self) -> Result<PublicKeyBytes, JsValue> {
-        self.inner
-            .identity_public_key()
-            .map(|pk| pk.into())
-            .map_err(|e| JsValue::from_str(&format!("{e:?}")))
-    }
-
     #[wasm_bindgen(js_name = "derivePublicKey")]
     pub async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, JsValue> {
         self.inner
@@ -218,10 +210,6 @@ use breez_sdk_spark::SignerError;
 
 #[async_trait]
 impl breez_sdk_spark::signer::ExternalBreezSigner for DefaultSigner {
-    fn identity_public_key(&self) -> Result<core_types::PublicKeyBytes, SignerError> {
-        self.inner.identity_public_key()
-    }
-
     async fn derive_public_key(
         &self,
         path: String,
@@ -272,14 +260,6 @@ impl breez_sdk_spark::signer::ExternalBreezSigner for DefaultSigner {
 
 #[async_trait]
 impl breez_sdk_spark::signer::ExternalBreezSigner for WasmExternalBreezSigner {
-    fn identity_public_key(&self) -> Result<core_types::PublicKeyBytes, SignerError> {
-        let wasm_pubkey: PublicKeyBytes = self
-            .inner
-            .identity_public_key()
-            .map_err(|e| SignerError::Generic(format!("JS error: {e:?}")))?;
-        Ok(wasm_pubkey.into())
-    }
-
     async fn derive_public_key(
         &self,
         path: String,
@@ -411,7 +391,6 @@ impl breez_sdk_spark::signer::ExternalBreezSigner for WasmExternalBreezSigner {
 
 #[wasm_bindgen(typescript_custom_section)]
 const SIGNER_INTERFACE: &'static str = r#"export interface ExternalBreezSigner {
-    identityPublicKey(): PublicKeyBytes;
     derivePublicKey(path: string): Promise<PublicKeyBytes>;
     signEcdsa(message: MessageBytes, path: string): Promise<EcdsaSignatureBytes>;
     signEcdsaRecoverable(message: MessageBytes, path: string): Promise<RecoverableEcdsaSignatureBytes>;
@@ -425,9 +404,6 @@ const SIGNER_INTERFACE: &'static str = r#"export interface ExternalBreezSigner {
 extern "C" {
     #[wasm_bindgen(typescript_type = "ExternalBreezSigner")]
     pub type JsExternalBreezSigner;
-
-    #[wasm_bindgen(structural, method, js_name = "identityPublicKey", catch)]
-    pub fn identity_public_key(this: &JsExternalBreezSigner) -> Result<PublicKeyBytes, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = "derivePublicKey", catch)]
     pub fn derive_public_key(

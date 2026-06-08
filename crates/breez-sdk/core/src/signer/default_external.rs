@@ -75,14 +75,6 @@ impl DefaultExternalSigner {
 
 #[macros::async_trait]
 impl ExternalBreezSigner for DefaultExternalSigner {
-    fn identity_public_key(&self) -> Result<PublicKeyBytes, SignerError> {
-        let pk = self
-            .inner
-            .identity_public_key()
-            .map_err(|e| SignerError::Generic(e.to_string()))?;
-        Ok(PublicKeyBytes::from_public_key(&pk))
-    }
-
     async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError> {
         let derivation_path =
             string_to_derivation_path(&path).map_err(|e| SignerError::Generic(e.to_string()))?;
@@ -236,20 +228,6 @@ mod tests {
         let internal = BreezSignerImpl::new(master);
 
         (external, internal)
-    }
-
-    #[macros::test_all]
-    fn test_identity_public_key() {
-        let (external, internal) = create_test_signer();
-
-        let external_pk = external.identity_public_key().unwrap();
-        let internal_pk = internal.identity_public_key().unwrap();
-
-        assert_eq!(
-            external_pk.to_public_key().unwrap(),
-            internal_pk,
-            "Identity public keys should match"
-        );
     }
 
     #[macros::async_test_all]
