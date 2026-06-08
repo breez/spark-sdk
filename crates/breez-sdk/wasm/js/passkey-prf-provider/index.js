@@ -648,7 +648,8 @@ export class PasskeyProvider {
 /**
  * Builder for a {@link PasskeyClient} with a caller-supplied
  * `PrfProvider`. Use it when you need a configured {@link PasskeyProvider}
- * (custom `rpId`/`rpName`, timeout overrides) or a custom PRF backend.
+ * (web-specific options like `authenticatorAttachment` or timeout overrides)
+ * or a custom PRF backend.
  * For the zero-config Breez-RP case, use the {@link PasskeyClient}
  * constructor directly.
  *
@@ -665,7 +666,7 @@ export class PasskeyClientBuilder {
      * @param {string} [breezApiKey] - Breez relay key for authenticated
      *   (NIP-42) label storage. Omit for public relays only.
      * @param {import('../breez_sdk_spark_wasm.js').PasskeyConfig} [config] -
-     *   `rpId` / `rpName` configure the built-in provider (ignored when
+     *   `providerOptions` configures the built-in provider (ignored when
      *   one is injected via {@link withPrfProvider}); `defaultLabel` is
      *   the label-store default.
      */
@@ -677,7 +678,7 @@ export class PasskeyClientBuilder {
 
     /**
      * Inject the `PrfProvider` the client derives seeds through,
-     * superseding the config's `rpId` / `rpName`.
+     * superseding the config's `providerOptions`.
      * @param {PrfProvider} provider
      * @returns {PasskeyClientBuilder} this, for chaining.
      */
@@ -688,7 +689,7 @@ export class PasskeyClientBuilder {
 
     /**
      * Build the client, defaulting to a browser {@link PasskeyProvider}
-     * on the config's `rpId` / `rpName` (default: the Breez RP) when no
+     * on the config's `providerOptions` (default: the Breez RP) when no
      * provider was injected.
      * @returns {import('../breez_sdk_spark_wasm.js').PasskeyClient}
      */
@@ -720,7 +721,7 @@ export class PasskeyClient {
      * @param {string} [breezApiKey] - Breez relay key for authenticated
      *   (NIP-42) label storage. Omit for public relays only.
      * @param {import('../breez_sdk_spark_wasm.js').PasskeyConfig} [config] -
-     *   Optional `rpId` / `rpName` for the built-in provider (default: the
+     *   Optional `providerOptions` for the built-in provider (default: the
      *   Breez shared RP) plus `defaultLabel`.
      * @returns {import('../breez_sdk_spark_wasm.js').PasskeyClient}
      */

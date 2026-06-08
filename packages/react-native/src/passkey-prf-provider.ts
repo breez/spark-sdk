@@ -303,9 +303,8 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 
 /**
  * Builds a `PasskeyClient` backed by a caller-supplied provider. Use this
- * when you need a configured {@link PasskeyProvider} (custom `rpId` /
- * `rpName`) or a custom PRF backend; omit the provider for the zero-config
- * Breez-RP default.
+ * for a custom PRF backend; omit the provider for the zero-config Breez-RP
+ * default and set `providerOptions` on the config to use your own RP.
  */
 export class PasskeyClientBuilder {
   private provider?: PrfProvider;
@@ -313,7 +312,7 @@ export class PasskeyClientBuilder {
   /**
    * @param breezApiKey Breez relay key for authenticated (NIP-42) label
    *   storage. Omit for public relays only.
-   * @param config Passkey client config. `rpId` / `rpName` configure the
+   * @param config Passkey client config. `providerOptions` configures the
    *   default provider (ignored when a provider is injected via
    *   {@link withPrfProvider}, which owns its RP); `defaultLabel` is the
    *   label-store default.
@@ -326,7 +325,7 @@ export class PasskeyClientBuilder {
   /**
    * Inject the provider the client derives seeds through: the built-in
    * {@link PasskeyProvider} or any custom `PrfProvider` implementation.
-   * Supersedes the config's `rpId` / `rpName` (the injected provider owns
+   * Supersedes the config's `providerOptions` (the injected provider owns
    * its RP).
    */
   withPrfProvider(provider: PrfProvider): this {
@@ -336,7 +335,7 @@ export class PasskeyClientBuilder {
 
   /**
    * Construct the client. Falls back to a default {@link PasskeyProvider}
-   * on the config's `rpId` / `rpName` (default: the Breez RP) when no
+   * on the config's `providerOptions` (default: the Breez RP) when no
    * provider was injected.
    */
   build(): SdkPasskeyClient {
@@ -361,7 +360,7 @@ function buildPasskeyClient(
 
 /**
  * Zero-config passkey client on the Breez shared RP (`keys.breez.technology`),
- * so a Breez-registered app needs only its relay key; set `rpId` / `rpName` on
+ * so a Breez-registered app needs only its relay key; set `providerOptions` on
  * the config to use your own RP. For a custom PRF backend, build the provider
  * and inject it via {@link PasskeyClientBuilder}.
  */
