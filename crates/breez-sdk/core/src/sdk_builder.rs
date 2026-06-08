@@ -6,14 +6,16 @@ use std::sync::Arc;
 
 use breez_sdk_common::buy::moonpay::MoonpayProvider;
 
-use spark_wallet::{InMemorySessionStore, SessionStore, Signer, SparkWallet, SparkWalletConfig};
+use spark_wallet::{
+    InMemorySessionStore, SessionStore, SparkSigner, SparkWallet, SparkWalletConfig,
+};
 use tokio::sync::watch;
 use tracing::{debug, info};
 
 use flashnet::{FlashnetConfig, IntegratorConfig};
 
 use crate::{
-    Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, Seed,
+    Credentials, EventEmitter, FiatService, FiatServiceWrapper, Network, Seed,
     chain::{
         BitcoinChainService,
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
@@ -26,10 +28,7 @@ use crate::{
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams, SyncCoordinator, runtime_from_config},
     sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context},
-    signer::{
-        breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
-        spark::SparkSigner,
-    },
+    signer::{breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner},
     stable_balance::StableBalance,
     token_conversion::TokenConversionMiddleware,
     token_conversion::{
@@ -55,17 +54,18 @@ struct RestChainServiceConfig {
 enum SignerSource {
     Seed {
         seed: Seed,
-        key_set_type: KeySetType,
-        use_address_index: bool,
         account_number: Option<u32>,
     },
-    External(Arc<dyn crate::signer::ExternalSigner>),
+    External {
+        breez: Arc<dyn crate::signer::ExternalBreezSigner>,
+        spark: Arc<dyn crate::signer::ExternalSparkSigner>,
+    },
 }
 
-/// The four signers derived from a single base signer.
+/// The four signers derived from a single signer source.
 struct Signers {
     base: Arc<dyn crate::signer::BreezSigner>,
-    spark: Arc<SparkSigner>,
+    spark: Arc<dyn SparkSigner>,
     rtsync: Arc<RTSyncSigner>,
     lnurl_auth: Arc<LnurlAuthSignerAdapter>,
 }
@@ -73,7 +73,7 @@ struct Signers {
 /// Inputs to [`build_spark_wallet`] — bundled to avoid an >8-argument helper.
 struct BuildSparkWalletParams {
     config: SparkWalletConfig,
-    spark_signer: Arc<SparkSigner>,
+    spark_signer: Arc<dyn SparkSigner>,
     session_store: Arc<dyn SessionStore>,
     shutdown_receiver: watch::Receiver<()>,
     background_services_enabled: bool,
@@ -113,8 +113,6 @@ impl SdkBuilder {
             config,
             signer_source: SignerSource::Seed {
                 seed,
-                key_set_type: KeySetType::Default,
-                use_address_index: false,
                 account_number: None,
             },
             storage: None,
@@ -128,16 +126,25 @@ impl SdkBuilder {
         }
     }
 
-    /// Creates a new `SdkBuilder` with the provided configuration and external signer.
+    /// Creates a new `SdkBuilder` with the provided configuration and external signers.
     ///
     /// # Arguments
     /// - `config`: The configuration to be used.
-    /// - `signer`: An external signer implementation.
+    /// - `breez_signer`: External signer for non-Spark SDK signing (LNURL-auth,
+    ///   real-time sync, message signing, ECIES).
+    /// - `spark_signer`: External high-level Spark signer for the Spark wallet.
     #[allow(clippy::needless_pass_by_value)]
-    pub fn new_with_signer(config: Config, signer: Arc<dyn crate::signer::ExternalSigner>) -> Self {
+    pub fn new_with_signer(
+        config: Config,
+        breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
+        spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+    ) -> Self {
         SdkBuilder {
             config,
-            signer_source: SignerSource::External(signer),
+            signer_source: SignerSource::External {
+                breez: breez_signer,
+                spark: spark_signer,
+            },
             storage: None,
             chain_service: None,
             rest_chain_service_config: None,
@@ -149,24 +156,20 @@ impl SdkBuilder {
         }
     }
 
-    /// Sets the key set type to be used by the SDK.
+    /// Sets the key set configuration to be used by the SDK.
     ///
     /// Note: This only applies when using a seed-based signer. It has no effect
     /// when using an external signer (created with `new_with_signer`).
     ///
     /// # Arguments
-    /// - `config`: Key set configuration containing the key set type, address index flag, and optional account number.
+    /// - `config`: Key set configuration containing the optional account number.
     #[must_use]
     pub fn with_key_set(mut self, config: crate::models::KeySetConfig) -> Self {
         if let SignerSource::Seed {
-            key_set_type: ref mut kst,
-            use_address_index: ref mut uai,
             account_number: ref mut an,
             ..
         } = self.signer_source
         {
-            *kst = config.key_set_type;
-            *uai = config.use_address_index;
             *an = config.account_number;
         }
         self
@@ -537,29 +540,38 @@ fn validate_server_mode(
 /// Derives the four signers (base, spark, rtsync, lnurl-auth) from one signer
 /// source.
 fn build_signers(config: &Config, signer_source: SignerSource) -> Result<Signers, SdkError> {
-    let base: Arc<dyn crate::signer::BreezSigner> = match signer_source {
-        SignerSource::Seed {
-            seed,
-            key_set_type,
-            use_address_index,
-            account_number,
-        } => Arc::new(
-            BreezSignerImpl::new(
-                config,
-                &seed,
-                key_set_type.into(),
-                use_address_index,
+    // The SDK-layer `BreezSigner` (`base`) roots at the identity master
+    // (`base/0'`); the high-level Spark signer (the in-process `DefaultSigner`
+    // wrapped in a `SparkSignerAdapter`) roots at the account master (`base`).
+    let (base, spark): (Arc<dyn crate::signer::BreezSigner>, Arc<dyn SparkSigner>) =
+        match signer_source {
+            SignerSource::Seed {
+                seed,
                 account_number,
-            )
-            .map_err(|e| SdkError::Generic(e.to_string()))?,
-        ),
-        SignerSource::External(external_signer) => {
-            use crate::signer::ExternalSignerAdapter;
-            Arc::new(ExternalSignerAdapter::new(external_signer))
-        }
-    };
+            } => {
+                let seed_bytes = seed.to_bytes()?;
+                let network = config.network.into();
+                let base: Arc<dyn crate::signer::BreezSigner> = Arc::new(BreezSignerImpl::new(
+                    spark_wallet::identity_master_key(&seed_bytes, network, account_number)
+                        .map_err(|e| SdkError::Generic(e.to_string()))?,
+                ));
+                let spark: Arc<dyn SparkSigner> = Arc::new(spark_wallet::SparkSignerAdapter::new(
+                    Arc::new(spark_wallet::DefaultSigner::from_master(
+                        spark_wallet::account_master_key(&seed_bytes, network, account_number)
+                            .map_err(|e| SdkError::Generic(e.to_string()))?,
+                    )),
+                ));
+                (base, spark)
+            }
+            SignerSource::External { breez, spark } => {
+                use crate::signer::{ExternalBreezSignerAdapter, ExternalSparkSignerAdapter};
+                let base: Arc<dyn crate::signer::BreezSigner> =
+                    Arc::new(ExternalBreezSignerAdapter::new(breez));
+                let spark: Arc<dyn SparkSigner> = Arc::new(ExternalSparkSignerAdapter::new(spark));
+                (base, spark)
+            }
+        };
 
-    let spark = Arc::new(SparkSigner::new(base.clone()));
     let rtsync = Arc::new(
         RTSyncSigner::new(base.clone(), config.network)
             .map_err(|e| SdkError::Generic(e.to_string()))?,
@@ -603,7 +615,7 @@ async fn resolve_context(
 async fn resolve_storage(
     supplied: Option<Arc<dyn StorageBackend>>,
     context: &SdkContext,
-    spark_signer: &Arc<SparkSigner>,
+    spark_signer: &Arc<dyn SparkSigner>,
     config: &Config,
 ) -> Result<Arc<ResolvedStores>, SdkError> {
     let storage_backend: Arc<dyn StorageBackend> = match (supplied, context.storage_backend.clone())
@@ -1171,18 +1183,16 @@ mod tests {
         );
     }
 
-    fn test_spark_signer() -> std::sync::Arc<crate::signer::spark::SparkSigner> {
-        use crate::KeySetType;
-        use crate::signer::breez::BreezSignerImpl;
-        use crate::signer::spark::SparkSigner;
+    fn test_spark_signer() -> std::sync::Arc<dyn spark_wallet::SparkSigner> {
         use std::sync::Arc;
 
-        let config = default_config(Network::Regtest);
         let seed = test_seed();
-        let base: Arc<dyn crate::signer::BreezSigner> = Arc::new(
-            BreezSignerImpl::new(&config, &seed, KeySetType::Default.into(), false, None).unwrap(),
-        );
-        Arc::new(SparkSigner::new(base))
+        let seed_bytes = seed.to_bytes().unwrap();
+        let master =
+            spark_wallet::account_master_key(&seed_bytes, Network::Regtest.into(), None).unwrap();
+        Arc::new(spark_wallet::SparkSignerAdapter::new(Arc::new(
+            spark_wallet::DefaultSigner::from_master(master),
+        )))
     }
 
     // ---- validate_server_mode ----

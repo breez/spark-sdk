@@ -27,7 +27,7 @@ use crate::{
     tree_store::WasmTreeStore,
 };
 use bitcoin::secp256k1::PublicKey;
-use breez_sdk_spark::{KeySet, PrebuiltBackend, SessionStoreAdapter, StorageBackend};
+use breez_sdk_spark::{PrebuiltBackend, SessionStoreAdapter, StorageBackend, identity_public_key};
 use platform_utils::tokio::sync::OnceCell;
 use wasm_bindgen::prelude::*;
 
@@ -364,14 +364,12 @@ impl SdkBuilder {
     pub async fn build(mut self) -> WasmResult<BreezSdk> {
         // Derive the tenant identity from the seed. The JS-side stores use it
         // to scope every read/write by `user_id`.
-        let identity_bytes = KeySet::new(
+        let identity_bytes = identity_public_key(
             &self.seed.to_bytes()?,
             self.network.into(),
             self.account_number,
         )
         .map_err(WasmError::new)?
-        .identity_key_pair
-        .public_key()
         .serialize();
 
         let custom_storage = match (

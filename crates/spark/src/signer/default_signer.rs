@@ -1,7 +1,7 @@
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
-use bitcoin::secp256k1::{self, All, Keypair, Message, PublicKey, SecretKey, schnorr};
+use bitcoin::secp256k1::{self, All, Message, PublicKey, SecretKey, schnorr};
 use bitcoin::{
     hashes::{Hash, sha256},
     key::Secp256k1,
@@ -31,74 +31,48 @@ fn account_number(network: Network) -> u32 {
     }
 }
 
-struct DerivedKeySet {
-    derivation_path: DerivationPath,
-    master_key: Xpriv,
+/// Path of the identity / ECIES key under the account master: the `0'` child.
+/// The SDK-layer `BreezSigner` roots here and the Spark identity lives here too.
+fn identity_path() -> DerivationPath {
+    DerivationPath::from(vec![
+        ChildNumber::from_hardened_idx(0).expect("0 is a valid hardened index"),
+    ])
 }
 
-impl DerivedKeySet {
-    fn new(
-        seed: &[u8],
-        network: Network,
-        derivation_path: DerivationPath,
-    ) -> Result<Self, bitcoin::bip32::Error> {
-        let master_key = Xpriv::new_master(network, seed)?;
-
-        Ok(DerivedKeySet {
-            derivation_path,
-            master_key,
-        })
-    }
-
-    fn to_key_set(
-        &self,
-        identity_child_number: Option<ChildNumber>,
-    ) -> Result<KeySet, DefaultSignerError> {
-        let secp = Secp256k1::new();
-        // The account node. Leaf-signing keys (`base/1'/..`) and static-deposit
-        // keys (`base/3'/..`) derive from it; the higher-level signer supplies
-        // those paths.
-        let account_master_key = self.master_key.derive_priv(&secp, &self.derivation_path)?;
-
-        let mut identity_master_key = account_master_key;
-        if let Some(child_number) = identity_child_number {
-            identity_master_key =
-                identity_master_key.derive_priv(&secp, &DerivationPath::from(vec![child_number]))?
-        }
-        Ok(KeySet {
-            account_master_key,
-            identity_master_key,
-            identity_key_pair: identity_master_key.private_key.keypair(&secp),
-        })
-    }
+/// The Spark account master (`base`): `m/8797555'/{account}'`. Every wallet key
+/// derives from it (identity at `0'`, leaf signing under `1'`, static deposit
+/// under `3'`). `account_no` falls back to a per-network default when unset.
+pub fn account_master_key(
+    seed: &[u8],
+    network: Network,
+    account_no: Option<u32>,
+) -> Result<Xpriv, DefaultSignerError> {
+    let account_number = account_no.unwrap_or_else(|| account_number(network));
+    let path: DerivationPath = format!("m/8797555'/{account_number}'").parse()?;
+    let master = Xpriv::new_master(network, seed)?;
+    Ok(master.derive_priv(&Secp256k1::new(), &path)?)
 }
 
-#[derive(Clone)]
-pub struct KeySet {
-    /// The account node (`base`). Leaf-signing and static-deposit keys derive
-    /// from it via paths supplied by the higher-level Spark signer.
-    pub account_master_key: Xpriv,
-    /// The identity node (`base/0'` for the default key set, `base` otherwise),
-    /// used by the SDK-layer `BreezSigner` as its derivation root.
-    pub identity_master_key: Xpriv,
-    /// The resolved identity keypair (tap-tweaked for the Taproot key set), used
-    /// for identity signing and ECIES.
-    pub identity_key_pair: Keypair,
+/// The wallet identity master (`base/0'`): the `BreezSigner` derivation root and
+/// the Spark identity / ECIES key.
+pub fn identity_master_key(
+    seed: &[u8],
+    network: Network,
+    account_no: Option<u32>,
+) -> Result<Xpriv, DefaultSignerError> {
+    let base = account_master_key(seed, network, account_no)?;
+    Ok(base.derive_priv(&Secp256k1::new(), &identity_path())?)
 }
 
-impl KeySet {
-    /// Derives the Spark key set from a seed at `m/8797555'/{account}'`, with the
-    /// identity key at the `0'` child of that account node.
-    pub fn new(
-        seed: &[u8],
-        network: Network,
-        account_no: Option<u32>,
-    ) -> Result<Self, DefaultSignerError> {
-        let account_number = account_no.unwrap_or_else(|| account_number(network));
-        let derivation_path = format!("m/8797555'/{account_number}'").parse()?;
-        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
-        derived_key_set.to_key_set(ChildNumber::from_hardened_idx(0).ok())
-    }
+/// The wallet identity public key (`base/0'`). Lets storage be scoped per wallet
+/// before any signer is built.
+pub fn identity_public_key(
+    seed: &[u8],
+    network: Network,
+    account_no: Option<u32>,
+) -> Result<PublicKey, DefaultSignerError> {
+    let master = identity_master_key(seed, network, account_no)?;
+    Ok(master.private_key.public_key(&Secp256k1::new()))
 }
 
 #[derive(Clone)]
@@ -135,17 +109,15 @@ impl From<bitcoin::bip32::Error> for DefaultSignerError {
 
 impl DefaultSigner {
     pub fn new(seed: &[u8], network: Network) -> Result<Self, DefaultSignerError> {
-        Ok(Self::from_key_set(KeySet::new(seed, network, None)?))
+        Ok(Self::from_master(account_master_key(seed, network, None)?))
     }
 
-    pub fn from_key_set(key_set: KeySet) -> Self {
-        // The Spark identity / ECIES key is the account master's `0'` child.
-        let encryption_path = DerivationPath::from(vec![
-            ChildNumber::from_hardened_idx(0).expect("0 is a valid hardened index"),
-        ]);
+    /// Builds a signer rooted at `master`. Every key derives from it by BIP32
+    /// path; the identity / ECIES key is its `0'` child.
+    pub fn from_master(master: Xpriv) -> Self {
         DefaultSigner {
-            master: key_set.account_master_key,
-            encryption_path,
+            master,
+            encryption_path: identity_path(),
             secp: Secp256k1::new(),
         }
     }

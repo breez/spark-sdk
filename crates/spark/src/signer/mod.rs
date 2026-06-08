@@ -10,7 +10,9 @@ use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey, schnorr};
 use frost_secp256k1_tr::round2::SignatureShare;
 
-pub use default_signer::{DefaultSigner, DefaultSignerError, KeySet};
+pub use default_signer::{
+    DefaultSigner, DefaultSignerError, account_master_key, identity_master_key, identity_public_key,
+};
 pub use error::SignerError;
 pub use models::*;
 pub use spark_signer::*;

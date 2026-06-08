@@ -48,7 +48,8 @@ pub use sdk_builder::SdkBuilder;
 pub use sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context};
 pub use session_store::{Session, SessionStore, SessionStoreAdapter, SessionStoreError};
 pub use spark_wallet::{
-    CombinedHeaderProvider, HeaderProvider, HeaderProviderError, KeySet, PublicKey,
+    CombinedHeaderProvider, HeaderProvider, HeaderProviderError, PublicKey, account_master_key,
+    identity_master_key, identity_public_key,
 };
 
 #[cfg(feature = "postgres")]

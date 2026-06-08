@@ -9,17 +9,16 @@ use crate::signer::{BreezSigner, ExternalBreezSigner, breez::BreezSignerImpl};
 use crate::{Network, SdkError, Seed};
 
 /// Derives the identity master Xpriv (the `BreezSigner` derivation root) from a
-/// mnemonic seed. Key derivation lives in the Spark layer (`KeySet`); the
-/// SDK-layer `BreezSigner` just consumes the resulting master.
+/// mnemonic seed. Key derivation lives in the Spark layer; the SDK-layer
+/// `BreezSigner` just consumes the resulting master.
 fn identity_master_key(
     seed: &Seed,
     network: Network,
     account_number: Option<u32>,
 ) -> Result<bitcoin::bip32::Xpriv, SdkError> {
     let seed_bytes = seed.to_bytes()?;
-    let key_set = spark_wallet::KeySet::new(&seed_bytes, network.into(), account_number)
-        .map_err(|e| SdkError::Generic(e.to_string()))?;
-    Ok(key_set.identity_master_key)
+    spark_wallet::identity_master_key(&seed_bytes, network.into(), account_number)
+        .map_err(|e| SdkError::Generic(e.to_string()))
 }
 
 /// Default implementation of `ExternalBreezSigner` that uses the internal `BreezSignerImpl`.
