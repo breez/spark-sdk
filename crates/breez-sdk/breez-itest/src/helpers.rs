@@ -918,6 +918,32 @@ pub async fn build_sdk_with_turnkey(
     }))
 }
 
+/// Which signer backend an SDK is built with, for backend-parametrized tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignerBackend {
+    Seed,
+    Turnkey,
+}
+
+/// Builds a Regtest SDK for the given signer backend, so one test body can run
+/// against multiple signers. `Turnkey` requires a provisioned wallet and
+/// `TURNKEY_*` credentials; callers should skip the case when they are absent
+/// (e.g. via `turnkey_config_from_env`).
+pub async fn build_backend_sdk(backend: SignerBackend) -> Result<SdkInstance> {
+    let temp = TempDir::new()?;
+    let dir = temp.path().to_string_lossy().to_string();
+    match backend {
+        SignerBackend::Seed => {
+            let mut seed = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut seed);
+            build_sdk_with_dir(dir, seed, Some(temp)).await
+        }
+        SignerBackend::Turnkey => build_sdk_with_turnkey(dir, Some(temp))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Turnkey credentials unavailable")),
+    }
+}
+
 pub async fn wait_for<F, Fut, T>(mut check_fn: F, timeout_secs: u64) -> Result<T>
 where
     F: FnMut() -> Fut,
