@@ -102,11 +102,15 @@ pub struct FrostShareResult {
 
 // ─── prepare_transfer ─────────────────────────────────────────────────────
 
-/// A single leaf being sent in an outbound transfer. The signer derives the
-/// old leaf key from `node.id` and generates a fresh receiver key internally.
+/// A single leaf being sent in an outbound transfer. The signer derives the old
+/// leaf key from `node.id` and the new (post-transfer) leaf key from
+/// `new_leaf_id`: a freshly generated id supplied per send, so the new key is a
+/// deterministic HD derivation distinct from the old one (a key-addressed signer
+/// such as Turnkey cannot use a random key).
 #[derive(Debug, Clone)]
 pub struct TransferLeafInput {
     pub node: TreeNode,
+    pub new_leaf_id: TreeNodeId,
 }
 
 #[derive(Debug, Clone)]

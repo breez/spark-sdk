@@ -343,6 +343,7 @@ impl CoopExitService {
                     .iter()
                     .map(|l| TransferLeafInput {
                         node: l.node.clone(),
+                        new_leaf_id: TreeNodeId::generate(),
                     })
                     .collect(),
                 operator_recipients: self.operator_recipients(),

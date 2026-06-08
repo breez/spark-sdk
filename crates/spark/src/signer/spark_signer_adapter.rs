@@ -254,8 +254,7 @@ impl SparkSigner for SparkSignerAdapter {
 
         for leaf in &leaves {
             let signing_key = SecretSource::Derived(signing_path(&leaf.node.id)?);
-            let new_secret = self.signer.generate_random_secret().await?;
-            let new_signing_key = SecretSource::Encrypted(new_secret.clone());
+            let new_signing_key = SecretSource::Derived(signing_path(&leaf.new_leaf_id)?);
 
             new_leaf_keys.push(NewLeafKey {
                 node_id: leaf.node.id.clone(),

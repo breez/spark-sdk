@@ -232,12 +232,13 @@ fn sighash_32(bytes: &[u8]) -> Result<[u8; 32], SdkError> {
 
 // ─── prepare_transfer ───────────────────────────────────────────────────────
 
-/// FFI-safe representation of `spark_wallet::TransferLeafInput`. Only the leaf
-/// id is conveyed — the signer derives keys from it.
+/// FFI-safe representation of `spark_wallet::TransferLeafInput`. Conveys the old
+/// leaf id and the new (post-transfer) leaf id; the signer derives keys from them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ExternalTransferLeafInput {
     pub node_id: ExternalTreeNodeId,
+    pub new_leaf_id: ExternalTreeNodeId,
 }
 
 impl ExternalTransferLeafInput {
@@ -246,6 +247,7 @@ impl ExternalTransferLeafInput {
     ) -> Result<Self, SdkError> {
         Ok(Self {
             node_id: ExternalTreeNodeId::from_tree_node_id(&leaf.node.id)?,
+            new_leaf_id: ExternalTreeNodeId::from_tree_node_id(&leaf.new_leaf_id)?,
         })
     }
 }
