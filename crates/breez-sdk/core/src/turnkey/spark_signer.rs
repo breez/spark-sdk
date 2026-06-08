@@ -18,8 +18,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use bitcoin::NetworkKind;
-use bitcoin::bip32::{ChainCode, ChildNumber, DerivationPath, Xpriv};
+use bitcoin::bip32::DerivationPath;
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::Identifier;
@@ -41,83 +40,29 @@ use crate::Network;
 
 use turnkey_enclave_encrypt::{ExportClient, QuorumPublicKey};
 
+use super::accounts::{
+    decode_scalar_32, ecdsa_from_rs, schnorr_from_rs, spark_address_format, xpriv_from_secret,
+};
 use super::error::TurnkeyError;
 use super::transport::TurnkeyClient;
 use super::types::{
-    ADDRESS_FORMAT_COMPRESSED, ADDRESS_FORMAT_SPARK_MAINNET, ADDRESS_FORMAT_SPARK_REGTEST,
-    CREATE_WALLET_ACCOUNTS_PATH, CREATE_WALLET_ACCOUNTS_RESULT, CREATE_WALLET_ACCOUNTS_TYPE,
-    CURVE_SECP256K1, CreateWalletAccountsIntent, CreateWalletAccountsResult, ENCODING_HEXADECIMAL,
-    EXPORT_WALLET_ACCOUNT_PATH, EXPORT_WALLET_ACCOUNT_RESULT, EXPORT_WALLET_ACCOUNT_TYPE,
-    ExportWalletAccountIntent, ExportWalletAccountResult, GET_WALLET_ACCOUNT_PATH,
-    GetWalletAccountRequest, GetWalletAccountResponse, HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256,
-    PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH, SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE,
-    SPARK_CLAIM_TRANSFER_PATH, SPARK_CLAIM_TRANSFER_RESULT, SPARK_CLAIM_TRANSFER_TYPE,
-    SPARK_PREPARE_LIGHTNING_RECEIVE_PATH, SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT,
-    SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE, SPARK_PREPARE_TRANSFER_PATH,
-    SPARK_PREPARE_TRANSFER_RESULT, SPARK_PREPARE_TRANSFER_TYPE, SPARK_SIGN_FROST_PATH,
-    SPARK_SIGN_FROST_RESULT, SPARK_SIGN_FROST_TYPE, SignRawPayloadIntent, SignRawPayloadResult,
-    SparkClaimLeaf, SparkClaimPackage, SparkClaimTransferIntent, SparkClaimTransferResult,
+    ADDRESS_FORMAT_COMPRESSED, EXPORT_WALLET_ACCOUNT_PATH, EXPORT_WALLET_ACCOUNT_RESULT,
+    EXPORT_WALLET_ACCOUNT_TYPE, ExportWalletAccountIntent, ExportWalletAccountResult,
+    HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256, SPARK_CLAIM_TRANSFER_PATH,
+    SPARK_CLAIM_TRANSFER_RESULT, SPARK_CLAIM_TRANSFER_TYPE, SPARK_PREPARE_LIGHTNING_RECEIVE_PATH,
+    SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT, SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE,
+    SPARK_PREPARE_TRANSFER_PATH, SPARK_PREPARE_TRANSFER_RESULT, SPARK_PREPARE_TRANSFER_TYPE,
+    SPARK_SIGN_FROST_PATH, SPARK_SIGN_FROST_RESULT, SPARK_SIGN_FROST_TYPE, SparkClaimLeaf,
+    SparkClaimPackage, SparkClaimTransferIntent, SparkClaimTransferResult,
     SparkEncryptedOperatorPackage, SparkFrostCommitment, SparkKeyDerivation, SparkLeafPublicKey,
     SparkLightningReceivePackage, SparkOperatorRecipient, SparkPartialSignature,
     SparkPrepareLightningReceiveIntent, SparkPrepareLightningReceiveResult,
     SparkPrepareTransferIntent, SparkPrepareTransferResult, SparkSignFrostIntent,
     SparkSignFrostResult, SparkSignatureRequest, SparkTransferLeaf, SparkTransferPackage,
-    WalletAccountParams,
 };
 
 fn to_spark_err<E: std::fmt::Display>(e: E) -> SignerError {
     SignerError::Generic(e.to_string())
-}
-
-/// Decodes a hex scalar into 32 bytes, left-padding if Turnkey omitted leading
-/// zeros.
-fn decode_scalar_32(hex_str: &str) -> Result<[u8; 32], TurnkeyError> {
-    let bytes =
-        hex::decode(hex_str).map_err(|e| TurnkeyError::Deserialize(format!("scalar hex: {e}")))?;
-    if bytes.len() > 32 {
-        return Err(TurnkeyError::Deserialize("scalar exceeds 32 bytes".into()));
-    }
-    let mut out = [0u8; 32];
-    out[32 - bytes.len()..].copy_from_slice(&bytes);
-    Ok(out)
-}
-
-fn ecdsa_from_rs(r_hex: &str, s_hex: &str) -> Result<ecdsa::Signature, TurnkeyError> {
-    let mut compact = [0u8; 64];
-    compact[..32].copy_from_slice(&decode_scalar_32(r_hex)?);
-    compact[32..].copy_from_slice(&decode_scalar_32(s_hex)?);
-    ecdsa::Signature::from_compact(&compact).map_err(|e| TurnkeyError::Deserialize(e.to_string()))
-}
-
-fn schnorr_from_rs(r_hex: &str, s_hex: &str) -> Result<schnorr::Signature, TurnkeyError> {
-    let mut sig = [0u8; 64];
-    sig[..32].copy_from_slice(&decode_scalar_32(r_hex)?);
-    sig[32..].copy_from_slice(&decode_scalar_32(s_hex)?);
-    schnorr::Signature::from_slice(&sig).map_err(|e| TurnkeyError::Deserialize(e.to_string()))
-}
-
-fn spark_address_format(network: Network) -> &'static str {
-    match network {
-        Network::Mainnet => ADDRESS_FORMAT_SPARK_MAINNET,
-        Network::Regtest => ADDRESS_FORMAT_SPARK_REGTEST,
-    }
-}
-
-/// Wraps a raw exported secret key as an `Xpriv` so it can root a local
-/// `DefaultSigner`. We never derive children, so the chain code is a fixed
-/// placeholder and the key is addressed via the empty (master) path.
-fn xpriv_from_secret(secret: SecretKey, network: Network) -> Xpriv {
-    Xpriv {
-        network: match network {
-            Network::Mainnet => NetworkKind::Main,
-            Network::Regtest => NetworkKind::Test,
-        },
-        depth: 0,
-        parent_fingerprint: Default::default(),
-        child_number: ChildNumber::from_normal_idx(0).expect("0 is a valid child index"),
-        private_key: secret,
-        chain_code: ChainCode::from([0u8; 32]),
-    }
 }
 
 fn frost_derivation(derivation: &FrostDerivation) -> SparkKeyDerivation {
@@ -267,61 +212,11 @@ impl TurnkeySparkSigner {
 
     async fn pubkey_at_path(&self, path: String) -> Result<PublicKey, SignerError> {
         let hex = self
-            .fetch_or_create_pubkey_hex(path)
+            .client
+            .compressed_pubkey_at(path)
             .await
             .map_err(to_spark_err)?;
         PublicKey::from_str(&hex).map_err(to_spark_err)
-    }
-
-    /// Reads the compressed public key for a derivation path, preferring an
-    /// existing account's `publicKey` and otherwise materializing the account
-    /// with `ADDRESS_FORMAT_COMPRESSED` (whose address is the compressed key).
-    async fn fetch_or_create_pubkey_hex(&self, path: String) -> Result<String, TurnkeyError> {
-        let request = GetWalletAccountRequest {
-            organization_id: self.client.organization_id.clone(),
-            wallet_id: self.client.wallet_id.clone(),
-            path: path.clone(),
-        };
-        if let Ok(resp) = self
-            .client
-            .process_request::<_, GetWalletAccountResponse>(GET_WALLET_ACCOUNT_PATH, &request)
-            .await
-            && let Some(public_key) = resp.account.public_key
-        {
-            return Ok(public_key);
-        }
-        self.create_account(path, ADDRESS_FORMAT_COMPRESSED).await
-    }
-
-    /// Materializes a wallet account at `path` with `address_format` and returns
-    /// its address. The key is deterministic from the wallet seed, so this is
-    /// effectively idempotent across runs.
-    async fn create_account(
-        &self,
-        path: String,
-        address_format: &'static str,
-    ) -> Result<String, TurnkeyError> {
-        let intent = CreateWalletAccountsIntent {
-            wallet_id: self.client.wallet_id.clone(),
-            accounts: vec![WalletAccountParams {
-                curve: CURVE_SECP256K1,
-                path_format: PATH_FORMAT_BIP32,
-                path,
-                address_format,
-            }],
-        };
-        let result: CreateWalletAccountsResult = self
-            .client
-            .submit_activity(
-                CREATE_WALLET_ACCOUNTS_PATH,
-                CREATE_WALLET_ACCOUNTS_TYPE,
-                intent,
-                CREATE_WALLET_ACCOUNTS_RESULT,
-            )
-            .await?;
-        result.addresses.into_iter().next().ok_or_else(|| {
-            TurnkeyError::UnexpectedResponse("create_wallet_accounts returned no address".into())
-        })
     }
 
     /// The Spark-format identity address, used as `signWith` for Spark-protocol
@@ -333,6 +228,7 @@ impl TurnkeySparkSigner {
         let format = spark_address_format(self.network);
         let path = format!("{}/0'", self.base_path());
         let addr = self
+            .client
             .create_account(path, format)
             .await
             .map_err(to_spark_err)?;
@@ -345,20 +241,9 @@ impl TurnkeySparkSigner {
     /// hash is signed as-is (`NO_OP`), matching the local signer.
     async fn sign_identity_schnorr(&self, hash: &[u8]) -> Result<schnorr::Signature, SignerError> {
         let sign_with = self.spark_identity_address().await?;
-        let intent = SignRawPayloadIntent {
-            sign_with,
-            payload: hex::encode(hash),
-            encoding: ENCODING_HEXADECIMAL,
-            hash_function: HASH_FUNCTION_NO_OP,
-        };
-        let result: SignRawPayloadResult = self
+        let result = self
             .client
-            .submit_activity(
-                SIGN_RAW_PAYLOAD_PATH,
-                SIGN_RAW_PAYLOAD_TYPE,
-                intent,
-                SIGN_RAW_PAYLOAD_RESULT,
-            )
+            .sign_raw(sign_with, hex::encode(hash), HASH_FUNCTION_NO_OP)
             .await
             .map_err(to_spark_err)?;
         schnorr_from_rs(&result.r, &result.s).map_err(to_spark_err)
@@ -370,19 +255,12 @@ impl TurnkeySparkSigner {
     /// Turnkey applies SHA-256 to the payload, matching the local signer.
     async fn sign_identity_ecdsa(&self, message: &[u8]) -> Result<ecdsa::Signature, SignerError> {
         let identity = self.get_identity_public_key().await?;
-        let intent = SignRawPayloadIntent {
-            sign_with: hex::encode(identity.serialize()),
-            payload: hex::encode(message),
-            encoding: ENCODING_HEXADECIMAL,
-            hash_function: HASH_FUNCTION_SHA256,
-        };
-        let result: SignRawPayloadResult = self
+        let result = self
             .client
-            .submit_activity(
-                SIGN_RAW_PAYLOAD_PATH,
-                SIGN_RAW_PAYLOAD_TYPE,
-                intent,
-                SIGN_RAW_PAYLOAD_RESULT,
+            .sign_raw(
+                hex::encode(identity.serialize()),
+                hex::encode(message),
+                HASH_FUNCTION_SHA256,
             )
             .await
             .map_err(to_spark_err)?;
@@ -415,6 +293,7 @@ impl TurnkeySparkSigner {
         }
         let path = format!("{}/3'/{index}'", self.base_path());
         let address = self
+            .client
             .create_account(path, ADDRESS_FORMAT_COMPRESSED)
             .await
             .map_err(to_spark_err)?;

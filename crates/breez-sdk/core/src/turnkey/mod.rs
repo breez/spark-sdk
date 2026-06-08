@@ -6,6 +6,8 @@
 //! Private keys stay in Turnkey except where its design requires a local export
 //! (static-deposit refund and the SDK-layer encryption/HMAC key).
 
+mod accounts;
+mod breez_signer;
 mod config;
 mod error;
 mod spark_signer;

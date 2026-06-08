@@ -78,6 +78,9 @@ pub(crate) struct SignRawPayloadIntent {
 pub(crate) struct SignRawPayloadResult {
     pub r: String,
     pub s: String,
+    /// ECDSA recovery id (hex). Absent for Schnorr, so defaulted.
+    #[serde(default)]
+    pub v: String,
 }
 
 pub(crate) const ADDRESS_FORMAT_SPARK_MAINNET: &str = "ADDRESS_FORMAT_SPARK_MAINNET";
