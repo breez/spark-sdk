@@ -15,6 +15,7 @@ use crate::signer::EncryptedSecret;
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::paging::{PagingFilter, PagingResult, pager};
 use crate::utils::refund::{SignRefundsParams, SignedRefundTransactions, sign_refunds};
+use crate::utils::tagged_hasher::TaggedHasher;
 use crate::utils::time::web_time_to_prost_timestamp;
 
 use bitcoin::Transaction;
@@ -644,21 +645,34 @@ impl TransferService {
             })
             .await?;
 
+        let key_tweak_package: std::collections::BTreeMap<String, Vec<u8>> = prepared
+            .operator_packages
+            .into_iter()
+            .map(|p| {
+                (
+                    hex::encode(p.operator_identifier.serialize()),
+                    p.encrypted_package,
+                )
+            })
+            .collect();
+
+        // Claim-package user signature: identity-key ECDSA over the tagged
+        // payload (tag || transfer_id || tweak map). Done here, not in the
+        // signer, so signers stay free of claim-payload construction.
+        let transfer_id_bytes = hex::decode(transfer.id.to_string().replace('-', ""))
+            .map_err(|e| ServiceError::Generic(format!("invalid transfer id: {e}")))?;
+        let signing_payload = TaggedHasher::new(&["spark", "claim", "signing payload"])
+            .add_bytes(&transfer_id_bytes)
+            .add_map_string_to_bytes(&key_tweak_package)
+            .signable_message();
+        let user_signature = self.spark_signer.sign_message(&signing_payload).await?;
+
         Ok(operator_rpc::spark::ClaimPackage {
             leaves_to_claim: cpfp_jobs,
             direct_leaves_to_claim: direct_jobs,
             direct_from_cpfp_leaves_to_claim: direct_from_cpfp_jobs,
-            key_tweak_package: prepared
-                .operator_packages
-                .into_iter()
-                .map(|p| {
-                    (
-                        hex::encode(p.operator_identifier.serialize()),
-                        p.encrypted_package,
-                    )
-                })
-                .collect(),
-            user_signature: prepared.claim_user_signature.serialize_der().to_vec(),
+            key_tweak_package: key_tweak_package.into_iter().collect(),
+            user_signature: user_signature.serialize_der().to_vec(),
             hash_variant: HashVariant::V2.into(),
         })
     }

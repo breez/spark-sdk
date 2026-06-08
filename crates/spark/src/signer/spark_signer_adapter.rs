@@ -366,7 +366,7 @@ impl SparkSigner for SparkSignerAdapter {
         request: PrepareClaimRequest,
     ) -> Result<PreparedClaim, SignerError> {
         let PrepareClaimRequest {
-            transfer_id,
+            transfer_id: _,
             sender_identity_public_key: _,
             leaves,
             operator_recipients,
@@ -412,8 +412,8 @@ impl SparkSigner for SparkSignerAdapter {
             }
         }
 
-        // ECIES-encrypt each operator's bundle of claim key tweaks.
-        let mut key_tweak_package: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        // ECIES-encrypt each operator's bundle of claim key tweaks. The
+        // claim-package user signature is produced by the orchestration layer.
         let mut operator_packages = Vec::with_capacity(operator_recipients.len());
         for recipient in &operator_recipients {
             let leaves_to_receive = per_operator
@@ -421,30 +421,13 @@ impl SparkSigner for SparkSignerAdapter {
                 .unwrap_or_default();
             let proto_bytes = proto::ClaimLeafKeyTweaks { leaves_to_receive }.encode_to_vec();
             let encrypted = self.encrypt_for_operator(&recipient.public_key, &proto_bytes)?;
-            key_tweak_package.insert(
-                hex::encode(recipient.identifier.serialize()),
-                encrypted.clone(),
-            );
             operator_packages.push(OperatorPackage {
                 operator_identifier: recipient.identifier,
                 encrypted_package: encrypted,
             });
         }
 
-        // Claim-package payload signature: tag || transfer_id || tweak map.
-        let signing_payload = TaggedHasher::new(&["spark", "claim", "signing payload"])
-            .add_bytes(&transfer_id_bytes(&transfer_id)?)
-            .add_map_string_to_bytes(&key_tweak_package)
-            .signable_message();
-        let claim_user_signature = self
-            .signer
-            .sign_message_ecdsa(&identity_path()?, &signing_payload)
-            .await?;
-
-        Ok(PreparedClaim {
-            operator_packages,
-            claim_user_signature,
-        })
+        Ok(PreparedClaim { operator_packages })
     }
 
     async fn prepare_lightning_receive(

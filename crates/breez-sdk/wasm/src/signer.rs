@@ -557,7 +557,6 @@ pub struct ExternalPrepareClaimRequest {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalPreparedClaim)]
 pub struct ExternalPreparedClaim {
     pub operator_packages: Vec<ExternalOperatorPackage>,
-    pub claim_user_signature: EcdsaSignatureBytes,
 }
 
 #[macros::extern_wasm_bindgen(

@@ -167,12 +167,13 @@ pub struct PrepareClaimRequest {
     pub threshold: u32,
 }
 
+/// The claim key-tweak packages. The claim-package user signature is produced
+/// by the orchestration layer (it signs the package payload with the identity
+/// key via `sign_message`), keeping signers free of claim-payload construction.
 #[derive(Debug, Clone)]
 pub struct PreparedClaim {
     /// One ECIES-encrypted claim-tweak package per operator.
     pub operator_packages: Vec<OperatorPackage>,
-    /// ECDSA signature over the claim-package payload (identity key).
-    pub claim_user_signature: ecdsa::Signature,
 }
 
 // ─── prepare_lightning_receive ────────────────────────────────────────────

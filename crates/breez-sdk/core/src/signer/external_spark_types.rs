@@ -394,7 +394,6 @@ impl ExternalPrepareClaimRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ExternalPreparedClaim {
     pub operator_packages: Vec<ExternalOperatorPackage>,
-    pub claim_user_signature: EcdsaSignatureBytes,
 }
 
 impl ExternalPreparedClaim {
@@ -405,7 +404,6 @@ impl ExternalPreparedClaim {
                 .iter()
                 .map(ExternalOperatorPackage::to_operator_package)
                 .collect::<Result<_, _>>()?,
-            claim_user_signature: self.claim_user_signature.to_signature()?,
         })
     }
 }
