@@ -32,9 +32,11 @@ pub(crate) fn spark_address_format(network: Network) -> &'static str {
 }
 
 impl TurnkeyClient {
-    /// Materializes a wallet account at `path` with `address_format`, returning
-    /// its address. The key is deterministic from the wallet seed, so this is
-    /// effectively idempotent across runs.
+    /// Materializes the wallet account at `path` with `address_format`,
+    /// returning its address. Idempotent: a path can only be created once, so if
+    /// it already exists (a prior run or a concurrent request) Turnkey 409s and
+    /// we read the existing address back. The `address_format` therefore only
+    /// takes effect on first creation.
     pub(crate) async fn create_account(
         &self,
         path: String,
@@ -45,21 +47,40 @@ impl TurnkeyClient {
             accounts: vec![WalletAccountParams {
                 curve: CURVE_SECP256K1,
                 path_format: PATH_FORMAT_BIP32,
-                path,
+                path: path.clone(),
                 address_format,
             }],
         };
-        let result: CreateWalletAccountsResult = self
+        let result: Result<CreateWalletAccountsResult, TurnkeyError> = self
             .submit_activity(
                 CREATE_WALLET_ACCOUNTS_PATH,
                 CREATE_WALLET_ACCOUNTS_TYPE,
                 intent,
                 CREATE_WALLET_ACCOUNTS_RESULT,
             )
+            .await;
+        match result {
+            Ok(result) => result.addresses.into_iter().next().ok_or_else(|| {
+                TurnkeyError::UnexpectedResponse(
+                    "create_wallet_accounts returned no address".into(),
+                )
+            }),
+            Err(TurnkeyError::Http { status: 409, .. }) => self.account_address(path).await,
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Reads the address of the existing wallet account at `path`.
+    async fn account_address(&self, path: String) -> Result<String, TurnkeyError> {
+        let request = GetWalletAccountRequest {
+            organization_id: self.organization_id.clone(),
+            wallet_id: self.wallet_id.clone(),
+            path,
+        };
+        let resp: GetWalletAccountResponse = self
+            .process_request(GET_WALLET_ACCOUNT_PATH, &request)
             .await?;
-        result.addresses.into_iter().next().ok_or_else(|| {
-            TurnkeyError::UnexpectedResponse("create_wallet_accounts returned no address".into())
-        })
+        Ok(resp.account.address)
     }
 
     /// Compressed public key (hex) for `path`: prefers an existing account's
@@ -106,8 +127,12 @@ impl TurnkeyClient {
     /// Exports the secret key for the account at `path`, decrypting the bundle
     /// against the pinned production quorum key. Used where Turnkey's design
     /// requires a local key (static-deposit refund, SDK-layer encryption/HMAC).
-    pub(crate) async fn export_secret_key(&self, path: String) -> Result<SecretKey, TurnkeyError> {
-        let address = self.create_account(path, ADDRESS_FORMAT_COMPRESSED).await?;
+    pub(crate) async fn export_secret_key(
+        &self,
+        path: String,
+        address_format: &'static str,
+    ) -> Result<SecretKey, TurnkeyError> {
+        let address = self.create_account(path, address_format).await?;
         let mut export_client = ExportClient::new(&QuorumPublicKey::production_signer());
         let target_public_key = export_client
             .target_public_key()

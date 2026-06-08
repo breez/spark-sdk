@@ -60,17 +60,18 @@ use super::accounts::{
 use super::error::TurnkeyError;
 use super::transport::TurnkeyClient;
 use super::types::{
-    HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256, SPARK_CLAIM_TRANSFER_PATH,
-    SPARK_CLAIM_TRANSFER_RESULT, SPARK_CLAIM_TRANSFER_TYPE, SPARK_PREPARE_LIGHTNING_RECEIVE_PATH,
-    SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT, SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE,
-    SPARK_PREPARE_TRANSFER_PATH, SPARK_PREPARE_TRANSFER_RESULT, SPARK_PREPARE_TRANSFER_TYPE,
-    SPARK_SIGN_FROST_PATH, SPARK_SIGN_FROST_RESULT, SPARK_SIGN_FROST_TYPE, SparkClaimLeaf,
-    SparkClaimPackage, SparkClaimTransferIntent, SparkClaimTransferResult,
-    SparkEncryptedOperatorPackage, SparkFrostCommitment, SparkKeyDerivation, SparkLeafPublicKey,
-    SparkLightningReceivePackage, SparkOperatorRecipient, SparkPartialSignature,
-    SparkPrepareLightningReceiveIntent, SparkPrepareLightningReceiveResult,
-    SparkPrepareTransferIntent, SparkPrepareTransferResult, SparkSignFrostIntent,
-    SparkSignFrostResult, SparkSignatureRequest, SparkTransferLeaf, SparkTransferPackage,
+    ADDRESS_FORMAT_COMPRESSED, HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256,
+    SPARK_CLAIM_TRANSFER_PATH, SPARK_CLAIM_TRANSFER_RESULT, SPARK_CLAIM_TRANSFER_TYPE,
+    SPARK_PREPARE_LIGHTNING_RECEIVE_PATH, SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT,
+    SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE, SPARK_PREPARE_TRANSFER_PATH,
+    SPARK_PREPARE_TRANSFER_RESULT, SPARK_PREPARE_TRANSFER_TYPE, SPARK_SIGN_FROST_PATH,
+    SPARK_SIGN_FROST_RESULT, SPARK_SIGN_FROST_TYPE, SparkClaimLeaf, SparkClaimPackage,
+    SparkClaimTransferIntent, SparkClaimTransferResult, SparkEncryptedOperatorPackage,
+    SparkFrostCommitment, SparkKeyDerivation, SparkLeafPublicKey, SparkLightningReceivePackage,
+    SparkOperatorRecipient, SparkPartialSignature, SparkPrepareLightningReceiveIntent,
+    SparkPrepareLightningReceiveResult, SparkPrepareTransferIntent, SparkPrepareTransferResult,
+    SparkSignFrostIntent, SparkSignFrostResult, SparkSignatureRequest, SparkTransferLeaf,
+    SparkTransferPackage,
 };
 
 fn to_spark_err<E: std::fmt::Display>(e: E) -> SignerError {
@@ -475,7 +476,7 @@ impl TurnkeySparkSigner {
         let path = format!("{}/3'/{index}'", self.base_path());
         let secret = self
             .client
-            .export_secret_key(path)
+            .export_secret_key(path, ADDRESS_FORMAT_COMPRESSED)
             .await
             .map_err(to_spark_err)?;
         self.static_deposit_secret_keys

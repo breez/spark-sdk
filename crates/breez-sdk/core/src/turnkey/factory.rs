@@ -8,7 +8,7 @@ use crate::error::SignerError;
 use crate::signer::breez::BreezSignerImpl;
 use crate::signer::{ExternalBreezSigner, ExternalSparkSigner};
 
-use super::accounts::xpriv_from_secret;
+use super::accounts::{spark_address_format, xpriv_from_secret};
 use super::breez_signer::TurnkeyBreezSigner;
 use super::config::TurnkeyConfig;
 use super::spark_signer::TurnkeySparkSigner;
@@ -39,9 +39,14 @@ pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<TurnkeySigne
     let network = config.network;
     let http = create_http_client(Some("breez-sdk-spark-turnkey"));
     let client = Arc::new(TurnkeyClient::new(&config, http).map_err(to_signer_err)?);
-    // Account-0 identity path; matches TurnkeySparkSigner's identity derivation.
+    // Account-0 identity path in Spark format, matching the Spark signer's
+    // identity account: a path can hold only one account, so both use Spark and
+    // read the compressed pubkey from its publicKey field.
     let encryption_key = client
-        .export_secret_key("m/8797555'/0'/0'".to_string())
+        .export_secret_key(
+            "m/8797555'/0'/0'".to_string(),
+            spark_address_format(network),
+        )
         .await
         .map_err(to_signer_err)?;
     let encryption = BreezSignerImpl::new(xpriv_from_secret(encryption_key, network));

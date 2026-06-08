@@ -59,6 +59,7 @@ pub(crate) struct GetWalletAccountResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WalletAccount {
+    pub address: String,
     #[serde(default)]
     pub public_key: Option<String>,
 }
