@@ -104,7 +104,9 @@ func InitSdkPostgres() (*breez_sdk_spark.BreezSdk, error) {
 	// Configure PostgreSQL backend
 	// Connection string format: "host=localhost user=postgres password=secret dbname=spark"
 	// Or URI format: "postgres://user:password@host:port/dbname?sslmode=require"
-	postgresConfig := breez_sdk_spark.DefaultPostgresStorageConfig("host=localhost user=postgres dbname=spark")
+	postgresConfig := breez_sdk_spark.DefaultPostgresStorageConfig(
+		"host=localhost user=postgres dbname=spark",
+	)
 	// Optionally pool settings can be adjusted. Some examples:
 	postgresConfig.MaxPoolSize = 8 // Max connections in pool
 	waitTimeoutSecs := uint64(30)
@@ -147,11 +149,14 @@ func InitSdkMysql() (*breez_sdk_spark.BreezSdk, error) {
 	// Configure MySQL backend (MySQL 8.0+).
 	// Connection string format (URL only):
 	//   "mysql://user:password@host:3306/dbname?ssl-mode=required"
-	mysqlConfig := breez_sdk_spark.DefaultMysqlStorageConfig("mysql://user:password@localhost:3306/spark")
+	mysqlConfig := breez_sdk_spark.DefaultMysqlStorageConfig(
+		"mysql://user:password@localhost:3306/spark",
+	)
 	// Optionally pool settings can be adjusted. Some examples:
 	mysqlConfig.MaxPoolSize = 8 // Max connections in pool
 	recycleTimeoutSecs := uint64(60)
-	mysqlConfig.RecycleTimeoutSecs = &recycleTimeoutSecs // Recycle idle connections after this many seconds
+	// Recycle idle connections after this many seconds
+	mysqlConfig.RecycleTimeoutSecs = &recycleTimeoutSecs
 	// Provide a custom CA certificate when using ssl-mode=verify_ca or verify_identity:
 	// rootCa := "-----BEGIN CERTIFICATE-----\n..."
 	// mysqlConfig.RootCaPem = &rootCa

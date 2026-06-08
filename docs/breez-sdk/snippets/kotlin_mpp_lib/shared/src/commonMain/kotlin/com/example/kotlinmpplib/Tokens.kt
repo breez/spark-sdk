@@ -208,7 +208,10 @@ class Tokens {
 
             // If the fees are acceptable, continue to send the token payment
             prepareResponse.conversionEstimate?.let { conversionEstimate ->
-                println("Estimated conversion: ${conversionEstimate.amountIn} token units → ${conversionEstimate.amountOut} sats")
+                println(
+                    "Estimated conversion: ${conversionEstimate.amountIn} token units " +
+                        "→ ${conversionEstimate.amountOut} sats"
+                )
                 println("Estimated conversion fee: ${conversionEstimate.fee} token units")
             }
         } catch (e: Exception) {

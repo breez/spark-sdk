@@ -50,7 +50,9 @@ func ListPaymentsFiltered(sdk *breez_sdk_spark.BreezSdk) (*[]breez_sdk_spark.Pay
 	// ANCHOR: list-payments-filtered
 	// Filter by asset (Bitcoin or Token)
 	tokenIdentifier := "token_identifier_here"
-	var assetFilter breez_sdk_spark.AssetFilter = breez_sdk_spark.AssetFilterToken{TokenIdentifier: &tokenIdentifier}
+	var assetFilter breez_sdk_spark.AssetFilter = breez_sdk_spark.AssetFilterToken{
+		TokenIdentifier: &tokenIdentifier,
+	}
 	// To filter by Bitcoin instead:
 	// var assetFilter breez_sdk_spark.AssetFilter = breez_sdk_spark.AssetFilterBitcoin
 

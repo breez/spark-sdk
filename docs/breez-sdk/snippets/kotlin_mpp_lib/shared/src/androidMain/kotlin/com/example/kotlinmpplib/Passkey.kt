@@ -45,7 +45,8 @@ class PasskeySnippets(private val activity: Activity) {
             is PasskeyAvailability.Available -> Unit
             is PasskeyAvailability.PrfUnsupported -> Unit
             is PasskeyAvailability.NotAssociated -> {
-                // Log.e("Breez", "Domain association failed (source=${availability.source}): ${availability.reason}")
+                // Log.e("Breez", "Domain association failed
+                // (source=${availability.source}): ${availability.reason}")
             }
             is PasskeyAvailability.Skipped -> Unit
         }
@@ -152,7 +153,8 @@ class PasskeySnippets(private val activity: Activity) {
         )
         // Log.v("Breez", "${signInResponse.wallet.seed}") // Pass to connect() to open the wallet
         // Log.v("Breez", "${signInResponse.wallet.label}") // Label this wallet was derived from
-        // Log.v("Breez", "${signInResponse.labels}") // This passkey's labels (populated on discovery sign-in)
+        // Log.v("Breez", "${signInResponse.labels}")
+        // This passkey's labels (populated on discovery sign-in)
         // Log.v("Breez", "${signInResponse.credential}") // Credential signed in with (credential_id only)
         // ANCHOR_END: credential-metadata
     }

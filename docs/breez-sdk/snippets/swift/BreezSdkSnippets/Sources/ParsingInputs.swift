@@ -17,11 +17,13 @@ func parseInput(sdk: BreezSdk) async throws {
 
         case .lnurlPay(v1: let details):
             print(
-                "Input is LNURL-Pay/Lightning address accepting min/max \(details.minSendable)/\(details.maxSendable) msats)"
+                "Input is LNURL-Pay/Lightning address accepting min/max "
+                    + "\(details.minSendable)/\(details.maxSendable) msats)"
             )
         case .lnurlWithdraw(v1: let details):
             print(
-                "Input is LNURL-Withdraw for min/max \(details.minWithdrawable)/\(details.maxWithdrawable) msats"
+                "Input is LNURL-Withdraw for min/max "
+                    + "\(details.minWithdrawable)/\(details.maxWithdrawable) msats"
             )
 
         case .sparkAddress(v1: let details):

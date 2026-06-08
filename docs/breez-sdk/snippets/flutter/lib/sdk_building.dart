@@ -19,7 +19,11 @@ Future<void> initSdkAdvanced() async {
   //     url: "https://custom.chain.service",
   //     credentials: Credentials(
   //         username: "service-username", password: "service-password"));
-  // builder.withKeySet(config: KeySetConfig(keySetType: <your key set type>, useAddressIndex: <use address index>, accountNumber: <account number>));
+  // builder.withKeySet(
+  //     config: KeySetConfig(
+  //         keySetType: <your key set type>,
+  //         useAddressIndex: <use address index>,
+  //         accountNumber: <account number>));
   final sdk = await builder.build();
   // ANCHOR_END: init-sdk-advanced
   print(sdk);

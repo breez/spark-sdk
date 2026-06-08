@@ -16,8 +16,9 @@ Future<void> listUnclaimedDeposits(BreezSdk sdk) async {
               ? '${(claimError.maxFee as Fee_Fixed).amount} sats'
               : '${(claimError.maxFee as Fee_Rate).satPerVbyte} sats/vByte')
           : 'none';
-      print(
-          "Max claim fee exceeded. Max: $maxFeeStr, Required: ${claimError.requiredFeeSats} sats or ${claimError.requiredFeeRateSatPerVbyte} sats/vByte");
+      print("Max claim fee exceeded. Max: $maxFeeStr, "
+          "Required: ${claimError.requiredFeeSats} sats or "
+          "${claimError.requiredFeeRateSatPerVbyte} sats/vByte");
     } else if (claimError is DepositClaimError_MissingUtxo) {
       print("UTXO not found when claiming deposit");
     } else if (claimError is DepositClaimError_Generic) {

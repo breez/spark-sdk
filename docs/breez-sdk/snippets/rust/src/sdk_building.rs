@@ -24,7 +24,11 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // let builder = builder.with_storage_backend(custom_storage(<your storage implementation>))
     // let builder = builder.with_chain_service(<your chain service implementation>)
     // let builder = builder.with_rest_client(<your rest client implementation>)
-    // let builder = builder.with_key_set(KeySetConfig { key_set_type: <your key set type>, use_address_index: <use address index>, account_number: <account number> })
+    // let builder = builder.with_key_set(KeySetConfig {
+    //     key_set_type: <your key set type>,
+    //     use_address_index: <use address index>,
+    //     account_number: <account number>
+    // })
     // let builder = builder.with_payment_observer(<your payment observer implementation>);
     let sdk = builder.build().await?;
 

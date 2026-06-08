@@ -38,7 +38,10 @@ const exampleListContacts = async (sdk: BreezSdk) => {
     limit: 10
   })
   for (const contact of contacts) {
-    console.log(`Contact: id=${contact.id}, name=${contact.name}, identifier=${contact.paymentIdentifier}`)
+    console.log(
+      `Contact: id=${contact.id}, name=${contact.name}, ` +
+      `identifier=${contact.paymentIdentifier}`
+    )
   }
   // ANCHOR_END: list-contacts
 }

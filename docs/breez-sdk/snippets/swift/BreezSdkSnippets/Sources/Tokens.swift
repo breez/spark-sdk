@@ -171,7 +171,9 @@ func prepareSendPaymentTokenConversion(sdk: BreezSdk) async throws {
 
     // If the fees are acceptable, continue to send the token payment
     if let conversionEstimate = prepareResponse.conversionEstimate {
-        print("Estimated conversion: \(conversionEstimate.amountIn) token units → \(conversionEstimate.amountOut) sats")
+        print(
+            "Estimated conversion: \(conversionEstimate.amountIn) token units "
+                + "→ \(conversionEstimate.amountOut) sats")
         print("Estimated conversion fee: \(conversionEstimate.fee) token units")
     }
     // ANCHOR_END: prepare-send-payment-with-conversion

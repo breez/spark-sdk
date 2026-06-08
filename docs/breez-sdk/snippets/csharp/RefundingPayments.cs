@@ -32,7 +32,8 @@ namespace BreezSdkSnippets
                             }
                         }
                         Console.WriteLine($"Claim failed: Fee exceeded. Max: {maxFeeStr}, " +
-                                        $"Required: {exceeded.requiredFeeSats} sats or {exceeded.requiredFeeRateSatPerVbyte} sats/vByte");
+                                        $"Required: {exceeded.requiredFeeSats} sats or " +
+                                        $"{exceeded.requiredFeeRateSatPerVbyte} sats/vByte");
                     }
                     else if (deposit.claimError is DepositClaimError.MissingUtxo)
                     {

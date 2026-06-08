@@ -130,7 +130,10 @@ const examplePrepareSendPaymentTokenConversion = async (sdk: BreezSdk) => {
   // If the fees are acceptable, continue to create the Send Payment
   if (prepareResponse.conversionEstimate !== undefined) {
     const conversionEstimate = prepareResponse.conversionEstimate
-    console.debug(`Estimated conversion: ${conversionEstimate.amountIn} token units → ${conversionEstimate.amountOut} sats`)
+    console.debug(
+      `Estimated conversion: ${conversionEstimate.amountIn} token units → ` +
+      `${conversionEstimate.amountOut} sats`
+    )
     console.debug(`Estimated conversion fee: ${conversionEstimate.fee} token units`)
   }
   // ANCHOR_END: prepare-send-payment-with-conversion

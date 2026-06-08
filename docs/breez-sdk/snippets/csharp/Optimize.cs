@@ -35,7 +35,9 @@ namespace BreezSdkSnippets
             uint roundsExecuted = 0;
             while (true)
             {
-                var outcome = (await sdk.OptimizeLeaves(new OptimizeLeavesRequest(OptimizationMode.SingleRound))).outcome;
+                var outcome = (await sdk.OptimizeLeaves(
+                    new OptimizeLeavesRequest(OptimizationMode.SingleRound)
+                )).outcome;
 
                 if (outcome is OptimizationOutcome.InProgress)
                 {
@@ -67,7 +69,11 @@ namespace BreezSdkSnippets
                 case AutoOptimizationEvent.Started { totalRounds: var totalRounds }:
                     Console.WriteLine($"Auto-optimization started with {totalRounds} rounds");
                     break;
-                case AutoOptimizationEvent.RoundCompleted { currentRound: var currentRound, totalRounds: var totalRounds }:
+                case AutoOptimizationEvent.RoundCompleted
+                {
+                    currentRound: var currentRound,
+                    totalRounds: var totalRounds
+                }:
                     Console.WriteLine($"Auto-optimization round {currentRound} of {totalRounds} completed");
                     break;
                 case AutoOptimizationEvent.Completed:

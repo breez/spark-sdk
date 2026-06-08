@@ -35,7 +35,11 @@ func configureOptimizationConfiguration() async throws {
     // ANCHOR: optimization-configuration
     var config = defaultConfig(network: Network.mainnet)
     config.leafOptimizationConfig = LeafOptimizationConfig(autoEnabled: true, multiplicity: 1)
-    config.tokenOptimizationConfig = TokenOptimizationConfig(autoEnabled: true, targetOutputCount: 5, minOutputsThreshold: 50)
+    config.tokenOptimizationConfig = TokenOptimizationConfig(
+        autoEnabled: true,
+        targetOutputCount: 5,
+        minOutputsThreshold: 50
+    )
     // ANCHOR_END: optimization-configuration
     print("Config: \(config)")
 }

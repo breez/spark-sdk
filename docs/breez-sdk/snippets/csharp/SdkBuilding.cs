@@ -69,7 +69,8 @@ namespace BreezSdkSnippets
             {
                 foreach (var payment in payments)
                 {
-                    Console.WriteLine($"About to send payment {payment.paymentId} of amount {payment.amount}");
+                    Console.WriteLine($"About to send payment {payment.paymentId} " +
+                                      $"of amount {payment.amount}");
                 }
             }
 
@@ -77,7 +78,8 @@ namespace BreezSdkSnippets
             {
                 foreach (var update in updates)
                 {
-                    Console.WriteLine($"Token tx broadcast: {update.provisionalPaymentId} -> {update.finalPaymentId}");
+                    Console.WriteLine($"Token tx broadcast: {update.provisionalPaymentId} -> " +
+                                      $"{update.finalPaymentId}");
                 }
             }
         }

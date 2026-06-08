@@ -65,7 +65,12 @@ func ListContacts(sdk *breez_sdk_spark.BreezSdk) ([]breez_sdk_spark.Contact, err
 	}
 
 	for _, contact := range contacts {
-		log.Printf("Contact: id=%v, name=%v, identifier=%v", contact.Id, contact.Name, contact.PaymentIdentifier)
+		log.Printf(
+			"Contact: id=%v, name=%v, identifier=%v",
+			contact.Id,
+			contact.Name,
+			contact.PaymentIdentifier,
+		)
 	}
 	// ANCHOR_END: list-contacts
 	return contacts, nil

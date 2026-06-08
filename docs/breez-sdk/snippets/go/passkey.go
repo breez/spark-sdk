@@ -12,7 +12,9 @@ import (
 // key, FIDO2, file-backed). Only DeriveSeeds and IsSupported are required.
 type CustomPrfProvider struct{}
 
-func (p *CustomPrfProvider) DeriveSeeds(request breez_sdk_spark.DeriveSeedsRequest) (breez_sdk_spark.DeriveSeedsOutput, error) {
+func (p *CustomPrfProvider) DeriveSeeds(
+	request breez_sdk_spark.DeriveSeedsRequest,
+) (breez_sdk_spark.DeriveSeedsOutput, error) {
 	// Return one 32-byte PRF output per salt, in input order.
 	panic("Implement using WebAuthn or native passkey APIs")
 }
@@ -21,7 +23,9 @@ func (p *CustomPrfProvider) IsSupported() (bool, error) {
 	panic("Check platform passkey availability")
 }
 
-func (p *CustomPrfProvider) CreatePasskey(excludeCredentials [][]byte) (breez_sdk_spark.PasskeyCredential, error) {
+func (p *CustomPrfProvider) CreatePasskey(
+	excludeCredentials [][]byte,
+) (breez_sdk_spark.PasskeyCredential, error) {
 	// Register a credential and return its ID plus attestation.
 	panic("Implement registration via native passkey API")
 }
@@ -221,7 +225,7 @@ func RecoverFromAlreadyExists() (*breez_sdk_spark.Wallet, error) {
 	// ANCHOR: recover-already-exists
 	label := "personal"
 	registerResponse, err := passkey.Register(breez_sdk_spark.RegisterRequest{
-		Label: &label,
+		Label:              &label,
 		ExcludeCredentials: &[][]byte{
 			// app-persisted credential IDs from prior registrations
 		},

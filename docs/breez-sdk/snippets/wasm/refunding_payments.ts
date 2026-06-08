@@ -31,7 +31,9 @@ const listUnclaimedDeposits = async (sdk: BreezSdk) => {
             }
           }
           console.log(
-            `Max claim fee exceeded. Max: ${maxFeeStr}, Required: ${deposit.claimError.requiredFeeSats} sats or ${deposit.claimError.requiredFeeRateSatPerVbyte} sats/vByte`
+            `Max claim fee exceeded. Max: ${maxFeeStr}, ` +
+            `Required: ${deposit.claimError.requiredFeeSats} sats or ` +
+            `${deposit.claimError.requiredFeeRateSatPerVbyte} sats/vByte`
           )
           break
         }

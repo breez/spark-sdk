@@ -65,13 +65,15 @@ class SdkBuilding {
     class ExamplePaymentObserver : PaymentObserver {
         override suspend fun beforeSend(payments: List<ProvisionalPayment>) {
             for (payment in payments) {
-                // Log.v("PaymentObserver", "About to send payment: ${payment.paymentId} of amount ${payment.amount}")
+                // Log.v("PaymentObserver", "About to send payment:
+                // ${payment.paymentId} of amount ${payment.amount}")
             }
         }
 
         override suspend fun afterSend(updates: List<PaymentIdUpdate>) {
             for (update in updates) {
-                // Log.v("PaymentObserver", "Token tx broadcast: ${update.provisionalPaymentId} -> ${update.finalPaymentId}")
+                // Log.v("PaymentObserver", "Token tx broadcast:
+                // ${update.provisionalPaymentId} -> ${update.finalPaymentId}")
             }
         }
     }
