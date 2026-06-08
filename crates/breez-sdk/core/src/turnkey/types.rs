@@ -1,6 +1,6 @@
 //! Typed request/result structs for the Turnkey activities and queries the
 //! signer uses. JSON keys are camelCase; enum values are Turnkey's
-//! SCREAMING_SNAKE strings.
+//! `SCREAMING_SNAKE` strings.
 
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +59,6 @@ pub(crate) struct GetWalletAccountResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WalletAccount {
-    pub address: String,
     #[serde(default)]
     pub public_key: Option<String>,
 }

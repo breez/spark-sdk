@@ -31,8 +31,15 @@ impl Default for TurnkeyRetryConfig {
 impl TurnkeyRetryConfig {
     /// Exponential backoff delay to wait after `attempt` attempts (1-based),
     /// capped at `max_delay_ms`.
+    // Backoff over small millisecond delays: the float/int casts are bounded
+    // and intentional.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     pub(crate) fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        let factor = self.multiplier.powi(attempt.saturating_sub(1) as i32);
+        let factor = self.multiplier.powf(f64::from(attempt.saturating_sub(1)));
         let millis = (self.initial_delay_ms as f64 * factor).min(self.max_delay_ms as f64);
         Duration::from_millis(millis as u64)
     }

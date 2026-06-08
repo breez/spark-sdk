@@ -2,7 +2,7 @@
 //! the Spark signer and the SDK-layer (Breez) signer.
 
 use bitcoin::NetworkKind;
-use bitcoin::bip32::{ChainCode, ChildNumber, Xpriv};
+use bitcoin::bip32::{ChainCode, ChildNumber, Fingerprint, Xpriv};
 use bitcoin::secp256k1::{SecretKey, ecdsa, schnorr};
 
 use crate::Network;
@@ -140,7 +140,8 @@ pub(crate) fn decode_scalar_32(hex_str: &str) -> Result<[u8; 32], TurnkeyError> 
         return Err(TurnkeyError::Deserialize("scalar exceeds 32 bytes".into()));
     }
     let mut out = [0u8; 32];
-    out[32 - bytes.len()..].copy_from_slice(&bytes);
+    let start = 32usize.saturating_sub(bytes.len());
+    out[start..].copy_from_slice(&bytes);
     Ok(out)
 }
 
@@ -173,7 +174,7 @@ pub(crate) fn xpriv_from_secret(secret: SecretKey, network: Network) -> Xpriv {
             Network::Regtest => NetworkKind::Test,
         },
         depth: 0,
-        parent_fingerprint: Default::default(),
+        parent_fingerprint: Fingerprint::default(),
         child_number: ChildNumber::from_normal_idx(0).expect("0 is a valid child index"),
         private_key: secret,
         chain_code: ChainCode::from([0u8; 32]),

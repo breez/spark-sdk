@@ -105,10 +105,9 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
         let recovery_id = hex::decode(&result.v)
             .ok()
             .and_then(|b| b.last().copied())
-            .map(|b| if b >= 27 { b - 27 } else { b })
-            .unwrap_or(0);
+            .map_or(0, |b| if b >= 27 { b.saturating_sub(27) } else { b });
         let mut bytes = Vec::with_capacity(65);
-        bytes.push(31 + recovery_id);
+        bytes.push(31u8.saturating_add(recovery_id));
         bytes.extend_from_slice(&decode_scalar_32(&result.r).map_err(to_signer_err)?);
         bytes.extend_from_slice(&decode_scalar_32(&result.s).map_err(to_signer_err)?);
         Ok(RecoverableEcdsaSignatureBytes::new(bytes))

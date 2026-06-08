@@ -69,8 +69,7 @@ struct ActivityEnvelope<'a, P> {
 fn current_timestamp_ms() -> String {
     platform_utils::time::SystemTime::now()
         .duration_since(platform_utils::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis())
         .to_string()
 }
 
@@ -156,7 +155,7 @@ impl TurnkeyClient {
                     if attempt >= self.retry.max_retries {
                         return Err(TurnkeyError::ExceededRetries(attempt));
                     }
-                    attempt += 1;
+                    attempt = attempt.saturating_add(1);
                     sleep(self.retry.delay_for_attempt(attempt)).await;
                 }
                 ActivityStatus::Failed => {
