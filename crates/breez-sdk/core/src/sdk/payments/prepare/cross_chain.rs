@@ -14,6 +14,36 @@ use crate::{
 
 use super::super::{conversion, validation};
 
+/// Human-readable label for a [`input::CrossChainAddressFamily`] suitable
+/// for user-facing error messages.
+fn address_family_label(family: input::CrossChainAddressFamily) -> &'static str {
+    match family {
+        input::CrossChainAddressFamily::Evm => "EVM",
+        input::CrossChainAddressFamily::Solana => "Solana",
+        input::CrossChainAddressFamily::Tron => "Tron",
+    }
+}
+
+/// Fails when the parsed address's family doesn't match the route's
+/// inferable destination family. Skipped when the route is for a
+/// native-asset destination (no contract address), so the family can't be
+/// inferred from the route alone — the provider validates at submit time.
+fn validate_address_family_against_route(
+    address_family: input::CrossChainAddressFamily,
+    route: &CrossChainRoutePair,
+) -> Result<(), SdkError> {
+    if let Some(route_family) = route.destination_address_family()
+        && route_family != address_family
+    {
+        return Err(SdkError::InvalidInput(format!(
+            "Address family ({}) does not match the selected route's chain ({}).",
+            address_family_label(address_family),
+            route.chain,
+        )));
+    }
+    Ok(())
+}
+
 /// Pre-resolution validation for cross-chain sends. Shared checks
 /// (`validate_amount`) plus the cross-chain-specific rule that
 /// `FromBitcoin` conversions are unsupported.
@@ -174,11 +204,10 @@ pub(crate) async fn prepare(
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
     validate_request(amount, conversion_options.as_ref())?;
 
-    if input::detect_address_family(address).is_none() {
-        return Err(SdkError::InvalidInput(
-            "Address is not a recognized cross-chain address".to_string(),
-        ));
-    }
+    let address_family = input::detect_address_family(address).ok_or_else(|| {
+        SdkError::InvalidInput("Address is not a recognized cross-chain address".to_string())
+    })?;
+    validate_address_family_against_route(address_family, route)?;
 
     let provider_slippage_bps = resolve_slippage_bps(
         max_slippage_bps,
@@ -502,6 +531,68 @@ mod tests {
     #[test_all]
     fn validate_request_allows_no_conversion() {
         assert!(validate_request(1000, None).is_ok());
+    }
+
+    // ---- validate_address_family_against_route ----
+
+    fn route_with_contract(chain: &str, contract: Option<&str>) -> CrossChainRoutePair {
+        CrossChainRoutePair {
+            provider: CrossChainProvider::Orchestra,
+            chain: chain.to_string(),
+            chain_id: None,
+            asset: "USDC".to_string(),
+            contract_address: contract.map(str::to_string),
+            decimals: 6,
+            exact_out_eligible: false,
+            supported_sources: vec![SourceAsset::Bitcoin],
+        }
+    }
+
+    #[test_all]
+    fn destination_family_inferred_from_evm_contract() {
+        let route = route_with_contract("base", Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"));
+        assert_eq!(
+            route.destination_address_family(),
+            Some(input::CrossChainAddressFamily::Evm)
+        );
+    }
+
+    #[test_all]
+    fn destination_family_none_for_native_route() {
+        let route = route_with_contract("base", None);
+        assert!(route.destination_address_family().is_none());
+    }
+
+    #[test_all]
+    fn family_check_passes_when_route_matches_address() {
+        let route = route_with_contract("base", Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"));
+        assert!(
+            validate_address_family_against_route(input::CrossChainAddressFamily::Evm, &route)
+                .is_ok()
+        );
+    }
+
+    #[test_all]
+    fn family_check_rejects_mismatched_route() {
+        let route = route_with_contract("base", Some("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"));
+        let err =
+            validate_address_family_against_route(input::CrossChainAddressFamily::Solana, &route)
+                .unwrap_err();
+        let SdkError::InvalidInput(msg) = err else {
+            panic!("expected InvalidInput, got {err:?}");
+        };
+        assert!(msg.contains("Solana") && msg.contains("base"));
+    }
+
+    #[test_all]
+    fn family_check_skips_when_route_has_no_contract() {
+        let route = route_with_contract("base", None);
+        // No contract → family can't be inferred from the route, so the check
+        // is a no-op and we defer to the provider.
+        assert!(
+            validate_address_family_against_route(input::CrossChainAddressFamily::Solana, &route)
+                .is_ok()
+        );
     }
 
     // ---- decide_cross_chain_source ----

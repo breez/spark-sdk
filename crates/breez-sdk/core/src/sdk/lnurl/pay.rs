@@ -263,7 +263,7 @@ pub(super) async fn send(
 
         // Reconcile the prepare-time fee against the re-estimated fee, overpaying
         // by the difference to respect the prepared amount.
-        let overpayment = send::bolt11::fee_overpayment(fees_included_fee, current_fee)?;
+        let overpayment = crate::utils::fees::fee_overpayment(fees_included_fee, current_fee)?;
 
         if overpayment > 0 {
             tracing::info!(

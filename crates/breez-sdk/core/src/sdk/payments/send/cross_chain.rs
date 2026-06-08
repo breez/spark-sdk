@@ -15,6 +15,7 @@ pub(in crate::sdk) async fn send(
     sdk: &BreezSdk,
     method: &SendPaymentMethod,
     token_identifier: Option<String>,
+    idempotency_key: Option<String>,
 ) -> Result<SendPaymentResponse, SdkError> {
     let SendPaymentMethod::CrossChainAddress {
         route,
@@ -63,7 +64,7 @@ pub(in crate::sdk) async fn send(
     let payment = sdk
         .cross_chain_providers
         .get(route.provider)?
-        .send(&prepared)
+        .send(&prepared, idempotency_key)
         .await?;
 
     Ok(SendPaymentResponse { payment })

@@ -2353,6 +2353,105 @@ mod tests {
         crate::persist::tests::test_contacts_crud(Box::new(storage)).await;
     }
 
+    /// Migration backfill: an untyped (pre-migration) AMM `conversion_info`
+    /// row is upgraded to a tagged enum and reads back via the strict
+    /// `from_json_string_opt::<ConversionInfo>` path that `list_payments` /
+    /// `get_payment_by_id` use.
+    #[tokio::test]
+    async fn test_migration_conversion_info_type_discriminator() {
+        use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
+        use rusqlite::{Connection, params};
+        use rusqlite_migration::{M, Migrations};
+
+        let temp_dir = create_temp_dir("sqlite_migration_conversion_info_discriminator");
+        let db_path = temp_dir.join(super::DEFAULT_DB_FILENAME);
+
+        // Step 1: bring the database up to the state before the discriminator
+        // backfill — the conversion_info column exists, but no `"type"` tag has
+        // been backfilled yet.
+        let backfill_index = SqliteStorage::current_migrations().len() - 1;
+        {
+            let mut conn = Connection::open(&db_path).unwrap();
+            let migrations_before_backfill: Vec<_> = SqliteStorage::current_migrations()
+                .iter()
+                .take(backfill_index)
+                .map(|s| M::up(s))
+                .collect();
+            let migrations = Migrations::new(migrations_before_backfill);
+            migrations.to_latest(&mut conn).unwrap();
+        }
+
+        // Step 2: insert a payment + a pre-migration conversion_info row
+        // (no `"type"` tag — the shape an older SDK would have written).
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, spark)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    "conv-migration-test",
+                    "send",
+                    "completed",
+                    "5000",
+                    "10",
+                    1_234_567_890_i64,
+                    "\"spark\"",
+                    1_i32
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO payment_details_spark (payment_id) VALUES (?)",
+                params!["conv-migration-test"],
+            )
+            .unwrap();
+
+            let untyped_conversion_info = serde_json::json!({
+                "pool_id": "pool-pre",
+                "conversion_id": "conv-pre",
+                "status": "Completed",
+                "fee": "42",
+                "purpose": null,
+            });
+            conn.execute(
+                "INSERT INTO payment_metadata (payment_id, conversion_info)
+                 VALUES (?, ?)",
+                params!["conv-migration-test", untyped_conversion_info.to_string()],
+            )
+            .unwrap();
+        }
+
+        // Step 3: open with `SqliteStorage` so the backfill migration runs.
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        // Step 4: read back via the strict tagged-enum path.
+        let payment = storage
+            .get_payment_by_id("conv-migration-test".to_string())
+            .await
+            .unwrap();
+        let Some(PaymentDetails::Spark {
+            conversion_info, ..
+        }) = payment.details
+        else {
+            panic!("Expected Spark payment details");
+        };
+        match conversion_info.expect("conversion_info should be set") {
+            ConversionInfo::Amm {
+                pool_id,
+                conversion_id,
+                status,
+                fee,
+                ..
+            } => {
+                assert_eq!(pool_id, "pool-pre");
+                assert_eq!(conversion_id, "conv-pre");
+                assert_eq!(status, ConversionStatus::Completed);
+                assert_eq!(fee, Some(42));
+            }
+            other => panic!("Expected ConversionInfo::Amm, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn test_conversion_status_persistence() {
         let temp_dir = create_temp_dir("sqlite_conversion_status_persistence");

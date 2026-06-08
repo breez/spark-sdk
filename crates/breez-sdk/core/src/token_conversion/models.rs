@@ -130,9 +130,14 @@ impl FromStr for ConversionStatus {
     }
 }
 
-/// Conversion metadata stored on a payment's metadata row. Discriminated by a
-/// `"type"` tag in JSON. Old data (AMM-only, no tag) is handled by the custom
-/// `Deserialize` impl which defaults to `"amm"` when the tag is absent.
+/// Details of the asset conversion attached to a payment, when the payment
+/// involves a swap or cross-chain bridge in addition to the on-Spark transfer.
+///
+/// The variant identifies which provider handled the conversion:
+/// - [`ConversionInfo::Amm`] for Spark token swaps via Flashnet AMM pools.
+/// - [`ConversionInfo::Orchestra`] for cross-chain sends via Flashnet
+///   Orchestra (Spark → external chain).
+/// - [`ConversionInfo::Boltz`] for sats → stable-coin reverse swaps via Boltz.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -241,7 +246,9 @@ pub enum ConversionInfo {
         delivered_amount: Option<u128>,
         /// Current status of the reverse swap.
         status: ConversionStatus,
-        /// Fee in sats (source-side for sends): Boltz spread + LN routing budget.
+        /// Boltz spread in sats (provider fee, source-side). The LN routing
+        /// budget is tracked separately as the source-leg payment's
+        /// `Payment::fees`.
         #[serde(default, with = "serde_option_u128_as_string")]
         fee: Option<u128>,
         /// Number of decimals for the asset (e.g. 6 for USDT).

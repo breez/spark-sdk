@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bitcoin::hashes::{Hash, sha256};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
-use spark_wallet::{SparkAddress, SparkWallet, TransferTokenOutput};
+use spark_wallet::{SparkAddress, SparkWallet, TransferId, TransferTokenOutput};
 use tracing::debug;
 
 use super::models::{
@@ -131,11 +131,18 @@ impl OrchestraClient {
 
     /// Send `amount_in` sats (or tokens) to the Orchestra-provided `deposit_address`
     /// via the Spark wallet. Returns the full [`AssetTransfer`].
+    ///
+    /// `transfer_id` is threaded into the underlying Spark BTC transfer for
+    /// protocol-level idempotency on retry. Ignored on the token branch:
+    /// `spark_wallet::transfer_tokens` does not accept an idempotency token,
+    /// matching the SDK's contract that token-source sends carry no retry
+    /// guarantee.
     pub async fn transfer_to_deposit(
         &self,
         deposit_address: &str,
         amount_in: u128,
         token_identifier: Option<&str>,
+        transfer_id: Option<TransferId>,
     ) -> Result<AssetTransfer, FlashnetError> {
         let receiver_address = SparkAddress::from_str(deposit_address).map_err(|e| {
             FlashnetError::Generic(format!(
@@ -150,7 +157,7 @@ impl OrchestraClient {
                     .map_err(|e| FlashnetError::Generic(format!("amount_in exceeds u64: {e}")))?;
                 let transfer = self
                     .spark_wallet
-                    .transfer(amount_sats, &receiver_address, None)
+                    .transfer(amount_sats, &receiver_address, transfer_id)
                     .await?;
                 Ok(AssetTransfer::Spark(transfer))
             }

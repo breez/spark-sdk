@@ -12,11 +12,32 @@ pub(crate) use boltz::BoltzService;
 pub(crate) use orchestra::OrchestraService;
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use spark_wallet::TransferId;
 
 use crate::{CrossChainAddressDetails, error::SdkError};
+
+/// Resolves the BTC-leg [`TransferId`] for a cross-chain send. A
+/// caller-supplied `idempotency_key` from [`crate::SendPaymentRequest`]
+/// wins so the top-level `get_payment_by_id(idempotency_key)` lookup in
+/// `orchestrate_send` can short-circuit retries; otherwise we derive a
+/// `UUIDv5` from `fallback_seed` (the provider's quote/swap id) so that
+/// re-sending the same prepared shape still hits Spark's protocol-level
+/// dedup. Mirrors the stable-balance per-receive convention. Token-source
+/// sends ignore the return value: [`spark_wallet::transfer_tokens`] has
+/// no idempotency hook.
+pub(crate) fn derive_btc_leg_transfer_id(
+    idempotency_key: Option<&str>,
+    fallback_seed: &str,
+) -> Result<TransferId, SdkError> {
+    match idempotency_key {
+        Some(key) => TransferId::from_str(key).map_err(SdkError::Generic),
+        None => Ok(TransferId::from_name(fallback_seed)),
+    }
+}
 
 /// SDK-level bounds for cross-chain slippage.
 pub(crate) const MIN_CROSS_CHAIN_SLIPPAGE_BPS: u32 = 10;
@@ -30,6 +51,15 @@ pub(crate) const DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS: u32 = 100;
 pub enum CrossChainProvider {
     Orchestra,
     Boltz,
+}
+
+impl std::fmt::Display for CrossChainProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Orchestra => f.write_str("Orchestra"),
+            Self::Boltz => f.write_str("Boltz"),
+        }
+    }
 }
 
 /// The source asset a cross-chain route accepts as input on the Spark side.
@@ -99,6 +129,20 @@ pub struct CrossChainRoutePair {
     pub supported_sources: Vec<SourceAsset>,
 }
 
+impl CrossChainRoutePair {
+    /// Infers the destination address family from the route's
+    /// `contract_address`. Returns `None` for native-asset routes (no
+    /// contract address) or if the address format isn't recognized; callers
+    /// should treat that as "skip the address-family validation".
+    pub(crate) fn destination_address_family(
+        &self,
+    ) -> Option<breez_sdk_common::input::CrossChainAddressFamily> {
+        self.contract_address
+            .as_deref()
+            .and_then(breez_sdk_common::input::detect_address_family)
+    }
+}
+
 /// Registry of cross-chain providers keyed by [`CrossChainProvider`].
 #[derive(Clone, Default)]
 pub(crate) struct CrossChainProviders(HashMap<CrossChainProvider, Arc<dyn CrossChainService>>);
@@ -118,9 +162,7 @@ impl CrossChainProviders {
         provider: CrossChainProvider,
     ) -> Result<&Arc<dyn CrossChainService>, SdkError> {
         self.0.get(&provider).ok_or_else(|| {
-            SdkError::InvalidInput(format!(
-                "Cross-chain provider {provider:?} is not available."
-            ))
+            SdkError::InvalidInput(format!("Cross-chain provider {provider} is not available."))
         })
     }
 
@@ -219,7 +261,70 @@ pub(crate) trait CrossChainService: Send + Sync {
     /// the provider, persist metadata, monitor to terminal, and return the
     /// resulting [`Payment`].
     ///
+    /// `idempotency_key` is the caller-provided key from `SendPaymentRequest`.
+    /// Providers should use it as the underlying Spark `TransferId` so the
+    /// outbound transfer is protocol-level idempotent on retry; if `None`,
+    /// the provider derives a deterministic key from its own quote/swap id
+    /// (same shape as the stable-balance per-receive convention). Only the
+    /// BTC-source branch benefits — token transfers have no upstream
+    /// idempotency hook, and the top-level dispatcher already rejects
+    /// idempotency keys for token-source sends.
+    ///
     /// Each provider owns the polling-to-terminal step internally — the
     /// SDK dispatcher does not wrap this with an additional wait.
-    async fn send(&self, prepared: &CrossChainPrepared) -> Result<crate::Payment, SdkError>;
+    async fn send(
+        &self,
+        prepared: &CrossChainPrepared,
+        idempotency_key: Option<String>,
+    ) -> Result<crate::Payment, SdkError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
+    fn derive_btc_leg_transfer_id_uses_caller_key() {
+        // A v4 UUID is a valid TransferId — using one here checks that the
+        // caller-supplied key wins outright.
+        let key = "00000000-0000-4000-8000-000000000001";
+        let id = derive_btc_leg_transfer_id(Some(key), "ignored-seed").unwrap();
+        assert_eq!(id.to_string(), key);
+    }
+
+    #[test_all]
+    fn derive_btc_leg_transfer_id_deterministic_from_seed() {
+        let a = derive_btc_leg_transfer_id(None, "cross_chain:orchestra:quote-1").unwrap();
+        let b = derive_btc_leg_transfer_id(None, "cross_chain:orchestra:quote-1").unwrap();
+        assert_eq!(
+            a, b,
+            "same seed must produce the same TransferId across calls"
+        );
+    }
+
+    #[test_all]
+    fn derive_btc_leg_transfer_id_distinct_seeds_yield_distinct_ids() {
+        let a = derive_btc_leg_transfer_id(None, "cross_chain:orchestra:quote-1").unwrap();
+        let b = derive_btc_leg_transfer_id(None, "cross_chain:orchestra:quote-2").unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test_all]
+    fn derive_btc_leg_transfer_id_orchestra_and_boltz_seeds_collide_only_on_id() {
+        // The provider tag in the seed prevents an Orchestra `quote-1` and a
+        // hypothetical Boltz `quote-1` from colliding on the same TransferId.
+        let orchestra = derive_btc_leg_transfer_id(None, "cross_chain:orchestra:abc").unwrap();
+        let boltz = derive_btc_leg_transfer_id(None, "cross_chain:boltz:abc").unwrap();
+        assert_ne!(orchestra, boltz);
+    }
+
+    #[test_all]
+    fn derive_btc_leg_transfer_id_rejects_invalid_caller_key() {
+        let err = derive_btc_leg_transfer_id(Some("not-a-uuid"), "fallback").unwrap_err();
+        assert!(matches!(err, SdkError::Generic(_)));
+    }
 }

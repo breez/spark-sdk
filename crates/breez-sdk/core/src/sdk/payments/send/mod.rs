@@ -37,25 +37,14 @@ pub(in crate::sdk) async fn orchestrate_send(
 ) -> Result<SendPaymentResponse, SdkError> {
     let token_identifier = request.prepare_response.token_identifier.clone();
 
-    // Check the idempotency key is valid and payment doesn't already exist
+    // Check the idempotency key is valid and payment doesn't already exist.
+    // The token-payment rejection also covers cross-chain sends whose source
+    // is a token (no idempotency hook on `spark_wallet::transfer_tokens`);
+    // BTC-source cross-chain sends fall through and pick up idempotency via
+    // the per-provider deterministic `TransferId` derived below.
     if request.idempotency_key.is_some() && token_identifier.is_some() {
         return Err(SdkError::InvalidInput(
             "Idempotency key is not supported for token payments".to_string(),
-        ));
-    }
-    // Cross-chain sends ignore the user's idempotency_key: the top-level lookup
-    // below would never hit (provider rows are keyed by LN payment id /
-    // spark_tx_hash, not the user key), and neither provider's send leg threads
-    // the key into its underlying Spark transfer. Reject explicitly so callers
-    // don't get the misleading impression that retries are deduped.
-    if request.idempotency_key.is_some()
-        && matches!(
-            request.prepare_response.payment_method,
-            SendPaymentMethod::CrossChainAddress { .. }
-        )
-    {
-        return Err(SdkError::InvalidInput(
-            "Idempotency key is not supported for cross-chain sends".to_string(),
         ));
     }
     if let Some(idempotency_key) = &request.idempotency_key {
@@ -148,7 +137,13 @@ pub(super) async fn send_internal(
             bitcoin_address::send(sdk, address, fee_quote, request, amount_override).await
         }
         method @ SendPaymentMethod::CrossChainAddress { .. } => {
-            cross_chain::send(sdk, method, token_identifier).await
+            cross_chain::send(
+                sdk,
+                method,
+                token_identifier,
+                request.idempotency_key.clone(),
+            )
+            .await
         }
     }
 }

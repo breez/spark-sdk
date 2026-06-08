@@ -30,6 +30,7 @@ use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
 use super::{
     CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
     CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
+    derive_btc_leg_transfer_id,
 };
 
 use crate::utils::{
@@ -414,7 +415,11 @@ impl CrossChainService for OrchestraService {
         })
     }
 
-    async fn send(&self, prepared: &CrossChainPrepared) -> Result<crate::Payment, SdkError> {
+    async fn send(
+        &self,
+        prepared: &CrossChainPrepared,
+        idempotency_key: Option<String>,
+    ) -> Result<crate::Payment, SdkError> {
         let CrossChainProviderContext::Orchestra {
             quote_id,
             deposit_address,
@@ -427,6 +432,11 @@ impl CrossChainService for OrchestraService {
 
         validate_quote_expiry(&prepared.expires_at)?;
 
+        let transfer_id = Some(derive_btc_leg_transfer_id(
+            idempotency_key.as_deref(),
+            &format!("cross_chain:orchestra:{quote_id}"),
+        )?);
+
         // Step 1: Spark transfer to the Orchestra deposit address.
         let asset_transfer = self
             .client
@@ -434,6 +444,7 @@ impl CrossChainService for OrchestraService {
                 deposit_address,
                 prepared.amount_in,
                 prepared.token_identifier.as_deref(),
+                transfer_id,
             )
             .await?;
         let spark_tx_hash = asset_transfer.id();

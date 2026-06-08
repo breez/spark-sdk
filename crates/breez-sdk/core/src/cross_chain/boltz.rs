@@ -21,6 +21,7 @@ use tracing::{debug, error, info};
 use super::{
     CrossChainFeeMode, CrossChainPrepared, CrossChainProvider, CrossChainProviderContext,
     CrossChainRouteFilter, CrossChainRoutePair, CrossChainService, SourceAsset,
+    derive_btc_leg_transfer_id,
 };
 use crate::{
     ConversionInfo, ConversionStatus, Network, PaymentMetadata, PaymentStatus, Storage,
@@ -416,7 +417,11 @@ impl CrossChainService for BoltzService {
     }
 
     #[allow(clippy::large_futures)]
-    async fn send(&self, prepared: &CrossChainPrepared) -> Result<crate::Payment, SdkError> {
+    async fn send(
+        &self,
+        prepared: &CrossChainPrepared,
+        idempotency_key: Option<String>,
+    ) -> Result<crate::Payment, SdkError> {
         let CrossChainProviderContext::Boltz {
             swap_id,
             invoice,
@@ -429,6 +434,11 @@ impl CrossChainService for BoltzService {
         };
 
         validate_quote_expiry(&prepared.expires_at)?;
+
+        let transfer_id = Some(derive_btc_leg_transfer_id(
+            idempotency_key.as_deref(),
+            &format!("cross_chain:boltz:{swap_id}"),
+        )?);
 
         let invoice_amount_sats = u64::try_from(prepared.amount_in)
             .map_err(|e| SdkError::Generic(format!("Boltz invoice amount exceeds u64: {e}")))?;
@@ -455,21 +465,9 @@ impl CrossChainService for BoltzService {
                         ))
                     })?;
 
-                if current_fee > ln_fee_budget {
-                    return Err(SdkError::Generic(
-                        "Fee increased since prepare. Please retry.".to_string(),
-                    ));
-                }
+                let overpayment = crate::utils::fees::fee_overpayment(ln_fee_budget, current_fee)?;
 
-                let overpayment_uncapped = ln_fee_budget.saturating_sub(current_fee);
-                let max_allowed_overpayment = current_fee.max(1);
-                if overpayment_uncapped > max_allowed_overpayment {
-                    return Err(SdkError::Generic(format!(
-                        "Fee overpayment ({overpayment_uncapped} sats) exceeds allowed maximum ({max_allowed_overpayment} sats)"
-                    )));
-                }
-
-                Some(invoice_amount_sats.saturating_add(overpayment_uncapped))
+                Some(invoice_amount_sats.saturating_add(overpayment))
             }
         };
 
@@ -486,7 +484,7 @@ impl CrossChainService for BoltzService {
                 ln_fee_budget,
                 false,
                 prepared.amount_in,
-                None,
+                transfer_id,
             )
             .await
             .map_err(|e| SdkError::Generic(format!("Boltz lightning payment failed: {e}")))?;

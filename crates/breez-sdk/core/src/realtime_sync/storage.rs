@@ -867,6 +867,109 @@ mod tests {
         }
     }
 
+    /// Sync record carrying an untyped (pre-migration) `conversion_info` JSON
+    /// is upgraded to a tagged `ConversionInfo::Amm` by the lenient
+    /// deserializer, then persisted by the strict re-serialize on insert.
+    /// Future direct reads see the tagged row.
+    #[tokio::test]
+    async fn test_incoming_payment_metadata_upgrades_pre_migration_conversion_info() {
+        let temp_dir = create_temp_dir("incoming_pm_pre_migration");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        storage
+            .apply_payment_update(make_test_lightning_payment("pm-upgrade"))
+            .await
+            .unwrap();
+
+        // Pre-migration shape: no `"type"` tag on the conversion_info object.
+        let mut data = HashMap::new();
+        data.insert(
+            "conversion_info".to_string(),
+            serde_json::json!({
+                "pool_id": "pool-1",
+                "conversion_id": "conv-1",
+                "status": "Pending",
+                "fee": "100",
+                "purpose": null,
+            }),
+        );
+        let pm_version = RecordType::PaymentMetadata.schema_version();
+        let change = make_incoming_change("PaymentMetadata", "pm-upgrade", pm_version, data);
+        let _ = synced.handle_incoming_change(change).await.unwrap();
+
+        let payment = storage
+            .get_payment_by_id("pm-upgrade".to_string())
+            .await
+            .unwrap();
+        let Some(crate::PaymentDetails::Lightning {
+            conversion_info, ..
+        }) = &payment.details
+        else {
+            panic!("Expected Lightning payment details");
+        };
+        match conversion_info
+            .as_ref()
+            .expect("conversion_info should be set")
+        {
+            crate::ConversionInfo::Amm {
+                pool_id,
+                conversion_id,
+                ..
+            } => {
+                assert_eq!(pool_id, "pool-1");
+                assert_eq!(conversion_id, "conv-1");
+            }
+            other => panic!("Expected ConversionInfo::Amm, got {other:?}"),
+        }
+    }
+
+    /// Sync record with an already-tagged `conversion_info` passes through
+    /// unchanged (sanity check that the lenient deserializer doesn't corrupt
+    /// modern records).
+    #[tokio::test]
+    async fn test_incoming_payment_metadata_preserves_tagged_conversion_info() {
+        let temp_dir = create_temp_dir("incoming_pm_tagged");
+        let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
+        let synced = create_test_synced_storage(Arc::clone(&storage));
+
+        storage
+            .apply_payment_update(make_test_lightning_payment("pm-tagged"))
+            .await
+            .unwrap();
+
+        let mut data = HashMap::new();
+        data.insert(
+            "conversion_info".to_string(),
+            serde_json::json!({
+                "type": "amm",
+                "pool_id": "pool-2",
+                "conversion_id": "conv-2",
+                "status": "Completed",
+                "fee": "200",
+                "purpose": null,
+            }),
+        );
+        let pm_version = RecordType::PaymentMetadata.schema_version();
+        let change = make_incoming_change("PaymentMetadata", "pm-tagged", pm_version, data);
+        let _ = synced.handle_incoming_change(change).await.unwrap();
+
+        let payment = storage
+            .get_payment_by_id("pm-tagged".to_string())
+            .await
+            .unwrap();
+        let Some(crate::PaymentDetails::Lightning {
+            conversion_info, ..
+        }) = &payment.details
+        else {
+            panic!("Expected Lightning payment details");
+        };
+        assert!(matches!(
+            conversion_info,
+            Some(crate::ConversionInfo::Amm { .. })
+        ));
+    }
+
     #[tokio::test]
     async fn test_outgoing_unknown_type_newer_schema() {
         let temp_dir = create_temp_dir("outgoing_unknown_newer");

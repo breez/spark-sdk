@@ -2730,6 +2730,142 @@ mod tests {
         assert_eq!(returned[0].id, "ln-failed");
     }
 
+    /// Migration backfill: an untyped (pre-migration) AMM `conversion_info`
+    /// row is upgraded to a tagged enum and reads back via the strict
+    /// `from_json_string_opt::<ConversionInfo>` path that `list_payments` /
+    /// `get_payment_by_id` use.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn test_migration_conversion_info_type_discriminator() {
+        use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
+
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start PostgreSQL container");
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get host port");
+        let connection_string = format!(
+            "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+        );
+
+        // Bring the DB up to the state right before the discriminator backfill.
+        let migrations = PostgresStorage::migrations(&TEST_IDENTITY_A);
+        let backfill_index = migrations.len() - 1;
+        {
+            let (client, conn) = tokio_postgres::connect(&connection_string, tokio_postgres::NoTls)
+                .await
+                .expect("Failed to connect");
+            tokio::spawn(async move {
+                if let Err(e) = conn.await {
+                    eprintln!("connection error: {e}");
+                }
+            });
+            client
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS brz_schema_migrations (
+                        version INTEGER PRIMARY KEY,
+                        applied_at TIMESTAMPTZ DEFAULT NOW()
+                    )",
+                    &[],
+                )
+                .await
+                .unwrap();
+            for (i, migration) in migrations.iter().take(backfill_index).enumerate() {
+                let version = i32::try_from(i + 1).unwrap();
+                for statement in migration {
+                    client.execute(statement.as_str(), &[]).await.unwrap();
+                }
+                client
+                    .execute(
+                        "INSERT INTO brz_schema_migrations (version) VALUES ($1)",
+                        &[&version],
+                    )
+                    .await
+                    .unwrap();
+            }
+
+            // Insert a Spark payment + an untyped (pre-migration) AMM row.
+            // user_id is required (multi-tenant scoping migration is in the
+            // applied set above).
+            let user_id_bytes: &[u8] = &TEST_IDENTITY_A;
+            client
+                .execute(
+                    "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, spark)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                    &[
+                        &user_id_bytes,
+                        &"conv-migration-test",
+                        &"send",
+                        &"completed",
+                        &"5000",
+                        &"10",
+                        &1_700_000_001_i64,
+                        &"\"spark\"",
+                        &true,
+                    ],
+                )
+                .await
+                .unwrap();
+            client
+                .execute(
+                    "INSERT INTO brz_payment_details_spark (user_id, payment_id) VALUES ($1, $2)",
+                    &[&user_id_bytes, &"conv-migration-test"],
+                )
+                .await
+                .unwrap();
+            let untyped = serde_json::json!({
+                "pool_id": "pool-pre",
+                "conversion_id": "conv-pre",
+                "status": "Completed",
+                "fee": "42",
+                "purpose": null,
+            });
+            client
+                .execute(
+                    "INSERT INTO brz_payment_metadata (user_id, payment_id, conversion_info)
+                     VALUES ($1, $2, $3)",
+                    &[&user_id_bytes, &"conv-migration-test", &untyped],
+                )
+                .await
+                .unwrap();
+        }
+
+        // Now open via PostgresStorage to trigger the remaining backfill migration.
+        let config = PostgresStorageConfig::with_defaults(connection_string);
+        let storage = PostgresStorage::new(config, &TEST_IDENTITY_A)
+            .await
+            .unwrap();
+
+        let payment = storage
+            .get_payment_by_id("conv-migration-test".to_string())
+            .await
+            .unwrap();
+        let Some(PaymentDetails::Spark {
+            conversion_info, ..
+        }) = payment.details
+        else {
+            panic!("Expected Spark payment details");
+        };
+        match conversion_info.expect("conversion_info should be set") {
+            ConversionInfo::Amm {
+                pool_id,
+                conversion_id,
+                status,
+                fee,
+                ..
+            } => {
+                assert_eq!(pool_id, "pool-pre");
+                assert_eq!(conversion_id, "conv-pre");
+                assert_eq!(status, ConversionStatus::Completed);
+                assert_eq!(fee, Some(42));
+            }
+            other => panic!("Expected ConversionInfo::Amm, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_parse_valid_pem_in_storage() {
         let test_ca_pem = generate_test_ca_pem("testca1");
