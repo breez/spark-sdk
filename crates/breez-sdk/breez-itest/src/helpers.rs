@@ -854,6 +854,70 @@ pub async fn build_sdk_with_external_signer(
     })
 }
 
+/// Reads the Turnkey test-org config from the environment, returning `None` if
+/// any required variable is unset. This lets the Turnkey integration tests skip
+/// cleanly when run without credentials (e.g. locally) and only execute where
+/// CI provides the secrets.
+pub fn turnkey_config_from_env() -> Option<breez_sdk_spark::turnkey::TurnkeyConfig> {
+    let var = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
+    Some(breez_sdk_spark::turnkey::TurnkeyConfig {
+        base_url: var("TURNKEY_BASE_URL").unwrap_or_else(|| "https://api.turnkey.com".to_string()),
+        organization_id: var("TURNKEY_ORG_ID")?,
+        api_public_key: var("TURNKEY_API_PUBLIC_KEY")?,
+        api_private_key: var("TURNKEY_API_PRIVATE_KEY")?,
+        wallet_id: var("TURNKEY_WALLET_ID")?,
+        network: Network::Regtest,
+        retry: breez_sdk_spark::turnkey::TurnkeyRetryConfig::default(),
+    })
+}
+
+/// Builds a Regtest SDK backed by the Turnkey signers (`create_turnkey_signer`),
+/// or returns `Ok(None)` when the Turnkey env vars are unset so callers can skip
+/// without failing. Every signing operation routes through Turnkey; the wallet
+/// must already be provisioned there.
+pub async fn build_sdk_with_turnkey(
+    storage_dir: String,
+    temp_dir: Option<TempDir>,
+) -> Result<Option<SdkInstance>> {
+    let Some(turnkey_config) = turnkey_config_from_env() else {
+        info!("Turnkey env vars not set; skipping Turnkey-backed SDK build");
+        return Ok(None);
+    };
+    let signers = breez_sdk_spark::turnkey::create_turnkey_signer(turnkey_config)
+        .await
+        .map_err(|e| anyhow::anyhow!("create_turnkey_signer failed: {e}"))?;
+
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = true;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+
+    let builder = SdkBuilder::new_with_signer(config, signers.breez, signers.spark);
+    let builder = apply_storage(builder, storage_dir).await?;
+    let sdk = builder.build().await?;
+
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    let _ = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok(Some(SdkInstance {
+        sdk,
+        events: rx,
+        span: tracing::Span::current(),
+        temp_dir,
+        data_sync_fixture: None,
+        lnurl_fixture: None,
+    }))
+}
+
 pub async fn wait_for<F, Fut, T>(mut check_fn: F, timeout_secs: u64) -> Result<T>
 where
     F: FnMut() -> Fut,
