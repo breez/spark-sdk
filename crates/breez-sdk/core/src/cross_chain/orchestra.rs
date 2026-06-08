@@ -37,11 +37,11 @@ use crate::utils::{
     polling::{PollSchedule, poll_until},
 };
 
+const DEFAULT_AFFILIATE_ID: &str = "breez_sdk";
 // Polling cadence for the outbound Spark transfer leg.
 const SEND_POLL_INITIAL_DELAY_MS: u64 = 500;
 const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
 const SEND_POLL_TIMEOUT_SECS: u64 = 30;
-
 /// The canonical Spark source chain string used by Orchestra.
 const SPARK_SOURCE_CHAIN: &str = "spark";
 
@@ -366,7 +366,7 @@ impl CrossChainService for OrchestraService {
             slippage_bps: Some(max_slippage_bps),
             zeroconf_enabled: None,
             app_fees: Vec::new(),
-            affiliate_id: None,
+            affiliate_id: Some(DEFAULT_AFFILIATE_ID.to_string()),
         };
 
         debug!(
@@ -428,7 +428,7 @@ impl CrossChainService for OrchestraService {
         validate_quote_expiry(&prepared.expires_at)?;
 
         // Step 1: Spark transfer to the Orchestra deposit address.
-        let spark_tx_hash = self
+        let asset_transfer = self
             .client
             .transfer_to_deposit(
                 deposit_address,
@@ -436,6 +436,7 @@ impl CrossChainService for OrchestraService {
                 prepared.token_identifier.as_deref(),
             )
             .await?;
+        let spark_tx_hash = asset_transfer.id();
         debug!("Orchestra: deposit transfer {spark_tx_hash} sent for quote {quote_id}");
 
         // Step 2: Submit the deposit to Orchestra.
@@ -476,22 +477,23 @@ impl CrossChainService for OrchestraService {
             }
         };
 
+        let conversion_info = ConversionInfo::Orchestra {
+            order_id: order_id.clone(),
+            quote_id: quote_id.clone(),
+            chain: prepared.pair.chain.clone(),
+            chain_id: prepared.pair.chain_id.clone(),
+            asset: prepared.pair.asset.clone(),
+            recipient_address: prepared.recipient_address.clone(),
+            estimated_out: prepared.estimated_out,
+            delivered_amount: None,
+            status,
+            fee: Some(prepared.fee_amount),
+            read_token,
+            asset_decimals: u32::from(prepared.pair.decimals),
+            asset_contract: prepared.pair.contract_address.clone(),
+        };
         let metadata = crate::PaymentMetadata {
-            conversion_info: Some(ConversionInfo::Orchestra {
-                order_id: order_id.clone(),
-                quote_id: quote_id.clone(),
-                chain: prepared.pair.chain.clone(),
-                chain_id: prepared.pair.chain_id.clone(),
-                asset: prepared.pair.asset.clone(),
-                recipient_address: prepared.recipient_address.clone(),
-                estimated_out: prepared.estimated_out,
-                delivered_amount: None,
-                status,
-                fee: Some(prepared.fee_amount),
-                read_token,
-                asset_decimals: u32::from(prepared.pair.decimals),
-                asset_contract: prepared.pair.contract_address.clone(),
-            }),
+            conversion_info: Some(conversion_info.clone()),
             ..Default::default()
         };
 
@@ -523,7 +525,7 @@ impl CrossChainService for OrchestraService {
         let storage = Arc::clone(&self.storage);
         let spark_wallet = self.spark_wallet.clone();
         let payment_id_for_poll = payment_id.clone();
-        poll_until(schedule, None, || {
+        let polled = poll_until(schedule, None, || {
             fetch_and_process_payment(
                 spark_wallet.as_ref(),
                 Arc::clone(&storage),
@@ -531,12 +533,35 @@ impl CrossChainService for OrchestraService {
                 false,
             )
         })
-        .await
-        .map_err(|e| {
-            SdkError::Generic(format!(
-                "Cross-chain send submitted (order {order_id}), but payment row not yet synced: {e}"
-            ))
-        })
+        .await;
+
+        match polled {
+            Ok(payment) => Ok(payment),
+            Err(e) => {
+                // Operator sync still in flight — the metadata is already
+                // cached, and `poll_in_flight_orders` will reconcile the
+                // payment row as soon as it lands. Surface a payment built
+                // from the deposit transfer (with the Orchestra
+                // `ConversionInfo` attached) so callers see the send as
+                // submitted rather than failed.
+                debug!(
+                    "Orchestra: payment row not yet visible (order {order_id}): {e}; returning fallback payment built from the deposit transfer"
+                );
+                let payment = crate::utils::conversions::payment_from_asset_transfer(
+                    asset_transfer,
+                    &self.spark_wallet,
+                    &self.storage,
+                    &payment_id,
+                )
+                .await?
+                .ok_or_else(|| {
+                    SdkError::Generic(format!(
+                        "Orchestra transfer produced no outgoing payment for {payment_id}"
+                    ))
+                })?;
+                Ok(payment_with_orchestra_info(payment, Some(conversion_info)))
+            }
+        }
     }
 }
 
@@ -544,6 +569,44 @@ impl CrossChainService for OrchestraService {
 /// source for receives.
 fn non_spark_side(r: &Route, is_send: bool) -> &RouteAsset {
     if is_send { &r.destination } else { &r.source }
+}
+
+/// Attaches the Orchestra [`ConversionInfo`] to a freshly-converted
+/// [`Payment`]. The payment's top-level `status` is left as-is — it reflects
+/// the local Spark/Token transfer settlement, while the cross-chain pending
+/// state lives inside `conversion_info.status`. Lightning / Withdraw /
+/// Deposit details pass through unchanged (they shouldn't occur on the
+/// Orchestra send path; this is defensive).
+fn payment_with_orchestra_info(
+    mut payment: crate::Payment,
+    conversion_info: Option<ConversionInfo>,
+) -> crate::Payment {
+    payment.details = match payment.details {
+        Some(PaymentDetails::Spark {
+            invoice_details,
+            htlc_details,
+            ..
+        }) => Some(PaymentDetails::Spark {
+            invoice_details,
+            htlc_details,
+            conversion_info,
+        }),
+        Some(PaymentDetails::Token {
+            metadata,
+            tx_hash,
+            tx_type,
+            invoice_details,
+            ..
+        }) => Some(PaymentDetails::Token {
+            metadata,
+            tx_hash,
+            tx_type,
+            invoice_details,
+            conversion_info,
+        }),
+        other => other,
+    };
+    payment
 }
 
 /// Whether a raw Orchestra route should appear in the deduplicated list,
@@ -975,6 +1038,118 @@ mod tests {
             Some(CrossChainAddressFamily::Evm),
             Some("0x1234567890123456789012345678901234567890")
         ));
+    }
+
+    // ---- with_orchestra_info ----
+
+    fn dummy_payment(method: crate::PaymentMethod, details: PaymentDetails) -> crate::Payment {
+        crate::Payment {
+            id: "p1".to_string(),
+            payment_type: crate::PaymentType::Send,
+            status: crate::PaymentStatus::Completed,
+            amount: 1_000,
+            fees: 0,
+            timestamp: 100,
+            method,
+            details: Some(details),
+            conversion_details: None,
+        }
+    }
+
+    #[test_all]
+    fn with_orchestra_info_injects_into_spark_details_and_preserves_status() {
+        let original_details = PaymentDetails::Spark {
+            invoice_details: None,
+            htlc_details: None,
+            conversion_info: None,
+        };
+        let payment = dummy_payment(crate::PaymentMethod::Spark, original_details);
+        let info = orchestra_info("ord1", "q1");
+
+        let out = payment_with_orchestra_info(payment, Some(info));
+
+        // Status reflects the local Spark transfer (already settled by the
+        // time we reach the fallback); cross-chain pending lives in
+        // conversion_info.status.
+        assert_eq!(out.status, crate::PaymentStatus::Completed);
+        assert!(matches!(
+            out.details,
+            Some(PaymentDetails::Spark {
+                conversion_info: Some(ConversionInfo::Orchestra { .. }),
+                ..
+            })
+        ));
+    }
+
+    #[test_all]
+    fn with_orchestra_info_preserves_spark_invoice_and_htlc_details() {
+        // Defensive: invoice_details / htlc_details on Spark payments must
+        // not be wiped by the override.
+        let original_details = PaymentDetails::Spark {
+            invoice_details: Some(crate::SparkInvoicePaymentDetails {
+                description: Some("preserved".to_string()),
+                invoice: "inv".to_string(),
+            }),
+            htlc_details: None,
+            conversion_info: None,
+        };
+        let payment = dummy_payment(crate::PaymentMethod::Spark, original_details);
+
+        let out = payment_with_orchestra_info(payment, None);
+
+        if let Some(PaymentDetails::Spark {
+            invoice_details, ..
+        }) = out.details
+        {
+            assert_eq!(
+                invoice_details.and_then(|d| d.description).as_deref(),
+                Some("preserved")
+            );
+        } else {
+            panic!("expected Spark details");
+        }
+    }
+
+    #[test_all]
+    fn with_orchestra_info_injects_into_token_details_and_preserves_metadata() {
+        let original_details = PaymentDetails::Token {
+            metadata: crate::TokenMetadata {
+                identifier: "btkn1usdb".to_string(),
+                issuer_public_key: "issuer".to_string(),
+                name: "Bitcoin USD".to_string(),
+                ticker: "USDB".to_string(),
+                decimals: 6,
+                max_supply: 0,
+                is_freezable: true,
+            },
+            tx_hash: "hash".to_string(),
+            tx_type: crate::TokenTransactionType::Transfer,
+            invoice_details: None,
+            conversion_info: None,
+        };
+        let payment = dummy_payment(crate::PaymentMethod::Token, original_details);
+        let info = orchestra_info("ord1", "q1");
+
+        let out = payment_with_orchestra_info(payment, Some(info));
+
+        // Top-level status reflects the local Token transfer.
+        assert_eq!(out.status, crate::PaymentStatus::Completed);
+        if let Some(PaymentDetails::Token {
+            metadata,
+            conversion_info,
+            ..
+        }) = out.details
+        {
+            // Real metadata fetched via the shared helper is preserved.
+            assert_eq!(metadata.ticker, "USDB");
+            assert_eq!(metadata.decimals, 6);
+            assert!(matches!(
+                conversion_info,
+                Some(ConversionInfo::Orchestra { .. })
+            ));
+        } else {
+            panic!("expected Token details");
+        }
     }
 
     // ---- apply_terminal_status ----

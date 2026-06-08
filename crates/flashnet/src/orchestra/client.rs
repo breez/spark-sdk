@@ -1,5 +1,3 @@
-//! HTTP client for the Flashnet Orchestra cross-chain API.
-
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -16,6 +14,7 @@ use super::models::{
 use crate::cache::CacheStore;
 use crate::config::OrchestraConfig;
 use crate::error::FlashnetError;
+use crate::models::AssetTransfer;
 
 const ROUTES_CACHE_KEY: &str = "orchestra_routes";
 /// One hour — Orchestra routes are effectively static between deployments.
@@ -130,37 +129,36 @@ impl OrchestraClient {
             .await
     }
 
-    /// Send `amount_in` sats (or tokens) to the Orchestra-provided
-    /// `deposit_address` via the Spark wallet. Returns the resulting Spark
-    /// transfer id / token tx hash, which `/submit` expects as
-    /// `sparkTxHash`.
+    /// Send `amount_in` sats (or tokens) to the Orchestra-provided `deposit_address`
+    /// via the Spark wallet. Returns the full [`AssetTransfer`].
     pub async fn transfer_to_deposit(
         &self,
         deposit_address: &str,
         amount_in: u128,
         token_identifier: Option<&str>,
-    ) -> Result<String, FlashnetError> {
+    ) -> Result<AssetTransfer, FlashnetError> {
         let receiver_address = SparkAddress::from_str(deposit_address).map_err(|e| {
             FlashnetError::Generic(format!(
                 "Failed to parse Orchestra deposit address '{deposit_address}': {e}"
             ))
         })?;
 
-        let id = match token_identifier {
+        match token_identifier {
             None => {
                 // BTC sats — plain Spark transfer.
                 let amount_sats = u64::try_from(amount_in)
                     .map_err(|e| FlashnetError::Generic(format!("amount_in exceeds u64: {e}")))?;
-                self.spark_wallet
+                let transfer = self
+                    .spark_wallet
                     .transfer(amount_sats, &receiver_address, None)
-                    .await?
-                    .id
-                    .to_string()
+                    .await?;
+                Ok(AssetTransfer::Spark(transfer))
             }
             Some(token_identifier) => {
                 // USDB (or other Spark token) — token transfer.
                 // `token_identifier` is already a bech32m-encoded token id (e.g. btkn1x...).
-                self.spark_wallet
+                let token_tx = self
+                    .spark_wallet
                     .transfer_tokens(
                         vec![TransferTokenOutput {
                             token_id: token_identifier.to_string(),
@@ -171,11 +169,10 @@ impl OrchestraClient {
                         None,
                         None,
                     )
-                    .await?
-                    .hash
+                    .await?;
+                Ok(AssetTransfer::Token(token_tx))
             }
-        };
-        Ok(id)
+        }
     }
 
     /// Look up an order by its id.

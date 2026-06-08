@@ -5,38 +5,12 @@ use serde::{Deserialize, Serialize};
 use serde_with::DisplayFromStr;
 use serde_with::serde_as;
 use spark::Network;
-use spark_wallet::{PublicKey, TokenTransaction, TransferId, WalletTransfer};
+use spark_wallet::{PublicKey, TransferId};
 
 use super::api::BTC_ASSET_ADDRESS;
 use super::utils::decode_token_identifier;
 use crate::error::FlashnetError;
-
-/// The asset transfer produced when we send the swap's "in" asset to the
-/// pool. Carries the rich wallet-side object so callers can record a
-/// `Payment` for the sent leg without re-fetching it from the operator.
-///
-/// `Spark` is the larger variant; we don't box it because instances are
-/// short-lived (constructed once per swap, consumed by the caller almost
-/// immediately) and adding indirection would only complicate consumers.
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum AssetTransfer {
-    Spark(WalletTransfer),
-    Token(TokenTransaction),
-}
-
-impl AssetTransfer {
-    /// Returns the operator-side identifier for this transfer — a Spark
-    /// `transfer_id` or a token transaction hash, matching what the swap
-    /// signing flow uses.
-    #[must_use]
-    pub fn id(&self) -> String {
-        match self {
-            AssetTransfer::Spark(t) => t.id.to_string(),
-            AssetTransfer::Token(t) => t.hash.clone(),
-        }
-    }
-}
+use crate::models::AssetTransfer;
 
 /// Response returned by [`FlashnetClient::execute_swap`](crate::FlashnetClient::execute_swap):
 /// the wire-shaped fields from Flashnet plus the rich `AssetTransfer` we

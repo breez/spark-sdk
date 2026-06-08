@@ -13,12 +13,11 @@ use tracing::{debug, error, info, warn};
 use crate::{
     AmountAdjustmentReason, EventEmitter, Network, Payment, PaymentDetails, PaymentMetadata,
     Storage,
-    persist::{ObjectCacheRepository, StorageListPaymentsRequest, StoragePaymentDetailsFilter},
+    persist::{StorageListPaymentsRequest, StoragePaymentDetailsFilter},
     token_conversion::{ConversionAmount, DEFAULT_CONVERSION_MAX_SLIPPAGE_BPS},
     utils::{
         payments::{fetch_and_process_payment, insert_payment_with_metadata},
         polling::{PollSchedule, poll_until},
-        token::token_transaction_to_payments,
     },
 };
 
@@ -632,34 +631,20 @@ impl FlashnetTokenConverter {
         outbound_asset_transfer: AssetTransfer,
         sent_payment_id: &str,
     ) -> Option<Payment> {
-        match outbound_asset_transfer {
-            AssetTransfer::Spark(transfer) => match Payment::try_from(transfer) {
-                Ok(payment) => Some(payment),
-                Err(e) => {
-                    warn!(
-                        "Failed to build Payment from sent spark transfer for conversion {sent_payment_id}: {e:?}"
-                    );
-                    None
-                }
-            },
-            AssetTransfer::Token(token_tx) => {
-                let object_repository = ObjectCacheRepository::new(self.storage.clone());
-                match token_transaction_to_payments(
-                    &self.spark_wallet,
-                    &object_repository,
-                    &token_tx,
-                    true,
-                )
-                .await
-                {
-                    Ok(payments) => payments.into_iter().find(|p| p.id == sent_payment_id),
-                    Err(e) => {
-                        warn!(
-                            "Failed to convert sent token tx to payments for conversion {sent_payment_id}: {e:?}"
-                        );
-                        None
-                    }
-                }
+        match crate::utils::conversions::payment_from_asset_transfer(
+            outbound_asset_transfer,
+            &self.spark_wallet,
+            &self.storage,
+            sent_payment_id,
+        )
+        .await
+        {
+            Ok(payment) => payment,
+            Err(e) => {
+                warn!(
+                    "Failed to build Payment from sent asset transfer for conversion {sent_payment_id}: {e:?}"
+                );
+                None
             }
         }
     }

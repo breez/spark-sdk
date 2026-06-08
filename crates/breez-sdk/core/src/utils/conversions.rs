@@ -15,6 +15,8 @@
 
 use std::sync::Arc;
 
+use flashnet::AssetTransfer;
+use spark_wallet::SparkWallet;
 use tracing::warn;
 
 use crate::{
@@ -24,7 +26,36 @@ use crate::{
         Conversion, ConversionAsset, ConversionChain, ConversionDetails, ConversionProvider,
         ConversionSide,
     },
+    persist::ObjectCacheRepository,
+    utils::token::token_transaction_to_payments,
 };
+
+/// Converts a freshly-produced [`AssetTransfer`] into the [`Payment`] row the
+/// SDK would surface once operator-side sync catches up.
+///
+/// - `AssetTransfer::Spark` → uses the [`Payment::try_from`] adapter on
+///   the wallet transfer (no network IO).
+/// - `AssetTransfer::Token` → calls [`token_transaction_to_payments`] (cache-
+///   backed metadata lookup) and filters to the output matching
+///   `payment_id`. Returns `Ok(None)` when no output matches (e.g. token
+///   transactions with only a change output, or a `payment_id` mismatch).
+pub(crate) async fn payment_from_asset_transfer(
+    transfer: AssetTransfer,
+    spark_wallet: &SparkWallet,
+    storage: &Arc<dyn Storage>,
+    payment_id: &str,
+) -> Result<Option<Payment>, SdkError> {
+    match transfer {
+        AssetTransfer::Spark(wallet_transfer) => Ok(Some(Payment::try_from(wallet_transfer)?)),
+        AssetTransfer::Token(token_tx) => {
+            let object_repository = ObjectCacheRepository::new(Arc::clone(storage));
+            let payments =
+                token_transaction_to_payments(spark_wallet, &object_repository, &token_tx, true)
+                    .await?;
+            Ok(payments.into_iter().find(|p| p.id == payment_id))
+        }
+    }
+}
 
 /// Extract `ConversionInfo` from whichever [`PaymentDetails`] variant carries
 /// it. Cross-chain conversion info can sit on `Lightning` (Boltz hold-invoice

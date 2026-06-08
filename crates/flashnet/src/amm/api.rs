@@ -7,17 +7,17 @@ use tokio::sync::Mutex;
 use tracing::debug;
 
 use super::models::{
-    AssetTransfer, ClawbackIntent, ClawbackRequest, ClawbackResponse, ExecuteSwapIntent,
-    ExecuteSwapRequest, ExecuteSwapResponse, FeatureName, FeatureStatus,
-    FlashnetExecuteSwapResponse, GetMinAmountsRequest, GetMinAmountsResponse, ListPoolsRequest,
-    ListPoolsResponse, ListUserSwapsRequest, ListUserSwapsResponse, MinAmount, PingResponse,
-    SignedClawbackRequest, SignedExecuteSwapRequest, SignedExecuteSwapResponse,
-    SimulateSwapRequest, SimulateSwapResponse,
+    ClawbackIntent, ClawbackRequest, ClawbackResponse, ExecuteSwapIntent, ExecuteSwapRequest,
+    ExecuteSwapResponse, FeatureName, FeatureStatus, FlashnetExecuteSwapResponse,
+    GetMinAmountsRequest, GetMinAmountsResponse, ListPoolsRequest, ListPoolsResponse,
+    ListUserSwapsRequest, ListUserSwapsResponse, MinAmount, PingResponse, SignedClawbackRequest,
+    SignedExecuteSwapRequest, SignedExecuteSwapResponse, SimulateSwapRequest, SimulateSwapResponse,
 };
 use super::utils::generate_nonce;
 use crate::cache::CacheStore;
 use crate::config::FlashnetConfig;
 use crate::error::FlashnetError;
+use crate::models::AssetTransfer;
 
 pub const BTC_ASSET_ADDRESS: &str =
     "020202020202020202020202020202020202020202020202020202020202020202";
