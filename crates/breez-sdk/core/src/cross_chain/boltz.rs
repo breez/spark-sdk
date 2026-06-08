@@ -385,7 +385,7 @@ impl CrossChainService for BoltzService {
         // The route carries the destination's orthogonal `(chain, asset)`
         // identity; Boltz selects by that pair, so map the asset ticker back to
         // its enum and pass both through (no opaque destination handle).
-        let asset = asset_from_ticker(&route.asset).ok_or_else(|| {
+        let asset = Asset::try_from(route.asset.as_str()).map_err(|()| {
             SdkError::InvalidInput(format!(
                 "Boltz does not support asset '{}' on {}",
                 route.asset, route.chain
@@ -581,19 +581,6 @@ impl CrossChainService for BoltzService {
 
 fn boltz_err_to_sdk(err: &BoltzError) -> SdkError {
     SdkError::Generic(format!("Boltz: {err}"))
-}
-
-/// Map a route's asset ticker back to the boltz-client [`Asset`]. Inverse of
-/// `Asset::as_str` (used when building the route): `CrossChainRoutePair.asset`
-/// is a plain string, so the prepare path parses it to select the destination
-/// by `(chain, asset)`. Returns `None` for tickers Boltz does not deliver.
-fn asset_from_ticker(ticker: &str) -> Option<Asset> {
-    match ticker.to_ascii_uppercase().as_str() {
-        "USDT" => Some(Asset::Usdt),
-        "USDT0" => Some(Asset::Usdt0),
-        "USDC" => Some(Asset::Usdc),
-        _ => None,
-    }
 }
 
 /// Phase-1 check for the `FeesIncluded` path: returns the size to use for the
