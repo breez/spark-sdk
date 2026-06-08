@@ -323,3 +323,20 @@ pub(crate) struct SparkClaimTransferResult {
     #[serde(default)]
     pub new_leaf_public_keys: Vec<SparkLeafPublicKey>,
 }
+
+pub(crate) const EXPORT_WALLET_ACCOUNT_PATH: &str = "/public/v1/submit/export_wallet_account";
+pub(crate) const EXPORT_WALLET_ACCOUNT_TYPE: &str = "ACTIVITY_TYPE_EXPORT_WALLET_ACCOUNT";
+pub(crate) const EXPORT_WALLET_ACCOUNT_RESULT: &str = "exportWalletAccountResult";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExportWalletAccountIntent {
+    pub address: String,
+    pub target_public_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExportWalletAccountResult {
+    pub export_bundle: String,
+}

@@ -18,22 +18,28 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
+use bitcoin::NetworkKind;
+use bitcoin::bip32::{ChainCode, ChildNumber, DerivationPath, Xpriv};
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::{PublicKey, ecdsa, schnorr};
+use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::{NonceCommitment, SigningCommitments};
 use frost_secp256k1_tr::round2::SignatureShare;
 use spark_wallet::{
-    FrostDerivation, FrostJob, FrostShareResult, FrostSigningCommitmentsWithNonces, NewLeafKey,
-    OperatorPackage, OperatorRecipient, PrepareClaimRequest, PrepareLightningReceiveRequest,
-    PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
-    PrepareTransferRequest, PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit,
-    PreparedStaticDepositClaim, PreparedTokenTransaction, PreparedTransfer,
-    SignSparkInvoiceRequest, SignStaticDepositRefundRequest, SignedSparkInvoice, SignerError,
-    SparkSigner, StartStaticDepositRefundRequest, StartedStaticDepositRefund, TreeNodeId,
+    AggregateFrostRequest, DefaultSigner, FrostDerivation, FrostJob, FrostShareResult,
+    FrostSigningCommitmentsWithNonces, NewLeafKey, OperatorPackage, OperatorRecipient,
+    PrepareClaimRequest, PrepareLightningReceiveRequest, PrepareStaticDepositClaimRequest,
+    PrepareStaticDepositRequest, PrepareTokenTransactionRequest, PrepareTransferRequest,
+    PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit, PreparedStaticDepositClaim,
+    PreparedTokenTransaction, PreparedTransfer, SecretSource, SignFrostRequest,
+    SignSparkInvoiceRequest, SignStaticDepositRefundRequest, SignedSparkInvoice, Signer,
+    SignerError, SparkSigner, StartStaticDepositRefundRequest, StartedStaticDepositRefund,
+    TreeNodeId, aggregate_frost,
 };
 
 use crate::Network;
+
+use turnkey_enclave_encrypt::{ExportClient, QuorumPublicKey};
 
 use super::error::TurnkeyError;
 use super::transport::TurnkeyClient;
@@ -41,17 +47,19 @@ use super::types::{
     ADDRESS_FORMAT_COMPRESSED, ADDRESS_FORMAT_SPARK_MAINNET, ADDRESS_FORMAT_SPARK_REGTEST,
     CREATE_WALLET_ACCOUNTS_PATH, CREATE_WALLET_ACCOUNTS_RESULT, CREATE_WALLET_ACCOUNTS_TYPE,
     CURVE_SECP256K1, CreateWalletAccountsIntent, CreateWalletAccountsResult, ENCODING_HEXADECIMAL,
-    GET_WALLET_ACCOUNT_PATH, GetWalletAccountRequest, GetWalletAccountResponse,
-    HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256, PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH,
-    SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SPARK_CLAIM_TRANSFER_PATH,
-    SPARK_CLAIM_TRANSFER_RESULT, SPARK_CLAIM_TRANSFER_TYPE, SPARK_PREPARE_LIGHTNING_RECEIVE_PATH,
-    SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT, SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE,
-    SPARK_PREPARE_TRANSFER_PATH, SPARK_PREPARE_TRANSFER_RESULT, SPARK_PREPARE_TRANSFER_TYPE,
-    SPARK_SIGN_FROST_PATH, SPARK_SIGN_FROST_RESULT, SPARK_SIGN_FROST_TYPE, SignRawPayloadIntent,
-    SignRawPayloadResult, SparkClaimLeaf, SparkClaimPackage, SparkClaimTransferIntent,
-    SparkClaimTransferResult, SparkEncryptedOperatorPackage, SparkFrostCommitment,
-    SparkKeyDerivation, SparkLeafPublicKey, SparkLightningReceivePackage, SparkOperatorRecipient,
-    SparkPartialSignature, SparkPrepareLightningReceiveIntent, SparkPrepareLightningReceiveResult,
+    EXPORT_WALLET_ACCOUNT_PATH, EXPORT_WALLET_ACCOUNT_RESULT, EXPORT_WALLET_ACCOUNT_TYPE,
+    ExportWalletAccountIntent, ExportWalletAccountResult, GET_WALLET_ACCOUNT_PATH,
+    GetWalletAccountRequest, GetWalletAccountResponse, HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256,
+    PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH, SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE,
+    SPARK_CLAIM_TRANSFER_PATH, SPARK_CLAIM_TRANSFER_RESULT, SPARK_CLAIM_TRANSFER_TYPE,
+    SPARK_PREPARE_LIGHTNING_RECEIVE_PATH, SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT,
+    SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE, SPARK_PREPARE_TRANSFER_PATH,
+    SPARK_PREPARE_TRANSFER_RESULT, SPARK_PREPARE_TRANSFER_TYPE, SPARK_SIGN_FROST_PATH,
+    SPARK_SIGN_FROST_RESULT, SPARK_SIGN_FROST_TYPE, SignRawPayloadIntent, SignRawPayloadResult,
+    SparkClaimLeaf, SparkClaimPackage, SparkClaimTransferIntent, SparkClaimTransferResult,
+    SparkEncryptedOperatorPackage, SparkFrostCommitment, SparkKeyDerivation, SparkLeafPublicKey,
+    SparkLightningReceivePackage, SparkOperatorRecipient, SparkPartialSignature,
+    SparkPrepareLightningReceiveIntent, SparkPrepareLightningReceiveResult,
     SparkPrepareTransferIntent, SparkPrepareTransferResult, SparkSignFrostIntent,
     SparkSignFrostResult, SparkSignatureRequest, SparkTransferLeaf, SparkTransferPackage,
     WalletAccountParams,
@@ -92,6 +100,23 @@ fn spark_address_format(network: Network) -> &'static str {
     match network {
         Network::Mainnet => ADDRESS_FORMAT_SPARK_MAINNET,
         Network::Regtest => ADDRESS_FORMAT_SPARK_REGTEST,
+    }
+}
+
+/// Wraps a raw exported secret key as an `Xpriv` so it can root a local
+/// `DefaultSigner`. We never derive children, so the chain code is a fixed
+/// placeholder and the key is addressed via the empty (master) path.
+fn xpriv_from_secret(secret: SecretKey, network: Network) -> Xpriv {
+    Xpriv {
+        network: match network {
+            Network::Mainnet => NetworkKind::Main,
+            Network::Regtest => NetworkKind::Test,
+        },
+        depth: 0,
+        parent_fingerprint: Default::default(),
+        child_number: ChildNumber::from_normal_idx(0).expect("0 is a valid child index"),
+        private_key: secret,
+        chain_code: ChainCode::from([0u8; 32]),
     }
 }
 
@@ -203,11 +228,15 @@ pub(crate) struct TurnkeySparkSigner {
     client: Arc<TurnkeyClient>,
     account: u32,
     network: Network,
-    // Pubkey/address memoization only (see module docs): immutable, in-memory, non-authoritative.
+    // Pubkey/address memoization (see module docs): immutable, in-memory, non-authoritative.
     identity_pubkey: Mutex<Option<PublicKey>>,
     spark_address: Mutex<Option<String>>,
     leaf_pubkeys: Mutex<HashMap<TreeNodeId, PublicKey>>,
     static_deposit_pubkeys: Mutex<HashMap<u32, PublicKey>>,
+    // Static-deposit secret keys exported from Turnkey, cached so the refund
+    // start/sign pair need not re-export. Exportable by design (the SSP co-signs
+    // with them); in-memory only, never persisted.
+    static_deposit_secret_keys: Mutex<HashMap<u32, SecretKey>>,
 }
 
 impl TurnkeySparkSigner {
@@ -220,6 +249,7 @@ impl TurnkeySparkSigner {
             spark_address: Mutex::new(None),
             leaf_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_pubkeys: Mutex::new(HashMap::new()),
+            static_deposit_secret_keys: Mutex::new(HashMap::new()),
         }
     }
 
@@ -369,6 +399,60 @@ impl TurnkeySparkSigner {
             cache.insert(id, pk);
         }
         Ok(())
+    }
+
+    /// Exports the static-deposit secret key at `index` from Turnkey, decrypting
+    /// the bundle against the pinned quorum key. Cached in-memory.
+    async fn export_static_deposit_key(&self, index: u32) -> Result<SecretKey, SignerError> {
+        if let Some(secret) = self
+            .static_deposit_secret_keys
+            .lock()
+            .unwrap()
+            .get(&index)
+            .copied()
+        {
+            return Ok(secret);
+        }
+        let path = format!("{}/3'/{index}'", self.base_path());
+        let address = self
+            .create_account(path, ADDRESS_FORMAT_COMPRESSED)
+            .await
+            .map_err(to_spark_err)?;
+        let mut export_client = ExportClient::new(&QuorumPublicKey::production_signer());
+        let target_public_key = export_client.target_public_key().map_err(to_spark_err)?;
+        let result: ExportWalletAccountResult = self
+            .client
+            .submit_activity(
+                EXPORT_WALLET_ACCOUNT_PATH,
+                EXPORT_WALLET_ACCOUNT_TYPE,
+                ExportWalletAccountIntent {
+                    address,
+                    target_public_key,
+                },
+                EXPORT_WALLET_ACCOUNT_RESULT,
+            )
+            .await
+            .map_err(to_spark_err)?;
+        let private_bytes = export_client
+            .decrypt_private_key(&result.export_bundle, &self.client.organization_id)
+            .map_err(to_spark_err)?;
+        let secret = SecretKey::from_slice(&private_bytes).map_err(to_spark_err)?;
+        self.static_deposit_secret_keys
+            .lock()
+            .unwrap()
+            .insert(index, secret);
+        Ok(secret)
+    }
+
+    /// A local in-process signer rooted at the exported static-deposit key, so
+    /// the refund FROST and SSP-export ECIES reuse the existing machinery (the
+    /// key is addressed via the empty derivation path).
+    async fn local_static_deposit_signer(&self, index: u32) -> Result<DefaultSigner, SignerError> {
+        let secret = self.export_static_deposit_key(index).await?;
+        Ok(DefaultSigner::from_master(xpriv_from_secret(
+            secret,
+            self.network,
+        )))
     }
 }
 
@@ -599,38 +683,104 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
 
     async fn prepare_static_deposit(
         &self,
-        _request: PrepareStaticDepositRequest,
+        request: PrepareStaticDepositRequest,
     ) -> Result<PreparedStaticDeposit, SignerError> {
-        Err(SignerError::Generic(
-            "turnkey signer: prepare_static_deposit not yet implemented".to_string(),
-        ))
+        let PrepareStaticDepositRequest {
+            index,
+            ssp_public_key,
+            frost_jobs,
+        } = request;
+        // Export the static-deposit secret and ECIES-encrypt it to the SSP via a
+        // local signer rooted at that key (empty path = the key itself).
+        let local = self.local_static_deposit_signer(index).await?;
+        let exported_secret = local
+            .encrypt_secret_for_receiver(
+                &SecretSource::Derived(DerivationPath::master()),
+                &ssp_public_key,
+            )
+            .await?;
+        // The deposit tree-tx FROST stays in Turnkey (SPARK_SIGN_FROST).
+        let frost_shares = self.sign_frost(frost_jobs).await?;
+        Ok(PreparedStaticDeposit {
+            exported_secret,
+            frost_shares,
+        })
     }
 
     async fn start_static_deposit_refund(
         &self,
-        _request: StartStaticDepositRefundRequest,
+        request: StartStaticDepositRefundRequest,
     ) -> Result<StartedStaticDepositRefund, SignerError> {
-        Err(SignerError::Generic(
-            "turnkey signer: start_static_deposit_refund not yet implemented".to_string(),
-        ))
+        let StartStaticDepositRefundRequest {
+            index,
+            user_statement,
+        } = request;
+        let signing_public_key = self.get_static_deposit_public_key(index).await?;
+        // User-commits-first: the nonce (encrypted to the local signer) is
+        // generated now and reconstructed in sign_static_deposit_refund.
+        let nonce_commitment = self
+            .local_static_deposit_signer(index)
+            .await?
+            .generate_random_signing_commitment()
+            .await?;
+        let user_signature = self.sign_identity_ecdsa(&user_statement).await?;
+        Ok(StartedStaticDepositRefund {
+            signing_public_key,
+            nonce_commitment,
+            user_signature,
+        })
     }
 
     async fn sign_static_deposit_refund(
         &self,
-        _request: SignStaticDepositRefundRequest,
+        request: SignStaticDepositRefundRequest,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
-        Err(SignerError::Generic(
-            "turnkey signer: sign_static_deposit_refund not yet implemented".to_string(),
-        ))
+        let SignStaticDepositRefundRequest {
+            index,
+            sighash,
+            verifying_key,
+            nonce_commitment,
+            statechain_commitments,
+            statechain_signatures,
+            statechain_public_keys,
+        } = request;
+        let local = self.local_static_deposit_signer(index).await?;
+        let aggregating_public_key = self.get_static_deposit_public_key(index).await?;
+        // Sign with the pre-committed nonce, then aggregate (pure public math).
+        let user_signature = local
+            .sign_frost(SignFrostRequest {
+                message: &sighash,
+                public_key: &verifying_key,
+                private_key: &SecretSource::Derived(DerivationPath::master()),
+                verifying_key: &verifying_key,
+                self_nonce_commitment: &nonce_commitment,
+                statechain_commitments: statechain_commitments.clone(),
+                adaptor_public_key: None,
+            })
+            .await?;
+        aggregate_frost(AggregateFrostRequest {
+            message: &sighash,
+            statechain_signatures,
+            statechain_public_keys,
+            verifying_key: &verifying_key,
+            statechain_commitments,
+            self_commitment: &nonce_commitment.commitments,
+            public_key: &aggregating_public_key,
+            self_signature: &user_signature,
+            adaptor_public_key: None,
+        })
     }
 
     async fn prepare_static_deposit_claim(
         &self,
-        _request: PrepareStaticDepositClaimRequest,
+        request: PrepareStaticDepositClaimRequest,
     ) -> Result<PreparedStaticDepositClaim, SignerError> {
-        Err(SignerError::Generic(
-            "turnkey signer: prepare_static_deposit_claim not yet implemented".to_string(),
-        ))
+        let deposit_secret_key = self.export_static_deposit_key(request.index).await?;
+        let user_signature = self.sign_identity_ecdsa(&request.user_statement).await?;
+        Ok(PreparedStaticDepositClaim {
+            deposit_secret_key,
+            user_signature,
+        })
     }
 
     async fn sign_spark_invoice(

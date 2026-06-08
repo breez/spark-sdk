@@ -25,7 +25,7 @@ mysql = [
 # binaries built without this feature contain none of the bench-layer
 # setup code.
 span-trace = []
-turnkey = []
+turnkey = ["dep:turnkey_enclave_encrypt"]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
@@ -62,6 +62,7 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid.workspace = true
 uniffi = { workspace = true, optional = true }
+turnkey_enclave_encrypt = { workspace = true, optional = true }
 x509-cert = { version = "0.2", default-features = false }
 anyhow.workspace = true
 frost-secp256k1-tr = { workspace = true }
