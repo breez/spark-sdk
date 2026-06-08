@@ -119,9 +119,9 @@ mod tests {
     use macros::async_test_all;
     use spark_wallet::SessionStore as _;
 
+    use crate::Seed;
     use crate::signer::BreezSigner;
     use crate::signer::breez::BreezSignerImpl;
-    use crate::{KeySetType, Seed};
 
     use super::*;
 
@@ -166,14 +166,8 @@ mod tests {
     fn test_signer(seed_byte: u8) -> Arc<dyn BreezSigner> {
         let seed = Seed::Entropy(vec![seed_byte; 32]);
         let seed_bytes = seed.to_bytes().unwrap();
-        let key_set = spark_wallet::KeySet::new(
-            &seed_bytes,
-            Network::Regtest.into(),
-            KeySetType::Default.into(),
-            false,
-            None,
-        )
-        .unwrap();
+        let key_set =
+            spark_wallet::KeySet::new(&seed_bytes, Network::Regtest.into(), None).unwrap();
         Arc::new(BreezSignerImpl::new(key_set.identity_master_key))
     }
 

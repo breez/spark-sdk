@@ -37,8 +37,6 @@ Future<BreezSdk> createTokenWithCustomAccountNumber() async {
   // Set the account number for the SDK
   builder.withKeySet(
     config: KeySetConfig(
-      keySetType: KeySetType.default_,
-      useAddressIndex: false,
       accountNumber: accountNumber,
     ),
   );

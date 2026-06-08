@@ -105,20 +105,8 @@ pub enum AutoOptimizationEvent {
     Skipped,
 }
 
-#[derive(Clone)]
-#[macros::extern_wasm_bindgen(breez_sdk_spark::KeySetType)]
-pub enum KeySetType {
-    Default,
-    Taproot,
-    NativeSegwit,
-    WrappedSegwit,
-    Legacy,
-}
-
 #[macros::extern_wasm_bindgen(breez_sdk_spark::KeySetConfig)]
 pub struct KeySetConfig {
-    pub key_set_type: KeySetType,
-    pub use_address_index: bool,
     pub account_number: Option<u32>,
 }
 

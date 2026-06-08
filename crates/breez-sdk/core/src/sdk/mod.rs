@@ -331,14 +331,7 @@ pub fn default_external_signer(
     use crate::signer::DefaultExternalSigner;
 
     let config = key_set_config.unwrap_or_default();
-    let signer = DefaultExternalSigner::new(
-        mnemonic,
-        passphrase,
-        network,
-        config.key_set_type,
-        config.use_address_index,
-        config.account_number,
-    )?;
+    let signer = DefaultExternalSigner::new(mnemonic, passphrase, network, config.account_number)?;
 
     Ok(Arc::new(signer))
 }

@@ -36,8 +36,6 @@ func createTokenWithCustomAccountNumber() async throws -> BreezSdk {
 
     // Set the account number for the SDK
     let keySetConfig = KeySetConfig(
-        keySetType: KeySetType.default,
-        useAddressIndex: false,
         accountNumber: accountNumber
     )
     await builder.withKeySet(config: keySetConfig)

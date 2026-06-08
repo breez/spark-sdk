@@ -12,8 +12,6 @@ fn create_signer() -> Result<Arc<dyn ExternalBreezSigner>, SdkError> {
         None, // passphrase
         network,
         Some(KeySetConfig {
-            key_set_type: KeySetType::Default,
-            use_address_index: false,
             account_number: Some(0),
         }),
     )?;

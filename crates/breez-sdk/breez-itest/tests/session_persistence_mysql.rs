@@ -42,8 +42,6 @@ impl MysqlSessionPersistenceFixture {
         let key_set = breez_sdk_spark::KeySet::new(
             &shared_seed,
             breez_sdk_spark::Network::Regtest.into(),
-            breez_sdk_spark::KeySetType::Default.into(),
-            false,
             None,
         )?;
         let identity = key_set.identity_key_pair.public_key().serialize().to_vec();

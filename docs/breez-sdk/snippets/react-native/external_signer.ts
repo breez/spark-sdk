@@ -2,8 +2,7 @@ import {
   defaultExternalSigner,
   connectWithSigner,
   defaultConfig,
-  Network,
-  KeySetType
+  Network
 } from '@breeztech/breez-sdk-spark-react-native'
 import type { ExternalSparkSigner, KeySetConfig } from '@breeztech/breez-sdk-spark-react-native'
 import RNFS from 'react-native-fs'
@@ -12,8 +11,6 @@ import RNFS from 'react-native-fs'
 const createSigner = () => {
   const mnemonic = '<mnemonic words>'
   const keySetConfig: KeySetConfig = {
-    keySetType: KeySetType.Default,
-    useAddressIndex: false,
     accountNumber: 0
   }
 

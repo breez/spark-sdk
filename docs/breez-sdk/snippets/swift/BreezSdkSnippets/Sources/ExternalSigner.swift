@@ -12,8 +12,6 @@ class ExternalSignerSnippets {
             passphrase: nil,
             network: network,
             keySetConfig: KeySetConfig(
-                keySetType: KeySetType.default,
-                useAddressIndex: false,
                 accountNumber: 0
             )
         )

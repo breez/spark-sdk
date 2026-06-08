@@ -43,13 +43,9 @@ func withRestChainService(builder: SdkBuilder) async {
 
 func withKeySet(builder: SdkBuilder) async {
     // ANCHOR: with-key-set
-    let keySetType = KeySetType.default
-    let useAddressIndex = false
     let optionalAccountNumber = UInt32(21)
-    
+
     let config = KeySetConfig(
-        keySetType: keySetType,
-        useAddressIndex: useAddressIndex,
         accountNumber: optionalAccountNumber
     )
     

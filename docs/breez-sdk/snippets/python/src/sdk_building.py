@@ -18,7 +18,6 @@ from breez_sdk_spark import (
     PaymentObserver,
     ChainApiType,
     Credentials,
-    KeySetType,
     KeySetConfig,
     UpdateUserSettingsRequest,
 )
@@ -68,13 +67,9 @@ async def with_rest_chain_service(builder: SdkBuilder):
 
 async def with_key_set(builder: SdkBuilder):
     # ANCHOR: with-key-set
-    key_set_type = KeySetType.DEFAULT
-    use_address_index = False
     optional_account_number = 21
 
     key_set_config = KeySetConfig(
-        key_set_type=key_set_type,
-        use_address_index=use_address_index,
         account_number=optional_account_number,
     )
 

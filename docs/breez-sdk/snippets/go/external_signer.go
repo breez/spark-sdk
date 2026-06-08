@@ -10,14 +10,10 @@ import (
 func createSigner() (breez_sdk_spark.ExternalBreezSigner, error) {
 	mnemonic := "<mnemonic words>"
 	network := breez_sdk_spark.NetworkMainnet
-	keySetType := breez_sdk_spark.KeySetTypeDefault
-	useAddressIndex := false
 	var accountNumber uint32 = 0
 
 	keySetConfig := breez_sdk_spark.KeySetConfig{
-		KeySetType:      keySetType,
-		UseAddressIndex: useAddressIndex,
-		AccountNumber:   &accountNumber,
+		AccountNumber: &accountNumber,
 	}
 
 	signer, err := breez_sdk_spark.DefaultExternalSigner(

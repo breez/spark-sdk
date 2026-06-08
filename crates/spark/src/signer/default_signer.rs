@@ -1,5 +1,4 @@
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
-use bitcoin::key::{Parity, TapTweak};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::secp256k1::{self, All, Keypair, Message, PublicKey, SecretKey, schnorr};
@@ -30,16 +29,6 @@ fn account_number(network: Network) -> u32 {
         Network::Regtest => 0,
         _ => 1,
     }
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum KeySetType {
-    #[default]
-    Default,
-    Taproot,
-    NativeSegwit,
-    WrappedSegwit,
-    Legacy,
 }
 
 struct DerivedKeySet {
@@ -98,121 +87,17 @@ pub struct KeySet {
 }
 
 impl KeySet {
+    /// Derives the Spark key set from a seed at `m/8797555'/{account}'`, with the
+    /// identity key at the `0'` child of that account node.
     pub fn new(
         seed: &[u8],
         network: Network,
-        key_type: KeySetType,
-        use_address_index: bool,
         account_no: Option<u32>,
     ) -> Result<Self, DefaultSignerError> {
         let account_number = account_no.unwrap_or_else(|| account_number(network));
-        match key_type {
-            KeySetType::Default => Self::default_keys(seed, network, account_number),
-            KeySetType::Taproot => {
-                Self::taproot_keys(seed, network, use_address_index, account_number)
-            }
-            KeySetType::NativeSegwit => {
-                Self::native_segwit_keys(seed, network, use_address_index, account_number)
-            }
-            KeySetType::WrappedSegwit => {
-                Self::wrapped_segwit_keys(seed, network, use_address_index, account_number)
-            }
-            KeySetType::Legacy => {
-                Self::legacy_bitcoin_keys(seed, network, use_address_index, account_number)
-            }
-        }
-    }
-
-    fn default_keys(
-        seed: &[u8],
-        network: Network,
-        account_number: u32,
-    ) -> Result<Self, DefaultSignerError> {
         let derivation_path = format!("m/8797555'/{account_number}'").parse()?;
         let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
         derived_key_set.to_key_set(ChildNumber::from_hardened_idx(0).ok())
-    }
-
-    fn taproot_keys(
-        seed: &[u8],
-        network: Network,
-        use_address_index: bool,
-        account_number: u32,
-    ) -> Result<Self, DefaultSignerError> {
-        let derivation_path = if use_address_index {
-            format!("m/86'/0'/0'/0/{account_number}")
-        } else {
-            format!("m/86'/0'/{account_number}'/0/0")
-        }
-        .parse()?;
-        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
-        let mut key_set = derived_key_set.to_key_set(None)?;
-        let secp = Secp256k1::new();
-        key_set.identity_key_pair = key_set
-            .identity_key_pair
-            .tap_tweak(&secp, None)
-            .to_keypair();
-        if let (_, Parity::Odd) = key_set
-            .identity_key_pair
-            .secret_key()
-            .x_only_public_key(&secp)
-        {
-            key_set.identity_key_pair = key_set
-                .identity_key_pair
-                .secret_key()
-                .negate()
-                .keypair(&secp)
-        }
-
-        Ok(key_set)
-    }
-
-    fn native_segwit_keys(
-        seed: &[u8],
-        network: Network,
-        use_address_index: bool,
-        account_number: u32,
-    ) -> Result<Self, DefaultSignerError> {
-        let derivation_path = if use_address_index {
-            format!("m/84'/0'/0'/0/{account_number}")
-        } else {
-            format!("m/84'/0'/{account_number}'/0/0")
-        }
-        .parse()?;
-        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
-        derived_key_set.to_key_set(None)
-    }
-
-    fn wrapped_segwit_keys(
-        seed: &[u8],
-        network: Network,
-        use_address_index: bool,
-        account_number: u32,
-    ) -> Result<Self, DefaultSignerError> {
-        let derivation_path = if use_address_index {
-            format!("m/49'/0'/0'/0/{account_number}")
-        } else {
-            format!("m/49'/0'/{account_number}'/0/0")
-        }
-        .parse()?;
-        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
-        derived_key_set.to_key_set(None)
-    }
-
-    fn legacy_bitcoin_keys(
-        seed: &[u8],
-        network: Network,
-        use_address_index: bool,
-        account_number: u32,
-    ) -> Result<Self, DefaultSignerError> {
-        let derivation_path = if use_address_index {
-            format!("m/44'/0'/0'/0/{account_number}")
-        } else {
-            format!("m/44'/0'/{account_number}'/0/0")
-        }
-        .parse()?;
-        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
-        derived_key_set.to_key_set(None)
     }
 }
 
@@ -245,13 +130,7 @@ impl From<bitcoin::bip32::Error> for DefaultSignerError {
 
 impl DefaultSigner {
     pub fn new(seed: &[u8], network: Network) -> Result<Self, DefaultSignerError> {
-        Ok(Self::from_key_set(KeySet::new(
-            seed,
-            network,
-            KeySetType::Default,
-            false,
-            None,
-        )?))
+        Ok(Self::from_key_set(KeySet::new(seed, network, None)?))
     }
 
     pub fn from_key_set(key_set: KeySet) -> Self {

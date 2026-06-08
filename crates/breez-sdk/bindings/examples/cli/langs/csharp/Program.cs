@@ -321,8 +321,6 @@ static async Task RunInteractiveMode(
     if (accountNumber != null)
     {
         await builder.WithKeySet(new KeySetConfig(
-            keySetType: KeySetType.Default,
-            useAddressIndex: false,
             accountNumber: accountNumber
         ));
     }

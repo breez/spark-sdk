@@ -6,7 +6,6 @@ import {
   defaultServerConfig,
   Network,
   ChainApiType,
-  KeySetType,
   type KeySetConfig,
   type PaymentIdUpdate,
   type ProvisionalPayment,
@@ -32,11 +31,7 @@ const exampleGettingStartedAdvanced = async () => {
   // await builder.withStorage(<your storage implementation>)
   // await builder.withChainService(<your chain service implementation>)
   // await builder.withRestClient(<your rest client implementation>)
-  // await builder.withKeySet({
-  //   keySetType: <your key set type>,
-  //   useAddressIndex: <use address index>,
-  //   accountNumber: <account number>
-  // })
+  // await builder.withKeySet({ accountNumber: <account number> })
   // await builder.withPaymentObserver(<your payment observer implementation>)
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-advanced
@@ -57,8 +52,6 @@ const exampleWithRestChainService = async (builder: SdkBuilder) => {
 const exampleWithKeySet = async (builder: SdkBuilder) => {
   // ANCHOR: with-key-set
   const keySetConfig: KeySetConfig = {
-    keySetType: KeySetType.Default,
-    useAddressIndex: false,
     accountNumber: 21
   }
   await builder.withKeySet(keySetConfig)

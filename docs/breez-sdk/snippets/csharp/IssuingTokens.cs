@@ -45,8 +45,6 @@ namespace BreezSdkSnippets
 
             // Set the account number for the SDK
             var keySetConfig = new KeySetConfig(
-                keySetType: KeySetType.Default,
-                useAddressIndex: false,
                 accountNumber
             );
             await builder.WithKeySet(keySetConfig);

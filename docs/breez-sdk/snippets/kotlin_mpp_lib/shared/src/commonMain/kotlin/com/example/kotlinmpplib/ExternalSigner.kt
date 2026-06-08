@@ -7,13 +7,9 @@ class ExternalSigner {
     fun createSigner(): breez_sdk_spark.ExternalBreezSigner {
         val mnemonic = "<mnemonic words>"
         val network = Network.MAINNET
-        val keySetType = KeySetType.DEFAULT
-        val useAddressIndex = false
         val accountNumber = 0U
-        
+
         val keySetConfig = KeySetConfig(
-            keySetType = keySetType,
-            useAddressIndex = useAddressIndex,
             accountNumber = accountNumber
         )
         

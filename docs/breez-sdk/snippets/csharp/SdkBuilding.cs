@@ -48,13 +48,9 @@ namespace BreezSdkSnippets
         async Task WithKeySet(SdkBuilder builder)
         {
             // ANCHOR: with-key-set
-            var keySetType = KeySetType.Default;
-            var useAddressIndex = false;
             var optionalAccountNumber = 21u;
 
             var keySetConfig = new KeySetConfig(
-                keySetType: keySetType,
-                useAddressIndex: useAddressIndex,
                 accountNumber: optionalAccountNumber
             );
 

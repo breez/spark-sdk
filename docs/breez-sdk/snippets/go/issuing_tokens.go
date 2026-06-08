@@ -55,9 +55,7 @@ func CreateTokenWithCustomAccountNumber() (*breez_sdk_spark.BreezSdk, error) {
 
 	// Set the account number for the SDK
 	keySetConfig := breez_sdk_spark.KeySetConfig{
-		KeySetType:      breez_sdk_spark.KeySetTypeDefault,
-		UseAddressIndex: false,
-		AccountNumber:   &accountNumber,
+		AccountNumber: &accountNumber,
 	}
 	builder.WithKeySet(keySetConfig)
 

@@ -7,7 +7,6 @@ from breez_sdk_spark import (
     ExternalBreezSigner,
     ExternalSparkSigner,
     KeySetConfig,
-    KeySetType,
     Network,
 )
 
@@ -15,13 +14,9 @@ from breez_sdk_spark import (
 def create_signer() -> ExternalBreezSigner:
     mnemonic = "<mnemonic words>"
     network = Network.MAINNET
-    key_set_type = KeySetType.DEFAULT
-    use_address_index = False
     account_number = 0
 
     key_set_config = KeySetConfig(
-        key_set_type=key_set_type,
-        use_address_index=use_address_index,
         account_number=account_number,
     )
 

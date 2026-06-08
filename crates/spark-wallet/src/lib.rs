@@ -28,7 +28,7 @@ pub use spark::{
     signer::{
         AggregateFrostRequest, ClaimLeafInput, DefaultSigner, DefaultSignerError, EncryptedSecret,
         FrostDerivation, FrostJob, FrostShareResult, FrostSigningCommitmentsWithNonces, KeySet,
-        KeySetType, NewLeafKey, OperatorPackage, OperatorRecipient, PrepareClaimRequest,
+        NewLeafKey, OperatorPackage, OperatorRecipient, PrepareClaimRequest,
         PrepareLightningReceiveRequest, PrepareStaticDepositClaimRequest,
         PrepareStaticDepositRequest, PrepareTokenTransactionRequest, PrepareTransferRequest,
         PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit, PreparedStaticDepositClaim,

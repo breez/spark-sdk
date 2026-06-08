@@ -45,8 +45,6 @@ class IssuingTokens {
 
             // Set the account number for the SDK
             val keySetConfig = KeySetConfig(
-                keySetType = KeySetType.DEFAULT,
-                useAddressIndex = false,
                 accountNumber = accountNumber
             )
             builder.withKeySet(keySetConfig)

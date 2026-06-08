@@ -295,8 +295,6 @@ async function main() {
 
   if (opts.accountNumber != null) {
     sdkBuilder = sdkBuilder.withKeySet({
-      keySetType: 'default',
-      useAddressIndex: false,
       accountNumber: opts.accountNumber
     })
   }

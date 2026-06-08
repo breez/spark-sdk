@@ -210,9 +210,7 @@ func main() {
 		}
 		acctNum32 := uint32(acctNum)
 		builder.WithKeySet(breez_sdk_spark.KeySetConfig{
-			KeySetType:      breez_sdk_spark.KeySetTypeDefault,
-			UseAddressIndex: false,
-			AccountNumber:   &acctNum32,
+			AccountNumber: &acctNum32,
 		})
 	}
 

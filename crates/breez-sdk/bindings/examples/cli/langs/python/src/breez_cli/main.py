@@ -12,7 +12,6 @@ from prompt_toolkit.history import FileHistory
 from breez_sdk_spark import (
     EventListener,
     KeySetConfig,
-    KeySetType,
     Network,
     SdkBuilder,
     SdkEvent,
@@ -160,8 +159,6 @@ async def main(data_dir, network, account_number, postgres_connection_string,
 
     if account_number is not None:
         key_set_config = KeySetConfig(
-            key_set_type=KeySetType.DEFAULT,
-            use_address_index=False,
             account_number=account_number,
         )
         await builder.with_key_set(config=key_set_config)

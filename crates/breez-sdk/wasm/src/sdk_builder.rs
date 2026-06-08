@@ -199,8 +199,6 @@ pub struct SdkBuilder {
     context_postgres_pool: Option<SharedPostgresPool>,
     /// JS MySQL pool supplied via `withSharedContext(ctx_with_pool)`.
     context_mysql_pool: Option<SharedMysqlPool>,
-    key_set_type: breez_sdk_spark::KeySetType,
-    use_address_index: bool,
     account_number: Option<u32>,
 }
 
@@ -219,8 +217,6 @@ impl SdkBuilder {
             storage: None,
             context_postgres_pool: None,
             context_mysql_pool: None,
-            key_set_type: breez_sdk_spark::KeySetType::Default,
-            use_address_index: false,
             account_number: None,
         }
     }
@@ -252,8 +248,6 @@ impl SdkBuilder {
             storage: None,
             context_postgres_pool: None,
             context_mysql_pool: None,
-            key_set_type: breez_sdk_spark::KeySetType::Default,
-            use_address_index: false,
             account_number: None,
         }
     }
@@ -309,12 +303,8 @@ impl SdkBuilder {
 
     #[wasm_bindgen(js_name = "withKeySet")]
     pub fn with_key_set(mut self, config: crate::models::KeySetConfig) -> Self {
-        self.key_set_type = config.key_set_type.clone().into();
-        self.use_address_index = config.use_address_index;
         self.account_number = config.account_number;
         let core_config = breez_sdk_spark::KeySetConfig {
-            key_set_type: config.key_set_type.into(),
-            use_address_index: config.use_address_index,
             account_number: config.account_number,
         };
         self.builder = self.builder.with_key_set(core_config);
@@ -377,8 +367,6 @@ impl SdkBuilder {
         let identity_bytes = KeySet::new(
             &self.seed.to_bytes()?,
             self.network.into(),
-            self.key_set_type.into(),
-            self.use_address_index,
             self.account_number,
         )
         .map_err(WasmError::new)?

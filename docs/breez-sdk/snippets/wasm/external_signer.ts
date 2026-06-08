@@ -9,8 +9,6 @@ import type { ExternalSparkSigner, KeySetConfig } from '@breeztech/breez-sdk-spa
 const createSigner = () => {
   const mnemonic = '<mnemonic words>'
   const keySetConfig: KeySetConfig = {
-    keySetType: 'default',
-    useAddressIndex: false,
     accountNumber: 0
   }
 

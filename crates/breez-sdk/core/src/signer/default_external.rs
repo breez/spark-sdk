@@ -6,7 +6,7 @@ use crate::signer::external_types::{
     RecoverableEcdsaSignatureBytes, SchnorrSignatureBytes, string_to_derivation_path,
 };
 use crate::signer::{BreezSigner, ExternalBreezSigner, breez::BreezSignerImpl};
-use crate::{Network, SdkError, Seed, models::KeySetType};
+use crate::{Network, SdkError, Seed};
 
 /// Derives the identity master Xpriv (the `BreezSigner` derivation root) from a
 /// mnemonic seed. Key derivation lives in the Spark layer (`KeySet`); the
@@ -14,19 +14,11 @@ use crate::{Network, SdkError, Seed, models::KeySetType};
 fn identity_master_key(
     seed: &Seed,
     network: Network,
-    key_set_type: KeySetType,
-    use_address_index: bool,
     account_number: Option<u32>,
 ) -> Result<bitcoin::bip32::Xpriv, SdkError> {
     let seed_bytes = seed.to_bytes()?;
-    let key_set = spark_wallet::KeySet::new(
-        &seed_bytes,
-        network.into(),
-        key_set_type.into(),
-        use_address_index,
-        account_number,
-    )
-    .map_err(|e| SdkError::Generic(e.to_string()))?;
+    let key_set = spark_wallet::KeySet::new(&seed_bytes, network.into(), account_number)
+        .map_err(|e| SdkError::Generic(e.to_string()))?;
     Ok(key_set.identity_master_key)
 }
 
@@ -45,29 +37,19 @@ impl DefaultExternalSigner {
     /// * `mnemonic` - BIP39 mnemonic phrase (12 or 24 words)
     /// * `passphrase` - Optional passphrase for the mnemonic
     /// * `network` - Network to use (Mainnet or Regtest)
-    /// * `key_set_type` - Type of key set to use
-    /// * `use_address_index` - Whether to use address index in derivation
     /// * `account_number` - Optional account number for key derivation
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn new(
         mnemonic: String,
         passphrase: Option<String>,
         network: Network,
-        key_set_type: KeySetType,
-        use_address_index: bool,
         account_number: Option<u32>,
     ) -> Result<Self, SdkError> {
         let seed = Seed::Mnemonic {
             mnemonic,
             passphrase,
         };
-        let master = identity_master_key(
-            &seed,
-            network,
-            key_set_type,
-            use_address_index,
-            account_number,
-        )?;
+        let master = identity_master_key(&seed, network, account_number)?;
         let inner = BreezSignerImpl::new(master);
         Ok(Self { inner })
     }
@@ -191,7 +173,6 @@ impl ExternalBreezSigner for DefaultExternalSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::KeySetType;
     use bitcoin::bip32::DerivationPath;
     use bitcoin::hashes::Hash;
     use std::str::FromStr;
@@ -199,32 +180,17 @@ mod tests {
     fn create_test_signer() -> (DefaultExternalSigner, BreezSignerImpl) {
         let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string();
         let network = Network::Regtest;
-        let key_set_type = KeySetType::Default;
-        let use_address_index = false;
         let account_number = Some(0);
 
-        let external = DefaultExternalSigner::new(
-            mnemonic.clone(),
-            None,
-            network,
-            key_set_type,
-            use_address_index,
-            account_number,
-        )
-        .expect("Failed to create DefaultExternalSigner");
+        let external = DefaultExternalSigner::new(mnemonic.clone(), None, network, account_number)
+            .expect("Failed to create DefaultExternalSigner");
 
         let seed = Seed::Mnemonic {
             mnemonic,
             passphrase: None,
         };
-        let master = identity_master_key(
-            &seed,
-            network,
-            key_set_type,
-            use_address_index,
-            account_number,
-        )
-        .expect("Failed to derive identity master key");
+        let master = identity_master_key(&seed, network, account_number)
+            .expect("Failed to derive identity master key");
         let internal = BreezSignerImpl::new(master);
 
         (external, internal)

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use breez_sdk_spark::{
     default_config, BreezSdk, BurnIssuerTokenRequest, CreateIssuerTokenRequest,
-    FreezeIssuerTokenRequest, KeySetConfig, KeySetType, MintIssuerTokenRequest, Network, Payment,
+    FreezeIssuerTokenRequest, KeySetConfig, MintIssuerTokenRequest, Network, Payment,
     PaymentDetailsFilter, SdkBuilder, Seed, TokenIssuer, TokenMetadata, TokenTransactionType,
     UnfreezeIssuerTokenRequest,
 };
@@ -43,8 +43,6 @@ async fn create_token_with_custom_account_number() -> Result<BreezSdk> {
 
     // Set the account number for the SDK
     builder = builder.with_key_set(KeySetConfig {
-        key_set_type: KeySetType::Default,
-        use_address_index: false,
         account_number: Some(account_number),
     });
 

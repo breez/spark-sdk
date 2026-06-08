@@ -9,13 +9,9 @@ namespace BreezSdkSnippets
         {
             var mnemonic = "<mnemonic words>";
             var network = Network.Mainnet;
-            var keySetType = KeySetType.Default;
-            var useAddressIndex = false;
             uint accountNumber = 0;
 
             var keySetConfig = new KeySetConfig(
-                keySetType: keySetType,
-                useAddressIndex: useAddressIndex,
                 accountNumber: accountNumber
             );
 

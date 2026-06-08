@@ -304,8 +304,6 @@ suspend fun runInteractiveMode(
             ?: error("Invalid account number: $accountNumber")
         builder.withKeySet(
             KeySetConfig(
-                keySetType = KeySetType.DEFAULT,
-                useAddressIndex = false,
                 accountNumber = acctNum,
             )
         )

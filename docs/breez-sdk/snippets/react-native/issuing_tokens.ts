@@ -6,7 +6,6 @@ import {
   type TokenIssuer,
   type TokenMetadata,
   type Payment,
-  KeySetType,
   SdkBuilder,
   type KeySetConfig,
   PaymentDetailsFilter,
@@ -47,8 +46,6 @@ const createTokenWithCustomAccountNumber = async () => {
 
   // Set the account number for the SDK
   const keySetConfig: KeySetConfig = {
-    keySetType: KeySetType.Default,
-    useAddressIndex: false,
     accountNumber
   }
   await builder.withKeySet(keySetConfig)

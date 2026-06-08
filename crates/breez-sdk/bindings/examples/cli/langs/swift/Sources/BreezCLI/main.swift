@@ -275,8 +275,6 @@ if let connectionString = opts.postgresConnectionString {
 }
 if let accountNumber = opts.accountNumber {
     await builder.withKeySet(config: KeySetConfig(
-        keySetType: .default,
-        useAddressIndex: false,
         accountNumber: accountNumber
     ))
 }

@@ -47,13 +47,9 @@ class SdkBuilding {
 
     suspend fun withKeySet(builder: SdkBuilder) {
         // ANCHOR: with-key-set
-        val keySetType = KeySetType.DEFAULT
-        val useAddressIndex = false
         val optionalAccountNumber = 21u
-        
+
         val keySetConfig = KeySetConfig(
-            keySetType = keySetType,
-            useAddressIndex = useAddressIndex,
             accountNumber = optionalAccountNumber
         )
         

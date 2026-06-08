@@ -49,14 +49,10 @@ func WithRestChainService(builder *breez_sdk_spark.SdkBuilder) {
 
 func WithKeySet(builder *breez_sdk_spark.SdkBuilder) {
 	// ANCHOR: with-key-set
-	keySetType := breez_sdk_spark.KeySetTypeDefault
-	useAccountIndex := true
 	optionalAccountNumber := uint32(21)
 
 	keySetConfig := breez_sdk_spark.KeySetConfig{
-		KeySetType:      keySetType,
-		UseAddressIndex: useAccountIndex,
-		AccountNumber:   &optionalAccountNumber,
+		AccountNumber: &optionalAccountNumber,
 	}
 
 	builder.WithKeySet(keySetConfig)
