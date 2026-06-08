@@ -7,15 +7,19 @@ use bitcoin::secp256k1::{SecretKey, ecdsa, schnorr};
 
 use crate::Network;
 
+use turnkey_enclave_encrypt::{ExportClient, QuorumPublicKey};
+
 use super::error::TurnkeyError;
 use super::transport::TurnkeyClient;
 use super::types::{
     ADDRESS_FORMAT_COMPRESSED, ADDRESS_FORMAT_SPARK_MAINNET, ADDRESS_FORMAT_SPARK_REGTEST,
     CREATE_WALLET_ACCOUNTS_PATH, CREATE_WALLET_ACCOUNTS_RESULT, CREATE_WALLET_ACCOUNTS_TYPE,
     CURVE_SECP256K1, CreateWalletAccountsIntent, CreateWalletAccountsResult, ENCODING_HEXADECIMAL,
-    GET_WALLET_ACCOUNT_PATH, GetWalletAccountRequest, GetWalletAccountResponse, PATH_FORMAT_BIP32,
-    SIGN_RAW_PAYLOAD_PATH, SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SignRawPayloadIntent,
-    SignRawPayloadResult, WalletAccountParams,
+    EXPORT_WALLET_ACCOUNT_PATH, EXPORT_WALLET_ACCOUNT_RESULT, EXPORT_WALLET_ACCOUNT_TYPE,
+    ExportWalletAccountIntent, ExportWalletAccountResult, GET_WALLET_ACCOUNT_PATH,
+    GetWalletAccountRequest, GetWalletAccountResponse, PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH,
+    SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SignRawPayloadIntent, SignRawPayloadResult,
+    WalletAccountParams,
 };
 
 /// The Spark address format (and thus the BIP-340 Schnorr signing scheme) for
@@ -97,6 +101,33 @@ impl TurnkeyClient {
             SIGN_RAW_PAYLOAD_RESULT,
         )
         .await
+    }
+
+    /// Exports the secret key for the account at `path`, decrypting the bundle
+    /// against the pinned production quorum key. Used where Turnkey's design
+    /// requires a local key (static-deposit refund, SDK-layer encryption/HMAC).
+    pub(crate) async fn export_secret_key(&self, path: String) -> Result<SecretKey, TurnkeyError> {
+        let address = self.create_account(path, ADDRESS_FORMAT_COMPRESSED).await?;
+        let mut export_client = ExportClient::new(&QuorumPublicKey::production_signer());
+        let target_public_key = export_client
+            .target_public_key()
+            .map_err(|e| TurnkeyError::Deserialize(format!("export target key: {e}")))?;
+        let result: ExportWalletAccountResult = self
+            .submit_activity(
+                EXPORT_WALLET_ACCOUNT_PATH,
+                EXPORT_WALLET_ACCOUNT_TYPE,
+                ExportWalletAccountIntent {
+                    address,
+                    target_public_key,
+                },
+                EXPORT_WALLET_ACCOUNT_RESULT,
+            )
+            .await?;
+        let private_bytes = export_client
+            .decrypt_private_key(&result.export_bundle, &self.organization_id)
+            .map_err(|e| TurnkeyError::Deserialize(format!("export decrypt: {e}")))?;
+        SecretKey::from_slice(&private_bytes)
+            .map_err(|e| TurnkeyError::Deserialize(format!("export secret key: {e}")))
     }
 }
 

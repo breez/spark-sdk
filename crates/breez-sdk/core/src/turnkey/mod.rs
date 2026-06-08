@@ -10,6 +10,7 @@ mod accounts;
 mod breez_signer;
 mod config;
 mod error;
+mod factory;
 mod spark_signer;
 mod stamp;
 mod transport;
@@ -17,3 +18,4 @@ mod types;
 
 pub use config::{TurnkeyConfig, TurnkeyRetryConfig};
 pub use error::TurnkeyError;
+pub use factory::{TurnkeySigners, create_turnkey_signer};

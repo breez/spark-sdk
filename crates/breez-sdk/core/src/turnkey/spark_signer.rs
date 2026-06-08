@@ -54,16 +54,12 @@ use crate::signer::{
     SecretBytes,
 };
 
-use turnkey_enclave_encrypt::{ExportClient, QuorumPublicKey};
-
 use super::accounts::{
     decode_scalar_32, ecdsa_from_rs, schnorr_from_rs, spark_address_format, xpriv_from_secret,
 };
 use super::error::TurnkeyError;
 use super::transport::TurnkeyClient;
 use super::types::{
-    ADDRESS_FORMAT_COMPRESSED, EXPORT_WALLET_ACCOUNT_PATH, EXPORT_WALLET_ACCOUNT_RESULT,
-    EXPORT_WALLET_ACCOUNT_TYPE, ExportWalletAccountIntent, ExportWalletAccountResult,
     HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256, SPARK_CLAIM_TRANSFER_PATH,
     SPARK_CLAIM_TRANSFER_RESULT, SPARK_CLAIM_TRANSFER_TYPE, SPARK_PREPARE_LIGHTNING_RECEIVE_PATH,
     SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT, SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE,
@@ -477,30 +473,11 @@ impl TurnkeySparkSigner {
             return Ok(secret);
         }
         let path = format!("{}/3'/{index}'", self.base_path());
-        let address = self
+        let secret = self
             .client
-            .create_account(path, ADDRESS_FORMAT_COMPRESSED)
+            .export_secret_key(path)
             .await
             .map_err(to_spark_err)?;
-        let mut export_client = ExportClient::new(&QuorumPublicKey::production_signer());
-        let target_public_key = export_client.target_public_key().map_err(to_spark_err)?;
-        let result: ExportWalletAccountResult = self
-            .client
-            .submit_activity(
-                EXPORT_WALLET_ACCOUNT_PATH,
-                EXPORT_WALLET_ACCOUNT_TYPE,
-                ExportWalletAccountIntent {
-                    address,
-                    target_public_key,
-                },
-                EXPORT_WALLET_ACCOUNT_RESULT,
-            )
-            .await
-            .map_err(to_spark_err)?;
-        let private_bytes = export_client
-            .decrypt_private_key(&result.export_bundle, &self.client.organization_id)
-            .map_err(to_spark_err)?;
-        let secret = SecretKey::from_slice(&private_bytes).map_err(to_spark_err)?;
         self.static_deposit_secret_keys
             .lock()
             .unwrap()
