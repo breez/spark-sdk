@@ -170,7 +170,9 @@ where
     let prepare = instance_0
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: counterparty_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: counterparty_address.clone(),
+            },
             amount: Some(payment_amount.into()),
             token_identifier: None,
             fee_policy: None,
@@ -258,7 +260,9 @@ where
     let prepare_return = counterparty
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: main_address,
+            payment_request: PaymentRequest::Input {
+                input: main_address,
+            },
             amount: Some(return_amount.into()),
             token_identifier: None,
             fee_policy: None,
@@ -346,7 +350,7 @@ where
         let prepare = instances[sender_idx]
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: cp_address,
+                payment_request: PaymentRequest::Input { input: cp_address },
                 amount: Some(payment_amt.into()),
                 token_identifier: None,
                 conversion_options: None,
@@ -542,7 +546,7 @@ where
     let prepare = instance_0
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_address,
+            payment_request: PaymentRequest::Input { input: bob_address },
             amount: Some(500_000),
             token_identifier: Some(token_id.clone()),
             conversion_options: None,
@@ -637,7 +641,7 @@ where
             let prepare = instances[sender_idx]
                 .sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request: bob_addr,
+                    payment_request: PaymentRequest::Input { input: bob_addr },
                     amount: Some(PAYMENT_AMOUNT),
                     token_identifier: Some(token_id.clone()),
                     conversion_options: None,
@@ -731,7 +735,7 @@ where
             let prepare = bob
                 .sdk
                 .prepare_send_payment(PrepareSendPaymentRequest {
-                    payment_request: alice_addr,
+                    payment_request: PaymentRequest::Input { input: alice_addr },
                     amount: Some(PAYMENT_AMOUNT),
                     token_identifier: Some(token_id.clone()),
                     conversion_options: None,

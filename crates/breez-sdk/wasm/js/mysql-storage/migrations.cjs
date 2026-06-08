@@ -508,6 +508,15 @@ class MysqlMigrationManager {
           `ALTER TABLE brz_schema_migrations MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
         ],
       },
+      {
+        // Backfill the conversion_info `type` discriminator for the
+        // ConversionInfo enum refactor. All existing rows are AMM.
+        // Mirrors the Rust mysql migration of the same name.
+        name: "Backfill conversion_info type discriminator",
+        sql: [
+          `UPDATE brz_payment_metadata SET conversion_info = JSON_SET(conversion_info, '$.type', 'amm') WHERE conversion_info IS NOT NULL AND JSON_EXTRACT(conversion_info, '$.type') IS NULL`,
+        ],
+      },
     ];
   }
 }

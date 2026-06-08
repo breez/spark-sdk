@@ -6,19 +6,18 @@ use spark_wallet::{PublicKey, SparkAddress, SparkWallet, TransferId, TransferTok
 use tokio::sync::Mutex;
 use tracing::debug;
 
-use crate::utils::generate_nonce;
-use crate::{
-    AssetTransfer, ClawbackIntent, ClawbackRequest, ClawbackResponse, ExecuteSwapIntent,
-    ExecuteSwapResponse, FlashnetExecuteSwapResponse, GetMinAmountsRequest, GetMinAmountsResponse,
-    ListUserSwapsRequest, ListUserSwapsResponse, SignedClawbackRequest, SignedExecuteSwapResponse,
+use super::models::{
+    ClawbackIntent, ClawbackRequest, ClawbackResponse, ExecuteSwapIntent, ExecuteSwapRequest,
+    ExecuteSwapResponse, FeatureName, FeatureStatus, FlashnetExecuteSwapResponse,
+    GetMinAmountsRequest, GetMinAmountsResponse, ListPoolsRequest, ListPoolsResponse,
+    ListUserSwapsRequest, ListUserSwapsResponse, MinAmount, PingResponse, SignedClawbackRequest,
+    SignedExecuteSwapRequest, SignedExecuteSwapResponse, SimulateSwapRequest, SimulateSwapResponse,
 };
-use crate::{
-    ExecuteSwapRequest, FeatureName, FeatureStatus, FlashnetError, MinAmount, PingResponse,
-    SignedExecuteSwapRequest,
-    cache::CacheStore,
-    config::FlashnetConfig,
-    models::{ListPoolsRequest, ListPoolsResponse, SimulateSwapRequest, SimulateSwapResponse},
-};
+use super::utils::generate_nonce;
+use crate::cache::CacheStore;
+use crate::config::FlashnetConfig;
+use crate::error::FlashnetError;
+use crate::models::AssetTransfer;
 
 pub const BTC_ASSET_ADDRESS: &str =
     "020202020202020202020202020202020202020202020202020202020202020202";

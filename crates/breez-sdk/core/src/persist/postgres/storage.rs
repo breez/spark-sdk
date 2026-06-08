@@ -421,6 +421,12 @@ impl PostgresStorage {
             // (Migrations are run as untyped batch_execute, so parameter binding is not
             // available without restructuring the runner.)
             multi_tenant_migration(identity),
+            // Migration 17: Backfill type discriminator on conversion_info for
+            // the ConversionInfo enum refactor. All existing rows are AMM.
+            vec!["UPDATE brz_payment_metadata
+               SET conversion_info = conversion_info::jsonb || '{\"type\": \"amm\"}'::jsonb
+               WHERE conversion_info IS NOT NULL
+                 AND (conversion_info::jsonb->>'type') IS NULL".to_string()],
         ]
     }
 }
@@ -832,27 +838,42 @@ impl Storage for PostgresStorage {
                         params.push(Box::new(htlc_status.to_string()));
                     }
                 }
-                // Filter by conversion info presence
+                // Payment type discriminator
+                match payment_details_filter {
+                    StoragePaymentDetailsFilter::Spark { .. } => {
+                        payment_details_clauses.push("p.spark = true".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Token { .. } => {
+                        payment_details_clauses.push("p.spark IS NULL".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Lightning { .. } => {}
+                }
+
+                // Filter by conversion info type + status
                 let conversion_filter = match payment_details_filter {
                     StoragePaymentDetailsFilter::Spark {
-                        conversion_refund_needed: Some(v),
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark = true")),
-                    StoragePaymentDetailsFilter::Token {
-                        conversion_refund_needed: Some(v),
+                    }
+                    | StoragePaymentDetailsFilter::Token {
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark IS NULL")),
+                    } => Some(cf),
                     _ => None,
                 };
-                if let Some((conversion_refund_needed, type_check)) = conversion_filter {
-                    let refund_needed = if *conversion_refund_needed {
-                        "= 'RefundNeeded'"
-                    } else {
-                        "!= 'RefundNeeded'"
+                if let Some(cf) = conversion_filter {
+                    let status_clause = match cf {
+                        crate::persist::ConversionFilter::AmmRefundNeeded => {
+                            "pm.conversion_info::jsonb->>'type' = 'amm' AND \
+                             pm.conversion_info::jsonb->>'status' = 'RefundNeeded'"
+                        }
+                        crate::persist::ConversionFilter::OrchestraPending => {
+                            "pm.conversion_info::jsonb->>'type' = 'orchestra' AND \
+                             pm.conversion_info::jsonb->>'status' NOT IN ('Completed', 'Failed', 'Refunded')"
+                        }
                     };
                     payment_details_clauses.push(format!(
-                        "{type_check} AND pm.conversion_info IS NOT NULL AND
-                         pm.conversion_info::jsonb->>'status' {refund_needed}"
+                        "pm.conversion_info IS NOT NULL AND {status_clause}"
                     ));
                 }
                 // Filter by token transaction hash
@@ -1816,6 +1837,8 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             } else {
                 None
             };
+            let conversion_info_json: Option<serde_json::Value> = row.get(19);
+            let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
             Some(PaymentDetails::Lightning {
                 invoice,
                 destination_pubkey,
@@ -1824,6 +1847,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 lnurl_pay_info,
                 lnurl_withdraw_info,
                 lnurl_receive_metadata,
+                conversion_info,
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
@@ -1897,8 +1921,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                     s.parse::<ConversionStatus>()
                         .map(|status| ConversionDetails {
                             status,
-                            from: None,
-                            to: None,
+                            conversions: vec![],
                         })
                         .map_err(StorageError::Serialization)
                 })
@@ -2181,6 +2204,7 @@ mod tests {
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
+                conversion_info: None,
             }),
             conversion_details: None,
         };
@@ -2426,6 +2450,19 @@ mod tests {
                 .unwrap();
         assert_eq!(list_b_final.len(), 1);
         assert_eq!(list_b_final[0].id, "pmt_shared_id");
+    }
+
+    #[tokio::test]
+    async fn test_insert_boltz_conversion_info() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_insert_boltz_conversion_info(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_boltz_status_to_completed() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_update_boltz_status_to_completed(Box::new(fixture.storage))
+            .await;
     }
 
     /// Generates a self-signed CA certificate in PEM format for testing.
@@ -2797,7 +2834,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 16, "migration version must be preserved");
+        assert_eq!(version, 17, "migration version must be preserved");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3085,13 +3122,14 @@ mod tests {
             "found orphan unprefixed indexes after upgrade: {orphans:?}"
         );
 
-        // Migration version advanced from 15 to 16.
+        // Migration version advanced from 15 through 17 (16: multi-tenant scope,
+        // 17: conversion_info type-discriminator backfill).
         let version: i32 = client
             .query_one("SELECT MAX(version) FROM brz_schema_migrations", &[])
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 16, "migration must advance to 16");
+        assert_eq!(version, 17, "migration must advance to 17");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

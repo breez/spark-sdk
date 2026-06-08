@@ -387,7 +387,7 @@ fn wasm_test_cmd(
         bail!("No packages with wasm tests found");
     }
 
-    // Prefer cargo test with wasm-bindgen-test runner. Allow browser or node mode
+    // Prefer cargo test with wasm-bindgen-test runner. Allow browser or node mode.
     let mut envs = vec![("RUSTFLAGS".to_string(), String::new())];
     if node {
         // Node is default for wasm-bindgen-test when browser env not set

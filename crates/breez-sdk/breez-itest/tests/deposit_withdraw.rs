@@ -78,7 +78,9 @@ async fn test_onchain_withdraw_to_static_address(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_address.clone(),
+            },
             amount: Some(amount as u128),
             token_identifier: None,
             conversion_options: None,
@@ -272,7 +274,9 @@ async fn test_send_all_to_bitcoin_address(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_address.clone(),
+            },
             amount: Some(alice_balance as u128),
             token_identifier: None,
             conversion_options: None,
@@ -461,7 +465,9 @@ async fn test_deposit_low_amount_refund_fee_rate(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_address.clone(),
+            },
             amount: Some(fund_amount as u128),
             token_identifier: None,
             conversion_options: None,

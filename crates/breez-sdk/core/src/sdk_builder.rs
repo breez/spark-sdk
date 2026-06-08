@@ -10,7 +10,7 @@ use spark_wallet::{InMemorySessionStore, SessionStore, Signer, SparkWallet, Spar
 use tokio::sync::watch;
 use tracing::{debug, info};
 
-use flashnet::{FlashnetConfig, IntegratorConfig};
+use flashnet::{FlashnetConfig, IntegratorConfig, OrchestraConfig};
 
 use crate::{
     Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, Seed,
@@ -460,6 +460,27 @@ impl SdkBuilder {
         );
 
         let sync_coordinator = SyncCoordinator::new();
+
+        // Shared lightning-send helper used by `send_bolt11_invoice` and
+        // by cross-chain providers that pay LN invoices (currently: Boltz
+        // reverse swap).
+        let lightning_sender = Arc::new(crate::sdk::LightningSender::new(
+            Arc::clone(&spark_wallet),
+            Arc::clone(&storage),
+            sync_coordinator.clone(),
+            Arc::clone(&event_emitter),
+            shutdown_sender.clone(),
+        ));
+
+        let cross_chain_providers = build_cross_chain_providers(
+            &self.config,
+            &spark_wallet,
+            &storage,
+            &lightning_sender,
+            shutdown_sender.subscribe(),
+        )
+        .await;
+
         let stable_balance = build_stable_balance(
             &self.config,
             &token_converter,
@@ -491,6 +512,8 @@ impl SdkBuilder {
             token_converter,
             stable_balance,
             sync_coordinator,
+            cross_chain_providers,
+            lightning_sender,
         })
         .await?;
         debug!("Initialized and started breez sdk.");
@@ -529,6 +552,11 @@ fn validate_server_mode(
         return Err(SdkError::InvalidInput(
             "token_optimization_config.auto_enabled must be false when background_tasks_enabled is false"
                 .to_string(),
+        ));
+    }
+    if config.cross_chain_config.is_some() {
+        return Err(SdkError::InvalidInput(
+            "Cross-chain config must be unset when background tasks are disabled".to_string(),
         ));
     }
     Ok(())
@@ -861,6 +889,59 @@ async fn build_stable_balance(
     ))
 }
 
+/// Builds the cross-chain provider map. Each provider owns its own HTTP
+/// client, route cache, and background monitor task. Returns an empty map
+/// when `config.cross_chain_config` is unset.
+async fn build_cross_chain_providers(
+    config: &Config,
+    spark_wallet: &Arc<SparkWallet>,
+    storage: &Arc<dyn crate::persist::Storage>,
+    lightning_sender: &Arc<crate::sdk::LightningSender>,
+    shutdown_receiver: watch::Receiver<()>,
+) -> crate::cross_chain::CrossChainProviders {
+    let mut providers = crate::cross_chain::CrossChainProviders::new();
+    if config.cross_chain_config.is_none() {
+        return providers;
+    }
+
+    let maybe_orchestra_config = OrchestraConfig::default_for_network(config.network.into());
+    if let Some(orchestra_config) = maybe_orchestra_config {
+        providers.insert(
+            crate::cross_chain::CrossChainProvider::Orchestra,
+            Arc::new(crate::cross_chain::OrchestraService::new(
+                orchestra_config,
+                Arc::clone(spark_wallet),
+                Arc::clone(storage),
+                shutdown_receiver,
+            )),
+        );
+    }
+
+    match build_boltz_service(
+        config.network,
+        Arc::clone(spark_wallet),
+        Arc::clone(storage),
+        Arc::clone(lightning_sender),
+    )
+    .await
+    {
+        Ok(Some(service)) => {
+            providers.insert(crate::cross_chain::CrossChainProvider::Boltz, service);
+        }
+        Ok(None) => {
+            info!(
+                "Boltz provider skipped: no default configuration for network {:?}",
+                config.network
+            );
+        }
+        Err(e) => {
+            tracing::error!("Failed to initialize Boltz provider: {e:?}");
+        }
+    }
+
+    providers
+}
+
 #[cfg(test)]
 #[cfg(feature = "sqlite")]
 mod tests {
@@ -962,6 +1043,30 @@ mod tests {
             }
             Err(err) => panic!("expected InvalidInput error, got {err:?}"),
             Ok(_) => panic!("expected server mode with optimization auto_enabled to fail"),
+        }
+    }
+
+    /// Regtest + `cross_chain_config` trips the Mainnet-only gate in
+    /// `Config::validate` before reaching the server-mode reject in
+    /// `build`. The server-mode gate is still in place (verified by the
+    /// inline check in `build`); this test pins the more specific failure.
+    #[tokio::test]
+    async fn build_rejects_cross_chain_config_on_regtest() {
+        use crate::{CrossChainConfig, SdkError, default_config};
+        let mut config = default_config(Network::Regtest);
+        config.cross_chain_config = Some(CrossChainConfig::default());
+
+        let seed = test_seed();
+        let result = SdkBuilder::new(config, seed).build().await;
+        match result {
+            Err(SdkError::InvalidInput(m)) => {
+                assert!(
+                    m.contains("only available on Mainnet"),
+                    "expected mainnet-only rejection, got: {m}"
+                );
+            }
+            Err(err) => panic!("expected InvalidInput error, got {err:?}"),
+            Ok(_) => panic!("expected regtest with cross_chain_config to fail"),
         }
     }
 
@@ -1254,4 +1359,100 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+}
+
+/// Loads or generates the device-local Boltz instance handle (random 32-byte
+/// seed + instance id). In v1 this is kept local only — cross-device recovery
+/// of swaps lands with the v2 submarine-swap feature.
+///
+/// Cross-device consequence in v1: a user who restores from mnemonic on a
+/// second device cannot claim destination-chain payouts for reverse swaps
+/// initiated on the first device. Funds are not at risk — Boltz's
+/// hold-invoice timeout refunds the lightning leg — but the second device
+/// is blind to the in-flight swap until it terminates on Boltz's side.
+/// v2 is expected to retroactively publish the existing local seed on
+/// first boot so new devices can bootstrap from rtsync.
+async fn load_or_create_boltz_instance(
+    storage: &Arc<dyn crate::Storage>,
+) -> Result<BoltzInstanceHandle, SdkError> {
+    use bitcoin::secp256k1::rand::{RngCore, thread_rng};
+
+    const BOLTZ_INSTANCE_KEY: &str = "boltz_instance_current";
+
+    if let Some(raw) = storage
+        .get_cached_item(BOLTZ_INSTANCE_KEY.to_string())
+        .await
+        .map_err(|e| SdkError::Generic(format!("Failed to read Boltz instance: {e}")))?
+    {
+        let handle: BoltzInstanceHandle = serde_json::from_str(&raw)
+            .map_err(|e| SdkError::Generic(format!("Corrupted Boltz instance handle: {e}")))?;
+        return Ok(handle);
+    }
+
+    let mut seed = [0u8; 32];
+    thread_rng().fill_bytes(&mut seed);
+    let handle = BoltzInstanceHandle {
+        instance_id: uuid::Uuid::new_v4().to_string(),
+        seed_hex: hex::encode(seed),
+    };
+    let serialized = serde_json::to_string(&handle)
+        .map_err(|e| SdkError::Generic(format!("Failed to serialize Boltz instance: {e}")))?;
+    storage
+        .set_cached_item(BOLTZ_INSTANCE_KEY.to_string(), serialized)
+        .await
+        .map_err(|e| SdkError::Generic(format!("Failed to persist Boltz instance: {e}")))?;
+    Ok(handle)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct BoltzInstanceHandle {
+    instance_id: String,
+    seed_hex: String,
+}
+
+/// Initializes the Boltz reverse-swap cross-chain provider: loads or creates
+/// the local instance seed, constructs the inner `BoltzClient`, registers the
+/// event listener, resumes any active swaps, and returns an SDK-side wrapper
+/// ready to be inserted into the provider registry.
+async fn build_boltz_service(
+    network: Network,
+    spark_wallet: Arc<spark_wallet::SparkWallet>,
+    storage: Arc<dyn crate::Storage>,
+    lightning_sender: Arc<crate::sdk::LightningSender>,
+) -> Result<Option<Arc<dyn crate::cross_chain::CrossChainService>>, SdkError> {
+    let Some(client_config) = crate::cross_chain::BoltzService::default_client_config(network)
+    else {
+        return Ok(None);
+    };
+
+    let handle = load_or_create_boltz_instance(&storage).await?;
+    let seed = hex::decode(&handle.seed_hex)
+        .map_err(|e| SdkError::Generic(format!("Invalid Boltz instance seed hex: {e}")))?;
+
+    let adapter = Arc::new(
+        crate::cross_chain::boltz_storage_adapter::BoltzStorageAdapter::new(
+            Arc::clone(&storage),
+            handle.instance_id.clone(),
+        ),
+    );
+
+    let client = boltz_client::BoltzService::new(client_config, &seed, adapter)
+        .await
+        .map_err(|e| SdkError::Generic(format!("Failed to construct Boltz client: {e}")))?;
+
+    let listener = Box::new(
+        crate::cross_chain::boltz_event_listener::BoltzSdkEventListener::new(Arc::clone(&storage)),
+    );
+    client.add_event_listener(listener).await;
+
+    if let Err(e) = client.resume_swaps().await {
+        tracing::warn!("Boltz resume_swaps failed on startup: {e:?}");
+    }
+
+    Ok(Some(Arc::new(crate::cross_chain::BoltzService::new(
+        Arc::new(client),
+        spark_wallet,
+        storage,
+        lightning_sender,
+    ))))
 }

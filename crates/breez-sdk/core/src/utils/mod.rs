@@ -1,9 +1,11 @@
 pub(crate) mod bitcoin_dust;
 pub(crate) mod contacts_validation;
+pub(crate) mod conversions;
 pub(crate) mod deposit_chain_syncer;
 pub(crate) mod expiring_cell;
 pub(crate) mod payments;
 pub(crate) mod polling;
+pub mod serde_helpers;
 pub(crate) mod token;
 pub(crate) mod utxo_fetcher;
 

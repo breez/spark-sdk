@@ -1,5 +1,6 @@
 pub(super) mod bitcoin_address;
 pub(in crate::sdk) mod bolt11;
+pub(in crate::sdk::payments) mod cross_chain;
 pub(super) mod spark_address;
 pub(super) mod spark_invoice;
 
@@ -40,6 +41,21 @@ pub(in crate::sdk) async fn orchestrate_send(
     if request.idempotency_key.is_some() && token_identifier.is_some() {
         return Err(SdkError::InvalidInput(
             "Idempotency key is not supported for token payments".to_string(),
+        ));
+    }
+    // Cross-chain sends ignore the user's idempotency_key: the top-level lookup
+    // below would never hit (provider rows are keyed by LN payment id /
+    // spark_tx_hash, not the user key), and neither provider's send leg threads
+    // the key into its underlying Spark transfer. Reject explicitly so callers
+    // don't get the misleading impression that retries are deduped.
+    if request.idempotency_key.is_some()
+        && matches!(
+            request.prepare_response.payment_method,
+            SendPaymentMethod::CrossChainAddress { .. }
+        )
+    {
+        return Err(SdkError::InvalidInput(
+            "Idempotency key is not supported for cross-chain sends".to_string(),
         ));
     }
     if let Some(idempotency_key) = &request.idempotency_key {
@@ -130,6 +146,9 @@ pub(super) async fn send_internal(
         }
         SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
             bitcoin_address::send(sdk, address, fee_quote, request, amount_override).await
+        }
+        method @ SendPaymentMethod::CrossChainAddress { .. } => {
+            cross_chain::send(sdk, method, token_identifier).await
         }
     }
 }

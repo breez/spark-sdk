@@ -62,7 +62,9 @@ async fn test_conversion_send_server_mode_bitcoin_to_token() -> Result<()> {
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address,
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address,
+            },
             amount: Some(sats_to_token_amount),
             token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
             conversion_options: Some(ConversionOptions {
@@ -142,7 +144,9 @@ async fn test_conversion_send_server_mode_token_to_bitcoin() -> Result<()> {
     let prepare_seed = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address,
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address,
+            },
             amount: Some(sats_to_token_amount),
             token_identifier: Some(SHELL_REGTEST_TOKEN_ID.to_string()),
             conversion_options: Some(ConversionOptions {
@@ -181,7 +185,9 @@ async fn test_conversion_send_server_mode_token_to_bitcoin() -> Result<()> {
     let prepare = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: alice_invoice,
+            payment_request: PaymentRequest::Input {
+                input: alice_invoice,
+            },
             amount: None,
             token_identifier: None,
             conversion_options: Some(ConversionOptions {

@@ -41,7 +41,9 @@ async fn test_01_lightning_hodl_success(
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_invoice.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_invoice.clone(),
+            },
             amount: None,
             token_identifier: None,
             conversion_options: None,

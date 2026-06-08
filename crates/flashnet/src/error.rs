@@ -4,7 +4,7 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
 pub enum FlashnetError {
-    #[error("Network error: {reason} (code: {code:?})")]
+    #[error("{reason}")]
     Network { reason: String, code: Option<u16> },
 
     #[error("Execution error: {source}")]
