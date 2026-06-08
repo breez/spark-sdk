@@ -58,6 +58,9 @@ pub struct TurnkeyConfig {
     pub api_private_key: String,
     /// Id of the Spark wallet to sign with.
     pub wallet_id: String,
+    /// Network the wallet operates on; selects the Spark address format
+    /// (mainnet or regtest) used for Spark-protocol and Schnorr signing.
+    pub network: crate::Network,
     /// Retry policy for Turnkey requests.
     pub retry: TurnkeyRetryConfig,
 }

@@ -19,25 +19,33 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::{PublicKey, ecdsa};
+use bitcoin::secp256k1::{PublicKey, ecdsa, schnorr};
+use frost_secp256k1_tr::round1::{NonceCommitment, SigningCommitments};
+use frost_secp256k1_tr::round2::SignatureShare;
 use spark_wallet::{
-    FrostJob, FrostShareResult, PrepareClaimRequest, PrepareLightningReceiveRequest,
-    PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
-    PrepareTransferRequest, PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit,
-    PreparedStaticDepositClaim, PreparedTokenTransaction, PreparedTransfer,
-    SignSparkInvoiceRequest, SignStaticDepositRefundRequest, SignedSparkInvoice, SignerError,
-    SparkSigner, StartStaticDepositRefundRequest, StartedStaticDepositRefund, TreeNodeId,
+    FrostDerivation, FrostJob, FrostShareResult, FrostSigningCommitmentsWithNonces,
+    PrepareClaimRequest, PrepareLightningReceiveRequest, PrepareStaticDepositClaimRequest,
+    PrepareStaticDepositRequest, PrepareTokenTransactionRequest, PrepareTransferRequest,
+    PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit, PreparedStaticDepositClaim,
+    PreparedTokenTransaction, PreparedTransfer, SignSparkInvoiceRequest,
+    SignStaticDepositRefundRequest, SignedSparkInvoice, SignerError, SparkSigner,
+    StartStaticDepositRefundRequest, StartedStaticDepositRefund, TreeNodeId,
 };
+
+use crate::Network;
 
 use super::error::TurnkeyError;
 use super::transport::TurnkeyClient;
 use super::types::{
-    ADDRESS_FORMAT_COMPRESSED, CREATE_WALLET_ACCOUNTS_PATH, CREATE_WALLET_ACCOUNTS_RESULT,
-    CREATE_WALLET_ACCOUNTS_TYPE, CURVE_SECP256K1, CreateWalletAccountsIntent,
-    CreateWalletAccountsResult, ENCODING_HEXADECIMAL, GET_WALLET_ACCOUNT_PATH,
-    GetWalletAccountRequest, GetWalletAccountResponse, HASH_FUNCTION_SHA256, PATH_FORMAT_BIP32,
-    SIGN_RAW_PAYLOAD_PATH, SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SignRawPayloadIntent,
-    SignRawPayloadResult, WalletAccountParams,
+    ADDRESS_FORMAT_COMPRESSED, ADDRESS_FORMAT_SPARK_MAINNET, ADDRESS_FORMAT_SPARK_REGTEST,
+    CREATE_WALLET_ACCOUNTS_PATH, CREATE_WALLET_ACCOUNTS_RESULT, CREATE_WALLET_ACCOUNTS_TYPE,
+    CURVE_SECP256K1, CreateWalletAccountsIntent, CreateWalletAccountsResult, ENCODING_HEXADECIMAL,
+    GET_WALLET_ACCOUNT_PATH, GetWalletAccountRequest, GetWalletAccountResponse,
+    HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256, PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH,
+    SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SPARK_SIGN_FROST_PATH, SPARK_SIGN_FROST_RESULT,
+    SPARK_SIGN_FROST_TYPE, SignRawPayloadIntent, SignRawPayloadResult, SparkFrostCommitment,
+    SparkKeyDerivation, SparkPartialSignature, SparkSignFrostIntent, SparkSignFrostResult,
+    SparkSignatureRequest, WalletAccountParams,
 };
 
 fn to_spark_err<E: std::fmt::Display>(e: E) -> SignerError {
@@ -64,21 +72,105 @@ fn ecdsa_from_rs(r_hex: &str, s_hex: &str) -> Result<ecdsa::Signature, TurnkeyEr
     ecdsa::Signature::from_compact(&compact).map_err(|e| TurnkeyError::Deserialize(e.to_string()))
 }
 
+fn schnorr_from_rs(r_hex: &str, s_hex: &str) -> Result<schnorr::Signature, TurnkeyError> {
+    let mut sig = [0u8; 64];
+    sig[..32].copy_from_slice(&decode_scalar_32(r_hex)?);
+    sig[32..].copy_from_slice(&decode_scalar_32(s_hex)?);
+    schnorr::Signature::from_slice(&sig).map_err(|e| TurnkeyError::Deserialize(e.to_string()))
+}
+
+fn spark_address_format(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => ADDRESS_FORMAT_SPARK_MAINNET,
+        Network::Regtest => ADDRESS_FORMAT_SPARK_REGTEST,
+    }
+}
+
+fn frost_derivation(derivation: &FrostDerivation) -> SparkKeyDerivation {
+    match derivation {
+        FrostDerivation::SigningLeaf { leaf_id } => {
+            SparkKeyDerivation::signing_leaf(leaf_id.to_string())
+        }
+        FrostDerivation::StaticDeposit { index } => SparkKeyDerivation::static_deposit(*index),
+        FrostDerivation::HtlcPreimage => SparkKeyDerivation::htlc_preimage(),
+        FrostDerivation::Identity => SparkKeyDerivation::identity(),
+    }
+}
+
+/// Converts a native FROST job into the request shape, hex-encoding the sighash,
+/// verifying key, per-operator commitments, and optional adaptor key.
+fn frost_job_to_request(job: &FrostJob) -> Result<SparkSignatureRequest, TurnkeyError> {
+    let mut operator_commitments = Vec::with_capacity(job.operator_commitments.len());
+    for (identifier, commitment) in &job.operator_commitments {
+        operator_commitments.push(SparkFrostCommitment {
+            id: hex::encode(identifier.serialize()),
+            hiding: hex::encode(
+                commitment
+                    .hiding()
+                    .serialize()
+                    .map_err(|e| TurnkeyError::Serialize(e.to_string()))?,
+            ),
+            binding: hex::encode(
+                commitment
+                    .binding()
+                    .serialize()
+                    .map_err(|e| TurnkeyError::Serialize(e.to_string()))?,
+            ),
+        });
+    }
+    Ok(SparkSignatureRequest {
+        derivation: frost_derivation(&job.derivation),
+        message: hex::encode(job.sighash),
+        verifying_key: hex::encode(job.verifying_key.serialize()),
+        operator_commitments,
+        adaptor_public_key: job.adaptor_public_key.map(|pk| hex::encode(pk.serialize())),
+    })
+}
+
+/// Rebuilds a `FrostShareResult` from Turnkey's partial signature. The secret
+/// nonces stay in the enclave, so `nonces_ciphertext` is empty: downstream code
+/// only reads the public commitment and the share (see module docs).
+fn partial_signature_to_share(
+    sig: &SparkPartialSignature,
+) -> Result<FrostShareResult, TurnkeyError> {
+    let decode = |what: &str, value: &str| -> Result<Vec<u8>, TurnkeyError> {
+        hex::decode(value).map_err(|e| TurnkeyError::Deserialize(format!("{what}: {e}")))
+    };
+    let hiding = NonceCommitment::deserialize(&decode("hiding", &sig.hiding)?)
+        .map_err(|e| TurnkeyError::Deserialize(e.to_string()))?;
+    let binding = NonceCommitment::deserialize(&decode("binding", &sig.binding)?)
+        .map_err(|e| TurnkeyError::Deserialize(e.to_string()))?;
+    let signature_share =
+        SignatureShare::deserialize(&decode("signatureShare", &sig.signature_share)?)
+            .map_err(|e| TurnkeyError::Deserialize(e.to_string()))?;
+    Ok(FrostShareResult {
+        commitment: FrostSigningCommitmentsWithNonces {
+            commitments: SigningCommitments::new(hiding, binding),
+            nonces_ciphertext: Vec::new(),
+        },
+        signature_share,
+    })
+}
+
 pub(crate) struct TurnkeySparkSigner {
     client: Arc<TurnkeyClient>,
     account: u32,
-    // Pubkey memoization only (see module docs): immutable, in-memory, non-authoritative.
+    network: Network,
+    // Pubkey/address memoization only (see module docs): immutable, in-memory, non-authoritative.
     identity_pubkey: Mutex<Option<PublicKey>>,
+    spark_address: Mutex<Option<String>>,
     leaf_pubkeys: Mutex<HashMap<TreeNodeId, PublicKey>>,
     static_deposit_pubkeys: Mutex<HashMap<u32, PublicKey>>,
 }
 
 impl TurnkeySparkSigner {
-    pub(crate) fn new(client: Arc<TurnkeyClient>) -> Self {
+    pub(crate) fn new(client: Arc<TurnkeyClient>, network: Network) -> Self {
         Self {
             client,
             account: 0,
+            network,
             identity_pubkey: Mutex::new(None),
+            spark_address: Mutex::new(None),
             leaf_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_pubkeys: Mutex::new(HashMap::new()),
         }
@@ -121,14 +213,24 @@ impl TurnkeySparkSigner {
         {
             return Ok(public_key);
         }
+        self.create_account(path, ADDRESS_FORMAT_COMPRESSED).await
+    }
 
+    /// Materializes a wallet account at `path` with `address_format` and returns
+    /// its address. The key is deterministic from the wallet seed, so this is
+    /// effectively idempotent across runs.
+    async fn create_account(
+        &self,
+        path: String,
+        address_format: &'static str,
+    ) -> Result<String, TurnkeyError> {
         let intent = CreateWalletAccountsIntent {
             wallet_id: self.client.wallet_id.clone(),
             accounts: vec![WalletAccountParams {
                 curve: CURVE_SECP256K1,
                 path_format: PATH_FORMAT_BIP32,
                 path,
-                address_format: ADDRESS_FORMAT_COMPRESSED,
+                address_format,
             }],
         };
         let result: CreateWalletAccountsResult = self
@@ -143,6 +245,46 @@ impl TurnkeySparkSigner {
         result.addresses.into_iter().next().ok_or_else(|| {
             TurnkeyError::UnexpectedResponse("create_wallet_accounts returned no address".into())
         })
+    }
+
+    /// The Spark-format identity address, used as `signWith` for Spark-protocol
+    /// activities and BIP-340 Schnorr signing.
+    async fn spark_identity_address(&self) -> Result<String, SignerError> {
+        if let Some(addr) = self.spark_address.lock().unwrap().clone() {
+            return Ok(addr);
+        }
+        let format = spark_address_format(self.network);
+        let path = format!("{}/0'", self.base_path());
+        let addr = self
+            .create_account(path, format)
+            .await
+            .map_err(to_spark_err)?;
+        *self.spark_address.lock().unwrap() = Some(addr.clone());
+        Ok(addr)
+    }
+
+    /// BIP-340 Schnorr-signs a 32-byte `hash` with the identity key via
+    /// `SIGN_RAW_PAYLOAD`. The Spark-format `signWith` selects Schnorr, and the
+    /// hash is signed as-is (`NO_OP`), matching the local signer.
+    async fn sign_identity_schnorr(&self, hash: &[u8]) -> Result<schnorr::Signature, SignerError> {
+        let sign_with = self.spark_identity_address().await?;
+        let intent = SignRawPayloadIntent {
+            sign_with,
+            payload: hex::encode(hash),
+            encoding: ENCODING_HEXADECIMAL,
+            hash_function: HASH_FUNCTION_NO_OP,
+        };
+        let result: SignRawPayloadResult = self
+            .client
+            .submit_activity(
+                SIGN_RAW_PAYLOAD_PATH,
+                SIGN_RAW_PAYLOAD_TYPE,
+                intent,
+                SIGN_RAW_PAYLOAD_RESULT,
+            )
+            .await
+            .map_err(to_spark_err)?;
+        schnorr_from_rs(&result.r, &result.s).map_err(to_spark_err)
     }
 
     /// ECDSA-signs `message` with the identity key via `SIGN_RAW_PAYLOAD`.
@@ -230,10 +372,37 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
         self.sign_identity_ecdsa(message).await
     }
 
-    async fn sign_frost(&self, _jobs: Vec<FrostJob>) -> Result<Vec<FrostShareResult>, SignerError> {
-        Err(SignerError::Generic(
-            "turnkey signer: sign_frost not yet implemented".to_string(),
-        ))
+    async fn sign_frost(&self, jobs: Vec<FrostJob>) -> Result<Vec<FrostShareResult>, SignerError> {
+        let sign_with = self.spark_identity_address().await?;
+        let mut signatures = Vec::with_capacity(jobs.len());
+        for job in &jobs {
+            signatures.push(frost_job_to_request(job).map_err(to_spark_err)?);
+        }
+        let result: SparkSignFrostResult = self
+            .client
+            .submit_activity(
+                SPARK_SIGN_FROST_PATH,
+                SPARK_SIGN_FROST_TYPE,
+                SparkSignFrostIntent {
+                    sign_with,
+                    signatures,
+                },
+                SPARK_SIGN_FROST_RESULT,
+            )
+            .await
+            .map_err(to_spark_err)?;
+        if result.signatures.len() != jobs.len() {
+            return Err(SignerError::Generic(format!(
+                "turnkey sign_frost: expected {} shares, got {}",
+                jobs.len(),
+                result.signatures.len()
+            )));
+        }
+        result
+            .signatures
+            .iter()
+            .map(|sig| partial_signature_to_share(sig).map_err(to_spark_err))
+            .collect()
     }
 
     async fn prepare_transfer(
@@ -301,19 +470,17 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
 
     async fn sign_spark_invoice(
         &self,
-        _request: SignSparkInvoiceRequest,
+        request: SignSparkInvoiceRequest,
     ) -> Result<SignedSparkInvoice, SignerError> {
-        Err(SignerError::Generic(
-            "turnkey signer: sign_spark_invoice not yet implemented".to_string(),
-        ))
+        let signature = self.sign_identity_schnorr(&request.invoice_hash).await?;
+        Ok(SignedSparkInvoice { signature })
     }
 
     async fn prepare_token_transaction(
         &self,
-        _request: PrepareTokenTransactionRequest,
+        request: PrepareTokenTransactionRequest,
     ) -> Result<PreparedTokenTransaction, SignerError> {
-        Err(SignerError::Generic(
-            "turnkey signer: prepare_token_transaction not yet implemented".to_string(),
-        ))
+        let signature = self.sign_identity_schnorr(&request.digest).await?;
+        Ok(PreparedTokenTransaction { signature })
     }
 }
