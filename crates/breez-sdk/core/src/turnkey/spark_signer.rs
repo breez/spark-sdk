@@ -20,16 +20,17 @@ use std::sync::{Arc, Mutex};
 
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::{PublicKey, ecdsa, schnorr};
+use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::{NonceCommitment, SigningCommitments};
 use frost_secp256k1_tr::round2::SignatureShare;
 use spark_wallet::{
     FrostDerivation, FrostJob, FrostShareResult, FrostSigningCommitmentsWithNonces,
-    PrepareClaimRequest, PrepareLightningReceiveRequest, PrepareStaticDepositClaimRequest,
-    PrepareStaticDepositRequest, PrepareTokenTransactionRequest, PrepareTransferRequest,
-    PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit, PreparedStaticDepositClaim,
-    PreparedTokenTransaction, PreparedTransfer, SignSparkInvoiceRequest,
-    SignStaticDepositRefundRequest, SignedSparkInvoice, SignerError, SparkSigner,
-    StartStaticDepositRefundRequest, StartedStaticDepositRefund, TreeNodeId,
+    OperatorPackage, OperatorRecipient, PrepareClaimRequest, PrepareLightningReceiveRequest,
+    PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
+    PrepareTransferRequest, PreparedClaim, PreparedLightningReceive, PreparedStaticDeposit,
+    PreparedStaticDepositClaim, PreparedTokenTransaction, PreparedTransfer,
+    SignSparkInvoiceRequest, SignStaticDepositRefundRequest, SignedSparkInvoice, SignerError,
+    SparkSigner, StartStaticDepositRefundRequest, StartedStaticDepositRefund, TreeNodeId,
 };
 
 use crate::Network;
@@ -42,10 +43,13 @@ use super::types::{
     CURVE_SECP256K1, CreateWalletAccountsIntent, CreateWalletAccountsResult, ENCODING_HEXADECIMAL,
     GET_WALLET_ACCOUNT_PATH, GetWalletAccountRequest, GetWalletAccountResponse,
     HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256, PATH_FORMAT_BIP32, SIGN_RAW_PAYLOAD_PATH,
-    SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SPARK_SIGN_FROST_PATH, SPARK_SIGN_FROST_RESULT,
-    SPARK_SIGN_FROST_TYPE, SignRawPayloadIntent, SignRawPayloadResult, SparkFrostCommitment,
-    SparkKeyDerivation, SparkPartialSignature, SparkSignFrostIntent, SparkSignFrostResult,
-    SparkSignatureRequest, WalletAccountParams,
+    SIGN_RAW_PAYLOAD_RESULT, SIGN_RAW_PAYLOAD_TYPE, SPARK_PREPARE_LIGHTNING_RECEIVE_PATH,
+    SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT, SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE,
+    SPARK_SIGN_FROST_PATH, SPARK_SIGN_FROST_RESULT, SPARK_SIGN_FROST_TYPE, SignRawPayloadIntent,
+    SignRawPayloadResult, SparkEncryptedOperatorPackage, SparkFrostCommitment, SparkKeyDerivation,
+    SparkLightningReceivePackage, SparkOperatorRecipient, SparkPartialSignature,
+    SparkPrepareLightningReceiveIntent, SparkPrepareLightningReceiveResult, SparkSignFrostIntent,
+    SparkSignFrostResult, SparkSignatureRequest, WalletAccountParams,
 };
 
 fn to_spark_err<E: std::fmt::Display>(e: E) -> SignerError {
@@ -149,6 +153,31 @@ fn partial_signature_to_share(
             nonces_ciphertext: Vec::new(),
         },
         signature_share,
+    })
+}
+
+fn operator_recipients(recipients: &[OperatorRecipient]) -> Vec<SparkOperatorRecipient> {
+    recipients
+        .iter()
+        .map(|r| SparkOperatorRecipient {
+            operator_id: hex::encode(r.identifier.serialize()),
+            encryption_public_key: hex::encode(r.public_key.serialize()),
+        })
+        .collect()
+}
+
+fn operator_package_from(
+    pkg: &SparkEncryptedOperatorPackage,
+) -> Result<OperatorPackage, TurnkeyError> {
+    let id_bytes = hex::decode(&pkg.operator_id)
+        .map_err(|e| TurnkeyError::Deserialize(format!("operatorId: {e}")))?;
+    let operator_identifier =
+        Identifier::deserialize(&id_bytes).map_err(|e| TurnkeyError::Deserialize(e.to_string()))?;
+    let encrypted_package = hex::decode(&pkg.encrypted_package)
+        .map_err(|e| TurnkeyError::Deserialize(format!("encryptedPackage: {e}")))?;
+    Ok(OperatorPackage {
+        operator_identifier,
+        encrypted_package,
     })
 }
 
@@ -405,6 +434,8 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
             .collect()
     }
 
+    // Open: SPARK_PREPARE_TRANSFER takes a `newLeafDerivation` tag, but this trait
+    // generates a fresh (non-HD) new leaf key, so there is no tag to supply.
     async fn prepare_transfer(
         &self,
         _request: PrepareTransferRequest,
@@ -414,6 +445,9 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
         ))
     }
 
+    // Open: SPARK_CLAIM_TRANSFER returns no claim user signature, which
+    // PreparedClaim requires; reconstructing it needs spark-internal payload
+    // hashing (TaggedHasher) not reachable from this crate.
     async fn prepare_claim(
         &self,
         _request: PrepareClaimRequest,
@@ -425,11 +459,36 @@ impl spark_wallet::SparkSigner for TurnkeySparkSigner {
 
     async fn prepare_lightning_receive(
         &self,
-        _request: PrepareLightningReceiveRequest,
+        request: PrepareLightningReceiveRequest,
     ) -> Result<PreparedLightningReceive, SignerError> {
-        Err(SignerError::Generic(
-            "turnkey signer: prepare_lightning_receive not yet implemented".to_string(),
-        ))
+        let sign_with = self.spark_identity_address().await?;
+        let intent = SparkPrepareLightningReceiveIntent {
+            sign_with,
+            lightning_receive: SparkLightningReceivePackage {
+                threshold: request.threshold,
+                operator_recipients: operator_recipients(&request.operator_recipients),
+            },
+        };
+        let result: SparkPrepareLightningReceiveResult = self
+            .client
+            .submit_activity(
+                SPARK_PREPARE_LIGHTNING_RECEIVE_PATH,
+                SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE,
+                intent,
+                SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT,
+            )
+            .await
+            .map_err(to_spark_err)?;
+        let payment_hash = decode_scalar_32(&result.payment_hash).map_err(to_spark_err)?;
+        let operator_preimage_packages = result
+            .operator_packages
+            .iter()
+            .map(|pkg| operator_package_from(pkg).map_err(to_spark_err))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(PreparedLightningReceive {
+            payment_hash,
+            operator_preimage_packages,
+        })
     }
 
     async fn prepare_static_deposit(

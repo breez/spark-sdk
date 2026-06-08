@@ -188,3 +188,48 @@ pub(crate) struct SparkPartialSignature {
     pub hiding: String,
     pub binding: String,
 }
+
+pub(crate) const SPARK_PREPARE_LIGHTNING_RECEIVE_PATH: &str =
+    "/public/v1/submit/spark_prepare_lightning_receive";
+pub(crate) const SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE: &str =
+    "ACTIVITY_TYPE_SPARK_PREPARE_LIGHTNING_RECEIVE";
+pub(crate) const SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT: &str =
+    "sparkPrepareLightningReceiveResult";
+
+/// An operator the signer encrypts shares to. `operatorId` is the hex FROST
+/// identifier (the same value used for `operatorCommitments[].id`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkOperatorRecipient {
+    pub operator_id: String,
+    pub encryption_public_key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkEncryptedOperatorPackage {
+    pub operator_id: String,
+    pub encrypted_package: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkLightningReceivePackage {
+    pub threshold: u32,
+    pub operator_recipients: Vec<SparkOperatorRecipient>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkPrepareLightningReceiveIntent {
+    pub sign_with: String,
+    pub lightning_receive: SparkLightningReceivePackage,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SparkPrepareLightningReceiveResult {
+    #[serde(default)]
+    pub operator_packages: Vec<SparkEncryptedOperatorPackage>,
+    pub payment_hash: String,
+}
