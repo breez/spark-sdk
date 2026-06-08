@@ -45,13 +45,16 @@ func CheckAvailability() {
 	}
 	switch r := availability.(type) {
 	case breez_sdk_spark.PasskeyAvailabilityAvailable:
-		_ = r // Show passkey as primary option.
+		// Show passkey as primary option.
+		_ = r
 	case breez_sdk_spark.PasskeyAvailabilityPrfUnsupported:
-		_ = r // Fall back to mnemonic flow.
+		// Fall back to mnemonic flow.
+		_ = r
 	case breez_sdk_spark.PasskeyAvailabilityNotAssociated:
 		log.Printf("Domain association failed (source=%s): %s", r.Source, r.Reason)
 	case breez_sdk_spark.PasskeyAvailabilitySkipped:
-		_ = r // No verification source on this platform; proceed normally.
+		// No verification source on this platform; proceed normally.
+		_ = r
 	}
 	// ANCHOR_END: check-availability
 }
@@ -127,9 +130,12 @@ func CredentialMetadata() error {
 	}
 
 	if response.Credential != nil {
-		log.Println(response.Credential.CredentialId)   // Persist to reopen the same wallet on sign-in
-		log.Println(response.Credential.Aaguid)         // Authenticator model (display hint, unverified)
-		log.Println(response.Credential.BackupEligible) // Whether the passkey syncs across devices
+		// Persist to reopen the same wallet on sign-in
+		log.Println(response.Credential.CredentialId)
+		// Authenticator model (display hint, unverified)
+		log.Println(response.Credential.Aaguid)
+		// Whether the passkey syncs across devices
+		log.Println(response.Credential.BackupEligible)
 	}
 
 	// Pin the stored credential ID so the OS can't substitute a sibling
@@ -143,10 +149,14 @@ func CredentialMetadata() error {
 	if err != nil {
 		return err
 	}
-	log.Println(signInResponse.Wallet.Seed)  // Pass to connect() to open the wallet
-	log.Println(signInResponse.Wallet.Label) // Label this wallet was derived from
-	log.Println(signInResponse.Labels)       // This passkey's labels (populated on discovery sign-in)
-	log.Println(signInResponse.Credential)   // Credential signed in with (credential_id only)
+	// Pass to connect() to open the wallet
+	log.Println(signInResponse.Wallet.Seed)
+	// Label this wallet was derived from
+	log.Println(signInResponse.Wallet.Label)
+	// This passkey's labels (populated on discovery sign-in)
+	log.Println(signInResponse.Labels)
+	// Credential signed in with (credential_id only)
+	log.Println(signInResponse.Credential)
 	// ANCHOR_END: credential-metadata
 	return nil
 }
@@ -191,12 +201,14 @@ func CheckDomain() error {
 
 	switch r := result.(type) {
 	case breez_sdk_spark.DomainAssociationAssociated:
-		_ = r // Safe to proceed.
+		// Safe to proceed.
+		_ = r
 	case breez_sdk_spark.DomainAssociationNotAssociated:
 		log.Printf("Domain association failed (source=%s): %s", r.Source, r.Reason)
 		return nil
 	case breez_sdk_spark.DomainAssociationSkipped:
-		_ = r // Verification could not be performed; proceed normally.
+		// Verification could not be performed; proceed normally.
+		_ = r
 	}
 	// ANCHOR_END: domain-association
 	return nil

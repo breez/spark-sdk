@@ -116,9 +116,12 @@ namespace BreezSdkSnippets
 
             if (response.credential is not null)
             {
-                Console.WriteLine(response.credential.credentialId); // Persist to reopen the same wallet on sign-in
-                Console.WriteLine(response.credential.aaguid); // Authenticator model (display hint, unverified)
-                Console.WriteLine(response.credential.backupEligible); // Whether the passkey syncs across devices
+                // Persist to reopen the same wallet on sign-in
+                Console.WriteLine(response.credential.credentialId);
+                // Authenticator model (display hint, unverified)
+                Console.WriteLine(response.credential.aaguid);
+                // Whether the passkey syncs across devices
+                Console.WriteLine(response.credential.backupEligible);
             }
 
             // Pin the stored credential ID so the OS can't substitute a sibling credential, which would derive a different wallet.
@@ -129,10 +132,14 @@ namespace BreezSdkSnippets
                     // stored credentialId bytes
                 }
             ));
-            Console.WriteLine(signInResponse.wallet.seed); // Pass to connect() to open the wallet
-            Console.WriteLine(signInResponse.wallet.label); // Label this wallet was derived from
-            Console.WriteLine(signInResponse.labels); // This passkey's labels (populated on discovery sign-in)
-            Console.WriteLine(signInResponse.credential); // Credential signed in with (credential_id only)
+            // Pass to connect() to open the wallet
+            Console.WriteLine(signInResponse.wallet.seed);
+            // Label this wallet was derived from
+            Console.WriteLine(signInResponse.wallet.label);
+            // This passkey's labels (populated on discovery sign-in)
+            Console.WriteLine(signInResponse.labels);
+            // Credential signed in with (credential_id only)
+            Console.WriteLine(signInResponse.credential);
             // ANCHOR_END: credential-metadata
         }
 

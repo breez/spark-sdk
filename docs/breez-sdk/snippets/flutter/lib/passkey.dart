@@ -47,7 +47,9 @@ PasskeyClient setupPasskeyClient() {
   // ANCHOR: setup-client
   final passkey = PasskeyClient(
     breezApiKey: '<breez api key>',
-    config: PasskeyConfig(providerOptions: PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App')),
+    config: PasskeyConfig(
+      providerOptions: PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App'),
+    ),
   );
   // ANCHOR_END: setup-client
   return passkey;
@@ -131,9 +133,12 @@ Future<void> credentialMetadata() async {
 
   final credential = response.credential;
   if (credential != null) {
-    print(credential.credentialId); // Persist to reopen the same wallet on sign-in
-    print(credential.aaguid); // Authenticator model (display hint, unverified)
-    print(credential.backupEligible); // Whether the passkey syncs across devices
+    // Persist to reopen the same wallet on sign-in
+    print(credential.credentialId);
+    // Authenticator model (display hint, unverified)
+    print(credential.aaguid);
+    // Whether the passkey syncs across devices
+    print(credential.backupEligible);
   }
 
   // Pin the stored credential ID so the OS can't substitute a sibling.
@@ -142,10 +147,14 @@ Future<void> credentialMetadata() async {
       // stored credentialId bytes
     ]),
   );
-  print(signInResponse.wallet.seed); // Pass to connect() to open the wallet
-  print(signInResponse.wallet.label); // Label this wallet was derived from
-  print(signInResponse.labels); // This passkey's labels (populated on discovery sign-in)
-  print(signInResponse.credential); // Credential signed in with (credential_id only)
+  // Pass to connect() to open the wallet
+  print(signInResponse.wallet.seed);
+  // Label this wallet was derived from
+  print(signInResponse.wallet.label);
+  // This passkey's labels (populated on discovery sign-in)
+  print(signInResponse.labels);
+  // Credential signed in with (credential_id only)
+  print(signInResponse.credential);
   // ANCHOR_END: credential-metadata
 }
 
@@ -182,7 +191,10 @@ Future<void> storeLabel() async {
 Future<void> checkDomain() async {
   // ANCHOR: domain-association
   // Diagnostic only: never blocks the ceremony.
-  final prfProvider = PasskeyProvider(PasskeyProviderOptions(rpId: '<your-rp-domain>', rpName: 'Your App'));
+  final prfProvider = PasskeyProvider(PasskeyProviderOptions(
+    rpId: '<your-rp-domain>',
+    rpName: 'Your App',
+  ));
   final result = await prfProvider.checkDomainAssociation();
 
   if (result is DomainAssociationAssociated) {

@@ -148,9 +148,12 @@ async fn credential_metadata() -> Result<()> {
         .await?;
 
     if let Some(credential) = &response.credential {
-        println!("{:?}", credential.credential_id); // Persist to reopen the same wallet on sign-in
-        println!("{:?}", credential.aaguid); // Authenticator model (display hint, unverified)
-        println!("{:?}", credential.backup_eligible); // Whether the passkey syncs across devices
+        // Persist to reopen the same wallet on sign-in
+        println!("{:?}", credential.credential_id);
+        // Authenticator model (display hint, unverified)
+        println!("{:?}", credential.aaguid);
+        // Whether the passkey syncs across devices
+        println!("{:?}", credential.backup_eligible);
     }
 
     // Pin the stored credential ID so the OS can't substitute a sibling,
@@ -162,10 +165,14 @@ async fn credential_metadata() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    println!("{:?}", sign_in_response.wallet.seed); // Pass to connect() to open the wallet
-    println!("{}", sign_in_response.wallet.label); // Label this wallet was derived from
-    println!("{:?}", sign_in_response.labels); // This passkey's labels (populated on discovery sign-in)
-    println!("{:?}", sign_in_response.credential); // Credential signed in with (credential_id only)
+    // Pass to connect() to open the wallet
+    println!("{:?}", sign_in_response.wallet.seed);
+    // Label this wallet was derived from
+    println!("{}", sign_in_response.wallet.label);
+    // This passkey's labels (populated on discovery sign-in)
+    println!("{:?}", sign_in_response.labels);
+    // Credential signed in with (credential_id only)
+    println!("{:?}", sign_in_response.credential);
     // ANCHOR_END: credential-metadata
     Ok(())
 }
