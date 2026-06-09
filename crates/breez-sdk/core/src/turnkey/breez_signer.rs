@@ -3,9 +3,10 @@
 //! Per Turnkey's design, signing is the norm and encryption is not offered:
 //! - derive / ECDSA / Schnorr go to Turnkey (the wallet's enclave keys).
 //! - ECIES (multi-device sync + session storage) and HMAC (LNURL-auth path
-//!   computation) run locally against a single key exported from Turnkey, via an
-//!   inner [`BreezSignerImpl`]. Those uses only need to be consistent, not match
-//!   the enclave keys, so a stable exported key suffices.
+//!   computation) run locally against a dedicated, non-Spark key exported from
+//!   Turnkey (a reserved derivation the Spark signer never uses), via an inner
+//!   [`BreezSignerImpl`]. Those uses only need a stable key, so a non-Spark key
+//!   keeps every Spark key (the identity key included) in the enclave.
 
 use std::str::FromStr;
 use std::sync::Arc;
