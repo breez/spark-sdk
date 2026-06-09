@@ -9,7 +9,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Breez SDK under test (enable test-utils for direct helpers)
-breez-sdk-spark = { workspace = true, features = ["test-utils", "sqlite", "postgres", "mysql", "turnkey", "turnkey-p256"] }
+breez-sdk-spark = { workspace = true, features = ["test-utils", "sqlite", "postgres", "mysql", "turnkey", "turnkey-p256", "turnkey-test-utils"] }
 breez-sdk-common = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }
 

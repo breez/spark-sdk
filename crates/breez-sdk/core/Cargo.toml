@@ -29,6 +29,10 @@ turnkey = ["dep:turnkey_enclave_encrypt"]
 # Additionally accept P-256 (Turnkey's default) API keys for stamping, alongside
 # the always-available secp256k1. Pulls in the `p256` crate.
 turnkey-p256 = ["turnkey", "dep:p256"]
+# Test-only Turnkey wallet lifecycle helpers (create/delete/list wallets), for
+# integration harnesses that provision a throwaway wallet per test. Not part of
+# the integrator API: integrators bring their own wallet (see create_turnkey_signer).
+turnkey-test-utils = ["turnkey"]
 
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]

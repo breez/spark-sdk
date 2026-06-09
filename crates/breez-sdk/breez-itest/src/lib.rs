@@ -38,6 +38,10 @@ pub struct SdkInstance {
     pub data_sync_fixture: Option<Arc<DataSyncFixture>>,
     #[allow(dead_code)]
     pub lnurl_fixture: Option<Arc<LnurlFixture>>,
+    /// Held only for its `Drop`: deletes a per-test Turnkey wallet on teardown.
+    /// `None` for seed-backed instances and for fixed-wallet Turnkey runs.
+    #[allow(dead_code)]
+    turnkey_guard: Option<TurnkeyWalletGuard>,
 }
 
 /// Persistent SDK fixture that allows reinitialization with the same configuration
