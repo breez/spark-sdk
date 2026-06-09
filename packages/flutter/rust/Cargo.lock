@@ -1100,7 +1100,7 @@ dependencies = [
 [[package]]
 name = "boltz-client"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=7367b5361124c61dfdd71f282ecb23914d981cfb#7367b5361124c61dfdd71f282ecb23914d981cfb"
+source = "git+https://github.com/breez/boltz-client?rev=a4517828f42a0c8fe55f68cfab5764207b8eaa9e#a4517828f42a0c8fe55f68cfab5764207b8eaa9e"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -1115,8 +1115,8 @@ dependencies = [
  "hex",
  "k256",
  "lightning-invoice 0.34.0",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=7367b5361124c61dfdd71f282ecb23914d981cfb)",
- "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=7367b5361124c61dfdd71f282ecb23914d981cfb)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=a4517828f42a0c8fe55f68cfab5764207b8eaa9e)",
+ "platform-utils 0.1.0 (git+https://github.com/breez/boltz-client?rev=a4517828f42a0c8fe55f68cfab5764207b8eaa9e)",
  "serde",
  "serde_json",
  "sha2",
@@ -1125,6 +1125,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite-wasm",
  "tracing",
+ "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -3199,7 +3201,7 @@ dependencies = [
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=7367b5361124c61dfdd71f282ecb23914d981cfb#7367b5361124c61dfdd71f282ecb23914d981cfb"
+source = "git+https://github.com/breez/boltz-client?rev=a4517828f42a0c8fe55f68cfab5764207b8eaa9e#a4517828f42a0c8fe55f68cfab5764207b8eaa9e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3607,12 +3609,12 @@ dependencies = [
 [[package]]
 name = "platform-utils"
 version = "0.1.0"
-source = "git+https://github.com/breez/boltz-client?rev=7367b5361124c61dfdd71f282ecb23914d981cfb#7367b5361124c61dfdd71f282ecb23914d981cfb"
+source = "git+https://github.com/breez/boltz-client?rev=a4517828f42a0c8fe55f68cfab5764207b8eaa9e#a4517828f42a0c8fe55f68cfab5764207b8eaa9e"
 dependencies = [
  "async-trait",
  "base64",
  "bitreq",
- "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=7367b5361124c61dfdd71f282ecb23914d981cfb)",
+ "macros 0.1.0 (git+https://github.com/breez/boltz-client?rev=a4517828f42a0c8fe55f68cfab5764207b8eaa9e)",
  "reqwest",
  "serde",
  "serde_json",
