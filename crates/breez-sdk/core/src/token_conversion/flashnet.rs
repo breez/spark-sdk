@@ -372,7 +372,7 @@ impl FlashnetTokenConverter {
     async fn update_payment_conversion_info(
         &self,
         pool_id: &PublicKey,
-        outbound_identifier: String,
+        outbound_asset_transfer: &AssetTransfer,
         inbound_identifier: Option<String>,
         refund_identifier: Option<String>,
         fee_split: Option<FeeSplit>,
@@ -384,6 +384,7 @@ impl FlashnetTokenConverter {
             Some(FeeSplit::Received(fee)) => (None, Some(*fee)),
             None => (None, None),
         };
+        let outbound_identifier = outbound_asset_transfer.id();
         debug!(
             "Updating payment conversion info for pool_id: {pool_id}, outbound_identifier: {outbound_identifier}, inbound_identifier: {inbound_identifier:?}, refund_identifier: {refund_identifier:?}, sent_fee: {sent_fee:?}, received_fee: {received_fee:?}",
         );
@@ -397,9 +398,13 @@ impl FlashnetTokenConverter {
         let conversion_id = uuid::Uuid::now_v7().to_string();
 
         // Insert sent, received, and refund payment metadata in parallel.
+        // The sent leg uses the AssetTransfer-aware helper to skip the
+        // operator round-trip; inbound/refund stay on the string-identifier
+        // helper because the SDK never holds those transfers in hand
+        // (they're produced by the pool, not by us).
         let sent_fut = async {
-            crate::utils::payments::insert_or_cache_payment_metadata(
-                &outbound_identifier,
+            crate::utils::conversions::insert_or_cache_payment_metadata_for_transfer(
+                outbound_asset_transfer,
                 PaymentMetadata {
                     conversion_info: Some(ConversionInfo::Amm {
                         pool_id: pool_id_str.clone(),
@@ -749,7 +754,7 @@ impl TokenConverter for FlashnetTokenConverter {
                 let (sent_payment_id, received_payment_id) =
                     Box::pin(self.update_payment_conversion_info(
                         &pool_id,
-                        flashnet_response.transfer_id,
+                        &outbound_asset_transfer,
                         flashnet_response.outbound_transfer_id,
                         flashnet_response.refund_transfer_id,
                         fee_split,
@@ -783,13 +788,13 @@ impl TokenConverter for FlashnetTokenConverter {
             Err(e) => {
                 error!("Convert token failed: {e:?}");
                 if let FlashnetError::Execution {
-                    transaction_identifier: Some(transaction_identifier),
+                    outbound_asset_transfer: Some(outbound_asset_transfer),
                     source,
                 } = &e
                 {
                     let _ = Box::pin(self.update_payment_conversion_info(
                         &pool_id,
-                        transaction_identifier.clone(),
+                        outbound_asset_transfer,
                         None,
                         None,
                         None,

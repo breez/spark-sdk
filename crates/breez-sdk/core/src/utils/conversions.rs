@@ -20,7 +20,8 @@ use spark_wallet::SparkWallet;
 use tracing::warn;
 
 use crate::{
-    ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentType, Storage,
+    ConversionInfo, ConversionStatus, Payment, PaymentDetails, PaymentMetadata, PaymentType,
+    Storage,
     error::SdkError,
     models::{
         Conversion, ConversionAsset, ConversionChain, ConversionDetails, ConversionProvider,
@@ -55,6 +56,57 @@ pub(crate) async fn payment_from_asset_transfer(
             Ok(payments.into_iter().find(|p| p.id == payment_id))
         }
     }
+}
+
+/// Persists `metadata` against the payment row corresponding to a
+/// freshly-produced [`AssetTransfer`], resolving the payment id directly
+/// from the in-hand transfer instead of round-tripping back to the
+/// operators.
+///
+/// The string-identifier variant
+/// [`crate::utils::payments::insert_or_cache_payment_metadata`] calls
+/// `get_token_transactions_by_hashes` on the token branch to re-fetch the
+/// transaction it needs to derive the payment id; for callers that
+/// already received the [`AssetTransfer`] from `transfer_to_deposit` /
+/// `transfer_asset`, that fetch is wasted work. This helper takes the
+/// transfer by reference and skips the network step.
+///
+/// Always inserts (never caches): with the [`AssetTransfer`] in hand the
+/// payment id is locally resolvable, so the cache fallback used by the
+/// string-identifier variant for the "not synced yet" case is
+/// unnecessary.
+pub(crate) async fn insert_or_cache_payment_metadata_for_transfer(
+    transfer: &AssetTransfer,
+    metadata: PaymentMetadata,
+    spark_wallet: &SparkWallet,
+    storage: &Arc<dyn Storage>,
+    tx_inputs_are_ours: bool,
+) -> Result<String, SdkError> {
+    let payment_id = match transfer {
+        AssetTransfer::Spark(wallet_transfer) => wallet_transfer.id.to_string(),
+        AssetTransfer::Token(token_tx) => {
+            let object_repository = ObjectCacheRepository::new(Arc::clone(storage));
+            let payments = token_transaction_to_payments(
+                spark_wallet,
+                &object_repository,
+                token_tx,
+                tx_inputs_are_ours,
+            )
+            .await?;
+            payments.first().map(|p| p.id.clone()).ok_or_else(|| {
+                SdkError::Generic(
+                    "Token transaction has no outputs that produce a Payment row".to_string(),
+                )
+            })?
+        }
+    };
+
+    storage
+        .insert_payment_metadata(payment_id.clone(), metadata)
+        .await
+        .map_err(|e| SdkError::Generic(format!("Failed to insert payment metadata: {e}")))?;
+
+    Ok(payment_id)
 }
 
 /// Extract `ConversionInfo` from whichever [`PaymentDetails`] variant carries

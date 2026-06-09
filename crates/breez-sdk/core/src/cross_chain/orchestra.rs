@@ -508,8 +508,8 @@ impl CrossChainService for OrchestraService {
             ..Default::default()
         };
 
-        let payment_id = crate::utils::payments::insert_or_cache_payment_metadata(
-            &spark_tx_hash,
+        let payment_id = crate::utils::conversions::insert_or_cache_payment_metadata_for_transfer(
+            &asset_transfer,
             metadata,
             &self.spark_wallet,
             &self.storage,

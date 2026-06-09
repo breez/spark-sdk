@@ -206,7 +206,7 @@ impl FlashnetClient {
                 ),
                 outbound_asset_transfer,
             }),
-            Err(e) => Err(FlashnetError::execution(e, Some(transaction_identifier))),
+            Err(e) => Err(FlashnetError::execution(e, Some(outbound_asset_transfer))),
         }
     }
 
