@@ -7,9 +7,10 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use platform_utils::HttpClient;
 use platform_utils::tokio::time::sleep;
+use platform_utils::{HttpClient, HttpResponse};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -73,15 +74,24 @@ fn current_timestamp_ms() -> String {
         .to_string()
 }
 
-/// Whether a failed request is worth retrying: network/transport failures and
-/// transient server responses (408, 429 rate limit, 5xx). Other 4xx (bad
-/// request, auth, 409 already-exists) won't change on retry, so they propagate.
-fn is_retryable(error: &TurnkeyError) -> bool {
-    match error {
-        TurnkeyError::Transport(_) => true,
-        TurnkeyError::Http { status, .. } => matches!(*status, 408 | 429 | 500..=599),
-        _ => false,
-    }
+/// Cap on a server-requested `Retry-After`, so a pathological value can't stall
+/// a request indefinitely.
+const MAX_RETRY_AFTER_SECS: u64 = 60;
+
+/// Whether an HTTP status is worth retrying: transient server responses (408,
+/// 429 rate limit, 5xx). Other statuses (400/401/403/404, and the 409
+/// already-exists used for idempotent account creation) won't change on retry.
+/// Transport (network) failures are retried separately.
+fn is_retryable_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500..=599)
+}
+
+/// The delay a `Retry-After` header requests, in its delta-seconds form, capped
+/// at [`MAX_RETRY_AFTER_SECS`]. The HTTP-date form is not parsed, so the caller
+/// falls back to its backoff schedule for that.
+fn retry_after_delay(resp: &HttpResponse) -> Option<Duration> {
+    let secs: u64 = resp.header("retry-after")?.trim().parse().ok()?;
+    Some(Duration::from_secs(secs.min(MAX_RETRY_AFTER_SECS)))
 }
 
 pub(crate) struct TurnkeyClient {
@@ -138,46 +148,37 @@ impl TurnkeyClient {
 
         let mut attempt: u32 = 0;
         loop {
-            match self.send_once(&url, &headers, &body).await {
-                Ok(resp) => return Ok(resp),
-                Err(e) if attempt < self.retry.max_retries && is_retryable(&e) => {
+            let outcome = self
+                .http
+                .post(url.clone(), Some(headers.clone()), Some(body.clone()))
+                .await;
+            match outcome {
+                Ok(resp) if resp.is_success() => {
+                    return resp
+                        .json::<Resp>()
+                        .map_err(|e| TurnkeyError::Deserialize(e.to_string()));
+                }
+                Ok(resp)
+                    if attempt < self.retry.max_retries && is_retryable_status(resp.status) =>
+                {
+                    attempt = attempt.saturating_add(1);
+                    let delay = retry_after_delay(&resp)
+                        .unwrap_or_else(|| self.retry.delay_for_attempt(attempt));
+                    sleep(delay).await;
+                }
+                Ok(resp) => {
+                    return Err(TurnkeyError::Http {
+                        status: resp.status,
+                        body: resp.body,
+                    });
+                }
+                Err(_) if attempt < self.retry.max_retries => {
                     attempt = attempt.saturating_add(1);
                     sleep(self.retry.delay_for_attempt(attempt)).await;
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(TurnkeyError::Transport(e.to_string())),
             }
         }
-    }
-
-    /// A single HTTP attempt: POST the already-stamped body and deserialize the
-    /// success response, mapping transport and non-2xx outcomes to errors.
-    async fn send_once<Resp>(
-        &self,
-        url: &str,
-        headers: &HashMap<String, String>,
-        body: &str,
-    ) -> Result<Resp, TurnkeyError>
-    where
-        Resp: DeserializeOwned,
-    {
-        let resp = self
-            .http
-            .post(
-                url.to_string(),
-                Some(headers.clone()),
-                Some(body.to_string()),
-            )
-            .await
-            .map_err(|e| TurnkeyError::Transport(e.to_string()))?;
-
-        if !resp.is_success() {
-            return Err(TurnkeyError::Http {
-                status: resp.status,
-                body: resp.body,
-            });
-        }
-        resp.json::<Resp>()
-            .map_err(|e| TurnkeyError::Deserialize(e.to_string()))
     }
 
     /// Submits an activity and polls until it reaches a terminal status,
@@ -251,29 +252,47 @@ impl TurnkeyClient {
 mod tests {
     use super::*;
 
+    fn response_with_retry_after(value: &str) -> HttpResponse {
+        HttpResponse {
+            status: 429,
+            body: String::new(),
+            headers: std::iter::once(("retry-after".to_string(), value.to_string())).collect(),
+        }
+    }
+
     #[test]
-    fn classifies_retryable_errors() {
-        assert!(is_retryable(&TurnkeyError::Transport(
-            "connection reset".into()
-        )));
+    fn classifies_retryable_statuses() {
         for status in [408u16, 429, 500, 502, 503, 504] {
-            assert!(
-                is_retryable(&TurnkeyError::Http {
-                    status,
-                    body: String::new()
-                }),
-                "{status} should be retryable"
-            );
+            assert!(is_retryable_status(status), "{status} should be retryable");
         }
         for status in [400u16, 401, 403, 404, 409] {
             assert!(
-                !is_retryable(&TurnkeyError::Http {
-                    status,
-                    body: String::new()
-                }),
+                !is_retryable_status(status),
                 "{status} should not be retryable"
             );
         }
-        assert!(!is_retryable(&TurnkeyError::Deserialize("bad json".into())));
+    }
+
+    #[test]
+    fn parses_retry_after_seconds_capped() {
+        assert_eq!(
+            retry_after_delay(&response_with_retry_after("5")),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            retry_after_delay(&response_with_retry_after("99999")),
+            Some(Duration::from_secs(MAX_RETRY_AFTER_SECS))
+        );
+        // The HTTP-date form is not parsed; the caller falls back to backoff.
+        assert_eq!(
+            retry_after_delay(&response_with_retry_after("Wed, 21 Oct 2015 07:28:00 GMT")),
+            None
+        );
+        let no_header = HttpResponse {
+            status: 429,
+            body: String::new(),
+            headers: HashMap::new(),
+        };
+        assert_eq!(retry_after_delay(&no_header), None);
     }
 }
