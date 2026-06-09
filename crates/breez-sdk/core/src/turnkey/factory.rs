@@ -8,11 +8,12 @@ use crate::error::SignerError;
 use crate::signer::breez::BreezSignerImpl;
 use crate::signer::{ExternalBreezSigner, ExternalSparkSigner};
 
-use super::accounts::{spark_address_format, xpriv_from_secret};
+use super::accounts::xpriv_from_secret;
 use super::breez_signer::TurnkeyBreezSigner;
 use super::config::TurnkeyConfig;
 use super::spark_signer::TurnkeySparkSigner;
 use super::transport::TurnkeyClient;
+use super::types::ADDRESS_FORMAT_COMPRESSED;
 
 fn to_signer_err<E: std::fmt::Display>(e: E) -> SignerError {
     SignerError::Generic(e.to_string())
@@ -39,14 +40,12 @@ pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<TurnkeySigne
     let network = config.network;
     let http = create_http_client(Some("breez-sdk-spark-turnkey"));
     let client = Arc::new(TurnkeyClient::new(&config, http).map_err(to_signer_err)?);
-    // Account-0 identity path in Spark format, matching the Spark signer's
-    // identity account: a path can hold only one account, so both use Spark and
-    // read the compressed pubkey from its publicKey field.
+    // Identity key, exported once to seed the encryption signer. This also
+    // materializes the compressed identity account, which ECDSA identity signing
+    // (operator auth) uses as signWith; the Spark signer separately materializes
+    // the Spark-format account at the same path for Schnorr and Spark activities.
     let encryption_key = client
-        .export_secret_key(
-            "m/8797555'/0'/0'".to_string(),
-            spark_address_format(network),
-        )
+        .export_secret_key("m/8797555'/0'/0'".to_string(), ADDRESS_FORMAT_COMPRESSED)
         .await
         .map_err(to_signer_err)?;
     let encryption = BreezSignerImpl::new(xpriv_from_secret(encryption_key, network));

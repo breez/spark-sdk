@@ -34,7 +34,7 @@ use frost_secp256k1_tr::round2::SignatureShare;
 use spark_wallet::{
     AggregateFrostRequest, DefaultSigner, FrostDerivation, FrostJob, FrostShareResult,
     FrostSigningCommitmentsWithNonces, NewLeafKey, OperatorPackage, OperatorRecipient,
-    SecretSource, SignFrostRequest, Signer, TreeNodeId, aggregate_frost,
+    SecretSource, SignFrostRequest, Signer, SparkAddress, TreeNodeId, aggregate_frost,
 };
 
 use crate::Network;
@@ -365,16 +365,24 @@ impl TurnkeySparkSigner {
 
     /// The Spark-format identity address, used as `signWith` for Spark-protocol
     /// activities and BIP-340 Schnorr signing.
+    ///
+    /// The identity path holds two accounts: a compressed one (created by the
+    /// factory, for ECDSA) and the Spark one ensured here. Turnkey allows both
+    /// formats at one path, but get-by-path is then ambiguous, so the address is
+    /// derived locally: it's the canonical Spark address for the identity key,
+    /// identical to what Turnkey assigns the Spark account.
     async fn spark_identity_address(&self) -> Result<String, SignerError> {
         if let Some(addr) = self.spark_address.lock().unwrap().clone() {
             return Ok(addr);
         }
-        let format = spark_address_format(self.network);
         let path = format!("{}/0'", self.base_path());
-        let addr = self
-            .client
-            .create_account(path, format)
+        self.client
+            .create_account(path, spark_address_format(self.network))
             .await
+            .map_err(to_spark_err)?;
+        let identity = self.identity_public_key().await?;
+        let addr = SparkAddress::new(identity, self.network.into(), None)
+            .to_address_string()
             .map_err(to_spark_err)?;
         *self.spark_address.lock().unwrap() = Some(addr.clone());
         Ok(addr)
