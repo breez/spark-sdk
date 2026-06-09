@@ -572,7 +572,11 @@ mod tests {
                 .unwrap()
                 .pop_front()
                 .ok_or_else(|| HttpError::Other("mock: no more scripted responses".to_string()))?;
-            Ok(platform_utils::HttpResponse { status, body })
+            Ok(platform_utils::HttpResponse {
+                status,
+                body,
+                headers: std::collections::HashMap::new(),
+            })
         }
 
         async fn delete(

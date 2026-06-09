@@ -5,6 +5,20 @@ use std::time::Duration;
 
 use super::{HttpClient, HttpError, HttpResponse, REQUEST_TIMEOUT};
 
+/// Collects response headers into a map with lowercased names, skipping any
+/// header whose value is not valid UTF-8.
+fn collect_headers(headers: &reqwest::header::HeaderMap) -> HashMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.as_str().to_string(), v.to_string()))
+        })
+        .collect()
+}
+
 /// HTTP client implementation backed by reqwest.
 pub struct ReqwestHttpClient {
     client: reqwest::Client,
@@ -69,11 +83,16 @@ impl HttpClient for ReqwestHttpClient {
 
         let response = req.send().await?;
         let status = response.status().as_u16();
+        let headers = collect_headers(response.headers());
         let body = response.text().await?;
         tracing::debug!("Received response, status: {status}");
         tracing::trace!("raw response body: {body}");
 
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            body,
+            headers,
+        })
     }
 
     async fn post(
@@ -99,11 +118,16 @@ impl HttpClient for ReqwestHttpClient {
 
         let response = req.send().await?;
         let status = response.status().as_u16();
+        let headers = collect_headers(response.headers());
         let body = response.text().await?;
         tracing::debug!("Received response, status: {status}");
         tracing::trace!("raw response body: {body}");
 
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            body,
+            headers,
+        })
     }
 
     async fn delete(
@@ -129,10 +153,15 @@ impl HttpClient for ReqwestHttpClient {
 
         let response = req.send().await?;
         let status = response.status().as_u16();
+        let headers = collect_headers(response.headers());
         let body = response.text().await?;
         tracing::debug!("Received response, status: {status}");
         tracing::trace!("raw response body: {body}");
 
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            body,
+            headers,
+        })
     }
 }

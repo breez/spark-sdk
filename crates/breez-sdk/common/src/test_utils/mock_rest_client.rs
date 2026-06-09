@@ -51,7 +51,11 @@ impl HttpClient for MockRestClient {
         let status = response.status_code;
         let body = response.text;
 
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            body,
+            headers: HashMap::new(),
+        })
     }
 
     async fn post(
@@ -68,7 +72,11 @@ impl HttpClient for MockRestClient {
         let status = response.status_code;
         let body = response.text;
 
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            body,
+            headers: HashMap::new(),
+        })
     }
 
     async fn delete(
@@ -85,6 +93,10 @@ impl HttpClient for MockRestClient {
         let status = response.status_code;
         let body = response.text;
 
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            body,
+            headers: HashMap::new(),
+        })
     }
 }
