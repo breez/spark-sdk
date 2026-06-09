@@ -55,6 +55,17 @@ struct ActivityResponse {
     activity: Option<Activity>,
 }
 
+/// Query path for fetching a single activity by id, used to poll a pending
+/// activity without resubmitting it.
+const GET_ACTIVITY_PATH: &str = "/public/v1/query/get_activity";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GetActivityRequest<'a> {
+    organization_id: &'a str,
+    activity_id: &'a str,
+}
+
 /// Wraps an activity intent in the `{type, timestampMs, organizationId,
 /// parameters}` envelope Turnkey's submit endpoints expect.
 #[derive(Serialize)]
@@ -181,9 +192,14 @@ impl TurnkeyClient {
         }
     }
 
-    /// Submits an activity and polls until it reaches a terminal status,
-    /// returning the completed [`Activity`]. Pending activities are retried with
-    /// exponential backoff per the configured [`TurnkeyRetryConfig`].
+    /// Submits an activity once, then polls it by id until it reaches a terminal
+    /// status, returning the completed [`Activity`].
+    ///
+    /// Polling fetches the activity by id rather than resubmitting it: Turnkey
+    /// records the activity on the first submit and rejects an identical
+    /// resubmit with a fingerprint 409, so a pending activity must be polled via
+    /// [`Self::get_activity`], not re-sent. Backoff between polls follows the
+    /// configured [`TurnkeyRetryConfig`].
     pub(crate) async fn process_activity<Req>(
         &self,
         path: &str,
@@ -192,10 +208,10 @@ impl TurnkeyClient {
     where
         Req: Serialize + ?Sized,
     {
+        let response: ActivityResponse = self.process_request(path, request).await?;
+        let mut activity = response.activity.ok_or(TurnkeyError::MissingActivity)?;
         let mut attempt: u32 = 0;
         loop {
-            let response: ActivityResponse = self.process_request(path, request).await?;
-            let activity = response.activity.ok_or(TurnkeyError::MissingActivity)?;
             match activity.status {
                 ActivityStatus::Completed => return Ok(activity),
                 ActivityStatus::Pending | ActivityStatus::Created => {
@@ -204,6 +220,7 @@ impl TurnkeyClient {
                     }
                     attempt = attempt.saturating_add(1);
                     sleep(self.retry.delay_for_attempt(attempt)).await;
+                    activity = self.get_activity(&activity.id).await?;
                 }
                 ActivityStatus::Failed => {
                     return Err(TurnkeyError::ActivityFailed(activity.failure.to_string()));
@@ -219,6 +236,17 @@ impl TurnkeyClient {
                 }
             }
         }
+    }
+
+    /// Fetches an activity by id. An idempotent query (safe to retry), used to
+    /// poll a pending activity without resubmitting it.
+    async fn get_activity(&self, activity_id: &str) -> Result<Activity, TurnkeyError> {
+        let request = GetActivityRequest {
+            organization_id: &self.organization_id,
+            activity_id,
+        };
+        let response: ActivityResponse = self.process_request(GET_ACTIVITY_PATH, &request).await?;
+        response.activity.ok_or(TurnkeyError::MissingActivity)
     }
 
     /// Submits `parameters` as `activity_type` to `path`, polls to completion,
