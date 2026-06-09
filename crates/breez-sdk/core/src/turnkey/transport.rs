@@ -73,6 +73,17 @@ fn current_timestamp_ms() -> String {
         .to_string()
 }
 
+/// Whether a failed request is worth retrying: network/transport failures and
+/// transient server responses (408, 429 rate limit, 5xx). Other 4xx (bad
+/// request, auth, 409 already-exists) won't change on retry, so they propagate.
+fn is_retryable(error: &TurnkeyError) -> bool {
+    match error {
+        TurnkeyError::Transport(_) => true,
+        TurnkeyError::Http { status, .. } => matches!(*status, 408 | 429 | 500..=599),
+        _ => false,
+    }
+}
+
 pub(crate) struct TurnkeyClient {
     http: Arc<dyn HttpClient>,
     base_url: String,
@@ -100,6 +111,13 @@ impl TurnkeyClient {
     /// Serializes `request`, stamps it, POSTs to `{base_url}{path}`, and
     /// deserializes the JSON response into `Resp`. Used for both queries and the
     /// activity-submit endpoint.
+    ///
+    /// Transient failures (network errors, 429 rate limits, 5xx) are retried
+    /// with exponential backoff per [`TurnkeyRetryConfig`]. The body is stamped
+    /// once and replayed verbatim: the signature covers only the body, and
+    /// activity submits carry a timestamp that Turnkey fingerprints for dedup,
+    /// so a retried submit never double-executes. Without response-header access
+    /// we can't honor `Retry-After`, so 429s fall back to the backoff schedule.
     pub(crate) async fn process_request<Req, Resp>(
         &self,
         path: &str,
@@ -118,9 +136,37 @@ impl TurnkeyClient {
         headers.insert("Content-Type".to_string(), "application/json".to_string());
         headers.insert(stamp_name, stamp_value);
 
+        let mut attempt: u32 = 0;
+        loop {
+            match self.send_once(&url, &headers, &body).await {
+                Ok(resp) => return Ok(resp),
+                Err(e) if attempt < self.retry.max_retries && is_retryable(&e) => {
+                    attempt = attempt.saturating_add(1);
+                    sleep(self.retry.delay_for_attempt(attempt)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// A single HTTP attempt: POST the already-stamped body and deserialize the
+    /// success response, mapping transport and non-2xx outcomes to errors.
+    async fn send_once<Resp>(
+        &self,
+        url: &str,
+        headers: &HashMap<String, String>,
+        body: &str,
+    ) -> Result<Resp, TurnkeyError>
+    where
+        Resp: DeserializeOwned,
+    {
         let resp = self
             .http
-            .post(url, Some(headers), Some(body))
+            .post(
+                url.to_string(),
+                Some(headers.clone()),
+                Some(body.to_string()),
+            )
             .await
             .map_err(|e| TurnkeyError::Transport(e.to_string()))?;
 
@@ -198,5 +244,36 @@ impl TurnkeyClient {
             TurnkeyError::UnexpectedResponse(format!("missing {result_field} in activity result"))
         })?;
         serde_json::from_value(value.clone()).map_err(|e| TurnkeyError::Deserialize(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_retryable_errors() {
+        assert!(is_retryable(&TurnkeyError::Transport(
+            "connection reset".into()
+        )));
+        for status in [408u16, 429, 500, 502, 503, 504] {
+            assert!(
+                is_retryable(&TurnkeyError::Http {
+                    status,
+                    body: String::new()
+                }),
+                "{status} should be retryable"
+            );
+        }
+        for status in [400u16, 401, 403, 404, 409] {
+            assert!(
+                !is_retryable(&TurnkeyError::Http {
+                    status,
+                    body: String::new()
+                }),
+                "{status} should not be retryable"
+            );
+        }
+        assert!(!is_retryable(&TurnkeyError::Deserialize("bad json".into())));
     }
 }
