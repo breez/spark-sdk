@@ -329,8 +329,8 @@ class CliEventListener {
       eventDesc = 'UnclaimedDeposits'
     } else if (event.tag === SdkEvent_Tags.NewDeposits) {
       eventDesc = 'NewDeposits'
-    } else if (event.tag === SdkEvent_Tags.Optimization) {
-      eventDesc = 'Optimization'
+    } else if (event.tag === SdkEvent_Tags.AutoOptimization) {
+      eventDesc = 'AutoOptimization'
     } else if (event.tag === SdkEvent_Tags.LightningAddressChanged) {
       eventDesc = 'LightningAddressChanged'
     }
