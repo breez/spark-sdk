@@ -1,31 +1,32 @@
-//! In-process [`ExternalSparkSigner`] implementation for tests.
+//! Default in-process implementation of [`ExternalSparkSigner`].
 //!
-//! Wraps the same in-process signer the seed path uses behind the external
-//! (FFI) trait, so SDK instances built with `SdkBuilder::new_with_signer`
-//! exercise the external-signer plumbing end to end: the trait surface, the
-//! FFI type conversions, and the SDK-side `ExternalSparkSignerAdapter`. Key
-//! derivation matches the seed path, so an SDK built either way from the same
-//! mnemonic is the same wallet.
+//! Backs the foreign Spark-signing trait with the same in-process signer the
+//! seed path uses, converting between the FFI mirror types and the native
+//! `spark_wallet` types per call. Created via
+//! [`default_external_signers`](crate::default_external_signers); also serves
+//! as the reference for integrators implementing the trait themselves.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use anyhow::Result;
-use breez_sdk_spark::SignerError;
-use breez_sdk_spark::signer::{
-    EcdsaSignatureBytes, ExternalFrostCommitments, ExternalFrostJob, ExternalFrostShareResult,
-    ExternalFrostSignature, ExternalNewLeafKey, ExternalOperatorPackage,
-    ExternalPrepareClaimRequest, ExternalPrepareLightningReceiveRequest,
+use crate::error::SignerError;
+use crate::signer::external_spark::ExternalSparkSigner;
+use crate::signer::external_spark_types::{
+    ExternalFrostJob, ExternalFrostShareResult, ExternalNewLeafKey, ExternalOperatorPackage,
+    ExternalOperatorRecipient, ExternalPrepareClaimRequest, ExternalPrepareLightningReceiveRequest,
     ExternalPrepareStaticDepositClaimRequest, ExternalPrepareStaticDepositRequest,
     ExternalPrepareTokenTransactionRequest, ExternalPrepareTransferRequest, ExternalPreparedClaim,
     ExternalPreparedLightningReceive, ExternalPreparedStaticDeposit,
     ExternalPreparedStaticDepositClaim, ExternalPreparedTokenTransaction, ExternalPreparedTransfer,
     ExternalSignSparkInvoiceRequest, ExternalSignStaticDepositRefundRequest,
-    ExternalSignedSparkInvoice, ExternalSparkInvoiceKind, ExternalSparkSigner,
-    ExternalStartStaticDepositRefundRequest, ExternalStartedStaticDepositRefund,
-    ExternalTokenTransactionKind, ExternalTreeNodeId, PublicKeyBytes, SchnorrSignatureBytes,
-    SecretBytes,
+    ExternalSignedSparkInvoice, ExternalSparkInvoiceKind, ExternalStartStaticDepositRefundRequest,
+    ExternalStartedStaticDepositRefund, ExternalTokenTransactionKind,
 };
+use crate::signer::external_types::{
+    EcdsaSignatureBytes, ExternalFrostCommitments, ExternalFrostSignature, ExternalTreeNodeId,
+    PublicKeyBytes, SchnorrSignatureBytes, SecretBytes,
+};
+use crate::{Network, SdkError, Seed};
 use spark_wallet::{
     ClaimLeafInput, DefaultSigner, PrepareClaimRequest, PrepareLightningReceiveRequest,
     PrepareStaticDepositClaimRequest, PrepareStaticDepositRequest, PrepareTokenTransactionRequest,
@@ -35,16 +36,29 @@ use spark_wallet::{
     TreeNodeStatus,
 };
 
-/// Test-only foreign Spark signer backed by the in-process `DefaultSigner`.
-pub struct TestExternalSparkSigner {
+/// Default `ExternalSparkSigner` backed by the in-process `DefaultSigner`.
+pub struct DefaultExternalSparkSigner {
     inner: SparkSignerAdapter,
 }
 
-impl TestExternalSparkSigner {
-    pub fn new(seed: &[u8]) -> Result<Self> {
-        let signer = DefaultSigner::new(seed, spark_wallet::Network::Regtest)?;
+impl DefaultExternalSparkSigner {
+    /// Creates the signer from a mnemonic, deriving the same keys as the
+    /// seed-based connect path.
+    pub fn new(
+        mnemonic: String,
+        passphrase: Option<String>,
+        network: Network,
+        account_number: Option<u32>,
+    ) -> Result<Self, SdkError> {
+        let seed_bytes = Seed::Mnemonic {
+            mnemonic,
+            passphrase,
+        }
+        .to_bytes()?;
+        let master = spark_wallet::account_master_key(&seed_bytes, network.into(), account_number)
+            .map_err(|e| SdkError::Generic(e.to_string()))?;
         Ok(Self {
-            inner: SparkSignerAdapter::new(Arc::new(signer)),
+            inner: SparkSignerAdapter::new(Arc::new(DefaultSigner::from_master(master))),
         })
     }
 }
@@ -98,7 +112,7 @@ fn node_with_id(id: TreeNodeId) -> TreeNode {
 }
 
 fn operator_recipients(
-    recipients: &[breez_sdk_spark::signer::ExternalOperatorRecipient],
+    recipients: &[ExternalOperatorRecipient],
 ) -> Result<Vec<spark_wallet::OperatorRecipient>, SignerError> {
     recipients
         .iter()
@@ -116,7 +130,7 @@ fn operator_packages(
 }
 
 #[macros::async_trait]
-impl ExternalSparkSigner for TestExternalSparkSigner {
+impl ExternalSparkSigner for DefaultExternalSparkSigner {
     async fn get_identity_public_key(&self) -> Result<PublicKeyBytes, SignerError> {
         let pk = self.inner.get_identity_public_key().await.map_err(err)?;
         Ok(PublicKeyBytes::from_public_key(&pk))

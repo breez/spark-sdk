@@ -175,7 +175,7 @@ pub async fn connect_with_signer(
 ) -> Result<BreezSdk, SdkError> {
     let builder = super::sdk_builder::SdkBuilder::new_with_signer(
         request.config,
-        request.signer,
+        request.breez_signer,
         request.spark_signer,
     )
     .with_default_storage(request.storage_dir);
@@ -306,10 +306,23 @@ fn default_spark_config(network: Network) -> crate::models::SparkConfig {
     }
 }
 
-/// Creates a default external signer from a mnemonic.
+/// The two default external signers created from one mnemonic by
+/// [`default_external_signers`].
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct DefaultExternalSigners {
+    /// External signer for non-Spark SDK signing (LNURL-auth, sync, message
+    /// signing, ECIES).
+    pub breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
+    /// External high-level Spark signer for the Spark wallet flows.
+    pub spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+}
+
+/// Creates the default external signers from a mnemonic.
 ///
-/// This is a convenience factory method for creating a signer that can be used
-/// with `connect_with_signer` or `SdkBuilder::new_with_signer`.
+/// This is a convenience factory method for creating the two signer halves
+/// that can be passed to `connect_with_signer` or `SdkBuilder::new_with_signer`.
+/// Key derivation matches the seed-based connect path: an SDK built either way
+/// from the same mnemonic is the same wallet.
 ///
 /// # Arguments
 ///
@@ -317,23 +330,29 @@ fn default_spark_config(network: Network) -> crate::models::SparkConfig {
 /// * `passphrase` - Optional passphrase for the mnemonic
 /// * `network` - Network to use (Mainnet or Regtest)
 /// * `key_set_config` - Optional key set configuration. If None, uses default configuration.
-///
-/// # Returns
-///
-/// Result containing the signer as `Arc<dyn ExternalBreezSigner>`
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn default_external_signer(
+pub fn default_external_signers(
     mnemonic: String,
     passphrase: Option<String>,
     network: Network,
     key_set_config: Option<crate::models::KeySetConfig>,
-) -> Result<Arc<dyn crate::signer::ExternalBreezSigner>, SdkError> {
-    use crate::signer::DefaultExternalSigner;
+) -> Result<DefaultExternalSigners, SdkError> {
+    use crate::signer::{DefaultExternalSigner, DefaultExternalSparkSigner};
 
     let config = key_set_config.unwrap_or_default();
-    let signer = DefaultExternalSigner::new(mnemonic, passphrase, network, config.account_number)?;
+    let breez_signer = DefaultExternalSigner::new(
+        mnemonic.clone(),
+        passphrase.clone(),
+        network,
+        config.account_number,
+    )?;
+    let spark_signer =
+        DefaultExternalSparkSigner::new(mnemonic, passphrase, network, config.account_number)?;
 
-    Ok(Arc::new(signer))
+    Ok(DefaultExternalSigners {
+        breez_signer: Arc::new(breez_signer),
+        spark_signer: Arc::new(spark_signer),
+    })
 }
 
 /// Fetches the current status of Spark network services relevant to the SDK.

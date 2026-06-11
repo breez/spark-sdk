@@ -1,28 +1,27 @@
 import {
-  defaultExternalSigner,
+  defaultExternalSigners,
   connectWithSigner,
   defaultConfig
 } from '@breeztech/breez-sdk-spark'
-import type { ExternalSparkSigner, KeySetConfig } from '@breeztech/breez-sdk-spark'
+import type { KeySetConfig } from '@breeztech/breez-sdk-spark'
 
 // ANCHOR: default-external-signer
-const createSigner = () => {
+const createSigners = () => {
   const mnemonic = '<mnemonic words>'
   const keySetConfig: KeySetConfig = {
     accountNumber: 0
   }
 
-  // Create the default signer from the SDK
-  const signer = defaultExternalSigner(mnemonic, null, 'mainnet', keySetConfig)
+  // Create the default signers from the SDK
+  const signers = defaultExternalSigners(mnemonic, null, 'mainnet', keySetConfig)
 
-  return signer
+  return signers
 }
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
 const exampleConnectWithSigner = async (
-  signer: ReturnType<typeof defaultExternalSigner>,
-  sparkSigner: ExternalSparkSigner
+  signers: ReturnType<typeof defaultExternalSigners>
 ) => {
   // Create the config
   const config = defaultConfig('mainnet')
@@ -31,11 +30,11 @@ const exampleConnectWithSigner = async (
   // Connect using the external signers
   const sdk = await connectWithSigner(
     config,
-    signer,
-    sparkSigner,
+    signers.breezSigner,
+    signers.sparkSigner,
     'breez_spark_db' // For WASM, this is the IndexedDB database name
   )
 }
 // ANCHOR_END: connect-with-signer
 
-export { createSigner, exampleConnectWithSigner }
+export { createSigners, exampleConnectWithSigner }

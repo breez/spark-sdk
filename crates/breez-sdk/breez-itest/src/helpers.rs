@@ -803,12 +803,10 @@ pub async fn build_sdk_from_mnemonic(
 
 /// Build SDK instance from a mnemonic via the external-signer path.
 ///
-/// Constructs both foreign signer halves in-process (the default
-/// `ExternalBreezSigner` plus [`crate::TestExternalSparkSigner`]) and hands
-/// them to `SdkBuilder::new_with_signer`, so the external signer surface and
-/// its FFI type conversions are exercised end to end. Key derivation matches
-/// the seed path: an SDK built either way from the same mnemonic is the same
-/// wallet.
+/// Uses the default external signers from `default_external_signers` with
+/// `SdkBuilder::new_with_signer`, so the external signer surface and its FFI
+/// type conversions are exercised end to end. Key derivation matches the seed
+/// path: an SDK built either way from the same mnemonic is the same wallet.
 ///
 /// # Arguments
 /// * `storage_dir` - Directory path for SDK storage
@@ -829,15 +827,8 @@ pub async fn build_sdk_with_external_signer(
     config.sync_interval_secs = 5;
     config.real_time_sync_server_url = None;
 
-    let breez_signer = default_external_signer(mnemonic.clone(), None, Network::Regtest, None)?;
-    let seed_bytes = Seed::Mnemonic {
-        mnemonic,
-        passphrase: None,
-    }
-    .to_bytes()?;
-    let spark_signer = Arc::new(crate::TestExternalSparkSigner::new(&seed_bytes)?);
-
-    let builder = SdkBuilder::new_with_signer(config, breez_signer, spark_signer);
+    let signers = default_external_signers(mnemonic, None, Network::Regtest, None)?;
+    let builder = SdkBuilder::new_with_signer(config, signers.breez_signer, signers.spark_signer);
     let builder = apply_storage(builder, storage_dir).await?;
     let sdk = builder.build().await?;
 

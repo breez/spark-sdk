@@ -57,6 +57,7 @@ pub trait BreezSigner: Send + Sync {
 // External signer support - private adapter
 mod adapter;
 mod default_external;
+mod default_external_spark;
 
 // External spark signer support - private adapter
 mod external_spark_adapter;
@@ -76,6 +77,7 @@ pub use external_types::*;
 // Internal-only exports (used by adapter and builder)
 pub(crate) use adapter::ExternalBreezSignerAdapter;
 pub(crate) use default_external::DefaultExternalSigner;
+pub(crate) use default_external_spark::DefaultExternalSparkSigner;
 pub(crate) use external_spark_adapter::ExternalSparkSignerAdapter;
 pub mod breez;
 pub mod lnurl_auth;

@@ -4,7 +4,7 @@ import breez_sdk_spark.*
 
 class ExternalSigner {
     // ANCHOR: default-external-signer
-    fun createSigner(): breez_sdk_spark.ExternalBreezSigner {
+    fun createSigners(): breez_sdk_spark.DefaultExternalSigners {
         val mnemonic = "<mnemonic words>"
         val network = Network.MAINNET
         val accountNumber = 0U
@@ -13,19 +13,19 @@ class ExternalSigner {
             accountNumber = accountNumber
         )
         
-        val signer = defaultExternalSigner(
+        val signers = defaultExternalSigners(
             mnemonic = mnemonic,
             passphrase = null,
             network = network,
             keySetConfig = keySetConfig
         )
         
-        return signer
+        return signers
     }
     // ANCHOR_END: default-external-signer
     
     // ANCHOR: connect-with-signer
-    suspend fun connectWithSigner(signer: breez_sdk_spark.ExternalBreezSigner, sparkSigner: breez_sdk_spark.ExternalSparkSigner) {
+    suspend fun connectWithSigner(signers: breez_sdk_spark.DefaultExternalSigners) {
         // Create the config
         val config = defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
@@ -34,8 +34,8 @@ class ExternalSigner {
             // Connect using the external signers
             val sdk = connectWithSigner(ConnectWithSignerRequest(
                 config = config,
-                signer = signer,
-                sparkSigner = sparkSigner,
+                breezSigner = signers.breezSigner,
+                sparkSigner = signers.sparkSigner,
                 storageDir = "./.data"
             ))
         } catch (e: Exception) {

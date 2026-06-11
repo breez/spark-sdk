@@ -110,8 +110,9 @@ impl WasmExternalBreezSigner {
 }
 
 /// A default signer implementation that wraps the core SDK's ExternalBreezSigner.
-/// This is returned by `defaultExternalSigner` and can be passed to `connectWithSigner`.
+/// This is returned by `defaultExternalSigners` and can be passed to `connectWithSigner`.
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct DefaultSigner {
     pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalBreezSigner>,
 }
@@ -1017,4 +1018,206 @@ extern "C" {
         this: &JsExternalSparkSigner,
         request: ExternalPrepareStaticDepositClaimRequest,
     ) -> Result<Promise, JsValue>;
+}
+
+/// A default Spark signer implementation that wraps the core SDK's
+/// `ExternalSparkSigner`. Returned by `defaultExternalSigners` and can be
+/// passed to `connectWithSigner` or `SdkBuilder.newWithSigner`.
+#[wasm_bindgen]
+#[derive(Clone)]
+pub struct DefaultSparkSigner {
+    pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSparkSigner>,
+}
+
+// This assumes that we'll always be running in a single thread (true for Wasm environments)
+unsafe impl Send for DefaultSparkSigner {}
+unsafe impl Sync for DefaultSparkSigner {}
+
+impl DefaultSparkSigner {
+    pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSparkSigner>) -> Self {
+        Self { inner }
+    }
+}
+
+fn default_spark_err(e: impl std::fmt::Debug) -> JsValue {
+    JsValue::from_str(&format!("{e:?}"))
+}
+
+#[wasm_bindgen]
+impl DefaultSparkSigner {
+    #[wasm_bindgen(js_name = "getIdentityPublicKey")]
+    pub async fn get_identity_public_key(&self) -> Result<PublicKeyBytes, JsValue> {
+        self.inner
+            .get_identity_public_key()
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "getPublicKeyForLeaf")]
+    pub async fn get_public_key_for_leaf(
+        &self,
+        leaf_id: ExternalTreeNodeId,
+    ) -> Result<PublicKeyBytes, JsValue> {
+        self.inner
+            .get_public_key_for_leaf(leaf_id.into())
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "getStaticDepositPublicKey")]
+    pub async fn get_static_deposit_public_key(
+        &self,
+        index: u32,
+    ) -> Result<PublicKeyBytes, JsValue> {
+        self.inner
+            .get_static_deposit_public_key(index)
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "signAuthenticationChallenge")]
+    pub async fn sign_authentication_challenge(
+        &self,
+        challenge: Vec<u8>,
+    ) -> Result<EcdsaSignatureBytes, JsValue> {
+        self.inner
+            .sign_authentication_challenge(challenge)
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "signMessage")]
+    pub async fn sign_message(&self, message: Vec<u8>) -> Result<EcdsaSignatureBytes, JsValue> {
+        self.inner
+            .sign_message(message)
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "signFrost")]
+    pub async fn sign_frost(&self, jobs: JsValue) -> Result<JsValue, JsValue> {
+        let wasm_jobs: Vec<ExternalFrostJob> =
+            serde_wasm_bindgen::from_value(jobs).map_err(default_spark_err)?;
+        let results = self
+            .inner
+            .sign_frost(wasm_jobs.into_iter().map(Into::into).collect())
+            .await
+            .map_err(default_spark_err)?;
+        let wasm_results: Vec<ExternalFrostShareResult> =
+            results.into_iter().map(Into::into).collect();
+        serde_wasm_bindgen::to_value(&wasm_results).map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "prepareTransfer")]
+    pub async fn prepare_transfer(
+        &self,
+        request: ExternalPrepareTransferRequest,
+    ) -> Result<ExternalPreparedTransfer, JsValue> {
+        self.inner
+            .prepare_transfer(request.into())
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "prepareClaim")]
+    pub async fn prepare_claim(
+        &self,
+        request: ExternalPrepareClaimRequest,
+    ) -> Result<ExternalPreparedClaim, JsValue> {
+        self.inner
+            .prepare_claim(request.into())
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "prepareLightningReceive")]
+    pub async fn prepare_lightning_receive(
+        &self,
+        request: ExternalPrepareLightningReceiveRequest,
+    ) -> Result<ExternalPreparedLightningReceive, JsValue> {
+        self.inner
+            .prepare_lightning_receive(request.into())
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "prepareStaticDeposit")]
+    pub async fn prepare_static_deposit(
+        &self,
+        request: ExternalPrepareStaticDepositRequest,
+    ) -> Result<ExternalPreparedStaticDeposit, JsValue> {
+        self.inner
+            .prepare_static_deposit(request.into())
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "startStaticDepositRefund")]
+    pub async fn start_static_deposit_refund(
+        &self,
+        request: ExternalStartStaticDepositRefundRequest,
+    ) -> Result<ExternalStartedStaticDepositRefund, JsValue> {
+        self.inner
+            .start_static_deposit_refund(request.into())
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "signStaticDepositRefund")]
+    pub async fn sign_static_deposit_refund(
+        &self,
+        request: ExternalSignStaticDepositRefundRequest,
+    ) -> Result<ExternalFrostSignature, JsValue> {
+        self.inner
+            .sign_static_deposit_refund(request.into())
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "signSparkInvoice")]
+    pub async fn sign_spark_invoice(
+        &self,
+        request: ExternalSignSparkInvoiceRequest,
+    ) -> Result<ExternalSignedSparkInvoice, JsValue> {
+        self.inner
+            .sign_spark_invoice(request.into())
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "prepareTokenTransaction")]
+    pub async fn prepare_token_transaction(
+        &self,
+        request: ExternalPrepareTokenTransactionRequest,
+    ) -> Result<ExternalPreparedTokenTransaction, JsValue> {
+        self.inner
+            .prepare_token_transaction(request.into())
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
+
+    #[wasm_bindgen(js_name = "prepareStaticDepositClaim")]
+    pub async fn prepare_static_deposit_claim(
+        &self,
+        request: ExternalPrepareStaticDepositClaimRequest,
+    ) -> Result<ExternalPreparedStaticDepositClaim, JsValue> {
+        self.inner
+            .prepare_static_deposit_claim(request.into())
+            .await
+            .map(Into::into)
+            .map_err(default_spark_err)
+    }
 }

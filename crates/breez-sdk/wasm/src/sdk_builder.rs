@@ -224,7 +224,7 @@ impl SdkBuilder {
     #[wasm_bindgen(js_name = "newWithSigner")]
     pub fn new_with_signer(
         config: Config,
-        signer: crate::signer::JsExternalBreezSigner,
+        breez_signer: crate::signer::JsExternalBreezSigner,
         spark_signer: crate::signer::JsExternalSparkSigner,
     ) -> Self {
         use crate::signer::{WasmExternalBreezSigner, WasmExternalSparkSigner};
@@ -232,7 +232,7 @@ impl SdkBuilder {
 
         let config_core: breez_sdk_spark::Config = config.into();
         let signer_adapter: Arc<dyn breez_sdk_spark::signer::ExternalBreezSigner> =
-            Arc::new(WasmExternalBreezSigner::new(signer));
+            Arc::new(WasmExternalBreezSigner::new(breez_signer));
         let spark_signer_adapter: Arc<dyn breez_sdk_spark::signer::ExternalSparkSigner> =
             Arc::new(WasmExternalSparkSigner::new(spark_signer));
 
