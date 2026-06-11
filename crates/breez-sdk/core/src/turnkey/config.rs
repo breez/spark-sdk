@@ -68,6 +68,11 @@ pub struct TurnkeyConfig {
     /// Network the wallet operates on; selects the Spark address format
     /// (mainnet or regtest) used for Spark-protocol and Schnorr signing.
     pub network: crate::Network,
+    /// Spark account number: the `{account}` in every derivation path
+    /// (`m/8797555'/{account}'/...`). Unset uses the network default, matching
+    /// the seed-based signer, so the same wallet seed derives the same keys on
+    /// either backend.
+    pub account_number: Option<u32>,
     /// Retry policy for Turnkey requests.
     pub retry: TurnkeyRetryConfig,
 }

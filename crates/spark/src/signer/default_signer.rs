@@ -24,7 +24,10 @@ use crate::{
 
 use super::VerifiableSecretShare;
 
-fn account_number(network: Network) -> u32 {
+/// The default Spark account number (`m/8797555'/{account}'`) for `network`,
+/// used when the caller does not pin one. Every signer backend should apply the
+/// same default so a wallet seed derives the same keys regardless of backend.
+pub fn default_account_number(network: Network) -> u32 {
     match network {
         Network::Regtest => 0,
         _ => 1,
@@ -47,7 +50,7 @@ pub fn account_master_key(
     network: Network,
     account_no: Option<u32>,
 ) -> Result<Xpriv, DefaultSignerError> {
-    let account_number = account_no.unwrap_or_else(|| account_number(network));
+    let account_number = account_no.unwrap_or_else(|| default_account_number(network));
     let path: DerivationPath = format!("m/8797555'/{account_number}'").parse()?;
     let master = Xpriv::new_master(network, seed)?;
     Ok(master.derive_priv(&Secp256k1::new(), &path)?)

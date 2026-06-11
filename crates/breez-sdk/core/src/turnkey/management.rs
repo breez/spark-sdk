@@ -26,9 +26,12 @@ const DELETE_WALLETS_RESULT: &str = "deleteWalletsResult";
 
 const LIST_WALLETS_PATH: &str = "/public/v1/query/list_wallets";
 
-/// Identity derivation path. A new wallet is seeded with both the compressed and
-/// Spark identity accounts at this path (see [`TurnkeyWalletManager::create_wallet`]).
-const IDENTITY_PATH: &str = "m/8797555'/0'/0'";
+/// Identity derivation path under the configured account. A new wallet is
+/// seeded with both the compressed and Spark identity accounts at this path
+/// (see [`TurnkeyWalletManager::create_wallet`]).
+fn identity_path(account: u32) -> String {
+    format!("m/8797555'/{account}'/0'")
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +100,7 @@ pub struct TurnkeyWalletInfo {
 pub struct TurnkeyWalletManager {
     client: TurnkeyClient,
     network: crate::Network,
+    account: u32,
 }
 
 impl TurnkeyWalletManager {
@@ -107,6 +111,7 @@ impl TurnkeyWalletManager {
         Ok(Self {
             client: TurnkeyClient::new(config, http)?,
             network: config.network,
+            account: super::factory::account_number(config),
         })
     }
 
@@ -123,7 +128,7 @@ impl TurnkeyWalletManager {
         let identity_account = |address_format: &'static str| WalletAccountParams {
             curve: CURVE_SECP256K1,
             path_format: PATH_FORMAT_BIP32,
-            path: IDENTITY_PATH.to_string(),
+            path: identity_path(self.account),
             address_format,
         };
         let intent = CreateWalletIntent {

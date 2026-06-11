@@ -284,10 +284,10 @@ pub(crate) struct TurnkeySparkSigner {
 }
 
 impl TurnkeySparkSigner {
-    pub(crate) fn new(client: Arc<TurnkeyClient>, network: Network) -> Self {
+    pub(crate) fn new(client: Arc<TurnkeyClient>, network: Network, account: u32) -> Self {
         Self {
             client,
-            account: 0,
+            account,
             network,
             identity_pubkey: Mutex::new(None),
             spark_address: Mutex::new(None),

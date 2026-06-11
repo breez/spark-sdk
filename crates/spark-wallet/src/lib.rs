@@ -36,8 +36,8 @@ pub use spark::{
         SignFrostRequest, SignSparkInvoiceRequest, SignStaticDepositRefundRequest,
         SignedSparkInvoice, Signer, SignerError, SparkInvoiceKind, SparkSigner, SparkSignerAdapter,
         StartStaticDepositRefundRequest, StartedStaticDepositRefund, TokenTransactionKind,
-        TransferLeafInput, VerifiableSecretShare, account_master_key, identity_master_key,
-        identity_public_key,
+        TransferLeafInput, VerifiableSecretShare, account_master_key, default_account_number,
+        identity_master_key, identity_public_key,
     },
     ssp::*,
     token::{

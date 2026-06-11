@@ -874,6 +874,9 @@ pub fn turnkey_config_from_env() -> Option<breez_sdk_spark::turnkey::TurnkeyConf
         api_private_key: var("TURNKEY_API_PRIVATE_KEY")?,
         wallet_id: String::new(),
         network: Network::Regtest,
+        // Defaults to the network default (0 on regtest); settable to verify
+        // non-default accounts against the live API.
+        account_number: var("TURNKEY_ACCOUNT_NUMBER").and_then(|v| v.parse().ok()),
         retry: breez_sdk_spark::turnkey::TurnkeyRetryConfig::default(),
     })
 }

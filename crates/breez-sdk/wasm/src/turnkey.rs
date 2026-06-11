@@ -26,6 +26,7 @@ pub struct TurnkeyConfig {
     pub api_private_key: String,
     pub wallet_id: String,
     pub network: Network,
+    pub account_number: Option<u32>,
     pub retry: TurnkeyRetryConfig,
 }
 
