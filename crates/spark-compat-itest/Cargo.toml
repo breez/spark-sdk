@@ -1,0 +1,31 @@
+[package]
+name = "spark-compat-itest"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+# Standalone workspace: this crate links the previous SDK release (git tag)
+# next to the current workspace crates, so it must not be a member of the
+# root workspace (cargo would refuse the duplicate package graph there, and
+# every workspace build would compile a second copy of the SDK).
+[workspace]
+
+[dependencies]
+anyhow = "1.0.98"
+bitcoin = { version = "0.32.6", features = ["serde"] }
+rand = "0.8"
+tokio = { version = "1.45.1", features = ["full"] }
+tracing = "0.1.41"
+
+# Current build under test.
+spark-wallet = { path = "../spark-wallet" }
+# Latest released SDK. Bump the tag when a new version is released.
+spark-wallet-old = { package = "spark-wallet", git = "https://github.com/breez/spark-sdk.git", tag = "0.15.1" }
+
+# Docker fixtures (bitcoind + service operators) from the regular itest crate.
+spark-itest = { path = "../spark-itest" }
+
+[dev-dependencies]
+test-log = { version = "0.2.18", default-features = false, features = ["trace"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

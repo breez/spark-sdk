@@ -76,6 +76,12 @@ spark-itest-pg:
 spark-itest-mysql:
 	USE_MYSQL_BACKEND=true cargo xtask itest
 
+# Cross-version signer compatibility tests: links the previous SDK release
+# (git tag pinned in spark-compat-itest's Cargo.toml) next to the current
+# build and continues flows across versions. Requires Docker.
+compat-itest:
+	cargo xtask compat-itest
+
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 
