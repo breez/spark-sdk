@@ -87,8 +87,8 @@ pub struct FrostShareResult {
 /// A single leaf being sent in an outbound transfer. The signer derives the old
 /// leaf key from `node.id` and the new (post-transfer) leaf key from
 /// `new_leaf_id`: a freshly generated id supplied per send, so the new key is a
-/// deterministic HD derivation distinct from the old one (a key-addressed signer
-/// such as Turnkey cannot use a random key).
+/// deterministic HD derivation distinct from the old one (a key-addressed
+/// signer backend cannot use a random key).
 #[derive(Debug, Clone)]
 pub struct TransferLeafInput {
     pub node: TreeNode,
@@ -253,8 +253,8 @@ pub struct SignStaticDepositRefundRequest {
 /// Prepare a static-deposit claim. Like the refund, this is the
 /// *exported/local-key* path: the SSP co-signs the claim and therefore needs
 /// the static-deposit secret in the clear, so the signer exports it. The
-/// default adapter reads its local static-deposit key; a Turnkey backend
-/// exports the static-deposit account from the enclave.
+/// default adapter reads its local static-deposit key; a remote signer
+/// backend exports it from its key store.
 #[derive(Debug, Clone)]
 pub struct PrepareStaticDepositClaimRequest {
     /// Static-deposit address index.

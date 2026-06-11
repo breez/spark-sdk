@@ -79,10 +79,6 @@ pub fn identity_public_key(
 pub struct DefaultSigner {
     /// The master node every key is derived from.
     master: Xpriv,
-    /// Path of the key used for ECIES (encrypt-to-self, decrypt). This is the
-    /// key counterparties encrypt secrets to; the Spark layer derives the wallet
-    /// identity at the same path.
-    encryption_path: DerivationPath,
     secp: Secp256k1<All>,
 }
 
@@ -117,7 +113,6 @@ impl DefaultSigner {
     pub fn from_master(master: Xpriv) -> Self {
         DefaultSigner {
             master,
-            encryption_path: identity_path(),
             secp: Secp256k1::new(),
         }
     }
@@ -133,11 +128,10 @@ impl DefaultSigner {
             .private_key)
     }
 
-    /// Public key used for ECIES (the key counterparties encrypt to).
+    /// Public key used for ECIES (the key counterparties encrypt to): the
+    /// identity key, where the Spark layer derives the wallet identity.
     fn encryption_public_key(&self) -> Result<PublicKey, SignerError> {
-        Ok(self
-            .derive_at(&self.encryption_path)?
-            .public_key(&self.secp))
+        Ok(self.derive_at(&identity_path())?.public_key(&self.secp))
     }
 
     fn encrypt_message_ecies(
@@ -150,7 +144,7 @@ impl DefaultSigner {
     }
 
     fn decrypt_message_ecies(&self, ciphertext: &[u8]) -> Result<Vec<u8>, SignerError> {
-        let secret = self.derive_at(&self.encryption_path)?;
+        let secret = self.derive_at(&identity_path())?;
         utils::ecies::decrypt(&secret.secret_bytes(), ciphertext)
             .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))
     }

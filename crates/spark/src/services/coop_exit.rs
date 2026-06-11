@@ -292,7 +292,7 @@ impl CoopExitService {
         }
         let receiver_public_key = self.ssp_client.identity_public_key();
 
-        // 3. Fetch operator signing commitments (3 per leaf: cpfp, direct, direct-from-cpfp).
+        // 1. Fetch operator signing commitments (3 per leaf: cpfp, direct, direct-from-cpfp).
         let signing_commitments = self
             .operator_pool
             .get_coordinator()
@@ -314,7 +314,7 @@ impl CoopExitService {
         let [cpfp_chunk, direct_chunk, direct_from_cpfp_chunk] =
             split_signing_commitments_by_variant(&signing_commitments, leaf_key_tweaks.len())?;
 
-        // 4. Sign coop-exit refunds (connector refunds, decremented timelock)
+        // 2. Sign coop-exit refunds (connector refunds, decremented timelock)
         //    operator-commits-first into UserSignedTxSigningJob's.
         let connector_tx_parsed: Transaction = bitcoin::consensus::deserialize(&connector_tx)
             .map_err(|_| {
@@ -332,7 +332,7 @@ impl CoopExitService {
             )
             .await?;
 
-        // 5. Key-tweak step (to the SSP receiver) + transfer-package signature
+        // 3. Key-tweak step (to the SSP receiver) + transfer-package signature
         //    via the high-level signer; assemble with the connector refunds.
         let prepared = self
             .spark_signer
@@ -376,7 +376,7 @@ impl CoopExitService {
                 COOP_EXIT_EXPIRY_DURATION
             };
 
-        // 6. Single cooperative_exit_v2 call with the full transfer_package.
+        // 4. Single cooperative_exit_v2 call with the full transfer_package.
         let response =
             self.operator_pool
                 .get_coordinator()

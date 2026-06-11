@@ -1,7 +1,7 @@
 //! External (foreign) high-level Spark signer trait.
 //!
-//! Mirrors `spark_wallet::SparkSigner` using FFI-compatible types so a Turnkey
-//! (or other) integrator can implement the Spark flow-signing surface directly.
+//! Mirrors `spark_wallet::SparkSigner` using FFI-compatible types so an
+//! integrator can implement the Spark flow-signing surface directly.
 //! The SDK wraps an implementation in
 //! [`ExternalSparkSignerAdapter`](super::ExternalSparkSignerAdapter) to obtain a
 //! native `spark_wallet::SparkSigner`.
