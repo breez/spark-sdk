@@ -118,12 +118,20 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
             .await
             .map_err(to_signer_err)?;
         // Output layout (per the trait): [31 + recovery_id] || r(32) || s(32).
-        // Turnkey reports the recovery id in `v`; the exact encoding is verified
-        // at integration time (Ethereum-style 27/28 is normalized here).
-        let recovery_id = hex::decode(&result.v)
+        // Turnkey reports the recovery id in `v` (hex), possibly Ethereum-style
+        // (27/28), normalized here. The signature recovers to the wrong key
+        // under a wrong recovery id, so a missing or out-of-range `v` is an
+        // error rather than a guessed value.
+        let v = u32::from_str_radix(result.v.trim(), 16).map_err(|e| {
+            SignerError::Generic(format!("invalid Turnkey recovery id '{}': {e}", result.v))
+        })?;
+        let normalized = if v >= 27 { v.saturating_sub(27) } else { v };
+        let recovery_id = u8::try_from(normalized)
             .ok()
-            .and_then(|b| b.last().copied())
-            .map_or(0, |b| if b >= 27 { b.saturating_sub(27) } else { b });
+            .filter(|id| *id <= 3)
+            .ok_or_else(|| {
+                SignerError::Generic(format!("Turnkey recovery id '{}' out of range", result.v))
+            })?;
         let mut bytes = Vec::with_capacity(65);
         bytes.push(31u8.saturating_add(recovery_id));
         bytes.extend_from_slice(&decode_scalar_32(&result.r).map_err(to_signer_err)?);
