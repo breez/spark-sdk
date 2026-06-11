@@ -109,26 +109,29 @@ impl WasmExternalBreezSigner {
     }
 }
 
-/// A default signer implementation that wraps the core SDK's ExternalBreezSigner.
-/// This is returned by `defaultExternalSigners` and can be passed to `connectWithSigner`.
+/// A Rust-backed [`ExternalBreezSigner`] surfaced to JS as a signer object that
+/// can be passed to `connectWithSigner` or `SdkBuilder.newWithSigner`. Produced
+/// by `defaultExternalSigners` (seed) and `createTurnkeySigner` (Turnkey).
+///
+/// [`ExternalBreezSigner`]: breez_sdk_spark::signer::ExternalBreezSigner
 #[wasm_bindgen]
 #[derive(Clone)]
-pub struct DefaultSigner {
+pub struct ExternalBreezSignerHandle {
     pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalBreezSigner>,
 }
 
 // This assumes that we'll always be running in a single thread (true for Wasm environments)
-unsafe impl Send for DefaultSigner {}
-unsafe impl Sync for DefaultSigner {}
+unsafe impl Send for ExternalBreezSignerHandle {}
+unsafe impl Sync for ExternalBreezSignerHandle {}
 
-impl DefaultSigner {
+impl ExternalBreezSignerHandle {
     pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalBreezSigner>) -> Self {
         Self { inner }
     }
 }
 
 #[wasm_bindgen]
-impl DefaultSigner {
+impl ExternalBreezSignerHandle {
     #[wasm_bindgen(js_name = "derivePublicKey")]
     pub async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, JsValue> {
         self.inner
@@ -210,7 +213,7 @@ impl DefaultSigner {
 use breez_sdk_spark::SignerError;
 
 #[async_trait]
-impl breez_sdk_spark::signer::ExternalBreezSigner for DefaultSigner {
+impl breez_sdk_spark::signer::ExternalBreezSigner for ExternalBreezSignerHandle {
     async fn derive_public_key(
         &self,
         path: String,
@@ -1020,38 +1023,40 @@ extern "C" {
     ) -> Result<Promise, JsValue>;
 }
 
-/// A default Spark signer implementation that wraps the core SDK's
-/// `ExternalSparkSigner`. Returned by `defaultExternalSigners` and can be
-/// passed to `connectWithSigner` or `SdkBuilder.newWithSigner`.
+/// A Rust-backed [`ExternalSparkSigner`] surfaced to JS as a signer object that
+/// can be passed to `connectWithSigner` or `SdkBuilder.newWithSigner`. Produced
+/// by `defaultExternalSigners` (seed) and `createTurnkeySigner` (Turnkey).
+///
+/// [`ExternalSparkSigner`]: breez_sdk_spark::signer::ExternalSparkSigner
 #[wasm_bindgen]
 #[derive(Clone)]
-pub struct DefaultSparkSigner {
+pub struct ExternalSparkSignerHandle {
     pub(crate) inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSparkSigner>,
 }
 
 // This assumes that we'll always be running in a single thread (true for Wasm environments)
-unsafe impl Send for DefaultSparkSigner {}
-unsafe impl Sync for DefaultSparkSigner {}
+unsafe impl Send for ExternalSparkSignerHandle {}
+unsafe impl Sync for ExternalSparkSignerHandle {}
 
-impl DefaultSparkSigner {
+impl ExternalSparkSignerHandle {
     pub fn new(inner: std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSparkSigner>) -> Self {
         Self { inner }
     }
 }
 
-fn default_spark_err(e: impl std::fmt::Debug) -> JsValue {
+fn spark_handle_js_err(e: impl std::fmt::Debug) -> JsValue {
     JsValue::from_str(&format!("{e:?}"))
 }
 
 #[wasm_bindgen]
-impl DefaultSparkSigner {
+impl ExternalSparkSignerHandle {
     #[wasm_bindgen(js_name = "getIdentityPublicKey")]
     pub async fn get_identity_public_key(&self) -> Result<PublicKeyBytes, JsValue> {
         self.inner
             .get_identity_public_key()
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "getPublicKeyForLeaf")]
@@ -1063,7 +1068,7 @@ impl DefaultSparkSigner {
             .get_public_key_for_leaf(leaf_id.into())
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "getStaticDepositPublicKey")]
@@ -1075,7 +1080,7 @@ impl DefaultSparkSigner {
             .get_static_deposit_public_key(index)
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "signAuthenticationChallenge")]
@@ -1087,7 +1092,7 @@ impl DefaultSparkSigner {
             .sign_authentication_challenge(challenge)
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "signMessage")]
@@ -1096,7 +1101,7 @@ impl DefaultSparkSigner {
             .sign_message(message)
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "signFrost")]
@@ -1108,7 +1113,7 @@ impl DefaultSparkSigner {
             .inner
             .sign_frost(jobs.into_iter().map(Into::into).collect())
             .await
-            .map_err(default_spark_err)?;
+            .map_err(spark_handle_js_err)?;
         Ok(results.into_iter().map(Into::into).collect())
     }
 
@@ -1121,7 +1126,7 @@ impl DefaultSparkSigner {
             .prepare_transfer(request.into())
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "prepareClaim")]
@@ -1133,7 +1138,7 @@ impl DefaultSparkSigner {
             .prepare_claim(request.into())
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "prepareLightningReceive")]
@@ -1145,7 +1150,7 @@ impl DefaultSparkSigner {
             .prepare_lightning_receive(request.into())
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "prepareStaticDeposit")]
@@ -1157,7 +1162,7 @@ impl DefaultSparkSigner {
             .prepare_static_deposit(request.into())
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "startStaticDepositRefund")]
@@ -1169,7 +1174,7 @@ impl DefaultSparkSigner {
             .start_static_deposit_refund(request.into())
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "signStaticDepositRefund")]
@@ -1181,7 +1186,7 @@ impl DefaultSparkSigner {
             .sign_static_deposit_refund(request.into())
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "signSparkInvoice")]
@@ -1193,7 +1198,7 @@ impl DefaultSparkSigner {
             .sign_spark_invoice(request.into())
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "prepareTokenTransaction")]
@@ -1205,7 +1210,7 @@ impl DefaultSparkSigner {
             .prepare_token_transaction(request.into())
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 
     #[wasm_bindgen(js_name = "prepareStaticDepositClaim")]
@@ -1217,6 +1222,6 @@ impl DefaultSparkSigner {
             .prepare_static_deposit_claim(request.into())
             .await
             .map(Into::into)
-            .map_err(default_spark_err)
+            .map_err(spark_handle_js_err)
     }
 }

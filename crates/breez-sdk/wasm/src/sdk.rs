@@ -75,8 +75,8 @@ pub async fn get_spark_status() -> WasmResult<SparkStatus> {
 /// `SdkBuilder.newWithSigner`.
 #[wasm_bindgen]
 pub struct ExternalSigners {
-    breez_signer: crate::signer::DefaultSigner,
-    spark_signer: crate::signer::DefaultSparkSigner,
+    breez_signer: crate::signer::ExternalBreezSignerHandle,
+    spark_signer: crate::signer::ExternalSparkSignerHandle,
 }
 
 #[wasm_bindgen]
@@ -84,13 +84,13 @@ impl ExternalSigners {
     /// External signer for non-Spark SDK signing (LNURL-auth, sync, message
     /// signing, ECIES).
     #[wasm_bindgen(getter, js_name = "breezSigner")]
-    pub fn breez_signer(&self) -> crate::signer::DefaultSigner {
+    pub fn breez_signer(&self) -> crate::signer::ExternalBreezSignerHandle {
         self.breez_signer.clone()
     }
 
     /// External high-level Spark signer for the Spark wallet flows.
     #[wasm_bindgen(getter, js_name = "sparkSigner")]
-    pub fn spark_signer(&self) -> crate::signer::DefaultSparkSigner {
+    pub fn spark_signer(&self) -> crate::signer::ExternalSparkSignerHandle {
         self.spark_signer.clone()
     }
 }
@@ -114,8 +114,8 @@ pub fn default_external_signers(
     )?;
 
     Ok(ExternalSigners {
-        breez_signer: crate::signer::DefaultSigner::new(signers.breez_signer),
-        spark_signer: crate::signer::DefaultSparkSigner::new(signers.spark_signer),
+        breez_signer: crate::signer::ExternalBreezSignerHandle::new(signers.breez_signer),
+        spark_signer: crate::signer::ExternalSparkSignerHandle::new(signers.spark_signer),
     })
 }
 

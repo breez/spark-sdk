@@ -31,7 +31,7 @@ crate-type = ["cdylib"]
 [dependencies]
 async-trait.workspace = true
 bitcoin.workspace = true
-breez-sdk-spark = { workspace = true, features = ["passkey"] }
+breez-sdk-spark = { workspace = true, features = ["passkey", "turnkey-p256"] }
 js-sys.workspace = true
 macros.workspace = true
 platform-utils.workspace = true
