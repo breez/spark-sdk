@@ -74,13 +74,13 @@ pub async fn get_spark_status() -> WasmResult<SparkStatus> {
 /// `defaultExternalSigners`; pass both halves to `connectWithSigner` or
 /// `SdkBuilder.newWithSigner`.
 #[wasm_bindgen]
-pub struct DefaultExternalSigners {
+pub struct ExternalSigners {
     breez_signer: crate::signer::DefaultSigner,
     spark_signer: crate::signer::DefaultSparkSigner,
 }
 
 #[wasm_bindgen]
-impl DefaultExternalSigners {
+impl ExternalSigners {
     /// External signer for non-Spark SDK signing (LNURL-auth, sync, message
     /// signing, ECIES).
     #[wasm_bindgen(getter, js_name = "breezSigner")]
@@ -105,7 +105,7 @@ pub fn default_external_signers(
     passphrase: Option<String>,
     network: Network,
     key_set_config: Option<crate::models::KeySetConfig>,
-) -> WasmResult<DefaultExternalSigners> {
+) -> WasmResult<ExternalSigners> {
     let signers = breez_sdk_spark::default_external_signers(
         mnemonic,
         passphrase,
@@ -113,7 +113,7 @@ pub fn default_external_signers(
         key_set_config.map(|k| k.into()),
     )?;
 
-    Ok(DefaultExternalSigners {
+    Ok(ExternalSigners {
         breez_signer: crate::signer::DefaultSigner::new(signers.breez_signer),
         spark_signer: crate::signer::DefaultSparkSigner::new(signers.spark_signer),
     })

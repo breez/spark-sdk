@@ -309,7 +309,7 @@ fn default_spark_config(network: Network) -> crate::models::SparkConfig {
 /// The two default external signers created from one mnemonic by
 /// [`default_external_signers`].
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct DefaultExternalSigners {
+pub struct ExternalSigners {
     /// External signer for non-Spark SDK signing (LNURL-auth, sync, message
     /// signing, ECIES).
     pub breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
@@ -336,7 +336,7 @@ pub fn default_external_signers(
     passphrase: Option<String>,
     network: Network,
     key_set_config: Option<crate::models::KeySetConfig>,
-) -> Result<DefaultExternalSigners, SdkError> {
+) -> Result<ExternalSigners, SdkError> {
     use crate::signer::{DefaultExternalSigner, DefaultExternalSparkSigner};
 
     let config = key_set_config.unwrap_or_default();
@@ -349,7 +349,7 @@ pub fn default_external_signers(
     let spark_signer =
         DefaultExternalSparkSigner::new(mnemonic, passphrase, network, config.account_number)?;
 
-    Ok(DefaultExternalSigners {
+    Ok(ExternalSigners {
         breez_signer: Arc::new(breez_signer),
         spark_signer: Arc::new(spark_signer),
     })

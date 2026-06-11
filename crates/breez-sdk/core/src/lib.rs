@@ -70,7 +70,7 @@ pub use {
     sdk::{connect, connect_with_signer},
 };
 
-pub use sdk::{DefaultExternalSigners, default_external_signers};
+pub use sdk::{ExternalSigners, default_external_signers};
 
 #[cfg(feature = "test-utils")]
 pub use persist::tests as storage_tests;

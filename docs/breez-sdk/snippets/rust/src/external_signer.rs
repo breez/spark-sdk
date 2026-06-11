@@ -1,7 +1,7 @@
 use breez_sdk_spark::*;
 
 // ANCHOR: default-external-signer
-fn create_signers() -> Result<DefaultExternalSigners, SdkError> {
+fn create_signers() -> Result<ExternalSigners, SdkError> {
     let mnemonic = "<mnemonic words>".to_string();
     let network = Network::Mainnet;
 
@@ -19,7 +19,7 @@ fn create_signers() -> Result<DefaultExternalSigners, SdkError> {
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-async fn connect_example(signers: DefaultExternalSigners) -> Result<BreezSdk, SdkError> {
+async fn connect_example(signers: ExternalSigners) -> Result<BreezSdk, SdkError> {
     // Create the config
     let mut config = default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());

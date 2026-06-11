@@ -7,7 +7,7 @@ import (
 )
 
 // ANCHOR: default-external-signer
-func createSigners() (breez_sdk_spark.DefaultExternalSigners, error) {
+func createSigners() (breez_sdk_spark.ExternalSigners, error) {
 	mnemonic := "<mnemonic words>"
 	network := breez_sdk_spark.NetworkMainnet
 	var accountNumber uint32 = 0
@@ -28,7 +28,7 @@ func createSigners() (breez_sdk_spark.DefaultExternalSigners, error) {
 			// Handle SdkError - can inspect specific variants if needed
 			// e.g., switch on sdkErr variant for InsufficientFunds, NetworkError, etc.
 		}
-		return breez_sdk_spark.DefaultExternalSigners{}, err
+		return breez_sdk_spark.ExternalSigners{}, err
 	}
 
 	return signers, nil
@@ -38,7 +38,7 @@ func createSigners() (breez_sdk_spark.DefaultExternalSigners, error) {
 
 // ANCHOR: connect-with-signer
 func connectWithSigner(
-	signers breez_sdk_spark.DefaultExternalSigners,
+	signers breez_sdk_spark.ExternalSigners,
 ) (*breez_sdk_spark.BreezSdk, error) {
 	// Create the config
 	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
