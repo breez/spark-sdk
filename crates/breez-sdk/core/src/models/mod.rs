@@ -1706,7 +1706,9 @@ impl From<RecoverLnurlPayResponse> for LightningAddressInfo {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct KeySetConfig {
-    /// Optional account number for key derivation.
+    /// Account number in the derivation path (`m/8797555'/<account number>'`).
+    /// Each account number derives an independent wallet from the same seed.
+    /// Unset uses the network default: 0 on Regtest, 1 on all other networks.
     pub account_number: Option<u32>,
 }
 

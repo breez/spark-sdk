@@ -17,7 +17,7 @@ func initSdkAdvanced() async throws -> BreezSdk {
     // await builder.withStorage(<your storage implementation>)
     // await builder.withChainService(<your chain service implementation>)
     // await builder.withRestClient(<your rest client implementation>)
-    // await builder.withKeySet(<your key set type>, <use address index>, <account number>)
+    // await builder.withKeySet(config: KeySetConfig(accountNumber: <account number>))
     // await builder.withPaymentObserver(<your payment observer implementation>)
     let sdk = try await builder.build()
     // ANCHOR_END: init-sdk-advanced

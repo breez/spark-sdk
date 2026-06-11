@@ -11,7 +11,7 @@ The shared-pool, shared-chain-service, and shared-connection-manager components 
 - [Shared REST Chain Service](#with-shared-rest-chain-service) to share the chain service HTTP client across SDK instances
 - [LNURL Client](#with-lnurl-client) to make REST requests
 - [Fiat Service](#with-fiat-service) to provide Fiat currencies and exchange rates
-- Change the [Key Set](#with-key-set) to alter the derivation path used
+- Change the [Key Set](#with-key-set) account number to derive an independent wallet from the same seed
 - [Payment Observer](#with-payment-observer) to be notified before payments occur
 - [Shared SDK Context](#with-shared-context) to share connection pools and HTTP/gRPC clients across SDK instances
 
@@ -116,13 +116,7 @@ The LNURL Client is used to make REST requests specifically when interacting wit
     <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.SdkBuilder.html#method.with_key_set">API docs</a>
 </h2>
 
-The SDK uses by default the Default key set with the account number 1 on Mainnet (0 on Regtest). You can change this to alter the derivation path used with the provided seed:
-
-- **Default** - Uses derivation path `m/8797555'/<account number>` (use address index is ignored)
-- **Taproot** - Uses derivation path `m/86'/0'/<account number>'/0/0`<br/>(or `m/86'/0'/0'/0/<account number>` when use address index is enabled)
-- **Native Segwit** - Uses derivation path `m/84'/0'/<account number>'/0/0`<br/>(or `m/84'/0'/0'/0/<account number>` when use address index is enabled)
-- **Wrapped Segwit** - Uses derivation path `m/49'/0'/<account number>'/0/0`<br/>(or `m/49'/0'/0'/0/<account number>` when use address index is enabled)
-- **Legacy** - Uses derivation path `m/44'/0'/<account number>'/0/0`<br/>(or `m/44'/0'/0'/0/<account number>` when use address index is enabled)
+The SDK derives all wallet keys from the seed at the derivation path `m/8797555'/<account number>'`. By default the account number is 0 on Regtest and 1 on all other networks. Set a different account number to derive an independent wallet from the same seed:
 
 {{#tabs sdk_building:with-key-set}}
 

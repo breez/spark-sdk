@@ -27,7 +27,7 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 	// builder.WithStorage(<your storage implementation>)
 	// builder.WithChainService(<your chain service implementation>)
 	// builder.WithRestClient(<your rest client implementation>)
-	// builder.WithKeySet(<your key set type>, <use address index>, <account number>)
+	// builder.WithKeySet(breez_sdk_spark.KeySetConfig{AccountNumber: <account number>})
 	// builder.WithPaymentObserver(<your payment observer implementation>)
 	sdk, err := builder.Build()
 

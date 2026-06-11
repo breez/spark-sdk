@@ -44,7 +44,7 @@ For advanced use cases where you need more control, you can configure the SDK us
 - [Bitcoin Chain Service](customizing.md#with-chain-service) to provide network data
 - [LNURL Client](customizing.md#with-lnurl-client) to make REST requests
 - [Fiat Service](customizing.md#with-fiat-service) to provide Fiat currencies and exchange rates 
-- Change the [Key Set](customizing.md#with-key-set) to alter the derivation path used
+- Change the [Key Set](customizing.md#with-key-set) account number to derive an independent wallet from the same seed
 - [Payment Observer](customizing.md#with-payment-observer) to be notified before payments occur
 
 See [Customizing the SDK](customizing.md) for examples of this advanced initialization pattern.
