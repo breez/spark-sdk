@@ -377,28 +377,7 @@ impl SparkWallet {
             }
         };
 
-        if with_background_processing {
-            let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
-            let background_processor = Arc::new(BackgroundProcessor::new(
-                Arc::clone(&operator_pool),
-                Arc::clone(&event_manager),
-                identity_public_key,
-                reconnect_interval,
-                Arc::clone(&tree_service),
-                Arc::clone(&service_provider),
-                Arc::clone(&transfer_service),
-                Arc::clone(&htlc_service),
-                Arc::clone(&leaf_optimizer),
-                config.leaf_auto_optimize_enabled,
-                Arc::clone(&token_service),
-                config.token_outputs_optimization_options.clone(),
-                config.max_concurrent_claims,
-            ));
-            background_processor
-                .run_background_tasks(cancellation_token.clone())
-                .await;
-        }
-        Ok(Self {
+        let wallet = Self {
             cancel,
             config,
             deposit_service,
@@ -417,7 +396,11 @@ impl SparkWallet {
             htlc_service,
             leaf_optimizer,
             select_leaves_refresh: tokio::sync::OnceCell::new(),
-        })
+        };
+        if with_background_processing {
+            wallet.start_background_processing(cancellation_token).await;
+        }
+        Ok(wallet)
     }
 }
 
@@ -1314,6 +1297,33 @@ impl SparkWallet {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<WalletEvent> {
         self.event_manager.listen()
+    }
+
+    /// Spawns the operator event stream, leaf/token refresh, and auto-optimizer.
+    /// Callers that disable `with_background_processing` on the builder are
+    /// responsible for invoking this once their event subscribers are attached;
+    /// the first `WalletEvent::Synced` is otherwise dropped if no listener is
+    /// connected yet.
+    pub async fn start_background_processing(&self, cancellation_token: watch::Receiver<()>) {
+        let reconnect_interval = Duration::from_secs(self.config.reconnect_interval_seconds);
+        let background_processor = Arc::new(BackgroundProcessor::new(
+            Arc::clone(&self.operator_pool),
+            Arc::clone(&self.event_manager),
+            self.identity_public_key,
+            reconnect_interval,
+            Arc::clone(&self.tree_service),
+            Arc::clone(&self.ssp_client),
+            Arc::clone(&self.transfer_service),
+            Arc::clone(&self.htlc_service),
+            Arc::clone(&self.leaf_optimizer),
+            self.config.leaf_auto_optimize_enabled,
+            Arc::clone(&self.token_service),
+            self.config.token_outputs_optimization_options.clone(),
+            self.config.max_concurrent_claims,
+        ));
+        background_processor
+            .run_background_tasks(cancellation_token)
+            .await;
     }
 
     /// Returns the balances of all tokens in the wallet.

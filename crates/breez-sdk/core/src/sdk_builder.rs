@@ -76,7 +76,6 @@ struct BuildSparkWalletParams {
     spark_signer: Arc<SparkSigner>,
     session_store: Arc<dyn SessionStore>,
     shutdown_receiver: watch::Receiver<()>,
-    background_services_enabled: bool,
     tree_store: Option<Arc<dyn spark_wallet::TreeStore>>,
     token_output_store: Option<Arc<dyn spark_wallet::TokenOutputStore>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
@@ -419,7 +418,6 @@ impl SdkBuilder {
             spark_signer: Arc::clone(&signers.spark),
             session_store,
             shutdown_receiver: shutdown_sender.subscribe(),
-            background_services_enabled,
             tree_store: stores.tree_store.clone(),
             token_output_store: stores.token_output_store.clone(),
             payment_observer: self.payment_observer,
@@ -736,7 +734,7 @@ async fn build_spark_wallet(params: BuildSparkWalletParams) -> Result<Arc<SparkW
     let mut wallet_builder = spark_wallet::WalletBuilder::new(params.config, params.spark_signer)
         .with_cancellation_token(params.shutdown_receiver)
         .with_session_store(params.session_store)
-        .with_background_processing(params.background_services_enabled);
+        .with_background_processing(false);
     if let Some(provider) = &params.context.jwt_header_provider {
         wallet_builder = wallet_builder.with_so_extra_header_provider(
             Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
