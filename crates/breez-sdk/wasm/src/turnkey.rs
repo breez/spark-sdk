@@ -16,6 +16,7 @@ pub struct TurnkeyRetryConfig {
     pub multiplier: f64,
     pub max_delay_ms: u64,
     pub max_retries: u32,
+    pub request_timeout_ms: u64,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::turnkey::TurnkeyConfig)]

@@ -85,9 +85,12 @@ fn current_timestamp_ms() -> String {
         .to_string()
 }
 
-/// Cap on a server-requested `Retry-After`, so a pathological value can't stall
-/// a request indefinitely.
-const MAX_RETRY_AFTER_SECS: u64 = 60;
+/// Whether a retry whose wait takes `delay` still fits the request's time
+/// budget after `elapsed` has already been spent. A wait that would end past
+/// the deadline is pointless: fail with the error at hand instead.
+fn retry_within_budget(elapsed: Duration, delay: Duration, timeout: Duration) -> bool {
+    elapsed.saturating_add(delay) < timeout
+}
 
 /// Whether an HTTP status is worth retrying: transient server responses (408,
 /// 429 rate limit, 5xx). Other statuses (400/401/403/404, and the 409
@@ -97,12 +100,12 @@ fn is_retryable_status(status: u16) -> bool {
     matches!(status, 408 | 429 | 500..=599)
 }
 
-/// The delay a `Retry-After` header requests, in its delta-seconds form, capped
-/// at [`MAX_RETRY_AFTER_SECS`]. The HTTP-date form is not parsed, so the caller
-/// falls back to its backoff schedule for that.
+/// The delay a `Retry-After` header requests, in its delta-seconds form. The
+/// HTTP-date form is not parsed, so the caller falls back to its backoff
+/// schedule for that.
 fn retry_after_delay(resp: &HttpResponse) -> Option<Duration> {
     let secs: u64 = resp.header("retry-after")?.trim().parse().ok()?;
-    Some(Duration::from_secs(secs.min(MAX_RETRY_AFTER_SECS)))
+    Some(Duration::from_secs(secs))
 }
 
 pub(crate) struct TurnkeyClient {
@@ -137,8 +140,11 @@ impl TurnkeyClient {
     /// with exponential backoff per [`TurnkeyRetryConfig`]. The body is stamped
     /// once and replayed verbatim: the signature covers only the body, and
     /// activity submits carry a timestamp that Turnkey fingerprints for dedup,
-    /// so a retried submit never double-executes. Without response-header access
-    /// we can't honor `Retry-After`, so 429s fall back to the backoff schedule.
+    /// so a retried submit never double-executes. A server-provided
+    /// `Retry-After` overrides the backoff delay. Every retry is bounded by the
+    /// configured request timeout: a wait that would end past it (a long
+    /// `Retry-After`, or a late attempt with little budget left) fails the
+    /// request with the error at hand instead of stalling.
     pub(crate) async fn process_request<Req, Resp>(
         &self,
         path: &str,
@@ -157,6 +163,8 @@ impl TurnkeyClient {
         headers.insert("Content-Type".to_string(), "application/json".to_string());
         headers.insert(stamp_name, stamp_value);
 
+        let started = platform_utils::time::Instant::now();
+        let timeout = self.retry.request_timeout();
         let mut attempt: u32 = 0;
         loop {
             let outcome = self
@@ -175,6 +183,12 @@ impl TurnkeyClient {
                     attempt = attempt.saturating_add(1);
                     let delay = retry_after_delay(&resp)
                         .unwrap_or_else(|| self.retry.delay_for_attempt(attempt));
+                    if !retry_within_budget(started.elapsed(), delay, timeout) {
+                        return Err(TurnkeyError::Http {
+                            status: resp.status,
+                            body: resp.body,
+                        });
+                    }
                     sleep(delay).await;
                 }
                 Ok(resp) => {
@@ -183,9 +197,13 @@ impl TurnkeyClient {
                         body: resp.body,
                     });
                 }
-                Err(_) if attempt < self.retry.max_retries => {
+                Err(e) if attempt < self.retry.max_retries => {
                     attempt = attempt.saturating_add(1);
-                    sleep(self.retry.delay_for_attempt(attempt)).await;
+                    let delay = self.retry.delay_for_attempt(attempt);
+                    if !retry_within_budget(started.elapsed(), delay, timeout) {
+                        return Err(TurnkeyError::Transport(e.to_string()));
+                    }
+                    sleep(delay).await;
                 }
                 Err(e) => return Err(TurnkeyError::Transport(e.to_string())),
             }
@@ -302,14 +320,16 @@ mod tests {
     }
 
     #[test]
-    fn parses_retry_after_seconds_capped() {
+    fn parses_retry_after_seconds() {
         assert_eq!(
             retry_after_delay(&response_with_retry_after("5")),
             Some(Duration::from_secs(5))
         );
+        // Parsed as-is; the retry loop refuses waits that fall outside the
+        // request's time budget rather than capping them.
         assert_eq!(
             retry_after_delay(&response_with_retry_after("99999")),
-            Some(Duration::from_secs(MAX_RETRY_AFTER_SECS))
+            Some(Duration::from_secs(99999))
         );
         // The HTTP-date form is not parsed; the caller falls back to backoff.
         assert_eq!(
@@ -322,5 +342,34 @@ mod tests {
             headers: HashMap::new(),
         };
         assert_eq!(retry_after_delay(&no_header), None);
+    }
+
+    #[test]
+    fn refuses_retries_past_the_request_timeout() {
+        let timeout = Duration::from_mins(1);
+        // Fresh request, short wait: retry.
+        assert!(retry_within_budget(
+            Duration::ZERO,
+            Duration::from_secs(5),
+            timeout
+        ));
+        // A Retry-After longer than the whole budget: never retry.
+        assert!(!retry_within_budget(
+            Duration::ZERO,
+            Duration::from_mins(10),
+            timeout
+        ));
+        // Late attempt: a wait that fit earlier no longer does.
+        assert!(!retry_within_budget(
+            Duration::from_secs(58),
+            Duration::from_secs(5),
+            timeout
+        ));
+        // Budget already exhausted.
+        assert!(!retry_within_budget(
+            Duration::from_mins(1),
+            Duration::ZERO,
+            timeout
+        ));
     }
 }

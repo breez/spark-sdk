@@ -14,16 +14,22 @@ pub struct TurnkeyRetryConfig {
     pub max_delay_ms: u64,
     /// Maximum number of retries (0 disables retrying).
     pub max_retries: u32,
+    /// Total time budget for one API request including its retries and waits,
+    /// in milliseconds. No retry begins past this deadline: when the next wait
+    /// (server-requested or backoff) would end after it, the request fails with
+    /// the last error instead of stalling.
+    pub request_timeout_ms: u64,
 }
 
 impl Default for TurnkeyRetryConfig {
     fn default() -> Self {
-        // Matches turnkey_client::RetryConfig::default().
+        // Backoff matches turnkey_client::RetryConfig::default().
         Self {
             initial_delay_ms: 500,
             multiplier: 2.0,
             max_delay_ms: 5_000,
             max_retries: 5,
+            request_timeout_ms: 60_000,
         }
     }
 }
@@ -42,6 +48,10 @@ impl TurnkeyRetryConfig {
         let factor = self.multiplier.powf(f64::from(attempt.saturating_sub(1)));
         let millis = (self.initial_delay_ms as f64 * factor).min(self.max_delay_ms as f64);
         Duration::from_millis(millis as u64)
+    }
+
+    pub(crate) fn request_timeout(&self) -> Duration {
+        Duration::from_millis(self.request_timeout_ms)
     }
 }
 
