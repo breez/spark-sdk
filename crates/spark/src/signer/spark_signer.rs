@@ -1,29 +1,11 @@
 //! High-level Spark signing trait.
 //!
 //! `SparkSigner` is the *flow-level* signing interface the Spark protocol
-//! layer talks to. Its methods mirror the Turnkey Spark activity surface, so a
-//! Turnkey backend is a thin adapter on top, while the in-process default
-//! ([`SparkSignerAdapter`](super::SparkSignerAdapter)) does the same work
-//! locally over the low-level [`Signer`](super::Signer) trait.
+//! layer talks to.
 //!
 //! The trait is **derivation-path-agnostic**: methods speak in Spark concepts
 //! (leaf id, static-deposit index, transfer/claim) and never in BIP-32 paths.
-//! Each implementation resolves those concepts to its own key material —
-//! Turnkey inside its enclave, the default adapter by reproducing the exact
-//! key derivation we use today.
-//!
-//! Several Spark flows are *compositions* of these methods rather than
-//! dedicated trait methods:
-//!  * deposit tree creation = `sign_frost` (the three root-tree txs)
-//!  * cooperative exit = `sign_frost` (connector refunds) + `prepare_transfer`
-//!  * lightning send = `sign_frost` (HTLC refunds) + `prepare_transfer`
-//!  * timelock renewal = `sign_frost`
-//!
-//! Static-deposit refund is the exception: it is *user-commits-first* (the user
-//! nonce commitment must reach the operators before they sign), so it can't be
-//! a single operator-commits-first `sign_frost`. It gets its own method pair —
-//! `start_static_deposit_refund` + `sign_static_deposit_refund` — split across
-//! the operator round-trip.
+//! Each implementation resolves those concepts to its own key material.
 
 use std::collections::BTreeMap;
 
@@ -223,12 +205,6 @@ pub struct PreparedStaticDeposit {
 /// (in `initiate_static_deposit_utxo_refund`) before they produce their shares,
 /// so refund signing is split across the operator round-trip instead of being a
 /// single operator-commits-first [`sign_frost`](SparkSigner::sign_frost) call.
-///
-/// It is also the *exported/local-key* path: the static-deposit key is
-/// recoverable client-side (the default adapter signs with the local
-/// static-deposit key; a Turnkey backend exports the static-deposit account),
-/// so the returned nonce travels with that already-local key material between
-/// the two calls.
 #[derive(Debug, Clone)]
 pub struct StartStaticDepositRefundRequest {
     /// Static-deposit address index.

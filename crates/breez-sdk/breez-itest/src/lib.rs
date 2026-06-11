@@ -1,4 +1,5 @@
 pub mod concurrent_scenarios;
+pub mod external_spark_signer;
 pub mod faucet;
 pub mod fixtures;
 pub mod helpers;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 pub use concurrent_scenarios::{
     RuntimeMode, run_concurrent_multi_instance_operations, run_concurrent_token_operations,
 };
+pub use external_spark_signer::TestExternalSparkSigner;
 pub use faucet::RegtestFaucet;
 pub use fixtures::data_sync::{DataSyncFixture, DataSyncImageConfig};
 pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
