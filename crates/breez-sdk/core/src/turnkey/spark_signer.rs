@@ -23,7 +23,9 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 use bitcoin::bip32::DerivationPath;
 use bitcoin::hashes::{Hash, sha256};
@@ -319,27 +321,24 @@ impl TurnkeySparkSigner {
     /// The wallet identity public key, memoized. Native-typed: internal callers
     /// (identity signing) need the `PublicKey`, not its FFI bytes.
     async fn identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        if let Some(pk) = *self.identity_pubkey.lock().unwrap() {
+        if let Some(pk) = *self.identity_pubkey.lock().await {
             return Ok(pk);
         }
         let pk = self
             .pubkey_at_path(format!("{}/0'", self.base_path()))
             .await?;
-        *self.identity_pubkey.lock().unwrap() = Some(pk);
+        *self.identity_pubkey.lock().await = Some(pk);
         Ok(pk)
     }
 
     /// The signing public key for a tree leaf, memoized.
     async fn leaf_public_key(&self, leaf_id: &TreeNodeId) -> Result<PublicKey, SignerError> {
-        if let Some(pk) = self.leaf_pubkeys.lock().unwrap().get(leaf_id).copied() {
+        if let Some(pk) = self.leaf_pubkeys.lock().await.get(leaf_id).copied() {
             return Ok(pk);
         }
         let path = format!("{}/1'/{}'", self.base_path(), Self::leaf_index(leaf_id));
         let pk = self.pubkey_at_path(path).await?;
-        self.leaf_pubkeys
-            .lock()
-            .unwrap()
-            .insert(leaf_id.clone(), pk);
+        self.leaf_pubkeys.lock().await.insert(leaf_id.clone(), pk);
         Ok(pk)
     }
 
@@ -348,7 +347,7 @@ impl TurnkeySparkSigner {
         if let Some(pk) = self
             .static_deposit_pubkeys
             .lock()
-            .unwrap()
+            .await
             .get(&index)
             .copied()
         {
@@ -356,10 +355,7 @@ impl TurnkeySparkSigner {
         }
         let path = format!("{}/3'/{index}'", self.base_path());
         let pk = self.pubkey_at_path(path).await?;
-        self.static_deposit_pubkeys
-            .lock()
-            .unwrap()
-            .insert(index, pk);
+        self.static_deposit_pubkeys.lock().await.insert(index, pk);
         Ok(pk)
     }
 
@@ -372,7 +368,7 @@ impl TurnkeySparkSigner {
     /// derived locally: it's the canonical Spark address for the identity key,
     /// identical to what Turnkey assigns the Spark account.
     async fn spark_identity_address(&self) -> Result<String, SignerError> {
-        if let Some(addr) = self.spark_address.lock().unwrap().clone() {
+        if let Some(addr) = self.spark_address.lock().await.clone() {
             return Ok(addr);
         }
         let path = format!("{}/0'", self.base_path());
@@ -384,7 +380,7 @@ impl TurnkeySparkSigner {
         let addr = SparkAddress::new(identity, self.network.into(), None)
             .to_address_string()
             .map_err(to_spark_err)?;
-        *self.spark_address.lock().unwrap() = Some(addr.clone());
+        *self.spark_address.lock().await = Some(addr.clone());
         Ok(addr)
     }
 
@@ -459,8 +455,8 @@ impl TurnkeySparkSigner {
 
     /// Seeds the leaf cache from a claim/transfer result. Each leaf's signing key
     /// is `HD(leaf_id)`, matching what `get_public_key_for_leaf` derives.
-    fn cache_new_leaf_keys(&self, leaves: &[SparkLeafPublicKey]) -> Result<(), SignerError> {
-        let mut cache = self.leaf_pubkeys.lock().unwrap();
+    async fn cache_new_leaf_keys(&self, leaves: &[SparkLeafPublicKey]) -> Result<(), SignerError> {
+        let mut cache = self.leaf_pubkeys.lock().await;
         for lpk in leaves {
             let id = TreeNodeId::from_str(&lpk.leaf_id).map_err(to_spark_err)?;
             let pk = PublicKey::from_str(&lpk.public_key).map_err(to_spark_err)?;
@@ -475,7 +471,7 @@ impl TurnkeySparkSigner {
         if let Some(secret) = self
             .static_deposit_secret_keys
             .lock()
-            .unwrap()
+            .await
             .get(&index)
             .copied()
         {
@@ -489,7 +485,7 @@ impl TurnkeySparkSigner {
             .map_err(to_spark_err)?;
         self.static_deposit_secret_keys
             .lock()
-            .unwrap()
+            .await
             .insert(index, secret);
         Ok(secret)
     }
@@ -656,7 +652,8 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
             )
             .await
             .map_err(to_spark_err)?;
-        self.cache_new_leaf_keys(&result.new_leaf_public_keys)?;
+        self.cache_new_leaf_keys(&result.new_leaf_public_keys)
+            .await?;
         let operator_packages = external_operator_packages(&result.operator_packages)?;
         Ok(ExternalPreparedClaim { operator_packages })
     }
