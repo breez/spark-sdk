@@ -1,16 +1,15 @@
 //! Signer-backend-parametrized integration tests.
 //!
 //! Each flow runs against every signer backend, so seed-based and Turnkey-backed
-//! signers share a single test body (see [`SignerBackend`] / `build_backend_sdk`).
-//! Turnkey cases need a provisioned wallet plus `TURNKEY_*` credentials; without
-//! them the case skips. All cases use the regtest faucet, like the rest of
+//! signers share a single test body (see [`SignerBackend`] /
+//! `build_backend_sdk`). The Turnkey cases only exist when this crate is built
+//! with the `turnkey` feature; they then require `TURNKEY_*` credentials and
+//! fail without them. All cases use the regtest faucet, like the rest of
 //! breez-itest, so they run in CI rather than locally.
 //!
 //! Coverage per backend: identity-key derivation (`info_and_address`), on-chain
 //! deposit funding / static-deposit signing (`fund_onchain_deposit`), and an
-//! outbound transfer + inbound claim (`send_receive_spark`). The Turnkey wallet
-//! is a single provisioned wallet, so transfers pair it with a seed-based
-//! counterparty rather than a second Turnkey wallet.
+//! outbound transfer + inbound claim (`send_receive_spark`).
 
 use anyhow::Result;
 use breez_sdk_itest::*;
@@ -19,25 +18,28 @@ use rstest::*;
 use rstest_reuse::{apply, template};
 use tracing::info;
 
-/// Returns `true` (and logs) when a case involves the Turnkey backend but no
-/// credentials are configured, so the case should skip without failing.
-fn skip_without_turnkey(backends: &[SignerBackend]) -> bool {
-    if backends.contains(&SignerBackend::Turnkey) && turnkey_config_from_env().is_none() {
-        info!("Turnkey credentials unavailable; skipping case");
-        return true;
-    }
-    false
-}
+// The templates exist in two variants: with the Turnkey cases when this crate
+// is built with the `turnkey` feature, and seed-only otherwise, so default
+// builds do not even contain the Turnkey cases.
 
 /// Single-party flows: run once per backend.
+#[cfg(feature = "turnkey")]
 #[template]
 #[rstest]
 #[case::seed(SignerBackend::Seed)]
 #[case::turnkey(SignerBackend::Turnkey)]
 fn each_backend(#[case] backend: SignerBackend) {}
 
-/// Two-party transfers. The Turnkey wallet is a single provisioned wallet, so it
-/// can be at most one side (no turnkey-to-turnkey case).
+/// Single-party flows: run once per backend.
+#[cfg(not(feature = "turnkey"))]
+#[template]
+#[rstest]
+#[case::seed(SignerBackend::Seed)]
+fn each_backend(#[case] backend: SignerBackend) {}
+
+/// Two-party transfers, pairing Turnkey with a seed-based counterparty in both
+/// directions.
+#[cfg(feature = "turnkey")]
 #[template]
 #[rstest]
 #[case::seed_to_seed(SignerBackend::Seed, SignerBackend::Seed)]
@@ -45,13 +47,17 @@ fn each_backend(#[case] backend: SignerBackend) {}
 #[case::seed_to_turnkey(SignerBackend::Seed, SignerBackend::Turnkey)]
 fn transfer_backends(#[case] sender: SignerBackend, #[case] receiver: SignerBackend) {}
 
+/// Two-party transfers.
+#[cfg(not(feature = "turnkey"))]
+#[template]
+#[rstest]
+#[case::seed_to_seed(SignerBackend::Seed, SignerBackend::Seed)]
+fn transfer_backends(#[case] sender: SignerBackend, #[case] receiver: SignerBackend) {}
+
 /// Connect, read wallet info, and derive a Spark address (identity-key path).
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
 async fn info_and_address(#[case] backend: SignerBackend) -> Result<()> {
-    if skip_without_turnkey(&[backend]) {
-        return Ok(());
-    }
     let sdk = build_backend_sdk(backend).await?;
     let info = sdk
         .sdk
@@ -76,9 +82,6 @@ async fn info_and_address(#[case] backend: SignerBackend) -> Result<()> {
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
 async fn fund_onchain_deposit(#[case] backend: SignerBackend) -> Result<()> {
-    if skip_without_turnkey(&[backend]) {
-        return Ok(());
-    }
     let mut sdk = build_backend_sdk(backend).await?;
     ensure_funded(&mut sdk, 1000).await?;
     let info = sdk
@@ -100,9 +103,6 @@ async fn send_receive_spark(
     #[case] sender: SignerBackend,
     #[case] receiver: SignerBackend,
 ) -> Result<()> {
-    if skip_without_turnkey(&[sender, receiver]) {
-        return Ok(());
-    }
     let mut tx = build_backend_sdk(sender).await?;
     let mut rx = build_backend_sdk(receiver).await?;
 
@@ -151,9 +151,6 @@ async fn send_receive_spark(
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
 async fn lightning_receive(#[case] backend: SignerBackend) -> Result<()> {
-    if skip_without_turnkey(&[backend]) {
-        return Ok(());
-    }
     let mut receiver = build_backend_sdk(backend).await?;
     let mut sender = build_backend_sdk(SignerBackend::Seed).await?;
     ensure_funded(&mut sender, 5000).await?;
@@ -209,9 +206,6 @@ async fn lightning_receive(#[case] backend: SignerBackend) -> Result<()> {
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
 async fn static_deposit_refund(#[case] backend: SignerBackend) -> Result<()> {
-    if skip_without_turnkey(&[backend]) {
-        return Ok(());
-    }
     let mut config = regtest_test_config();
     config.max_deposit_claim_fee = None;
     let mut sdk = build_backend_sdk_with_config(backend, config).await?;
@@ -262,9 +256,6 @@ async fn static_deposit_refund(#[case] backend: SignerBackend) -> Result<()> {
 #[apply(each_backend)]
 #[test_log::test(tokio::test)]
 async fn token_mint(#[case] backend: SignerBackend) -> Result<()> {
-    if skip_without_turnkey(&[backend]) {
-        return Ok(());
-    }
     let sdk = build_backend_sdk(backend).await?;
     let issuer = sdk.sdk.get_token_issuer();
 

@@ -7,9 +7,15 @@ version.workspace = true
 name = "breez_sdk_itest"
 path = "src/lib.rs"
 
+[features]
+# Compiles the Turnkey signer-backend test cases and harness. The cases need
+# TURNKEY_* credentials at runtime and fail without them; leave the feature off
+# to exclude them entirely.
+turnkey = ["breez-sdk-spark/turnkey", "breez-sdk-spark/turnkey-p256"]
+
 [dependencies]
 # Breez SDK under test (enable test-utils for direct helpers)
-breez-sdk-spark = { workspace = true, features = ["test-utils", "sqlite", "postgres", "mysql", "turnkey", "turnkey-p256"] }
+breez-sdk-spark = { workspace = true, features = ["test-utils", "sqlite", "postgres", "mysql"] }
 breez-sdk-common = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }
 

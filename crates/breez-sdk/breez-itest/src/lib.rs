@@ -4,6 +4,8 @@ pub mod fixtures;
 pub mod helpers;
 mod log;
 pub mod session_store_scenarios;
+#[cfg(feature = "turnkey")]
+pub mod turnkey;
 
 use std::sync::Arc;
 
@@ -39,10 +41,19 @@ pub struct SdkInstance {
     #[allow(dead_code)]
     pub lnurl_fixture: Option<Arc<LnurlFixture>>,
     /// Held only for its `Drop`: deletes a per-test Turnkey wallet on teardown.
-    /// `None` for seed-backed instances and for fixed-wallet Turnkey runs.
+    /// `None` for seed-backed instances.
     #[allow(dead_code)]
-    turnkey_guard: Option<TurnkeyWalletGuard>,
+    turnkey_guard: Option<TurnkeyGuard>,
 }
+
+/// The per-test Turnkey wallet guard held by [`SdkInstance`]. Without the
+/// `turnkey` feature this is an uninhabited placeholder, so the field exists
+/// (and every construction site writes a plain `turnkey_guard: None`) without
+/// feature-gating each one.
+#[cfg(feature = "turnkey")]
+type TurnkeyGuard = turnkey::TurnkeyWalletGuard;
+#[cfg(not(feature = "turnkey"))]
+type TurnkeyGuard = std::convert::Infallible;
 
 /// Persistent SDK fixture that allows reinitialization with the same configuration
 pub struct ReinitializableSdkInstance {
