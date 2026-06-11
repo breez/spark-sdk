@@ -35,6 +35,7 @@ fn to_signer_err<E: std::fmt::Display>(e: E) -> SignerError {
 pub(crate) struct TurnkeyBreezSigner {
     client: Arc<TurnkeyClient>,
     network: Network,
+    account: u32,
     encryption: BreezSignerImpl,
 }
 
@@ -42,12 +43,28 @@ impl TurnkeyBreezSigner {
     pub(crate) fn new(
         client: Arc<TurnkeyClient>,
         network: Network,
+        account: u32,
         encryption: BreezSignerImpl,
     ) -> Self {
         Self {
             client,
             network,
+            account,
             encryption,
+        }
+    }
+
+    /// Roots a caller-supplied path at the wallet identity master
+    /// (`m/8797555'/{account}'/0'`). The `BreezSigner` contract applies caller
+    /// paths relative to the identity master (as the seed backend does), so the
+    /// same path yields the same key on either backend.
+    fn identity_rooted_path(&self, caller_path: &str) -> String {
+        let base = format!("m/8797555'/{}'/0'", self.account);
+        let relative = caller_path.trim_start_matches('m').trim_start_matches('/');
+        if relative.is_empty() {
+            base
+        } else {
+            format!("{base}/{relative}")
         }
     }
 }
@@ -57,7 +74,7 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
     async fn derive_public_key(&self, path: String) -> Result<PublicKeyBytes, SignerError> {
         let hex = self
             .client
-            .compressed_pubkey_at(path)
+            .compressed_pubkey_at(self.identity_rooted_path(&path))
             .await
             .map_err(to_signer_err)?;
         let pk = PublicKey::from_str(&hex).map_err(to_signer_err)?;
@@ -73,7 +90,7 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
         // 32-byte digest, so Turnkey signs it as-is (NO_OP).
         let sign_with = self
             .client
-            .compressed_pubkey_at(path)
+            .compressed_pubkey_at(self.identity_rooted_path(&path))
             .await
             .map_err(to_signer_err)?;
         let result = self
@@ -92,7 +109,7 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
     ) -> Result<RecoverableEcdsaSignatureBytes, SignerError> {
         let sign_with = self
             .client
-            .compressed_pubkey_at(path)
+            .compressed_pubkey_at(self.identity_rooted_path(&path))
             .await
             .map_err(to_signer_err)?;
         let result = self
@@ -139,7 +156,10 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
         // hash is signed as-is (NO_OP).
         let sign_with = self
             .client
-            .create_account(path, spark_address_format(self.network))
+            .create_account(
+                self.identity_rooted_path(&path),
+                spark_address_format(self.network),
+            )
             .await
             .map_err(to_signer_err)?;
         let result = self

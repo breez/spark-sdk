@@ -76,8 +76,12 @@ pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<TurnkeySigne
         .await
         .map_err(to_signer_err)?;
     let encryption = BreezSignerImpl::new(xpriv_from_secret(encryption_key, network));
-    let breez: Arc<dyn ExternalBreezSigner> =
-        Arc::new(TurnkeyBreezSigner::new(client.clone(), network, encryption));
+    let breez: Arc<dyn ExternalBreezSigner> = Arc::new(TurnkeyBreezSigner::new(
+        client.clone(),
+        network,
+        account,
+        encryption,
+    ));
     let spark: Arc<dyn ExternalSparkSigner> =
         Arc::new(TurnkeySparkSigner::new(client, network, account));
     Ok(TurnkeySigners { breez, spark })
