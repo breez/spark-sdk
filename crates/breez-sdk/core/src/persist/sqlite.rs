@@ -328,6 +328,13 @@ impl SqliteStorage {
             "ALTER TABLE unclaimed_deposits ADD COLUMN is_mature INTEGER NOT NULL DEFAULT 1;",
             // Add conversion_status to payment_metadata
             "ALTER TABLE payment_metadata ADD COLUMN conversion_status TEXT;",
+            // Add deposit_vout to distinguish multiple deposits within one funding tx.
+            // Reset the bitcoin sync offset so the next sync re-iterates every transfer
+            // and backfills vout from the SSP user_request payload.
+            "ALTER TABLE payments ADD COLUMN deposit_vout INTEGER;
+             UPDATE settings
+             SET value = json_set(value, '$.offset', 0)
+             WHERE key = 'sync_offset' AND json_valid(value);",
         ]
     }
 }
@@ -379,18 +386,24 @@ impl SqliteStorage {
     #[allow(clippy::too_many_lines)]
     fn insert_payment_in_tx(tx: &Transaction<'_>, payment: Payment) -> Result<(), StorageError> {
         // Compute detail columns for the main payments row
-        let (withdraw_tx_id, deposit_tx_id, spark): (Option<&str>, Option<&str>, Option<bool>) =
-            match &payment.details {
-                Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None),
-                Some(PaymentDetails::Deposit { tx_id }) => (None, Some(tx_id.as_str()), None),
-                Some(PaymentDetails::Spark { .. }) => (None, None, Some(true)),
-                _ => (None, None, None),
-            };
+        let (withdraw_tx_id, deposit_tx_id, deposit_vout, spark): (
+            Option<&str>,
+            Option<&str>,
+            Option<u32>,
+            Option<bool>,
+        ) = match &payment.details {
+            Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None, None),
+            Some(PaymentDetails::Deposit { tx_id, vout }) => {
+                (None, Some(tx_id.as_str()), *vout, None)
+            }
+            Some(PaymentDetails::Spark { .. }) => (None, None, None, Some(true)),
+            _ => (None, None, None, None),
+        };
 
         // Insert or update main payment record (including detail columns atomically)
         tx.execute(
-            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, deposit_vout, spark)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 payment_type=excluded.payment_type,
                 status=excluded.status,
@@ -400,6 +413,7 @@ impl SqliteStorage {
                 method=excluded.method,
                 withdraw_tx_id=excluded.withdraw_tx_id,
                 deposit_tx_id=excluded.deposit_tx_id,
+                deposit_vout=excluded.deposit_vout,
                 spark=excluded.spark",
             params![
                 payment.id,
@@ -411,6 +425,7 @@ impl SqliteStorage {
                 payment.method,
                 withdraw_tx_id,
                 deposit_tx_id,
+                deposit_vout,
                 spark,
             ],
         )?;
@@ -1395,7 +1410,7 @@ impl Storage for SqliteStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-30 are used by `map_payment`, index 31 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-30 and 32 are used by `map_payment`, index 31 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1428,7 +1443,8 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           p.deposit_vout
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
       LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -1496,7 +1512,10 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
-        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
+        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit {
+            tx_id,
+            vout: row.get::<_, Option<u32>>(32)?,
+        }),
         (_, _, _, Some(_), _) => {
             let invoice_details_str: Option<String> = row.get(24)?;
             let invoice_details = invoice_details_str

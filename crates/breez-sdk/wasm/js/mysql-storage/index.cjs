@@ -78,7 +78,8 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           p.deposit_vout
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
@@ -463,11 +464,15 @@ class MysqlStorage {
       payment.details?.type === "withdraw" ? payment.details.txId : null;
     const depositTxId =
       payment.details?.type === "deposit" ? payment.details.txId : null;
+    const depositVout =
+      payment.details?.type === "deposit"
+        ? payment.details.vout ?? null
+        : null;
     const spark = payment.details?.type === "spark" ? 1 : null;
 
     await conn.query(
-      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, deposit_vout, spark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          payment_type=VALUES(payment_type),
          status=VALUES(status),
@@ -477,6 +482,7 @@ class MysqlStorage {
          method=VALUES(method),
          withdraw_tx_id=VALUES(withdraw_tx_id),
          deposit_tx_id=VALUES(deposit_tx_id),
+         deposit_vout=VALUES(deposit_vout),
          spark=VALUES(spark)`,
       [
         this.identity,
@@ -489,6 +495,7 @@ class MysqlStorage {
         payment.method ? JSON.stringify(payment.method) : null,
         withdrawTxId,
         depositTxId,
+        depositVout,
         spark,
       ]
     );
@@ -877,6 +884,8 @@ class MysqlStorage {
       details = {
         type: "deposit",
         txId: row.deposit_tx_id,
+        vout:
+          row.deposit_vout != null ? Number(row.deposit_vout) : null,
       };
     } else if (toBool(row.spark)) {
       details = {

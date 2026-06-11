@@ -486,6 +486,36 @@ class MigrationManager {
           }
         }
       },
+      {
+        // Add deposit_vout to distinguish deposits sharing a funding tx.
+        // The new field is carried inside the JSON `details` blob — no schema
+        // change is needed, but we reset the bitcoin sync offset so the next
+        // sync re-iterates every transfer and backfills vout from the SSP
+        // user_request payload.
+        name: "Reset sync offset to backfill deposit vout",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("settings")) {
+            const settingsStore = transaction.objectStore("settings");
+            const getRequest = settingsStore.get("sync_offset");
+
+            getRequest.onsuccess = () => {
+              const syncCache = getRequest.result;
+              if (syncCache && syncCache.value) {
+                try {
+                  const syncInfo = JSON.parse(syncCache.value);
+                  syncInfo.offset = 0;
+                  settingsStore.put({
+                    key: "sync_offset",
+                    value: JSON.stringify(syncInfo),
+                  });
+                } catch (e) {
+                  // If parsing fails, just continue
+                }
+              }
+            };
+          }
+        },
+      },
     ];
   }
 }
@@ -514,7 +544,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 17; // Current schema version (= migration count)
+    this.dbVersion = 18; // Current schema version (= migration count)
   }
 
   /**

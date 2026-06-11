@@ -469,6 +469,22 @@ impl MysqlStorage {
                 "ALTER TABLE brz_schema_migrations MODIFY COLUMN applied_at \
                  DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
             )],
+            // Migration 18: Add deposit_vout to distinguish multiple deposits within
+            // one funding tx. Reset the bitcoin sync offset so the next sync
+            // re-iterates every transfer and backfills vout from the SSP user_request
+            // payload.
+            vec![
+                Migration::AddColumn {
+                    table: "brz_payments",
+                    column: "deposit_vout",
+                    definition: "INT UNSIGNED NULL",
+                },
+                Migration::sql(
+                    "UPDATE brz_settings
+                     SET value = JSON_SET(value, '$.offset', 0)
+                     WHERE `key` = 'sync_offset' AND value IS NOT NULL",
+                ),
+            ],
         ]
     }
 }
@@ -696,17 +712,23 @@ impl MysqlStorage {
         identity: &[u8],
         payment: Payment,
     ) -> Result<(), StorageError> {
-        let (withdraw_tx_id, deposit_tx_id, spark): (Option<&str>, Option<&str>, Option<bool>) =
-            match &payment.details {
-                Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None),
-                Some(PaymentDetails::Deposit { tx_id }) => (None, Some(tx_id.as_str()), None),
-                Some(PaymentDetails::Spark { .. }) => (None, None, Some(true)),
-                _ => (None, None, None),
-            };
+        let (withdraw_tx_id, deposit_tx_id, deposit_vout, spark): (
+            Option<&str>,
+            Option<&str>,
+            Option<u32>,
+            Option<bool>,
+        ) = match &payment.details {
+            Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None, None),
+            Some(PaymentDetails::Deposit { tx_id, vout }) => {
+                (None, Some(tx_id.as_str()), *vout, None)
+            }
+            Some(PaymentDetails::Spark { .. }) => (None, None, None, Some(true)),
+            _ => (None, None, None, None),
+        };
 
         tx.exec_drop(
-            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, deposit_vout, spark)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     payment_type = VALUES(payment_type),
                     status = VALUES(status),
@@ -716,6 +738,7 @@ impl MysqlStorage {
                     method = VALUES(method),
                     withdraw_tx_id = VALUES(withdraw_tx_id),
                     deposit_tx_id = VALUES(deposit_tx_id),
+                    deposit_vout = VALUES(deposit_vout),
                     spark = VALUES(spark)",
             (
                 identity.to_vec(),
@@ -728,6 +751,7 @@ impl MysqlStorage {
                 Some(payment.method.to_string()),
                 withdraw_tx_id.map(str::to_string),
                 deposit_tx_id.map(str::to_string),
+                deposit_vout,
                 spark,
             ),
         )
@@ -1810,7 +1834,7 @@ impl Storage for MysqlStorage {
     }
 }
 
-/// Base query for payment lookups. Indices 0-30 are used by `map_payment`,
+/// Base query for payment lookups. Indices 0-30 and 32 are used by `map_payment`,
 /// index 31 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
@@ -1844,7 +1868,8 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           p.deposit_vout
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
@@ -1921,7 +1946,10 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
-        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
+        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit {
+            tx_id,
+            vout: get_opt_u32(row, 32),
+        }),
         (_, _, _, Some(_), _) => {
             let invoice_details_str: Option<String> = get_opt_str(row, 24);
             let invoice_details = from_json_string_opt(invoice_details_str)?;
@@ -2044,6 +2072,10 @@ fn get_opt_bool(row: &Row, idx: usize) -> Option<bool> {
 
 fn get_opt_i64(row: &Row, idx: usize) -> Option<i64> {
     row.get::<Option<i64>, _>(idx).flatten()
+}
+
+fn get_opt_u32(row: &Row, idx: usize) -> Option<u32> {
+    row.get::<Option<u32>, _>(idx).flatten()
 }
 
 #[cfg(test)]
@@ -2616,9 +2648,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             version,
-            Some(17),
-            "migration version must advance to 17 (the legacy fixture starts at 16, migration 17 \
-             pins applied_at default to UTC)"
+            Some(18),
+            "migration version must advance to 18 (the legacy fixture starts at 16; migration 17 \
+             pins applied_at default to UTC, migration 18 adds deposit_vout)"
         );
 
         let payment_count: Option<i64> = conn
@@ -2891,7 +2923,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(17), "migration must advance to 17");
+        assert_eq!(version, Some(18), "migration must advance to 18");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

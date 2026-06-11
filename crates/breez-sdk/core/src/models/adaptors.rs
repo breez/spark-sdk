@@ -199,6 +199,7 @@ impl PaymentDetails {
             },
             SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
                 tx_id: request.transaction_id.clone(),
+                vout: u32::try_from(request.output_index).ok(),
             },
         };
 

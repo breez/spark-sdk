@@ -421,6 +421,15 @@ impl PostgresStorage {
             // (Migrations are run as untyped batch_execute, so parameter binding is not
             // available without restructuring the runner.)
             multi_tenant_migration(identity),
+            // Migration 17: Add deposit_vout to distinguish multiple deposits within one
+            // funding tx. Reset the bitcoin sync offset so the next sync re-iterates
+            // every transfer and backfills vout from the SSP user_request payload.
+            vec![
+                "ALTER TABLE brz_payments ADD COLUMN IF NOT EXISTS deposit_vout BIGINT".to_string(),
+                "UPDATE brz_settings
+                 SET value = jsonb_set(value::jsonb, '{offset}', '0')::text
+                 WHERE key = 'sync_offset' AND value IS NOT NULL".to_string(),
+            ],
         ]
     }
 }
@@ -591,18 +600,24 @@ impl PostgresStorage {
         payment: Payment,
     ) -> Result<(), StorageError> {
         // Compute detail columns for the main payments row
-        let (withdraw_tx_id, deposit_tx_id, spark): (Option<&str>, Option<&str>, Option<bool>) =
-            match &payment.details {
-                Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None),
-                Some(PaymentDetails::Deposit { tx_id }) => (None, Some(tx_id.as_str()), None),
-                Some(PaymentDetails::Spark { .. }) => (None, None, Some(true)),
-                _ => (None, None, None),
-            };
+        let (withdraw_tx_id, deposit_tx_id, deposit_vout, spark): (
+            Option<&str>,
+            Option<&str>,
+            Option<i64>,
+            Option<bool>,
+        ) = match &payment.details {
+            Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None, None),
+            Some(PaymentDetails::Deposit { tx_id, vout }) => {
+                (None, Some(tx_id.as_str()), vout.map(i64::from), None)
+            }
+            Some(PaymentDetails::Spark { .. }) => (None, None, None, Some(true)),
+            _ => (None, None, None, None),
+        };
 
         // Insert or update main payment record (including detail columns atomically)
         tx.execute(
-            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, deposit_vout, spark)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                  ON CONFLICT(user_id, id) DO UPDATE SET
                     payment_type = EXCLUDED.payment_type,
                     status = EXCLUDED.status,
@@ -612,6 +627,7 @@ impl PostgresStorage {
                     method = EXCLUDED.method,
                     withdraw_tx_id = EXCLUDED.withdraw_tx_id,
                     deposit_tx_id = EXCLUDED.deposit_tx_id,
+                    deposit_vout = EXCLUDED.deposit_vout,
                     spark = EXCLUDED.spark",
             &[
                 &identity,
@@ -624,6 +640,7 @@ impl PostgresStorage {
                 &Some(payment.method.to_string()),
                 &withdraw_tx_id,
                 &deposit_tx_id,
+                &deposit_vout,
                 &spark,
             ],
         )
@@ -1717,7 +1734,7 @@ impl Storage for PostgresStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-30 are used by `map_payment`, index 31 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-30 and 32 are used by `map_payment`, index 31 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1750,7 +1767,8 @@ const SELECT_PAYMENT_SQL: &str = "
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
            pm.conversion_status,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           p.deposit_vout
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
@@ -1827,7 +1845,13 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
-        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
+        (_, _, Some(tx_id), _, _) => {
+            let vout: Option<i64> = row.get(32);
+            Some(PaymentDetails::Deposit {
+                tx_id,
+                vout: vout.and_then(|v| u32::try_from(v).ok()),
+            })
+        }
         (_, _, _, Some(_), _) => {
             let invoice_details_json: Option<serde_json::Value> = row.get(24);
             let invoice_details = from_json_opt(invoice_details_json)?;
@@ -2769,8 +2793,8 @@ mod tests {
 
         // Build storage with run_migration=true — fires the rename block,
         // then run_migrations sees schema_migrations at version 16 (now
-        // renamed to brz_schema_migrations) and skips all version-tracked
-        // steps. Net effect: schema is renamed, no migrations re-run.
+        // renamed to brz_schema_migrations) and runs only migrations strictly
+        // newer than 16 (currently: migration 17, the deposit_vout column).
         let storage = PostgresStorage::new(
             PostgresStorageConfig::with_defaults(connection_string),
             &TEST_IDENTITY_A,
@@ -2797,7 +2821,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 16, "migration version must be preserved");
+        assert_eq!(version, 17, "migration version must advance to 17");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3085,13 +3109,13 @@ mod tests {
             "found orphan unprefixed indexes after upgrade: {orphans:?}"
         );
 
-        // Migration version advanced from 15 to 16.
+        // Migration version advanced from 15 to 17 (16 = multi-tenant, 17 = deposit_vout).
         let version: i32 = client
             .query_one("SELECT MAX(version) FROM brz_schema_migrations", &[])
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 16, "migration must advance to 16");
+        assert_eq!(version, 17, "migration must advance to 17");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

@@ -64,7 +64,8 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           p.deposit_vout
       FROM payments p
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
       LEFT JOIN payment_details_token t ON p.id = t.payment_id
@@ -362,8 +363,8 @@ class SqliteStorage {
 
   _runPaymentUpsert(payment) {
     const paymentInsert = this.db.prepare(
-      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-       VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark)
+      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, deposit_vout, spark)
+       VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @depositVout, @spark)
        ON CONFLICT(id) DO UPDATE SET
          payment_type=excluded.payment_type,
          status=excluded.status,
@@ -373,6 +374,7 @@ class SqliteStorage {
          method=excluded.method,
          withdraw_tx_id=excluded.withdraw_tx_id,
          deposit_tx_id=excluded.deposit_tx_id,
+         deposit_vout=excluded.deposit_vout,
          spark=excluded.spark`
     );
     const lightningInsert = this.db.prepare(
@@ -419,6 +421,8 @@ class SqliteStorage {
         payment.details?.type === "withdraw" ? payment.details.txId : null,
       depositTxId:
         payment.details?.type === "deposit" ? payment.details.txId : null,
+      depositVout:
+        payment.details?.type === "deposit" ? payment.details.vout ?? null : null,
       spark: payment.details?.type === "spark" ? 1 : null,
     });
 
@@ -807,6 +811,7 @@ class SqliteStorage {
       details = {
         type: "deposit",
         txId: row.deposit_tx_id,
+        vout: row.deposit_vout ?? null,
       };
     } else if (row.spark) {
       details = {

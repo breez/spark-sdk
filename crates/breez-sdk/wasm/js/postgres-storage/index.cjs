@@ -63,7 +63,8 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
-           pm.parent_payment_id
+           pm.parent_payment_id,
+           p.deposit_vout
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
@@ -420,11 +421,15 @@ class PostgresStorage {
       payment.details?.type === "withdraw" ? payment.details.txId : null;
     const depositTxId =
       payment.details?.type === "deposit" ? payment.details.txId : null;
+    const depositVout =
+      payment.details?.type === "deposit"
+        ? payment.details.vout ?? null
+        : null;
     const spark = payment.details?.type === "spark" ? true : null;
 
     await client.query(
-      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, deposit_vout, spark)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT(user_id, id) DO UPDATE SET
          payment_type=EXCLUDED.payment_type,
          status=EXCLUDED.status,
@@ -434,6 +439,7 @@ class PostgresStorage {
          method=EXCLUDED.method,
          withdraw_tx_id=EXCLUDED.withdraw_tx_id,
          deposit_tx_id=EXCLUDED.deposit_tx_id,
+         deposit_vout=EXCLUDED.deposit_vout,
          spark=EXCLUDED.spark`,
       [
         this.identity,
@@ -446,6 +452,7 @@ class PostgresStorage {
         payment.method ? JSON.stringify(payment.method) : null,
         withdrawTxId,
         depositTxId,
+        depositVout,
         spark,
       ]
     );
@@ -835,6 +842,8 @@ class PostgresStorage {
       details = {
         type: "deposit",
         txId: row.deposit_tx_id,
+        vout:
+          row.deposit_vout != null ? Number(row.deposit_vout) : null,
       };
     } else if (row.spark) {
       details = {

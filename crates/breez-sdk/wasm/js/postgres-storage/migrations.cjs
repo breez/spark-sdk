@@ -467,6 +467,17 @@ class PostgresMigrationManager {
              ON brz_sync_incoming(user_id, revision)`,
         ],
       },
+      {
+        // Reset the bitcoin sync offset so the next sync re-iterates every
+        // transfer and backfills vout from the SSP user_request payload.
+        name: "Add deposit_vout to distinguish deposits sharing a funding tx",
+        sql: [
+          `ALTER TABLE brz_payments ADD COLUMN IF NOT EXISTS deposit_vout BIGINT`,
+          `UPDATE brz_settings
+           SET value = jsonb_set(value::jsonb, '{offset}', '0')::text
+           WHERE key = 'sync_offset' AND value IS NOT NULL`,
+        ],
+      },
     ];
   }
 }

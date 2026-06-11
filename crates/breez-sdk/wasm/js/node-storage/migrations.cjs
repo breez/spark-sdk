@@ -433,6 +433,17 @@ class MigrationManager {
           `CREATE INDEX idx_payment_metadata_payment_id ON payment_metadata(payment_id)`,
         ],
       },
+      {
+        // Reset the bitcoin sync offset so the next sync re-iterates every
+        // transfer and backfills vout from the SSP user_request payload.
+        name: "Add deposit_vout to distinguish deposits sharing a funding tx",
+        sql: [
+          `ALTER TABLE payments ADD COLUMN deposit_vout INTEGER`,
+          `UPDATE settings
+           SET value = json_set(value, '$.offset', 0)
+           WHERE key = 'sync_offset' AND json_valid(value)`,
+        ],
+      },
     ];
   }
 }

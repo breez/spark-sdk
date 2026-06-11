@@ -508,6 +508,17 @@ class MysqlMigrationManager {
           `ALTER TABLE brz_schema_migrations MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
         ],
       },
+      {
+        // Reset the bitcoin sync offset so the next sync re-iterates every
+        // transfer and backfills vout from the SSP user_request payload.
+        name: "Add deposit_vout to distinguish deposits sharing a funding tx",
+        sql: [
+          `ALTER TABLE brz_payments ADD COLUMN deposit_vout INT UNSIGNED NULL`,
+          `UPDATE brz_settings
+           SET value = JSON_SET(value, '$.offset', 0)
+           WHERE \`key\` = 'sync_offset' AND value IS NOT NULL`,
+        ],
+      },
     ];
   }
 }
