@@ -132,8 +132,8 @@
 mod conversions;
 mod queue;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Weak};
 
 use platform_utils::tokio;
 use spark_wallet::{SparkWallet, TransferId};
@@ -227,7 +227,10 @@ pub(crate) struct StableBalance {
     pub(super) synced_notify: Arc<Notify>,
 
     /// Event emitter used to publish conversion outcomes to the active runtime.
-    pub(super) event_emitter: Arc<EventEmitter>,
+    /// Weak: this struct is registered as middleware on the emitter, so a
+    /// strong back-reference would form a reference cycle that leaks the
+    /// whole SDK object graph.
+    pub(super) event_emitter: Weak<EventEmitter>,
 
     /// Number of in-flight send-with-conversion payments.
     /// Auto-convert is suppressed while this is > 0.
@@ -271,7 +274,7 @@ impl StableBalance {
             token_converter,
             spark_wallet,
             storage,
-            event_emitter: Arc::clone(&event_emitter),
+            event_emitter: Arc::downgrade(&event_emitter),
             effective_values: Arc::new(ExpiringCell::new()),
             queue,
             synced_notify,
@@ -574,9 +577,11 @@ impl StableBalance {
 
     /// Emits the fact that a conversion changed balances and payments.
     pub(super) async fn emit_conversion_completed(&self) {
-        self.event_emitter
-            .emit_runtime_event(RuntimeEvent::StableBalanceConversionCompleted)
-            .await;
+        if let Some(event_emitter) = self.event_emitter.upgrade() {
+            event_emitter
+                .emit_runtime_event(RuntimeEvent::StableBalanceConversionCompleted)
+                .await;
+        }
     }
 }
 

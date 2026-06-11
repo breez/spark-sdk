@@ -201,9 +201,14 @@ pub struct EventEmitter {
     synced_event_buffer: Mutex<Option<InternalSyncedEvent>>,
 }
 
+/// Handlers registered here are owned by the `EventEmitter` for its whole
+/// lifetime, and the emitter is itself owned by the SDK object graph. To keep
+/// that graph droppable, a handler must not hold a strong reference back to
+/// the `EventEmitter` (directly or via a `BreezSdk` clone); the emitter is
+/// passed into `handle` instead.
 #[macros::async_trait]
 pub(crate) trait RuntimeEventHandler: Send + Sync {
-    async fn handle(&self, event: RuntimeEvent);
+    async fn handle(&self, emitter: &EventEmitter, event: RuntimeEvent);
 }
 
 impl EventEmitter {
@@ -273,6 +278,11 @@ impl EventEmitter {
     /// Add middleware to the event processing chain.
     ///
     /// Middleware can transform or suppress events before they reach external listeners.
+    ///
+    /// Middleware is owned by the emitter for its whole lifetime, so it must
+    /// not hold a strong reference back to the emitter (directly or
+    /// transitively); use `Weak<EventEmitter>` instead, or the SDK object
+    /// graph can never be dropped.
     pub async fn add_middleware(&self, middleware: Box<dyn EventMiddleware>) {
         let mut mw = self.middleware.write().await;
         mw.push(middleware);
@@ -286,7 +296,7 @@ impl EventEmitter {
     pub(crate) async fn emit_runtime_event(&self, event: RuntimeEvent) {
         let handlers = self.runtime_event_handlers.read().await;
         for handler in handlers.iter() {
-            handler.handle(event.clone()).await;
+            handler.handle(self, event.clone()).await;
         }
     }
 

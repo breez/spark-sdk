@@ -833,7 +833,7 @@ fn build_token_converter(
         flashnet_config,
         Arc::clone(storage),
         Arc::clone(spark_wallet),
-        Arc::clone(event_emitter),
+        event_emitter,
         config.network,
         context.http_client.clone(),
     ))
@@ -1027,6 +1027,112 @@ mod tests {
                 .to_string(),
             passphrase: None,
         }
+    }
+
+    fn unique_storage_dir(name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("breez-sdk-test-{}-{}", name, uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Waits for the SDK object graph to be released. Background tasks drop
+    /// their `BreezSdk` clones asynchronously after the shutdown signal, so
+    /// poll briefly instead of asserting immediately after `drop`.
+    async fn assert_sdk_graph_freed(
+        event_emitter: std::sync::Weak<crate::EventEmitter>,
+        spark_wallet: std::sync::Weak<spark_wallet::SparkWallet>,
+    ) {
+        for _ in 0..100 {
+            if event_emitter.upgrade().is_none() && spark_wallet.upgrade().is_none() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        panic!(
+            "SDK object graph leaked after drop (EventEmitter alive: {}, SparkWallet alive: {})",
+            event_emitter.upgrade().is_some(),
+            spark_wallet.upgrade().is_some(),
+        );
+    }
+
+    /// Regression test for <https://github.com/breez/spark-sdk/issues/947>:
+    /// each server-mode build → disconnect → drop lifecycle must release the
+    /// whole per-instance object graph.
+    #[tokio::test]
+    async fn server_mode_sdk_graph_is_freed_on_drop() {
+        use crate::default_server_config;
+
+        let config = default_server_config(Network::Regtest);
+        let sdk = SdkBuilder::new(config, test_seed())
+            .with_default_storage(unique_storage_dir("leak-server"))
+            .build()
+            .await
+            .expect("server-mode build should succeed");
+
+        let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
+        let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);
+
+        sdk.disconnect().await.expect("disconnect should succeed");
+        drop(sdk);
+
+        assert_sdk_graph_freed(event_emitter, spark_wallet).await;
+    }
+
+    /// Network-dependent variant of `server_mode_sdk_graph_is_freed_on_drop`
+    /// that runs a real `sync_wallet` against the regtest operators before
+    /// dropping, proving the sync path retains nothing either.
+    #[tokio::test]
+    #[ignore = "requires network access to the regtest operators"]
+    async fn server_mode_sdk_graph_is_freed_on_drop_after_sync() {
+        use crate::{SyncWalletRequest, default_server_config};
+
+        let config = default_server_config(Network::Regtest);
+        let sdk = SdkBuilder::new(config, test_seed())
+            .with_default_storage(unique_storage_dir("leak-server-sync"))
+            .build()
+            .await
+            .expect("server-mode build should succeed");
+
+        let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
+        let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);
+
+        sdk.sync_wallet(SyncWalletRequest {})
+            .await
+            .expect("sync_wallet should succeed");
+
+        sdk.disconnect().await.expect("disconnect should succeed");
+        drop(sdk);
+
+        assert_sdk_graph_freed(event_emitter, spark_wallet).await;
+    }
+
+    /// Client-mode counterpart of the issue #947 regression test: after
+    /// `disconnect`, dropping the SDK must release the whole object graph.
+    #[tokio::test]
+    async fn client_mode_sdk_graph_is_freed_after_disconnect_and_drop() {
+        let mut config = default_config(Network::Regtest);
+        // Keep the build offline: no real-time sync connection and no
+        // network-backed private-mode setup on startup.
+        config.real_time_sync_server_url = None;
+        config.private_enabled_default = false;
+
+        let sdk = SdkBuilder::new(config, test_seed())
+            .with_default_storage(unique_storage_dir("leak-client"))
+            .build()
+            .await
+            .expect("client-mode build should succeed");
+
+        let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
+        let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);
+
+        tokio::time::timeout(std::time::Duration::from_secs(30), sdk.disconnect())
+            .await
+            .expect("disconnect should not hang")
+            .expect("disconnect should succeed");
+        drop(sdk);
+
+        assert_sdk_graph_freed(event_emitter, spark_wallet).await;
     }
 
     fn test_spark_signer() -> std::sync::Arc<crate::signer::spark::SparkSigner> {
