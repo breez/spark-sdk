@@ -1,5 +1,4 @@
-//! Turnkey wallet lifecycle helpers (create / delete / list), behind the
-//! `turnkey-test-utils` feature.
+//! Turnkey wallet lifecycle helpers (create / delete / list).
 //!
 //! Not part of the integrator-facing API: integrators bring their own wallet
 //! (see [`super::create_turnkey_signer`]). These exist so a test harness can

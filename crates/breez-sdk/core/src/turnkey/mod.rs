@@ -11,7 +11,6 @@ mod breez_signer;
 mod config;
 mod error;
 mod factory;
-#[cfg(feature = "turnkey-test-utils")]
 mod management;
 mod spark_signer;
 mod stamp;
@@ -21,5 +20,4 @@ mod types;
 pub use config::{TurnkeyConfig, TurnkeyRetryConfig};
 pub use error::TurnkeyError;
 pub use factory::{TurnkeySigners, create_turnkey_signer};
-#[cfg(feature = "turnkey-test-utils")]
 pub use management::{TurnkeyWalletInfo, TurnkeyWalletManager};
