@@ -1,10 +1,14 @@
-//! Turnkey wallet lifecycle helpers (create / delete / list).
+//! Turnkey wallet lifecycle helpers (create / delete / list), behind the
+//! `test-utils` feature.
 //!
 //! Not part of the integrator-facing API: integrators bring their own wallet
 //! (see [`super::create_turnkey_signer`]). These exist so a test harness can
 //! provision a throwaway wallet per test and reap abandoned ones, keeping each
-//! test isolated. The configured API key authenticates at the organization
-//! level, so one key can create and delete many wallets in that org.
+//! test isolated. `test-utils` is the crate's cross-crate equivalent of
+//! `cfg(test)`: the integration-test crate consumes this from outside, where a
+//! literal `cfg(test)` would not be visible. The configured API key
+//! authenticates at the organization level, so one key can create and delete
+//! many wallets in that org.
 
 use serde::{Deserialize, Serialize};
 
