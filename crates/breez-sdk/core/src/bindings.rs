@@ -28,6 +28,28 @@ impl SdkBuilder {
         }
     }
 
+    /// Creates a new `SdkBuilder` with the provided configuration and external
+    /// signers (e.g. from `create_turnkey_signer`), so signer-based SDKs can be
+    /// composed with any storage backend or shared context, unlike
+    /// `connect_with_signer` which is fixed to the default storage.
+    /// Arguments:
+    /// - `config`: The configuration to be used.
+    /// - `breez_signer`: External signer for non-Spark SDK signing (LNURL-auth,
+    ///   sync, message signing, ECIES).
+    /// - `spark_signer`: External high-level Spark signer for the Spark wallet.
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    pub fn new_with_signer(
+        config: Config,
+        breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
+        spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+    ) -> Self {
+        let inner =
+            crate::sdk_builder::SdkBuilder::new_with_signer(config, breez_signer, spark_signer);
+        SdkBuilder {
+            inner: Mutex::new(inner),
+        }
+    }
+
     /// Sets the root storage directory to initialize the default storage with.
     /// This initializes both storage and real-time sync storage with the
     /// default implementations.

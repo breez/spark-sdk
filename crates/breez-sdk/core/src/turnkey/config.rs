@@ -59,9 +59,10 @@ impl TurnkeyRetryConfig {
 ///
 /// Assumes the Spark wallet already exists in Turnkey (identity, static-deposit,
 /// and encryption accounts provisioned); provisioning is out of scope here. The
-/// API keypair authenticates every request and must be a secp256k1 key (Turnkey
-/// supports both curves; we use secp256k1 so the SDK needs no extra crypto
-/// dependency).
+/// API keypair authenticates every request: secp256k1 keys are always supported
+/// (reusing the SDK's existing crypto dependency), and P-256 keys (Turnkey's
+/// console default) when built with the `turnkey-p256` feature. The curve is
+/// detected from the key material.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TurnkeyConfig {
@@ -69,9 +70,9 @@ pub struct TurnkeyConfig {
     pub base_url: String,
     /// Organization (or sub-organization) id that owns the wallet.
     pub organization_id: String,
-    /// secp256k1 API public key (compressed, hex), registered with the organization.
+    /// API public key (compressed, hex), registered with the organization.
     pub api_public_key: String,
-    /// secp256k1 API private key (hex) used to stamp requests.
+    /// API private key (hex) used to stamp requests.
     pub api_private_key: String,
     /// Id of the Spark wallet to sign with.
     pub wallet_id: String,
