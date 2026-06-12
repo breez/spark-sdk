@@ -329,25 +329,25 @@ pub struct ExternalSigners {
 /// * `mnemonic` - BIP39 mnemonic phrase (12 or 24 words)
 /// * `passphrase` - Optional passphrase for the mnemonic
 /// * `network` - Network to use (Mainnet or Regtest)
-/// * `key_set_config` - Optional key set configuration. If None, uses default configuration.
+/// * `account_number` - Account number in the derivation path. Unset uses the
+///   network default: 0 on Regtest, 1 on all other networks.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn default_external_signers(
     mnemonic: String,
     passphrase: Option<String>,
     network: Network,
-    key_set_config: Option<crate::models::KeySetConfig>,
+    account_number: Option<u32>,
 ) -> Result<ExternalSigners, SdkError> {
     use crate::signer::{DefaultExternalSigner, DefaultExternalSparkSigner};
 
-    let config = key_set_config.unwrap_or_default();
     let breez_signer = DefaultExternalSigner::new(
         mnemonic.clone(),
         passphrase.clone(),
         network,
-        config.account_number,
+        account_number,
     )?;
     let spark_signer =
-        DefaultExternalSparkSigner::new(mnemonic, passphrase, network, config.account_number)?;
+        DefaultExternalSparkSigner::new(mnemonic, passphrase, network, account_number)?;
 
     Ok(ExternalSigners {
         breez_signer: Arc::new(breez_signer),

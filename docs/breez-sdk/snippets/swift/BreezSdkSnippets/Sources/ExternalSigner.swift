@@ -11,9 +11,7 @@ class ExternalSignerSnippets {
             mnemonic: mnemonic,
             passphrase: nil,
             network: network,
-            keySetConfig: KeySetConfig(
-                accountNumber: 0
-            )
+            accountNumber: 0
         )
         
         return signers

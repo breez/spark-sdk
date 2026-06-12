@@ -105,11 +105,6 @@ pub enum AutoOptimizationEvent {
     Skipped,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::KeySetConfig)]
-pub struct KeySetConfig {
-    pub account_number: Option<u32>,
-}
-
 #[derive(Clone)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Seed)]
 pub enum Seed {

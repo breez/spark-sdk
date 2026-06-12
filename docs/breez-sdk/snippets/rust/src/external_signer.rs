@@ -9,9 +9,7 @@ fn create_signers() -> Result<ExternalSigners, SdkError> {
         mnemonic,
         None, // passphrase
         network,
-        Some(KeySetConfig {
-            account_number: Some(0),
-        }),
+        Some(0), // account number
     )?;
 
     Ok(signers)

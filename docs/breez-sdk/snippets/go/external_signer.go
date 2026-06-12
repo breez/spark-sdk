@@ -12,15 +12,11 @@ func createSigners() (breez_sdk_spark.ExternalSigners, error) {
 	network := breez_sdk_spark.NetworkMainnet
 	var accountNumber uint32 = 0
 
-	keySetConfig := breez_sdk_spark.KeySetConfig{
-		AccountNumber: &accountNumber,
-	}
-
 	signers, err := breez_sdk_spark.DefaultExternalSigners(
 		mnemonic,
 		nil, // passphrase
 		network,
-		&keySetConfig,
+		&accountNumber,
 	)
 	if err != nil {
 		var sdkErr *breez_sdk_spark.SdkError

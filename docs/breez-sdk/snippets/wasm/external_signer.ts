@@ -3,17 +3,14 @@ import {
   connectWithSigner,
   defaultConfig
 } from '@breeztech/breez-sdk-spark'
-import type { KeySetConfig } from '@breeztech/breez-sdk-spark'
 
 // ANCHOR: default-external-signer
 const createSigners = () => {
   const mnemonic = '<mnemonic words>'
-  const keySetConfig: KeySetConfig = {
-    accountNumber: 0
-  }
+  const accountNumber = 0
 
   // Create the default signers from the SDK
-  const signers = defaultExternalSigners(mnemonic, null, 'mainnet', keySetConfig)
+  const signers = defaultExternalSigners(mnemonic, null, 'mainnet', accountNumber)
 
   return signers
 }

@@ -294,9 +294,7 @@ async function main() {
   }
 
   if (opts.accountNumber != null) {
-    sdkBuilder = sdkBuilder.withKeySet({
-      accountNumber: opts.accountNumber
-    })
+    sdkBuilder = sdkBuilder.withAccountNumber(opts.accountNumber)
   }
 
   const sdk = await sdkBuilder.build()

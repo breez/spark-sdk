@@ -104,13 +104,13 @@ pub fn default_external_signers(
     mnemonic: String,
     passphrase: Option<String>,
     network: Network,
-    key_set_config: Option<crate::models::KeySetConfig>,
+    account_number: Option<u32>,
 ) -> WasmResult<ExternalSigners> {
     let signers = breez_sdk_spark::default_external_signers(
         mnemonic,
         passphrase,
         network.into(),
-        key_set_config.map(|k| k.into()),
+        account_number,
     )?;
 
     Ok(ExternalSigners {

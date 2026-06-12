@@ -5,7 +5,6 @@ from breez_sdk_spark import (
     BreezSdk,
     ConnectWithSignerRequest,
     ExternalSigners,
-    KeySetConfig,
     Network,
 )
 
@@ -15,15 +14,11 @@ def create_signers() -> ExternalSigners:
     network = Network.MAINNET
     account_number = 0
 
-    key_set_config = KeySetConfig(
-        account_number=account_number,
-    )
-
     signers = default_external_signers(
         mnemonic=mnemonic,
         passphrase=None,
         network=network,
-        key_set_config=key_set_config,
+        account_number=account_number,
     )
 
     return signers

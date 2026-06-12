@@ -11,15 +11,11 @@ namespace BreezSdkSnippets
             var network = Network.Mainnet;
             uint accountNumber = 0;
 
-            var keySetConfig = new KeySetConfig(
-                accountNumber: accountNumber
-            );
-
             var signers = BreezSdkSparkMethods.DefaultExternalSigners(
                 mnemonic: mnemonic,
                 passphrase: null,
                 network: network,
-                keySetConfig: keySetConfig
+                accountNumber: accountNumber
             );
 
             return signers;

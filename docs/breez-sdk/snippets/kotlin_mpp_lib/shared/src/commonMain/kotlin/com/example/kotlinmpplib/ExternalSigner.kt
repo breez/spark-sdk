@@ -9,15 +9,11 @@ class ExternalSigner {
         val network = Network.MAINNET
         val accountNumber = 0U
 
-        val keySetConfig = KeySetConfig(
-            accountNumber = accountNumber
-        )
-        
         val signers = defaultExternalSigners(
             mnemonic = mnemonic,
             passphrase = null,
             network = network,
-            keySetConfig = keySetConfig
+            accountNumber = accountNumber
         )
         
         return signers
