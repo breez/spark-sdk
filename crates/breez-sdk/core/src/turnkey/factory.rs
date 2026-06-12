@@ -56,7 +56,7 @@ fn encryption_key_path(account: u32) -> String {
 /// dedicated, non-Spark key exported once here. Exporting a non-Spark key keeps
 /// every Spark key (the identity key included) in the enclave; ECIES/HMAC only
 /// need a stable key, not a Spark one.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<TurnkeySigners, SignerError> {
     let network = config.network;
     let account = account_number(&config);
