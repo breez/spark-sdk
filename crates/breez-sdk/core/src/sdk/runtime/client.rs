@@ -43,9 +43,7 @@ impl RuntimeProfile for ClientRuntime {
         // Subscribers are now attached: start the wallet's BackgroundProcessor so
         // its first `WalletEvent::Synced` (emitted after the operator stream
         // connects) lands in the runtime loop and drives the initial Full sync.
-        sdk.spark_wallet
-            .start_background_processing(sdk.shutdown_sender.subscribe())
-            .await;
+        sdk.spark_wallet.start_background_processing().await;
 
         sdk.try_recover_lightning_address();
         spawn_conversion_refunder(

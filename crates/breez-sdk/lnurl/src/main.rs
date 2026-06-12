@@ -243,11 +243,11 @@ where
             None,
             None,
             None,
-            true,
             None,
         )
         .await?,
     );
+    wallet.start_background_processing().await;
 
     let config_domains: Vec<String> = args
         .domains

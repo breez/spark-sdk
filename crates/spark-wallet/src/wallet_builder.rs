@@ -26,7 +26,6 @@ pub struct WalletBuilder {
     transfer_observer: Option<Arc<dyn TransferObserver>>,
     ssp_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     so_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
-    with_background_processing: bool,
 }
 
 impl WalletBuilder {
@@ -43,7 +42,6 @@ impl WalletBuilder {
             transfer_observer: None,
             ssp_extra_header_provider: None,
             so_extra_header_provider: None,
-            with_background_processing: true,
         }
     }
 
@@ -117,12 +115,6 @@ impl WalletBuilder {
         self
     }
 
-    #[must_use]
-    pub fn with_background_processing(mut self, with_background_processing: bool) -> Self {
-        self.with_background_processing = with_background_processing;
-        self
-    }
-
     pub async fn build(self) -> Result<SparkWallet, SparkWalletError> {
         SparkWallet::new(
             self.config,
@@ -139,7 +131,6 @@ impl WalletBuilder {
             self.transfer_observer,
             self.ssp_extra_header_provider,
             self.so_extra_header_provider,
-            self.with_background_processing,
             self.cancellation_token,
         )
         .await
