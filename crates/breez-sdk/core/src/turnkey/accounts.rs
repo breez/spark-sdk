@@ -174,7 +174,10 @@ pub(crate) fn ecdsa_from_rs(r_hex: &str, s_hex: &str) -> Result<ecdsa::Signature
     let mut compact = [0u8; 64];
     compact[..32].copy_from_slice(&decode_scalar_32(r_hex)?);
     compact[32..].copy_from_slice(&decode_scalar_32(s_hex)?);
-    ecdsa::Signature::from_compact(&compact).map_err(|e| TurnkeyError::Deserialize(e.to_string()))
+    let mut signature = ecdsa::Signature::from_compact(&compact)
+        .map_err(|e| TurnkeyError::Deserialize(e.to_string()))?;
+    signature.normalize_s();
+    Ok(signature)
 }
 
 pub(crate) fn schnorr_from_rs(
