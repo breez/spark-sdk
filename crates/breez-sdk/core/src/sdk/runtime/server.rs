@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use tokio::sync::watch;
 use tracing::error;
 
-use crate::{GetInfoRequest, GetInfoResponse, error::SdkError};
+use crate::{EventEmitter, GetInfoRequest, GetInfoResponse, Storage, error::SdkError};
 
 use super::{RuntimeEvent, RuntimeProfile};
 use crate::sdk::{BreezSdk, SyncType};
@@ -21,7 +23,9 @@ impl RuntimeProfile for ServerRuntime {
         }
 
         sdk.event_emitter
-            .add_runtime_event_handler(Box::new(ServerRuntimeEventHandler { sdk: sdk.clone() }))
+            .add_runtime_event_handler(Box::new(ServerRuntimeEventHandler {
+                storage: sdk.storage.clone(),
+            }))
             .await;
     }
 
@@ -71,24 +75,19 @@ impl RuntimeProfile for ServerRuntime {
 }
 
 struct ServerRuntimeEventHandler {
-    sdk: BreezSdk,
+    storage: Arc<dyn Storage>,
 }
 
 #[macros::async_trait]
 impl crate::events::RuntimeEventHandler for ServerRuntimeEventHandler {
-    async fn handle(&self, event: RuntimeEvent) {
+    async fn handle(&self, emitter: &EventEmitter, event: RuntimeEvent) {
         match event {
             RuntimeEvent::DepositClaimed {
                 payment,
                 should_emit_event,
             } => {
                 if should_emit_event {
-                    get_payment_and_emit_event(
-                        &self.sdk.storage,
-                        &self.sdk.event_emitter,
-                        *payment,
-                    )
-                    .await;
+                    get_payment_and_emit_event(&self.storage, emitter, *payment).await;
                 }
             }
             RuntimeEvent::StableBalanceConversionCompleted => {}

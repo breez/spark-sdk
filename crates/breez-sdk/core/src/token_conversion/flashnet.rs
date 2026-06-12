@@ -1,4 +1,9 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    str::FromStr,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use bitcoin::secp256k1::PublicKey;
 use flashnet::{
@@ -44,7 +49,10 @@ pub(crate) struct FlashnetTokenConverter {
     flashnet_client: Arc<FlashnetClient>,
     storage: Arc<dyn Storage>,
     spark_wallet: Arc<SparkWallet>,
-    event_emitter: Arc<EventEmitter>,
+    /// Weak: this converter is reachable from the emitter (the
+    /// `StableBalance` middleware holds it), so a strong back-reference
+    /// would form a reference cycle that leaks the whole SDK object graph.
+    event_emitter: Weak<EventEmitter>,
     network: Network,
     refund_trigger: broadcast::Sender<()>,
     integrator_fee_bps: u32,
@@ -63,7 +71,7 @@ impl FlashnetTokenConverter {
         flashnet_config: FlashnetConfig,
         storage: Arc<dyn Storage>,
         spark_wallet: Arc<SparkWallet>,
-        event_emitter: Arc<EventEmitter>,
+        event_emitter: &Arc<EventEmitter>,
         network: Network,
         http_client: Arc<dyn platform_utils::HttpClient>,
     ) -> Self {
@@ -85,7 +93,7 @@ impl FlashnetTokenConverter {
             flashnet_client,
             storage,
             spark_wallet,
-            event_emitter,
+            event_emitter: Arc::downgrade(event_emitter),
             network,
             refund_trigger,
             integrator_fee_bps,
@@ -636,6 +644,13 @@ impl FlashnetTokenConverter {
         sent_payment_id: &str,
         received_payment_id: &str,
     ) {
+        // The emitter is gone only when the SDK is being torn down; the next
+        // sync rebuilds both conversion legs from the operators.
+        let Some(event_emitter) = self.event_emitter.upgrade() else {
+            debug!("Skipping conversion payment processing: SDK is shutting down");
+            return;
+        };
+
         // Sent leg: we just produced this transfer ourselves, so the local
         // spark/token wallet state is already current — no claim needed.
         // Build the Payment directly and insert it even if the operator-side
@@ -648,7 +663,7 @@ impl FlashnetTokenConverter {
             insert_payment_with_metadata(
                 self.spark_wallet.clone(),
                 self.storage.clone(),
-                self.event_emitter.clone(),
+                event_emitter.clone(),
                 payment,
             )
             .await;
@@ -662,7 +677,7 @@ impl FlashnetTokenConverter {
             insert_payment_with_metadata(
                 self.spark_wallet.clone(),
                 self.storage.clone(),
-                self.event_emitter.clone(),
+                event_emitter,
                 payment,
             )
             .await;

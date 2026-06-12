@@ -30,7 +30,7 @@ pub async fn init_and_start_real_time_sync(
     let synced_storage = Arc::new(SyncedStorage::new(
         Arc::clone(&params.storage),
         Arc::clone(&sync_service),
-        params.event_emitter,
+        &params.event_emitter,
         params.lnurl_server_client,
     ));
 

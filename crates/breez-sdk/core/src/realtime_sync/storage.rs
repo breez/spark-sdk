@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, Weak},
 };
 
 use breez_sdk_common::sync::{
@@ -89,7 +89,10 @@ struct ContactSyncData {
 pub struct SyncedStorage {
     inner: Arc<dyn Storage>,
     sync_service: Arc<SyncService>,
-    event_emitter: Arc<EventEmitter>,
+    /// Weak: the emitter's registered handlers and listeners can reach this
+    /// storage, so a strong back-reference would form a reference cycle that
+    /// leaks the whole SDK object graph.
+    event_emitter: Weak<EventEmitter>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
 }
 
@@ -121,17 +124,21 @@ impl NewRecordHandler for SyncedStorage {
             return Ok(());
         }
 
-        self.event_emitter
-            .emit_synced(&InternalSyncedEvent {
-                storage_incoming: incoming_count,
-                ..Default::default()
-            })
-            .await;
+        if let Some(event_emitter) = self.event_emitter.upgrade() {
+            event_emitter
+                .emit_synced(&InternalSyncedEvent {
+                    storage_incoming: incoming_count,
+                    ..Default::default()
+                })
+                .await;
+        }
         Ok(())
     }
 
     async fn on_sync_failed(&self) {
-        self.event_emitter.notify_rtsync_failed().await;
+        if let Some(event_emitter) = self.event_emitter.upgrade() {
+            event_emitter.notify_rtsync_failed().await;
+        }
     }
 }
 
@@ -139,13 +146,13 @@ impl SyncedStorage {
     pub fn new(
         inner: Arc<dyn Storage>,
         sync_service: Arc<SyncService>,
-        event_emitter: Arc<EventEmitter>,
+        event_emitter: &Arc<EventEmitter>,
         lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
     ) -> Self {
         SyncedStorage {
             inner,
             sync_service,
-            event_emitter,
+            event_emitter: Arc::downgrade(event_emitter),
             lnurl_server_client,
         }
     }
@@ -382,7 +389,7 @@ impl SyncedStorage {
 
         let client = Arc::clone(client);
         let inner = Arc::clone(&self.inner);
-        let event_emitter = Arc::clone(&self.event_emitter);
+        let event_emitter = Weak::clone(&self.event_emitter);
         let span = tracing::Span::current();
 
         tokio::spawn(
@@ -436,7 +443,9 @@ impl SyncedStorage {
                     None
                 };
 
-                if old != new {
+                if old != new
+                    && let Some(event_emitter) = event_emitter.upgrade()
+                {
                     event_emitter
                         .emit(&SdkEvent::LightningAddressChanged {
                             lightning_address: new,
@@ -681,7 +690,7 @@ mod tests {
         );
         let sync_service = Arc::new(SyncService::new(sync_storage));
         let event_emitter = Arc::new(EventEmitter::new(true));
-        SyncedStorage::new(storage, sync_service, event_emitter, None)
+        SyncedStorage::new(storage, sync_service, &event_emitter, None)
     }
 
     fn make_incoming_change(
