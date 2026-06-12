@@ -27,6 +27,11 @@ use super::{BreezSdk, helpers::get_deposit_address, parse_input};
 impl BreezSdk {
     /// Registers a listener to receive SDK events
     ///
+    /// The SDK holds the listener until it is removed with
+    /// `remove_event_listener` or until `disconnect` unregisters all
+    /// listeners. A held listener that references the SDK instance keeps
+    /// that instance alive.
+    ///
     /// # Arguments
     ///
     /// * `listener` - An implementation of the `EventListener` trait
@@ -56,11 +61,15 @@ impl BreezSdk {
     /// This method stops the background tasks started by the `start()` method.
     /// It should be called before your application terminates to ensure proper cleanup.
     ///
+    /// It also unregisters all event listeners, so listeners that reference
+    /// the SDK no longer keep it alive after this call.
+    ///
     /// # Returns
     ///
     /// Result containing either success or an `SdkError` if the background task couldn't be stopped
     pub async fn disconnect(&self) -> Result<(), SdkError> {
         info!("Disconnecting Breez SDK");
+        self.event_emitter.clear_external_listeners().await;
         if self.shutdown_sender.send(()).is_err() {
             // A `watch::Sender::send` error means every receiver has been
             // dropped, i.e. no background task is listening. This is the
