@@ -16,7 +16,10 @@ use super::external_types::{
 /// - Spark-specific types as serialized representations
 ///
 /// Errors are returned as `SignerError` for FFI compatibility.
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
+#[cfg_attr(
+    feature = "uniffi",
+    uniffi::export(with_foreign, async_runtime = "tokio")
+)]
 #[macros::async_trait]
 pub trait ExternalBreezSigner: Send + Sync {
     /// Derives a public key for the given BIP32 derivation path.

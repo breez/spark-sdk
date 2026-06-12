@@ -6235,7 +6235,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 [[package]]
 name = "uniffi"
 version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "anyhow",
  "camino",
@@ -6251,7 +6251,7 @@ dependencies = [
 [[package]]
 name = "uniffi_bindgen"
 version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "anyhow",
  "askama",
@@ -6277,7 +6277,7 @@ dependencies = [
 [[package]]
 name = "uniffi_build"
 version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "anyhow",
  "camino",
@@ -6287,7 +6287,7 @@ dependencies = [
 [[package]]
 name = "uniffi_core"
 version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "anyhow",
  "async-compat",
@@ -6299,7 +6299,7 @@ dependencies = [
 [[package]]
 name = "uniffi_internal_macros"
 version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "anyhow",
  "indexmap 2.14.0",
@@ -6311,7 +6311,7 @@ dependencies = [
 [[package]]
 name = "uniffi_macros"
 version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "camino",
  "fs-err",
@@ -6327,7 +6327,7 @@ dependencies = [
 [[package]]
 name = "uniffi_meta"
 version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "anyhow",
  "siphasher 0.3.11",
@@ -6338,7 +6338,7 @@ dependencies = [
 [[package]]
 name = "uniffi_pipeline"
 version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "anyhow",
  "heck",
@@ -6350,7 +6350,7 @@ dependencies = [
 [[package]]
 name = "uniffi_testing"
 version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "anyhow",
  "camino",
@@ -6362,7 +6362,7 @@ dependencies = [
 [[package]]
 name = "uniffi_udl"
 version = "0.29.5"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "anyhow",
  "textwrap",
@@ -6704,7 +6704,7 @@ dependencies = [
 [[package]]
 name = "weedle2"
 version = "5.0.0"
-source = "git+https://github.com/breez/uniffi-rs?branch=fix-python-async-protocol-v0.29.5#c0e758328b6ad12ceda32b7dd286c8624b987e60"
+source = "git+https://github.com/breez/uniffi-rs?branch=v0.29.5-breez#f1133c3c7aedb4135c58ac51caeebc2d6cdf0b44"
 dependencies = [
  "nom",
 ]

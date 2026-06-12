@@ -23,7 +23,10 @@ use super::external_types::{
 };
 
 /// FFI-compatible mirror of `spark_wallet::SparkSigner`.
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
+#[cfg_attr(
+    feature = "uniffi",
+    uniffi::export(with_foreign, async_runtime = "tokio")
+)]
 #[macros::async_trait]
 pub trait ExternalSparkSigner: Send + Sync {
     /// The wallet identity public key (33 bytes compressed).
