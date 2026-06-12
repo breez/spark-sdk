@@ -502,7 +502,7 @@ pub enum PaymentDetails {
     },
     Deposit {
         tx_id: String,
-        vout: Option<u32>,
+        vout: u32,
     },
 }
 

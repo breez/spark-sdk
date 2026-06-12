@@ -615,7 +615,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         method: PaymentMethod::Deposit,
         details: Some(PaymentDetails::Deposit {
             tx_id: "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321fe".to_string(),
-            vout: Some(2),
+            vout: 2,
         }),
         conversion_details: None,
     };
@@ -1663,7 +1663,7 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
         method: PaymentMethod::Deposit,
         details: Some(PaymentDetails::Deposit {
             tx_id: "deposit_tx_1".to_string(),
-            vout: Some(0),
+            vout: 0,
         }),
         conversion_details: None,
     };

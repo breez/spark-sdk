@@ -434,11 +434,22 @@ class MigrationManager {
         ],
       },
       {
-        // Reset the bitcoin sync offset so the next sync re-iterates every
-        // transfer and backfills vout from the SSP user_request payload.
-        name: "Add deposit_vout to distinguish deposits sharing a funding tx",
+        // Move deposit details into their own table so vout can be NOT NULL and
+        // the schema matches payment_details_lightning / _token / _spark. Delete
+        // existing deposit payments so the resync repopulates them with the real
+        // vout from the SSP user_request payload: vout=0 is a valid output index,
+        // so we can't safely default-backfill it. Reset the bitcoin sync offset
+        // to trigger that resync.
+        name: "Move deposit details into payment_details_deposit table",
         sql: [
-          `ALTER TABLE payments ADD COLUMN deposit_vout INTEGER`,
+          `CREATE TABLE payment_details_deposit (
+              payment_id TEXT PRIMARY KEY,
+              tx_id TEXT NOT NULL,
+              vout INTEGER NOT NULL,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+          )`,
+          `DELETE FROM payments WHERE deposit_tx_id IS NOT NULL`,
+          `ALTER TABLE payments DROP COLUMN deposit_tx_id`,
           `UPDATE settings
            SET value = json_set(value, '$.offset', 0)
            WHERE key = 'sync_offset' AND json_valid(value)`,

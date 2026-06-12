@@ -197,10 +197,13 @@ impl PaymentDetails {
                 htlc_details: None,
                 conversion_info: None,
             },
-            SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
-                tx_id: request.transaction_id.clone(),
-                vout: u32::try_from(request.output_index).ok(),
-            },
+            SspUserRequest::ClaimStaticDeposit(request) => {
+                let vout = u32::try_from(request.output_index).unwrap_or_default();
+                PaymentDetails::Deposit {
+                    tx_id: request.transaction_id.clone(),
+                    vout,
+                }
+            }
         };
 
         Ok(Some(details))

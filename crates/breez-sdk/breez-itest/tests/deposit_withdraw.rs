@@ -116,11 +116,8 @@ async fn test_onchain_withdraw_to_static_address(
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 180).await?;
     assert!(matches!(recv_payment.method, PaymentMethod::Deposit));
     assert!(
-        matches!(
-            recv_payment.details,
-            Some(PaymentDetails::Deposit { vout: Some(_), .. })
-        ),
-        "Deposit payment must carry a vout: {:?}",
+        matches!(recv_payment.details, Some(PaymentDetails::Deposit { .. })),
+        "Deposit payment must have Deposit details: {:?}",
         recv_payment.details
     );
 
@@ -216,7 +213,7 @@ async fn test_deposit_fee_manual_claim(
     assert!(
         matches!(
             &claim_resp.payment.details,
-            Some(PaymentDetails::Deposit { vout: Some(v), .. }) if *v == vout
+            Some(PaymentDetails::Deposit { vout: v, .. }) if *v == vout
         ),
         "Manual claim payment must carry vout={vout}: {:?}",
         claim_resp.payment.details

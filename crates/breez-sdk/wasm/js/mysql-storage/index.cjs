@@ -55,7 +55,8 @@ const SELECT_PAYMENT_SQL = `
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
-           p.deposit_tx_id,
+           pd.tx_id AS deposit_tx_id,
+           pd.vout AS deposit_vout,
            p.spark,
            l.invoice AS lightning_invoice,
            l.payment_hash AS lightning_payment_hash,
@@ -78,12 +79,12 @@ const SELECT_PAYMENT_SQL = `
            lrm.nostr_zap_receipt AS lnurl_nostr_zap_receipt,
            lrm.sender_comment AS lnurl_sender_comment,
            lrm.payment_hash AS lnurl_payment_hash,
-           pm.parent_payment_id,
-           p.deposit_vout
+           pm.parent_payment_id
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
       LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
+      LEFT JOIN brz_payment_details_deposit pd ON p.id = pd.payment_id AND p.user_id = pd.user_id
       LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
       LEFT JOIN brz_lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash AND l.user_id = lrm.user_id`;
 
@@ -462,17 +463,11 @@ class MysqlStorage {
   async _runPaymentUpsert(conn, payment) {
     const withdrawTxId =
       payment.details?.type === "withdraw" ? payment.details.txId : null;
-    const depositTxId =
-      payment.details?.type === "deposit" ? payment.details.txId : null;
-    const depositVout =
-      payment.details?.type === "deposit"
-        ? payment.details.vout ?? null
-        : null;
     const spark = payment.details?.type === "spark" ? 1 : null;
 
     await conn.query(
-      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, deposit_vout, spark)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          payment_type=VALUES(payment_type),
          status=VALUES(status),
@@ -481,8 +476,6 @@ class MysqlStorage {
          timestamp=VALUES(timestamp),
          method=VALUES(method),
          withdraw_tx_id=VALUES(withdraw_tx_id),
-         deposit_tx_id=VALUES(deposit_tx_id),
-         deposit_vout=VALUES(deposit_vout),
          spark=VALUES(spark)`,
       [
         this.identity,
@@ -494,11 +487,20 @@ class MysqlStorage {
         payment.timestamp,
         payment.method ? JSON.stringify(payment.method) : null,
         withdrawTxId,
-        depositTxId,
-        depositVout,
         spark,
       ]
     );
+
+    if (payment.details?.type === "deposit") {
+      await conn.query(
+        `INSERT INTO brz_payment_details_deposit (user_id, payment_id, tx_id, vout)
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           tx_id=VALUES(tx_id),
+           vout=VALUES(vout)`,
+        [this.identity, payment.id, payment.details.txId, payment.details.vout]
+      );
+    }
 
     if (
       payment.details?.type === "spark" &&
@@ -884,8 +886,7 @@ class MysqlStorage {
       details = {
         type: "deposit",
         txId: row.deposit_tx_id,
-        vout:
-          row.deposit_vout != null ? Number(row.deposit_vout) : null,
+        vout: Number(row.deposit_vout),
       };
     } else if (toBool(row.spark)) {
       details = {

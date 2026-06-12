@@ -487,13 +487,38 @@ class MigrationManager {
         }
       },
       {
-        // Add deposit_vout to distinguish deposits sharing a funding tx.
-        // The new field is carried inside the JSON `details` blob — no schema
-        // change is needed, but we reset the bitcoin sync offset so the next
-        // sync re-iterates every transfer and backfills vout from the SSP
-        // user_request payload.
-        name: "Reset sync offset to backfill deposit vout",
+        // Add deposit_vout to distinguish deposits sharing a funding tx. The
+        // new field is carried inside the JSON `details` blob, so no schema
+        // change is needed. Delete existing deposit payments so the resync
+        // repopulates them with the real vout from the SSP user_request
+        // payload: vout=0 is a valid output index, so we can't safely
+        // default-backfill it. Reset the bitcoin sync offset to trigger
+        // that resync.
+        name: "Delete legacy deposit payments and reset sync offset for vout",
         upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("payments")) {
+            const paymentStore = transaction.objectStore("payments");
+            const cursorRequest = paymentStore.openCursor();
+            cursorRequest.onsuccess = (event) => {
+              const cursor = event.target.result;
+              if (!cursor) return;
+              const payment = cursor.value;
+              let details = null;
+              if (payment.details && typeof payment.details === "string") {
+                try {
+                  details = JSON.parse(payment.details);
+                } catch (e) {
+                  details = null;
+                }
+              } else {
+                details = payment.details;
+              }
+              if (details && details.type === "deposit") {
+                cursor.delete();
+              }
+              cursor.continue();
+            };
+          }
           if (db.objectStoreNames.contains("settings")) {
             const settingsStore = transaction.objectStore("settings");
             const getRequest = settingsStore.get("sync_offset");

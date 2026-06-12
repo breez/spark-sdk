@@ -509,11 +509,23 @@ class MysqlMigrationManager {
         ],
       },
       {
-        // Reset the bitcoin sync offset so the next sync re-iterates every
-        // transfer and backfills vout from the SSP user_request payload.
-        name: "Add deposit_vout to distinguish deposits sharing a funding tx",
+        // Move deposit details into their own table so vout can be NOT NULL and
+        // the schema matches brz_payment_details_lightning / _token / _spark.
+        // Delete existing deposit payments so the resync repopulates them with the
+        // real vout from the SSP user_request payload: vout=0 is a valid output
+        // index, so we can't safely default-backfill it. Reset the bitcoin sync
+        // offset to trigger that resync.
+        name: "Move deposit details into brz_payment_details_deposit table",
         sql: [
-          `ALTER TABLE brz_payments ADD COLUMN deposit_vout INT UNSIGNED NULL`,
+          `CREATE TABLE IF NOT EXISTS brz_payment_details_deposit (
+              user_id VARBINARY(33) NOT NULL,
+              payment_id VARCHAR(255) NOT NULL,
+              tx_id VARCHAR(255) NOT NULL,
+              vout INT UNSIGNED NOT NULL,
+              PRIMARY KEY (user_id, payment_id)
+          )`,
+          `DELETE FROM brz_payments WHERE deposit_tx_id IS NOT NULL`,
+          `ALTER TABLE brz_payments DROP COLUMN deposit_tx_id`,
           `UPDATE brz_settings
            SET value = JSON_SET(value, '$.offset', 0)
            WHERE \`key\` = 'sync_offset' AND value IS NOT NULL`,
