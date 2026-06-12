@@ -156,21 +156,26 @@ impl SdkBuilder {
         }
     }
 
-    /// Sets the key set configuration to be used by the SDK.
+    /// Sets the account number for key derivation. All wallet keys derive from
+    /// the seed at `m/8797555'/<account number>'`, so each account number
+    /// yields an independent wallet from the same seed.
+    ///
+    /// When unset, the account number defaults to 0 on Regtest and 1 on all
+    /// other networks.
     ///
     /// Note: This only applies when using a seed-based signer. It has no effect
     /// when using an external signer (created with `new_with_signer`).
     ///
     /// # Arguments
-    /// - `config`: Key set configuration containing the optional account number.
+    /// - `account_number`: The account number in the derivation path.
     #[must_use]
-    pub fn with_key_set(mut self, config: crate::models::KeySetConfig) -> Self {
+    pub fn with_account_number(mut self, account_number: u32) -> Self {
         if let SignerSource::Seed {
             account_number: ref mut an,
             ..
         } = self.signer_source
         {
-            *an = config.account_number;
+            *an = Some(account_number);
         }
         self
     }

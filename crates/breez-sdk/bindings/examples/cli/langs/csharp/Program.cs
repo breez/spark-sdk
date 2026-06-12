@@ -320,9 +320,7 @@ static async Task RunInteractiveMode(
 
     if (accountNumber != null)
     {
-        await builder.WithKeySet(new KeySetConfig(
-            accountNumber: accountNumber
-        ));
+        await builder.WithAccountNumber(accountNumber.Value);
     }
 
     var sdk = await builder.Build();

@@ -209,9 +209,7 @@ func main() {
 			log.Fatalf("Invalid account number: %v", err)
 		}
 		acctNum32 := uint32(acctNum)
-		builder.WithKeySet(breez_sdk_spark.KeySetConfig{
-			AccountNumber: &acctNum32,
-		})
+		builder.WithAccountNumber(acctNum32)
 	}
 
 	sdk, err := builder.Build()

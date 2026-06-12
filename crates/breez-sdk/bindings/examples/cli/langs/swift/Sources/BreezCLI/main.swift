@@ -274,9 +274,7 @@ if let connectionString = opts.postgresConnectionString {
     await builder.withDefaultStorage(storageDir: resolvedDir)
 }
 if let accountNumber = opts.accountNumber {
-    await builder.withKeySet(config: KeySetConfig(
-        accountNumber: accountNumber
-    ))
+    await builder.withAccountNumber(accountNumber: accountNumber)
 }
 
 let sdk = try await builder.build()

@@ -301,13 +301,10 @@ impl SdkBuilder {
         self
     }
 
-    #[wasm_bindgen(js_name = "withKeySet")]
-    pub fn with_key_set(mut self, config: crate::models::KeySetConfig) -> Self {
-        self.account_number = config.account_number;
-        let core_config = breez_sdk_spark::KeySetConfig {
-            account_number: config.account_number,
-        };
-        self.builder = self.builder.with_key_set(core_config);
+    #[wasm_bindgen(js_name = "withAccountNumber")]
+    pub fn with_account_number(mut self, account_number: u32) -> Self {
+        self.account_number = Some(account_number);
+        self.builder = self.builder.with_account_number(account_number);
         self
     }
 

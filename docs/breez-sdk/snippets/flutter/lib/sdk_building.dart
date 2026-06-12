@@ -19,7 +19,7 @@ Future<void> initSdkAdvanced() async {
   //     url: "https://custom.chain.service",
   //     credentials: Credentials(
   //         username: "service-username", password: "service-password"));
-  // builder.withKeySet(config: KeySetConfig(accountNumber: <account number>));
+  // builder.withAccountNumber(accountNumber: <account number>);
   final sdk = await builder.build();
   // ANCHOR_END: init-sdk-advanced
   print(sdk);
@@ -41,15 +41,11 @@ Future<void> withRestChainService(SdkBuilder builder) async {
   // ANCHOR_END: with-rest-chain-service
 }
 
-Future<void> withKeySet(SdkBuilder builder) async {
-  // ANCHOR: with-key-set
-  var optionalAccountNumber = 21;
-  builder.withKeySet(
-    config: KeySetConfig(
-      accountNumber: optionalAccountNumber,
-    ),
-  );
-  // ANCHOR_END: with-key-set
+Future<void> withAccountNumber(SdkBuilder builder) async {
+  // ANCHOR: with-account-number
+  var accountNumber = 21;
+  builder.withAccountNumber(accountNumber: accountNumber);
+  // ANCHOR_END: with-account-number
 }
 
 // ANCHOR: with-payment-observer

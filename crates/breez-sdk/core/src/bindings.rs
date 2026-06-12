@@ -3,9 +3,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::{
-    BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
-    RestClient, SdkContext, SdkError, Seed, Storage, StorageBackend,
-    chain::rest_client::ChainApiType,
+    BitcoinChainService, BreezSdk, Config, Credentials, FiatService, PaymentObserver, RestClient,
+    SdkContext, SdkError, Seed, Storage, StorageBackend, chain::rest_client::ChainApiType,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -65,12 +64,15 @@ impl SdkBuilder {
         *builder = builder.clone().with_storage(storage);
     }
 
-    /// Sets the key set type to be used by the SDK.
+    /// Sets the account number for key derivation. All wallet keys derive from
+    /// the seed at `m/8797555'/<account number>'`, so each account number
+    /// yields an independent wallet from the same seed. Defaults to 0 on
+    /// Regtest and 1 on all other networks when unset.
     /// Arguments:
-    /// - `config`: Key set configuration containing the key set type, address index flag, and optional account number.
-    pub async fn with_key_set(&self, config: KeySetConfig) {
+    /// - `account_number`: The account number in the derivation path.
+    pub async fn with_account_number(&self, account_number: u32) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_key_set(config);
+        *builder = builder.clone().with_account_number(account_number);
     }
 
     /// Sets the chain service to be used by the SDK.

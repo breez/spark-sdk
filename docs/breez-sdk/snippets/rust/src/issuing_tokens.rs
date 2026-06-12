@@ -1,9 +1,8 @@
 use anyhow::Result;
 use breez_sdk_spark::{
     default_config, BreezSdk, BurnIssuerTokenRequest, CreateIssuerTokenRequest,
-    FreezeIssuerTokenRequest, KeySetConfig, MintIssuerTokenRequest, Network, Payment,
-    PaymentDetailsFilter, SdkBuilder, Seed, TokenIssuer, TokenMetadata, TokenTransactionType,
-    UnfreezeIssuerTokenRequest,
+    FreezeIssuerTokenRequest, MintIssuerTokenRequest, Network, Payment, PaymentDetailsFilter,
+    SdkBuilder, Seed, TokenIssuer, TokenMetadata, TokenTransactionType, UnfreezeIssuerTokenRequest,
 };
 use log::info;
 
@@ -42,9 +41,7 @@ async fn create_token_with_custom_account_number() -> Result<BreezSdk> {
     builder = builder.with_default_storage("./.data".to_string());
 
     // Set the account number for the SDK
-    builder = builder.with_key_set(KeySetConfig {
-        account_number: Some(account_number),
-    });
+    builder = builder.with_account_number(account_number);
 
     let sdk = builder.build().await?;
     // ANCHOR_END: custom-account-number

@@ -48,9 +48,7 @@ const createTokenWithCustomAccountNumber = async () => {
   builder = await builder.withDefaultStorage('./.data')
 
   // Set the account number for the SDK
-  builder = builder.withKeySet({
-    accountNumber
-  })
+  builder = builder.withAccountNumber(accountNumber)
 
   const sdk = await builder.build()
   // ANCHOR_END: custom-account-number

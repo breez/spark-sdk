@@ -20,7 +20,7 @@ class SdkBuilding {
             // builder.withStorage(<your storage implementation>)
             // builder.withChainService(<your chain service implementation>)
             // builder.withRestClient(<your rest client implementation>)
-            // builder.withKeySet(KeySetConfig(accountNumber = <account number>))
+            // builder.withAccountNumber(<account number>)
             // builder.withPaymentObserver(<your payment observer implementation>)
             val sdk = builder.build()
         } catch (e: Exception) {
@@ -45,16 +45,11 @@ class SdkBuilding {
         // ANCHOR_END: with-rest-chain-service
     }
 
-    suspend fun withKeySet(builder: SdkBuilder) {
-        // ANCHOR: with-key-set
-        val optionalAccountNumber = 21u
-
-        val keySetConfig = KeySetConfig(
-            accountNumber = optionalAccountNumber
-        )
-        
-        builder.withKeySet(keySetConfig)
-        // ANCHOR_END: with-key-set
+    suspend fun withAccountNumber(builder: SdkBuilder) {
+        // ANCHOR: with-account-number
+        val accountNumber = 21u
+        builder.withAccountNumber(accountNumber)
+        // ANCHOR_END: with-account-number
     }
 
     // ANCHOR: with-payment-observer

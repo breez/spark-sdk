@@ -18,7 +18,6 @@ from breez_sdk_spark import (
     PaymentObserver,
     ChainApiType,
     Credentials,
-    KeySetConfig,
     UpdateUserSettingsRequest,
 )
 
@@ -39,7 +38,7 @@ async def init_sdk_advanced():
         # await builder.with_storage(<your storage implementation>)
         # await builder.with_chain_service(<your chain service implementation>)
         # await builder.with_rest_client(<your rest client implementation>)
-        # await builder.with_key_set(KeySetConfig(account_number=<account number>))
+        # await builder.with_account_number(<account number>)
         # await builder.with_payment_observer(<your payment observer implementation>)
         sdk = await builder.build()
         return sdk
@@ -65,16 +64,11 @@ async def with_rest_chain_service(builder: SdkBuilder):
     # ANCHOR_END: with-rest-chain-service
 
 
-async def with_key_set(builder: SdkBuilder):
-    # ANCHOR: with-key-set
-    optional_account_number = 21
-
-    key_set_config = KeySetConfig(
-        account_number=optional_account_number,
-    )
-
-    await builder.with_key_set(config=key_set_config)
-    # ANCHOR_END: with-key-set
+async def with_account_number(builder: SdkBuilder):
+    # ANCHOR: with-account-number
+    account_number = 21
+    await builder.with_account_number(account_number=account_number)
+    # ANCHOR_END: with-account-number
 
 
 # ANCHOR: with-payment-observer

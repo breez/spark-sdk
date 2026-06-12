@@ -121,11 +121,6 @@ pub struct _ConnectRequest {
     pub storage_dir: String,
 }
 
-#[frb(mirror(KeySetConfig))]
-pub struct _KeySetConfig {
-    pub account_number: Option<u32>,
-}
-
 #[frb(mirror(CheckMessageRequest))]
 pub struct _CheckMessageRequest {
     pub message: String,
