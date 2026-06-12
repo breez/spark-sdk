@@ -124,11 +124,16 @@ impl TurnkeyClient {
     ) -> Result<Self, TurnkeyError> {
         Ok(Self {
             http,
-            base_url: config.base_url.trim_end_matches('/').to_string(),
+            base_url: config
+                .base_url
+                .as_deref()
+                .unwrap_or(super::config::DEFAULT_BASE_URL)
+                .trim_end_matches('/')
+                .to_string(),
             organization_id: config.organization_id.clone(),
             wallet_id: config.wallet_id.clone(),
             stamper: ApiKeyStamper::from_hex(&config.api_private_key, &config.api_public_key)?,
-            retry: config.retry.clone(),
+            retry: config.retry.clone().unwrap_or_default(),
         })
     }
 

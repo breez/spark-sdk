@@ -63,11 +63,14 @@ impl TurnkeyRetryConfig {
 /// (reusing the SDK's existing crypto dependency), and P-256 keys (Turnkey's
 /// console default) when built with the `turnkey-p256` feature. The curve is
 /// detected from the key material.
+/// The Turnkey API base URL used when [`TurnkeyConfig::base_url`] is unset.
+pub(crate) const DEFAULT_BASE_URL: &str = "https://api.turnkey.com";
+
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct TurnkeyConfig {
-    /// Turnkey API base URL (e.g. `https://api.turnkey.com`).
-    pub base_url: String,
+    /// Turnkey API base URL. Unset uses `https://api.turnkey.com`.
+    pub base_url: Option<String>,
     /// Organization (or sub-organization) id that owns the wallet.
     pub organization_id: String,
     /// API public key (compressed, hex), registered with the organization.
@@ -84,6 +87,6 @@ pub struct TurnkeyConfig {
     /// the seed-based signer, so the same wallet seed derives the same keys on
     /// either backend.
     pub account_number: Option<u32>,
-    /// Retry policy for Turnkey requests.
-    pub retry: TurnkeyRetryConfig,
+    /// Retry policy for Turnkey requests. Unset uses the default policy.
+    pub retry: Option<TurnkeyRetryConfig>,
 }

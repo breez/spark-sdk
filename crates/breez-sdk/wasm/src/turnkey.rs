@@ -21,14 +21,14 @@ pub struct TurnkeyRetryConfig {
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::turnkey::TurnkeyConfig)]
 pub struct TurnkeyConfig {
-    pub base_url: String,
+    pub base_url: Option<String>,
     pub organization_id: String,
     pub api_public_key: String,
     pub api_private_key: String,
     pub wallet_id: String,
     pub network: Network,
     pub account_number: Option<u32>,
-    pub retry: TurnkeyRetryConfig,
+    pub retry: Option<TurnkeyRetryConfig>,
 }
 
 /// Builds the Turnkey-backed signers from `config`, then pass

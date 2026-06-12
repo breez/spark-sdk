@@ -3,7 +3,7 @@
 //! declaration in `lib.rs`), so everything here can assume the backend exists.
 
 use anyhow::Result;
-use breez_sdk_spark::turnkey::{TurnkeyConfig, TurnkeyRetryConfig, TurnkeyWalletManager};
+use breez_sdk_spark::turnkey::{TurnkeyConfig, TurnkeyWalletManager};
 use breez_sdk_spark::{Config, GetInfoRequest, Network, SdkBuilder};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
@@ -18,7 +18,7 @@ use crate::helpers::{ChannelEventListener, apply_storage};
 pub fn turnkey_config_from_env() -> Option<TurnkeyConfig> {
     let var = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
     Some(TurnkeyConfig {
-        base_url: var("TURNKEY_BASE_URL").unwrap_or_else(|| "https://api.turnkey.com".to_string()),
+        base_url: var("TURNKEY_BASE_URL"),
         organization_id: var("TURNKEY_ORG_ID")?,
         api_public_key: var("TURNKEY_API_PUBLIC_KEY")?,
         api_private_key: var("TURNKEY_API_PRIVATE_KEY")?,
@@ -27,7 +27,7 @@ pub fn turnkey_config_from_env() -> Option<TurnkeyConfig> {
         // Defaults to the network default (0 on regtest); settable to verify
         // non-default accounts against the live API.
         account_number: var("TURNKEY_ACCOUNT_NUMBER").and_then(|v| v.parse().ok()),
-        retry: TurnkeyRetryConfig::default(),
+        retry: None,
     })
 }
 
