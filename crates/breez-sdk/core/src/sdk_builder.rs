@@ -1135,6 +1135,42 @@ mod tests {
         assert_sdk_graph_freed(event_emitter, spark_wallet).await;
     }
 
+    /// `disconnect` must unregister event listeners, so a listener that
+    /// references the SDK instance cannot keep it alive afterwards.
+    #[tokio::test]
+    async fn disconnect_unregisters_event_listeners() {
+        use crate::{SdkEvent, default_server_config, events::EventListener};
+
+        struct NoopListener;
+
+        #[macros::async_trait]
+        impl EventListener for NoopListener {
+            async fn on_event(&self, _event: SdkEvent) {}
+        }
+
+        let storage_dir = std::env::temp_dir()
+            .join(format!(
+                "breez-sdk-test-listener-clear-{}",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let sdk = SdkBuilder::new(default_server_config(Network::Regtest), test_seed())
+            .with_default_storage(storage_dir)
+            .build()
+            .await
+            .expect("server-mode build should succeed");
+
+        let id = sdk.add_event_listener(Box::new(NoopListener)).await;
+
+        sdk.disconnect().await.expect("disconnect should succeed");
+
+        assert!(
+            !sdk.remove_event_listener(&id).await,
+            "listener should already be unregistered by disconnect"
+        );
+    }
+
     fn test_spark_signer() -> std::sync::Arc<crate::signer::spark::SparkSigner> {
         use crate::KeySetType;
         use crate::signer::breez::BreezSignerImpl;

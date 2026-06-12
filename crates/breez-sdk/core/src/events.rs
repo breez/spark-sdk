@@ -257,6 +257,16 @@ impl EventEmitter {
         listeners.remove(id).is_some()
     }
 
+    /// Remove all external listeners.
+    ///
+    /// Listeners are owned by the emitter, so a listener that references the
+    /// SDK pins the whole instance; dropping them here on disconnect makes
+    /// the instance releasable regardless of what listeners capture.
+    pub async fn clear_external_listeners(&self) {
+        let mut listeners = self.external_listeners.write().await;
+        listeners.clear();
+    }
+
     /// Add an internal listener that sees all raw events before middleware processing.
     ///
     /// Used by SDK components (e.g., `ClientSyncListener`) that need to observe events
@@ -509,6 +519,36 @@ mod tests {
 
         // Try to remove a non-existent listener
         assert!(!emitter.remove_external_listener("non-existent-id").await);
+    }
+
+    #[async_test_all]
+    async fn test_clear_external_listeners() {
+        let emitter = EventEmitter::new(false);
+
+        let received1 = Arc::new(AtomicBool::new(false));
+        let received2 = Arc::new(AtomicBool::new(false));
+
+        let id1 = emitter
+            .add_external_listener(Box::new(TestListener {
+                received: received1.clone(),
+            }))
+            .await;
+        let id2 = emitter
+            .add_external_listener(Box::new(TestListener {
+                received: received2.clone(),
+            }))
+            .await;
+
+        emitter.clear_external_listeners().await;
+
+        emitter.emit(&SdkEvent::Synced).await;
+
+        assert!(!received1.load(Ordering::Relaxed));
+        assert!(!received2.load(Ordering::Relaxed));
+
+        // Already cleared, so individual removal finds nothing
+        assert!(!emitter.remove_external_listener(&id1).await);
+        assert!(!emitter.remove_external_listener(&id2).await);
     }
 
     #[async_test_all]
