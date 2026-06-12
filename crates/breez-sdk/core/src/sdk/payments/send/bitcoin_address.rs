@@ -111,6 +111,7 @@ pub(in crate::sdk::payments) async fn convert_token(
     let response = sdk
         .token_converter
         .convert(
+            sdk.event_emitter.clone(),
             conversion_options,
             &purpose,
             token_identifier,
