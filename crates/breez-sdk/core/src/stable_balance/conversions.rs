@@ -28,13 +28,14 @@ impl StableBalance {
         parent_payment_id: &str,
     ) -> Result<bool, ConversionError> {
         // Get the active token, skip if stable balance is inactive
-        let Some(active_token_identifier) = self.get_active_token_identifier().await else {
+        let Some(active_token_identifier) = self.core.get_active_token_identifier().await else {
             debug!("Per-receive conversion skipped: stable balance is inactive");
             return Ok(false);
         };
 
         // Fetch payment from storage to get latest metadata and amount
         let payment = self
+            .core
             .storage
             .get_payment_by_id(parent_payment_id.to_string())
             .await?;
@@ -55,6 +56,7 @@ impl StableBalance {
         // Check minimum threshold
         let amount_sats = payment.amount;
         let (_, min_from_amount) = self
+            .core
             .get_or_init_effective_values(&active_token_identifier)
             .await?;
         let amount_sats_u64 = u64::try_from(amount_sats).unwrap_or(u64::MAX);
@@ -72,6 +74,7 @@ impl StableBalance {
 
         // Check if payment with this transfer_id already exists (already converted)
         if self
+            .core
             .storage
             .get_payment_by_id(transfer_id.to_string())
             .await
@@ -91,12 +94,14 @@ impl StableBalance {
         // Perform conversion with deterministic transfer_id for idempotency
         let options = ConversionOptions {
             conversion_type: ConversionType::FromBitcoin,
-            max_slippage_bps: self.config.max_slippage_bps,
+            max_slippage_bps: self.core.config.max_slippage_bps,
             completion_timeout_secs: None,
         };
         let response = self
+            .core
             .token_converter
             .convert(
+                self.event_emitter.clone(),
                 &options,
                 &ConversionPurpose::AutoConversion,
                 Some(&active_token_identifier),
@@ -106,7 +111,8 @@ impl StableBalance {
             .await?;
 
         // Link both conversion payments to the received parent payment
-        self.storage
+        self.core
+            .storage
             .insert_payment_metadata(
                 response.sent_payment_id.clone(),
                 PaymentMetadata {
@@ -115,7 +121,8 @@ impl StableBalance {
                 },
             )
             .await?;
-        self.storage
+        self.core
+            .storage
             .insert_payment_metadata(
                 response.received_payment_id.clone(),
                 PaymentMetadata {
@@ -141,7 +148,7 @@ impl StableBalance {
     /// - Balance is below the trigger amount
     pub(super) async fn auto_convert(&self) -> Result<bool, ConversionError> {
         // Get the active token, skip if stable balance is inactive
-        let Some(active_token_identifier) = self.get_active_token_identifier().await else {
+        let Some(active_token_identifier) = self.core.get_active_token_identifier().await else {
             debug!("Auto-conversion skipped: stable balance is inactive");
             return Ok(false);
         };
@@ -161,6 +168,7 @@ impl StableBalance {
 
         // Check if balance exceeds the threshold
         let (threshold, _) = self
+            .core
             .get_or_init_effective_values(&active_token_identifier)
             .await?;
         if balance_sats < threshold {
@@ -170,7 +178,7 @@ impl StableBalance {
 
         let from_btc_options = ConversionOptions {
             conversion_type: ConversionType::FromBitcoin,
-            max_slippage_bps: self.config.max_slippage_bps,
+            max_slippage_bps: self.core.config.max_slippage_bps,
             completion_timeout_secs: None,
         };
 
@@ -187,7 +195,7 @@ impl StableBalance {
         // Per-receive converts specific payment amounts and takes priority; if we
         // proceed, we'd convert the same sats and per-receive would fail with
         // InsufficientFunds. The next Synced event will re-queue auto-convert.
-        if self.queue.has_per_receive().await {
+        if self.core.queue.has_per_receive().await {
             debug!("Auto-conversion aborted: per-receive tasks queued during preparation");
             return Ok(false);
         }
@@ -197,8 +205,10 @@ impl StableBalance {
         );
 
         let response = self
+            .core
             .token_converter
             .convert(
+                self.event_emitter.clone(),
                 &from_btc_options,
                 &ConversionPurpose::AutoConversion,
                 Some(&active_token_identifier),
@@ -208,7 +218,8 @@ impl StableBalance {
             .await?;
 
         // Link sent payment as child of received payment
-        self.storage
+        self.core
+            .storage
             .insert_payment_metadata(
                 response.sent_payment_id.clone(),
                 PaymentMetadata {
@@ -224,7 +235,8 @@ impl StableBalance {
         );
 
         // Persist Completed status for the received token payment
-        self.storage
+        self.core
+            .storage
             .insert_payment_metadata(
                 response.received_payment_id.clone(),
                 PaymentMetadata {
@@ -259,6 +271,7 @@ impl StableBalance {
 
         // Check minimum conversion limit for ToBitcoin
         let limits = self
+            .core
             .token_converter
             .fetch_limits(&FetchConversionLimitsRequest {
                 conversion_type: ConversionType::ToBitcoin {
@@ -281,7 +294,7 @@ impl StableBalance {
             conversion_type: ConversionType::ToBitcoin {
                 from_token_identifier: token_identifier.to_string(),
             },
-            max_slippage_bps: self.config.max_slippage_bps,
+            max_slippage_bps: self.core.config.max_slippage_bps,
             completion_timeout_secs: None,
         };
 
@@ -290,8 +303,10 @@ impl StableBalance {
         );
 
         let response = self
+            .core
             .token_converter
             .convert(
+                self.event_emitter.clone(),
                 &to_btc_options,
                 &ConversionPurpose::AutoConversion,
                 Some(&token_identifier.to_string()),
@@ -301,7 +316,8 @@ impl StableBalance {
             .await?;
 
         // Link sent payment as child of received payment (same pattern as auto_convert)
-        self.storage
+        self.core
+            .storage
             .insert_payment_metadata(
                 response.sent_payment_id.clone(),
                 PaymentMetadata {
@@ -312,7 +328,8 @@ impl StableBalance {
             .await?;
 
         // Persist Completed status for the received BTC payment
-        self.storage
+        self.core
+            .storage
             .insert_payment_metadata(
                 response.received_payment_id.clone(),
                 PaymentMetadata {
@@ -348,7 +365,7 @@ impl StableBalance {
             token_identifier: Some(token_id.clone()),
         };
         let (limits_res, balances_res) = tokio::join!(
-            self.token_converter.fetch_limits(&limits_request),
+            self.core.token_converter.fetch_limits(&limits_request),
             self.spark_wallet.get_token_balances(),
         );
 
@@ -367,6 +384,7 @@ impl StableBalance {
 
         // Estimate how many tokens we'd get from converting balance_sats
         let Ok(Some(est)) = self
+            .core
             .token_converter
             .validate(
                 Some(from_btc_options),

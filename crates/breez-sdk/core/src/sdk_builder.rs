@@ -451,13 +451,8 @@ impl SdkBuilder {
         .await?;
 
         let buy_bitcoin_provider = Arc::new(MoonpayProvider::new(context.breez_server.clone()));
-        let token_converter = build_token_converter(
-            &self.config,
-            &storage,
-            &spark_wallet,
-            &event_emitter,
-            &context,
-        );
+        let token_converter =
+            build_token_converter(&self.config, &storage, &spark_wallet, &context);
 
         let sync_coordinator = SyncCoordinator::new();
         let stable_balance = build_stable_balance(
@@ -816,7 +811,6 @@ fn build_token_converter(
     config: &Config,
     storage: &Arc<dyn crate::persist::Storage>,
     spark_wallet: &Arc<SparkWallet>,
-    event_emitter: &Arc<EventEmitter>,
     context: &SdkContext,
 ) -> Arc<dyn TokenConverter> {
     let flashnet_config = FlashnetConfig::default_config(
@@ -833,7 +827,6 @@ fn build_token_converter(
         flashnet_config,
         Arc::clone(storage),
         Arc::clone(spark_wallet),
-        event_emitter,
         config.network,
         context.http_client.clone(),
     ))
@@ -1122,6 +1115,50 @@ mod tests {
             .build()
             .await
             .expect("client-mode build should succeed");
+
+        let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
+        let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);
+
+        tokio::time::timeout(std::time::Duration::from_secs(30), sdk.disconnect())
+            .await
+            .expect("disconnect should not hang")
+            .expect("disconnect should succeed");
+        drop(sdk);
+
+        assert_sdk_graph_freed(event_emitter, spark_wallet).await;
+    }
+
+    /// Variant of the client-mode leak regression test with real-time sync
+    /// and stable balance enabled: the sync record handler and the conversion
+    /// worker hold the emitter strongly, so their tasks must release it on
+    /// `disconnect`.
+    #[tokio::test]
+    async fn client_mode_sdk_graph_is_freed_with_real_time_sync_enabled() {
+        use crate::{StableBalanceConfig, StableBalanceToken};
+
+        let mut config = default_config(Network::Regtest);
+        // Unreachable sync server: the gRPC client connects lazily, so the
+        // build succeeds offline and the sync tasks just retry in the
+        // background until shutdown.
+        config.real_time_sync_server_url = Some("http://127.0.0.1:9".to_string());
+        config.private_enabled_default = false;
+        // No active token, so the conversion worker spawns without making
+        // network calls.
+        config.stable_balance_config = Some(StableBalanceConfig {
+            tokens: vec![StableBalanceToken {
+                label: "USDB".to_string(),
+                token_identifier: "btkn1test".to_string(),
+            }],
+            default_active_label: None,
+            threshold_sats: None,
+            max_slippage_bps: None,
+        });
+
+        let sdk = SdkBuilder::new(config, test_seed())
+            .with_default_storage(unique_storage_dir("leak-client-rtsync"))
+            .build()
+            .await
+            .expect("client-mode build with real-time sync should succeed");
 
         let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
         let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);

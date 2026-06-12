@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
     str::FromStr,
-    sync::{Arc, Weak},
+    sync::Arc,
 };
 
 use breez_sdk_common::sync::{
@@ -86,18 +86,31 @@ struct ContactSyncData {
     pub deleted_at: Option<u64>,
 }
 
+/// Storage wrapper that mirrors local writes into the real-time sync queue.
+///
+/// This is `sdk.storage`, which is reachable from the `EventEmitter` (handlers
+/// and listeners registered on the emitter hold it), so it must not reference
+/// the emitter or the SDK graph could never be dropped. Event emission for
+/// sync outcomes lives in [`SyncedRecordHandler`] instead.
 pub struct SyncedStorage {
     inner: Arc<dyn Storage>,
     sync_service: Arc<SyncService>,
-    /// Weak: the emitter's registered handlers and listeners can reach this
-    /// storage, so a strong back-reference would form a reference cycle that
-    /// leaks the whole SDK object graph.
-    event_emitter: Weak<EventEmitter>,
+}
+
+/// Applies incoming and replayed sync records to local storage and reports
+/// sync outcomes on the event emitter.
+///
+/// Owned by the `SyncProcessor`, whose tasks stop on the shutdown signal, so
+/// the strong emitter reference is released on `disconnect()` and cannot form
+/// a cycle (the emitter never owns the processor).
+pub struct SyncedRecordHandler {
+    storage: Arc<dyn Storage>,
+    event_emitter: Arc<EventEmitter>,
     lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
 }
 
 #[macros::async_trait]
-impl NewRecordHandler for SyncedStorage {
+impl NewRecordHandler for SyncedRecordHandler {
     async fn on_incoming_change(
         &self,
         change: CommonIncomingChange,
@@ -124,36 +137,25 @@ impl NewRecordHandler for SyncedStorage {
             return Ok(());
         }
 
-        if let Some(event_emitter) = self.event_emitter.upgrade() {
-            event_emitter
-                .emit_synced(&InternalSyncedEvent {
-                    storage_incoming: incoming_count,
-                    ..Default::default()
-                })
-                .await;
-        }
+        self.event_emitter
+            .emit_synced(&InternalSyncedEvent {
+                storage_incoming: incoming_count,
+                ..Default::default()
+            })
+            .await;
         Ok(())
     }
 
     async fn on_sync_failed(&self) {
-        if let Some(event_emitter) = self.event_emitter.upgrade() {
-            event_emitter.notify_rtsync_failed().await;
-        }
+        self.event_emitter.notify_rtsync_failed().await;
     }
 }
 
 impl SyncedStorage {
-    pub fn new(
-        inner: Arc<dyn Storage>,
-        sync_service: Arc<SyncService>,
-        event_emitter: &Arc<EventEmitter>,
-        lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
-    ) -> Self {
+    pub fn new(inner: Arc<dyn Storage>, sync_service: Arc<SyncService>) -> Self {
         SyncedStorage {
             inner,
             sync_service,
-            event_emitter: Arc::downgrade(event_emitter),
-            lnurl_server_client,
         }
     }
 
@@ -238,6 +240,37 @@ impl SyncedStorage {
         self.set_cached_item(INITIAL_SYNC_CACHE_KEY.to_string(), "true".to_string())
             .await?;
         Ok(())
+    }
+
+    async fn push_lightning_address_sync(&self) {
+        if let Err(e) = self
+            .sync_service
+            .set_outgoing_record(&RecordChangeRequest {
+                id: RecordId::new(
+                    RecordType::LightningAddress.to_string(),
+                    LIGHTNING_ADDRESS_DATA_ID,
+                ),
+                schema_version: RecordType::LightningAddress.schema_version(),
+                updated_fields: HashMap::new(),
+            })
+            .await
+        {
+            error!("Failed to push lightning address sync signal: {e:?}");
+        }
+    }
+}
+
+impl SyncedRecordHandler {
+    pub fn new(
+        storage: Arc<dyn Storage>,
+        event_emitter: Arc<EventEmitter>,
+        lnurl_server_client: Option<Arc<dyn LnurlServerClient>>,
+    ) -> Self {
+        SyncedRecordHandler {
+            storage,
+            event_emitter,
+            lnurl_server_client,
+        }
     }
 
     async fn handle_incoming_change(
@@ -330,7 +363,7 @@ impl SyncedStorage {
         )
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
 
-        self.inner
+        self.storage
             .insert_payment_metadata(data_id, metadata)
             .await?;
         Ok(())
@@ -343,7 +376,7 @@ impl SyncedStorage {
     ) -> anyhow::Result<()> {
         if fields.contains_key(DELETED_AT_FIELD) {
             // Ignore not-found errors when deleting
-            let _ = self.inner.delete_contact(data_id).await;
+            let _ = self.storage.delete_contact(data_id).await;
             return Ok(());
         }
 
@@ -360,26 +393,9 @@ impl SyncedStorage {
             created_at: sync_data.created_at,
             updated_at: sync_data.updated_at,
         };
-        self.inner.insert_contact(contact).await?;
+        self.storage.insert_contact(contact).await?;
 
         Ok(())
-    }
-
-    async fn push_lightning_address_sync(&self) {
-        if let Err(e) = self
-            .sync_service
-            .set_outgoing_record(&RecordChangeRequest {
-                id: RecordId::new(
-                    RecordType::LightningAddress.to_string(),
-                    LIGHTNING_ADDRESS_DATA_ID,
-                ),
-                schema_version: RecordType::LightningAddress.schema_version(),
-                updated_fields: HashMap::new(),
-            })
-            .await
-        {
-            error!("Failed to push lightning address sync signal: {e:?}");
-        }
     }
 
     fn handle_lightning_address_change(&self) -> RecordOutcome {
@@ -388,13 +404,13 @@ impl SyncedStorage {
         };
 
         let client = Arc::clone(client);
-        let inner = Arc::clone(&self.inner);
-        let event_emitter = Weak::clone(&self.event_emitter);
+        let storage = Arc::clone(&self.storage);
+        let event_emitter = Arc::clone(&self.event_emitter);
         let span = tracing::Span::current();
 
         tokio::spawn(
             async move {
-                let cache = ObjectCacheRepository::new(Arc::clone(&inner));
+                let cache = ObjectCacheRepository::new(Arc::clone(&storage));
                 let old = cache
                     .fetch_lightning_address()
                     .await
@@ -406,7 +422,7 @@ impl SyncedStorage {
                     Ok(resp) => resp,
                     Err(e) => {
                         warn!("Failed to recover lightning address after sync trigger: {e:?}");
-                        if let Err(e) = inner
+                        if let Err(e) = storage
                             .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
                             .await
                         {
@@ -420,7 +436,7 @@ impl SyncedStorage {
                     let address_info = resp.into();
                     if let Err(e) = cache.save_lightning_address(&address_info, true).await {
                         error!("Failed to save recovered lightning address: {e:?}");
-                        if let Err(e) = inner
+                        if let Err(e) = storage
                             .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
                             .await
                         {
@@ -432,7 +448,7 @@ impl SyncedStorage {
                 } else {
                     if let Err(e) = cache.delete_lightning_address(true).await {
                         error!("Failed to delete lightning address from cache: {e:?}");
-                        if let Err(e) = inner
+                        if let Err(e) = storage
                             .delete_cached_item(LIGHTNING_ADDRESS_KEY.to_string())
                             .await
                         {
@@ -443,9 +459,7 @@ impl SyncedStorage {
                     None
                 };
 
-                if old != new
-                    && let Some(event_emitter) = event_emitter.upgrade()
-                {
+                if old != new {
                     event_emitter
                         .emit(&SdkEvent::LightningAddressChanged {
                             lightning_address: new,
@@ -689,8 +703,12 @@ mod tests {
             crate::sync_storage::SyncStorageWrapper::new(Arc::clone(&storage)),
         );
         let sync_service = Arc::new(SyncService::new(sync_storage));
+        SyncedStorage::new(storage, sync_service)
+    }
+
+    fn create_test_record_handler(storage: Arc<dyn Storage>) -> SyncedRecordHandler {
         let event_emitter = Arc::new(EventEmitter::new(true));
-        SyncedStorage::new(storage, sync_service, &event_emitter, None)
+        SyncedRecordHandler::new(storage, event_emitter, None)
     }
 
     fn make_incoming_change(
@@ -758,7 +776,7 @@ mod tests {
     async fn test_incoming_unknown_type_newer_schema() {
         let temp_dir = create_temp_dir("incoming_unknown_newer");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&storage));
+        let handler = create_test_record_handler(Arc::clone(&storage));
 
         let change = make_incoming_change(
             "FutureType",
@@ -766,7 +784,7 @@ mod tests {
             SchemaVersion::new(99, 0, 0),
             HashMap::new(),
         );
-        let result = synced.handle_incoming_change(change).await;
+        let result = handler.handle_incoming_change(change).await;
         assert!(result.is_ok());
 
         // Verify no payment was created as a side effect
@@ -777,7 +795,7 @@ mod tests {
     async fn test_incoming_unknown_type_compatible_schema() {
         let temp_dir = create_temp_dir("incoming_unknown_compat");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&storage));
+        let handler = create_test_record_handler(Arc::clone(&storage));
 
         let change = make_incoming_change(
             "UnknownType",
@@ -785,7 +803,7 @@ mod tests {
             SchemaVersion::new(1, 0, 0),
             HashMap::new(),
         );
-        let result = synced.handle_incoming_change(change).await;
+        let result = handler.handle_incoming_change(change).await;
         assert!(result.is_ok());
 
         // Verify no payment metadata was written
@@ -796,7 +814,7 @@ mod tests {
     async fn test_incoming_known_type_newer_major_version() {
         let temp_dir = create_temp_dir("incoming_known_newer_major");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&storage));
+        let handler = create_test_record_handler(Arc::clone(&storage));
 
         // Insert a payment so we can verify metadata was NOT written
         storage
@@ -816,7 +834,7 @@ mod tests {
             SchemaVersion::new(pm_version.major + 1, 0, 0),
             data,
         );
-        let result = synced.handle_incoming_change(change).await;
+        let result = handler.handle_incoming_change(change).await;
         assert!(result.is_ok());
 
         // Verify metadata was NOT applied despite known type (newer major version)
@@ -835,7 +853,7 @@ mod tests {
     async fn test_incoming_known_type_newer_minor_version_applied() {
         let temp_dir = create_temp_dir("incoming_known_newer_minor");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&storage));
+        let handler = create_test_record_handler(Arc::clone(&storage));
 
         storage
             .apply_payment_update(make_test_lightning_payment("pay1"))
@@ -854,7 +872,7 @@ mod tests {
             SchemaVersion::new(pm_version.major, pm_version.minor + 1, 0),
             data,
         );
-        let result = synced.handle_incoming_change(change).await;
+        let result = handler.handle_incoming_change(change).await;
         assert!(result.is_ok());
 
         // Verify metadata WAS applied (compatible minor version bump)
@@ -873,7 +891,7 @@ mod tests {
     async fn test_outgoing_unknown_type_newer_schema() {
         let temp_dir = create_temp_dir("outgoing_unknown_newer");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&storage));
+        let handler = create_test_record_handler(Arc::clone(&storage));
 
         let change = make_outgoing_change(
             "FutureType",
@@ -881,7 +899,7 @@ mod tests {
             SchemaVersion::new(99, 0, 0),
             HashMap::new(),
         );
-        let result = synced.handle_outgoing_change(change).await;
+        let result = handler.handle_outgoing_change(change).await;
         assert!(result.is_ok());
 
         // Verify no payment metadata side effect
@@ -892,7 +910,7 @@ mod tests {
     async fn test_outgoing_unknown_type_compatible_schema() {
         let temp_dir = create_temp_dir("outgoing_unknown_compat");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&storage));
+        let handler = create_test_record_handler(Arc::clone(&storage));
 
         let change = make_outgoing_change(
             "UnknownType",
@@ -900,7 +918,7 @@ mod tests {
             SchemaVersion::new(1, 0, 0),
             HashMap::new(),
         );
-        let result = synced.handle_outgoing_change(change).await;
+        let result = handler.handle_outgoing_change(change).await;
         assert!(result.is_ok());
 
         // Verify no payment metadata side effect
@@ -924,12 +942,12 @@ mod tests {
     async fn test_incoming_contact_without_deleted_at_upserts() {
         let temp_dir = create_temp_dir("incoming_contact_upsert");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&storage));
+        let handler = create_test_record_handler(Arc::clone(&storage));
 
         let data = make_contact_data("Alice", "alice@example.com");
         let change =
             make_incoming_change("Contact", "c1", RecordType::Contact.schema_version(), data);
-        let result = synced.handle_incoming_change(change).await;
+        let result = handler.handle_incoming_change(change).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), RecordOutcome::Completed);
 
@@ -942,7 +960,7 @@ mod tests {
     async fn test_incoming_contact_with_deleted_at_deletes() {
         let temp_dir = create_temp_dir("incoming_contact_delete");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&storage));
+        let handler = create_test_record_handler(Arc::clone(&storage));
 
         // First insert a contact
         storage
@@ -961,7 +979,7 @@ mod tests {
         data.insert("deleted_at".to_string(), serde_json::json!(2000));
         let change =
             make_incoming_change("Contact", "c1", RecordType::Contact.schema_version(), data);
-        let result = synced.handle_incoming_change(change).await;
+        let result = handler.handle_incoming_change(change).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), RecordOutcome::Completed);
 
@@ -972,12 +990,12 @@ mod tests {
     async fn test_outgoing_replay_contact_without_deleted_at_upserts() {
         let temp_dir = create_temp_dir("outgoing_contact_upsert");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&storage));
+        let handler = create_test_record_handler(Arc::clone(&storage));
 
         let data = make_contact_data("Bob", "bob@example.com");
         let change =
             make_outgoing_change("Contact", "c2", RecordType::Contact.schema_version(), data);
-        let result = synced.handle_outgoing_change(change).await;
+        let result = handler.handle_outgoing_change(change).await;
         assert!(result.is_ok());
 
         let contact = storage.get_contact("c2".to_string()).await.unwrap();
@@ -988,7 +1006,7 @@ mod tests {
     async fn test_outgoing_replay_contact_with_deleted_at_deletes() {
         let temp_dir = create_temp_dir("outgoing_contact_delete");
         let storage: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&temp_dir).unwrap());
-        let synced = create_test_synced_storage(Arc::clone(&storage));
+        let handler = create_test_record_handler(Arc::clone(&storage));
 
         // First insert a contact
         storage
@@ -1007,7 +1025,7 @@ mod tests {
         data.insert("deleted_at".to_string(), serde_json::json!(2000));
         let change =
             make_outgoing_change("Contact", "c3", RecordType::Contact.schema_version(), data);
-        let result = synced.handle_outgoing_change(change).await;
+        let result = handler.handle_outgoing_change(change).await;
         assert!(result.is_ok());
 
         assert!(storage.get_contact("c3".to_string()).await.is_err());

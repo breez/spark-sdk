@@ -290,9 +290,10 @@ impl EventEmitter {
     /// Middleware can transform or suppress events before they reach external listeners.
     ///
     /// Middleware is owned by the emitter for its whole lifetime, so it must
-    /// not hold a strong reference back to the emitter (directly or
-    /// transitively); use `Weak<EventEmitter>` instead, or the SDK object
-    /// graph can never be dropped.
+    /// not hold a reference back to the emitter (directly or transitively),
+    /// or the SDK object graph can never be dropped. Code that needs to emit
+    /// must receive the emitter from its caller instead (see
+    /// `RuntimeEventHandler` and `TokenConverter::convert`).
     pub async fn add_middleware(&self, middleware: Box<dyn EventMiddleware>) {
         let mut mw = self.middleware.write().await;
         mw.push(middleware);

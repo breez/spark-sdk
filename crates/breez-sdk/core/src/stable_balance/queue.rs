@@ -284,7 +284,7 @@ impl StableBalance {
             async move {
                 // Pre-warm effective values cache
                 if let Some(token_id) = stable_balance.get_active_token_identifier().await
-                    && let Err(e) = stable_balance.get_or_init_effective_values(&token_id).await
+                    && let Err(e) = stable_balance.core.get_or_init_effective_values(&token_id).await
                 {
                     warn!("Failed to pre-warm effective values: {e:?}");
                 }
@@ -299,22 +299,22 @@ impl StableBalance {
                         info!("Conversion worker shutdown before initial sync");
                         return;
                     }
-                    () = stable_balance.synced_notify.notified() => {
+                    () = stable_balance.core.synced_notify.notified() => {
                         debug!("Conversion worker: initial sync completed");
                     }
                 }
 
                 // Cold-start: queue auto-convert for any existing excess balance
-                stable_balance.queue.push_auto_convert().await;
+                stable_balance.core.queue.push_auto_convert().await;
 
                 // Main processing loop
                 debug!("Conversion worker: entering main loop");
                 loop {
                     // Register notify future BEFORE checking the queue to avoid missed wakeups
-                    let notified = stable_balance.queue.notify.notified();
+                    let notified = stable_balance.core.queue.notify.notified();
 
                     // Drain all available tasks
-                    while let Some(task) = stable_balance.queue.next_task().await {
+                    while let Some(task) = stable_balance.core.queue.next_task().await {
                         debug!("Conversion worker: processing task {task:?}");
                         match &task {
                             ConversionTask::PerReceive(payment_id) => {
@@ -324,12 +324,12 @@ impl StableBalance {
                                 {
                                     PerReceiveResult::Done { converted } => {
                                         debug!("Conversion worker: completed task {task:?} (converted={converted})");
-                                        stable_balance.queue.complete_task(&task).await;
+                                        stable_balance.core.queue.complete_task(&task).await;
                                         if converted {
                                             // Clear any pending auto-convert — the local balance
                                             // is stale until sync completes. The next Synced event
                                             // will re-queue auto-convert if there's still excess.
-                                            stable_balance.queue.clear_pending_auto_convert().await;
+                                            stable_balance.core.queue.clear_pending_auto_convert().await;
                                             stable_balance.emit_conversion_completed().await;
                                         }
                                     }
@@ -337,7 +337,7 @@ impl StableBalance {
                                         // Mark as deferred so next_task skips it until
                                         // resolved by a PaymentSucceeded event or timeout
                                         debug!("Conversion worker: deferring task {task:?}");
-                                        stable_balance.queue.defer_task(payment_id).await;
+                                        stable_balance.core.queue.defer_task(payment_id).await;
                                     }
                                 }
                             }
@@ -350,7 +350,7 @@ impl StableBalance {
                                     }
                                 };
                                 debug!("Conversion worker: auto-convert done (converted={converted})");
-                                stable_balance.queue.complete_task(&task).await;
+                                stable_balance.core.queue.complete_task(&task).await;
                                 if converted {
                                     stable_balance.emit_conversion_completed().await;
                                 }
@@ -365,7 +365,7 @@ impl StableBalance {
                                         }
                                     };
                                 debug!("Conversion worker: completed task {task:?} (converted={converted})");
-                                stable_balance.queue.complete_task(&task).await;
+                                stable_balance.core.queue.complete_task(&task).await;
                                 if converted {
                                     stable_balance.emit_conversion_completed().await;
                                 }
@@ -398,6 +398,7 @@ impl StableBalance {
             Ok(converted) => {
                 if converted
                     && let Err(e) = self
+                        .core
                         .storage
                         .insert_payment_metadata(
                             payment_id.clone(),
@@ -437,7 +438,7 @@ impl StableBalance {
     /// Stale deferred tasks are cleaned up by `clear_expired_tasks()` on the
     /// first `Synced` event.
     async fn recover_pending_conversions(&self) {
-        let cache = ObjectCacheRepository::new(self.storage.clone());
+        let cache = ObjectCacheRepository::new(self.core.storage.clone());
         match cache.fetch_pending_conversions().await {
             Ok(Some(pending)) => {
                 if !pending.is_empty() {
@@ -445,7 +446,7 @@ impl StableBalance {
                         "Recovering {} pending conversion(s) from previous session",
                         pending.len()
                     );
-                    let mut state = self.queue.state.lock().await;
+                    let mut state = self.core.queue.state.lock().await;
                     for entry in pending {
                         if state
                             .per_receive
@@ -456,7 +457,7 @@ impl StableBalance {
                         }
                         state.per_receive.push(entry);
                     }
-                    self.queue.persist_pending(&state).await;
+                    self.core.queue.persist_pending(&state).await;
                 }
             }
             Ok(None) => {}
