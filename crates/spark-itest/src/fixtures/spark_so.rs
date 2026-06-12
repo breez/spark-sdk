@@ -4,6 +4,7 @@ use bitcoin::secp256k1::SecretKey;
 use rcgen::{CertifiedKey, generate_simple_self_signed};
 use serde_json::json;
 use spark_wallet::Identifier;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -51,11 +52,14 @@ const STARTUP_COMPLETE_PATTERN: &str = "All startup tasks completed";
 const LOG_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Database query constants
-const KEYSHARE_CHECK_TIMEOUT: Duration = Duration::from_secs(60);
+const KEYSHARE_CHECK_TIMEOUT: Duration = Duration::from_secs(180);
 const KEYSHARE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
-const KEYSHARE_POST_CHECK_DELAY: Duration = Duration::from_secs(5);
 const KEYSHARE_MIN_UUID: &str = "01954639-8d50-7e47-b3f0-ddb307fab7c2";
 const KEYSHARE_STATUS_AVAILABLE: &str = "AVAILABLE";
+// Must match dkg.min_available_keys in docker/so.config.yaml. An operator's DKG task keeps
+// generating batches until it sees this many available keyshares of its own, so requiring it
+// here guarantees no further inserts will race the cross-database readiness check below.
+const KEYSHARE_MIN_PER_COORDINATOR: usize = 100;
 
 pub struct SparkSoFixture {
     pub operators: Vec<OperatorFixture>,
@@ -355,78 +359,40 @@ impl SparkSoFixture {
         ))
     }
 
-    // Wait for signing keyshares to be available in all operator databases
+    // Wait until signing keyshares are usable across all operator databases.
+    //
+    // A keyshare is only usable when the same row is AVAILABLE in every operator's database:
+    // the coordinator reserves the chosen id on all operators, and an operator whose database
+    // has not yet caught up rejects the reservation ("keyshares are not all available"). DKG
+    // batches commit to each operator's database independently, so readiness requires every
+    // keyshare a coordinator can pick to be visible in the other operators' databases, not
+    // just each operator having keyshares of its own. The snapshot must also be identical on
+    // two consecutive polls, so a DKG batch that is mid-commit cannot slip past the check.
     async fn wait_for_keyshares(&self) -> Result<()> {
         info!("Checking for available signing keyshares in all operators...");
 
-        // Set a timeout for the entire keyshare checking process
         let result = timeout(KEYSHARE_CHECK_TIMEOUT, async {
-            // Continue checking until keyshares are available for all operators
+            let mut previous: Option<Vec<Vec<(String, i64)>>> = None;
+
             loop {
-                let mut all_ready = true;
+                match self.query_available_keyshares().await {
+                    Ok(snapshot) => {
+                        let counts: Vec<usize> = snapshot.iter().map(Vec::len).collect();
+                        info!("Available keyshares per operator database: {:?}", counts);
 
-                // Check each operator's database
-                for operator in &self.operators {
-                    // Connect to the operator's database
-                    match tokio_postgres::connect(&operator.postgres_connectionstring, NoTls).await
-                    {
-                        Ok((client, connection)) => {
-                            // Spawn a background task to drive the connection
-                            tokio::spawn(async move {
-                                if let Err(e) = connection.await {
-                                    warn!("Database connection error: {}", e);
-                                }
-                            });
-
-                            // Query for available keyshares
-                            let query = format!(
-                                "SELECT COUNT(*) FROM signing_keyshares 
-                                WHERE status = '{}' 
-                                AND coordinator_index = {} 
-                                AND id > '{}'",
-                                KEYSHARE_STATUS_AVAILABLE, operator.index, KEYSHARE_MIN_UUID
-                            );
-
-                            match client.query_one(&query, &[]).await {
-                                Ok(row) => {
-                                    let count: i64 = row.get(0);
-                                    info!(
-                                        "Operator {} has {} available keyshares",
-                                        operator.index, count
-                                    );
-
-                                    // If no keyshares are available, not all operators are ready
-                                    if count == 0 {
-                                        all_ready = false;
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        "Failed to query keyshares for operator {}: {}",
-                                        operator.index, e
-                                    );
-                                    all_ready = false;
-                                }
-                            }
+                        if previous.as_ref() == Some(&snapshot) && Self::keyshares_ready(&snapshot)
+                        {
+                            info!("Keyshares are propagated across all operator databases");
+                            return Ok(());
                         }
-                        Err(e) => {
-                            warn!(
-                                "Failed to connect to database for operator {}: {}",
-                                operator.index, e
-                            );
-                            all_ready = false;
-                        }
+                        previous = Some(snapshot);
+                    }
+                    Err(e) => {
+                        warn!("Failed to query keyshares: {}", e);
+                        previous = None;
                     }
                 }
 
-                // If all operators have keyshares, we're done
-                if all_ready {
-                    info!("All operators have available keyshares");
-                    sleep(KEYSHARE_POST_CHECK_DELAY).await;
-                    return Ok(());
-                }
-
-                // Wait before checking again
                 sleep(KEYSHARE_CHECK_INTERVAL).await;
             }
         })
@@ -441,5 +407,64 @@ impl SparkSoFixture {
                 ))
             }
         }
+    }
+
+    // Fetch the set of available (id, coordinator_index) keyshares from each operator's
+    // database, ordered by id so the per-operator sets compare deterministically.
+    async fn query_available_keyshares(&self) -> Result<Vec<Vec<(String, i64)>>> {
+        let query = format!(
+            "SELECT id::text, COALESCE(coordinator_index, -1)::bigint FROM signing_keyshares
+            WHERE status = '{KEYSHARE_STATUS_AVAILABLE}'
+            AND id > '{KEYSHARE_MIN_UUID}'
+            ORDER BY id"
+        );
+
+        let mut keyshare_sets = Vec::with_capacity(self.operators.len());
+        for operator in &self.operators {
+            let (client, connection) =
+                tokio_postgres::connect(&operator.postgres_connectionstring, NoTls).await?;
+
+            // Spawn a background task to drive the connection
+            tokio::spawn(async move {
+                if let Err(e) = connection.await {
+                    warn!("Database connection error: {}", e);
+                }
+            });
+
+            let rows = client.query(&query, &[]).await?;
+            keyshare_sets.push(
+                rows.iter()
+                    .map(|row| (row.get(0), row.get(1)))
+                    .collect::<Vec<(String, i64)>>(),
+            );
+        }
+
+        Ok(keyshare_sets)
+    }
+
+    // Mirrors the reservation invariant: a coordinator picks from the available keyshares
+    // with its own coordinator_index in its own database, then reserves that id on every
+    // other operator, so each of those ids must be available in every other database.
+    fn keyshares_ready(snapshot: &[Vec<(String, i64)>]) -> bool {
+        let id_sets: Vec<HashSet<&str>> = snapshot
+            .iter()
+            .map(|set| set.iter().map(|(id, _)| id.as_str()).collect())
+            .collect();
+
+        snapshot.iter().enumerate().all(|(coordinator, own_set)| {
+            let coordinated: Vec<&str> = own_set
+                .iter()
+                .filter(|(_, coordinator_index)| *coordinator_index == coordinator as i64)
+                .map(|(id, _)| id.as_str())
+                .collect();
+
+            // An operator's DKG keeps inserting batches until it has
+            // KEYSHARE_MIN_PER_COORDINATOR keyshares of its own; below that, more inserts
+            // are still coming and could race this check.
+            coordinated.len() >= KEYSHARE_MIN_PER_COORDINATOR
+                && id_sets.iter().enumerate().all(|(other, ids)| {
+                    other == coordinator || coordinated.iter().all(|id| ids.contains(id))
+                })
+        })
     }
 }
