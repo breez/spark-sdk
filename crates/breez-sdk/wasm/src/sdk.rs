@@ -70,13 +70,25 @@ pub async fn get_spark_status() -> WasmResult<SparkStatus> {
     Ok(breez_sdk_spark::get_spark_status().await?.into())
 }
 
-/// The two default external signers created from one mnemonic. Returned by
-/// `defaultExternalSigners`; pass both halves to `connectWithSigner` or
-/// `SdkBuilder.newWithSigner`.
+/// The two external signers for the SDK's signer-based connect. Returned by
+/// `defaultExternalSigners` (seed) and `createTurnkeySigner` (Turnkey); pass
+/// both halves to `connectWithSigner` or `SdkBuilder.newWithSigner`.
 #[wasm_bindgen]
 pub struct ExternalSigners {
     breez_signer: crate::signer::ExternalBreezSignerHandle,
     spark_signer: crate::signer::ExternalSparkSignerHandle,
+}
+
+impl ExternalSigners {
+    pub(crate) fn new(
+        breez_signer: crate::signer::ExternalBreezSignerHandle,
+        spark_signer: crate::signer::ExternalSparkSignerHandle,
+    ) -> Self {
+        Self {
+            breez_signer,
+            spark_signer,
+        }
+    }
 }
 
 #[wasm_bindgen]

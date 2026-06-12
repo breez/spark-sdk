@@ -31,34 +31,16 @@ pub struct TurnkeyConfig {
     pub retry: TurnkeyRetryConfig,
 }
 
-/// The Turnkey-backed signers. Pass `breez` and `spark` to `connectWithSigner`.
-#[wasm_bindgen]
-pub struct TurnkeySigners {
-    breez: ExternalBreezSignerHandle,
-    spark: ExternalSparkSignerHandle,
-}
-
-#[wasm_bindgen]
-impl TurnkeySigners {
-    #[wasm_bindgen(getter)]
-    pub fn breez(&self) -> ExternalBreezSignerHandle {
-        self.breez.clone()
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn spark(&self) -> ExternalSparkSignerHandle {
-        self.spark.clone()
-    }
-}
-
-/// Builds the Turnkey-backed signers from `config`, then pass `signers.breez`
-/// and `signers.spark` to `connectWithSigner`, exactly as with any other
-/// external signer.
+/// Builds the Turnkey-backed signers from `config`, then pass
+/// `signers.breezSigner` and `signers.sparkSigner` to `connectWithSigner`,
+/// exactly as with any other external signer.
 #[wasm_bindgen(js_name = "createTurnkeySigner")]
-pub async fn create_turnkey_signer(config: TurnkeyConfig) -> WasmResult<TurnkeySigners> {
+pub async fn create_turnkey_signer(
+    config: TurnkeyConfig,
+) -> WasmResult<crate::sdk::ExternalSigners> {
     let signers = breez_sdk_spark::turnkey::create_turnkey_signer(config.into()).await?;
-    Ok(TurnkeySigners {
-        breez: ExternalBreezSignerHandle::new(signers.breez),
-        spark: ExternalSparkSignerHandle::new(signers.spark),
-    })
+    Ok(crate::sdk::ExternalSigners::new(
+        ExternalBreezSignerHandle::new(signers.breez_signer),
+        ExternalSparkSignerHandle::new(signers.spark_signer),
+    ))
 }

@@ -169,7 +169,7 @@ pub async fn build_sdk_with_turnkey(
         .await
         .map_err(|e| anyhow::anyhow!("create_turnkey_signer failed: {e}"))?;
 
-    let builder = SdkBuilder::new_with_signer(config, signers.breez, signers.spark);
+    let builder = SdkBuilder::new_with_signer(config, signers.breez_signer, signers.spark_signer);
     let builder = apply_storage(builder, storage_dir).await?;
     let sdk = builder.build().await?;
 

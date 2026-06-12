@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use platform_utils::create_http_client;
 
+use crate::ExternalSigners;
 use crate::error::SignerError;
 use crate::signer::breez::BreezSignerImpl;
 use crate::signer::{ExternalBreezSigner, ExternalSparkSigner};
@@ -17,14 +18,6 @@ use super::types::ADDRESS_FORMAT_COMPRESSED;
 
 fn to_signer_err<E: std::fmt::Display>(e: E) -> SignerError {
     SignerError::Generic(e.to_string())
-}
-
-/// The two Turnkey-backed signers, ready to pass to the SDK's signer-based
-/// connect: `breez` for non-Spark SDK signing, `spark` for the Spark wallet.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct TurnkeySigners {
-    pub breez: Arc<dyn ExternalBreezSigner>,
-    pub spark: Arc<dyn ExternalSparkSigner>,
 }
 
 /// The Spark account number from `config`: explicit, or the per-network default
@@ -57,7 +50,7 @@ fn encryption_key_path(account: u32) -> String {
 /// every Spark key (the identity key included) in the enclave; ECIES/HMAC only
 /// need a stable key, not a Spark one.
 #[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<TurnkeySigners, SignerError> {
+pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<ExternalSigners, SignerError> {
     let network = config.network;
     let account = account_number(&config);
     let http = create_http_client(Some("breez-sdk-spark-turnkey"));
@@ -76,13 +69,16 @@ pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<TurnkeySigne
         .await
         .map_err(to_signer_err)?;
     let encryption = BreezSignerImpl::new(xpriv_from_secret(encryption_key, network));
-    let breez: Arc<dyn ExternalBreezSigner> = Arc::new(TurnkeyBreezSigner::new(
+    let breez_signer: Arc<dyn ExternalBreezSigner> = Arc::new(TurnkeyBreezSigner::new(
         client.clone(),
         network,
         account,
         encryption,
     ));
-    let spark: Arc<dyn ExternalSparkSigner> =
+    let spark_signer: Arc<dyn ExternalSparkSigner> =
         Arc::new(TurnkeySparkSigner::new(client, network, account));
-    Ok(TurnkeySigners { breez, spark })
+    Ok(ExternalSigners {
+        breez_signer,
+        spark_signer,
+    })
 }
