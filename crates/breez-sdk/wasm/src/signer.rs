@@ -1100,17 +1100,16 @@ impl DefaultSparkSigner {
     }
 
     #[wasm_bindgen(js_name = "signFrost")]
-    pub async fn sign_frost(&self, jobs: JsValue) -> Result<JsValue, JsValue> {
-        let wasm_jobs: Vec<ExternalFrostJob> =
-            serde_wasm_bindgen::from_value(jobs).map_err(default_spark_err)?;
+    pub async fn sign_frost(
+        &self,
+        jobs: Vec<ExternalFrostJob>,
+    ) -> Result<Vec<ExternalFrostShareResult>, JsValue> {
         let results = self
             .inner
-            .sign_frost(wasm_jobs.into_iter().map(Into::into).collect())
+            .sign_frost(jobs.into_iter().map(Into::into).collect())
             .await
             .map_err(default_spark_err)?;
-        let wasm_results: Vec<ExternalFrostShareResult> =
-            results.into_iter().map(Into::into).collect();
-        serde_wasm_bindgen::to_value(&wasm_results).map_err(default_spark_err)
+        Ok(results.into_iter().map(Into::into).collect())
     }
 
     #[wasm_bindgen(js_name = "prepareTransfer")]
