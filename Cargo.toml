@@ -218,6 +218,7 @@ deadpool = "0.12"
 tokio-test = "0.4.4"
 tonic = { version = "0.12.3", default-features = false }
 tonic-build = { version = "0.12.3", features = ["prost"] }
+tonic-types = "0.12.3"
 tonic-web-wasm-client = "0.6"
 tower-service = "0.3.3"
 tracing = "0.1.41"
