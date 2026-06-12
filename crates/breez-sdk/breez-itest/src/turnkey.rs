@@ -129,19 +129,12 @@ impl Drop for TurnkeyWalletGuard {
     }
 }
 
-/// Builds a Regtest SDK backed by the Turnkey signers (`create_turnkey_signer`).
-/// Every signing operation routes through Turnkey, so the `TURNKEY_*`
-/// credentials are required: building this crate with the `turnkey` feature
-/// opts into them.
-///
-/// A throwaway wallet is provisioned for this instance (fully isolating each
-/// case, like the seed backend) and deleted on teardown via
-/// [`TurnkeyWalletGuard`].
-pub async fn build_sdk_with_turnkey(
-    config: Config,
-    storage_dir: String,
-    temp_dir: Option<TempDir>,
-) -> Result<SdkInstance> {
+/// Provisions a fresh throwaway Turnkey wallet and returns the config pointing
+/// at it, plus the [`TurnkeyWalletGuard`] that deletes it on drop. Requires the
+/// `TURNKEY_*` credentials: building this crate with the `turnkey` feature opts
+/// into them.
+pub async fn provision_turnkey_wallet()
+-> Result<(breez_sdk_spark::turnkey::TurnkeyConfig, TurnkeyWalletGuard)> {
     let Some(mut turnkey_config) = turnkey_config_from_env() else {
         anyhow::bail!(
             "the turnkey feature is enabled but TURNKEY_ORG_ID, \
@@ -163,7 +156,20 @@ pub async fn build_sdk_with_turnkey(
         .map_err(|e| anyhow::anyhow!("Turnkey create_wallet failed: {e}"))?;
     info!("Created per-test Turnkey wallet {wallet_id} ({wallet_name})");
     turnkey_config.wallet_id = wallet_id;
-    let turnkey_guard = Some(TurnkeyWalletGuard::new(turnkey_config.clone()));
+    let guard = TurnkeyWalletGuard::new(turnkey_config.clone());
+    Ok((turnkey_config, guard))
+}
+
+/// Builds a Regtest SDK backed by the Turnkey signers (`create_turnkey_signer`)
+/// on a freshly provisioned throwaway wallet (fully isolating each case, like
+/// the seed backend), deleted on teardown via [`TurnkeyWalletGuard`].
+pub async fn build_sdk_with_turnkey(
+    config: Config,
+    storage_dir: String,
+    temp_dir: Option<TempDir>,
+) -> Result<SdkInstance> {
+    let (turnkey_config, guard) = provision_turnkey_wallet().await?;
+    let turnkey_guard = Some(guard);
 
     let signers = breez_sdk_spark::turnkey::create_turnkey_signer(turnkey_config)
         .await
