@@ -180,6 +180,33 @@ pub(crate) fn ecdsa_from_rs(r_hex: &str, s_hex: &str) -> Result<ecdsa::Signature
     Ok(signature)
 }
 
+/// Normalizes a recoverable ECDSA signature to low-s, returning the 64-byte
+/// compact `r || s` and the matching recovery id. Turnkey returns the raw `s`,
+/// which may be high; secp256k1 verifiers and BIP-146 require low-s. Negating
+/// `s` (s -> n - s) negates the nonce point R, flipping its y-parity, so the
+/// recovery id's low bit must flip with it or the signature recovers to the
+/// wrong key.
+pub(crate) fn ecdsa_recoverable_low_s(
+    r_hex: &str,
+    s_hex: &str,
+    recovery_id: u8,
+) -> Result<([u8; 64], u8), TurnkeyError> {
+    let mut compact = [0u8; 64];
+    compact[..32].copy_from_slice(&decode_scalar_32(r_hex)?);
+    compact[32..].copy_from_slice(&decode_scalar_32(s_hex)?);
+    let mut signature = ecdsa::Signature::from_compact(&compact)
+        .map_err(|e| TurnkeyError::Deserialize(e.to_string()))?;
+    let before = signature.serialize_compact();
+    signature.normalize_s();
+    let after = signature.serialize_compact();
+    let recovery_id = if before == after {
+        recovery_id
+    } else {
+        recovery_id ^ 1
+    };
+    Ok((after, recovery_id))
+}
+
 pub(crate) fn schnorr_from_rs(
     r_hex: &str,
     s_hex: &str,
@@ -206,5 +233,79 @@ pub(crate) fn xpriv_from_secret(secret: SecretKey, network: Network) -> Xpriv {
         child_number: ChildNumber::from_normal_idx(0).expect("0 is a valid child index"),
         private_key: secret,
         chain_code: ChainCode::from([0u8; 32]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::secp256k1::ecdsa::{RecoverableSignature, RecoveryId};
+    use bitcoin::secp256k1::{Message, PublicKey, Secp256k1, SecretKey};
+
+    // secp256k1 group order, big-endian.
+    const N: [u8; 32] = [
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFE, 0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36,
+        0x41, 0x41,
+    ];
+
+    /// Big-endian `N - s`, used to build the high-s twin of a low-s scalar.
+    fn neg_scalar(s: &[u8; 32]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        let mut borrow = false;
+        for i in (0..32).rev() {
+            let (d1, b1) = N[i].overflowing_sub(s[i]);
+            let (d2, b2) = d1.overflowing_sub(u8::from(borrow));
+            out[i] = d2;
+            borrow = b1 || b2;
+        }
+        out
+    }
+
+    fn recovered_key(compact: &[u8; 64], recovery_id: u8, msg: &Message) -> PublicKey {
+        let secp = Secp256k1::new();
+        let recid = RecoveryId::from_i32(i32::from(recovery_id)).unwrap();
+        let sig = RecoverableSignature::from_compact(compact, recid).unwrap();
+        secp.recover_ecdsa(msg, &sig).unwrap()
+    }
+
+    // A high-s signature from Turnkey must normalize to low-s without losing
+    // recoverability: negating `s` flips the recovery id's low bit, and both the
+    // raw and normalized forms must recover the same key.
+    #[test]
+    fn low_s_normalization_preserves_recovery() {
+        let secp = Secp256k1::new();
+        let sk = SecretKey::from_slice(&[0x11; 32]).unwrap();
+        let pk = PublicKey::from_secret_key(&secp, &sk);
+        let msg = Message::from_digest([0x42; 32]);
+
+        // secp256k1 always signs low-s, so this is the canonical form.
+        let (recid_low, compact_low) = secp.sign_ecdsa_recoverable(&msg, &sk).serialize_compact();
+        let recid_low = u8::try_from(recid_low.to_i32()).unwrap();
+        let r_hex = hex::encode(&compact_low[..32]);
+        let s_low_hex = hex::encode(&compact_low[32..]);
+
+        // Low-s input passes through untouched and recovers `pk`.
+        let (out, recid) = ecdsa_recoverable_low_s(&r_hex, &s_low_hex, recid_low).unwrap();
+        assert_eq!(out, compact_low);
+        assert_eq!(recid, recid_low);
+        assert_eq!(recovered_key(&out, recid, &msg), pk);
+
+        // High-s twin: s -> N - s, recovery id's low bit flipped. It recovers
+        // `pk` as given, and normalizing it returns the original low-s form.
+        let mut s_low = [0u8; 32];
+        s_low.copy_from_slice(&compact_low[32..]);
+        let s_high = neg_scalar(&s_low);
+        let s_high_hex = hex::encode(s_high);
+        let recid_high = recid_low ^ 1;
+
+        let mut compact_high = compact_low;
+        compact_high[32..].copy_from_slice(&s_high);
+        assert_eq!(recovered_key(&compact_high, recid_high, &msg), pk);
+
+        let (out, recid) = ecdsa_recoverable_low_s(&r_hex, &s_high_hex, recid_high).unwrap();
+        assert_eq!(out, compact_low);
+        assert_eq!(recid, recid_low);
+        assert_eq!(recovered_key(&out, recid, &msg), pk);
     }
 }

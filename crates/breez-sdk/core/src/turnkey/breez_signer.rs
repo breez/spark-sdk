@@ -22,7 +22,9 @@ use crate::signer::external_types::{
 };
 use crate::signer::{BreezSigner, ExternalBreezSigner};
 
-use super::accounts::{decode_scalar_32, ecdsa_from_rs, schnorr_from_rs, spark_address_format};
+use super::accounts::{
+    ecdsa_from_rs, ecdsa_recoverable_low_s, schnorr_from_rs, spark_address_format,
+};
 use super::transport::TurnkeyClient;
 use super::types::HASH_FUNCTION_NO_OP;
 
@@ -132,10 +134,13 @@ impl ExternalBreezSigner for TurnkeyBreezSigner {
             .ok_or_else(|| {
                 SignerError::Generic(format!("Turnkey recovery id '{}' out of range", result.v))
             })?;
+        // Low-s normalize to match the non-recoverable path; flips the recovery
+        // id's low bit when `s` is negated so the signature still recovers.
+        let (compact, recovery_id) =
+            ecdsa_recoverable_low_s(&result.r, &result.s, recovery_id).map_err(to_signer_err)?;
         let mut bytes = Vec::with_capacity(65);
         bytes.push(31u8.saturating_add(recovery_id));
-        bytes.extend_from_slice(&decode_scalar_32(&result.r).map_err(to_signer_err)?);
-        bytes.extend_from_slice(&decode_scalar_32(&result.s).map_err(to_signer_err)?);
+        bytes.extend_from_slice(&compact);
         Ok(RecoverableEcdsaSignatureBytes::new(bytes))
     }
 
