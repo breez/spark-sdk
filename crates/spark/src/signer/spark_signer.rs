@@ -304,7 +304,7 @@ pub enum TokenTransactionKind {
     /// Owner-side signature on a partial token transaction (`compute_hash`).
     Partial,
     /// Owner-side signature on a finalized token transaction
-    /// (`SHA256(SHA256(tx_hash || op_pubkey_hash))`).
+    /// (`SHA256(SHA256(tx_hash) || SHA256(operator_pubkey))`).
     Final,
 }
 
