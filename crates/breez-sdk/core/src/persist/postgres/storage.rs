@@ -423,10 +423,13 @@ impl PostgresStorage {
             multi_tenant_migration(identity),
             // Migration 17: Move deposit details into their own table so vout can be
             // NOT NULL and the schema matches brz_payment_details_lightning / _token /
-            // _spark. Delete existing deposit payments so the resync repopulates them
-            // with the real vout from the SSP user_request payload: vout=0 is a valid
-            // output index, so we can't safely default-backfill it. Reset the bitcoin
-            // sync offset to trigger that resync.
+            // _spark. We can't safely backfill the new table from the dropped
+            // deposit_tx_id column: we never stored the original SSP output_index,
+            // and vout=0 is a valid output index — defaulting would silently
+            // mislabel. Drop the column and leave the brz_payments row in place.
+            // The read path sees an unjoined deposit row as `details: None` until
+            // the resync re-fetches the SSP user_request and the upsert inserts the
+            // new details row.
             vec![
                 "CREATE TABLE IF NOT EXISTS brz_payment_details_deposit (
                     user_id BYTEA NOT NULL,
@@ -435,7 +438,6 @@ impl PostgresStorage {
                     vout BIGINT NOT NULL,
                     PRIMARY KEY (user_id, payment_id)
                  )".to_string(),
-                "DELETE FROM brz_payments WHERE deposit_tx_id IS NOT NULL".to_string(),
                 "ALTER TABLE brz_payments DROP COLUMN IF EXISTS deposit_tx_id".to_string(),
                 "UPDATE brz_settings
                  SET value = jsonb_set(value::jsonb, '{offset}', '0')::text
@@ -2130,6 +2132,58 @@ mod tests {
     async fn test_conversion_status_persistence() {
         let fixture = PostgresTestFixture::new().await;
         crate::persist::tests::test_conversion_status_persistence(Box::new(fixture.storage)).await;
+    }
+
+    /// Simulates the post-migration state for a legacy deposit: a row exists in
+    /// `brz_payments` with `method = 'deposit'` but no matching
+    /// `brz_payment_details_deposit` row (the SSP `user_request` hasn't been
+    /// re-fetched yet). `list_payments` must return the payment with
+    /// `details: None` and `method: Deposit` preserved.
+    #[tokio::test]
+    async fn test_legacy_deposit_without_details_row_returns_none() {
+        use crate::PaymentMethod;
+        use crate::persist::StorageListPaymentsRequest;
+
+        let fixture = PostgresTestFixture::new().await;
+
+        // Insert a deposit brz_payments row directly via the pool, bypassing
+        // insert_payment_in_tx so no brz_payment_details_deposit row is written.
+        let client = fixture.storage.pool.get().await.expect("get_client");
+        client
+            .execute(
+                "INSERT INTO brz_payments
+                 (user_id, id, payment_type, status, amount, fees, timestamp, method)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                &[
+                    &TEST_IDENTITY_A.to_vec(),
+                    &"legacy-deposit-1",
+                    &"receive",
+                    &"completed",
+                    &"1000",
+                    &"0",
+                    &1_000_i64,
+                    &"deposit",
+                ],
+            )
+            .await
+            .expect("seed legacy deposit");
+
+        let payments = fixture
+            .storage
+            .list_payments(StorageListPaymentsRequest::default())
+            .await
+            .expect("list_payments");
+
+        let p = payments
+            .iter()
+            .find(|p| p.id == "legacy-deposit-1")
+            .expect("legacy deposit must appear in list_payments");
+        assert!(
+            p.details.is_none(),
+            "legacy deposit must surface with details: None, got {:?}",
+            p.details
+        );
+        assert_eq!(p.method, PaymentMethod::Deposit);
     }
 
     /// A second 33-byte test identity (must differ from `TEST_IDENTITY_A`).

@@ -435,11 +435,13 @@ class MigrationManager {
       },
       {
         // Move deposit details into their own table so vout can be NOT NULL and
-        // the schema matches payment_details_lightning / _token / _spark. Delete
-        // existing deposit payments so the resync repopulates them with the real
-        // vout from the SSP user_request payload: vout=0 is a valid output index,
-        // so we can't safely default-backfill it. Reset the bitcoin sync offset
-        // to trigger that resync.
+        // the schema matches payment_details_lightning / _token / _spark. We can't
+        // safely backfill the new table from the dropped deposit_tx_id column: we
+        // never stored the original SSP output_index, and vout=0 is a valid output
+        // index — defaulting would silently mislabel. Drop the column and leave
+        // the payments row in place. The read path sees an unjoined deposit row
+        // as `details: None` until the resync re-fetches the SSP user_request and
+        // the upsert inserts the new details row.
         name: "Move deposit details into payment_details_deposit table",
         sql: [
           `CREATE TABLE payment_details_deposit (
@@ -448,7 +450,6 @@ class MigrationManager {
               vout INTEGER NOT NULL,
               FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
           )`,
-          `DELETE FROM payments WHERE deposit_tx_id IS NOT NULL`,
           `ALTER TABLE payments DROP COLUMN deposit_tx_id`,
           `UPDATE settings
            SET value = json_set(value, '$.offset', 0)

@@ -488,13 +488,16 @@ class MigrationManager {
       },
       {
         // Add deposit_vout to distinguish deposits sharing a funding tx. The
-        // new field is carried inside the JSON `details` blob, so no schema
-        // change is needed. Delete existing deposit payments so the resync
-        // repopulates them with the real vout from the SSP user_request
-        // payload: vout=0 is a valid output index, so we can't safely
-        // default-backfill it. Reset the bitcoin sync offset to trigger
-        // that resync.
-        name: "Delete legacy deposit payments and reset sync offset for vout",
+        // new field is carried inside the JSON `details` blob. We can't safely
+        // backfill vout on the existing blobs: we never stored the original SSP
+        // output_index, and vout=0 is a valid output index — defaulting would
+        // silently mislabel. Instead we clear `details` on legacy deposit blobs
+        // so the read path returns `details: None` (matches what the SQL
+        // backends do by leaving the payments row but having no matching
+        // payment_details_deposit row). Reset the bitcoin sync offset so the
+        // resync re-fetches the SSP user_request and the upsert rewrites the
+        // blob with the proper vout.
+        name: "Clear legacy deposit details and reset sync offset for vout",
         upgrade: (db, transaction) => {
           if (db.objectStoreNames.contains("payments")) {
             const paymentStore = transaction.objectStore("payments");
@@ -514,7 +517,8 @@ class MigrationManager {
                 details = payment.details;
               }
               if (details && details.type === "deposit") {
-                cursor.delete();
+                payment.details = null;
+                cursor.update(payment);
               }
               cursor.continue();
             };

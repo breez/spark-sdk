@@ -329,18 +329,19 @@ impl SqliteStorage {
             // Add conversion_status to payment_metadata
             "ALTER TABLE payment_metadata ADD COLUMN conversion_status TEXT;",
             // Move deposit details into their own table so vout can be NOT NULL and
-            // the schema matches payment_details_lightning / _token / _spark. Delete
-            // existing deposit payments so the resync repopulates them with the real
-            // vout from the SSP user_request payload: vout=0 is a valid output index,
-            // so we can't safely default-backfill it. Reset the bitcoin sync offset
-            // to trigger that resync.
+            // the schema matches payment_details_lightning / _token / _spark. We
+            // can't safely backfill the new table from the dropped deposit_tx_id
+            // column: we never stored the original SSP output_index, and vout=0
+            // is a valid output index — defaulting would silently mislabel. Drop
+            // the column and leave the payments row in place. The read path sees
+            // an unjoined deposit row as `details: None` until the resync re-fetches
+            // the SSP user_request and the upsert inserts the new details row.
             "CREATE TABLE payment_details_deposit (
                 payment_id TEXT PRIMARY KEY,
                 tx_id TEXT NOT NULL,
                 vout INTEGER NOT NULL,
                 FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
              );
-             DELETE FROM payments WHERE deposit_tx_id IS NOT NULL;
              ALTER TABLE payments DROP COLUMN deposit_tx_id;
              UPDATE settings
              SET value = json_set(value, '$.offset', 0)
@@ -2364,5 +2365,54 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_conversion_status_persistence(Box::new(storage)).await;
+    }
+
+    /// Simulates the post-migration state for a legacy deposit: a row exists in
+    /// `payments` with `method = 'deposit'` but no matching `payment_details_deposit`
+    /// row (the SSP `user_request` hasn't been re-fetched yet). `list_payments` must
+    /// return the payment with `details: None` and `method: Deposit` preserved,
+    /// rather than failing the whole call.
+    #[tokio::test]
+    async fn test_legacy_deposit_without_details_row_returns_none() {
+        use crate::PaymentMethod;
+        use crate::persist::{Storage, StorageListPaymentsRequest};
+        use rusqlite::params;
+
+        let temp_dir = create_temp_dir("sqlite_legacy_deposit");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        // Insert a deposit payments row directly, bypassing insert_payment_in_tx
+        // so no payment_details_deposit row is written.
+        let conn = storage.get_connection().unwrap();
+        conn.execute(
+            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                "legacy-deposit-1",
+                "receive",
+                "completed",
+                "1000",
+                "0",
+                1_000_i64,
+                PaymentMethod::Deposit,
+            ],
+        )
+        .unwrap();
+
+        let payments = storage
+            .list_payments(StorageListPaymentsRequest::default())
+            .await
+            .unwrap();
+
+        let p = payments
+            .iter()
+            .find(|p| p.id == "legacy-deposit-1")
+            .expect("legacy deposit must appear in list_payments");
+        assert!(
+            p.details.is_none(),
+            "legacy deposit must surface with details: None, got {:?}",
+            p.details
+        );
+        assert_eq!(p.method, PaymentMethod::Deposit);
     }
 }
