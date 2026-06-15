@@ -7,9 +7,9 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use breez_sdk_spark::{
-    EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig, StableBalanceToken,
-    default_config, default_mysql_storage_config, default_postgres_storage_config,
-    default_server_config,
+    CrossChainConfig, EventListener, Network, SdkBuilder, SdkEvent, Seed, StableBalanceConfig,
+    StableBalanceToken, default_config, default_mysql_storage_config,
+    default_postgres_storage_config, default_server_config,
 };
 use clap::Parser;
 use command::{Command, execute_command};
@@ -174,6 +174,12 @@ async fn run_interactive_mode(
     };
     config.api_key.clone_from(&breez_api_key);
     config.stable_balance_config = stable_balance_config;
+    // Cross-chain sends are opt-in by the caller and mainnet-only (enabling on
+    // other networks fails config validation). Enable with default slippage so
+    // `pay` can route cross-chain destinations.
+    if network == Network::Mainnet {
+        config.cross_chain_config = Some(CrossChainConfig::default());
+    }
 
     let seed = if let Some(config) = passkey_config {
         let prf = config
