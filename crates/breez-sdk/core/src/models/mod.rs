@@ -665,9 +665,11 @@ pub struct Config {
 
     /// Configuration for cross-chain sends via Orchestra and Boltz.
     ///
-    /// `Some(_)` enables cross-chain sends (sats → USDT on external chains).
-    /// `None` (default on regtest) disables them entirely. On mainnet, the
-    /// `default_config` populates this with [`CrossChainConfig::default`].
+    /// `Some(_)` enables cross-chain sends (sats to USDT on external chains).
+    /// `None` (default) disables them entirely. Opt in by setting this to
+    /// [`CrossChainConfig::default`] (or a customized value): the providers
+    /// run background work (e.g. web sockets), so enabling is left to the
+    /// caller. Cross-chain sends are only supported on mainnet.
     pub cross_chain_config: Option<CrossChainConfig>,
 }
 
