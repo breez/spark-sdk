@@ -63,14 +63,12 @@ use crate::{
 
 const SELECT_LEAVES_MAX_RETRIES: usize = 3;
 const MAX_LEAF_SPENT_RETRIES: usize = 3;
-const MAX_RATE_LIMIT_RETRIES: u32 = 5;
-const RATE_LIMIT_BASE_DELAY_MS: u64 = 100;
-const RATE_LIMIT_MAX_DELAY_MS: u64 = 3000;
-/// Retries for a leaf the operators have not finished finalizing yet. The window
-/// after a deposit claim is short, so a few hundred ms of backoff clears it.
-const MAX_LEAF_UNAVAILABLE_RETRIES: u32 = 5;
-const LEAF_UNAVAILABLE_BASE_DELAY_MS: u64 = 100;
-const LEAF_UNAVAILABLE_MAX_DELAY_MS: u64 = 3000;
+/// Backoff for transient operator errors that clear on their own: rate limiting
+/// (ResourceExhausted) and leaves the operators have not finished finalizing yet
+/// (LEAF_UNAVAILABLE).
+const MAX_BACKOFF_RETRIES: u32 = 5;
+const BACKOFF_BASE_DELAY_MS: u64 = 100;
+const BACKOFF_MAX_DELAY_MS: u64 = 3000;
 /// Grace period before claiming orphaned counter-swap transfers.
 /// Generous to absorb clock skew between the server (`created_time`) and the local clock.
 const COUNTER_SWAP_CLAIM_GRACE_PERIOD_SECS: u64 = 300;
@@ -125,6 +123,12 @@ fn is_leaf_unavailable_error(error: &OperatorRpcError) -> bool {
     operator_error_reason(error).as_deref() == Some(LEAF_UNAVAILABLE_REASON)
 }
 
+/// Checks if an error is a transient operator condition that clears on its own
+/// and should be retried after a backoff delay.
+fn is_backoff_retryable_error(error: &OperatorRpcError) -> bool {
+    is_resource_exhausted_error(error) || is_leaf_unavailable_error(error)
+}
+
 /// Macro to handle retry logic for operations that may fail due to concurrent leaf spending.
 /// This retries the operation up to MAX_LEAF_SPENT_RETRIES times.
 macro_rules! with_leafs_spent_retry {
@@ -135,8 +139,7 @@ macro_rules! with_leafs_spent_retry {
         |$leaves_reservation:ident| $operation:expr
     ) => {{
         let mut attempt = 0;
-        let mut rate_limit_attempt: u32 = 0;
-        let mut leaf_unavailable_attempt: u32 = 0;
+        let mut backoff_attempt: u32 = 0;
         loop {
             if attempt > 0 {
                 if attempt >= MAX_LEAF_SPENT_RETRIES {
@@ -165,37 +168,17 @@ macro_rules! with_leafs_spent_retry {
             match result {
                 Ok(v) => break Ok(v),
                 Err(ServiceError::ServiceConnectionError(e))
-                    if is_resource_exhausted_error(&e) =>
+                    if is_backoff_retryable_error(&e) =>
                 {
-                    rate_limit_attempt += 1;
-                    if rate_limit_attempt > MAX_RATE_LIMIT_RETRIES {
+                    backoff_attempt += 1;
+                    if backoff_attempt > MAX_BACKOFF_RETRIES {
                         break Err(ServiceError::ServiceConnectionError(e).into());
                     }
-                    let delay_ms = (RATE_LIMIT_BASE_DELAY_MS
-                        * 2u64.pow(rate_limit_attempt - 1))
-                    .min(RATE_LIMIT_MAX_DELAY_MS);
+                    let delay_ms = (BACKOFF_BASE_DELAY_MS * 2u64.pow(backoff_attempt - 1))
+                        .min(BACKOFF_MAX_DELAY_MS);
                     info!(
-                        "{} rate limited (attempt {}/{}), backing off {}ms",
-                        $operation_name, rate_limit_attempt,
-                        MAX_RATE_LIMIT_RETRIES, delay_ms,
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                    continue;
-                }
-                Err(ServiceError::ServiceConnectionError(e))
-                    if is_leaf_unavailable_error(&e) =>
-                {
-                    leaf_unavailable_attempt += 1;
-                    if leaf_unavailable_attempt > MAX_LEAF_UNAVAILABLE_RETRIES {
-                        break Err(ServiceError::ServiceConnectionError(e).into());
-                    }
-                    let delay_ms = (LEAF_UNAVAILABLE_BASE_DELAY_MS
-                        * 2u64.pow(leaf_unavailable_attempt - 1))
-                    .min(LEAF_UNAVAILABLE_MAX_DELAY_MS);
-                    info!(
-                        "{} hit a not-yet-available leaf (attempt {}/{}), backing off {}ms",
-                        $operation_name, leaf_unavailable_attempt,
-                        MAX_LEAF_UNAVAILABLE_RETRIES, delay_ms,
+                        "{} hit a transient operator error (attempt {}/{}), backing off {}ms: {:?}",
+                        $operation_name, backoff_attempt, MAX_BACKOFF_RETRIES, delay_ms, e,
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     continue;
@@ -2520,5 +2503,24 @@ mod tests {
             "leaf is not available to transfer, status: CREATING",
         )));
         assert!(!is_leaf_unavailable_error(&err));
+    }
+
+    #[test]
+    fn backoff_retryable_covers_rate_limit_and_leaf_unavailable() {
+        let rate_limited = OperatorRpcError::Connection(Box::new(tonic::Status::new(
+            tonic::Code::ResourceExhausted,
+            "rate limited",
+        )));
+        let leaf_unavailable =
+            error_with_reason(tonic::Code::FailedPrecondition, LEAF_UNAVAILABLE_REASON);
+        assert!(is_backoff_retryable_error(&rate_limited));
+        assert!(is_backoff_retryable_error(&leaf_unavailable));
+
+        // A terminal error is not retried.
+        let terminal = OperatorRpcError::Connection(Box::new(tonic::Status::new(
+            tonic::Code::Internal,
+            "boom",
+        )));
+        assert!(!is_backoff_retryable_error(&terminal));
     }
 }
