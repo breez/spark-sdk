@@ -3,12 +3,14 @@
     allow(clippy::arc_with_non_send_sync)
 )]
 use std::sync::Arc;
+use std::time::Duration;
 
+use breez_sdk_common::breez_server::{BreezServer, OrchestraServerConfig};
 use breez_sdk_common::buy::moonpay::MoonpayProvider;
 
 use spark_wallet::{InMemorySessionStore, SessionStore, Signer, SparkWallet, SparkWalletConfig};
 use tokio::sync::watch;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use flashnet::{FlashnetConfig, IntegratorConfig, OrchestraConfig};
 
@@ -473,6 +475,7 @@ impl SdkBuilder {
 
         let cross_chain_providers = build_cross_chain_providers(
             &self.config,
+            &context.breez_server,
             &spark_wallet,
             &storage,
             &signers.base,
@@ -889,11 +892,58 @@ async fn build_stable_balance(
     ))
 }
 
+/// Total attempts to fetch the orchestra config from Breez server before
+/// giving up for this session.
+const ORCHESTRA_FETCH_MAX_ATTEMPTS: u32 = 3;
+/// First backoff between orchestra config fetch retries; doubles each attempt.
+const ORCHESTRA_FETCH_BASE_BACKOFF: Duration = Duration::from_millis(256);
+
+/// Fetches the orchestra config from Breez server with a bounded retry.
+///
+/// Only connectivity failures are retried (with a short doubling backoff): a
+/// definitive empty response from the server is a final answer and is not
+/// retried. Returns `None` (and logs) when the server has no config or every
+/// attempt fails, in which case the orchestra provider is skipped for this
+/// session. Kept bounded so a slow or down Breez server cannot dominate
+/// connect latency for what is an optional provider.
+async fn fetch_orchestra_config_with_retry(
+    breez_server: &Arc<BreezServer>,
+) -> Option<OrchestraServerConfig> {
+    let mut backoff = ORCHESTRA_FETCH_BASE_BACKOFF;
+    for attempt in 1..=ORCHESTRA_FETCH_MAX_ATTEMPTS {
+        match breez_server.fetch_orchestra_config().await {
+            Ok(Some(cfg)) => return Some(cfg),
+            Ok(None) => {
+                info!("Orchestra provider skipped: no config from Breez server");
+                return None;
+            }
+            Err(e) if attempt < ORCHESTRA_FETCH_MAX_ATTEMPTS => {
+                warn!(
+                    "Failed to fetch orchestra config from Breez server \
+                     (attempt {attempt}/{ORCHESTRA_FETCH_MAX_ATTEMPTS}), \
+                     retrying in {backoff:?}: {e}"
+                );
+                platform_utils::tokio::time::sleep(backoff).await;
+                backoff = backoff.saturating_mul(2);
+            }
+            Err(e) => {
+                warn!(
+                    "Orchestra provider skipped: failed to fetch config from Breez server \
+                     after {ORCHESTRA_FETCH_MAX_ATTEMPTS} attempts: {e}"
+                );
+                return None;
+            }
+        }
+    }
+    None
+}
+
 /// Builds the cross-chain provider map. Each provider owns its own HTTP
 /// client, route cache, and background monitor task. Returns an empty map
 /// when `config.cross_chain_config` is unset.
 async fn build_cross_chain_providers(
     config: &Config,
+    breez_server: &Arc<BreezServer>,
     spark_wallet: &Arc<SparkWallet>,
     storage: &Arc<dyn crate::persist::Storage>,
     signer: &Arc<dyn crate::signer::BreezSigner>,
@@ -905,12 +955,20 @@ async fn build_cross_chain_providers(
         return providers;
     }
 
-    let maybe_orchestra_config = OrchestraConfig::default_for_network(config.network.into());
-    if let Some(orchestra_config) = maybe_orchestra_config {
+    // Orchestra cross-chain is mainnet-only. Its base URL and API key are
+    // fetched from Breez server so the key can be rotated and revoked without
+    // an SDK release. If the fetch fails or the server has no config, the
+    // orchestra provider is skipped: there is no bundled fallback key.
+    if matches!(config.network, Network::Mainnet)
+        && let Some(cfg) = fetch_orchestra_config_with_retry(breez_server).await
+    {
         providers.insert(
             crate::cross_chain::CrossChainProvider::Orchestra,
             Arc::new(crate::cross_chain::OrchestraService::new(
-                orchestra_config,
+                OrchestraConfig {
+                    base_url: cfg.base_url,
+                    api_key: cfg.api_key,
+                },
                 Arc::clone(spark_wallet),
                 Arc::clone(storage),
                 shutdown_receiver,

@@ -15,7 +15,7 @@ use crate::grpc::support_client::SupportClient;
 use crate::grpc::swapper_client::SwapperClient;
 use crate::grpc::taproot_swapper_client::TaprootSwapperClient;
 use crate::grpc::transport::{GrpcClient, Transport};
-use crate::grpc::{ChainApiServersRequest, PingRequest};
+use crate::grpc::{ChainApiServersRequest, OrchestraConfigRequest, PingRequest};
 use crate::with_connection_retry;
 
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
@@ -171,6 +171,37 @@ impl BreezServer {
 
         Ok(boltz_swapper_urls)
     }
+
+    /// Fetches the Flashnet Orchestra (cross-chain) config from Breez server.
+    /// Returns `None` when the server has no orchestra config (either field
+    /// empty), in which case the caller skips the orchestra provider.
+    pub async fn fetch_orchestra_config(
+        &self,
+    ) -> Result<Option<OrchestraServerConfig>, ServiceConnectivityError> {
+        let mut client = self.get_information_client().await;
+        let reply = with_connection_retry!(client.orchestra_config(OrchestraConfigRequest {}))
+            .await
+            .map_err(|e| {
+                ServiceConnectivityError::Other(format!(
+                    "(Breez: {e:?}) Failed to fetch OrchestraConfig"
+                ))
+            })?
+            .into_inner();
+
+        if reply.base_url.is_empty() || reply.api_key.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(OrchestraServerConfig {
+            base_url: reply.base_url,
+            api_key: reply.api_key,
+        }))
+    }
+}
+
+/// Flashnet Orchestra (cross-chain) config served by Breez server.
+pub struct OrchestraServerConfig {
+    pub base_url: String,
+    pub api_key: String,
 }
 
 #[derive(Clone)]

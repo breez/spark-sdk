@@ -27,6 +27,7 @@ service Information {
       returns (BreezAppVersionsReply) {}
   rpc ReceiverInfo(ReceiverInfoRequest) returns (ReceiverInfoReply) {}
   rpc ChainApiServers(ChainApiServersRequest) returns (ChainApiServersReply) {}
+  rpc OrchestraConfig(OrchestraConfigRequest) returns (OrchestraConfigReply) {}
 }
 
 service ChannelOpener {
@@ -511,6 +512,12 @@ message ChainApiServersReply {
     string server_base_url = 2;
   }
   repeated ChainAPIServer servers = 1;
+}
+
+message OrchestraConfigRequest {}
+message OrchestraConfigReply {
+  string base_url = 1;
+  string api_key = 2;
 }
 
 /////////////////////////////////////////////
