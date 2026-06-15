@@ -125,10 +125,18 @@ impl RecoverableEcdsaSignatureBytes {
 }
 
 /// FFI-safe representation of a private key (32 bytes)
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct SecretBytes {
     pub bytes: Vec<u8>,
+}
+
+/// Redacted `Debug`: never print the raw key, so it can't leak into logs even
+/// when wrapped in a `Debug`-deriving container. Mirrors `secp256k1::SecretKey`.
+impl std::fmt::Debug for SecretBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SecretBytes").field(&"<redacted>").finish()
+    }
 }
 
 impl SecretBytes {
