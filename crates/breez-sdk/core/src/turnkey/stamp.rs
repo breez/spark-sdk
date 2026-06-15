@@ -59,11 +59,15 @@ impl ApiKeyStamper {
     /// Builds a stamper from the hex-encoded API private key, selecting the curve
     /// whose derived compressed public key matches `expected_public_key_hex`.
     /// secp256k1 is tried first; P-256 only when the `turnkey-p256` feature is on.
-    /// An empty `expected_public_key_hex` skips detection and assumes secp256k1.
     pub(crate) fn from_hex(
         private_key_hex: &str,
         expected_public_key_hex: &str,
     ) -> Result<Self, TurnkeyError> {
+        if expected_public_key_hex.is_empty() {
+            return Err(TurnkeyError::InvalidApiKey(
+                "API public key is required to select the signing curve".to_string(),
+            ));
+        }
         let priv_bytes = hex::decode(private_key_hex)
             .map_err(|e| TurnkeyError::InvalidApiKey(format!("private key hex: {e}")))?;
 
@@ -72,9 +76,7 @@ impl ApiKeyStamper {
             let secp = Secp256k1::new();
             let public_key = secret_key.public_key(&secp);
             let derived = hex::encode(public_key.serialize());
-            if expected_public_key_hex.is_empty()
-                || derived.eq_ignore_ascii_case(expected_public_key_hex)
-            {
+            if derived.eq_ignore_ascii_case(expected_public_key_hex) {
                 return Ok(Self {
                     key: StamperKey::Secp256k1 {
                         secret_key,
@@ -89,9 +91,7 @@ impl ApiKeyStamper {
         #[cfg(feature = "turnkey-p256")]
         if let Ok(signing_key) = p256::ecdsa::SigningKey::from_slice(&priv_bytes) {
             let derived = p256_public_key_hex(&signing_key);
-            if expected_public_key_hex.is_empty()
-                || derived.eq_ignore_ascii_case(expected_public_key_hex)
-            {
+            if derived.eq_ignore_ascii_case(expected_public_key_hex) {
                 return Ok(Self {
                     key: StamperKey::P256(signing_key),
                 });
