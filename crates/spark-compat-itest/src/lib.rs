@@ -7,9 +7,10 @@
 //! divergence in key derivation or signing between the two builds breaks the
 //! continuation, so the signer is black-boxed end to end.
 //!
-//! All wallets run with background processing disabled and are driven
-//! explicitly (`sync()` / `claim_deposit()` / `transfer()`): "offline" is the
-//! default state, and there are no event races between the two builds.
+//! All wallets stay offline and are driven explicitly (`sync()` /
+//! `claim_deposit()` / `transfer()`), so there are no event races between the
+//! two builds. Each `wallet()` keeps its build offline the way its release
+//! allows (see the per-version constructors below).
 
 use anyhow::Result;
 
@@ -42,11 +43,11 @@ fn find_vout(tx: &bitcoin::Transaction, address: &bitcoin::Address) -> Result<u3
 }
 
 /// Generates the version-specific test API. Both modules expose the same
-/// functions over their own `spark-wallet` build; only the crate path and the
-/// signer wiring in `wallet()` differ (the old builder takes the low-level
-/// `Signer` directly, the new one takes a `SparkSigner`).
+/// functions over their own `spark-wallet` build; the crate path, the signer
+/// wiring, and the wallet construction (`$wallet`) are passed per version,
+/// since the builder API differs between releases.
 macro_rules! version_module {
-    ($name:ident, $krate:ident, $build_signer:item) => {
+    ($name:ident, $krate:ident, $build_signer:item, $wallet:item) => {
         pub mod $name {
             use std::str::FromStr;
             use std::sync::Arc;
@@ -102,15 +103,7 @@ macro_rules! version_module {
                 })
             }
 
-            /// Builds a wallet from `seed` with background processing disabled;
-            /// drive it explicitly with the helpers below.
-            pub async fn wallet(fx: &TestFixtures, seed: &[u8; 32]) -> Result<SparkWallet> {
-                let spark_signer = build_signer(seed)?;
-                Ok(WalletBuilder::new(config(fx)?, spark_signer)
-                    .with_background_processing(false)
-                    .build()
-                    .await?)
-            }
+            $wallet
 
             pub fn address_string(wallet: &SparkWallet) -> Result<String> {
                 Ok(wallet.get_spark_address()?.to_address_string()?)
@@ -207,6 +200,15 @@ version_module!(
             seed,
             spark_wallet_old::Network::Regtest,
         )?))
+    },
+    /// The previous release defaults background processing on, so disable it
+    /// explicitly to keep the wallet offline (driven by the helpers below).
+    pub async fn wallet(fx: &TestFixtures, seed: &[u8; 32]) -> Result<SparkWallet> {
+        let spark_signer = build_signer(seed)?;
+        Ok(WalletBuilder::new(config(fx)?, spark_signer)
+            .with_background_processing(false)
+            .build()
+            .await?)
     }
 );
 
@@ -219,5 +221,13 @@ version_module!(
         Ok(Arc::new(spark_wallet::SparkSignerAdapter::new(Arc::new(
             spark_wallet::DefaultSigner::new(seed, spark_wallet::Network::Regtest)?,
         ))))
+    },
+    /// The current release defers background start until a subscriber
+    /// subscribes; this wallet never does, so it stays offline.
+    pub async fn wallet(fx: &TestFixtures, seed: &[u8; 32]) -> Result<SparkWallet> {
+        let spark_signer = build_signer(seed)?;
+        Ok(WalletBuilder::new(config(fx)?, spark_signer)
+            .build()
+            .await?)
     }
 );
