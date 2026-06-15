@@ -1233,6 +1233,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn validate_server_mode_rejects_cross_chain_directly() {
+        use crate::{CrossChainConfig, default_server_config};
+        let mut config = default_server_config(Network::Regtest);
+        config.cross_chain_config = Some(CrossChainConfig::default());
+        match super::validate_server_mode(&config, false) {
+            Err(SdkError::InvalidInput(m)) => assert!(m.contains("Cross-chain config")),
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
     // ---- finalize_spark_wallet_config ----
 
     #[test]
