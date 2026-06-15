@@ -41,7 +41,8 @@ const SELECT_PAYMENT_SQL = `
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
-           p.deposit_tx_id,
+           pd.tx_id AS deposit_tx_id,
+           pd.vout AS deposit_vout,
            p.spark,
            l.invoice AS lightning_invoice,
            l.payment_hash AS lightning_payment_hash,
@@ -69,6 +70,7 @@ const SELECT_PAYMENT_SQL = `
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
       LEFT JOIN payment_details_token t ON p.id = t.payment_id
       LEFT JOIN payment_details_spark s ON p.id = s.payment_id
+      LEFT JOIN payment_details_deposit pd ON p.id = pd.payment_id
       LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
       LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash`;
 
@@ -362,8 +364,8 @@ class SqliteStorage {
 
   _runPaymentUpsert(payment) {
     const paymentInsert = this.db.prepare(
-      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-       VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @depositTxId, @spark)
+      `INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
+       VALUES (@id, @paymentType, @status, @amount, @fees, @timestamp, @method, @withdrawTxId, @spark)
        ON CONFLICT(id) DO UPDATE SET
          payment_type=excluded.payment_type,
          status=excluded.status,
@@ -372,8 +374,15 @@ class SqliteStorage {
          timestamp=excluded.timestamp,
          method=excluded.method,
          withdraw_tx_id=excluded.withdraw_tx_id,
-         deposit_tx_id=excluded.deposit_tx_id,
          spark=excluded.spark`
+    );
+    const depositInsert = this.db.prepare(
+      `INSERT INTO payment_details_deposit
+        (payment_id, tx_id, vout)
+        VALUES (@id, @txId, @vout)
+        ON CONFLICT(payment_id) DO UPDATE SET
+          tx_id=excluded.tx_id,
+          vout=excluded.vout`
     );
     const lightningInsert = this.db.prepare(
       `INSERT INTO payment_details_lightning
@@ -417,10 +426,16 @@ class SqliteStorage {
       method: payment.method ? JSON.stringify(payment.method) : null,
       withdrawTxId:
         payment.details?.type === "withdraw" ? payment.details.txId : null,
-      depositTxId:
-        payment.details?.type === "deposit" ? payment.details.txId : null,
       spark: payment.details?.type === "spark" ? 1 : null,
     });
+
+    if (payment.details?.type === "deposit") {
+      depositInsert.run({
+        id: payment.id,
+        txId: payment.details.txId,
+        vout: payment.details.vout,
+      });
+    }
 
     if (
       payment.details?.type === "spark" &&
@@ -807,6 +822,7 @@ class SqliteStorage {
       details = {
         type: "deposit",
         txId: row.deposit_tx_id,
+        vout: row.deposit_vout,
       };
     } else if (row.spark) {
       details = {

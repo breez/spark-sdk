@@ -328,6 +328,24 @@ impl SqliteStorage {
             "ALTER TABLE unclaimed_deposits ADD COLUMN is_mature INTEGER NOT NULL DEFAULT 1;",
             // Add conversion_status to payment_metadata
             "ALTER TABLE payment_metadata ADD COLUMN conversion_status TEXT;",
+            // Move deposit details into their own table so vout can be NOT NULL and
+            // the schema matches payment_details_lightning / _token / _spark. We
+            // can't safely backfill the new table from the dropped deposit_tx_id
+            // column: we never stored the original SSP output_index, and vout=0
+            // is a valid output index — defaulting would silently mislabel. Drop
+            // the column and leave the payments row in place. The read path sees
+            // an unjoined deposit row as `details: None` until the resync re-fetches
+            // the SSP user_request and the upsert inserts the new details row.
+            "CREATE TABLE payment_details_deposit (
+                payment_id TEXT PRIMARY KEY,
+                tx_id TEXT NOT NULL,
+                vout INTEGER NOT NULL,
+                FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+             );
+             ALTER TABLE payments DROP COLUMN deposit_tx_id;
+             UPDATE settings
+             SET value = json_set(value, '$.offset', 0)
+             WHERE key = 'sync_offset' AND json_valid(value);",
         ]
     }
 }
@@ -379,18 +397,16 @@ impl SqliteStorage {
     #[allow(clippy::too_many_lines)]
     fn insert_payment_in_tx(tx: &Transaction<'_>, payment: Payment) -> Result<(), StorageError> {
         // Compute detail columns for the main payments row
-        let (withdraw_tx_id, deposit_tx_id, spark): (Option<&str>, Option<&str>, Option<bool>) =
-            match &payment.details {
-                Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None),
-                Some(PaymentDetails::Deposit { tx_id }) => (None, Some(tx_id.as_str()), None),
-                Some(PaymentDetails::Spark { .. }) => (None, None, Some(true)),
-                _ => (None, None, None),
-            };
+        let (withdraw_tx_id, spark): (Option<&str>, Option<bool>) = match &payment.details {
+            Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None),
+            Some(PaymentDetails::Spark { .. }) => (None, Some(true)),
+            _ => (None, None),
+        };
 
         // Insert or update main payment record (including detail columns atomically)
         tx.execute(
-            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 payment_type=excluded.payment_type,
                 status=excluded.status,
@@ -399,7 +415,6 @@ impl SqliteStorage {
                 timestamp=excluded.timestamp,
                 method=excluded.method,
                 withdraw_tx_id=excluded.withdraw_tx_id,
-                deposit_tx_id=excluded.deposit_tx_id,
                 spark=excluded.spark",
             params![
                 payment.id,
@@ -410,7 +425,6 @@ impl SqliteStorage {
                 payment.timestamp,
                 payment.method,
                 withdraw_tx_id,
-                deposit_tx_id,
                 spark,
             ],
         )?;
@@ -491,7 +505,17 @@ impl SqliteStorage {
                     ],
                 )?;
             }
-            Some(PaymentDetails::Withdraw { .. } | PaymentDetails::Deposit { .. }) | None => {}
+            Some(PaymentDetails::Deposit { tx_id, vout }) => {
+                tx.execute(
+                    "INSERT INTO payment_details_deposit (payment_id, tx_id, vout)
+                     VALUES (?, ?, ?)
+                     ON CONFLICT(payment_id) DO UPDATE SET
+                        tx_id=excluded.tx_id,
+                        vout=excluded.vout",
+                    params![payment.id, tx_id, vout],
+                )?;
+            }
+            Some(PaymentDetails::Withdraw { .. }) | None => {}
         }
 
         Ok(())
@@ -848,7 +872,7 @@ impl Storage for SqliteStorage {
             .collect();
         let rows = stmt.query_map(params.as_slice(), |row| {
             let payment = map_payment(row)?;
-            let parent_payment_id: String = row.get(31)?;
+            let parent_payment_id: String = row.get(32)?;
             Ok((parent_payment_id, payment))
         })?;
 
@@ -1395,7 +1419,7 @@ impl Storage for SqliteStorage {
 }
 
 /// Base query for payment lookups.
-/// Column indices 0-30 are used by `map_payment`, index 31 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Column indices 0-31 are used by `map_payment`, index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1405,7 +1429,8 @@ const SELECT_PAYMENT_SQL: &str = "
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
-           p.deposit_tx_id,
+           pd.tx_id AS deposit_tx_id,
+           pd.vout AS deposit_vout,
            p.spark,
            l.invoice AS lightning_invoice,
            l.payment_hash AS lightning_payment_hash,
@@ -1433,6 +1458,7 @@ const SELECT_PAYMENT_SQL: &str = "
       LEFT JOIN payment_details_lightning l ON p.id = l.payment_id
       LEFT JOIN payment_details_token t ON p.id = t.payment_id
       LEFT JOIN payment_details_spark s ON p.id = s.payment_id
+      LEFT JOIN payment_details_deposit pd ON p.id = pd.payment_id
       LEFT JOIN payment_metadata pm ON p.id = pm.payment_id
       LEFT JOIN lnurl_receive_metadata lrm ON l.payment_hash = lrm.payment_hash";
 
@@ -1440,9 +1466,9 @@ const SELECT_PAYMENT_SQL: &str = "
 fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let withdraw_tx_id: Option<String> = row.get(7)?;
     let deposit_tx_id: Option<String> = row.get(8)?;
-    let spark: Option<i32> = row.get(9)?;
-    let lightning_invoice: Option<String> = row.get(10)?;
-    let token_metadata: Option<String> = row.get(20)?;
+    let spark: Option<i32> = row.get(10)?;
+    let lightning_invoice: Option<String> = row.get(11)?;
+    let token_metadata: Option<String> = row.get(21)?;
     let details = match (
         lightning_invoice,
         withdraw_tx_id,
@@ -1451,31 +1477,31 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
-            let payment_hash: String = row.get(11)?;
-            let destination_pubkey: String = row.get(12)?;
-            let description: Option<String> = row.get(13)?;
-            let preimage: Option<String> = row.get(14)?;
+            let payment_hash: String = row.get(12)?;
+            let destination_pubkey: String = row.get(13)?;
+            let description: Option<String> = row.get(14)?;
+            let preimage: Option<String> = row.get(15)?;
             let htlc_status: SparkHtlcStatus =
-                row.get::<_, Option<SparkHtlcStatus>>(15)?.ok_or_else(|| {
+                row.get::<_, Option<SparkHtlcStatus>>(16)?.ok_or_else(|| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        15,
+                        16,
                         rusqlite::types::Type::Null,
                         "htlc_status is required for Lightning payments".into(),
                     )
                 })?;
-            let htlc_expiry_time: u64 = row.get(16)?;
+            let htlc_expiry_time: u64 = row.get(17)?;
             let htlc_details = SparkHtlcDetails {
                 payment_hash,
                 preimage,
                 expiry_time: htlc_expiry_time,
                 status: htlc_status,
             };
-            let lnurl_pay_info: Option<LnurlPayInfo> = row.get(17)?;
-            let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(18)?;
-            let lnurl_nostr_zap_request: Option<String> = row.get(26)?;
-            let lnurl_nostr_zap_receipt: Option<String> = row.get(27)?;
-            let lnurl_sender_comment: Option<String> = row.get(28)?;
-            let lnurl_payment_hash: Option<String> = row.get(29)?;
+            let lnurl_pay_info: Option<LnurlPayInfo> = row.get(18)?;
+            let lnurl_withdraw_info: Option<LnurlWithdrawInfo> = row.get(19)?;
+            let lnurl_nostr_zap_request: Option<String> = row.get(27)?;
+            let lnurl_nostr_zap_receipt: Option<String> = row.get(28)?;
+            let lnurl_sender_comment: Option<String> = row.get(29)?;
+            let lnurl_payment_hash: Option<String> = row.get(30)?;
             let lnurl_receive_metadata = if lnurl_payment_hash.is_some() {
                 Some(LnurlReceiveMetadata {
                     nostr_zap_request: lnurl_nostr_zap_request,
@@ -1496,19 +1522,28 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
-        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
+        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit {
+            tx_id,
+            vout: row.get::<_, Option<u32>>(9)?.ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    9,
+                    rusqlite::types::Type::Null,
+                    "deposit row missing deposit_vout".into(),
+                )
+            })?,
+        }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_str: Option<String> = row.get(24)?;
+            let invoice_details_str: Option<String> = row.get(25)?;
             let invoice_details = invoice_details_str
-                .map(|s| serde_json_from_str(&s, 24))
-                .transpose()?;
-            let htlc_details_str: Option<String> = row.get(25)?;
-            let htlc_details = htlc_details_str
                 .map(|s| serde_json_from_str(&s, 25))
                 .transpose()?;
-            let conversion_info_str: Option<String> = row.get(19)?;
+            let htlc_details_str: Option<String> = row.get(26)?;
+            let htlc_details = htlc_details_str
+                .map(|s| serde_json_from_str(&s, 26))
+                .transpose()?;
+            let conversion_info_str: Option<String> = row.get(20)?;
             let conversion_info: Option<ConversionInfo> = conversion_info_str
-                .map(|s: String| serde_json_from_str(&s, 19))
+                .map(|s: String| serde_json_from_str(&s, 20))
                 .transpose()?;
             Some(PaymentDetails::Spark {
                 invoice_details,
@@ -1517,18 +1552,18 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             })
         }
         (_, _, _, _, Some(metadata)) => {
-            let tx_type: TokenTransactionType = row.get(22)?;
-            let invoice_details_str: Option<String> = row.get(23)?;
+            let tx_type: TokenTransactionType = row.get(23)?;
+            let invoice_details_str: Option<String> = row.get(24)?;
             let invoice_details = invoice_details_str
-                .map(|s| serde_json_from_str(&s, 23))
+                .map(|s| serde_json_from_str(&s, 24))
                 .transpose()?;
-            let conversion_info_str: Option<String> = row.get(19)?;
+            let conversion_info_str: Option<String> = row.get(20)?;
             let conversion_info: Option<ConversionInfo> = conversion_info_str
-                .map(|s: String| serde_json_from_str(&s, 19))
+                .map(|s: String| serde_json_from_str(&s, 20))
                 .transpose()?;
             Some(PaymentDetails::Token {
-                metadata: serde_json_from_str(&metadata, 20)?,
-                tx_hash: row.get(21)?,
+                metadata: serde_json_from_str(&metadata, 21)?,
+                tx_hash: row.get(22)?,
                 tx_type,
                 invoice_details,
                 conversion_info,
@@ -1536,8 +1571,8 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
         }
         _ => None,
     };
-    // Read conversion_status from payment_metadata (column 30)
-    let conversion_status: Option<ConversionStatus> = row.get(30)?;
+    // Read conversion_status from payment_metadata (column 31)
+    let conversion_status: Option<ConversionStatus> = row.get(31)?;
     let conversion_details = conversion_status.map(|status| ConversionDetails {
         status,
         from: None,
@@ -2330,5 +2365,54 @@ mod tests {
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_conversion_status_persistence(Box::new(storage)).await;
+    }
+
+    /// Simulates the post-migration state for a legacy deposit: a row exists in
+    /// `payments` with `method = 'deposit'` but no matching `payment_details_deposit`
+    /// row (the SSP `user_request` hasn't been re-fetched yet). `list_payments` must
+    /// return the payment with `details: None` and `method: Deposit` preserved,
+    /// rather than failing the whole call.
+    #[tokio::test]
+    async fn test_legacy_deposit_without_details_row_returns_none() {
+        use crate::PaymentMethod;
+        use crate::persist::{Storage, StorageListPaymentsRequest};
+        use rusqlite::params;
+
+        let temp_dir = create_temp_dir("sqlite_legacy_deposit");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        // Insert a deposit payments row directly, bypassing insert_payment_in_tx
+        // so no payment_details_deposit row is written.
+        let conn = storage.get_connection().unwrap();
+        conn.execute(
+            "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                "legacy-deposit-1",
+                "receive",
+                "completed",
+                "1000",
+                "0",
+                1_000_i64,
+                PaymentMethod::Deposit,
+            ],
+        )
+        .unwrap();
+
+        let payments = storage
+            .list_payments(StorageListPaymentsRequest::default())
+            .await
+            .unwrap();
+
+        let p = payments
+            .iter()
+            .find(|p| p.id == "legacy-deposit-1")
+            .expect("legacy deposit must appear in list_payments");
+        assert!(
+            p.details.is_none(),
+            "legacy deposit must surface with details: None, got {:?}",
+            p.details
+        );
+        assert_eq!(p.method, PaymentMethod::Deposit);
     }
 }

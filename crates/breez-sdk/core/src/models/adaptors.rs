@@ -197,9 +197,25 @@ impl PaymentDetails {
                 htlc_details: None,
                 conversion_info: None,
             },
-            SspUserRequest::ClaimStaticDeposit(request) => PaymentDetails::Deposit {
-                tx_id: request.transaction_id.clone(),
-            },
+            SspUserRequest::ClaimStaticDeposit(request) => {
+                let Ok(vout) = u32::try_from(request.output_index) else {
+                    // vout=0 is a valid output index, so we can't safely default.
+                    // Returning Ok(None) mirrors the early return for a missing
+                    // user_request above: the downstream branch records the deposit
+                    // as Pending without details and the sync loop keeps advancing
+                    // the offset. Erroring here would deadlock the whole sync until
+                    // the offending transfer leaves the SSP's response.
+                    warn!(
+                        "Invalid output_index {} in SspUserRequest::ClaimStaticDeposit; skipping details",
+                        request.output_index
+                    );
+                    return Ok(None);
+                };
+                PaymentDetails::Deposit {
+                    tx_id: request.transaction_id.clone(),
+                    vout,
+                }
+            }
         };
 
         Ok(Some(details))

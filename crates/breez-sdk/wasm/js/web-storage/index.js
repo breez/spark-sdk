@@ -486,6 +486,65 @@ class MigrationManager {
           }
         }
       },
+      {
+        // Add deposit_vout to distinguish deposits sharing a funding tx. The
+        // new field is carried inside the JSON `details` blob. We can't safely
+        // backfill vout on the existing blobs: we never stored the original SSP
+        // output_index, and vout=0 is a valid output index — defaulting would
+        // silently mislabel. Instead we clear `details` on legacy deposit blobs
+        // so the read path returns `details: None` (matches what the SQL
+        // backends do by leaving the payments row but having no matching
+        // payment_details_deposit row). Reset the bitcoin sync offset so the
+        // resync re-fetches the SSP user_request and the upsert rewrites the
+        // blob with the proper vout.
+        name: "Clear legacy deposit details and reset sync offset for vout",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("payments")) {
+            const paymentStore = transaction.objectStore("payments");
+            const cursorRequest = paymentStore.openCursor();
+            cursorRequest.onsuccess = (event) => {
+              const cursor = event.target.result;
+              if (!cursor) return;
+              const payment = cursor.value;
+              let details = null;
+              if (payment.details && typeof payment.details === "string") {
+                try {
+                  details = JSON.parse(payment.details);
+                } catch (e) {
+                  details = null;
+                }
+              } else {
+                details = payment.details;
+              }
+              if (details && details.type === "deposit") {
+                payment.details = null;
+                cursor.update(payment);
+              }
+              cursor.continue();
+            };
+          }
+          if (db.objectStoreNames.contains("settings")) {
+            const settingsStore = transaction.objectStore("settings");
+            const getRequest = settingsStore.get("sync_offset");
+
+            getRequest.onsuccess = () => {
+              const syncCache = getRequest.result;
+              if (syncCache && syncCache.value) {
+                try {
+                  const syncInfo = JSON.parse(syncCache.value);
+                  syncInfo.offset = 0;
+                  settingsStore.put({
+                    key: "sync_offset",
+                    value: JSON.stringify(syncInfo),
+                  });
+                } catch (e) {
+                  // If parsing fails, just continue
+                }
+              }
+            };
+          }
+        },
+      },
     ];
   }
 }
@@ -514,7 +573,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 17; // Current schema version (= migration count)
+    this.dbVersion = 18; // Current schema version (= migration count)
   }
 
   /**

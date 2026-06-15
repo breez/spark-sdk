@@ -485,6 +485,7 @@ pub enum PaymentDetails {
     },
     Deposit {
         tx_id: String,
+        vout: u32,
     },
 }
 

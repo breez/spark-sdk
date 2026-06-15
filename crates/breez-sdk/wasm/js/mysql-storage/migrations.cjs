@@ -508,6 +508,30 @@ class MysqlMigrationManager {
           `ALTER TABLE brz_schema_migrations MODIFY COLUMN applied_at DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))`,
         ],
       },
+      {
+        // Move deposit details into their own table so vout can be NOT NULL and
+        // the schema matches brz_payment_details_lightning / _token / _spark. We
+        // can't safely backfill the new table from the dropped deposit_tx_id
+        // column: we never stored the original SSP output_index, and vout=0 is a
+        // valid output index — defaulting would silently mislabel. Drop the
+        // column and leave the brz_payments row in place. The read path sees an
+        // unjoined deposit row as `details: None` until the resync re-fetches the
+        // SSP user_request and the upsert inserts the new details row.
+        name: "Move deposit details into brz_payment_details_deposit table",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS brz_payment_details_deposit (
+              user_id VARBINARY(33) NOT NULL,
+              payment_id VARCHAR(255) NOT NULL,
+              tx_id VARCHAR(255) NOT NULL,
+              vout INT UNSIGNED NOT NULL,
+              PRIMARY KEY (user_id, payment_id)
+          )`,
+          `ALTER TABLE brz_payments DROP COLUMN deposit_tx_id`,
+          `UPDATE brz_settings
+           SET value = JSON_SET(value, '$.offset', 0)
+           WHERE \`key\` = 'sync_offset' AND value IS NOT NULL`,
+        ],
+      },
     ];
   }
 }

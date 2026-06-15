@@ -469,6 +469,35 @@ impl MysqlStorage {
                 "ALTER TABLE brz_schema_migrations MODIFY COLUMN applied_at \
                  DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
             )],
+            // Migration 18: Move deposit details into their own table so vout can be
+            // NOT NULL and the schema matches brz_payment_details_lightning / _token /
+            // _spark. We can't safely backfill the new table from the dropped
+            // deposit_tx_id column: we never stored the original SSP output_index,
+            // and vout=0 is a valid output index — defaulting would silently
+            // mislabel. Drop the column and leave the brz_payments row in place.
+            // The read path sees an unjoined deposit row as `details: None` until
+            // the resync re-fetches the SSP user_request and the upsert inserts the
+            // new details row.
+            vec![
+                Migration::sql(
+                    "CREATE TABLE IF NOT EXISTS brz_payment_details_deposit (
+                        user_id VARBINARY(33) NOT NULL,
+                        payment_id VARCHAR(255) NOT NULL,
+                        tx_id VARCHAR(255) NOT NULL,
+                        vout INT UNSIGNED NOT NULL,
+                        PRIMARY KEY (user_id, payment_id)
+                    )",
+                ),
+                Migration::DropColumn {
+                    table: "brz_payments",
+                    column: "deposit_tx_id",
+                },
+                Migration::sql(
+                    "UPDATE brz_settings
+                     SET value = JSON_SET(value, '$.offset', 0)
+                     WHERE `key` = 'sync_offset' AND value IS NOT NULL",
+                ),
+            ],
         ]
     }
 }
@@ -696,17 +725,15 @@ impl MysqlStorage {
         identity: &[u8],
         payment: Payment,
     ) -> Result<(), StorageError> {
-        let (withdraw_tx_id, deposit_tx_id, spark): (Option<&str>, Option<&str>, Option<bool>) =
-            match &payment.details {
-                Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None, None),
-                Some(PaymentDetails::Deposit { tx_id }) => (None, Some(tx_id.as_str()), None),
-                Some(PaymentDetails::Spark { .. }) => (None, None, Some(true)),
-                _ => (None, None, None),
-            };
+        let (withdraw_tx_id, spark): (Option<&str>, Option<bool>) = match &payment.details {
+            Some(PaymentDetails::Withdraw { tx_id }) => (Some(tx_id.as_str()), None),
+            Some(PaymentDetails::Spark { .. }) => (None, Some(true)),
+            _ => (None, None),
+        };
 
         tx.exec_drop(
-            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, deposit_tx_id, spark)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, withdraw_tx_id, spark)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE
                     payment_type = VALUES(payment_type),
                     status = VALUES(status),
@@ -715,7 +742,6 @@ impl MysqlStorage {
                     timestamp = VALUES(timestamp),
                     method = VALUES(method),
                     withdraw_tx_id = VALUES(withdraw_tx_id),
-                    deposit_tx_id = VALUES(deposit_tx_id),
                     spark = VALUES(spark)",
             (
                 identity.to_vec(),
@@ -727,7 +753,6 @@ impl MysqlStorage {
                 i64::try_from(payment.timestamp)?,
                 Some(payment.method.to_string()),
                 withdraw_tx_id.map(str::to_string),
-                deposit_tx_id.map(str::to_string),
                 spark,
             ),
         )
@@ -822,7 +847,19 @@ impl MysqlStorage {
                 .await
                 .map_err(map_db_error)?;
             }
-            Some(PaymentDetails::Withdraw { .. } | PaymentDetails::Deposit { .. }) | None => {}
+            Some(PaymentDetails::Deposit { tx_id, vout }) => {
+                tx.exec_drop(
+                    "INSERT INTO brz_payment_details_deposit (user_id, payment_id, tx_id, vout)
+                         VALUES (?, ?, ?, ?)
+                         ON DUPLICATE KEY UPDATE
+                            tx_id = VALUES(tx_id),
+                            vout = VALUES(vout)",
+                    (identity.to_vec(), &payment.id, tx_id, vout),
+                )
+                .await
+                .map_err(map_db_error)?;
+            }
+            Some(PaymentDetails::Withdraw { .. }) | None => {}
         }
 
         Ok(())
@@ -1214,7 +1251,7 @@ impl Storage for MysqlStorage {
         for row in &rows {
             let payment = map_payment(row)?;
             let parent_payment_id: String = row
-                .get(31)
+                .get(32)
                 .ok_or_else(|| StorageError::Implementation("missing parent_payment_id".into()))?;
             result.entry(parent_payment_id).or_default().push(payment);
         }
@@ -1810,8 +1847,8 @@ impl Storage for MysqlStorage {
     }
 }
 
-/// Base query for payment lookups. Indices 0-30 are used by `map_payment`,
-/// index 31 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
+/// Base query for payment lookups. Indices 0-31 are used by `map_payment`,
+/// index 32 (`parent_payment_id`) is only used by `get_payments_by_parent_ids`.
 const SELECT_PAYMENT_SQL: &str = "
     SELECT p.id,
            p.payment_type,
@@ -1821,7 +1858,8 @@ const SELECT_PAYMENT_SQL: &str = "
            p.timestamp,
            p.method,
            p.withdraw_tx_id,
-           p.deposit_tx_id,
+           pd.tx_id AS deposit_tx_id,
+           pd.vout AS deposit_vout,
            p.spark,
            l.invoice AS lightning_invoice,
            l.payment_hash AS lightning_payment_hash,
@@ -1847,6 +1885,7 @@ const SELECT_PAYMENT_SQL: &str = "
            pm.parent_payment_id
       FROM brz_payments p
       LEFT JOIN brz_payment_details_lightning l ON p.id = l.payment_id AND p.user_id = l.user_id
+      LEFT JOIN brz_payment_details_deposit pd ON p.id = pd.payment_id AND p.user_id = pd.user_id
       LEFT JOIN brz_payment_details_token t ON p.id = t.payment_id AND p.user_id = t.user_id
       LEFT JOIN brz_payment_details_spark s ON p.id = s.payment_id AND p.user_id = s.user_id
       LEFT JOIN brz_payment_metadata pm ON p.id = pm.payment_id AND p.user_id = pm.user_id
@@ -1856,9 +1895,9 @@ const SELECT_PAYMENT_SQL: &str = "
 fn map_payment(row: &Row) -> Result<Payment, StorageError> {
     let withdraw_tx_id: Option<String> = get_opt_str(row, 7);
     let deposit_tx_id: Option<String> = get_opt_str(row, 8);
-    let spark: Option<bool> = get_opt_bool(row, 9);
-    let lightning_invoice: Option<String> = get_opt_str(row, 10);
-    let token_metadata: Option<String> = get_opt_str(row, 20);
+    let spark: Option<bool> = get_opt_bool(row, 10);
+    let lightning_invoice: Option<String> = get_opt_str(row, 11);
+    let token_metadata: Option<String> = get_opt_str(row, 21);
 
     let details = match (
         lightning_invoice,
@@ -1868,11 +1907,11 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
         token_metadata,
     ) {
         (Some(invoice), _, _, _, _) => {
-            let payment_hash: String = get_str(row, 11)?;
-            let destination_pubkey: String = get_str(row, 12)?;
-            let description: Option<String> = get_opt_str(row, 13);
-            let preimage: Option<String> = get_opt_str(row, 14);
-            let htlc_status_str: Option<String> = get_opt_str(row, 15);
+            let payment_hash: String = get_str(row, 12)?;
+            let destination_pubkey: String = get_str(row, 13)?;
+            let description: Option<String> = get_opt_str(row, 14);
+            let preimage: Option<String> = get_opt_str(row, 15);
+            let htlc_status_str: Option<String> = get_opt_str(row, 16);
             let htlc_status: SparkHtlcStatus = htlc_status_str
                 .ok_or_else(|| {
                     StorageError::Implementation(
@@ -1883,19 +1922,19 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                     s.parse()
                         .map_err(|e: String| StorageError::Serialization(e))
                 })?;
-            let htlc_expiry_time: i64 = get_i64(row, 16)?;
+            let htlc_expiry_time: i64 = get_i64(row, 17)?;
             let htlc_details = SparkHtlcDetails {
                 payment_hash,
                 preimage,
                 expiry_time: u64::try_from(htlc_expiry_time)?,
                 status: htlc_status,
             };
-            let lnurl_pay_info_str: Option<String> = get_opt_str(row, 17);
-            let lnurl_withdraw_info_str: Option<String> = get_opt_str(row, 18);
-            let lnurl_nostr_zap_request: Option<String> = get_opt_str(row, 26);
-            let lnurl_nostr_zap_receipt: Option<String> = get_opt_str(row, 27);
-            let lnurl_sender_comment: Option<String> = get_opt_str(row, 28);
-            let lnurl_payment_hash: Option<String> = get_opt_str(row, 29);
+            let lnurl_pay_info_str: Option<String> = get_opt_str(row, 18);
+            let lnurl_withdraw_info_str: Option<String> = get_opt_str(row, 19);
+            let lnurl_nostr_zap_request: Option<String> = get_opt_str(row, 27);
+            let lnurl_nostr_zap_receipt: Option<String> = get_opt_str(row, 28);
+            let lnurl_sender_comment: Option<String> = get_opt_str(row, 29);
+            let lnurl_payment_hash: Option<String> = get_opt_str(row, 30);
 
             let lnurl_pay_info: Option<LnurlPayInfo> = from_json_string_opt(lnurl_pay_info_str)?;
             let lnurl_withdraw_info: Option<LnurlWithdrawInfo> =
@@ -1921,13 +1960,18 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
-        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit { tx_id }),
+        (_, _, Some(tx_id), _, _) => Some(PaymentDetails::Deposit {
+            tx_id,
+            vout: get_opt_u32(row, 9).ok_or_else(|| {
+                StorageError::Serialization("deposit row missing deposit_vout".to_string())
+            })?,
+        }),
         (_, _, _, Some(_), _) => {
-            let invoice_details_str: Option<String> = get_opt_str(row, 24);
+            let invoice_details_str: Option<String> = get_opt_str(row, 25);
             let invoice_details = from_json_string_opt(invoice_details_str)?;
-            let htlc_details_str: Option<String> = get_opt_str(row, 25);
+            let htlc_details_str: Option<String> = get_opt_str(row, 26);
             let htlc_details = from_json_string_opt(htlc_details_str)?;
-            let conversion_info_str: Option<String> = get_opt_str(row, 19);
+            let conversion_info_str: Option<String> = get_opt_str(row, 20);
             let conversion_info: Option<ConversionInfo> =
                 from_json_string_opt(conversion_info_str)?;
             Some(PaymentDetails::Spark {
@@ -1937,19 +1981,19 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             })
         }
         (_, _, _, _, Some(metadata_str)) => {
-            let tx_type_str: String = get_str(row, 22)?;
+            let tx_type_str: String = get_str(row, 23)?;
             let tx_type = tx_type_str
                 .parse()
                 .map_err(|e: String| StorageError::Serialization(e))?;
-            let invoice_details_str: Option<String> = get_opt_str(row, 23);
+            let invoice_details_str: Option<String> = get_opt_str(row, 24);
             let invoice_details = from_json_string_opt(invoice_details_str)?;
-            let conversion_info_str: Option<String> = get_opt_str(row, 19);
+            let conversion_info_str: Option<String> = get_opt_str(row, 20);
             let conversion_info: Option<ConversionInfo> =
                 from_json_string_opt(conversion_info_str)?;
             Some(PaymentDetails::Token {
                 metadata: serde_json::from_str(&metadata_str)
                     .map_err(|e| StorageError::Serialization(e.to_string()))?,
-                tx_hash: get_str(row, 21)?,
+                tx_hash: get_str(row, 22)?,
                 tx_type,
                 invoice_details,
                 conversion_info,
@@ -1987,7 +2031,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 .unwrap_or(PaymentMethod::Lightning)
         }),
         conversion_details: {
-            let conversion_status_str: Option<String> = get_opt_str(row, 30);
+            let conversion_status_str: Option<String> = get_opt_str(row, 31);
             conversion_status_str
                 .map(|s| {
                     s.parse::<ConversionStatus>()
@@ -2044,6 +2088,10 @@ fn get_opt_bool(row: &Row, idx: usize) -> Option<bool> {
 
 fn get_opt_i64(row: &Row, idx: usize) -> Option<i64> {
     row.get::<Option<i64>, _>(idx).flatten()
+}
+
+fn get_opt_u32(row: &Row, idx: usize) -> Option<u32> {
+    row.get::<Option<u32>, _>(idx).flatten()
 }
 
 #[cfg(test)]
@@ -2221,6 +2269,59 @@ mod tests {
     async fn test_conversion_status_persistence() {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_conversion_status_persistence(Box::new(fixture.storage)).await;
+    }
+
+    /// Simulates the post-migration state for a legacy deposit: a row exists in
+    /// `brz_payments` with `method = 'deposit'` but no matching
+    /// `brz_payment_details_deposit` row (the SSP `user_request` hasn't been
+    /// re-fetched yet). `list_payments` must return the payment with
+    /// `details: None` and `method: Deposit` preserved.
+    #[tokio::test]
+    async fn test_legacy_deposit_without_details_row_returns_none() {
+        use crate::PaymentMethod;
+        use crate::persist::StorageListPaymentsRequest;
+        use mysql_async::prelude::Queryable;
+
+        let fixture = MysqlTestFixture::new().await;
+
+        // Insert a deposit brz_payments row directly via the pool, bypassing
+        // insert_payment_in_tx so no brz_payment_details_deposit row is written.
+        let mut conn = fixture.storage.pool.get_conn().await.expect("get_conn");
+        conn.exec_drop(
+            "INSERT INTO brz_payments
+             (user_id, id, payment_type, status, amount, fees, timestamp, method)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                TEST_IDENTITY_A.to_vec(),
+                "legacy-deposit-1",
+                "receive",
+                "completed",
+                "1000",
+                "0",
+                1_000_i64,
+                "deposit",
+            ),
+        )
+        .await
+        .expect("seed legacy deposit");
+        drop(conn);
+
+        let payments = fixture
+            .storage
+            .list_payments(StorageListPaymentsRequest::default())
+            .await
+            .expect("list_payments");
+
+        let p = payments
+            .iter()
+            .find(|p| p.id == "legacy-deposit-1")
+            .expect("legacy deposit must appear in list_payments");
+        assert!(
+            p.details.is_none(),
+            "legacy deposit must surface with details: None, got {:?}",
+            p.details
+        );
+        assert_eq!(p.method, PaymentMethod::Deposit);
     }
 
     /// A second 33-byte test identity (must differ from `TEST_IDENTITY_A`).
@@ -2616,9 +2717,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             version,
-            Some(17),
-            "migration version must advance to 17 (the legacy fixture starts at 16, migration 17 \
-             pins applied_at default to UTC)"
+            Some(18),
+            "migration version must advance to 18 (the legacy fixture starts at 16; migration 17 \
+             pins applied_at default to UTC, migration 18 moves deposit details into the \
+             brz_payment_details_deposit table)"
         );
 
         let payment_count: Option<i64> = conn
@@ -2891,7 +2993,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(17), "migration must advance to 17");
+        assert_eq!(version, Some(18), "migration must advance to 18");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

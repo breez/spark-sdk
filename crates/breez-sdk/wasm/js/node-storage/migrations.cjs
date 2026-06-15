@@ -433,6 +433,29 @@ class MigrationManager {
           `CREATE INDEX idx_payment_metadata_payment_id ON payment_metadata(payment_id)`,
         ],
       },
+      {
+        // Move deposit details into their own table so vout can be NOT NULL and
+        // the schema matches payment_details_lightning / _token / _spark. We can't
+        // safely backfill the new table from the dropped deposit_tx_id column: we
+        // never stored the original SSP output_index, and vout=0 is a valid output
+        // index — defaulting would silently mislabel. Drop the column and leave
+        // the payments row in place. The read path sees an unjoined deposit row
+        // as `details: None` until the resync re-fetches the SSP user_request and
+        // the upsert inserts the new details row.
+        name: "Move deposit details into payment_details_deposit table",
+        sql: [
+          `CREATE TABLE payment_details_deposit (
+              payment_id TEXT PRIMARY KEY,
+              tx_id TEXT NOT NULL,
+              vout INTEGER NOT NULL,
+              FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE CASCADE
+          )`,
+          `ALTER TABLE payments DROP COLUMN deposit_tx_id`,
+          `UPDATE settings
+           SET value = json_set(value, '$.offset', 0)
+           WHERE key = 'sync_offset' AND json_valid(value)`,
+        ],
+      },
     ];
   }
 }
