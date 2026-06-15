@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::accounts::spark_address_format;
 use super::config::TurnkeyConfig;
 use super::error::TurnkeyError;
-use super::transport::TurnkeyClient;
+use super::transport::{OnConflict, TurnkeyClient};
 use super::types::{
     ADDRESS_FORMAT_COMPRESSED, CURVE_SECP256K1, PATH_FORMAT_BIP32, WalletAccountParams,
 };
@@ -150,6 +150,8 @@ impl TurnkeyWalletManager {
                 CREATE_WALLET_TYPE,
                 intent,
                 CREATE_WALLET_RESULT,
+                // The 409 is recovered by name below, not retried.
+                OnConflict::Surface,
             )
             .await;
         match result {
@@ -189,6 +191,7 @@ impl TurnkeyWalletManager {
                     delete_without_export: true,
                 },
                 DELETE_WALLETS_RESULT,
+                OnConflict::Retry,
             )
             .await?;
         Ok(())
@@ -202,7 +205,7 @@ impl TurnkeyWalletManager {
         };
         let response: ListWalletsResponse = self
             .client
-            .process_request(LIST_WALLETS_PATH, &request)
+            .process_request(LIST_WALLETS_PATH, &request, OnConflict::Surface)
             .await?;
         Ok(response
             .wallets

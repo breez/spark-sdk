@@ -60,7 +60,7 @@ use super::accounts::{
     decode_scalar_32, ecdsa_from_rs, schnorr_from_rs, spark_address_format, xpriv_from_secret,
 };
 use super::error::TurnkeyError;
-use super::transport::TurnkeyClient;
+use super::transport::{OnConflict, TurnkeyClient};
 use super::types::{
     ADDRESS_FORMAT_COMPRESSED, HASH_FUNCTION_NO_OP, HASH_FUNCTION_SHA256,
     SPARK_CLAIM_TRANSFER_PATH, SPARK_CLAIM_TRANSFER_RESULT, SPARK_CLAIM_TRANSFER_TYPE,
@@ -436,6 +436,7 @@ impl TurnkeySparkSigner {
                     signatures,
                 },
                 SPARK_SIGN_FROST_RESULT,
+                OnConflict::Retry,
             )
             .await
             .map_err(to_spark_err)?;
@@ -597,6 +598,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
                 SPARK_PREPARE_TRANSFER_TYPE,
                 intent,
                 SPARK_PREPARE_TRANSFER_RESULT,
+                OnConflict::Retry,
             )
             .await
             .map_err(to_spark_err)?;
@@ -649,6 +651,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
                 SPARK_CLAIM_TRANSFER_TYPE,
                 intent,
                 SPARK_CLAIM_TRANSFER_RESULT,
+                OnConflict::Retry,
             )
             .await
             .map_err(to_spark_err)?;
@@ -679,6 +682,7 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
                 SPARK_PREPARE_LIGHTNING_RECEIVE_TYPE,
                 intent,
                 SPARK_PREPARE_LIGHTNING_RECEIVE_RESULT,
+                OnConflict::Retry,
             )
             .await
             .map_err(to_spark_err)?;

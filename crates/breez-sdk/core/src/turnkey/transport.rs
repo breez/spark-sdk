@@ -108,6 +108,15 @@ fn retry_after_delay(resp: &HttpResponse) -> Option<Duration> {
     Some(Duration::from_secs(secs))
 }
 
+/// Whether to retry or surface an HTTP 409 (conflict) response.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnConflict {
+    /// Retry the request within the retry budget.
+    Retry,
+    /// Return the 409 to the caller.
+    Surface,
+}
+
 pub(crate) struct TurnkeyClient {
     http: Arc<dyn HttpClient>,
     base_url: String,
@@ -145,7 +154,10 @@ impl TurnkeyClient {
     /// with exponential backoff per [`TurnkeyRetryConfig`]. The body is stamped
     /// once and replayed verbatim: the signature covers only the body, and
     /// activity submits carry a timestamp that Turnkey fingerprints for dedup,
-    /// so a retried submit never double-executes. A server-provided
+    /// so a retried submit never double-executes (it returns the original
+    /// activity). With [`OnConflict::Retry`], a 409 from such a resubmit (the
+    /// original still in flight) is also retried until it converges; with
+    /// [`OnConflict::Surface`] the 409 is returned. A server-provided
     /// `Retry-After` overrides the backoff delay. Every retry is bounded by the
     /// configured request timeout: a wait that would end past it (a long
     /// `Retry-After`, or a late attempt with little budget left) fails the
@@ -154,6 +166,7 @@ impl TurnkeyClient {
         &self,
         path: &str,
         request: &Req,
+        on_conflict: OnConflict,
     ) -> Result<Resp, TurnkeyError>
     where
         Req: Serialize + ?Sized,
@@ -183,7 +196,9 @@ impl TurnkeyClient {
                         .map_err(|e| TurnkeyError::Deserialize(e.to_string()));
                 }
                 Ok(resp)
-                    if attempt < self.retry.max_retries && is_retryable_status(resp.status) =>
+                    if attempt < self.retry.max_retries
+                        && (is_retryable_status(resp.status)
+                            || (resp.status == 409 && on_conflict == OnConflict::Retry)) =>
                 {
                     attempt = attempt.saturating_add(1);
                     let delay = retry_after_delay(&resp)
@@ -227,11 +242,12 @@ impl TurnkeyClient {
         &self,
         path: &str,
         request: &Req,
+        on_conflict: OnConflict,
     ) -> Result<Activity, TurnkeyError>
     where
         Req: Serialize + ?Sized,
     {
-        let response: ActivityResponse = self.process_request(path, request).await?;
+        let response: ActivityResponse = self.process_request(path, request, on_conflict).await?;
         let mut activity = response.activity.ok_or(TurnkeyError::MissingActivity)?;
         let mut attempt: u32 = 0;
         loop {
@@ -268,7 +284,10 @@ impl TurnkeyClient {
             organization_id: &self.organization_id,
             activity_id,
         };
-        let response: ActivityResponse = self.process_request(GET_ACTIVITY_PATH, &request).await?;
+        // A poll is a read; it never hits the duplicate-submit 409.
+        let response: ActivityResponse = self
+            .process_request(GET_ACTIVITY_PATH, &request, OnConflict::Surface)
+            .await?;
         response.activity.ok_or(TurnkeyError::MissingActivity)
     }
 
@@ -280,6 +299,7 @@ impl TurnkeyClient {
         activity_type: &str,
         parameters: P,
         result_field: &str,
+        on_conflict: OnConflict,
     ) -> Result<R, TurnkeyError>
     where
         P: Serialize,
@@ -291,7 +311,7 @@ impl TurnkeyClient {
             organization_id: &self.organization_id,
             parameters,
         };
-        let activity = self.process_activity(path, &envelope).await?;
+        let activity = self.process_activity(path, &envelope, on_conflict).await?;
         let value = activity.result.get(result_field).ok_or_else(|| {
             TurnkeyError::UnexpectedResponse(format!("missing {result_field} in activity result"))
         })?;

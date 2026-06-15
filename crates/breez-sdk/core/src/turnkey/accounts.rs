@@ -10,7 +10,7 @@ use crate::Network;
 use turnkey_enclave_encrypt::{ExportClient, QuorumPublicKey};
 
 use super::error::TurnkeyError;
-use super::transport::TurnkeyClient;
+use super::transport::{OnConflict, TurnkeyClient};
 use super::types::{
     ADDRESS_FORMAT_COMPRESSED, ADDRESS_FORMAT_SPARK_MAINNET, ADDRESS_FORMAT_SPARK_REGTEST,
     CREATE_WALLET_ACCOUNTS_PATH, CREATE_WALLET_ACCOUNTS_RESULT, CREATE_WALLET_ACCOUNTS_TYPE,
@@ -57,6 +57,9 @@ impl TurnkeyClient {
                 CREATE_WALLET_ACCOUNTS_TYPE,
                 intent,
                 CREATE_WALLET_ACCOUNTS_RESULT,
+                // A 409 here is a permanent "account at this path exists", which
+                // we recover from by reading the existing address.
+                OnConflict::Surface,
             )
             .await;
         match result {
@@ -78,7 +81,7 @@ impl TurnkeyClient {
             path,
         };
         let resp: GetWalletAccountResponse = self
-            .process_request(GET_WALLET_ACCOUNT_PATH, &request)
+            .process_request(GET_WALLET_ACCOUNT_PATH, &request, OnConflict::Surface)
             .await?;
         Ok(resp.account.address)
     }
@@ -93,7 +96,11 @@ impl TurnkeyClient {
             path: path.clone(),
         };
         if let Ok(resp) = self
-            .process_request::<_, GetWalletAccountResponse>(GET_WALLET_ACCOUNT_PATH, &request)
+            .process_request::<_, GetWalletAccountResponse>(
+                GET_WALLET_ACCOUNT_PATH,
+                &request,
+                OnConflict::Surface,
+            )
             .await
             && let Some(public_key) = resp.account.public_key
         {
@@ -120,6 +127,7 @@ impl TurnkeyClient {
                 hash_function,
             },
             SIGN_RAW_PAYLOAD_RESULT,
+            OnConflict::Retry,
         )
         .await
     }
@@ -146,6 +154,7 @@ impl TurnkeyClient {
                     target_public_key,
                 },
                 EXPORT_WALLET_ACCOUNT_RESULT,
+                OnConflict::Retry,
             )
             .await?;
         let private_bytes = export_client
