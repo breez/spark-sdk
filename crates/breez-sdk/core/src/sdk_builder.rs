@@ -75,8 +75,11 @@ struct BuildSparkWalletParams {
     config: SparkWalletConfig,
     spark_signer: Arc<dyn SparkSigner>,
     session_store: Arc<dyn SessionStore>,
-    shutdown_receiver: watch::Receiver<()>,
-    background_services_enabled: bool,
+    /// `Some` only in client mode. Wiring it in server mode would leave the
+    /// wallet holding a stored `cancellation_token` receiver that's never
+    /// consumed (server mode never calls `start_background_processing`), which
+    /// would stall `disconnect`'s `Sender::closed()` await forever.
+    shutdown_receiver: Option<watch::Receiver<()>>,
     tree_store: Option<Arc<dyn spark_wallet::TreeStore>>,
     token_output_store: Option<Arc<dyn spark_wallet::TokenOutputStore>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
@@ -426,8 +429,7 @@ impl SdkBuilder {
             config: spark_wallet_config,
             spark_signer: Arc::clone(&signers.spark),
             session_store,
-            shutdown_receiver: shutdown_sender.subscribe(),
-            background_services_enabled,
+            shutdown_receiver: background_services_enabled.then(|| shutdown_sender.subscribe()),
             tree_store: stores.tree_store.clone(),
             token_output_store: stores.token_output_store.clone(),
             payment_observer: self.payment_observer,
@@ -746,9 +748,10 @@ fn wrap_session_store(
 /// Builds the [`SparkWallet`] from the assembled config, signers and stores.
 async fn build_spark_wallet(params: BuildSparkWalletParams) -> Result<Arc<SparkWallet>, SdkError> {
     let mut wallet_builder = spark_wallet::WalletBuilder::new(params.config, params.spark_signer)
-        .with_cancellation_token(params.shutdown_receiver)
-        .with_session_store(params.session_store)
-        .with_background_processing(params.background_services_enabled);
+        .with_session_store(params.session_store);
+    if let Some(receiver) = params.shutdown_receiver {
+        wallet_builder = wallet_builder.with_cancellation_token(receiver);
+    }
     if let Some(provider) = &params.context.jwt_header_provider {
         wallet_builder = wallet_builder.with_so_extra_header_provider(
             Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>

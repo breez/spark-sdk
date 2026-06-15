@@ -124,10 +124,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(spark_wallet::SparkSignerAdapter::new(Arc::new(signer)));
     let wallet = Arc::new(spark_wallet::SparkWallet::connect(spark_config, spark_signer).await?);
 
-    // Spawn event listener
-    let clone = Arc::clone(&wallet);
+    let mut receiver = wallet.subscribe_events();
     tokio::spawn(async move {
-        let mut receiver = clone.subscribe_events();
         loop {
             tokio::select! {
                 Ok(event) = receiver.recv() => {
@@ -146,6 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+    wallet.start_background_processing().await;
 
     // Setup readline
     let rl = &mut Editor::new()?;

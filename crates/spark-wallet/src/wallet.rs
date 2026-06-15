@@ -165,10 +165,23 @@ macro_rules! with_leafs_spent_retry {
 }
 
 pub struct SparkWallet {
-    /// Cancellation token sender for internal use. When dropped, background tasks will stop.
-    /// This is `Some` only when no external cancellation token was provided.
+    /// Sender held for lifetime management when no external cancellation token
+    /// was provided to the builder. Dropping it cancels the receiver clones in
+    /// background tasks, so they exit when the wallet is dropped.
     #[allow(dead_code)]
     cancel: Option<watch::Sender<()>>,
+    /// Receiver moved into the background tasks on the first call to
+    /// [`Self::start_background_processing`]. Wrapped in `Mutex<Option<_>>` so
+    /// that first call can `take()` it: keeping a permanent receiver on `self`
+    /// would prevent [`watch::Sender::closed`] (used by the SDK's `disconnect`)
+    /// from ever firing while the wallet is alive. Tied to either the external
+    /// token passed via [`WalletBuilder::with_cancellation_token`] or the
+    /// internal sender in [`Self::cancel`].
+    cancellation_token: tokio::sync::Mutex<Option<watch::Receiver<()>>>,
+    /// Single-flight guard for [`Self::start_background_processing`] so callers
+    /// can invoke it repeatedly without spawning duplicate operator
+    /// subscriptions, refresh tasks, or auto-optimizer loops.
+    background_started: tokio::sync::OnceCell<()>,
     config: SparkWalletConfig,
     deposit_service: Arc<DepositService>,
     event_manager: Arc<EventManager>,
@@ -212,7 +225,6 @@ impl SparkWallet {
             None,
             None,
             None,
-            true,
             None,
         )
         .await
@@ -230,7 +242,6 @@ impl SparkWallet {
         transfer_observer: Option<Arc<dyn TransferObserver>>,
         ssp_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
         so_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
-        with_background_processing: bool,
         cancellation_token: Option<watch::Receiver<()>>,
     ) -> Result<Self, SparkWalletError> {
         config.validate()?;
@@ -368,7 +379,8 @@ impl SparkWallet {
             Some(auto_optimization_event_handler),
         ));
 
-        // Use external cancellation token if provided, otherwise create an internal one
+        // Use the external cancellation token if provided, otherwise create an
+        // internal sender we hold for the wallet's lifetime.
         let (cancel, cancellation_token) = match cancellation_token {
             Some(token) => (None, token),
             None => {
@@ -377,29 +389,10 @@ impl SparkWallet {
             }
         };
 
-        if with_background_processing {
-            let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
-            let background_processor = Arc::new(BackgroundProcessor::new(
-                Arc::clone(&operator_pool),
-                Arc::clone(&event_manager),
-                identity_public_key,
-                reconnect_interval,
-                Arc::clone(&tree_service),
-                Arc::clone(&service_provider),
-                Arc::clone(&transfer_service),
-                Arc::clone(&htlc_service),
-                Arc::clone(&leaf_optimizer),
-                config.leaf_auto_optimize_enabled,
-                Arc::clone(&token_service),
-                config.token_outputs_optimization_options.clone(),
-                config.max_concurrent_claims,
-            ));
-            background_processor
-                .run_background_tasks(cancellation_token.clone())
-                .await;
-        }
         Ok(Self {
             cancel,
+            cancellation_token: tokio::sync::Mutex::new(Some(cancellation_token)),
+            background_started: tokio::sync::OnceCell::new(),
             config,
             deposit_service,
             event_manager,
@@ -1310,6 +1303,50 @@ impl SparkWallet {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<WalletEvent> {
         self.event_manager.listen()
+    }
+
+    /// Spawns the operator event stream, leaf/token refresh, and auto-optimizer.
+    /// Callers must invoke this once their `subscribe_events()` listener is
+    /// attached; the first `WalletEvent::Synced` is otherwise dropped because no
+    /// receiver is connected to the broadcast channel yet. Background tasks run
+    /// until the cancellation token configured via
+    /// [`WalletBuilder::with_cancellation_token`] fires (or, when none was
+    /// provided, until the wallet is dropped).
+    ///
+    /// Subsequent calls are no-ops, so it is safe to call this defensively
+    /// (e.g. before every payment) without spawning duplicate subscriptions.
+    pub async fn start_background_processing(&self) {
+        self.background_started
+            .get_or_init(|| async {
+                // `take()` moves the receiver into the background processor.
+                // Holding it on `self` instead would keep the `watch::Sender`
+                // open and stall `Sender::closed()` (used by the SDK's
+                // `disconnect`) until the wallet itself dropped.
+                let Some(cancellation_token) = self.cancellation_token.lock().await.take() else {
+                    return;
+                };
+                let reconnect_interval =
+                    Duration::from_secs(self.config.reconnect_interval_seconds);
+                let background_processor = Arc::new(BackgroundProcessor::new(
+                    Arc::clone(&self.operator_pool),
+                    Arc::clone(&self.event_manager),
+                    self.identity_public_key,
+                    reconnect_interval,
+                    Arc::clone(&self.tree_service),
+                    Arc::clone(&self.ssp_client),
+                    Arc::clone(&self.transfer_service),
+                    Arc::clone(&self.htlc_service),
+                    Arc::clone(&self.leaf_optimizer),
+                    self.config.leaf_auto_optimize_enabled,
+                    Arc::clone(&self.token_service),
+                    self.config.token_outputs_optimization_options.clone(),
+                    self.config.max_concurrent_claims,
+                ));
+                background_processor
+                    .run_background_tasks(cancellation_token)
+                    .await;
+            })
+            .await;
     }
 
     /// Returns the balances of all tokens in the wallet.

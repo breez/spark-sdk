@@ -39,6 +39,12 @@ impl RuntimeProfile for ClientRuntime {
         register_client_runtime_event_handler(sdk).await;
         sdk.spawn_spark_private_mode_initialization();
         spawn_client_runtime_loop(sdk, initial_synced_sender);
+
+        // Subscribers are now attached: start the wallet's BackgroundProcessor so
+        // its first `WalletEvent::Synced` (emitted after the operator stream
+        // connects) lands in the runtime loop and drives the initial Full sync.
+        sdk.spark_wallet.start_background_processing().await;
+
         sdk.try_recover_lightning_address();
         spawn_conversion_refunder(
             Arc::clone(&sdk.token_converter),

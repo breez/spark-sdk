@@ -29,6 +29,11 @@ use crate::fixtures::{
 /// equivalent to `SparkWallet::connect(config, signer)`; for the SQL variants
 /// all three stores share the connection string (so they live in one
 /// database) and are scoped per-wallet by the signer's identity pubkey.
+///
+/// Background processing is **not** started. Callers must `subscribe_events()`
+/// first and then call `wallet.start_background_processing()`, otherwise the
+/// wallet's first `WalletEvent::Synced` fires before any listener exists and
+/// is dropped.
 pub async fn build_test_wallet(
     config: SparkWalletConfig,
     signer: Arc<dyn Signer>,
@@ -131,6 +136,7 @@ pub async fn create_regtest_wallet() -> Result<(SparkWallet, Receiver<WalletEven
     let backend = crate::backend::resolve_backend().await?;
     let wallet = build_test_wallet(config, signer, &backend).await?;
     let mut listener = wallet.subscribe_events();
+    wallet.start_background_processing().await;
 
     // Wait for initial sync
     wait_for_event(&mut listener, 60, "Synced", |e| match e {
@@ -169,12 +175,6 @@ pub async fn wallets(#[future] test_fixtures: TestFixtures) -> WalletsFixture {
         .expect("failed to create wallet config");
     let signer = create_test_signer_alice();
 
-    // Subscribe to events BEFORE the wallet has time to emit Synced. Wallet
-    // background tasks start as soon as build_test_wallet returns, and they
-    // race against subscribe_events because the broadcast channel doesn't
-    // replay past events. With the slower SQL backends, building a second
-    // wallet takes long enough that the first wallet's Synced fires before
-    // we'd otherwise get to subscribe.
     let alice_backend = crate::backend::resolve_backend()
         .await
         .expect("failed to resolve backend for alice wallet");
@@ -182,6 +182,7 @@ pub async fn wallets(#[future] test_fixtures: TestFixtures) -> WalletsFixture {
         .await
         .expect("Failed to connect alice wallet");
     let mut alice_listener = alice_wallet.subscribe_events();
+    alice_wallet.start_background_processing().await;
 
     let bob_backend = crate::backend::resolve_backend()
         .await
@@ -190,6 +191,8 @@ pub async fn wallets(#[future] test_fixtures: TestFixtures) -> WalletsFixture {
         .await
         .expect("Failed to connect bob wallet");
     let mut bob_listener = bob_wallet.subscribe_events();
+    bob_wallet.start_background_processing().await;
+
     loop {
         let event = alice_listener
             .recv()

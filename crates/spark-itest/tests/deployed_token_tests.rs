@@ -30,17 +30,16 @@ async fn test_many_outputs() -> Result<()> {
     rand::thread_rng().fill(&mut bob_seed);
     let signer_bob = Arc::new(DefaultSigner::new(&bob_seed, Network::Regtest).unwrap());
 
-    // Subscribe immediately after each build so Synced (emitted once during
-    // operator connect) isn't lost to a late subscribe — the broadcast
-    // channel doesn't replay past events, and SQL-backend builds + container
-    // startup are slow enough that Alice's Synced would otherwise fire before
-    // we'd subscribe.
     let alice_backend = resolve_backend().await?;
     let alice_wallet = build_test_wallet(config.clone(), signer_alice, &alice_backend).await?;
     let mut alice_listener = alice_wallet.subscribe_events();
+    alice_wallet.start_background_processing().await;
+
     let bob_backend = resolve_backend().await?;
     let bob_wallet = build_test_wallet(config, signer_bob, &bob_backend).await?;
     let mut bob_listener = bob_wallet.subscribe_events();
+    bob_wallet.start_background_processing().await;
+
     wait_for_event(&mut alice_listener, 30, "Synced", |event| match event {
         WalletEvent::Synced => Ok(Some(event)),
         _ => Ok(None),
