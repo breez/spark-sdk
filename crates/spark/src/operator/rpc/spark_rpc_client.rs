@@ -165,7 +165,10 @@ impl SparkRpcClient {
 
     #[instrument(level = "info", target = "spark::operator_rpc", skip_all, fields(operator_id = self.operator_id))]
     pub async fn store_preimage_share_v2(&self, req: StorePreimageShareV2Request) -> Result<()> {
-        debug!("Calling store_preimage_share_v2 with request: {:?}", req);
+        debug!(
+            "Calling store_preimage_share_v2 for payment_hash {}",
+            hex::encode(&req.payment_hash)
+        );
         self.spark_service_client()
             .await?
             .store_preimage_share_v2(req)
@@ -207,7 +210,10 @@ impl SparkRpcClient {
         &self,
         req: InitiatePreimageSwapRequest,
     ) -> Result<InitiatePreimageSwapResponse> {
-        debug!("Calling initiate_preimage_swap_v3 with request: {:?}", req);
+        debug!(
+            "Calling initiate_preimage_swap_v3 for payment_hash {}",
+            hex::encode(&req.payment_hash)
+        );
         Ok(self
             .spark_service_client()
             .await?
@@ -221,7 +227,10 @@ impl SparkRpcClient {
         &self,
         req: ProvidePreimageRequest,
     ) -> Result<ProvidePreimageResponse> {
-        debug!("Calling provide_preimage with request: {:?}", req);
+        debug!(
+            "Calling provide_preimage for payment_hash {}",
+            hex::encode(&req.payment_hash)
+        );
         Ok(self
             .spark_service_client()
             .await?
