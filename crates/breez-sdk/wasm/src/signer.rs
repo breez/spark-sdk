@@ -426,14 +426,14 @@ extern "C" {
         path: String,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = "eciesEncrypt", catch)]
+    #[wasm_bindgen(structural, method, js_name = "encryptEcies", catch)]
     pub fn encrypt_ecies(
         this: &JsExternalBreezSigner,
         message: Vec<u8>,
         path: String,
     ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = "eciesDecrypt", catch)]
+    #[wasm_bindgen(structural, method, js_name = "decryptEcies", catch)]
     pub fn decrypt_ecies(
         this: &JsExternalBreezSigner,
         message: Vec<u8>,
