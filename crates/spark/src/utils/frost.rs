@@ -62,10 +62,10 @@ pub(crate) fn frost_signing_package(
 /// Aggregates FROST signature shares (user + statechain) into a complete
 /// Schnorr signature.
 ///
-/// This is **pure public math** — no private key is involved — so it lives as a
-/// free function callable without a [`Signer`]. Flows that already hold a valid
-/// user signature share (e.g. the atomic-swap adaptor step) can aggregate it
-/// directly rather than re-signing.
+/// This is **pure public math** (no private key is involved), so it lives as a
+/// free function callable without a [`Signer`](crate::signer::Signer). Flows
+/// that already hold a valid user signature share (e.g. the atomic-swap adaptor
+/// step) can aggregate it directly rather than re-signing.
 pub fn aggregate_frost(
     request: AggregateFrostRequest<'_>,
 ) -> Result<frost_secp256k1_tr::Signature, SignerError> {

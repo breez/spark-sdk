@@ -132,11 +132,10 @@ pub struct PreparedTransfer {
 pub struct ClaimLeafInput {
     /// The leaf as it lands at the receiver (pre-claim state).
     pub node: TreeNode,
-    /// Sender's signature binding this leaf to the transfer (raw bytes;
-    /// verified in-enclave by policy-enforcing signers).
+    /// Sender's signature binding this leaf to the transfer (raw bytes).
     pub sender_signature: Vec<u8>,
     /// ECIES ciphertext of the incoming leaf signing key, encrypted for this
-    /// receiver; the signer decrypts it and derives the claim key tweak.
+    /// receiver.
     pub leaf_key_ciphertext: Vec<u8>,
 }
 
@@ -333,9 +332,8 @@ pub trait SparkSigner: Send + Sync + 'static {
     async fn get_public_key_for_leaf(&self, leaf_id: &TreeNodeId)
     -> Result<PublicKey, SignerError>;
 
-    /// Returns the static-deposit signing public key at `index`. Pure
-    /// public-key derivation (no signing): the wallet hands this to the
-    /// operators to derive a static-deposit address. Analogous to
+    /// Returns the static-deposit public key at `index`. The wallet hands this
+    /// to the operators to derive a static-deposit address. Analogous to
     /// [`get_public_key_for_leaf`](Self::get_public_key_for_leaf).
     async fn get_static_deposit_public_key(&self, index: u32) -> Result<PublicKey, SignerError>;
 
@@ -358,37 +356,35 @@ pub trait SparkSigner: Send + Sync + 'static {
     /// swap (with adaptor). Results are returned in the same order as `jobs`.
     async fn sign_frost(&self, jobs: Vec<FrostJob>) -> Result<Vec<FrostShareResult>, SignerError>;
 
-    /// Prepare an outbound transfer: per-leaf key-tweak (old − new), Feldman
-    /// split, ECIES-encrypt to receiver and operators, and identity-key
-    /// signature over the transfer-package payload. Generates the new leaf
-    /// keys internally. Refund FROST signing is a separate `sign_frost` call.
-    /// Maps to `SPARK_PREPARE_TRANSFER`.
+    /// Prepare an outbound transfer. Returns the per-operator key-tweak
+    /// packages, the new per-leaf keys, and the transfer-package signature
+    /// (see [`PreparedTransfer`]). Refund signing is a separate
+    /// [`sign_frost`](Self::sign_frost) call. Maps to `SPARK_PREPARE_TRANSFER`.
     async fn prepare_transfer(
         &self,
         request: PrepareTransferRequest,
     ) -> Result<PreparedTransfer, SignerError>;
 
-    /// Claim an inbound transfer (key-tweak step): verify each sender
-    /// signature, ECIES-decrypt the incoming leaf key, derive the receiver's
-    /// new HD leaf key, compute the claim key tweak, and produce
-    /// ECIES-encrypted claim-tweak packages plus the claim-package signature.
-    /// Refund signing is a separate `sign_frost` call (new derived leaf key).
-    /// Maps to `SPARK_CLAIM_TRANSFER`.
+    /// Prepare the key-tweak step for claiming an inbound transfer. Returns one
+    /// key-tweak package per operator that re-keys each claimed leaf to the
+    /// receiver (see [`PreparedClaim`]). Refund signing is a separate
+    /// [`sign_frost`](Self::sign_frost) call. Maps to `SPARK_CLAIM_TRANSFER`.
     async fn prepare_claim(
         &self,
         request: PrepareClaimRequest,
     ) -> Result<PreparedClaim, SignerError>;
 
-    /// Prepare a Lightning receive: generate a random preimage in-enclave,
-    /// Feldman-split it for the operators, return its hash for BOLT11.
-    /// Maps to `SPARK_PREPARE_LIGHTNING_RECEIVE`.
+    /// Prepare a Lightning receive. Returns the payment hash for the BOLT11
+    /// invoice and one preimage-share package per operator (see
+    /// [`PreparedLightningReceive`]). Maps to `SPARK_PREPARE_LIGHTNING_RECEIVE`.
     async fn prepare_lightning_receive(
         &self,
         request: PrepareLightningReceiveRequest,
     ) -> Result<PreparedLightningReceive, SignerError>;
 
-    /// Prepare a static deposit: export the static-deposit secret to the SSP
-    /// (ECIES) and FROST-sign the deposit tree txs.
+    /// Prepare a static deposit. Returns the static-deposit secret encrypted
+    /// for the SSP and the FROST shares for the deposit tree transactions
+    /// (see [`PreparedStaticDeposit`]).
     async fn prepare_static_deposit(
         &self,
         request: PrepareStaticDepositRequest,
@@ -404,17 +400,18 @@ pub trait SparkSigner: Send + Sync + 'static {
         request: StartStaticDepositRefundRequest,
     ) -> Result<StartedStaticDepositRefund, SignerError>;
 
-    /// Finish a static-deposit refund: produce the user's FROST share over the
-    /// refund sighash (bound to the nonce from `start_static_deposit_refund`)
-    /// and aggregate it with the operators' shares into the final signature.
+    /// Finish a static-deposit refund. Returns the final aggregated refund
+    /// signature; the user's contribution is bound to the nonce committed by
+    /// [`start_static_deposit_refund`](Self::start_static_deposit_refund).
     async fn sign_static_deposit_refund(
         &self,
         request: SignStaticDepositRefundRequest,
     ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
 
-    /// Prepare a static-deposit claim: export the static-deposit secret in the
-    /// clear (the SSP co-signs and needs it) and ECDSA-sign the claim
-    /// user-statement with the identity key.
+    /// Prepare a static-deposit claim. Returns the static-deposit secret in the
+    /// clear (the SSP co-signs the claim and needs it) and the identity-key
+    /// signature over the claim user-statement (see
+    /// [`PreparedStaticDepositClaim`]).
     async fn prepare_static_deposit_claim(
         &self,
         request: PrepareStaticDepositClaimRequest,
@@ -427,8 +424,9 @@ pub trait SparkSigner: Send + Sync + 'static {
         request: SignSparkInvoiceRequest,
     ) -> Result<SignedSparkInvoice, SignerError>;
 
-    /// Prepare a token transaction (freeze / partial / final): Schnorr-sign
-    /// the digest with the identity key.
+    /// Prepare a token transaction (freeze / partial / final). Returns the
+    /// identity-key signature over the request digest (see
+    /// [`PreparedTokenTransaction`]).
     async fn prepare_token_transaction(
         &self,
         request: PrepareTokenTransactionRequest,
