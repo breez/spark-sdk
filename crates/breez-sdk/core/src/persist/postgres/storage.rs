@@ -858,6 +858,10 @@ impl Storage for PostgresStorage {
                     | StoragePaymentDetailsFilter::Token {
                         conversion_filter: Some(cf),
                         ..
+                    }
+                    | StoragePaymentDetailsFilter::Lightning {
+                        conversion_filter: Some(cf),
+                        ..
                     } => Some(cf),
                     _ => None,
                 };
@@ -869,6 +873,10 @@ impl Storage for PostgresStorage {
                         }
                         crate::persist::ConversionFilter::OrchestraPending => {
                             "pm.conversion_info::jsonb->>'type' = 'orchestra' AND \
+                             pm.conversion_info::jsonb->>'status' NOT IN ('Completed', 'Failed', 'Refunded')"
+                        }
+                        crate::persist::ConversionFilter::BoltzPending => {
+                            "pm.conversion_info::jsonb->>'type' = 'boltz' AND \
                              pm.conversion_info::jsonb->>'status' NOT IN ('Completed', 'Failed', 'Refunded')"
                         }
                     };
@@ -2044,10 +2052,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_conversion_refund_needed_filtering() {
+    async fn test_conversion_filtering() {
         let fixture = PostgresTestFixture::new().await;
-        crate::persist::tests::test_conversion_refund_needed_filtering(Box::new(fixture.storage))
-            .await;
+        crate::persist::tests::test_conversion_filtering(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -2697,6 +2704,7 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                    conversion_filter: None,
                 }]),
                 ..Default::default()
             })
@@ -2709,6 +2717,7 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::PreimageShared]),
+                    conversion_filter: None,
                 }]),
                 ..Default::default()
             })
@@ -2721,6 +2730,7 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::Returned]),
+                    conversion_filter: None,
                 }]),
                 ..Default::default()
             })

@@ -14,11 +14,15 @@
 
 use std::sync::Arc;
 
-use boltz_client::{BoltzEventListener, BoltzSwapEvent, events, models::BoltzSwapStatus};
-use tracing::{debug, error};
+use boltz_client::{
+    BoltzEventListener, BoltzService, BoltzSwapEvent, events,
+    models::{BoltzSwap, BoltzSwapStatus},
+};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     ConversionInfo, ConversionStatus, PaymentMetadata, Storage,
+    persist::{ConversionFilter, StorageListPaymentsRequest, StoragePaymentDetailsFilter},
     utils::conversions::extract_conversion_info,
 };
 
@@ -58,7 +62,10 @@ impl BoltzSdkEventListener {
         let Some(conversion_info) = extract_conversion_info(existing.details) else {
             // Race window between `insert_payment` and `insert_payment_metadata`
             // in the send flow, or a non-conversion payment sharing this
-            // invoice. A later swap event carries the full state and retries.
+            // invoice. A later swap event carries the full state and retries;
+            // a dropped terminal event is recovered by the send-time
+            // read-after-write in `BoltzService::send` and the startup
+            // `reconcile_pending_boltz_conversions` pass.
             debug!(
                 swap_id = %swap.id,
                 payment_id = %payment_id,
@@ -67,23 +74,7 @@ impl BoltzSdkEventListener {
             return Ok(());
         };
 
-        let ConversionInfo::Boltz {
-            swap_id,
-            chain,
-            chain_id,
-            asset,
-            recipient_address,
-            invoice,
-            invoice_amount_sats,
-            estimated_out,
-            fee,
-            max_slippage_bps,
-            quote_degraded,
-            asset_decimals,
-            asset_contract,
-            ..
-        } = conversion_info
-        else {
+        let Some(updated) = boltz_metadata_from_swap(conversion_info, swap) else {
             debug!(
                 swap_id = %swap.id,
                 payment_id = %payment_id,
@@ -92,29 +83,6 @@ impl BoltzSdkEventListener {
             return Ok(());
         };
 
-        let new_status = map_boltz_status_to_conversion(&swap.status);
-
-        let updated = PaymentMetadata {
-            conversion_info: Some(ConversionInfo::Boltz {
-                swap_id,
-                chain,
-                chain_id,
-                asset,
-                recipient_address,
-                invoice,
-                invoice_amount_sats,
-                estimated_out,
-                delivered_amount: swap.delivered_amount.map(u128::from),
-                bridge_ref: swap.bridge_ref.clone(),
-                status: new_status,
-                fee,
-                max_slippage_bps,
-                quote_degraded,
-                asset_decimals,
-                asset_contract,
-            }),
-            ..Default::default()
-        };
         self.storage
             .insert_payment_metadata(payment_id.clone(), updated)
             .await
@@ -227,15 +195,268 @@ fn map_boltz_status_to_conversion(status: &BoltzSwapStatus) -> ConversionStatus 
     }
 }
 
+/// Mirror the current `swap` state onto `existing`, producing the
+/// [`PaymentMetadata`] update to persist. Returns `None` if `existing` is not a
+/// Boltz conversion (the caller should skip it). Immutable prepare-time fields
+/// pass through unchanged; only `status`, `delivered_amount`, and `bridge_ref`
+/// are refreshed from the swap row.
+///
+/// Shared by the WS-driven [`BoltzSdkEventListener::handle_swap_updated`], the
+/// send-time read-after-write in `BoltzService::send`, and
+/// [`reconcile_pending_boltz_conversions`], so all three apply identical
+/// status mapping.
+pub(crate) fn boltz_metadata_from_swap(
+    existing: ConversionInfo,
+    swap: &BoltzSwap,
+) -> Option<PaymentMetadata> {
+    let ConversionInfo::Boltz {
+        swap_id,
+        chain,
+        chain_id,
+        asset,
+        recipient_address,
+        invoice,
+        invoice_amount_sats,
+        estimated_out,
+        fee,
+        max_slippage_bps,
+        quote_degraded,
+        asset_decimals,
+        asset_contract,
+        ..
+    } = existing
+    else {
+        return None;
+    };
+
+    Some(PaymentMetadata {
+        conversion_info: Some(ConversionInfo::Boltz {
+            swap_id,
+            chain,
+            chain_id,
+            asset,
+            recipient_address,
+            invoice,
+            invoice_amount_sats,
+            estimated_out,
+            delivered_amount: swap.delivered_amount.map(u128::from),
+            bridge_ref: swap.bridge_ref.clone(),
+            status: map_boltz_status_to_conversion(&swap.status),
+            fee,
+            max_slippage_bps,
+            quote_degraded,
+            asset_decimals,
+            asset_contract,
+        }),
+        ..Default::default()
+    })
+}
+
+/// Startup safety net for Boltz conversions whose terminal `SwapUpdated` event
+/// was never applied to the payment row.
+///
+/// The WS event copies the terminal swap state onto the payment metadata, but
+/// it is fire-once and conditional on the payment row + `ConversionInfo`
+/// already existing. A fast swap can reach terminal before the send flow
+/// attaches `ConversionInfo` (the event is then dropped with no later event to
+/// retry), and a storage error or WS gap can likewise drop it. In all those
+/// cases the boltz-client swap row is terminal while `conversion_info.status`
+/// stays `Pending` forever.
+///
+/// This pass scans Send payments for Boltz conversions still `Pending`, and for
+/// each whose retained swap row (`get_swap`, a local read) has reached a
+/// terminal state, applies that state via [`boltz_metadata_from_swap`]. It runs
+/// once after `resume_swaps`. Only the instance that owns the swap row can
+/// resolve it; other devices pick up the corrected metadata through sync.
+pub(crate) async fn reconcile_pending_boltz_conversions(
+    client: &BoltzService,
+    storage: &Arc<dyn Storage>,
+) {
+    // Bound the scan to Lightning payments carrying a non-terminal Boltz
+    // conversion (the swap's hold-invoice leg), so history size doesn't matter.
+    let payments = match storage
+        .list_payments(StorageListPaymentsRequest {
+            payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
+                htlc_status: None,
+                conversion_filter: Some(ConversionFilter::BoltzPending),
+            }]),
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(payments) => payments,
+        Err(e) => {
+            warn!("Boltz reconcile: failed to list pending conversions: {e}");
+            return;
+        }
+    };
+
+    for payment in payments {
+        let payment_id = payment.id.clone();
+        let Some(conversion_info) = extract_conversion_info(payment.details) else {
+            continue;
+        };
+        let ConversionInfo::Boltz {
+            swap_id, status, ..
+        } = &conversion_info
+        else {
+            continue;
+        };
+        if !matches!(status, ConversionStatus::Pending) {
+            continue;
+        }
+        let swap_id = swap_id.clone();
+
+        let swap = match client.get_swap(&swap_id).await {
+            Ok(Some(swap)) if swap.status.is_terminal() => swap,
+            // Absent (not owned by this instance) or still in flight: leave it
+            // for the WS path / a later run.
+            Ok(_) => continue,
+            Err(e) => {
+                debug!("Boltz reconcile: get_swap {swap_id} failed: {e}");
+                continue;
+            }
+        };
+
+        let Some(updated) = boltz_metadata_from_swap(conversion_info, &swap) else {
+            continue;
+        };
+        match storage
+            .insert_payment_metadata(payment_id.clone(), updated)
+            .await
+        {
+            Ok(()) => info!(
+                payment_id = %payment_id,
+                swap_id = %swap_id,
+                status = ?swap.status,
+                "Boltz reconcile: applied terminal swap state to stale pending conversion"
+            ),
+            Err(e) => error!(
+                payment_id = %payment_id,
+                swap_id = %swap_id,
+                "Boltz reconcile: failed to persist reconciled metadata: {e}"
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use boltz_client::models::BoltzSwapStatus;
+    use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind};
 
     use super::*;
     use macros::test_all;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn make_swap_min(id: &str, status: BoltzSwapStatus) -> BoltzSwap {
+        BoltzSwap {
+            id: id.to_string(),
+            status,
+            bridge_kind: BridgeKind::Direct,
+            claim_key_index: 0,
+            chain_id: 42161,
+            claim_address: "0xclaim".to_string(),
+            destination_address: "0xdest".to_string(),
+            destination_chain: "Arbitrum One".to_string(),
+            asset: Asset::Usdt,
+            refund_address: "0xrefund".to_string(),
+            erc20swap_address: "0xswap".to_string(),
+            router_address: "0xrouter".to_string(),
+            invoice: "lnbc1".to_string(),
+            invoice_amount_sats: 1_013,
+            onchain_amount: 1_000,
+            expected_output_amount: 657_084,
+            slippage_bps: 100,
+            timeout_block_height: 123_456,
+            lockup_tx_id: None,
+            claim_tx_hash: None,
+            pending_call_id: None,
+            delivered_amount: None,
+            bridge_ref: None,
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_000,
+        }
+    }
+
+    fn pending_boltz_conversion() -> ConversionInfo {
+        ConversionInfo::Boltz {
+            swap_id: "swap1".to_string(),
+            invoice: "lnbc1".to_string(),
+            invoice_amount_sats: 1_013,
+            bridge_ref: None,
+            max_slippage_bps: 100,
+            quote_degraded: false,
+            chain: "Arbitrum One".to_string(),
+            chain_id: Some("42161".to_string()),
+            asset: "USDT".to_string(),
+            recipient_address: "0xrecipient".to_string(),
+            estimated_out: 656_122,
+            delivered_amount: None,
+            status: ConversionStatus::Pending,
+            fee: Some(8_530),
+            asset_decimals: 6,
+            asset_contract: Some("0xUSDT".to_string()),
+        }
+    }
+
+    #[test_all]
+    fn boltz_metadata_from_swap_applies_terminal_and_preserves_prepare_fields() {
+        let mut swap = make_swap_min("swap1", BoltzSwapStatus::Completed);
+        swap.delivered_amount = Some(657_084);
+
+        let updated = boltz_metadata_from_swap(pending_boltz_conversion(), &swap)
+            .expect("Boltz variant yields an update");
+
+        let Some(ConversionInfo::Boltz {
+            status,
+            delivered_amount,
+            estimated_out,
+            max_slippage_bps,
+            fee,
+            recipient_address,
+            ..
+        }) = updated.conversion_info
+        else {
+            panic!("expected a Boltz conversion");
+        };
+        assert_eq!(status, ConversionStatus::Completed);
+        assert_eq!(delivered_amount, Some(657_084));
+        // Immutable prepare-time fields pass through unchanged.
+        assert_eq!(estimated_out, 656_122);
+        assert_eq!(max_slippage_bps, 100);
+        assert_eq!(fee, Some(8_530));
+        assert_eq!(recipient_address, "0xrecipient");
+    }
+
+    #[test_all]
+    fn boltz_metadata_from_swap_maps_failed() {
+        let swap = make_swap_min("swap1", BoltzSwapStatus::Expired);
+        let updated =
+            boltz_metadata_from_swap(pending_boltz_conversion(), &swap).expect("Boltz variant");
+        assert!(matches!(
+            updated.conversion_info,
+            Some(ConversionInfo::Boltz {
+                status: ConversionStatus::Failed,
+                ..
+            })
+        ));
+    }
+
+    #[test_all]
+    fn boltz_metadata_from_swap_returns_none_for_non_boltz() {
+        let amm = ConversionInfo::Amm {
+            pool_id: "pool".to_string(),
+            conversion_id: "cid".to_string(),
+            status: ConversionStatus::Pending,
+            fee: None,
+            purpose: None,
+            amount_adjustment: None,
+        };
+        let swap = make_swap_min("swap1", BoltzSwapStatus::Completed);
+        assert!(boltz_metadata_from_swap(amm, &swap).is_none());
+    }
 
     #[test_all]
     fn status_mapping_covers_all_variants() {

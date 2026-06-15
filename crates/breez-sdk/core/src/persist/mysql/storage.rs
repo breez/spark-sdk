@@ -952,6 +952,10 @@ impl Storage for MysqlStorage {
                     | StoragePaymentDetailsFilter::Token {
                         conversion_filter: Some(cf),
                         ..
+                    }
+                    | StoragePaymentDetailsFilter::Lightning {
+                        conversion_filter: Some(cf),
+                        ..
                     } => Some(cf),
                     _ => None,
                 };
@@ -965,6 +969,11 @@ impl Storage for MysqlStorage {
                         crate::persist::ConversionFilter::OrchestraPending => {
                             "JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.type')) \
                              = 'orchestra' AND JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, \
+                             '$.status')) NOT IN ('Completed', 'Failed', 'Refunded')"
+                        }
+                        crate::persist::ConversionFilter::BoltzPending => {
+                            "JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.type')) \
+                             = 'boltz' AND JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, \
                              '$.status')) NOT IN ('Completed', 'Failed', 'Refunded')"
                         }
                     };
@@ -2205,10 +2214,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_conversion_refund_needed_filtering() {
+    async fn test_conversion_filtering() {
         let fixture = MysqlTestFixture::new().await;
-        crate::persist::tests::test_conversion_refund_needed_filtering(Box::new(fixture.storage))
-            .await;
+        crate::persist::tests::test_conversion_filtering(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]

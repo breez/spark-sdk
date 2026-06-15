@@ -136,6 +136,10 @@ pub enum ConversionFilter {
     AmmRefundNeeded,
     /// Orchestra orders that have not yet reached a terminal state.
     OrchestraPending,
+    /// Boltz reverse swaps that have not yet reached a terminal state. Lives on
+    /// the Lightning leg (the hold-invoice pay), so it is selected via the
+    /// [`StoragePaymentDetailsFilter::Lightning`] filter.
+    BoltzPending,
 }
 
 /// Storage-internal variant of [`PaymentDetailsFilter`].
@@ -153,6 +157,7 @@ pub enum StoragePaymentDetailsFilter {
     },
     Lightning {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
+        conversion_filter: Option<ConversionFilter>,
     },
 }
 
@@ -178,7 +183,10 @@ impl From<PaymentDetailsFilter> for StoragePaymentDetailsFilter {
                 tx_type,
             },
             PaymentDetailsFilter::Lightning { htlc_status } => {
-                StoragePaymentDetailsFilter::Lightning { htlc_status }
+                StoragePaymentDetailsFilter::Lightning {
+                    htlc_status,
+                    conversion_filter: None,
+                }
             }
         }
     }
@@ -205,7 +213,7 @@ impl From<StoragePaymentDetailsFilter> for PaymentDetailsFilter {
                 tx_hash,
                 tx_type,
             },
-            StoragePaymentDetailsFilter::Lightning { htlc_status } => {
+            StoragePaymentDetailsFilter::Lightning { htlc_status, .. } => {
                 PaymentDetailsFilter::Lightning { htlc_status }
             }
         }

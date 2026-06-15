@@ -204,9 +204,11 @@ impl BoltzService {
             handle.instance_id.clone(),
         ));
 
-        let client = BoltzClient::new(client_config, &seed, adapter)
-            .await
-            .map_err(|e| SdkError::Generic(format!("Failed to construct Boltz client: {e}")))?;
+        let client = Arc::new(
+            BoltzClient::new(client_config, &seed, adapter)
+                .await
+                .map_err(|e| SdkError::Generic(format!("Failed to construct Boltz client: {e}")))?,
+        );
 
         let listener = Box::new(super::boltz_event_listener::BoltzSdkEventListener::new(
             Arc::clone(&storage),
@@ -217,8 +219,21 @@ impl BoltzService {
             tracing::warn!("Boltz resume_swaps failed on startup: {e:?}");
         }
 
+        // Defense-in-depth: heal any conversion whose terminal swap event was
+        // dropped (see `reconcile_pending_boltz_conversions`). Spawned so a
+        // large payment history doesn't add latency to connect; it only reads
+        // local storage and the local swap rows.
+        platform_utils::tokio::spawn({
+            let client = Arc::clone(&client);
+            let storage = Arc::clone(&storage);
+            async move {
+                super::boltz_event_listener::reconcile_pending_boltz_conversions(&client, &storage)
+                    .await;
+            }
+        });
+
         Ok(Some(Arc::new(Self::new(
-            Arc::new(client),
+            client,
             spark_wallet,
             storage,
             lightning_sender,
@@ -637,25 +652,26 @@ impl CrossChainService for BoltzService {
 
         debug!("Boltz: lightning payment {spark_payment_id} sent for swap {swap_id}");
 
+        let conversion_info = ConversionInfo::Boltz {
+            swap_id: swap_id.clone(),
+            chain: prepared.pair.chain.clone(),
+            chain_id: prepared.pair.chain_id.clone(),
+            asset: prepared.pair.asset.clone(),
+            recipient_address: prepared.recipient_address.clone(),
+            invoice: invoice.clone(),
+            invoice_amount_sats,
+            estimated_out: prepared.estimated_out,
+            delivered_amount: None,
+            bridge_ref: None,
+            status: ConversionStatus::Pending,
+            fee: Some(prepared.fee_amount),
+            max_slippage_bps: *max_slippage_bps,
+            quote_degraded: false,
+            asset_decimals: u32::from(prepared.pair.decimals),
+            asset_contract: prepared.pair.contract_address.clone(),
+        };
         let metadata = PaymentMetadata {
-            conversion_info: Some(ConversionInfo::Boltz {
-                swap_id: swap_id.clone(),
-                chain: prepared.pair.chain.clone(),
-                chain_id: prepared.pair.chain_id.clone(),
-                asset: prepared.pair.asset.clone(),
-                recipient_address: prepared.recipient_address.clone(),
-                invoice: invoice.clone(),
-                invoice_amount_sats,
-                estimated_out: prepared.estimated_out,
-                delivered_amount: None,
-                bridge_ref: None,
-                status: ConversionStatus::Pending,
-                fee: Some(prepared.fee_amount),
-                max_slippage_bps: *max_slippage_bps,
-                quote_degraded: false,
-                asset_decimals: u32::from(prepared.pair.decimals),
-                asset_contract: prepared.pair.contract_address.clone(),
-            }),
+            conversion_info: Some(conversion_info.clone()),
             ..Default::default()
         };
 
@@ -671,6 +687,40 @@ impl CrossChainService for BoltzService {
             error!("Failed to persist Boltz metadata for payment {spark_payment_id}: {e:?}");
             spark_payment_id.clone()
         });
+
+        // Read-after-write reconcile. The boltz-client WS task drives the swap
+        // independently and may have reached a terminal state before (or
+        // during) the `ConversionInfo` write above. Such a terminal
+        // `SwapUpdated` event would have been dropped by the listener (no
+        // `ConversionInfo` to update yet), and `resume_swaps` won't replay it
+        // (terminal swaps are pruned from the active set). boltz-client
+        // persists the terminal swap row *before* emitting the event, and this
+        // read is sequenced after the metadata write, so no terminal transition
+        // can slip through: it is either visible here, or it lands after the
+        // write and the WS event finds the `ConversionInfo`.
+        match self.client.get_swap(swap_id).await {
+            Ok(Some(swap)) if swap.status.is_terminal() => {
+                if let Some(updated) =
+                    super::boltz_event_listener::boltz_metadata_from_swap(conversion_info, &swap)
+                {
+                    match self
+                        .storage
+                        .insert_payment_metadata(payment_id.clone(), updated)
+                        .await
+                    {
+                        Ok(()) => info!(
+                            "Boltz: swap {swap_id} already terminal at send; applied {:?} to payment {payment_id}",
+                            swap.status
+                        ),
+                        Err(e) => error!(
+                            "Boltz: failed to persist send-time terminal update for {payment_id}: {e:?}"
+                        ),
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => debug!("Boltz: read-after-write get_swap({swap_id}) failed: {e:?}"),
+        }
 
         // `lightning_sender::pay_and_persist_lightning_invoice` returns
         // immediately with a Pending payment and spawns a background SSP

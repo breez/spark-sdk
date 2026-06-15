@@ -1119,6 +1119,7 @@ pub enum PaymentDetailsFilter {
 pub enum ConversionFilter {
     AmmRefundNeeded,
     OrchestraPending,
+    BoltzPending,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::StoragePaymentDetailsFilter)]
@@ -1134,6 +1135,7 @@ pub enum StoragePaymentDetailsFilter {
     },
     Lightning {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
+        conversion_filter: Option<ConversionFilter>,
     },
 }
 

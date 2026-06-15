@@ -1907,7 +1907,7 @@ pub async fn test_spark_htlc_status_filtering(storage: Box<dyn Storage>) {
 }
 
 #[allow(clippy::too_many_lines)]
-pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) {
+pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
     // Create payments with and without conversion info
     let payment_with_refund_metadata = PaymentMetadata {
         conversion_info: Some(crate::ConversionInfo::Amm {
@@ -2260,6 +2260,109 @@ pub async fn test_conversion_refund_needed_filtering(storage: Box<dyn Storage>) 
         .await
         .unwrap();
     assert_eq!(all_spark_with_orchestra.len(), 4);
+
+    // -----------------------------------------------------------------
+    // Boltz-specific filter tests
+    //
+    // The Boltz conversion lives on the Lightning leg (the hold-invoice pay),
+    // so it is selected via the Lightning details filter, and the payment row
+    // itself is `Completed` (the LN leg settled) even while the conversion is
+    // still `Pending`.
+    // -----------------------------------------------------------------
+
+    let boltz_conversion = |status: crate::ConversionStatus| crate::ConversionInfo::Boltz {
+        swap_id: "swap_boltz".to_string(),
+        invoice: "lnbc_boltz".to_string(),
+        invoice_amount_sats: 1_013,
+        bridge_ref: None,
+        max_slippage_bps: 100,
+        quote_degraded: false,
+        chain: "Arbitrum One".to_string(),
+        chain_id: Some("42161".to_string()),
+        asset: "USDT".to_string(),
+        recipient_address: "0xrecipient".to_string(),
+        estimated_out: 656_122,
+        delivered_amount: None,
+        status,
+        fee: Some(8_530),
+        asset_decimals: 6,
+        asset_contract: None,
+    };
+
+    let boltz_lightning_payment = |id: &str, invoice: &str, ts: u64| Payment {
+        id: id.to_string(),
+        payment_type: PaymentType::Send,
+        status: PaymentStatus::Completed,
+        amount: 1_013,
+        fees: 6,
+        timestamp: ts,
+        method: PaymentMethod::Lightning,
+        details: Some(PaymentDetails::Lightning {
+            description: Some("Boltz reverse swap".to_string()),
+            invoice: invoice.to_string(),
+            destination_pubkey:
+                "03e9c5157126b8049ad235bdade8db97a473b5760b34781b8c870bd2ba34dbfcf8".to_string(),
+            htlc_details: test_lightning_htlc("boltz_payment_hash"),
+            lnurl_pay_info: None,
+            lnurl_withdraw_info: None,
+            lnurl_receive_metadata: None,
+            conversion_info: None,
+        }),
+        conversion_details: None,
+    };
+
+    // Pending Boltz conversion → should match BoltzPending.
+    storage
+        .apply_payment_update(boltz_lightning_payment(
+            "boltz_pending",
+            "lnbc_boltz_pending",
+            6000,
+        ))
+        .await
+        .unwrap();
+    storage
+        .insert_payment_metadata(
+            "boltz_pending".to_string(),
+            PaymentMetadata {
+                conversion_info: Some(boltz_conversion(crate::ConversionStatus::Pending)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    // Completed Boltz conversion → should NOT match BoltzPending.
+    storage
+        .apply_payment_update(boltz_lightning_payment(
+            "boltz_completed",
+            "lnbc_boltz_completed",
+            7000,
+        ))
+        .await
+        .unwrap();
+    storage
+        .insert_payment_metadata(
+            "boltz_completed".to_string(),
+            PaymentMetadata {
+                conversion_info: Some(boltz_conversion(crate::ConversionStatus::Completed)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let boltz_pending_filter = storage
+        .list_payments(StorageListPaymentsRequest {
+            payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Lightning {
+                htlc_status: None,
+                conversion_filter: Some(crate::persist::ConversionFilter::BoltzPending),
+            }]),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(boltz_pending_filter.len(), 1);
+    assert_eq!(boltz_pending_filter[0].id, "boltz_pending");
 }
 
 #[allow(clippy::too_many_lines)]
@@ -3100,6 +3203,7 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Lightning {
                 htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
@@ -3113,6 +3217,7 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
         .list_payments(StorageListPaymentsRequest {
             payment_details_filter: Some(vec![crate::StoragePaymentDetailsFilter::Lightning {
                 htlc_status: Some(vec![SparkHtlcStatus::PreimageShared]),
+                conversion_filter: None,
             }]),
             ..Default::default()
         })
@@ -3130,6 +3235,7 @@ pub async fn test_lightning_htlc_details_and_status_filtering(storage: Box<dyn S
                     SparkHtlcStatus::WaitingForPreimage,
                     SparkHtlcStatus::PreimageShared,
                 ]),
+                conversion_filter: None,
             }]),
             ..Default::default()
         })

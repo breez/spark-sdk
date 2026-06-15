@@ -276,22 +276,30 @@ class PostgresStorage {
           // Filter by conversion type + status
           if (
             (paymentDetailsFilter.type === "spark" ||
-              paymentDetailsFilter.type === "token") &&
+              paymentDetailsFilter.type === "token" ||
+              paymentDetailsFilter.type === "lightning") &&
             paymentDetailsFilter.conversionFilter !== undefined
           ) {
+            // Lightning carries the Boltz conversion; its `conversion_info.type`
+            // is the authoritative discriminator, so no payment-type column check.
             const typeCheck =
               paymentDetailsFilter.type === "spark"
                 ? "p.spark = true"
-                : "p.spark IS NULL";
+                : paymentDetailsFilter.type === "token"
+                  ? "p.spark IS NULL"
+                  : null;
             let statusClause;
             if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
               statusClause = "pm.conversion_info::jsonb->>'type' = 'amm' AND pm.conversion_info::jsonb->>'status' = 'refundNeeded'";
             } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
               statusClause = "pm.conversion_info::jsonb->>'type' = 'orchestra' AND pm.conversion_info::jsonb->>'status' NOT IN ('completed', 'failed', 'refunded')";
+            } else if (paymentDetailsFilter.conversionFilter === "boltzPending") {
+              statusClause = "pm.conversion_info::jsonb->>'type' = 'boltz' AND pm.conversion_info::jsonb->>'status' NOT IN ('completed', 'failed', 'refunded')";
             }
             if (statusClause) {
+              const prefix = typeCheck ? `${typeCheck} AND ` : "";
               paymentDetailsClauses.push(
-                `${typeCheck} AND pm.conversion_info IS NOT NULL AND ${statusClause}`
+                `${prefix}pm.conversion_info IS NOT NULL AND ${statusClause}`
               );
             }
           }

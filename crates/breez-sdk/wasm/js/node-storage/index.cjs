@@ -240,19 +240,31 @@ class SqliteStorage {
           }
           // Filter by conversion type + status
           if (
-            (paymentDetailsFilter.type === "spark" || paymentDetailsFilter.type === "token") &&
+            (paymentDetailsFilter.type === "spark" ||
+              paymentDetailsFilter.type === "token" ||
+              paymentDetailsFilter.type === "lightning") &&
               paymentDetailsFilter.conversionFilter !== undefined
           ) {
-            const typeCheck = paymentDetailsFilter.type === "spark" ? "p.spark = 1" : "p.spark IS NULL";
+            // Lightning carries the Boltz conversion; its `conversion_info.type`
+            // is the authoritative discriminator, so no payment-type column check.
+            const typeCheck =
+              paymentDetailsFilter.type === "spark"
+                ? "p.spark = 1"
+                : paymentDetailsFilter.type === "token"
+                  ? "p.spark IS NULL"
+                  : null;
             let statusClause;
             if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
               statusClause = "json_extract(pm.conversion_info, '$.type') = 'amm' AND json_extract(pm.conversion_info, '$.status') = 'refundNeeded'";
             } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
               statusClause = "json_extract(pm.conversion_info, '$.type') = 'orchestra' AND json_extract(pm.conversion_info, '$.status') NOT IN ('completed', 'failed', 'refunded')";
+            } else if (paymentDetailsFilter.conversionFilter === "boltzPending") {
+              statusClause = "json_extract(pm.conversion_info, '$.type') = 'boltz' AND json_extract(pm.conversion_info, '$.status') NOT IN ('completed', 'failed', 'refunded')";
             }
             if (statusClause) {
+              const prefix = typeCheck ? `${typeCheck} AND ` : "";
               paymentDetailsClauses.push(
-                `${typeCheck} AND pm.conversion_info IS NOT NULL AND ${statusClause}`
+                `${prefix}pm.conversion_info IS NOT NULL AND ${statusClause}`
               );
             }
           }

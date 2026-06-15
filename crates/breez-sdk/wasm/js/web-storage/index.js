@@ -2260,7 +2260,8 @@ class IndexedDBStorage {
         // Filter by conversion type + status
         if (
           (paymentDetailsFilter.type === "spark" ||
-            paymentDetailsFilter.type === "token") &&
+            paymentDetailsFilter.type === "token" ||
+            paymentDetailsFilter.type === "lightning") &&
           paymentDetailsFilter.conversionFilter != null
         ) {
           if (
@@ -2277,6 +2278,11 @@ class IndexedDBStorage {
             }
           } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
             if (ci.type !== "orchestra" || ["completed", "failed", "refunded"].includes(ci.status)) {
+              continue;
+            }
+          } else if (paymentDetailsFilter.conversionFilter === "boltzPending") {
+            // Boltz conversion lives on the Lightning leg.
+            if (ci.type !== "boltz" || ["completed", "failed", "refunded"].includes(ci.status)) {
               continue;
             }
           }
