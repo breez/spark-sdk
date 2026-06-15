@@ -1,29 +1,22 @@
-use std::collections::{BTreeMap, BTreeSet};
-
 use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
-use bitcoin::key::{Parity, TapTweak};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::rand::thread_rng;
-use bitcoin::secp256k1::{self, All, Keypair, Message, PublicKey, SecretKey, schnorr};
+use bitcoin::secp256k1::{self, All, Message, PublicKey, SecretKey, schnorr};
 use bitcoin::{
     hashes::{Hash, sha256},
     key::Secp256k1,
 };
 use frost_core::round1::Nonce;
-use frost_secp256k1_tr::keys::{
-    EvenY, KeyPackage, PublicKeyPackage, SigningShare, Tweak, VerifyingShare,
-};
-use frost_secp256k1_tr::round1::{SigningCommitments, SigningNonces};
+use frost_secp256k1_tr::keys::{EvenY, KeyPackage, SigningShare, Tweak, VerifyingShare};
+use frost_secp256k1_tr::round1::SigningNonces;
 use frost_secp256k1_tr::round2::SignatureShare;
-use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
+use frost_secp256k1_tr::{Identifier, VerifyingKey};
 use thiserror::Error;
 
 use crate::signer::{
-    AggregateFrostRequest, EncryptedSecret, FrostSigningCommitmentsWithNonces, SignFrostRequest,
-    secret_sharing,
+    EncryptedSecret, FrostSigningCommitmentsWithNonces, SignFrostRequest, secret_sharing,
 };
 use crate::signer::{SecretSource, SecretToSplit};
-use crate::tree::TreeNodeId;
 use crate::{
     Network,
     signer::{Signer, SignerError},
@@ -38,240 +31,54 @@ fn account_number(network: Network) -> u32 {
     }
 }
 
-fn frost_signing_package(
-    user_identifier: Identifier,
-    message: &[u8],
-    statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
-    self_commitment: &SigningCommitments,
-    adaptor_public_key: Option<&PublicKey>,
-) -> Result<SigningPackage, SignerError> {
-    // Clone statechain commitments to add our own commitment
-    let mut signing_commitments = statechain_commitments.clone();
-
-    // Create participant groups for the signing operation
-    // First group is all statechain participants
-    let mut signing_participants_groups = Vec::new();
-    signing_participants_groups.push(
-        statechain_commitments
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>(),
-    );
-
-    // Add the user's commitment to the signing commitments
-    signing_commitments.insert(user_identifier, *self_commitment);
-    // Add a second participant group containing only the user
-    signing_participants_groups.push(BTreeSet::from([user_identifier]));
-
-    // Convert the adaptor public key format if provided
-    let adaptor = match adaptor_public_key {
-        Some(pk) => {
-            let adaptor = VerifyingKey::deserialize(pk.serialize().as_slice()).map_err(|e| {
-                SignerError::SerializationError(format!(
-                    "Failed to deserialize adaptor public key: {e}"
-                ))
-            })?;
-            Some(adaptor)
-        }
-        None => None,
-    };
-
-    // Create a signing package containing commitments, participant groups, message and adaptor
-    Ok(SigningPackage::new_with_adaptor(
-        signing_commitments,
-        Some(signing_participants_groups),
-        message,
-        adaptor,
-    ))
+/// Path of the identity / ECIES key under the account master: the `0'` child.
+/// The SDK-layer `BreezSigner` roots here and the Spark identity lives here too.
+fn identity_path() -> DerivationPath {
+    DerivationPath::from(vec![
+        ChildNumber::from_hardened_idx(0).expect("0 is a valid hardened index"),
+    ])
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum KeySetType {
-    #[default]
-    Default,
-    Taproot,
-    NativeSegwit,
-    WrappedSegwit,
-    Legacy,
+/// The Spark account master (`base`): `m/8797555'/{account}'`. Every wallet key
+/// derives from it (identity at `0'`, leaf signing under `1'`, static deposit
+/// under `3'`). `account_no` falls back to a per-network default when unset.
+pub fn account_master_key(
+    seed: &[u8],
+    network: Network,
+    account_no: Option<u32>,
+) -> Result<Xpriv, DefaultSignerError> {
+    let account_number = account_no.unwrap_or_else(|| account_number(network));
+    let path: DerivationPath = format!("m/8797555'/{account_number}'").parse()?;
+    let master = Xpriv::new_master(network, seed)?;
+    Ok(master.derive_priv(&Secp256k1::new(), &path)?)
 }
 
-struct DerivedKeySet {
-    derivation_path: DerivationPath,
-    master_key: Xpriv,
+/// The wallet identity master (`base/0'`): the `BreezSigner` derivation root and
+/// the Spark identity / ECIES key.
+pub fn identity_master_key(
+    seed: &[u8],
+    network: Network,
+    account_no: Option<u32>,
+) -> Result<Xpriv, DefaultSignerError> {
+    let base = account_master_key(seed, network, account_no)?;
+    Ok(base.derive_priv(&Secp256k1::new(), &identity_path())?)
 }
 
-impl DerivedKeySet {
-    fn new(
-        seed: &[u8],
-        network: Network,
-        derivation_path: DerivationPath,
-    ) -> Result<Self, bitcoin::bip32::Error> {
-        let master_key = Xpriv::new_master(network, seed)?;
-
-        Ok(DerivedKeySet {
-            derivation_path,
-            master_key,
-        })
-    }
-
-    fn to_key_set(
-        &self,
-        identity_child_number: Option<ChildNumber>,
-    ) -> Result<KeySet, DefaultSignerError> {
-        let secp = Secp256k1::new();
-        let mut identity_master_key = self.master_key.derive_priv(&secp, &self.derivation_path)?;
-
-        let signing_master_key =
-            identity_master_key.derive_priv(&secp, &[ChildNumber::from_hardened_idx(1)?])?;
-        let static_deposit_master_key =
-            identity_master_key.derive_priv(&secp, &[ChildNumber::from_hardened_idx(3)?])?;
-        let encryption_master_key = identity_master_key
-            .derive_priv(&secp, &[ChildNumber::from_hardened_idx(712532575)?])?;
-        if let Some(child_number) = identity_child_number {
-            identity_master_key =
-                identity_master_key.derive_priv(&secp, &DerivationPath::from(vec![child_number]))?
-        }
-        Ok(KeySet {
-            identity_key_pair: identity_master_key.private_key.keypair(&secp),
-            identity_master_key,
-            encryption_master_key,
-            signing_master_key,
-            static_deposit_master_key,
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct KeySet {
-    pub identity_key_pair: Keypair,
-    pub identity_master_key: Xpriv,
-    pub encryption_master_key: Xpriv,
-    pub signing_master_key: Xpriv,
-    pub static_deposit_master_key: Xpriv,
-}
-
-impl KeySet {
-    pub fn new(
-        seed: &[u8],
-        network: Network,
-        key_type: KeySetType,
-        use_address_index: bool,
-        account_no: Option<u32>,
-    ) -> Result<Self, DefaultSignerError> {
-        let account_number = account_no.unwrap_or_else(|| account_number(network));
-        match key_type {
-            KeySetType::Default => Self::default_keys(seed, network, account_number),
-            KeySetType::Taproot => {
-                Self::taproot_keys(seed, network, use_address_index, account_number)
-            }
-            KeySetType::NativeSegwit => {
-                Self::native_segwit_keys(seed, network, use_address_index, account_number)
-            }
-            KeySetType::WrappedSegwit => {
-                Self::wrapped_segwit_keys(seed, network, use_address_index, account_number)
-            }
-            KeySetType::Legacy => {
-                Self::legacy_bitcoin_keys(seed, network, use_address_index, account_number)
-            }
-        }
-    }
-
-    fn default_keys(
-        seed: &[u8],
-        network: Network,
-        account_number: u32,
-    ) -> Result<Self, DefaultSignerError> {
-        let derivation_path = format!("m/8797555'/{account_number}'").parse()?;
-        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
-        derived_key_set.to_key_set(ChildNumber::from_hardened_idx(0).ok())
-    }
-
-    fn taproot_keys(
-        seed: &[u8],
-        network: Network,
-        use_address_index: bool,
-        account_number: u32,
-    ) -> Result<Self, DefaultSignerError> {
-        let derivation_path = if use_address_index {
-            format!("m/86'/0'/0'/0/{account_number}")
-        } else {
-            format!("m/86'/0'/{account_number}'/0/0")
-        }
-        .parse()?;
-        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
-        let mut key_set = derived_key_set.to_key_set(None)?;
-        let secp = Secp256k1::new();
-        key_set.identity_key_pair = key_set
-            .identity_key_pair
-            .tap_tweak(&secp, None)
-            .to_keypair();
-        if let (_, Parity::Odd) = key_set
-            .identity_key_pair
-            .secret_key()
-            .x_only_public_key(&secp)
-        {
-            key_set.identity_key_pair = key_set
-                .identity_key_pair
-                .secret_key()
-                .negate()
-                .keypair(&secp)
-        }
-
-        Ok(key_set)
-    }
-
-    fn native_segwit_keys(
-        seed: &[u8],
-        network: Network,
-        use_address_index: bool,
-        account_number: u32,
-    ) -> Result<Self, DefaultSignerError> {
-        let derivation_path = if use_address_index {
-            format!("m/84'/0'/0'/0/{account_number}")
-        } else {
-            format!("m/84'/0'/{account_number}'/0/0")
-        }
-        .parse()?;
-        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
-        derived_key_set.to_key_set(None)
-    }
-
-    fn wrapped_segwit_keys(
-        seed: &[u8],
-        network: Network,
-        use_address_index: bool,
-        account_number: u32,
-    ) -> Result<Self, DefaultSignerError> {
-        let derivation_path = if use_address_index {
-            format!("m/49'/0'/0'/0/{account_number}")
-        } else {
-            format!("m/49'/0'/{account_number}'/0/0")
-        }
-        .parse()?;
-        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
-        derived_key_set.to_key_set(None)
-    }
-
-    fn legacy_bitcoin_keys(
-        seed: &[u8],
-        network: Network,
-        use_address_index: bool,
-        account_number: u32,
-    ) -> Result<Self, DefaultSignerError> {
-        let derivation_path = if use_address_index {
-            format!("m/44'/0'/0'/0/{account_number}")
-        } else {
-            format!("m/44'/0'/{account_number}'/0/0")
-        }
-        .parse()?;
-        let derived_key_set = DerivedKeySet::new(seed, network, derivation_path)?;
-        derived_key_set.to_key_set(None)
-    }
+/// The wallet identity public key (`base/0'`). Lets storage be scoped per wallet
+/// before any signer is built.
+pub fn identity_public_key(
+    seed: &[u8],
+    network: Network,
+    account_no: Option<u32>,
+) -> Result<PublicKey, DefaultSignerError> {
+    let master = identity_master_key(seed, network, account_no)?;
+    Ok(master.private_key.public_key(&Secp256k1::new()))
 }
 
 #[derive(Clone)]
 pub struct DefaultSigner {
-    key_set: KeySet,
+    /// The master node every key is derived from.
+    master: Xpriv,
     secp: Secp256k1<All>,
 }
 
@@ -298,38 +105,33 @@ impl From<bitcoin::bip32::Error> for DefaultSignerError {
 
 impl DefaultSigner {
     pub fn new(seed: &[u8], network: Network) -> Result<Self, DefaultSignerError> {
-        Ok(Self::from_key_set(KeySet::new(
-            seed,
-            network,
-            KeySetType::Default,
-            false,
-            None,
-        )?))
+        Ok(Self::from_master(account_master_key(seed, network, None)?))
     }
 
-    pub fn from_key_set(key_set: KeySet) -> Self {
-        let secp = Secp256k1::new();
-        DefaultSigner { key_set, secp }
+    /// Builds a signer rooted at `master`. Every key derives from it by BIP32
+    /// path; the identity / ECIES key is its `0'` child.
+    pub fn from_master(master: Xpriv) -> Self {
+        DefaultSigner {
+            master,
+            secp: Secp256k1::new(),
+        }
     }
 }
 
 impl DefaultSigner {
-    fn derive_signing_key(&self, node_id: &TreeNodeId) -> Result<SecretKey, SignerError> {
-        let hash = sha256::Hash::hash(node_id.to_string().as_bytes());
-        let u32_bytes = hash.as_byte_array()[..4]
-            .try_into()
-            .map_err(|_| SignerError::InvalidHash)?;
-        let index = u32::from_be_bytes(u32_bytes) % 0x80000000;
-        let child_number =
-            ChildNumber::from_hardened_idx(index).map_err(|_| SignerError::InvalidHash)?;
-        let derivation_path = DerivationPath::from(vec![child_number]);
-        let child = self
-            .key_set
-            .signing_master_key
-            .derive_priv(&self.secp, &derivation_path)
+    /// Derives the raw secret key at `path` under the master.
+    fn derive_at(&self, path: &DerivationPath) -> Result<SecretKey, SignerError> {
+        Ok(self
+            .master
+            .derive_priv(&self.secp, path)
             .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
-            .private_key;
-        Ok(child)
+            .private_key)
+    }
+
+    /// Public key used for ECIES (the key counterparties encrypt to): the
+    /// identity key, where the Spark layer derives the wallet identity.
+    fn encryption_public_key(&self) -> Result<PublicKey, SignerError> {
+        Ok(self.derive_at(&identity_path())?.public_key(&self.secp))
     }
 
     fn encrypt_message_ecies(
@@ -342,7 +144,8 @@ impl DefaultSigner {
     }
 
     fn decrypt_message_ecies(&self, ciphertext: &[u8]) -> Result<Vec<u8>, SignerError> {
-        utils::ecies::decrypt(&self.key_set.identity_key_pair.secret_bytes(), ciphertext)
+        let secret = self.derive_at(&identity_path())?;
+        utils::ecies::decrypt(&secret.secret_bytes(), ciphertext)
             .map_err(|e| SignerError::Generic(format!("failed to decrypt: {e}")))
     }
 
@@ -385,20 +188,22 @@ impl DefaultSigner {
 
 #[macros::async_trait]
 impl Signer for DefaultSigner {
-    async fn sign_message_ecdsa_with_identity_key(
+    async fn sign_message_ecdsa(
         &self,
+        path: &DerivationPath,
         message: &[u8],
     ) -> Result<Signature, SignerError> {
         let digest = sha256::Hash::hash(message);
         let sig = self.secp.sign_ecdsa(
             &Message::from_digest(digest.to_byte_array()),
-            &self.key_set.identity_key_pair.secret_key(),
+            &self.derive_at(path)?,
         );
         Ok(sig)
     }
 
-    async fn sign_hash_schnorr_with_identity_key(
+    async fn sign_hash_schnorr(
         &self,
+        path: &DerivationPath,
         hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError> {
         if hash.len() != 32 {
@@ -408,13 +213,12 @@ impl Signer for DefaultSigner {
         }
         let mut hash_array = [0u8; 32];
         hash_array.copy_from_slice(hash);
+        let keypair = self.derive_at(path)?.keypair(&self.secp);
         // Always use auxiliary randomness for enhanced security
         let mut rng = thread_rng();
-        let sig = self.secp.sign_schnorr_with_rng(
-            &Message::from_digest(hash_array),
-            &self.key_set.identity_key_pair,
-            &mut rng,
-        );
+        let sig =
+            self.secp
+                .sign_schnorr_with_rng(&Message::from_digest(hash_array), &keypair, &mut rng);
         Ok(sig)
     }
 
@@ -432,7 +236,7 @@ impl Signer for DefaultSigner {
 
         let nonces = SigningNonces::from_nonces(hiding, binding);
         let nonces_ciphertext =
-            self.encrypt_nonces_ecies(&nonces, &self.get_identity_public_key().await?)?;
+            self.encrypt_nonces_ecies(&nonces, &self.encryption_public_key()?)?;
         let commitments = *nonces.commitments();
 
         Ok(FrostSigningCommitmentsWithNonces {
@@ -441,54 +245,20 @@ impl Signer for DefaultSigner {
         })
     }
 
-    async fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError> {
-        let signing_key = self.derive_signing_key(id)?;
-        let public_key = signing_key.public_key(&self.secp);
-        Ok(public_key)
+    async fn derive_public_key(&self, path: &DerivationPath) -> Result<PublicKey, SignerError> {
+        Ok(self.derive_at(path)?.public_key(&self.secp))
+    }
+
+    async fn secret_key(&self, path: &DerivationPath) -> Result<SecretKey, SignerError> {
+        self.derive_at(path)
     }
 
     async fn generate_random_secret(&self) -> Result<EncryptedSecret, SignerError> {
         let (secret_key, _) = self.secp.generate_keypair(&mut thread_rng());
         Ok(EncryptedSecret::new(self.encrypt_private_key_ecies(
             &secret_key,
-            &self.get_identity_public_key().await?,
+            &self.encryption_public_key()?,
         )?))
-    }
-
-    async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError> {
-        Ok(self.key_set.identity_key_pair.public_key())
-    }
-
-    async fn static_deposit_secret_encrypted(
-        &self,
-        index: u32,
-    ) -> Result<SecretSource, SignerError> {
-        let secret_key = self.static_deposit_secret(index).await?;
-        Ok(SecretSource::new_encrypted(
-            self.encrypt_private_key_ecies(&secret_key, &self.get_identity_public_key().await?)?,
-        ))
-    }
-
-    async fn static_deposit_secret(&self, index: u32) -> Result<SecretKey, SignerError> {
-        let child_number = ChildNumber::from_hardened_idx(index).map_err(|e| {
-            SignerError::Generic(format!("failed to create child from {index}: {e}"))
-        })?;
-        let derivation_path = DerivationPath::from(vec![child_number]);
-        let private_key = self
-            .key_set
-            .static_deposit_master_key
-            .derive_priv(&self.secp, &derivation_path)
-            .map_err(|e| SignerError::KeyDerivationError(format!("failed to derive child: {e}")))?
-            .private_key;
-        Ok(private_key)
-    }
-
-    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKey, SignerError> {
-        let public_key = self
-            .static_deposit_secret(index)
-            .await?
-            .public_key(&self.secp);
-        Ok(public_key)
     }
 
     async fn subtract_secrets(
@@ -509,19 +279,17 @@ impl Signer for DefaultSigner {
             .add_tweak(&new_signing_key.negate().into())
             .map_err(|e| SignerError::Generic(format!("failed to add tweak: {e}")))?;
 
-        let ciphertext =
-            self.encrypt_private_key_ecies(&res, &self.get_identity_public_key().await?)?;
+        let ciphertext = self.encrypt_private_key_ecies(&res, &self.encryption_public_key()?)?;
 
         Ok(SecretSource::new_encrypted(ciphertext))
     }
 
     async fn encrypt_secret_for_receiver(
         &self,
-        private_key: &EncryptedSecret,
+        secret: &SecretSource,
         receiver_public_key: &PublicKey,
     ) -> Result<Vec<u8>, SignerError> {
-        let private_key = SecretSource::Encrypted(private_key.clone()).to_secret_key(self)?;
-
+        let private_key = secret.to_secret_key(self)?;
         self.encrypt_private_key_ecies(&private_key, receiver_public_key)
     }
 
@@ -567,7 +335,7 @@ impl Signer for DefaultSigner {
 
         // Create a signing package containing the message, commitments, and participant groups
         // This is used by the FROST protocol to coordinate the multi-party signing process
-        let signing_package = frost_signing_package(
+        let signing_package = crate::utils::frost::frost_signing_package(
             user_identifier,
             request.message,
             request.statechain_commitments,
@@ -657,97 +425,12 @@ impl Signer for DefaultSigner {
         // from the statechain participants to form a complete threshold signature
         return Ok(signature_share);
     }
-
-    async fn aggregate_frost<'a>(
-        &self,
-        request: AggregateFrostRequest<'a>,
-    ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
-        tracing::trace!("default_signer::aggregate_frost");
-
-        // Derive an identifier for the local user
-        let user_identifier =
-            Identifier::derive("user".as_bytes()).map_err(|_| SignerError::IdentifierError)?;
-
-        // Create a signing package containing commitments, participant groups, message and adaptor
-        let signing_package = frost_signing_package(
-            user_identifier,
-            request.message,
-            request.statechain_commitments,
-            request.self_commitment,
-            request.adaptor_public_key,
-        )?;
-
-        // Combine all signature shares (statechain + user)
-        let mut signature_shares = request.statechain_signatures.clone();
-        signature_shares.insert(user_identifier, *request.self_signature);
-
-        // Build a map of verifying shares for all participants
-        let mut verifying_shares = BTreeMap::new();
-        // Convert statechain public keys to verifying shares
-        for (id, pk) in request.statechain_public_keys.iter() {
-            let verifying_key =
-                VerifyingShare::deserialize(pk.serialize().as_slice()).map_err(|e| {
-                    SignerError::SerializationError(format!(
-                        "Failed to deserialize public key for participant {id:?}: {e} (culprit: {:?})", e.culprit()
-                    ))
-                })?;
-            verifying_shares.insert(*id, verifying_key);
-        }
-
-        // Add the user's public key as a verifying share
-        verifying_shares.insert(
-            user_identifier,
-            VerifyingShare::deserialize(request.public_key.serialize().as_slice()).map_err(
-                |e| {
-                    SignerError::SerializationError(format!(
-                        "Failed to deserialize user public key: {e} (culprit: {:?})",
-                        e.culprit()
-                    ))
-                },
-            )?,
-        );
-
-        let verifying_key = VerifyingKey::deserialize(request.verifying_key.serialize().as_slice())
-            .map_err(|e| {
-                SignerError::SerializationError(format!(
-                    "Failed to deserialize group verifying key: {e} (culprit: {:?})",
-                    e.culprit()
-                ))
-            })?;
-
-        // Create a public key package with all verifying shares and the group's verifying key
-        let public_key_package = PublicKeyPackage::new(verifying_shares, verifying_key);
-
-        tracing::trace!("signing_package: {:?}", signing_package);
-        tracing::trace!("signature_shares: {:?}", signature_shares);
-        tracing::trace!("public_key_package: {:?}", public_key_package);
-
-        // For taproot signatures, we provide an empty merkle root
-        let merkle_root = Vec::new();
-
-        // Aggregate all signature shares into a final signature
-        let signature = frost_secp256k1_tr::aggregate_with_tweak(
-            &signing_package,
-            &signature_shares,
-            &public_key_package,
-            Some(&merkle_root),
-        )
-        .map_err(|e| {
-            SignerError::FrostError(format!(
-                "Failed to aggregate signatures: {e} (culprit: {:?})",
-                e.culprit()
-            ))
-        })?;
-
-        tracing::debug!("signature: {:?}", signature);
-        Ok(signature)
-    }
 }
 
 impl SecretSource {
     fn to_secret_key(&self, signer: &DefaultSigner) -> Result<SecretKey, SignerError> {
         match self {
-            SecretSource::Derived(node_id) => signer.derive_signing_key(node_id),
+            SecretSource::Derived(path) => signer.derive_at(path),
             SecretSource::Encrypted(ciphertext) => {
                 signer.decrypt_private_key_ecies(ciphertext.as_slice())
             }
@@ -763,9 +446,9 @@ pub(crate) mod tests {
     use std::str::FromStr;
 
     use crate::signer::{EncryptedSecret, SecretSource, Signer, SignerError};
-    use crate::tree::TreeNodeId;
     use crate::utils::verify_signature::verify_signature_ecdsa;
     use crate::{Network, signer::default_signer::DefaultSigner};
+    use bitcoin::bip32::DerivationPath;
 
     #[cfg(feature = "browser-tests")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -780,7 +463,10 @@ pub(crate) mod tests {
         let signer = create_test_signer();
         let message = "test message";
         let signature = signer
-            .sign_message_ecdsa_with_identity_key(message.as_bytes())
+            .sign_message_ecdsa(
+                &"m/0'".parse::<DerivationPath>().unwrap(),
+                message.as_bytes(),
+            )
             .await
             .expect("Failed to sign message");
 
@@ -788,7 +474,10 @@ pub(crate) mod tests {
             &signer.secp,
             message,
             &signature,
-            &signer.get_identity_public_key().await.unwrap(),
+            &signer
+                .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
+                .await
+                .unwrap(),
         )
         .expect("Failed to verify signature");
     }
@@ -797,7 +486,10 @@ pub(crate) mod tests {
     async fn test_verify_signature_ecdsa_invalid_signature() {
         let signer = create_test_signer();
         let signature = signer
-            .sign_message_ecdsa_with_identity_key("signed message".as_bytes())
+            .sign_message_ecdsa(
+                &"m/0'".parse::<DerivationPath>().unwrap(),
+                "signed message".as_bytes(),
+            )
             .await
             .expect("Failed to sign message");
 
@@ -806,7 +498,10 @@ pub(crate) mod tests {
             &signer.secp,
             "another message",
             &signature,
-            &signer.get_identity_public_key().await.unwrap(),
+            &signer
+                .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
+                .await
+                .unwrap(),
         );
         assert!(result.is_err());
         assert!(matches!(result, Err(secp256k1::Error::IncorrectSignature)));
@@ -833,7 +528,7 @@ pub(crate) mod tests {
 
         // Get the signer's identity public key (receiver)
         let receiver_public_key = signer
-            .get_identity_public_key()
+            .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
             .await
             .expect("Failed to get identity public key");
 
@@ -873,7 +568,7 @@ pub(crate) mod tests {
 
         // Encrypt both keys using the signer's identity public key
         let identity_public_key = signer
-            .get_identity_public_key()
+            .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
             .await
             .expect("Failed to get identity public key");
 
@@ -917,7 +612,7 @@ pub(crate) mod tests {
 
         // Encrypt the key using the signer's identity public key
         let identity_public_key = signer
-            .get_identity_public_key()
+            .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
             .await
             .expect("Failed to get identity public key");
 
@@ -947,7 +642,7 @@ pub(crate) mod tests {
         // Generate a private key and encrypt it with identity key
         let private_key = SecretKey::new(&mut rng);
         let identity_public_key = signer
-            .get_identity_public_key()
+            .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
             .await
             .expect("Failed to get identity public key");
 
@@ -962,7 +657,7 @@ pub(crate) mod tests {
         // Encrypt for receiver
         let result = signer
             .encrypt_secret_for_receiver(
-                &EncryptedSecret::new(encrypted_private_key),
+                &SecretSource::Encrypted(EncryptedSecret::new(encrypted_private_key)),
                 &receiver_public_key,
             )
             .await
@@ -991,7 +686,7 @@ pub(crate) mod tests {
         let expected_public_key = private_key.public_key(&secp);
 
         let identity_public_key = signer
-            .get_identity_public_key()
+            .derive_public_key(&"m/0'".parse::<DerivationPath>().unwrap())
             .await
             .expect("Failed to get identity public key");
 
@@ -1009,19 +704,19 @@ pub(crate) mod tests {
         assert_eq!(expected_public_key, result_public_key);
 
         // Test with derived private key source
-        let node_id = TreeNodeId::from_str("test_node").expect("Failed to create node ID");
-        let derived_source = SecretSource::Derived(node_id.clone());
+        let path = DerivationPath::from_str("m/1'/0'").expect("Failed to parse path");
+        let derived_source = SecretSource::Derived(path.clone());
 
         let result_public_key = signer
             .public_key_from_secret(&derived_source)
             .await
             .expect("Failed to get public key from derived source");
 
-        // Verify it matches what get_public_key_for_node returns
+        // Verify it matches what derive_public_key returns for the same path
         let expected_public_key = signer
-            .get_public_key_for_node(&node_id)
+            .derive_public_key(&path)
             .await
-            .expect("Failed to get public key for node");
+            .expect("Failed to derive public key");
 
         assert_eq!(expected_public_key, result_public_key);
     }

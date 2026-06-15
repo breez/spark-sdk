@@ -2,28 +2,44 @@ mod default_signer;
 mod error;
 mod models;
 mod secret_sharing;
+mod spark_signer;
+mod spark_signer_adapter;
 
-use crate::tree::TreeNodeId;
+use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, SecretKey, schnorr};
 use frost_secp256k1_tr::round2::SignatureShare;
 
-pub use default_signer::{DefaultSigner, DefaultSignerError, KeySet, KeySetType};
+pub use default_signer::{
+    DefaultSigner, DefaultSignerError, account_master_key, identity_master_key, identity_public_key,
+};
 pub use error::SignerError;
 pub use models::*;
+pub use spark_signer::*;
+pub use spark_signer_adapter::SparkSignerAdapter;
 
 #[cfg(test)]
 pub(crate) use default_signer::tests::create_test_signer;
 
 #[macros::async_trait]
 pub trait Signer: Send + Sync + 'static {
-    async fn sign_message_ecdsa_with_identity_key(
+    /// Public key of the key derived at `path` under the master.
+    async fn derive_public_key(&self, path: &DerivationPath) -> Result<PublicKey, SignerError>;
+
+    /// Raw secret key derived at `path` under the master.
+    async fn secret_key(&self, path: &DerivationPath) -> Result<SecretKey, SignerError>;
+
+    /// ECDSA-sign `message` (hashed with SHA-256 internally) with the key at `path`.
+    async fn sign_message_ecdsa(
         &self,
+        path: &DerivationPath,
         message: &[u8],
     ) -> Result<Signature, SignerError>;
 
-    async fn sign_hash_schnorr_with_identity_key(
+    /// Schnorr-sign a 32-byte `hash` with the key at `path`.
+    async fn sign_hash_schnorr(
         &self,
+        path: &DerivationPath,
         hash: &[u8],
     ) -> Result<schnorr::Signature, SignerError>;
 
@@ -31,20 +47,7 @@ pub trait Signer: Send + Sync + 'static {
         &self,
     ) -> Result<FrostSigningCommitmentsWithNonces, SignerError>;
 
-    async fn get_public_key_for_node(&self, id: &TreeNodeId) -> Result<PublicKey, SignerError>;
-
     async fn generate_random_secret(&self) -> Result<EncryptedSecret, SignerError>;
-
-    async fn get_identity_public_key(&self) -> Result<PublicKey, SignerError>;
-
-    async fn static_deposit_secret_encrypted(
-        &self,
-        index: u32,
-    ) -> Result<SecretSource, SignerError>;
-
-    async fn static_deposit_secret(&self, index: u32) -> Result<SecretKey, SignerError>;
-
-    async fn static_deposit_signing_key(&self, index: u32) -> Result<PublicKey, SignerError>;
 
     /// Subtract two private keys
     ///
@@ -63,10 +66,10 @@ pub trait Signer: Send + Sync + 'static {
         num_shares: usize,
     ) -> Result<Vec<VerifiableSecretShare>, SignerError>;
 
-    /// Takes an encrypted private key (encrypted for us) and returns an encrypted private key (encrypted for receiver)
+    /// Decrypts `secret` (held by us) and re-encrypts it for `receiver_public_key`.
     async fn encrypt_secret_for_receiver(
         &self,
-        private_key: &EncryptedSecret,
+        secret: &SecretSource,
         receiver_public_key: &PublicKey,
     ) -> Result<Vec<u8>, SignerError>;
 
@@ -101,28 +104,4 @@ pub trait Signer: Send + Sync + 'static {
         &self,
         request: SignFrostRequest<'a>,
     ) -> Result<SignatureShare, SignerError>;
-
-    /// Aggregates FROST (Flexible Round-Optimized Schnorr Threshold) signature shares into a complete signature
-    ///
-    /// This function takes signature shares from multiple parties (statechain and user),
-    /// combines them with the corresponding public keys and commitments, and produces
-    /// a single aggregated threshold signature that can be verified using the group's verifying key.
-    ///
-    /// # Parameters
-    /// * `message` - The message being signed
-    /// * `statechain_signatures` - Map of identifier to signature shares from statechain participants
-    /// * `statechain_public_keys` - Map of identifier to public keys from statechain participants
-    /// * `verifying_key` - The group's verifying key used to validate the final signature
-    /// * `statechain_commitments` - Map of identifier to commitment values from statechain participants
-    /// * `self_commitment` - The local user's commitment value
-    /// * `public_key` - The local user's public key
-    /// * `self_signature` - The local user's signature share
-    /// * `adaptor_public_key` - Optional adaptor public key for adaptor signatures
-    ///
-    /// # Returns
-    /// A complete FROST signature that can be verified against the group's public key
-    async fn aggregate_frost<'a>(
-        &self,
-        request: AggregateFrostRequest<'a>,
-    ) -> Result<frost_secp256k1_tr::Signature, SignerError>;
 }

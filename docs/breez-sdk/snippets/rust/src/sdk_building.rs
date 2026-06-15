@@ -24,11 +24,7 @@ pub(crate) async fn init_sdk_advanced() -> Result<BreezSdk> {
     // let builder = builder.with_storage_backend(custom_storage(<your storage implementation>))
     // let builder = builder.with_chain_service(<your chain service implementation>)
     // let builder = builder.with_rest_client(<your rest client implementation>)
-    // let builder = builder.with_key_set(KeySetConfig {
-    //     key_set_type: <your key set type>,
-    //     use_address_index: <use address index>,
-    //     account_number: <account number>
-    // })
+    // let builder = builder.with_account_number(<account number>)
     // let builder = builder.with_payment_observer(<your payment observer implementation>);
     let sdk = builder.build().await?;
 
@@ -48,17 +44,11 @@ pub(crate) fn with_rest_chain_service(builder: SdkBuilder) -> SdkBuilder {
     // ANCHOR_END: with-rest-chain-service
 }
 
-pub(crate) fn with_key_set(builder: SdkBuilder) -> SdkBuilder {
-    // ANCHOR: with-key-set
-    let key_set_type = KeySetType::Default;
-    let use_address_index = false;
-    let optional_account_number = 21;
-    builder.with_key_set(KeySetConfig {
-        key_set_type,
-        use_address_index,
-        account_number: Some(optional_account_number),
-    })
-    // ANCHOR_END: with-key-set
+pub(crate) fn with_account_number(builder: SdkBuilder) -> SdkBuilder {
+    // ANCHOR: with-account-number
+    let account_number = 21;
+    builder.with_account_number(account_number)
+    // ANCHOR_END: with-account-number
 }
 
 // ANCHOR: with-payment-observer

@@ -44,10 +44,11 @@ pub async fn connect(request: ConnectRequest) -> WasmResult<BreezSdk> {
 #[wasm_bindgen(js_name = "connectWithSigner")]
 pub async fn connect_with_signer(
     config: Config,
-    signer: crate::signer::JsExternalSigner,
+    breez_signer: crate::signer::JsExternalBreezSigner,
+    spark_signer: crate::signer::JsExternalSparkSigner,
     storage_dir: String,
 ) -> WasmResult<BreezSdk> {
-    let builder = SdkBuilder::new_with_signer(config, signer)
+    let builder = SdkBuilder::new_with_signer(config, breez_signer, spark_signer)
         .with_default_storage(storage_dir)
         .await?;
     let sdk = builder.build().await?;
@@ -64,29 +65,58 @@ pub fn default_server_config(network: Network) -> Config {
     breez_sdk_spark::default_server_config(network.into()).into()
 }
 
-/// Creates a default external signer from a mnemonic phrase.
-///
-/// This creates a signer that can be used with `connectWithSigner` or `SdkBuilder.newWithSigner`.
 #[wasm_bindgen(js_name = "getSparkStatus")]
 pub async fn get_spark_status() -> WasmResult<SparkStatus> {
     Ok(breez_sdk_spark::get_spark_status().await?.into())
 }
 
-#[wasm_bindgen(js_name = "defaultExternalSigner")]
-pub fn default_external_signer(
+/// The two default external signers created from one mnemonic. Returned by
+/// `defaultExternalSigners`; pass both halves to `connectWithSigner` or
+/// `SdkBuilder.newWithSigner`.
+#[wasm_bindgen]
+pub struct ExternalSigners {
+    breez_signer: crate::signer::DefaultSigner,
+    spark_signer: crate::signer::DefaultSparkSigner,
+}
+
+#[wasm_bindgen]
+impl ExternalSigners {
+    /// External signer for non-Spark SDK signing (LNURL-auth, sync, message
+    /// signing, ECIES).
+    #[wasm_bindgen(getter, js_name = "breezSigner")]
+    pub fn breez_signer(&self) -> crate::signer::DefaultSigner {
+        self.breez_signer.clone()
+    }
+
+    /// External high-level Spark signer for the Spark wallet flows.
+    #[wasm_bindgen(getter, js_name = "sparkSigner")]
+    pub fn spark_signer(&self) -> crate::signer::DefaultSparkSigner {
+        self.spark_signer.clone()
+    }
+}
+
+/// Creates the default external signers from a mnemonic phrase.
+///
+/// Key derivation matches the seed-based connect path: an SDK built either
+/// way from the same mnemonic is the same wallet.
+#[wasm_bindgen(js_name = "defaultExternalSigners")]
+pub fn default_external_signers(
     mnemonic: String,
     passphrase: Option<String>,
     network: Network,
-    key_set_config: Option<crate::models::KeySetConfig>,
-) -> WasmResult<crate::signer::DefaultSigner> {
-    let signer = breez_sdk_spark::default_external_signer(
+    account_number: Option<u32>,
+) -> WasmResult<ExternalSigners> {
+    let signers = breez_sdk_spark::default_external_signers(
         mnemonic,
         passphrase,
         network.into(),
-        key_set_config.map(|k| k.into()),
+        account_number,
     )?;
 
-    Ok(crate::signer::DefaultSigner::new(signer))
+    Ok(ExternalSigners {
+        breez_signer: crate::signer::DefaultSigner::new(signers.breez_signer),
+        spark_signer: crate::signer::DefaultSparkSigner::new(signers.spark_signer),
+    })
 }
 
 #[wasm_bindgen]

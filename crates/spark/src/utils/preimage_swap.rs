@@ -17,7 +17,7 @@ use crate::{
         },
     },
     services::{LeafKeyTweak, ServiceError, TransferId, map_signing_nonce_commitments},
-    signer::Signer,
+    signer::SparkSigner,
     utils::{
         refund::{SignRefundsParams, SignedRefundTransactions, sign_refunds},
         time::web_time_to_prost_timestamp,
@@ -39,7 +39,7 @@ pub(crate) struct SwapNodesForPreimageRequest<'a> {
 
 pub(crate) async fn swap_nodes_for_preimage(
     operator_pool: &Arc<OperatorPool>,
-    signer: &Arc<dyn Signer>,
+    spark_signer: &Arc<dyn SparkSigner>,
     network: Network,
     req: SwapNodesForPreimageRequest<'_>,
 ) -> Result<InitiatePreimageSwapResponse, ServiceError> {
@@ -91,7 +91,7 @@ pub(crate) async fn swap_nodes_for_preimage(
         direct_signed_tx,
         direct_from_cpfp_signed_tx,
     } = sign_refunds(SignRefundsParams {
-        signer,
+        spark_signer,
         leaves,
         cpfp_signing_commitments,
         direct_signing_commitments,
@@ -127,7 +127,11 @@ pub(crate) async fn swap_nodes_for_preimage(
         }),
         transfer: Some(StartUserSignedTransferRequest {
             transfer_id: transfer_id.to_string(),
-            owner_identity_public_key: signer.get_identity_public_key().await?.serialize().to_vec(),
+            owner_identity_public_key: spark_signer
+                .get_identity_public_key()
+                .await?
+                .serialize()
+                .to_vec(),
             receiver_identity_public_key: receiver_pubkey.serialize().to_vec(),
             expiry_time: Some(
                 web_time_to_prost_timestamp(expiry_time)

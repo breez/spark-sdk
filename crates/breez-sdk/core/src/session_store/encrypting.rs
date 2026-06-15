@@ -10,9 +10,9 @@ use crate::signer::BreezSigner;
 use super::SessionStoreError;
 
 /// Hardened derivation indices reserved for session-token encryption.
-/// `1397245774` == ASCII "SESN" — distinct from `RTSyncSigner`'s indices and
-/// from the `KeySet` master keys, so this scope can never collide with another
-/// subsystem deriving from the same identity master key.
+/// `1397245774` == ASCII "SESN", distinct from `RTSyncSigner`'s indices, so this
+/// scope can never collide with another subsystem deriving from the same
+/// identity master key.
 const ENCRYPTION_DERIVATION_PATH: &str = "m/1397245774'/0'/0'/0/0";
 const ENCRYPTION_DERIVATION_PATH_TEST: &str = "m/1397245774'/1'/0'/0/0";
 
@@ -119,9 +119,9 @@ mod tests {
     use macros::async_test_all;
     use spark_wallet::SessionStore as _;
 
+    use crate::Seed;
     use crate::signer::BreezSigner;
     use crate::signer::breez::BreezSignerImpl;
-    use crate::{KeySetType, Seed};
 
     use super::*;
 
@@ -164,12 +164,11 @@ mod tests {
     }
 
     fn test_signer(seed_byte: u8) -> Arc<dyn BreezSigner> {
-        let mut config = crate::default_config(Network::Regtest);
-        config.api_key = None;
         let seed = Seed::Entropy(vec![seed_byte; 32]);
-        Arc::new(
-            BreezSignerImpl::new(&config, &seed, KeySetType::Default.into(), false, None).unwrap(),
-        )
+        let seed_bytes = seed.to_bytes().unwrap();
+        let master =
+            spark_wallet::identity_master_key(&seed_bytes, Network::Regtest.into(), None).unwrap();
+        Arc::new(BreezSignerImpl::new(master))
     }
 
     #[async_test_all]

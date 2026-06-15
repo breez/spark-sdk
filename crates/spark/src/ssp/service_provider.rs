@@ -8,7 +8,7 @@ use crate::{
     default_user_agent,
     header_provider::{CombinedHeaderProvider, HeaderProvider},
     session_store::SessionStore,
-    signer::Signer,
+    signer::SparkSigner,
     ssp::{
         BitcoinNetwork, ClaimStaticDeposit, ClaimStaticDepositInput, CoopExitFeeQuote,
         CurrencyAmount, LeavesSwapRequest, RequestCoopExitInput, RequestLightningReceiveInput,
@@ -35,7 +35,7 @@ impl ServiceProvider {
     /// token.
     pub fn new(
         config: ServiceProviderConfig,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         session_store: Arc<dyn SessionStore>,
         extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     ) -> Self {
@@ -43,7 +43,7 @@ impl ServiceProvider {
         let http_client = create_http_client(Some(&user_agent));
         Self::new_with_client(
             config,
-            signer,
+            spark_signer,
             session_store,
             extra_header_provider,
             http_client,
@@ -57,7 +57,7 @@ impl ServiceProvider {
     /// SSP traffic.
     pub fn new_with_client(
         config: ServiceProviderConfig,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         session_store: Arc<dyn SessionStore>,
         extra_header_provider: Option<Arc<dyn HeaderProvider>>,
         http_client: Arc<dyn HttpClient>,
@@ -65,7 +65,7 @@ impl ServiceProvider {
         let header_provider = Self::build_header_provider(
             &config,
             Arc::clone(&http_client),
-            signer,
+            spark_signer,
             session_store,
             extra_header_provider,
         );
@@ -78,7 +78,7 @@ impl ServiceProvider {
     fn build_header_provider(
         config: &ServiceProviderConfig,
         http_client: Arc<dyn HttpClient>,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         session_store: Arc<dyn SessionStore>,
         extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     ) -> Arc<dyn HeaderProvider> {
@@ -86,7 +86,7 @@ impl ServiceProvider {
             &config.base_url,
             config.schema_endpoint.as_deref(),
             http_client,
-            signer,
+            spark_signer,
             session_store,
             config.identity_public_key,
         ));

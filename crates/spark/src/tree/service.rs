@@ -21,7 +21,7 @@ use crate::{
         },
     },
     services::{ServiceError, Swap, TimelockManager},
-    signer::Signer,
+    signer::SparkSigner,
     tree::{
         LeavesReservation, LeavesReservationId, TargetAmounts, TreeNodeId, TreeService, TreeStore,
         select_helper,
@@ -37,7 +37,7 @@ pub struct SynchronousTreeService {
     operator_pool: Arc<OperatorPool>,
     state: Arc<dyn TreeStore>,
     timelock_manager: Arc<TimelockManager>,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     swap_service: Arc<Swap>,
 }
 
@@ -240,7 +240,7 @@ impl TreeService for SynchronousTreeService {
                 continue;
             }
 
-            let our_node_pubkey = self.signer.get_public_key_for_node(&leaf.id).await?;
+            let our_node_pubkey = self.spark_signer.get_public_key_for_leaf(&leaf.id).await?;
             let other_node_pubkey = leaf.signing_keyshare.public_key;
             let verifying_pubkey = leaf.verifying_public_key;
 
@@ -307,7 +307,7 @@ impl SynchronousTreeService {
         operator_pool: Arc<OperatorPool>,
         state: Arc<dyn TreeStore>,
         timelock_manager: Arc<TimelockManager>,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         swap_service: Arc<Swap>,
     ) -> Self {
         SynchronousTreeService {
@@ -316,7 +316,7 @@ impl SynchronousTreeService {
             operator_pool,
             state,
             timelock_manager,
-            signer,
+            spark_signer,
             swap_service,
         }
     }

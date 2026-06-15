@@ -89,7 +89,11 @@ pub struct ConnectRequest {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ConnectWithSignerRequest {
     pub config: Config,
-    pub signer: std::sync::Arc<dyn crate::signer::ExternalSigner>,
+    /// External signer for non-Spark SDK signing (LNURL-auth, sync, message
+    /// signing, ECIES).
+    pub breez_signer: std::sync::Arc<dyn crate::signer::ExternalBreezSigner>,
+    /// External high-level Spark signer for the Spark wallet flows.
+    pub spark_signer: std::sync::Arc<dyn crate::signer::ExternalSparkSigner>,
     pub storage_dir: String,
 }
 
@@ -1694,65 +1698,6 @@ impl From<RecoverLnurlPayResponse> for LightningAddressInfo {
             lightning_address: resp.lightning_address,
             lnurl: LnurlInfo::new(resp.lnurl),
             username: resp.username,
-        }
-    }
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum KeySetType {
-    #[default]
-    Default,
-    Taproot,
-    NativeSegwit,
-    WrappedSegwit,
-    Legacy,
-}
-
-impl From<spark_wallet::KeySetType> for KeySetType {
-    fn from(value: spark_wallet::KeySetType) -> Self {
-        match value {
-            spark_wallet::KeySetType::Default => KeySetType::Default,
-            spark_wallet::KeySetType::Taproot => KeySetType::Taproot,
-            spark_wallet::KeySetType::NativeSegwit => KeySetType::NativeSegwit,
-            spark_wallet::KeySetType::WrappedSegwit => KeySetType::WrappedSegwit,
-            spark_wallet::KeySetType::Legacy => KeySetType::Legacy,
-        }
-    }
-}
-
-impl From<KeySetType> for spark_wallet::KeySetType {
-    fn from(value: KeySetType) -> Self {
-        match value {
-            KeySetType::Default => spark_wallet::KeySetType::Default,
-            KeySetType::Taproot => spark_wallet::KeySetType::Taproot,
-            KeySetType::NativeSegwit => spark_wallet::KeySetType::NativeSegwit,
-            KeySetType::WrappedSegwit => spark_wallet::KeySetType::WrappedSegwit,
-            KeySetType::Legacy => spark_wallet::KeySetType::Legacy,
-        }
-    }
-}
-
-/// Configuration for key set derivation.
-///
-/// This struct encapsulates the parameters needed for BIP32 key derivation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-pub struct KeySetConfig {
-    /// The key set type which determines the derivation path
-    pub key_set_type: KeySetType,
-    /// Controls the structure of the BIP derivation path
-    pub use_address_index: bool,
-    /// Optional account number for key derivation
-    pub account_number: Option<u32>,
-}
-
-impl Default for KeySetConfig {
-    fn default() -> Self {
-        Self {
-            key_set_type: KeySetType::Default,
-            use_address_index: false,
-            account_number: None,
         }
     }
 }

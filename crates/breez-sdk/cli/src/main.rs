@@ -209,11 +209,7 @@ async fn run_interactive_mode(
         sdk_builder = sdk_builder.with_default_storage(data_dir.to_string_lossy().to_string());
     }
     if let Some(account_number) = account_number {
-        sdk_builder = sdk_builder.with_key_set(breez_sdk_spark::KeySetConfig {
-            key_set_type: breez_sdk_spark::KeySetType::Default,
-            use_address_index: false,
-            account_number: Some(account_number),
-        });
+        sdk_builder = sdk_builder.with_account_number(account_number);
     }
 
     let sdk = sdk_builder.build().await?;

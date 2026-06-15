@@ -6,7 +6,7 @@ use spark::{
     operator::rpc::{ConnectionManager, DefaultConnectionManager},
     services::TransferObserver,
     session_store::{InMemorySessionStore, SessionStore},
-    signer::Signer,
+    signer::SparkSigner,
     token::{InMemoryTokenOutputStore, TokenOutputStore},
     tree::{InMemoryTreeStore, TreeStore},
 };
@@ -16,7 +16,7 @@ use crate::{SparkWallet, SparkWalletConfig, SparkWalletError};
 
 pub struct WalletBuilder {
     config: SparkWalletConfig,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     cancellation_token: Option<watch::Receiver<()>>,
     session_store: Option<Arc<dyn SessionStore>>,
     tree_store: Option<Arc<dyn TreeStore>>,
@@ -30,10 +30,10 @@ pub struct WalletBuilder {
 }
 
 impl WalletBuilder {
-    pub fn new(config: SparkWalletConfig, signer: Arc<dyn Signer>) -> Self {
+    pub fn new(config: SparkWalletConfig, spark_signer: Arc<dyn SparkSigner>) -> Self {
         WalletBuilder {
             config,
-            signer,
+            spark_signer,
             cancellation_token: None,
             session_store: None,
             tree_store: None,
@@ -126,7 +126,7 @@ impl WalletBuilder {
     pub async fn build(self) -> Result<SparkWallet, SparkWalletError> {
         SparkWallet::new(
             self.config,
-            self.signer,
+            self.spark_signer,
             self.session_store
                 .unwrap_or(Arc::new(InMemorySessionStore::default())),
             self.tree_store

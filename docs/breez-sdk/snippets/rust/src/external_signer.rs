@@ -1,37 +1,32 @@
-use breez_sdk_spark::signer::ExternalSigner;
 use breez_sdk_spark::*;
-use std::sync::Arc;
 
 // ANCHOR: default-external-signer
-fn create_signer() -> Result<Arc<dyn ExternalSigner>, SdkError> {
+fn create_signers() -> Result<ExternalSigners, SdkError> {
     let mnemonic = "<mnemonic words>".to_string();
     let network = Network::Mainnet;
 
-    let signer = default_external_signer(
+    let signers = default_external_signers(
         mnemonic,
         None, // passphrase
         network,
-        Some(KeySetConfig {
-            key_set_type: KeySetType::Default,
-            use_address_index: false,
-            account_number: Some(0),
-        }),
+        Some(0), // account number
     )?;
 
-    Ok(signer)
+    Ok(signers)
 }
 // ANCHOR_END: default-external-signer
 
 // ANCHOR: connect-with-signer
-async fn connect_example(signer: Arc<dyn ExternalSigner>) -> Result<BreezSdk, SdkError> {
+async fn connect_example(signers: ExternalSigners) -> Result<BreezSdk, SdkError> {
     // Create the config
     let mut config = default_config(Network::Mainnet);
     config.api_key = Some("<breez api key>".to_string());
 
-    // Connect using the external signer
+    // Connect using the external signers
     let sdk = connect_with_signer(ConnectWithSignerRequest {
         config,
-        signer,
+        breez_signer: signers.breez_signer,
+        spark_signer: signers.spark_signer,
         storage_dir: "./.data".to_string(),
     })
     .await?;

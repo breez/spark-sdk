@@ -6,9 +6,7 @@ import {
   type TokenIssuer,
   type TokenMetadata,
   type Payment,
-  KeySetType,
   SdkBuilder,
-  type KeySetConfig,
   PaymentDetailsFilter,
   TokenTransactionType
 } from '@breeztech/breez-sdk-spark-react-native'
@@ -46,12 +44,7 @@ const createTokenWithCustomAccountNumber = async () => {
   await builder.withDefaultStorage(`${RNFS.DocumentDirectoryPath}/data`)
 
   // Set the account number for the SDK
-  const keySetConfig: KeySetConfig = {
-    keySetType: KeySetType.Default,
-    useAddressIndex: false,
-    accountNumber
-  }
-  await builder.withKeySet(keySetConfig)
+  await builder.withAccountNumber(accountNumber)
 
   const sdk = await builder.build()
   // ANCHOR_END: custom-account-number

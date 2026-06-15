@@ -1,10 +1,9 @@
 use std::collections::BTreeMap;
 
+use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1::PublicKey;
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
 use k256::{PublicKey as k256PublicKey, Scalar};
-
-use crate::tree::TreeNodeId;
 
 #[derive(Debug, Clone)]
 pub struct SecretShare {
@@ -42,7 +41,8 @@ impl EncryptedSecret {
 
 #[derive(Clone, Debug)]
 pub enum SecretSource {
-    Derived(TreeNodeId),
+    /// A key derived at this BIP32 path under the signer's account master.
+    Derived(DerivationPath),
     Encrypted(EncryptedSecret),
 }
 

@@ -27,7 +27,7 @@ use crate::{
     tree_store::WasmTreeStore,
 };
 use bitcoin::secp256k1::PublicKey;
-use breez_sdk_spark::{KeySet, PrebuiltBackend, SessionStoreAdapter, StorageBackend};
+use breez_sdk_spark::{PrebuiltBackend, SessionStoreAdapter, StorageBackend, identity_public_key};
 use platform_utils::tokio::sync::OnceCell;
 use wasm_bindgen::prelude::*;
 
@@ -199,8 +199,6 @@ pub struct SdkBuilder {
     context_postgres_pool: Option<SharedPostgresPool>,
     /// JS MySQL pool supplied via `withSharedContext(ctx_with_pool)`.
     context_mysql_pool: Option<SharedMysqlPool>,
-    key_set_type: breez_sdk_spark::KeySetType,
-    use_address_index: bool,
     account_number: Option<u32>,
 }
 
@@ -219,31 +217,37 @@ impl SdkBuilder {
             storage: None,
             context_postgres_pool: None,
             context_mysql_pool: None,
-            key_set_type: breez_sdk_spark::KeySetType::Default,
-            use_address_index: false,
             account_number: None,
         }
     }
 
     #[wasm_bindgen(js_name = "newWithSigner")]
-    pub fn new_with_signer(config: Config, signer: crate::signer::JsExternalSigner) -> Self {
-        use crate::signer::WasmExternalSigner;
+    pub fn new_with_signer(
+        config: Config,
+        breez_signer: crate::signer::JsExternalBreezSigner,
+        spark_signer: crate::signer::JsExternalSparkSigner,
+    ) -> Self {
+        use crate::signer::{WasmExternalBreezSigner, WasmExternalSparkSigner};
         use std::sync::Arc;
 
         let config_core: breez_sdk_spark::Config = config.into();
-        let signer_adapter: Arc<dyn breez_sdk_spark::signer::ExternalSigner> =
-            Arc::new(WasmExternalSigner::new(signer));
+        let signer_adapter: Arc<dyn breez_sdk_spark::signer::ExternalBreezSigner> =
+            Arc::new(WasmExternalBreezSigner::new(breez_signer));
+        let spark_signer_adapter: Arc<dyn breez_sdk_spark::signer::ExternalSparkSigner> =
+            Arc::new(WasmExternalSparkSigner::new(spark_signer));
 
         Self {
             network: config_core.network,
             seed: breez_sdk_spark::Seed::Entropy(vec![]), // Placeholder, won't be used
-            builder: breez_sdk_spark::SdkBuilder::new_with_signer(config_core, signer_adapter),
+            builder: breez_sdk_spark::SdkBuilder::new_with_signer(
+                config_core,
+                signer_adapter,
+                spark_signer_adapter,
+            ),
             storage_config: None,
             storage: None,
             context_postgres_pool: None,
             context_mysql_pool: None,
-            key_set_type: breez_sdk_spark::KeySetType::Default,
-            use_address_index: false,
             account_number: None,
         }
     }
@@ -297,17 +301,10 @@ impl SdkBuilder {
         self
     }
 
-    #[wasm_bindgen(js_name = "withKeySet")]
-    pub fn with_key_set(mut self, config: crate::models::KeySetConfig) -> Self {
-        self.key_set_type = config.key_set_type.clone().into();
-        self.use_address_index = config.use_address_index;
-        self.account_number = config.account_number;
-        let core_config = breez_sdk_spark::KeySetConfig {
-            key_set_type: config.key_set_type.into(),
-            use_address_index: config.use_address_index,
-            account_number: config.account_number,
-        };
-        self.builder = self.builder.with_key_set(core_config);
+    #[wasm_bindgen(js_name = "withAccountNumber")]
+    pub fn with_account_number(mut self, account_number: u32) -> Self {
+        self.account_number = Some(account_number);
+        self.builder = self.builder.with_account_number(account_number);
         self
     }
 
@@ -364,16 +361,12 @@ impl SdkBuilder {
     pub async fn build(mut self) -> WasmResult<BreezSdk> {
         // Derive the tenant identity from the seed. The JS-side stores use it
         // to scope every read/write by `user_id`.
-        let identity_bytes = KeySet::new(
+        let identity_bytes = identity_public_key(
             &self.seed.to_bytes()?,
             self.network.into(),
-            self.key_set_type.into(),
-            self.use_address_index,
             self.account_number,
         )
         .map_err(WasmError::new)?
-        .identity_key_pair
-        .public_key()
         .serialize();
 
         let custom_storage = match (

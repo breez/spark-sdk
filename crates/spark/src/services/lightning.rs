@@ -1,25 +1,22 @@
 use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::OperatorPool;
-use crate::operator::rpc::spark::{SecretShare, StorePreimageShareV2Request};
+use crate::operator::rpc::spark::StorePreimageShareV2Request;
 use crate::services::{ServiceError, Transfer, TransferId, TransferObserver, TransferService};
-use crate::signer::SecretToSplit;
+use crate::signer::{OperatorRecipient, PrepareLightningReceiveRequest};
 use crate::ssp::{
     LightningReceiveRequestStatus, RequestLightningReceiveInput, RequestLightningSendInput,
     ServiceProvider,
 };
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
 use crate::utils::preimage_swap::{SwapNodesForPreimageRequest, swap_nodes_for_preimage};
-use crate::{signer::Signer, tree::TreeNode};
+use crate::{signer::SparkSigner, tree::TreeNode};
 use bitcoin::hashes::{Hash, sha256};
 use bitcoin::secp256k1::PublicKey;
 use hex::ToHex;
 use lightning_invoice::Bolt11Invoice;
 use platform_utils::time::SystemTime;
-use prost::Message as ProstMessage;
-use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -200,7 +197,7 @@ pub struct LightningService {
     operator_pool: Arc<OperatorPool>,
     ssp_client: Arc<ServiceProvider>,
     network: Network,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     transfer_service: Arc<TransferService>,
     split_secret_threshold: u32,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
@@ -211,7 +208,7 @@ impl LightningService {
         operator_pool: Arc<OperatorPool>,
         ssp_client: Arc<ServiceProvider>,
         network: Network,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         transfer_service: Arc<TransferService>,
         split_secret_threshold: u32,
         transfer_observer: Option<Arc<dyn TransferObserver>>,
@@ -220,11 +217,23 @@ impl LightningService {
             operator_pool,
             ssp_client,
             network,
-            signer,
+            spark_signer,
             transfer_service,
             split_secret_threshold,
             transfer_observer,
         }
+    }
+
+    /// Builds the operator-recipient list for share-encryption from the pool.
+    fn operator_recipients(&self) -> Vec<OperatorRecipient> {
+        self.operator_pool
+            .get_all_operators()
+            .map(|op| OperatorRecipient {
+                id: op.id,
+                identifier: op.identifier,
+                public_key: op.identity_public_key,
+            })
+            .collect()
     }
 
     pub async fn create_lightning_invoice(
@@ -298,21 +307,35 @@ impl LightningService {
 
         let identity_pubkey = match identity_pubkey {
             Some(pk) => pk,
-            None => self.signer.get_identity_public_key().await?,
+            None => self.spark_signer.get_identity_public_key().await?,
         };
 
         let is_hodl = external_payment_hash.is_some();
+        if !is_hodl && preimage.is_some() {
+            return Err(ServiceError::InvalidInput(
+                "external preimage is not supported; the signer generates it in-enclave"
+                    .to_string(),
+            ));
+        }
 
-        let (preimage, payment_hash) = if let Some(hash) = external_payment_hash {
-            (None, hash)
-        } else {
-            let preimage = preimage.unwrap_or_else(|| {
-                bitcoin::secp256k1::SecretKey::new(&mut OsRng)
-                    .secret_bytes()
-                    .to_vec()
-            });
-            let hash = sha256::Hash::hash(&preimage);
-            (Some(preimage), hash)
+        // For non-HODL invoices the signer generates the preimage in-enclave
+        // (it never leaves), returning its hash plus the per-operator encrypted
+        // preimage shares to store with the coordinator.
+        let (payment_hash, prepared_receive) = match external_payment_hash {
+            Some(hash) => (hash, None),
+            None => {
+                let prepared = self
+                    .spark_signer
+                    .prepare_lightning_receive(PrepareLightningReceiveRequest {
+                        operator_recipients: self.operator_recipients(),
+                        threshold: self.split_secret_threshold,
+                    })
+                    .await?;
+                (
+                    sha256::Hash::from_byte_array(prepared.payment_hash),
+                    Some(prepared),
+                )
+            }
         };
 
         let expiry = expiry_secs.unwrap_or(DEFAULT_RECEIVE_EXPIRY_SECS);
@@ -354,56 +377,28 @@ impl LightningService {
             }
         }
 
-        if !is_hodl {
-            let preimage = preimage.ok_or_else(|| {
-                ServiceError::Generic("preimage must be set for non-HODL invoices".to_string())
-            })?;
-            let shares = self
-                .signer
-                .split_secret_with_proofs(
-                    &SecretToSplit::Preimage(preimage),
-                    self.split_secret_threshold,
-                    self.operator_pool.len(),
-                )
-                .await?;
+        if let Some(prepared) = prepared_receive {
+            // The signer already Feldman-split the preimage and ECIES-encrypted
+            // a share per operator; just forward them to the coordinator.
+            let encrypted_preimage_shares: std::collections::HashMap<String, Vec<u8>> = prepared
+                .operator_preimage_packages
+                .into_iter()
+                .map(|p| {
+                    (
+                        hex::encode(p.operator_identifier.serialize()),
+                        p.encrypted_package,
+                    )
+                })
+                .collect();
 
-            // Build encrypted preimage shares map for V2 endpoint
-            let mut encrypted_shares: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-            let threshold = self.split_secret_threshold;
-            let invoice_string = invoice.invoice.encoded_invoice.clone();
-
-            for (operator, share) in self.operator_pool.get_all_operators().zip(shares) {
-                let secret_share_proto = SecretShare {
-                    secret_share: share.secret_share.share.to_bytes().to_vec(),
-                    proofs: share
-                        .proofs
-                        .iter()
-                        .map(|p| p.to_sec1_bytes().to_vec())
-                        .collect(),
-                };
-
-                // Serialize the SecretShare protobuf
-                let proto_bytes = secret_share_proto.encode_to_vec();
-
-                // Encrypt using ECIES with the operator's identity public key
-                let public_key_bytes = operator.identity_public_key.serialize_uncompressed();
-                let encrypted = utils::ecies::encrypt(&public_key_bytes, &proto_bytes)
-                    .map_err(|e| ServiceError::Generic(format!("ECIES encryption failed: {e}")))?;
-
-                let operator_identifier = hex::encode(operator.identifier.serialize());
-                encrypted_shares.insert(operator_identifier, encrypted);
-            }
-
-            // Send V2 request to coordinator
-            let coordinator = self.operator_pool.get_coordinator();
-
-            coordinator
+            self.operator_pool
+                .get_coordinator()
                 .client
                 .store_preimage_share_v2(StorePreimageShareV2Request {
                     payment_hash: payment_hash.to_byte_array().to_vec(),
-                    encrypted_preimage_shares: encrypted_shares.into_iter().collect(),
-                    threshold,
-                    invoice_string,
+                    encrypted_preimage_shares,
+                    threshold: self.split_secret_threshold,
+                    invoice_string: invoice.invoice.encoded_invoice.clone(),
                     user_identity_public_key: identity_pubkey.serialize().to_vec(),
                 })
                 .await
@@ -442,8 +437,7 @@ impl LightningService {
         }
 
         // Prepare leaf tweaks
-        let leaf_tweaks =
-            prepare_leaf_key_tweaks_to_send(&self.signer, leaves.to_vec(), None).await?;
+        let leaf_tweaks = prepare_leaf_key_tweaks_to_send(leaves.to_vec());
 
         let prepared_transfer_request = self
             .transfer_service
@@ -451,7 +445,6 @@ impl LightningService {
                 &unwrapped_transfer_id,
                 &leaf_tweaks,
                 &ssp_identity_public_key,
-                Default::default(),
                 Some(payment_hash),
                 Some(expiry_time),
                 None, // No adaptor public key for lightning transfers
@@ -460,7 +453,7 @@ impl LightningService {
 
         let initiate_preimage_swap_res = swap_nodes_for_preimage(
             &self.operator_pool,
-            &self.signer,
+            &self.spark_signer,
             self.network,
             SwapNodesForPreimageRequest {
                 transfer_id: &unwrapped_transfer_id,

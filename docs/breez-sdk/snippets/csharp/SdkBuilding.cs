@@ -22,7 +22,7 @@ namespace BreezSdkSnippets
             // await builder.WithStorage(<your storage implementation>)
             // await builder.WithChainService(<your chain service implementation>)
             // await builder.WithRestClient(<your rest client implementation>)
-            // await builder.WithKeySet(<your key set type>, <use address index>, <account number>)
+            // await builder.WithAccountNumber(<account number>)
             // await builder.WithPaymentObserver(<your payment observer implementation>);
             var sdk = await builder.Build();
             // ANCHOR_END: init-sdk-advanced
@@ -45,21 +45,12 @@ namespace BreezSdkSnippets
             // ANCHOR_END: with-rest-chain-service
         }
 
-        async Task WithKeySet(SdkBuilder builder)
+        async Task WithAccountNumber(SdkBuilder builder)
         {
-            // ANCHOR: with-key-set
-            var keySetType = KeySetType.Default;
-            var useAddressIndex = false;
-            var optionalAccountNumber = 21u;
-
-            var keySetConfig = new KeySetConfig(
-                keySetType: keySetType,
-                useAddressIndex: useAddressIndex,
-                accountNumber: optionalAccountNumber
-            );
-
-            await builder.WithKeySet(keySetConfig);
-            // ANCHOR_END: with-key-set
+            // ANCHOR: with-account-number
+            var accountNumber = 21u;
+            await builder.WithAccountNumber(accountNumber);
+            // ANCHOR_END: with-account-number
         }
 
         // ANCHOR: with-payment-observer

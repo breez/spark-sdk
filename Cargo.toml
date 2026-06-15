@@ -115,6 +115,10 @@ members = [
   "crates/internal",
   "crates/nip65-publisher",
 ]
+# spark-compat-itest links the previous SDK release (git tag) next to the
+# workspace crates; it builds standalone so normal workspace commands don't
+# pull a second copy of the dependency tree.
+exclude = ["crates/spark-compat-itest"]
 
 [workspace.package]
 version = "0.1.0"

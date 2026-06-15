@@ -20,7 +20,7 @@ use crate::address::SparkAddress;
 use crate::core::Network;
 use crate::operator::rpc as operator_rpc;
 use crate::operator::rpc::spark::PreimageRequestRole;
-use crate::signer::{FrostSigningCommitmentsWithNonces, SecretSource};
+use crate::signer::{EncryptedSecret, FrostSigningCommitmentsWithNonces};
 use crate::ssp::BitcoinNetwork;
 use crate::token::{HashableTokenTransaction, bech32m_encode_token_id};
 use crate::token::{TokenMetadata, TokenOutput, TokenOutputWithPrevOut};
@@ -30,8 +30,6 @@ use crate::utils::byte_padding::BytePadding;
 use super::ServiceError;
 
 pub use crate::ssp::LightningSendRequestStatus;
-
-pub(crate) type ProofMap = HashMap<TreeNodeId, k256::PublicKey>;
 
 impl From<crate::Network> for operator_rpc::spark::Network {
     fn from(network: crate::Network) -> Self {
@@ -259,8 +257,10 @@ pub(crate) fn split_signing_commitments_by_variant<T>(
 #[derive(Debug)]
 pub struct LeafKeyTweak {
     pub node: TreeNode,
-    pub signing_key: SecretSource,
-    pub new_signing_key: SecretSource,
+    /// For a claim, the incoming leaf key (ECIES-encrypted to our identity key
+    /// by the sender). `None` for outbound leaves, whose signing key is derived
+    /// from `node.id`.
+    pub incoming_key: Option<EncryptedSecret>,
 }
 
 // TODO: verify if the optional times should be optional

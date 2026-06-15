@@ -95,6 +95,20 @@ jobs:
       - name: Run Tests
         run: make ${{ matrix.backend.target }}
 
+  compat-itest:
+    name: Signer compatibility tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run cross-version signer tests
+        run: make compat-itest
+
   test:
     name: Test
     runs-on: ubuntu-latest

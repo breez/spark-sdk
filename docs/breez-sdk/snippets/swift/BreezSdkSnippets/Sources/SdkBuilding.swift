@@ -17,7 +17,7 @@ func initSdkAdvanced() async throws -> BreezSdk {
     // await builder.withStorage(<your storage implementation>)
     // await builder.withChainService(<your chain service implementation>)
     // await builder.withRestClient(<your rest client implementation>)
-    // await builder.withKeySet(<your key set type>, <use address index>, <account number>)
+    // await builder.withAccountNumber(accountNumber: <account number>)
     // await builder.withPaymentObserver(<your payment observer implementation>)
     let sdk = try await builder.build()
     // ANCHOR_END: init-sdk-advanced
@@ -41,20 +41,11 @@ func withRestChainService(builder: SdkBuilder) async {
     // ANCHOR_END: with-rest-chain-service
 }
 
-func withKeySet(builder: SdkBuilder) async {
-    // ANCHOR: with-key-set
-    let keySetType = KeySetType.default
-    let useAddressIndex = false
-    let optionalAccountNumber = UInt32(21)
-    
-    let config = KeySetConfig(
-        keySetType: keySetType,
-        useAddressIndex: useAddressIndex,
-        accountNumber: optionalAccountNumber
-    )
-    
-    await builder.withKeySet(config: config)
-    // ANCHOR_END: with-key-set
+func withAccountNumber(builder: SdkBuilder) async {
+    // ANCHOR: with-account-number
+    let accountNumber = UInt32(21)
+    await builder.withAccountNumber(accountNumber: accountNumber)
+    // ANCHOR_END: with-account-number
 }
 
 // ANCHOR: with-payment-observer

@@ -12,7 +12,8 @@ use spark_postgres::{
     PostgresSessionStore, PostgresTokenStore, PostgresTreeStore, default_postgres_storage_config,
 };
 use spark_wallet::{
-    DefaultSigner, Network, Signer, SparkWallet, SparkWalletConfig, WalletBuilder, WalletEvent,
+    DefaultSigner, Network, Signer, SparkSigner, SparkSignerAdapter, SparkWallet,
+    SparkWalletConfig, WalletBuilder, WalletEvent,
 };
 use tokio::sync::broadcast::Receiver;
 use tracing::{debug, info};
@@ -33,11 +34,12 @@ pub async fn build_test_wallet(
     signer: Arc<dyn Signer>,
     backend: &Backend,
 ) -> Result<SparkWallet> {
-    let mut builder = WalletBuilder::new(config, signer.clone());
+    let spark_signer = Arc::new(SparkSignerAdapter::new(signer.clone()));
+    let mut builder = WalletBuilder::new(config, spark_signer.clone());
     match backend {
         Backend::InMemory => {}
         Backend::Postgres(conn_str) => {
-            let identity = signer.get_identity_public_key().await?.serialize();
+            let identity = spark_signer.get_identity_public_key().await?.serialize();
             let pg_config = default_postgres_storage_config(conn_str.clone());
             let session = PostgresSessionStore::from_config(pg_config.clone(), &identity).await?;
             let tree = PostgresTreeStore::from_config(pg_config.clone(), &identity).await?;
@@ -48,7 +50,7 @@ pub async fn build_test_wallet(
                 .with_token_output_store(Arc::new(token));
         }
         Backend::Mysql(conn_str) => {
-            let identity = signer.get_identity_public_key().await?.serialize();
+            let identity = spark_signer.get_identity_public_key().await?.serialize();
             let my_config = default_mysql_storage_config(conn_str.clone());
             let session = MysqlSessionStore::from_config(my_config.clone(), &identity).await?;
             let tree = MysqlTreeStore::from_config(my_config.clone(), &identity).await?;

@@ -39,14 +39,13 @@ impl MysqlSessionPersistenceFixture {
         let mut shared_seed = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut shared_seed);
 
-        let key_set = breez_sdk_spark::KeySet::new(
+        let identity = breez_sdk_spark::identity_public_key(
             &shared_seed,
             breez_sdk_spark::Network::Regtest.into(),
-            breez_sdk_spark::KeySetType::Default.into(),
-            false,
             None,
-        )?;
-        let identity = key_set.identity_key_pair.public_key().serialize().to_vec();
+        )?
+        .serialize()
+        .to_vec();
 
         Ok(Self {
             mysql_container,
