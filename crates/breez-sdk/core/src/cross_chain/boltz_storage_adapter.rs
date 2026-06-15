@@ -9,7 +9,7 @@
 //!
 //! Terminal swap rows are intentionally **not** removed from the cache:
 //! only the `boltz_active_swap_ids` list is pruned on terminal transitions
-//! (see [`BoltzStorage::update_swap`]). This keeps terminal swaps queryable
+//! (see [`BoltzStorage::upsert_swap`]). This keeps terminal swaps queryable
 //! by id for the lifetime of the wallet — aligned with payment-history
 //! retention, and lets `boltz-client` re-inspect a completed swap (e.g.
 //! during debug/recovery) without a separate archive. Growth is bounded by
@@ -48,9 +48,9 @@ pub(crate) struct BoltzStorageAdapter {
     instance_id: String,
     key_index_mutex: Arc<Mutex<()>>,
     /// Serializes read-modify-write of `boltz_active_swap_ids` across
-    /// concurrent `insert_swap`/`update_swap` calls. Without it, two
-    /// concurrent swap transitions can race on the load → mutate → save
-    /// cycle and lose one another's update.
+    /// concurrent `upsert_swap` calls. Without it, two concurrent swap
+    /// transitions can race on the load → mutate → save cycle and lose one
+    /// another's update.
     active_ids_mutex: Arc<Mutex<()>>,
 }
 
@@ -90,7 +90,7 @@ impl BoltzStorageAdapter {
 
 #[macros::async_trait]
 impl BoltzStorage for BoltzStorageAdapter {
-    async fn insert_swap(&self, swap: &BoltzSwap) -> Result<(), BoltzError> {
+    async fn upsert_swap(&self, swap: &BoltzSwap) -> Result<(), BoltzError> {
         let serialized = serde_json::to_string(swap)
             .map_err(|e| BoltzError::Store(format!("Failed to serialize swap: {e}")))?;
         self.storage
@@ -98,25 +98,10 @@ impl BoltzStorage for BoltzStorageAdapter {
             .await
             .map_err(|e| BoltzError::Store(format!("Failed to persist swap row: {e}")))?;
 
-        if !swap.status.is_terminal() {
-            let _guard = self.active_ids_mutex.lock().await;
-            let mut ids = self.load_active_ids().await?;
-            if !ids.contains(&swap.id) {
-                ids.push(swap.id.clone());
-                self.save_active_ids(&ids).await?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn update_swap(&self, swap: &BoltzSwap) -> Result<(), BoltzError> {
-        let serialized = serde_json::to_string(swap)
-            .map_err(|e| BoltzError::Store(format!("Failed to serialize swap: {e}")))?;
-        self.storage
-            .set_cached_item(swap_row_key(&swap.id), serialized)
-            .await
-            .map_err(|e| BoltzError::Store(format!("Failed to update swap row: {e}")))?;
-
+        // Reconcile the active-id index against the swap's status. A terminal
+        // swap is removed (its row stays queryable by id); a non-terminal swap
+        // is added. Both branches are idempotent, so replaying the same write
+        // (crash/retry) is a no-op.
         let _guard = self.active_ids_mutex.lock().await;
         let mut ids = self.load_active_ids().await?;
         let contained = ids.contains(&swap.id);
@@ -160,13 +145,21 @@ impl BoltzStorage for BoltzStorageAdapter {
     async fn increment_key_index(&self) -> Result<u32, BoltzError> {
         let _guard = self.key_index_mutex.lock().await;
         let key = key_index_cache_key(&self.instance_id);
-        let current = self
+        // A regressed counter re-derives an already-used preimage, which is a
+        // fund-theft vector (see BoltzStorage::increment_key_index docs). Treat
+        // an absent key as a legitimate first-use 0, but hard-fail on a present-
+        // but-unparseable value rather than silently resetting to 0.
+        let current = match self
             .storage
             .get_cached_item(key.clone())
             .await
             .map_err(|e| BoltzError::Store(format!("Failed to read key index: {e}")))?
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(0);
+        {
+            None => 0,
+            Some(v) => v
+                .parse::<u32>()
+                .map_err(|e| BoltzError::Store(format!("Corrupt key index {v:?}: {e}")))?,
+        };
         let next = current
             .checked_add(1)
             .ok_or_else(|| BoltzError::Store("Key index overflow".to_string()))?;
@@ -232,10 +225,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_get_list_active_roundtrip() {
+    async fn upsert_get_list_active_roundtrip() {
         let adapter = make_adapter();
         let swap = make_swap("s1", BoltzSwapStatus::Created);
-        adapter.insert_swap(&swap).await.unwrap();
+        adapter.upsert_swap(&swap).await.unwrap();
 
         let fetched = adapter.get_swap("s1").await.unwrap().unwrap();
         assert_eq!(fetched.id, "s1");
@@ -247,8 +240,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_inserts_do_not_drop_active_ids() {
-        // Spawn many concurrent `insert_swap` calls. Without the active_ids
+    async fn concurrent_upserts_do_not_drop_active_ids() {
+        // Spawn many concurrent `upsert_swap` calls. Without the active_ids
         // mutex the load → mutate → save cycle would race and drop entries.
         const N: usize = 32;
 
@@ -264,7 +257,7 @@ mod tests {
             let adapter = Arc::clone(&adapter);
             handles.push(tokio::spawn(async move {
                 let swap = make_swap(&format!("race_{i}"), BoltzSwapStatus::Created);
-                adapter.insert_swap(&swap).await.unwrap();
+                adapter.upsert_swap(&swap).await.unwrap();
             }));
         }
         for h in handles {
@@ -275,7 +268,7 @@ mod tests {
         assert_eq!(
             active.len(),
             N,
-            "all concurrent insert_swap calls must land in active_ids"
+            "all concurrent upsert_swap calls must land in active_ids"
         );
     }
 
@@ -283,16 +276,16 @@ mod tests {
     async fn update_to_terminal_removes_from_active() {
         let adapter = make_adapter();
         adapter
-            .insert_swap(&make_swap("s1", BoltzSwapStatus::Created))
+            .upsert_swap(&make_swap("s1", BoltzSwapStatus::Created))
             .await
             .unwrap();
         adapter
-            .insert_swap(&make_swap("s2", BoltzSwapStatus::Created))
+            .upsert_swap(&make_swap("s2", BoltzSwapStatus::Created))
             .await
             .unwrap();
 
         let terminal = make_swap("s1", BoltzSwapStatus::Completed);
-        adapter.update_swap(&terminal).await.unwrap();
+        adapter.upsert_swap(&terminal).await.unwrap();
 
         let active = adapter.list_active_swaps().await.unwrap();
         assert_eq!(active.len(), 1);

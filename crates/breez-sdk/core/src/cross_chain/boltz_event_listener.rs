@@ -43,7 +43,7 @@ impl BoltzSdkEventListener {
         else {
             // Prepare-without-send orphan, or send still in flight: no payment
             // row yet carries this hold invoice. Boltz-client updates its own
-            // swap KV via `BoltzStorage::update_swap` independently, and the
+            // swap KV via `BoltzStorage::upsert_swap` independently, and the
             // next WS transition will re-sync the payment metadata once the
             // row exists.
             debug!(
