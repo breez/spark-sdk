@@ -475,6 +475,7 @@ impl SdkBuilder {
             &self.config,
             &spark_wallet,
             &storage,
+            &signers.base,
             &lightning_sender,
             shutdown_sender.subscribe(),
         )
@@ -895,6 +896,7 @@ async fn build_cross_chain_providers(
     config: &Config,
     spark_wallet: &Arc<SparkWallet>,
     storage: &Arc<dyn crate::persist::Storage>,
+    signer: &Arc<dyn crate::signer::BreezSigner>,
     lightning_sender: &Arc<crate::sdk::LightningSender>,
     shutdown_receiver: watch::Receiver<()>,
 ) -> crate::cross_chain::CrossChainProviders {
@@ -920,6 +922,7 @@ async fn build_cross_chain_providers(
         config.network,
         Arc::clone(spark_wallet),
         Arc::clone(storage),
+        Arc::clone(signer),
         Arc::clone(lightning_sender),
     )
     .await
@@ -1371,32 +1374,62 @@ mod tests {
     }
 }
 
+/// Hardened derivation index reserved for encrypting the Boltz instance handle
+/// at rest. `1112430164` == ASCII "BOLT", distinct from the session store's
+/// "SESN" path, `RTSyncSigner`'s indices, and the `KeySet` master keys, so this
+/// scope can never collide with another subsystem deriving from the same
+/// identity master key. No per-network variant is needed: the signer's
+/// `identity_master_key` is already derived under a network-specific account
+/// number, so mainnet and regtest yield distinct encryption keys regardless.
+const BOLTZ_INSTANCE_ENCRYPTION_PATH: &str = "m/1112430164'/0'/0'/0/0";
+
 /// Loads or generates the device-local Boltz instance handle (random 32-byte
-/// seed + instance id). In v1 this is kept local only — cross-device recovery
-/// of swaps lands with the v2 submarine-swap feature.
+/// seed + instance id). The seed is a long-lived secret that derives the Boltz
+/// swap claim/refund keys, so the serialized handle is encrypted at rest via
+/// the signer (ECIES under a dedicated derivation path): an attacker with
+/// read-only storage access never sees the seed in cleartext.
+///
+/// The seed is random rather than derived from the wallet identity so two
+/// devices restored from the same mnemonic never share a Boltz instance seed.
+///
+/// In v1 this is kept local only. Cross-device recovery of swaps lands with
+/// the v2 submarine-swap feature.
 ///
 /// Cross-device consequence in v1: a user who restores from mnemonic on a
 /// second device cannot claim destination-chain payouts for reverse swaps
-/// initiated on the first device. Funds are not at risk — Boltz's
-/// hold-invoice timeout refunds the lightning leg — but the second device
-/// is blind to the in-flight swap until it terminates on Boltz's side.
-/// v2 is expected to retroactively publish the existing local seed on
-/// first boot so new devices can bootstrap from rtsync.
+/// initiated on the first device. Funds are not at risk (Boltz's hold-invoice
+/// timeout refunds the lightning leg), but the second device is blind to the
+/// in-flight swap until it terminates on Boltz's side. v2 is expected to
+/// retroactively publish the existing local seed on first boot so new devices
+/// can bootstrap from rtsync.
 async fn load_or_create_boltz_instance(
     storage: &Arc<dyn crate::Storage>,
+    signer: &Arc<dyn crate::signer::BreezSigner>,
 ) -> Result<BoltzInstanceHandle, SdkError> {
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+    use bitcoin::bip32::DerivationPath;
     use bitcoin::secp256k1::rand::{RngCore, thread_rng};
 
     const BOLTZ_INSTANCE_KEY: &str = "boltz_instance_current";
+
+    let encryption_path: DerivationPath = BOLTZ_INSTANCE_ENCRYPTION_PATH
+        .parse()
+        .map_err(|e| SdkError::Generic(format!("Invalid Boltz instance encryption path: {e}")))?;
 
     if let Some(raw) = storage
         .get_cached_item(BOLTZ_INSTANCE_KEY.to_string())
         .await
         .map_err(|e| SdkError::Generic(format!("Failed to read Boltz instance: {e}")))?
     {
-        let handle: BoltzInstanceHandle = serde_json::from_str(&raw)
-            .map_err(|e| SdkError::Generic(format!("Corrupted Boltz instance handle: {e}")))?;
-        return Ok(handle);
+        // A decrypt or parse failure here means the stored blob predates
+        // encryption-at-rest (or is otherwise unreadable). The seed is
+        // device-local and regenerable, so we fall through and mint a fresh
+        // one rather than failing connect; the only cost is abandoning any
+        // swap in flight on this device.
+        match decrypt_boltz_instance(&raw, signer, &encryption_path).await {
+            Ok(handle) => return Ok(handle),
+            Err(e) => debug!("Discarding unreadable Boltz instance handle, regenerating: {e}"),
+        }
     }
 
     let mut seed = [0u8; 32];
@@ -1405,13 +1438,32 @@ async fn load_or_create_boltz_instance(
         instance_id: uuid::Uuid::new_v4().to_string(),
         seed_hex: hex::encode(seed),
     };
-    let serialized = serde_json::to_string(&handle)
+    let serialized = serde_json::to_vec(&handle)
         .map_err(|e| SdkError::Generic(format!("Failed to serialize Boltz instance: {e}")))?;
+    let ciphertext = signer
+        .encrypt_ecies(&serialized, &encryption_path)
+        .await
+        .map_err(|e| SdkError::Generic(format!("Failed to encrypt Boltz instance: {e}")))?;
     storage
-        .set_cached_item(BOLTZ_INSTANCE_KEY.to_string(), serialized)
+        .set_cached_item(BOLTZ_INSTANCE_KEY.to_string(), BASE64.encode(ciphertext))
         .await
         .map_err(|e| SdkError::Generic(format!("Failed to persist Boltz instance: {e}")))?;
     Ok(handle)
+}
+
+async fn decrypt_boltz_instance(
+    raw: &str,
+    signer: &Arc<dyn crate::signer::BreezSigner>,
+    encryption_path: &bitcoin::bip32::DerivationPath,
+) -> Result<BoltzInstanceHandle, SdkError> {
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+
+    let ciphertext = BASE64
+        .decode(raw.as_bytes())
+        .map_err(|e| SdkError::Generic(format!("Invalid base64 Boltz instance: {e}")))?;
+    let plaintext = signer.decrypt_ecies(&ciphertext, encryption_path).await?;
+    serde_json::from_slice(&plaintext)
+        .map_err(|e| SdkError::Generic(format!("Corrupted Boltz instance handle: {e}")))
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1428,6 +1480,7 @@ async fn build_boltz_service(
     network: Network,
     spark_wallet: Arc<spark_wallet::SparkWallet>,
     storage: Arc<dyn crate::Storage>,
+    signer: Arc<dyn crate::signer::BreezSigner>,
     lightning_sender: Arc<crate::sdk::LightningSender>,
 ) -> Result<Option<Arc<dyn crate::cross_chain::CrossChainService>>, SdkError> {
     let Some(client_config) = crate::cross_chain::BoltzService::default_client_config(network)
@@ -1435,7 +1488,7 @@ async fn build_boltz_service(
         return Ok(None);
     };
 
-    let handle = load_or_create_boltz_instance(&storage).await?;
+    let handle = load_or_create_boltz_instance(&storage, &signer).await?;
     let seed = hex::decode(&handle.seed_hex)
         .map_err(|e| SdkError::Generic(format!("Invalid Boltz instance seed hex: {e}")))?;
 
