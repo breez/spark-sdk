@@ -467,7 +467,6 @@ impl SdkBuilder {
         let lightning_sender = Arc::new(crate::sdk::LightningSender::new(
             Arc::clone(&spark_wallet),
             Arc::clone(&storage),
-            sync_coordinator.clone(),
             Arc::clone(&event_emitter),
             shutdown_sender.clone(),
         ));

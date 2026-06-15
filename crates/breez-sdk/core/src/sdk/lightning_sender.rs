@@ -13,15 +13,13 @@ use platform_utils::time::Duration;
 use platform_utils::tokio;
 use spark_wallet::{SparkWallet, TransferId};
 use tokio::select;
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, error, info};
 
 use crate::{
     Payment, PaymentDetails, PaymentStatus, Storage, error::SdkError, events::EventEmitter,
-    utils::payments::get_payment_and_emit_event,
+    utils::payments::record_payment_update,
 };
-
-use super::{SyncCoordinator, SyncType};
 
 /// Reusable helper that owns the dependencies needed to pay a BOLT11
 /// invoice, persist the resulting [`Payment`] row, and reconcile its status
@@ -32,7 +30,6 @@ use super::{SyncCoordinator, SyncType};
 pub(crate) struct LightningSender {
     spark_wallet: Arc<SparkWallet>,
     storage: Arc<dyn Storage>,
-    sync_coordinator: SyncCoordinator,
     event_emitter: Arc<EventEmitter>,
     shutdown_sender: watch::Sender<()>,
 }
@@ -41,14 +38,12 @@ impl LightningSender {
     pub(crate) fn new(
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
-        sync_coordinator: SyncCoordinator,
         event_emitter: Arc<EventEmitter>,
         shutdown_sender: watch::Sender<()>,
     ) -> Self {
         Self {
             spark_wallet,
             storage,
-            sync_coordinator,
             event_emitter,
             shutdown_sender,
         }
@@ -58,8 +53,15 @@ impl LightningSender {
     /// kick off SSP-side polling so the stored status is reconciled with
     /// the service provider's view as soon as the invoice settles.
     ///
+    /// When `completion_timeout_secs` is non-zero, waits up to that long for
+    /// the background poll to report a terminal status before returning; the
+    /// poll keeps running (and still emits `PaymentSucceeded`) regardless, so
+    /// a timeout simply returns the pre-confirmation payment. Pass `0` for
+    /// fire-and-forget (return the pending payment immediately).
+    ///
     /// Callers attach any provider-specific metadata via
     /// `insert_payment_metadata` afterwards.
+    #[expect(clippy::too_many_arguments)]
     pub(crate) async fn pay_and_persist_lightning_invoice(
         &self,
         invoice: &str,
@@ -68,6 +70,7 @@ impl LightningSender {
         prefer_spark: bool,
         displayed_amount: u128,
         transfer_id: Option<TransferId>,
+        completion_timeout_secs: u64,
     ) -> Result<Payment, SdkError> {
         let payment_response = Box::pin(self.spark_wallet.pay_lightning_invoice(
             invoice,
@@ -95,20 +98,46 @@ impl LightningSender {
                     payment_response.transfer.id.to_string(),
                     htlc_details,
                 )?;
-                self.spawn_poll(&payment, ssp_id);
-                payment
+                let completion_rx = self.spawn_poll(&payment, ssp_id);
+                if completion_timeout_secs == 0 {
+                    payment
+                } else {
+                    // Wait up to the caller's timeout for the background
+                    // poll to signal completion. The poll keeps running in
+                    // either branch — it still emits `PaymentSucceeded`
+                    // when terminal — so dropping the receiver on timeout
+                    // is harmless. We fall back to the pre-confirmation
+                    // payment if the wait times out or the channel closes
+                    // (e.g. missing HTLC details).
+                    tokio::time::timeout(
+                        Duration::from_secs(completion_timeout_secs),
+                        completion_rx,
+                    )
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or(payment)
+                }
             }
+            // Spark-routed Lightning sends complete synchronously inside
+            // `pay_lightning_invoice` — there is no SSP-side state to poll,
+            // so `completion_timeout_secs` is ignored for this branch and
+            // the payment is returned with whatever status the transfer
+            // already has.
             None => payment_response.transfer.try_into()?,
         };
         self.storage.apply_payment_update(payment.clone()).await?;
         Ok(payment)
     }
 
-    /// Poll the SSP until the lightning send payment reaches a non-pending
-    /// state, then update storage and emit a payment event.
-    fn spawn_poll(&self, payment: &Payment, ssp_id: String) {
+    /// Spawns the background poll that watches an outgoing Lightning send to
+    /// completion. Returns a receiver that resolves to the terminal `Payment`
+    /// when the SSP reports a non-`Pending` status, so callers can `await`
+    /// completion synchronously with their own timeout.
+    fn spawn_poll(&self, payment: &Payment, ssp_id: String) -> oneshot::Receiver<Payment> {
         const MAX_POLL_ATTEMPTS: u32 = 20;
         let payment_id = payment.id.clone();
+        let (tx, rx) = oneshot::channel();
         info!("Polling lightning send payment {}", payment_id);
 
         let Some(htlc_details) = payment.details.as_ref().and_then(|d| match d {
@@ -118,11 +147,10 @@ impl LightningSender {
             error!(
                 "Missing HTLC details for lightning send payment {payment_id}, skipping polling"
             );
-            return;
+            return rx;
         };
         let spark_wallet = self.spark_wallet.clone();
         let storage = self.storage.clone();
-        let sync_coordinator = self.sync_coordinator.clone();
         let event_emitter = self.event_emitter.clone();
         let payment = payment.clone();
         let payment_id = payment_id.clone();
@@ -131,46 +159,50 @@ impl LightningSender {
 
         tokio::spawn(
             async move {
-                for i in 0..MAX_POLL_ATTEMPTS {
-                    info!(
-                        "Polling lightning send payment {} attempt {}",
-                        payment_id, i
-                    );
-                    select! {
-                        _ = shutdown.changed() => {
-                            info!("Shutdown signal received");
-                            return;
-                        },
-                        p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
-                            if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
-                                info!("Polling payment status = {} {:?}", payment.status, p.status);
-                                if payment.status != PaymentStatus::Pending {
-                                    info!("Polling payment completed status = {}", payment.status);
-                                    // Update storage before emitting event so that
-                                    // get_payment returns the correct status immediately.
-                                    if let Err(e) = storage.apply_payment_update(payment.clone()).await {
-                                        error!("Failed to update payment in storage: {e:?}");
+                // Drive the poll loop until we either reach a terminal status,
+                // hit the attempt cap, or get a shutdown signal.
+                let terminal_payment: Option<Payment> = 'poll: {
+                    for i in 0..MAX_POLL_ATTEMPTS {
+                        info!(
+                            "Polling lightning send payment {} attempt {}",
+                            payment_id, i
+                        );
+                        select! {
+                            _ = shutdown.changed() => {
+                                info!("Shutdown signal received");
+                                break 'poll None;
+                            },
+                            p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
+                                if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
+                                    info!("Polling payment status = {} {:?}", payment.status, p.status);
+                                    if payment.status != PaymentStatus::Pending {
+                                        info!("Polling payment completed status = {}", payment.status);
+                                        break 'poll Some(payment);
                                     }
-                                    // Fetch the payment to include already stored metadata
-                                    get_payment_and_emit_event(&storage, &event_emitter, payment.clone()).await;
-                                    sync_coordinator
-                                        .trigger_sync_no_wait(SyncType::WalletState, true)
-                                        .await;
-                                    return;
                                 }
-                            }
 
-                            let sleep_time = if i < 5 {
-                                Duration::from_secs(1)
-                            } else {
-                                Duration::from_secs(i.into())
-                            };
-                            tokio::time::sleep(sleep_time).await;
+                                let sleep_time = if i < 5 {
+                                    Duration::from_secs(1)
+                                } else {
+                                    Duration::from_secs(i.into())
+                                };
+                                tokio::time::sleep(sleep_time).await;
+                            }
                         }
                     }
-                }
+                    None
+                };
+
+                let Some(payment) = terminal_payment else {
+                    return;
+                };
+
+                let _ = tx.send(payment.clone());
+                record_payment_update(&storage, &event_emitter, payment, true).await;
             }
             .instrument(span),
         );
+
+        rx
     }
 }

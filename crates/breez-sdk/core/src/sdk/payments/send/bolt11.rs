@@ -1,19 +1,15 @@
 use std::str::FromStr;
 
-use platform_utils::time::Duration;
-use platform_utils::tokio;
 use spark_wallet::TransferId;
-use tokio::sync::oneshot;
-use tracing::{Instrument, error, info};
+use tracing::info;
 
 use crate::{
-    Bolt11InvoiceDetails, ConversionOptions, ConversionPurpose, FeePolicy, PaymentStatus,
-    SendPaymentOptions,
+    Bolt11InvoiceDetails, ConversionOptions, ConversionPurpose, FeePolicy, SendPaymentOptions,
     error::SdkError,
-    models::{Payment, PaymentDetails, SendPaymentRequest, SendPaymentResponse},
+    models::{SendPaymentRequest, SendPaymentResponse},
     sdk::BreezSdk,
     token_conversion::{ConversionAmount, TokenConversionResponse},
-    utils::{fees::fee_overpayment, payments::record_payment_update},
+    utils::fees::fee_overpayment,
 };
 
 pub(super) async fn send(
@@ -81,67 +77,22 @@ pub(super) async fn send(
         .as_ref()
         .map(|idempotency_key| TransferId::from_str(idempotency_key))
         .transpose()?;
+    let amount_to_send_sats = amount_to_send
+        .map(|a| Ok::<u64, SdkError>(a.try_into()?))
+        .transpose()?;
 
-    let payment_response = Box::pin(
-        sdk.spark_wallet.pay_lightning_invoice(
+    let payment = sdk
+        .lightning_sender
+        .pay_and_persist_lightning_invoice(
             &invoice_details.invoice.bolt11,
-            amount_to_send
-                .map(|a| Ok::<u64, SdkError>(a.try_into()?))
-                .transpose()?,
-            Some(fee_sats),
+            amount_to_send_sats,
+            fee_sats,
             prefer_spark,
+            amount,
             transfer_id,
-        ),
-    )
-    .await?;
-    let completion_timeout_secs = completion_timeout_secs.unwrap_or(0);
-    let payment = match payment_response.lightning_payment {
-        Some(lightning_payment) => {
-            let ssp_id = lightning_payment.id.clone();
-            let htlc_details = payment_response
-                .transfer
-                .htlc_preimage_request
-                .ok_or_else(|| {
-                    SdkError::Generic("Missing HTLC details for Lightning send payment".to_string())
-                })?
-                .try_into()?;
-            let payment = Payment::from_lightning(
-                lightning_payment,
-                amount,
-                payment_response.transfer.id.to_string(),
-                htlc_details,
-            )?;
-            let completion_rx = poll_lightning_send_payment(sdk, &payment, ssp_id);
-            if completion_timeout_secs == 0 {
-                payment
-            } else {
-                // Wait up to the caller's timeout for the background
-                // poll to signal completion. The poll keeps running in
-                // either branch — it still emits `PaymentSucceeded`
-                // when terminal — so dropping the receiver on timeout
-                // is harmless. We fall back to the pre-confirmation
-                // payment if the wait times out or the channel closes
-                // (e.g. missing HTLC details).
-                tokio::time::timeout(
-                    Duration::from_secs(completion_timeout_secs.into()),
-                    completion_rx,
-                )
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .unwrap_or(payment)
-            }
-        }
-        // Spark-routed Lightning sends complete synchronously inside
-        // `pay_lightning_invoice` — there is no SSP-side state to poll,
-        // so `completion_timeout_secs` is ignored for this branch and
-        // the payment is returned with whatever status the transfer
-        // already has.
-        None => payment_response.transfer.try_into()?,
-    };
-
-    // Insert the payment into storage to make it immediately available for listing
-    sdk.storage.apply_payment_update(payment.clone()).await?;
+            completion_timeout_secs.unwrap_or(0).into(),
+        )
+        .await?;
 
     Ok(SendPaymentResponse { payment })
 }
@@ -178,81 +129,6 @@ async fn calculate_fees_included_amount(
     }
 
     Ok(receiver_amount.saturating_add(overpayment))
-}
-
-/// Spawns the background poll that watches an outgoing Lightning send to
-/// completion. Returns a receiver that resolves to the terminal `Payment`
-/// when the SSP reports a non-`Pending` status, so callers can `await`
-/// completion synchronously with their own timeout.
-fn poll_lightning_send_payment(
-    sdk: &BreezSdk,
-    payment: &Payment,
-    ssp_id: String,
-) -> oneshot::Receiver<Payment> {
-    const MAX_POLL_ATTEMPTS: u32 = 20;
-    let payment_id = payment.id.clone();
-    let (tx, rx) = oneshot::channel();
-    info!("Polling lightning send payment {}", payment_id);
-
-    let Some(htlc_details) = payment.details.as_ref().and_then(|d| match d {
-        PaymentDetails::Lightning { htlc_details, .. } => Some(htlc_details.clone()),
-        _ => None,
-    }) else {
-        error!("Missing HTLC details for lightning send payment {payment_id}, skipping polling");
-        return rx;
-    };
-    let spark_wallet = sdk.spark_wallet.clone();
-    let storage = sdk.storage.clone();
-    let event_emitter = sdk.event_emitter.clone();
-    let payment = payment.clone();
-    let payment_id = payment_id.clone();
-    let mut shutdown = sdk.shutdown_sender.subscribe();
-    let span = tracing::Span::current();
-
-    tokio::spawn(async move {
-        // Drive the poll loop until we either reach a terminal status,
-        // hit the attempt cap, or get a shutdown signal.
-        let terminal_payment: Option<Payment> = 'poll: {
-            for i in 0..MAX_POLL_ATTEMPTS {
-                info!(
-                    "Polling lightning send payment {} attempt {}",
-                    payment_id, i
-                );
-                tokio::select! {
-                    _ = shutdown.changed() => {
-                        info!("Shutdown signal received");
-                        break 'poll None;
-                    },
-                    p = spark_wallet.fetch_lightning_send_payment(&ssp_id) => {
-                        if let Ok(Some(p)) = p && let Ok(payment) = Payment::from_lightning(p.clone(), payment.amount, payment.id.clone(), htlc_details.clone()) {
-                            info!("Polling payment status = {} {:?}", payment.status, p.status);
-                            if payment.status != PaymentStatus::Pending {
-                                info!("Polling payment completed status = {}", payment.status);
-                                break 'poll Some(payment);
-                            }
-                        }
-
-                        let sleep_time = if i < 5 {
-                            Duration::from_secs(1)
-                        } else {
-                            Duration::from_secs(i.into())
-                        };
-                        tokio::time::sleep(sleep_time).await;
-                    }
-                }
-            }
-            None
-        };
-
-        let Some(payment) = terminal_payment else {
-            return;
-        };
-
-        let _ = tx.send(payment.clone());
-        record_payment_update(&storage, &event_emitter, payment, true).await;
-    }.instrument(span));
-
-    rx
 }
 
 /// Runs the token conversion for a Bolt11 send, returning the conversion response

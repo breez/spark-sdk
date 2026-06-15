@@ -485,6 +485,7 @@ impl CrossChainService for BoltzService {
                 false,
                 prepared.amount_in,
                 transfer_id,
+                0,
             )
             .await
             .map_err(|e| SdkError::Generic(format!("Boltz lightning payment failed: {e}")))?;
