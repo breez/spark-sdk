@@ -900,12 +900,15 @@ const ORCHESTRA_FETCH_BASE_BACKOFF: Duration = Duration::from_millis(256);
 
 /// Fetches the orchestra config from Breez server with a bounded retry.
 ///
-/// Only connectivity failures are retried (with a short doubling backoff): a
-/// definitive empty response from the server is a final answer and is not
-/// retried. Returns `None` (and logs) when the server has no config or every
-/// attempt fails, in which case the orchestra provider is skipped for this
-/// session. Kept bounded so a slow or down Breez server cannot dominate
-/// connect latency for what is an optional provider.
+/// Any fetch error is retried (with a short doubling backoff) up to
+/// `ORCHESTRA_FETCH_MAX_ATTEMPTS`: the server collapses every gRPC failure into
+/// one opaque error, so a transient outage and a permanent 4xx look the same
+/// here and both are retried. Only a definitive empty response from the server
+/// is treated as a final answer and short-circuits without retry. Returns
+/// `None` (and logs) when the server has no config or every attempt fails, in
+/// which case the orchestra provider is skipped for this session. Kept bounded
+/// so a slow or down Breez server cannot dominate connect latency for what is
+/// an optional provider.
 async fn fetch_orchestra_config_with_retry(
     breez_server: &Arc<BreezServer>,
 ) -> Option<OrchestraServerConfig> {

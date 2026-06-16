@@ -41,13 +41,16 @@ const SEND_POLL_MAX_DELAY_MS: u64 = 2000;
 const SEND_POLL_TIMEOUT_SECS: u64 = 60;
 
 /// Hardened derivation index reserved for encrypting the Boltz instance handle
-/// at rest. `1112430164` == ASCII "BOLT", distinct from the session store's
+/// at rest. `1112493140` == ASCII "BOLT", distinct from the session store's
 /// "SESN" path, `RTSyncSigner`'s indices, and the `KeySet` master keys, so this
 /// scope can never collide with another subsystem deriving from the same
-/// identity master key. No per-network variant is needed: the signer's
+/// identity master key. Never change it: this index derives the at-rest
+/// encryption key, so altering it makes every existing encrypted handle
+/// undecryptable (we then discard and regenerate, dropping any swap in flight
+/// on that device). No per-network variant is needed: the signer's
 /// `identity_master_key` is already derived under a network-specific account
 /// number, so mainnet and regtest yield distinct encryption keys regardless.
-const BOLTZ_INSTANCE_ENCRYPTION_PATH: &str = "m/1112430164'/0'/0'/0/0";
+const BOLTZ_INSTANCE_ENCRYPTION_PATH: &str = "m/1112493140'/0'/0'/0/0";
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct BoltzInstanceHandle {
