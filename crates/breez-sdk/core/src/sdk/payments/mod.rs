@@ -49,6 +49,7 @@ impl BreezSdk {
             ref address,
             ref route,
             max_slippage_bps,
+            target_overpay_bps,
         } = request.payment_request
         {
             let amount = request.amount.ok_or(SdkError::InvalidInput(
@@ -63,6 +64,7 @@ impl BreezSdk {
                 request.conversion_options.clone(),
                 request.fee_policy.unwrap_or_default(),
                 max_slippage_bps,
+                target_overpay_bps,
             )
             .await;
         }

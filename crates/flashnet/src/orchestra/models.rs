@@ -50,14 +50,20 @@ pub struct EstimateRequest {
     pub destination_asset: String,
     pub amount: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub amount_mode: Option<AmountMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub affiliate_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EstimateResponse {
+    #[serde(default)]
+    pub amount_mode: Option<AmountMode>,
     pub estimated_out: String,
     pub fee_amount: String,
+    #[serde(default)]
+    pub rounding_fee_amount: Option<String>,
     pub fee_bps: u32,
     pub total_fee_amount: String,
     #[serde(default)]
@@ -69,6 +75,14 @@ pub struct EstimateResponse {
     pub fee_asset: String,
     #[serde(default)]
     pub route: Vec<String>,
+    #[serde(default)]
+    pub target_amount_out: Option<String>,
+    #[serde(default)]
+    pub required_amount_in: Option<String>,
+    #[serde(default)]
+    pub max_accepted_amount_in: Option<String>,
+    #[serde(default)]
+    pub input_buffer_bps: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------

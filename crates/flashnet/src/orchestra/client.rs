@@ -104,13 +104,12 @@ impl OrchestraClient {
             .collect())
     }
 
-    /// Price preview (no auth).
     pub async fn estimate(
         &self,
         request: EstimateRequest,
     ) -> Result<EstimateResponse, FlashnetError> {
         debug!("Orchestra: GET /v1/orchestration/estimate");
-        self.get("v1/orchestration/estimate", Some(request), false)
+        self.get("v1/orchestration/estimate", Some(request), true)
             .await
     }
 

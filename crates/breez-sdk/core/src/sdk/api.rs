@@ -99,7 +99,7 @@ impl BreezSdk {
         filter: &CrossChainRouteFilter,
     ) -> Result<Vec<CrossChainRoutePair>, SdkError> {
         let mut all_routes = Vec::new();
-        for svc in self.cross_chain_providers.values() {
+        for svc in self.cross_chain_context.values() {
             match svc.get_routes(filter).await {
                 Ok(routes) => all_routes.extend(routes),
                 Err(e) => tracing::warn!("Cross-chain provider route fetch failed: {e}"),

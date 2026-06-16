@@ -391,7 +391,7 @@ pub fn build_crosschain_conversion(
             estimated_out,
             delivered_amount,
             status,
-            fee,
+            fee_amount,
             asset_decimals,
             asset_contract,
             ..
@@ -415,7 +415,7 @@ pub fn build_crosschain_conversion(
                     decimals: *asset_decimals,
                 },
                 amount: delivered_amount.unwrap_or(*estimated_out),
-                fee: fee.unwrap_or(0),
+                fee: fee_amount.unwrap_or(0),
             },
             amount_adjustment: None,
         }),
@@ -427,7 +427,7 @@ pub fn build_crosschain_conversion(
             estimated_out,
             delivered_amount,
             status,
-            fee,
+            fee_amount,
             asset_decimals,
             asset_contract,
             ..
@@ -438,7 +438,7 @@ pub fn build_crosschain_conversion(
                 chain: from_side.chain,
                 asset: from_side.asset,
                 amount: u128::from(*invoice_amount_sats),
-                fee: fee.unwrap_or(0),
+                fee: 0,
             },
             to: ConversionSide {
                 chain: ConversionChain::External {
@@ -451,7 +451,7 @@ pub fn build_crosschain_conversion(
                     decimals: *asset_decimals,
                 },
                 amount: delivered_amount.unwrap_or(*estimated_out),
-                fee: 0,
+                fee: fee_amount.unwrap_or(0),
             },
             amount_adjustment: None,
         }),
@@ -596,10 +596,13 @@ mod tests {
             chain_id: Some("8453".to_string()),
             asset: "USDC".to_string(),
             recipient_address: "0x1234".to_string(),
+            asset_amount_in: Some(100_000_000),
             estimated_out: 99_500_000,
             delivered_amount: None,
             status,
-            fee: Some(500),
+            fee_amount: Some(500_000),
+            service_fee_amount: Some(500),
+            service_fee_asset: Some("USDC".to_string()),
             read_token: None,
             asset_decimals: 6,
             asset_contract: Some("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string()),
@@ -615,11 +618,14 @@ mod tests {
             recipient_address: "So1ana".to_string(),
             invoice: "lnbc1000n1p".to_string(),
             invoice_amount_sats: 100_000,
+            asset_amount_in: Some(1_500_000),
             estimated_out: 1_450_000,
             delivered_amount: delivered,
             bridge_ref: None,
             status,
-            fee: Some(1_500),
+            fee_amount: Some(50_000),
+            service_fee_amount: Some(1_500),
+            service_fee_asset: None,
             max_slippage_bps: 100,
             quote_degraded: false,
             asset_decimals: 6,
@@ -846,7 +852,10 @@ mod tests {
             "Cross-chain destination should carry the contract address as identifier"
         );
         assert_eq!(conv.to.amount, 99_500_000);
-        assert_eq!(conv.to.fee, 500);
+        // `to.fee` reflects the full user-visible fee in dest units
+        // (= `ConversionInfo::Orchestra.fee_amount`). The provider-only
+        // spread is exposed separately as `service_fee_amount`.
+        assert_eq!(conv.to.fee, 500_000);
         assert_eq!(conv.to.asset.decimals, 6);
     }
 
@@ -861,7 +870,7 @@ mod tests {
         assert_eq!(conv.from.chain, ConversionChain::Lightning);
         assert_eq!(conv.from.asset.ticker, "BTC");
         assert_eq!(conv.from.amount, 100_000);
-        assert_eq!(conv.from.fee, 1_500);
+        assert_eq!(conv.from.fee, 0);
         assert_eq!(
             conv.to.chain,
             ConversionChain::External {
@@ -871,6 +880,7 @@ mod tests {
         );
         assert_eq!(conv.to.asset.ticker, "USDT");
         assert_eq!(conv.to.amount, 1_450_000);
+        assert_eq!(conv.to.fee, 50_000);
     }
 
     #[test]

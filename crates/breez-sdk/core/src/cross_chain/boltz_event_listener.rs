@@ -117,11 +117,14 @@ impl BoltzSdkEventListener {
             recipient_address,
             invoice,
             invoice_amount_sats,
+            asset_amount_in,
             estimated_out,
             delivered_amount,
             bridge_ref,
             status,
-            fee,
+            fee_amount,
+            service_fee_amount,
+            service_fee_asset,
             max_slippage_bps,
             asset_decimals,
             asset_contract,
@@ -145,11 +148,14 @@ impl BoltzSdkEventListener {
                 recipient_address,
                 invoice,
                 invoice_amount_sats,
+                asset_amount_in,
                 estimated_out,
                 delivered_amount,
                 bridge_ref,
                 status,
-                fee,
+                fee_amount,
+                service_fee_amount,
+                service_fee_asset,
                 max_slippage_bps,
                 quote_degraded: true,
                 asset_decimals,
@@ -217,8 +223,11 @@ pub(crate) fn boltz_metadata_from_swap(
         recipient_address,
         invoice,
         invoice_amount_sats,
+        asset_amount_in,
         estimated_out,
-        fee,
+        fee_amount,
+        service_fee_amount,
+        service_fee_asset,
         max_slippage_bps,
         quote_degraded,
         asset_decimals,
@@ -229,6 +238,15 @@ pub(crate) fn boltz_metadata_from_swap(
         return None;
     };
 
+    let new_status = map_boltz_status_to_conversion(&swap.status);
+    let delivered_amount = swap.delivered_amount.map(u128::from);
+    let updated_fee_amount = super::compute_terminal_fee_amount(
+        &new_status,
+        asset_amount_in,
+        delivered_amount,
+        fee_amount,
+    );
+
     Some(PaymentMetadata {
         conversion_info: Some(ConversionInfo::Boltz {
             swap_id,
@@ -238,11 +256,14 @@ pub(crate) fn boltz_metadata_from_swap(
             recipient_address,
             invoice,
             invoice_amount_sats,
+            asset_amount_in,
             estimated_out,
-            delivered_amount: swap.delivered_amount.map(u128::from),
+            delivered_amount,
             bridge_ref: swap.bridge_ref.clone(),
-            status: map_boltz_status_to_conversion(&swap.status),
-            fee,
+            status: new_status,
+            fee_amount: updated_fee_amount,
+            service_fee_amount,
+            service_fee_asset,
             max_slippage_bps,
             quote_degraded,
             asset_decimals,
@@ -392,10 +413,13 @@ mod tests {
             chain_id: Some("42161".to_string()),
             asset: "USDT".to_string(),
             recipient_address: "0xrecipient".to_string(),
+            asset_amount_in: Some(664_652),
             estimated_out: 656_122,
             delivered_amount: None,
             status: ConversionStatus::Pending,
-            fee: Some(8_530),
+            fee_amount: Some(8_530),
+            service_fee_amount: Some(8_530),
+            service_fee_asset: Some("USDT".to_string()),
             asset_decimals: 6,
             asset_contract: Some("0xUSDT".to_string()),
         }
@@ -414,7 +438,7 @@ mod tests {
             delivered_amount,
             estimated_out,
             max_slippage_bps,
-            fee,
+            fee_amount,
             recipient_address,
             ..
         }) = updated.conversion_info
@@ -426,7 +450,8 @@ mod tests {
         // Immutable prepare-time fields pass through unchanged.
         assert_eq!(estimated_out, 656_122);
         assert_eq!(max_slippage_bps, 100);
-        assert_eq!(fee, Some(8_530));
+        // fee_amount is recomputed on terminal: asset_amount_in - delivered = 664_652 - 657_084.
+        assert_eq!(fee_amount, Some(7_568));
         assert_eq!(recipient_address, "0xrecipient");
     }
 

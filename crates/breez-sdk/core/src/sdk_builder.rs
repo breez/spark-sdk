@@ -477,13 +477,14 @@ impl SdkBuilder {
             shutdown_sender.clone(),
         ));
 
-        let cross_chain_providers = build_cross_chain_providers(
+        let cross_chain_context = build_cross_chain_context(
             &self.config,
             &context.breez_server,
             &spark_wallet,
             &storage,
             &signers.base,
             &lightning_sender,
+            Arc::clone(&fiat_service),
             shutdown_sender.subscribe(),
         )
         .await;
@@ -519,7 +520,7 @@ impl SdkBuilder {
             token_converter,
             stable_balance,
             sync_coordinator,
-            cross_chain_providers,
+            cross_chain_context,
             lightning_sender,
         })
         .await?;
@@ -904,19 +905,26 @@ async fn build_stable_balance(
     ))
 }
 
-/// Builds the cross-chain provider map. Each provider owns its own HTTP
-/// client, route cache, and background monitor task. Returns an empty map
-/// when `config.cross_chain_config` is unset.
-async fn build_cross_chain_providers(
+/// Builds the cross-chain context: provider registry + shared cached fiat
+/// service. Returns an empty registry when `config.cross_chain_config` is unset.
+#[allow(clippy::too_many_arguments)]
+async fn build_cross_chain_context(
     config: &Config,
     breez_server: &Arc<BreezServer>,
     spark_wallet: &Arc<SparkWallet>,
     storage: &Arc<dyn crate::persist::Storage>,
     signer: &Arc<dyn crate::signer::BreezSigner>,
     lightning_sender: &Arc<crate::sdk::LightningSender>,
+    fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService>,
     shutdown_receiver: watch::Receiver<()>,
-) -> crate::cross_chain::CrossChainProviders {
-    let mut providers = crate::cross_chain::CrossChainProviders::new();
+) -> crate::cross_chain::CrossChainContext {
+    // Cache scoped to cross-chain: providers + dispatcher share one TTL window.
+    let cached_fiat: Arc<dyn breez_sdk_common::fiat::FiatService> =
+        Arc::new(crate::cross_chain::CachedFiatService::new(
+            fiat_service,
+            crate::cross_chain::DEFAULT_FIAT_CACHE_TTL,
+        ));
+    let mut providers = crate::cross_chain::CrossChainContext::new(Arc::clone(&cached_fiat));
     if config.cross_chain_config.is_none() {
         return providers;
     }
@@ -935,6 +943,7 @@ async fn build_cross_chain_providers(
                 config_resolver,
                 Arc::clone(spark_wallet),
                 Arc::clone(storage),
+                Arc::clone(&cached_fiat),
                 shutdown_receiver,
             )),
         );
@@ -945,6 +954,7 @@ async fn build_cross_chain_providers(
         Arc::clone(spark_wallet),
         Arc::clone(storage),
         Arc::clone(signer),
+        cached_fiat,
         Arc::clone(lightning_sender),
     )
     .await
