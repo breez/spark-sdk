@@ -396,8 +396,10 @@ async fn resolve_direct_overpay_amount(
     }
 }
 
-/// Conversion + `FeesIncluded` ("send all"): `amount` is the token budget;
-/// AMM `AmountIn` converts to a sats budget the provider treats as send-all.
+/// Conversion + `FeesIncluded` ("send all"): `amount` is the user's
+/// source-token budget (USDB base units). The AMM `AmountIn` step converts
+/// it to a sats budget that the provider treats as send-all; the recipient
+/// gets the post-fee remainder.
 async fn prepare_token_denominated_fees_included(
     sdk: &BreezSdk,
     address: &str,
@@ -466,11 +468,15 @@ async fn prepare_token_denominated_fees_included(
     ))
 }
 
-/// Conversion + `FeesExcluded` ("fees on top"): `amount` is what the recipient
-/// should receive. Fiat-inverts to a sats target (no AMM spread), gets the
-/// inflated invoice sats from the provider, then reverse-estimates the AMM
-/// to find the token amount the wallet must spend. Non-USD pairs downgrade
-/// to `FeesIncluded` — see the gate inside.
+/// Conversion + `FeesExcluded` ("fees on top"): `amount` is the user's
+/// source-token budget (USDB base units). USD-stable parity is what lets
+/// the same magnitude double as the destination delivery target — the
+/// math below assumes that, and the non-USD gate enforces it.
+///
+/// Pipeline: fiat-invert the (parity-equivalent) destination target to a
+/// sats target (no AMM spread), get the inflated invoice sats from the
+/// provider, then reverse-estimate the AMM to find the wallet token debit.
+/// Non-USD pairs downgrade to `FeesIncluded`.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn prepare_token_denominated_fees_excluded(
     sdk: &BreezSdk,
