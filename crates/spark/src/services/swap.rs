@@ -1,6 +1,7 @@
 use std::{str::FromStr, sync::Arc, time::Duration};
 
 use bitcoin::consensus::serialize;
+use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use platform_utils::time::SystemTime;
 use platform_utils::tokio;
@@ -18,10 +19,10 @@ use crate::{
         },
     },
     services::{LeafKeyTweak, ServiceError, SigningResult, Transfer, TransferId, TransferService},
-    signer::{SecretSource, Signer},
+    signer::{AggregateFrostRequest, SparkSigner},
     ssp::{RequestSwapInput, ServiceProvider, ServiceProviderError, UserLeafInput},
     tree::{TreeNode, TreeNodeId},
-    utils::{frost::sign_aggregate_frost, refund::RefundSignatures},
+    utils::frost::aggregate_frost,
 };
 
 const SWAP_EXPIRY_DURATION: Duration = Duration::from_secs(2 * 60);
@@ -37,7 +38,7 @@ fn is_retryable_ssp_error(error: &ServiceProviderError) -> bool {
 pub struct Swap {
     network: Network,
     operator_pool: Arc<OperatorPool>,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     ssp_client: Arc<ServiceProvider>,
     transfer_service: Arc<TransferService>,
 }
@@ -46,14 +47,14 @@ impl Swap {
     pub fn new(
         network: Network,
         operator_pool: Arc<OperatorPool>,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         ssp_client: Arc<ServiceProvider>,
         transfer_service: Arc<TransferService>,
     ) -> Self {
         Swap {
             network,
             operator_pool,
-            signer,
+            spark_signer,
             ssp_client,
             transfer_service,
         }
@@ -100,15 +101,13 @@ impl Swap {
 
         // TODO: split swap into batches (js sdk uses chunks of 100 leaves)
 
-        // Build leaf key tweaks with new signing keys that will be swapped to the ssp.
+        // Build leaf key tweaks to swap to the SSP. The new signing key for each
+        // leaf is generated inside `prepare_transfer`.
         let mut leaf_key_tweaks = Vec::with_capacity(leaves.len());
         for leaf in leaves {
             leaf_key_tweaks.push(LeafKeyTweak {
                 node: leaf.clone(),
-                signing_key: SecretSource::Derived(leaf.id.clone()),
-                new_signing_key: SecretSource::Encrypted(
-                    self.signer.generate_random_secret().await?,
-                ),
+                incoming_key: None,
             });
         }
 
@@ -136,7 +135,6 @@ impl Swap {
                 &transfer_id,
                 &leaf_key_tweaks,
                 &receiver_public_key,
-                RefundSignatures::default(),
                 None,
                 Some(expiry_time),
                 Some(&cpfp_adaptor_public_key),
@@ -242,23 +240,22 @@ impl Swap {
                 &leaf_key_tweak.node.node_tx.output[leaf_key_tweak.node.vout as usize],
             )?;
 
-            // Aggregate the FROST signature with the adaptor public key
-            // This combines the user's signature share with the statechain's signature shares
-            // to produce the final adaptor signature
-            let adaptor_signature =
-                sign_aggregate_frost(crate::utils::frost::SignAggregateFrostParams {
-                    signer: &self.signer,
-                    sighash: &sighash,
-                    signing_public_key: &signed_tx.signing_public_key,
-                    aggregating_public_key: &signed_tx.signing_public_key,
-                    signing_private_key: &leaf_key_tweak.signing_key,
-                    self_nonce_commitment: &signed_tx.self_nonce_commitment,
-                    adaptor_public_key: Some(&cpfp_adaptor_public_key),
-                    verifying_key: &verifying_key,
-                    signing_result: signing_result_data,
-                })
-                .await
-                .map_err(|e| ServiceError::Generic(format!("FROST aggregation failed: {e}")))?;
+            // Aggregate the user's already-produced FROST share (signed during
+            // `prepare_transfer_request`, bound to `self_nonce_commitment`) with
+            // the statechain shares, under the adaptor public key. This is pure
+            // public math — no re-signing, so no signing key is needed here.
+            let adaptor_signature = aggregate_frost(AggregateFrostRequest {
+                message: sighash.as_byte_array(),
+                statechain_signatures: signing_result_data.signature_shares,
+                statechain_public_keys: signing_result_data.public_keys,
+                verifying_key: &verifying_key,
+                statechain_commitments: signing_result_data.signing_commitments,
+                self_commitment: &signed_tx.self_nonce_commitment.commitments,
+                public_key: &signed_tx.signing_public_key,
+                self_signature: &signed_tx.user_signature,
+                adaptor_public_key: Some(&cpfp_adaptor_public_key),
+            })
+            .map_err(|e| ServiceError::Generic(format!("FROST aggregation failed: {e}")))?;
 
             user_leaves.push(UserLeafInput {
                 leaf_id: leaf_id.to_string(),
@@ -330,7 +327,7 @@ impl Swap {
                 "inbound transfer spark_id missing".to_string(),
             ))?;
         let identity_public_key = self
-            .signer
+            .spark_signer
             .get_identity_public_key()
             .await?
             .serialize()

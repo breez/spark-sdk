@@ -316,7 +316,7 @@ async fn resolve_cross_chain_source(
     let stable_max_slippage_bps = sdk
         .stable_balance
         .as_ref()
-        .and_then(|sb| sb.config.max_slippage_bps);
+        .and_then(|sb| sb.core.config.max_slippage_bps);
 
     match decide_cross_chain_source(
         route,

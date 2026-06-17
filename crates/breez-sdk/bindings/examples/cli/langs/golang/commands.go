@@ -649,7 +649,8 @@ func handleLnurlPay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args [
 
 func handleLnurlWithdraw(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []string) error {
 	fs := flag.NewFlagSet("lnurl-withdraw", flag.ContinueOnError)
-	timeoutSecs := fs.Uint("timeout", 0, "Completion timeout in seconds")
+	timeoutSecs := fs.Uint("t", 0, "Completion timeout in seconds")
+	fs.UintVar(timeoutSecs, "timeout", 0, "Completion timeout in seconds")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

@@ -27,7 +27,7 @@ func InitSdkAdvanced() (*breez_sdk_spark.BreezSdk, error) {
 	// builder.WithStorage(<your storage implementation>)
 	// builder.WithChainService(<your chain service implementation>)
 	// builder.WithRestClient(<your rest client implementation>)
-	// builder.WithKeySet(<your key set type>, <use address index>, <account number>)
+	// builder.WithAccountNumber(<account number>)
 	// builder.WithPaymentObserver(<your payment observer implementation>)
 	sdk, err := builder.Build()
 
@@ -47,20 +47,11 @@ func WithRestChainService(builder *breez_sdk_spark.SdkBuilder) {
 	// ANCHOR_END: with-rest-chain-service
 }
 
-func WithKeySet(builder *breez_sdk_spark.SdkBuilder) {
-	// ANCHOR: with-key-set
-	keySetType := breez_sdk_spark.KeySetTypeDefault
-	useAccountIndex := true
-	optionalAccountNumber := uint32(21)
-
-	keySetConfig := breez_sdk_spark.KeySetConfig{
-		KeySetType:      keySetType,
-		UseAddressIndex: useAccountIndex,
-		AccountNumber:   &optionalAccountNumber,
-	}
-
-	builder.WithKeySet(keySetConfig)
-	// ANCHOR_END: with-key-set
+func WithAccountNumber(builder *breez_sdk_spark.SdkBuilder) {
+	// ANCHOR: with-account-number
+	accountNumber := uint32(21)
+	builder.WithAccountNumber(accountNumber)
+	// ANCHOR_END: with-account-number
 }
 
 // ANCHOR: with-payment-observer

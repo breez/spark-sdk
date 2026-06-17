@@ -610,6 +610,9 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
       const provider = (options.provider || 'moonpay').toLowerCase()
       let request
       if (provider === 'cashapp' || provider === 'cash_app' || provider === 'cash-app') {
+        if (options.amountSat == null) {
+          throw new Error('--amount-sat is required when --provider is cashapp')
+        }
         request = { type: 'cashApp', amountSats: options.amountSat }
       } else {
         request = { type: 'moonpay', lockedAmountSat: options.amountSat, redirectUrl: options.redirectUrl }

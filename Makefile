@@ -76,6 +76,12 @@ spark-itest-pg:
 spark-itest-mysql:
 	USE_MYSQL_BACKEND=true cargo xtask itest
 
+# Cross-version signer compatibility tests: links the previous SDK release
+# (git tag pinned in spark-compat-itest's Cargo.toml) next to the current
+# build and continues flows across versions. Requires Docker.
+compat-itest:
+	cargo xtask compat-itest
+
 breez-itest:
 	cargo xtask test --package breez-sdk-itest -- --test-threads=8
 
@@ -84,6 +90,22 @@ breez-itest-pg-tree-store:
 
 breez-itest-mysql-tree-store:
 	USE_MYSQL_TREE_STORE=true cargo xtask test --package breez-sdk-itest -- --test-threads=8
+
+# Mainnet conversion tests (token_conversion + stable_balance). Selects only
+# those test binaries and runs single-threaded, since they share the one
+# env-funded test wallet. They skip automatically unless MAINNET_TEST_MNEMONIC
+# and BREEZ_API_KEY are set, so this is a no-op without those secrets.
+breez-itest-mainnet:
+	cargo xtask test --package breez-sdk-itest --test mainnet_token_conversion -- --test-threads=1
+	cargo xtask test --package breez-sdk-itest --test mainnet_stable_balance -- --test-threads=1
+	cargo xtask test --package breez-sdk-itest --test mainnet_server_mode_conversion -- --test-threads=1
+
+# Mainnet teardown: drains the deterministic Bob wallet back to the test account,
+# converting tokens to sats. Run last (e.g. as an always() CI step) so funds are
+# recovered even when the conversion tests fail. No-op without the secrets above.
+breez-itest-mainnet-teardown:
+	cargo xtask test --package breez-sdk-itest --test mainnet_teardown -- --test-threads=1
+
 claude-check:
 	make fmt-check clippy-check cargo-test
 

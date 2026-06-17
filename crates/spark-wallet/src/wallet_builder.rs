@@ -6,7 +6,7 @@ use spark::{
     operator::rpc::{ConnectionManager, DefaultConnectionManager},
     services::TransferObserver,
     session_store::{InMemorySessionStore, SessionStore},
-    signer::Signer,
+    signer::SparkSigner,
     token::{InMemoryTokenOutputStore, TokenOutputStore},
     tree::{InMemoryTreeStore, TreeStore},
 };
@@ -16,7 +16,7 @@ use crate::{SparkWallet, SparkWalletConfig, SparkWalletError};
 
 pub struct WalletBuilder {
     config: SparkWalletConfig,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     cancellation_token: Option<watch::Receiver<()>>,
     session_store: Option<Arc<dyn SessionStore>>,
     tree_store: Option<Arc<dyn TreeStore>>,
@@ -26,14 +26,13 @@ pub struct WalletBuilder {
     transfer_observer: Option<Arc<dyn TransferObserver>>,
     ssp_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     so_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
-    with_background_processing: bool,
 }
 
 impl WalletBuilder {
-    pub fn new(config: SparkWalletConfig, signer: Arc<dyn Signer>) -> Self {
+    pub fn new(config: SparkWalletConfig, spark_signer: Arc<dyn SparkSigner>) -> Self {
         WalletBuilder {
             config,
-            signer,
+            spark_signer,
             cancellation_token: None,
             session_store: None,
             tree_store: None,
@@ -43,7 +42,6 @@ impl WalletBuilder {
             transfer_observer: None,
             ssp_extra_header_provider: None,
             so_extra_header_provider: None,
-            with_background_processing: true,
         }
     }
 
@@ -117,16 +115,10 @@ impl WalletBuilder {
         self
     }
 
-    #[must_use]
-    pub fn with_background_processing(mut self, with_background_processing: bool) -> Self {
-        self.with_background_processing = with_background_processing;
-        self
-    }
-
     pub async fn build(self) -> Result<SparkWallet, SparkWalletError> {
         SparkWallet::new(
             self.config,
-            self.signer,
+            self.spark_signer,
             self.session_store
                 .unwrap_or(Arc::new(InMemorySessionStore::default())),
             self.tree_store
@@ -139,7 +131,6 @@ impl WalletBuilder {
             self.transfer_observer,
             self.ssp_extra_header_provider,
             self.so_extra_header_provider,
-            self.with_background_processing,
             self.cancellation_token,
         )
         .await

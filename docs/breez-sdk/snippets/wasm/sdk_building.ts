@@ -53,11 +53,7 @@ const exampleGettingStartedAdvanced = async () => {
   // builder = builder.withStorage(<your storage implementation>)
   // builder = builder.withChainService(<your chain service implementation>)
   // builder = builder.withRestClient(<your rest client implementation>)
-  // builder = builder.withKeySet({
-  //   keySetType: <your key set type>,
-  //   useAddressIndex: <use address index>,
-  //   accountNumber: <account number>
-  // })
+  // builder = builder.withAccountNumber(<account number>)
   // builder = builder.withPaymentObserver(<your payment observer implementation>)
   const sdk = await builder.build()
   // ANCHOR_END: init-sdk-advanced
@@ -133,14 +129,10 @@ const exampleWithRestChainService = async (builder: SdkBuilder) => {
   // ANCHOR_END: with-rest-chain-service
 }
 
-const exampleWithKeySet = async (builder: SdkBuilder) => {
-  // ANCHOR: with-key-set
-  builder = builder.withKeySet({
-    keySetType: 'default',
-    useAddressIndex: false,
-    accountNumber: 21
-  })
-  // ANCHOR_END: with-key-set
+const exampleWithAccountNumber = async (builder: SdkBuilder) => {
+  // ANCHOR: with-account-number
+  builder = builder.withAccountNumber(21)
+  // ANCHOR_END: with-account-number
 }
 
 const exampleInitSdkServer = async () => {

@@ -12,6 +12,7 @@ mod sdk_context;
 mod signer;
 mod token_store;
 mod tree_store;
+mod turnkey;
 
 use wasm_bindgen::prelude::wasm_bindgen;
 

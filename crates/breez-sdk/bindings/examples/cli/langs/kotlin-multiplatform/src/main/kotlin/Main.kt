@@ -302,13 +302,7 @@ suspend fun runInteractiveMode(
     if (accountNumber != null) {
         val acctNum = accountNumber.toUIntOrNull()
             ?: error("Invalid account number: $accountNumber")
-        builder.withKeySet(
-            KeySetConfig(
-                keySetType = KeySetType.DEFAULT,
-                useAddressIndex = false,
-                accountNumber = acctNum,
-            )
-        )
+        builder.withAccountNumber(acctNum)
     }
 
     val sdk = builder.build()

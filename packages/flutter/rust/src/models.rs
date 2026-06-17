@@ -127,13 +127,6 @@ pub struct _ConnectRequest {
     pub storage_dir: String,
 }
 
-#[frb(mirror(KeySetConfig))]
-pub struct _KeySetConfig {
-    pub key_set_type: KeySetType,
-    pub use_address_index: bool,
-    pub account_number: Option<u32>,
-}
-
 #[frb(mirror(CheckMessageRequest))]
 pub struct _CheckMessageRequest {
     pub message: String,
@@ -792,6 +785,7 @@ pub enum _PaymentDetails {
     },
     Deposit {
         tx_id: String,
+        vout: u32,
     },
 }
 
@@ -1088,15 +1082,6 @@ pub struct _LightningAddressInfo {
     pub lightning_address: String,
     pub lnurl: LnurlInfo,
     pub username: String,
-}
-
-#[frb(mirror(KeySetType))]
-pub enum _KeySetType {
-    Default,
-    Taproot,
-    NativeSegwit,
-    WrappedSegwit,
-    Legacy,
 }
 
 #[frb(mirror(ListFiatCurrenciesResponse))]

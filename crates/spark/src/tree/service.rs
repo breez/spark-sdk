@@ -14,11 +14,14 @@ use crate::{
         OperatorPool,
         rpc::{
             SparkRpcClient,
-            spark::{QueryNodesRequest, TreeNodeIds, query_nodes_request::Source},
+            spark::{
+                QueryNodesRequest, TreeNodeIds, TreeNodeStatus as ProtoTreeNodeStatus,
+                query_nodes_request::Source,
+            },
         },
     },
     services::{ServiceError, Swap, TimelockManager},
-    signer::Signer,
+    signer::SparkSigner,
     tree::{
         LeavesReservation, LeavesReservationId, TargetAmounts, TreeNodeId, TreeService, TreeStore,
         select_helper,
@@ -34,7 +37,7 @@ pub struct SynchronousTreeService {
     operator_pool: Arc<OperatorPool>,
     state: Arc<dyn TreeStore>,
     timelock_manager: Arc<TimelockManager>,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     swap_service: Arc<Swap>,
 }
 
@@ -171,10 +174,15 @@ impl TreeService for SynchronousTreeService {
             .map(|op| (op.id, op.client.clone()))
             .collect();
 
-        let coord_fut = self.query_nodes(&coordinator_client, false, None);
-        let op_futs = operators
-            .iter()
-            .map(|(id, client)| async move { (*id, self.query_nodes(client, false, None).await) });
+        let coord_fut =
+            self.query_nodes(&coordinator_client, false, None, available_leaf_statuses());
+        let op_futs = operators.iter().map(|(id, client)| async move {
+            (
+                *id,
+                self.query_nodes(client, false, None, available_leaf_statuses())
+                    .await,
+            )
+        });
 
         let (coordinator_leaves_res, operator_results) = tokio::join!(coord_fut, join_all(op_futs));
         let coordinator_leaves = coordinator_leaves_res?;
@@ -232,7 +240,7 @@ impl TreeService for SynchronousTreeService {
                 continue;
             }
 
-            let our_node_pubkey = self.signer.get_public_key_for_node(&leaf.id).await?;
+            let our_node_pubkey = self.spark_signer.get_public_key_for_leaf(&leaf.id).await?;
             let other_node_pubkey = leaf.signing_keyshare.public_key;
             let verifying_pubkey = leaf.verifying_public_key;
 
@@ -299,7 +307,7 @@ impl SynchronousTreeService {
         operator_pool: Arc<OperatorPool>,
         state: Arc<dyn TreeStore>,
         timelock_manager: Arc<TimelockManager>,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         swap_service: Arc<Swap>,
     ) -> Self {
         SynchronousTreeService {
@@ -308,7 +316,7 @@ impl SynchronousTreeService {
             operator_pool,
             state,
             timelock_manager,
-            signer,
+            spark_signer,
             swap_service,
         }
     }
@@ -483,7 +491,7 @@ impl SynchronousTreeService {
                 node_ids: node_ids.clone(),
             });
             match self
-                .query_nodes(&coordinator_client, false, Some(source))
+                .query_nodes(&coordinator_client, false, Some(source), vec![])
                 .await
             {
                 Ok(nodes) => {
@@ -555,20 +563,18 @@ impl SynchronousTreeService {
         client: &SparkRpcClient,
         include_parents: bool,
         source: Option<Source>,
+        statuses: Vec<i32>,
         paging: PagingFilter,
     ) -> Result<PagingResult<TreeNode>, TreeServiceError> {
-        let source = source.unwrap_or(Source::OwnerIdentityPubkey(
-            self.identity_pubkey.serialize().to_vec(),
-        ));
         let nodes = client
-            .query_nodes(QueryNodesRequest {
+            .query_nodes(query_nodes_request(
+                &self.identity_pubkey,
+                source,
                 include_parents,
-                limit: paging.limit as i64,
-                offset: paging.offset as i64,
-                network: self.network.to_proto_network().into(),
-                source: Some(source),
-                statuses: vec![],
-            })
+                self.network,
+                &paging,
+                statuses,
+            ))
             .await?;
         let items: Vec<TreeNode> = nodes
             .nodes
@@ -590,9 +596,12 @@ impl SynchronousTreeService {
         client: &SparkRpcClient,
         include_parents: bool,
         source: Option<Source>,
+        statuses: Vec<i32>,
     ) -> Result<Vec<TreeNode>, TreeServiceError> {
         let nodes = pager(
-            |f| self.query_nodes_inner(client, include_parents, source.clone(), f),
+            |f| {
+                self.query_nodes_inner(client, include_parents, source.clone(), statuses.clone(), f)
+            },
             PagingFilter::default(),
         )
         .await?;
@@ -687,6 +696,31 @@ impl SynchronousTreeService {
     }
 }
 
+fn available_leaf_statuses() -> Vec<i32> {
+    vec![ProtoTreeNodeStatus::Available as i32]
+}
+
+fn query_nodes_request(
+    identity_pubkey: &PublicKey,
+    source: Option<Source>,
+    include_parents: bool,
+    network: Network,
+    paging: &PagingFilter,
+    statuses: Vec<i32>,
+) -> QueryNodesRequest {
+    let source = source.unwrap_or(Source::OwnerIdentityPubkey(
+        identity_pubkey.serialize().to_vec(),
+    ));
+    QueryNodesRequest {
+        include_parents,
+        limit: paging.limit as i64,
+        offset: paging.offset as i64,
+        network: network.to_proto_network().into(),
+        source: Some(source),
+        statuses,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
@@ -732,6 +766,43 @@ mod tests {
                 status: TreeNodeStatus::Available,
             })
             .collect()
+    }
+
+    #[test_all]
+    fn refresh_query_requests_only_available_leaves() {
+        let owner = PublicKey::from_slice(&[2; 33]).unwrap();
+        let req = query_nodes_request(
+            &owner,
+            None,
+            false,
+            Network::Mainnet,
+            &PagingFilter::default(),
+            available_leaf_statuses(),
+        );
+        assert_eq!(req.statuses, vec![ProtoTreeNodeStatus::Available as i32]);
+        assert!(
+            !req.statuses
+                .contains(&(ProtoTreeNodeStatus::TransferLocked as i32))
+        );
+        assert!(matches!(req.source, Some(Source::OwnerIdentityPubkey(_))));
+    }
+
+    #[test_all]
+    fn node_id_query_is_not_status_filtered() {
+        let owner = PublicKey::from_slice(&[2; 33]).unwrap();
+        let source = Source::NodeIds(TreeNodeIds {
+            node_ids: vec!["n".to_string()],
+        });
+        let req = query_nodes_request(
+            &owner,
+            Some(source),
+            false,
+            Network::Mainnet,
+            &PagingFilter::default(),
+            vec![],
+        );
+        assert!(req.statuses.is_empty());
+        assert!(matches!(req.source, Some(Source::NodeIds(_))));
     }
 
     #[test_all]

@@ -9,7 +9,7 @@ use crate::{
     header_provider::{CombinedHeaderProvider, HeaderProvider},
     operator::rpc::{ConnectionManager, OperatorRpcError, SoAuthHeaderProvider, SparkRpcClient},
     session_store::SessionStore,
-    signer::Signer,
+    signer::SparkSigner,
 };
 
 use super::OperatorError;
@@ -106,7 +106,7 @@ impl OperatorPool {
         config: &OperatorPoolConfig,
         connection_manager: Arc<dyn ConnectionManager>,
         session_store: Arc<dyn SessionStore>,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         extra_header_provider: Option<Arc<dyn HeaderProvider>>,
     ) -> Result<Self, OperatorRpcError> {
         let mut operators = Vec::new();
@@ -114,7 +114,7 @@ impl OperatorPool {
             let transport = connection_manager.get_transport(operator).await?;
             let auth_provider = Arc::new(SoAuthHeaderProvider::new(
                 transport.clone(),
-                Arc::clone(&signer),
+                Arc::clone(&spark_signer),
                 session_store.clone(),
                 operator.identity_public_key,
             ));

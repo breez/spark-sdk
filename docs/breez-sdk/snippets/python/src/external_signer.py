@@ -1,49 +1,40 @@
 from breez_sdk_spark import (
     default_config,
-    default_external_signer,
+    default_external_signers,
     connect_with_signer,
     BreezSdk,
     ConnectWithSignerRequest,
-    ExternalSigner,
-    KeySetConfig,
-    KeySetType,
+    ExternalSigners,
     Network,
 )
 
 # ANCHOR: default-external-signer
-def create_signer() -> ExternalSigner:
+def create_signers() -> ExternalSigners:
     mnemonic = "<mnemonic words>"
     network = Network.MAINNET
-    key_set_type = KeySetType.DEFAULT
-    use_address_index = False
     account_number = 0
 
-    key_set_config = KeySetConfig(
-        key_set_type=key_set_type,
-        use_address_index=use_address_index,
-        account_number=account_number,
-    )
-
-    signer = default_external_signer(
+    signers = default_external_signers(
         mnemonic=mnemonic,
         passphrase=None,
         network=network,
-        key_set_config=key_set_config,
+        account_number=account_number,
     )
 
-    return signer
+    return signers
 # ANCHOR_END: default-external-signer
 
 # ANCHOR: connect-with-signer
-async def example_connect_with_signer(signer: ExternalSigner) -> BreezSdk:
+async def example_connect_with_signer(signers: ExternalSigners) -> BreezSdk:
     # Create the config
     config = default_config(Network.MAINNET)
     config.api_key = "<breez api key>"
 
-    # Connect using the external signer
+    # Connect using the external signers
     sdk = await connect_with_signer(ConnectWithSignerRequest(
         config=config,
-        signer=signer,
+        breez_signer=signers.breez_signer,
+        spark_signer=signers.spark_signer,
         storage_dir="./.data"
     ))
 

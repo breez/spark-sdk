@@ -116,6 +116,11 @@ enum Commands {
     /// Run integration tests (containers etc.)
     Itest {},
 
+    /// Run cross-version signer compatibility tests: flows started by the
+    /// previous SDK release (git tag pinned in spark-compat-itest) are
+    /// finished by the current build, and vice versa.
+    CompatItest {},
+
     /// Check Flutter package (generate bindings and build)
     FlutterCheck {},
 
@@ -165,6 +170,7 @@ fn main() -> Result<()> {
             skip_build,
         } => check_doc_snippets_cmd(package, skip_build),
         Commands::Itest {} => itest_cmd(),
+        Commands::CompatItest {} => compat_itest_cmd(),
         Commands::FlutterCheck {} => flutter_check_cmd(),
         Commands::SyncPasskeyCore { check } => sync_passkey_core_cmd(check),
     }
@@ -852,6 +858,29 @@ fn wasm_clippy_cmd(fix: bool, rest: Vec<String>) -> Result<()> {
 }
 
 fn itest_cmd() -> Result<()> {
+    let sh = prepare_itest_images()?;
+
+    // Run the integration tests
+    cmd!(sh, "cargo test -p spark-itest --no-fail-fast").run()?;
+    Ok(())
+}
+
+fn compat_itest_cmd() -> Result<()> {
+    let sh = prepare_itest_images()?;
+
+    // The compat crate is a standalone workspace (it links the previous SDK
+    // release next to the current build), hence the manifest path.
+    cmd!(
+        sh,
+        "cargo test --manifest-path crates/spark-compat-itest/Cargo.toml --no-fail-fast"
+    )
+    .run()?;
+    Ok(())
+}
+
+/// Pulls the base images and builds the bitcoind + operator images the local
+/// integration-test fixtures run on.
+fn prepare_itest_images() -> Result<Shell> {
     let sh = Shell::new()?;
 
     // Verify Docker is available
@@ -898,9 +927,7 @@ fn itest_cmd() -> Result<()> {
     )
     .run()?;
 
-    // Run the integration tests
-    cmd!(sh, "cargo test -p spark-itest --no-fail-fast").run()?;
-    Ok(())
+    Ok(sh)
 }
 
 fn flutter_check_cmd() -> Result<()> {

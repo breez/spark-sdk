@@ -45,12 +45,33 @@ pub trait RestClient: Send + Sync {
     ) -> Result<RestResponse, ServiceConnectivityError>;
 }
 
-#[macros::derive_from(platform_utils::HttpResponse)]
-#[macros::derive_into(platform_utils::HttpResponse)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RestResponse {
     pub status: u16,
     pub body: String,
+}
+
+// Conversions are manual (not derived): `platform_utils::HttpResponse` carries
+// response headers that the integrator-facing `RestResponse` does not, so the
+// header map is empty when adapting an external `RestClient` response and
+// dropped in the reverse direction.
+impl From<RestResponse> for platform_utils::HttpResponse {
+    fn from(response: RestResponse) -> Self {
+        platform_utils::HttpResponse {
+            status: response.status,
+            body: response.body,
+            headers: HashMap::new(),
+        }
+    }
+}
+
+impl From<platform_utils::HttpResponse> for RestResponse {
+    fn from(response: platform_utils::HttpResponse) -> Self {
+        RestResponse {
+            status: response.status,
+            body: response.body,
+        }
+    }
 }
 
 /// Wrapper that adapts an external `RestClient` to `platform_utils::HttpClient`

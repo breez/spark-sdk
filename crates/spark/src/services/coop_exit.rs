@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,28 +10,27 @@ use serde::Serialize;
 use tracing::{debug, trace};
 
 use crate::bitcoin::{sighash_from_multi_input_tx, sighash_from_tx};
-use crate::core::Network;
+use crate::core::{Network, next_sequence};
 use crate::operator::OperatorPool;
 use crate::operator::rpc as operator_rpc;
 use crate::services::models::{
     SignedTx, map_signing_nonce_commitments, split_signing_commitments_by_variant,
 };
-use crate::services::{
-    ExitSpeed, LeafKeyTweak, LeafRefundSigningData, Transfer, TransferId, TransferService,
-};
+use crate::services::{ExitSpeed, LeafKeyTweak, Transfer, TransferId, TransferService};
 use crate::services::{ServiceError, TransferObserver};
-use crate::signer::{FrostSigningCommitmentsWithNonces, SecretSource, SignFrostRequest};
+use crate::signer::{
+    FrostDerivation, FrostJob, OperatorRecipient, PrepareTransferRequest, SparkSigner,
+    TransferLeafInput,
+};
 use crate::ssp::RequestCoopExitInput;
 use crate::ssp::ServiceProvider;
+use crate::tree::TreeNode;
 use crate::tree::TreeNodeId;
 use crate::utils::leaf_key_tweak::prepare_leaf_key_tweaks_to_send;
-use crate::utils::refund::{
-    RefundSignatures, prepare_leaf_refund_signing_data,
-    prepare_refund_so_signing_jobs_with_tx_constructor,
-};
 use crate::utils::time::web_time_to_prost_timestamp;
-use crate::utils::transactions::{ConnectorRefundTxsParams, create_connector_refund_txs};
-use crate::{signer::Signer, tree::TreeNode};
+use crate::utils::transactions::{
+    ConnectorRefundTxsParams, RefundTransactions, create_connector_refund_txs,
+};
 
 const COOP_EXIT_EXPIRY_DURATION_MAINNET: Duration = Duration::from_secs(7 * 24 * 60 * 60 + 5 * 60); // 1 week + 5 minutes
 const COOP_EXIT_EXPIRY_DURATION: Duration = Duration::from_secs(35 * 60); // 35 minutes
@@ -107,7 +105,7 @@ pub struct CoopExitService {
     ssp_client: Arc<ServiceProvider>,
     transfer_service: Arc<TransferService>,
     network: Network,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     transfer_observer: Option<Arc<dyn TransferObserver>>,
 }
 
@@ -117,7 +115,7 @@ impl CoopExitService {
         ssp_client: Arc<ServiceProvider>,
         transfer_service: Arc<TransferService>,
         network: Network,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         transfer_observer: Option<Arc<dyn TransferObserver>>,
     ) -> Self {
         CoopExitService {
@@ -125,9 +123,21 @@ impl CoopExitService {
             ssp_client,
             transfer_service,
             network,
-            signer,
+            spark_signer,
             transfer_observer,
         }
+    }
+
+    /// Builds the operator-recipient list for share-encryption from the pool.
+    fn operator_recipients(&self) -> Vec<OperatorRecipient> {
+        self.operator_pool
+            .get_all_operators()
+            .map(|op| OperatorRecipient {
+                id: op.id,
+                identifier: op.identifier,
+                public_key: op.identity_public_key,
+            })
+            .collect()
     }
 
     pub async fn fetch_coop_exit_fee_quote(
@@ -184,10 +194,9 @@ impl CoopExitService {
                 .await?;
         }
 
-        // Build leaf key tweaks for all leaves with new signing keys
+        // Build leaf key tweaks for all leaves
         let all_leaves = [leaves, fee_leaves.unwrap_or_default()].concat();
-        let leaf_key_tweaks =
-            prepare_leaf_key_tweaks_to_send(&self.signer, all_leaves, None).await?;
+        let leaf_key_tweaks = prepare_leaf_key_tweaks_to_send(all_leaves);
 
         // Request cooperative exit from the SSP
         trace!("Requesting cooperative exit");
@@ -283,27 +292,7 @@ impl CoopExitService {
         }
         let receiver_public_key = self.ssp_client.identity_public_key();
 
-        // 1. Prepare key tweaks (empty signature maps; the SO hasn't signed yet).
-        let key_tweak_input_map = self
-            .transfer_service
-            .prepare_send_transfer_key_tweaks(
-                &transfer_id,
-                &receiver_public_key,
-                &leaf_key_tweaks,
-                RefundSignatures::default(),
-            )
-            .await?;
-
-        // 2. ECIES-encrypt the key tweaks per operator.
-        let encrypted_key_tweaks = self
-            .transfer_service
-            .encrypt_key_tweaks(&key_tweak_input_map)?;
-        let key_tweak_package: HashMap<String, Vec<u8>> = encrypted_key_tweaks
-            .into_iter()
-            .map(|(k, v)| (hex::encode(k.serialize()), v))
-            .collect();
-
-        // 3. Fetch operator signing commitments (3 per leaf: cpfp, direct, direct-from-cpfp).
+        // 1. Fetch operator signing commitments (3 per leaf: cpfp, direct, direct-from-cpfp).
         let signing_commitments = self
             .operator_pool
             .get_coordinator()
@@ -325,7 +314,7 @@ impl CoopExitService {
         let [cpfp_chunk, direct_chunk, direct_from_cpfp_chunk] =
             split_signing_commitments_by_variant(&signing_commitments, leaf_key_tweaks.len())?;
 
-        // 4. Sign coop-exit refunds (connector refunds, decremented timelock)
+        // 2. Sign coop-exit refunds (connector refunds, decremented timelock)
         //    operator-commits-first into UserSignedTxSigningJob's.
         let connector_tx_parsed: Transaction = bitcoin::consensus::deserialize(&connector_tx)
             .map_err(|_| {
@@ -343,19 +332,42 @@ impl CoopExitService {
             )
             .await?;
 
-        // 5. Assemble + sign the transfer package.
-        let unsigned_package = operator_rpc::spark::TransferPackage {
+        // 3. Key-tweak step (to the SSP receiver) + transfer-package signature
+        //    via the high-level signer; assemble with the connector refunds.
+        let prepared = self
+            .spark_signer
+            .prepare_transfer(PrepareTransferRequest {
+                transfer_id: transfer_id.clone(),
+                receiver_public_key,
+                leaves: leaf_key_tweaks
+                    .iter()
+                    .map(|l| TransferLeafInput {
+                        node: l.node.clone(),
+                        new_leaf_id: TreeNodeId::generate(),
+                    })
+                    .collect(),
+                operator_recipients: self.operator_recipients(),
+                threshold: self.transfer_service.split_secret_threshold(),
+            })
+            .await?;
+
+        let signed_package = operator_rpc::spark::TransferPackage {
             leaves_to_send: cpfp_jobs,
             direct_leaves_to_send: direct_jobs,
             direct_from_cpfp_leaves_to_send: direct_from_cpfp_jobs,
-            key_tweak_package,
-            user_signature: Vec::new(),
+            key_tweak_package: prepared
+                .operator_packages
+                .into_iter()
+                .map(|p| {
+                    (
+                        hex::encode(p.operator_identifier.serialize()),
+                        p.encrypted_package,
+                    )
+                })
+                .collect(),
+            user_signature: prepared.transfer_user_signature.serialize_der().to_vec(),
             hash_variant: operator_rpc::spark::HashVariant::V2.into(),
         };
-        let signed_package = self
-            .transfer_service
-            .sign_transfer_package(&transfer_id, unsigned_package)
-            .await?;
 
         let expiry_time = SystemTime::now()
             + if self.network == Network::Mainnet {
@@ -364,7 +376,7 @@ impl CoopExitService {
                 COOP_EXIT_EXPIRY_DURATION
             };
 
-        // 6. Single cooperative_exit_v2 call with the full transfer_package.
+        // 4. Single cooperative_exit_v2 call with the full transfer_package.
         let response =
             self.operator_pool
                 .get_coordinator()
@@ -373,7 +385,7 @@ impl CoopExitService {
                     transfer: Some(operator_rpc::spark::StartTransferRequest {
                         transfer_id: transfer_id.to_string(),
                         owner_identity_public_key: self
-                            .signer
+                            .spark_signer
                             .get_identity_public_key()
                             .await?
                             .serialize()
@@ -426,64 +438,45 @@ impl CoopExitService {
         ),
         ServiceError,
     > {
-        // Build leaf data map (with the single SSP receiver) + connector prev_out
-        // per leaf.
-        let mut leaf_data_map =
-            prepare_leaf_refund_signing_data(&self.signer, leaves, *receiving_public_key).await?;
-        for (i, leaf) in leaves.iter().enumerate() {
-            if let Some(leaf_data) = leaf_data_map.get_mut(&leaf.node.id)
-                && i < connector_tx_parsed.output.len()
-            {
-                leaf_data.connector_prev_out = Some(connector_tx_parsed.output[i].clone());
-            }
-        }
-
-        // Build the connector refund transactions (decremented timelock) into
-        // `leaf_data_map`. The (fused-form) signing jobs returned here are
-        // discarded — we sign operator-commits-first below.
-        prepare_refund_so_signing_jobs_with_tx_constructor(
-            leaves,
-            &mut leaf_data_map,
-            false,
-            |c| {
-                create_connector_refund_txs(ConnectorRefundTxsParams {
-                    cpfp_sequence: c.cpfp_sequence,
-                    direct_sequence: c.direct_sequence,
-                    node_tx: &c.node.node_tx,
-                    direct_tx: c.node.direct_refund_tx(),
-                    connector_outpoint: OutPoint {
-                        txid: connector_txid,
-                        vout: c.vout,
-                    },
-                    receiving_pubkey: c.receiving_pubkey,
-                    network: self.network,
-                })
-            },
-        )?;
-
         let mut cpfp_jobs = Vec::new();
         let mut direct_jobs = Vec::new();
         let mut direct_from_cpfp_jobs = Vec::new();
         for (i, leaf) in leaves.iter().enumerate() {
-            let data = leaf_data_map.remove(&leaf.node.id).ok_or_else(|| {
-                ServiceError::Generic(format!("Leaf data not found for leaf {}", leaf.node.id))
-            })?;
+            // The connector refund is signed with the leaf's current derived key.
+            let signing_public_key = self
+                .spark_signer
+                .get_public_key_for_leaf(&leaf.node.id)
+                .await?;
             let verifying_key = leaf.node.verifying_public_key;
-            let signing_private_key = leaf.signing_key.clone();
+            let node_tx = &leaf.node.node_tx;
+            let connector_prev_out = connector_tx_parsed.output.get(i).cloned();
 
-            let LeafRefundSigningData {
-                signing_public_key,
-                tx: node_tx,
-                direct_tx,
-                refund_tx,
-                direct_refund_tx,
-                direct_from_cpfp_refund_tx,
-                signing_nonce_commitment,
-                direct_signing_nonce_commitment,
-                direct_from_cpfp_signing_nonce_commitment,
-                connector_prev_out,
-                ..
-            } = data;
+            // Build the connector refund transactions at the decremented timelock.
+            // The funds are refunded to the SSP receiver.
+            let refund_tx = leaf
+                .node
+                .refund_tx
+                .clone()
+                .ok_or_else(|| ServiceError::Generic("No refund tx".to_string()))?;
+            let old_sequence = refund_tx.input[0].sequence;
+            let (cpfp_sequence, direct_sequence) = next_sequence(old_sequence)
+                .ok_or_else(|| ServiceError::Generic("Failed to get next sequence".to_string()))?;
+            let RefundTransactions {
+                cpfp_tx: cpfp_refund_tx,
+                direct_tx: direct_refund_tx,
+                direct_from_cpfp_tx: direct_from_cpfp_refund_tx,
+            } = create_connector_refund_txs(ConnectorRefundTxsParams {
+                cpfp_sequence,
+                direct_sequence,
+                node_tx,
+                direct_tx: leaf.node.direct_refund_tx(),
+                connector_outpoint: OutPoint {
+                    txid: connector_txid,
+                    vout: i as u32,
+                },
+                receiving_pubkey: receiving_public_key,
+                network: self.network,
+            });
 
             // Coop-exit refunds spend multiple inputs (node_tx + connector); BIP-341
             // sighash requires all prev outs.
@@ -491,8 +484,6 @@ impl CoopExitService {
                 .as_ref()
                 .map(|c| vec![node_tx.output[0].clone(), c.clone()]);
 
-            let cpfp_refund_tx = refund_tx
-                .ok_or_else(|| ServiceError::Generic("Missing cpfp refund tx".to_string()))?;
             let cpfp_sighash = if let Some(prev_outs) = node_all_prev_outs
                 .as_ref()
                 .filter(|_| cpfp_refund_tx.input.len() > 1)
@@ -507,15 +498,15 @@ impl CoopExitService {
                     cpfp_refund_tx,
                     cpfp_sighash.as_byte_array(),
                     &signing_public_key,
-                    &signing_private_key,
-                    signing_nonce_commitment,
                     cpfp_commitments[i].clone(),
                     &verifying_key,
                 )
                 .await?,
             );
 
-            if let (Some(direct_tx), Some(direct_refund_tx)) = (direct_tx, direct_refund_tx) {
+            if let (Some(direct_tx), Some(direct_refund_tx)) =
+                (leaf.node.direct_tx.as_ref(), direct_refund_tx)
+            {
                 let direct_all_prev_outs = connector_prev_out
                     .as_ref()
                     .map(|c| vec![direct_tx.output[0].clone(), c.clone()]);
@@ -533,8 +524,6 @@ impl CoopExitService {
                         direct_refund_tx,
                         sighash.as_byte_array(),
                         &signing_public_key,
-                        &signing_private_key,
-                        direct_signing_nonce_commitment,
                         direct_commitments[i].clone(),
                         &verifying_key,
                     )
@@ -557,8 +546,6 @@ impl CoopExitService {
                         dfc_refund_tx,
                         sighash.as_byte_array(),
                         &signing_public_key,
-                        &signing_private_key,
-                        direct_from_cpfp_signing_nonce_commitment,
                         direct_from_cpfp_commitments[i].clone(),
                         &verifying_key,
                     )
@@ -570,41 +557,42 @@ impl CoopExitService {
         Ok((cpfp_jobs, direct_jobs, direct_from_cpfp_jobs))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn sign_coop_exit_refund_job(
         &self,
         node_id: &TreeNodeId,
         refund_tx: Transaction,
-        sighash_bytes: &[u8],
+        sighash_bytes: &[u8; 32],
         signing_public_key: &PublicKey,
-        signing_private_key: &SecretSource,
-        self_nonce_commitment: FrostSigningCommitmentsWithNonces,
         operator_commitments: std::collections::BTreeMap<
             Identifier,
             frost_secp256k1_tr::round1::SigningCommitments,
         >,
         verifying_key: &PublicKey,
     ) -> Result<operator_rpc::spark::UserSignedTxSigningJob, ServiceError> {
-        let user_signature = self
-            .signer
-            .sign_frost(SignFrostRequest {
-                message: sighash_bytes,
-                public_key: signing_public_key,
-                private_key: signing_private_key,
-                verifying_key,
-                self_nonce_commitment: &self_nonce_commitment,
-                statechain_commitments: operator_commitments.clone(),
+        // The connector refund is signed with the leaf's current derived key.
+        let share = self
+            .spark_signer
+            .sign_frost(vec![FrostJob {
+                derivation: FrostDerivation::SigningLeaf {
+                    leaf_id: node_id.clone(),
+                },
+                sighash: *sighash_bytes,
+                verifying_key: *verifying_key,
+                operator_commitments: operator_commitments.clone(),
                 adaptor_public_key: None,
-            })
-            .await?;
+            }])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| ServiceError::Generic("sign_frost returned no share".to_string()))?;
 
         let signed_tx = SignedTx {
             node_id: node_id.clone(),
             signing_public_key: *signing_public_key,
             tx: refund_tx,
-            user_signature,
+            user_signature: share.signature_share,
             signing_commitments: operator_commitments,
-            self_nonce_commitment,
+            self_nonce_commitment: share.commitment,
             network: self.network,
         };
         (&signed_tx).try_into()

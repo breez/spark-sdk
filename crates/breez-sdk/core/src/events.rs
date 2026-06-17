@@ -201,9 +201,14 @@ pub struct EventEmitter {
     synced_event_buffer: Mutex<Option<InternalSyncedEvent>>,
 }
 
+/// Handlers registered here are owned by the `EventEmitter` for its whole
+/// lifetime, and the emitter is itself owned by the SDK object graph. To keep
+/// that graph droppable, a handler must not hold a strong reference back to
+/// the `EventEmitter` (directly or via a `BreezSdk` clone); the emitter is
+/// passed into `handle` instead.
 #[macros::async_trait]
 pub(crate) trait RuntimeEventHandler: Send + Sync {
-    async fn handle(&self, event: RuntimeEvent);
+    async fn handle(&self, emitter: &EventEmitter, event: RuntimeEvent);
 }
 
 impl EventEmitter {
@@ -252,6 +257,16 @@ impl EventEmitter {
         listeners.remove(id).is_some()
     }
 
+    /// Remove all external listeners.
+    ///
+    /// Listeners are owned by the emitter, so a listener that references the
+    /// SDK pins the whole instance; dropping them here on disconnect makes
+    /// the instance releasable regardless of what listeners capture.
+    pub async fn clear_external_listeners(&self) {
+        let mut listeners = self.external_listeners.write().await;
+        listeners.clear();
+    }
+
     /// Add an internal listener that sees all raw events before middleware processing.
     ///
     /// Used by SDK components (e.g., `ClientSyncListener`) that need to observe events
@@ -273,6 +288,12 @@ impl EventEmitter {
     /// Add middleware to the event processing chain.
     ///
     /// Middleware can transform or suppress events before they reach external listeners.
+    ///
+    /// Middleware is owned by the emitter for its whole lifetime, so it must
+    /// not hold a reference back to the emitter (directly or transitively),
+    /// or the SDK object graph can never be dropped. Code that needs to emit
+    /// must receive the emitter from its caller instead (see
+    /// `RuntimeEventHandler` and `TokenConverter::convert`).
     pub async fn add_middleware(&self, middleware: Box<dyn EventMiddleware>) {
         let mut mw = self.middleware.write().await;
         mw.push(middleware);
@@ -286,7 +307,7 @@ impl EventEmitter {
     pub(crate) async fn emit_runtime_event(&self, event: RuntimeEvent) {
         let handlers = self.runtime_event_handlers.read().await;
         for handler in handlers.iter() {
-            handler.handle(event.clone()).await;
+            handler.handle(self, event.clone()).await;
         }
     }
 
@@ -499,6 +520,36 @@ mod tests {
 
         // Try to remove a non-existent listener
         assert!(!emitter.remove_external_listener("non-existent-id").await);
+    }
+
+    #[async_test_all]
+    async fn test_clear_external_listeners() {
+        let emitter = EventEmitter::new(false);
+
+        let received1 = Arc::new(AtomicBool::new(false));
+        let received2 = Arc::new(AtomicBool::new(false));
+
+        let id1 = emitter
+            .add_external_listener(Box::new(TestListener {
+                received: received1.clone(),
+            }))
+            .await;
+        let id2 = emitter
+            .add_external_listener(Box::new(TestListener {
+                received: received2.clone(),
+            }))
+            .await;
+
+        emitter.clear_external_listeners().await;
+
+        emitter.emit(&SdkEvent::Synced).await;
+
+        assert!(!received1.load(Ordering::Relaxed));
+        assert!(!received2.load(Ordering::Relaxed));
+
+        // Already cleared, so individual removal finds nothing
+        assert!(!emitter.remove_external_listener(&id1).await);
+        assert!(!emitter.remove_external_listener(&id2).await);
     }
 
     #[async_test_all]

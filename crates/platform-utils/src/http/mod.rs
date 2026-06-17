@@ -88,12 +88,23 @@ pub const REQUEST_TIMEOUT: u64 = 60;
 pub struct HttpResponse {
     pub status: u16,
     pub body: String,
+    /// Response headers with lowercased names. A header appearing more than once
+    /// collapses to its last value, which is sufficient for the single-valued
+    /// headers the SDK reads (e.g. `Retry-After`).
+    pub headers: HashMap<String, String>,
 }
 
 impl HttpResponse {
     /// Returns true if the status code indicates success (2xx).
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status)
+    }
+
+    /// Case-insensitive lookup of a response header by name.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .get(&name.to_ascii_lowercase())
+            .map(String::as_str)
     }
 
     /// Parse the response body as JSON.

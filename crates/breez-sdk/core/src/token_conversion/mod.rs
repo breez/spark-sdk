@@ -8,19 +8,28 @@ pub(crate) use flashnet::FlashnetTokenConverter;
 pub(crate) use middleware::TokenConversionMiddleware;
 pub use models::*;
 
+use std::sync::Arc;
+
 use spark_wallet::TransferId;
 use tokio::sync::broadcast;
+
+use crate::EventEmitter;
 
 /// Trait for conversion implementations.
 ///
 /// This trait abstracts the conversion mechanics, allowing different
 /// implementations (e.g., Flashnet) to be used interchangeably.
 /// Business logic for when/how much to convert is handled by `StableBalance`.
+///
+/// Implementations are reachable from the `EventEmitter` (the stable balance
+/// middleware holds the converter), so they must not store an emitter
+/// reference; the caller passes one into [`convert`](Self::convert) instead.
 #[macros::async_trait]
 pub(crate) trait TokenConverter: Send + Sync {
     /// Execute a conversion swap.
     ///
     /// # Arguments
+    /// * `event_emitter` - Emitter for the payment events of the swap legs
     /// * `options` - The conversion options including type and slippage
     /// * `purpose` - The purpose of the conversion
     /// * `token_identifier` - Optional token identifier for `FromBitcoin` conversions
@@ -28,6 +37,7 @@ pub(crate) trait TokenConverter: Send + Sync {
     /// * `transfer_id` - Optional transfer ID for idempotency
     async fn convert(
         &self,
+        event_emitter: Arc<EventEmitter>,
         options: &ConversionOptions,
         purpose: &ConversionPurpose,
         token_identifier: Option<&String>,

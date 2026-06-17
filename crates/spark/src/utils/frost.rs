@@ -1,87 +1,141 @@
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
 
-use bitcoin::TapSighash;
-use bitcoin::hashes::Hash;
 use bitcoin::secp256k1::PublicKey;
+use frost_secp256k1_tr::keys::{PublicKeyPackage, VerifyingShare};
+use frost_secp256k1_tr::round1::SigningCommitments;
+use frost_secp256k1_tr::{Identifier, SigningPackage, VerifyingKey};
 
-use crate::services::SigningResult;
-use crate::signer::{
-    AggregateFrostRequest, FrostSigningCommitmentsWithNonces, SecretSource, SignerError,
-};
-use crate::signer::{SignFrostRequest, Signer};
+use crate::signer::{AggregateFrostRequest, SignerError};
 
-pub struct SignAggregateFrostParams<'a> {
-    pub signer: &'a Arc<dyn Signer>,
-    pub sighash: &'a TapSighash,
-    pub signing_public_key: &'a PublicKey,
-    pub aggregating_public_key: &'a PublicKey,
-    pub signing_private_key: &'a SecretSource,
-    pub self_nonce_commitment: &'a FrostSigningCommitmentsWithNonces,
-    pub adaptor_public_key: Option<&'a PublicKey>,
-    pub verifying_key: &'a PublicKey,
-    pub signing_result: SigningResult,
+/// Builds the FROST [`SigningPackage`] for a user + statechain signing round.
+///
+/// Adds the user's commitment to the statechain commitments and splits the
+/// participants into two groups (statechain, user), optionally binding an
+/// adaptor public key for adaptor-signature flows (atomic swaps).
+pub(crate) fn frost_signing_package(
+    user_identifier: Identifier,
+    message: &[u8],
+    statechain_commitments: BTreeMap<Identifier, SigningCommitments>,
+    self_commitment: &SigningCommitments,
+    adaptor_public_key: Option<&PublicKey>,
+) -> Result<SigningPackage, SignerError> {
+    // Clone statechain commitments to add our own commitment
+    let mut signing_commitments = statechain_commitments.clone();
+
+    // Create participant groups for the signing operation.
+    // First group is all statechain participants.
+    let mut signing_participants_groups = Vec::new();
+    signing_participants_groups.push(
+        statechain_commitments
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+    );
+
+    // Add the user's commitment to the signing commitments
+    signing_commitments.insert(user_identifier, *self_commitment);
+    // Add a second participant group containing only the user
+    signing_participants_groups.push(BTreeSet::from([user_identifier]));
+
+    // Convert the adaptor public key format if provided
+    let adaptor = match adaptor_public_key {
+        Some(pk) => {
+            let adaptor = VerifyingKey::deserialize(pk.serialize().as_slice()).map_err(|e| {
+                SignerError::SerializationError(format!(
+                    "Failed to deserialize adaptor public key: {e}"
+                ))
+            })?;
+            Some(adaptor)
+        }
+        None => None,
+    };
+
+    // Create a signing package containing commitments, participant groups, message and adaptor
+    Ok(SigningPackage::new_with_adaptor(
+        signing_commitments,
+        Some(signing_participants_groups),
+        message,
+        adaptor,
+    ))
 }
 
-/// Performs a complete FROST signing and aggregation flow for a Bitcoin transaction.
+/// Aggregates FROST signature shares (user + statechain) into a complete
+/// Schnorr signature.
 ///
-/// This function handles the full FROST (Flexible Round-Optimized Schnorr Threshold) signature process:
-/// 1. Signs the sighash using FROST with the user's key
-/// 2. Aggregates the user's signature with signatures from statechain participants
-///
-/// The function supports optional adaptor signatures when an adaptor public key is provided.
-/// Adaptor signatures allow the signature to be "encrypted" under an adaptor key,
-/// requiring additional knowledge to extract the complete signature.
-///
-/// # Arguments
-///
-/// * `params` - A `SignAggregateFrostParams` struct containing:
-///   - `signer`: Reference to the signer implementation
-///   - `sighash`: Pre-computed taproot sighash for the transaction
-///   - `signing_public_key`: The public key to use for signing (user's key)
-///   - `aggregating_public_key`: The public key to use for aggregation
-///   - `signing_private_key`: The private key source for signing
-///   - `self_nonce_commitment`: User's FROST nonce commitments with nonces
-///   - `adaptor_public_key`: Optional public key for adaptor signatures
-///   - `verifying_key`: The combined public key used to verify the signature
-///   - `signing_result`: Contains signature shares and commitments from statechain
-///
-/// # Returns
-///
-/// A `Result` containing:
-/// - `Ok(frost_secp256k1_tr::Signature)`: The aggregated FROST signature on success
-/// - `Err(SignerError)`: If any part of the signing or aggregation process fails
-pub async fn sign_aggregate_frost(
-    params: SignAggregateFrostParams<'_>,
+/// This is **pure public math** (no private key is involved), so it lives as a
+/// free function callable without a [`Signer`](crate::signer::Signer). Flows
+/// that already hold a valid user signature share (e.g. the atomic-swap adaptor
+/// step) can aggregate it directly rather than re-signing.
+pub fn aggregate_frost(
+    request: AggregateFrostRequest<'_>,
 ) -> Result<frost_secp256k1_tr::Signature, SignerError> {
-    // Sign with FROST
-    let user_signature = params
-        .signer
-        .sign_frost(SignFrostRequest {
-            message: params.sighash.as_byte_array(),
-            public_key: params.signing_public_key,
-            private_key: params.signing_private_key,
-            verifying_key: params.verifying_key,
-            self_nonce_commitment: params.self_nonce_commitment,
-            statechain_commitments: params.signing_result.signing_commitments.clone(),
-            adaptor_public_key: params.adaptor_public_key,
-        })
-        .await?;
+    // Derive an identifier for the local user
+    let user_identifier =
+        Identifier::derive("user".as_bytes()).map_err(|_| SignerError::IdentifierError)?;
 
-    // Aggregate FROST signatures
-    let aggregate_signature = params
-        .signer
-        .aggregate_frost(AggregateFrostRequest {
-            message: params.sighash.as_byte_array(),
-            statechain_signatures: params.signing_result.signature_shares,
-            statechain_public_keys: params.signing_result.public_keys,
-            verifying_key: params.verifying_key,
-            statechain_commitments: params.signing_result.signing_commitments,
-            self_commitment: &params.self_nonce_commitment.commitments,
-            public_key: params.aggregating_public_key,
-            self_signature: &user_signature,
-            adaptor_public_key: params.adaptor_public_key,
-        })
-        .await?;
+    // Create a signing package containing commitments, participant groups, message and adaptor
+    let signing_package = frost_signing_package(
+        user_identifier,
+        request.message,
+        request.statechain_commitments,
+        request.self_commitment,
+        request.adaptor_public_key,
+    )?;
 
-    Ok(aggregate_signature)
+    // Combine all signature shares (statechain + user)
+    let mut signature_shares = request.statechain_signatures.clone();
+    signature_shares.insert(user_identifier, *request.self_signature);
+
+    // Build a map of verifying shares for all participants
+    let mut verifying_shares = BTreeMap::new();
+    // Convert statechain public keys to verifying shares
+    for (id, pk) in request.statechain_public_keys.iter() {
+        let verifying_key =
+            VerifyingShare::deserialize(pk.serialize().as_slice()).map_err(|e| {
+                SignerError::SerializationError(format!(
+                    "Failed to deserialize public key for participant {id:?}: {e} (culprit: {:?})",
+                    e.culprit()
+                ))
+            })?;
+        verifying_shares.insert(*id, verifying_key);
+    }
+
+    // Add the user's public key as a verifying share
+    verifying_shares.insert(
+        user_identifier,
+        VerifyingShare::deserialize(request.public_key.serialize().as_slice()).map_err(|e| {
+            SignerError::SerializationError(format!(
+                "Failed to deserialize user public key: {e} (culprit: {:?})",
+                e.culprit()
+            ))
+        })?,
+    );
+
+    let verifying_key = VerifyingKey::deserialize(request.verifying_key.serialize().as_slice())
+        .map_err(|e| {
+            SignerError::SerializationError(format!(
+                "Failed to deserialize group verifying key: {e} (culprit: {:?})",
+                e.culprit()
+            ))
+        })?;
+
+    // Create a public key package with all verifying shares and the group's verifying key
+    let public_key_package = PublicKeyPackage::new(verifying_shares, verifying_key);
+
+    // For taproot signatures, we provide an empty merkle root
+    let merkle_root = Vec::new();
+
+    // Aggregate all signature shares into a final signature
+    frost_secp256k1_tr::aggregate_with_tweak(
+        &signing_package,
+        &signature_shares,
+        &public_key_package,
+        Some(&merkle_root),
+    )
+    .map_err(|e| {
+        SignerError::FrostError(format!(
+            "Failed to aggregate signatures: {e} (culprit: {:?})",
+            e.culprit()
+        ))
+    })
 }

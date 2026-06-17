@@ -620,6 +620,7 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
         method: PaymentMethod::Deposit,
         details: Some(PaymentDetails::Deposit {
             tx_id: "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321fe".to_string(),
+            vout: 2,
         }),
         conversion_details: None,
     };
@@ -1018,12 +1019,21 @@ pub async fn test_storage(storage: Box<dyn Storage>) {
             (
                 Some(PaymentDetails::Withdraw { tx_id: r_tx_id }),
                 Some(PaymentDetails::Withdraw { tx_id: e_tx_id }),
-            )
-            | (
-                Some(PaymentDetails::Deposit { tx_id: r_tx_id }),
-                Some(PaymentDetails::Deposit { tx_id: e_tx_id }),
             ) => {
                 assert_eq!(r_tx_id, e_tx_id);
+            }
+            (
+                Some(PaymentDetails::Deposit {
+                    tx_id: r_tx_id,
+                    vout: r_vout,
+                }),
+                Some(PaymentDetails::Deposit {
+                    tx_id: e_tx_id,
+                    vout: e_vout,
+                }),
+            ) => {
+                assert_eq!(r_tx_id, e_tx_id);
+                assert_eq!(r_vout, e_vout);
             }
             _ => panic!(
                 "Payment details mismatch for payment {} (index {})",
@@ -1667,6 +1677,7 @@ pub async fn test_asset_filtering(storage: Box<dyn Storage>) {
         method: PaymentMethod::Deposit,
         details: Some(PaymentDetails::Deposit {
             tx_id: "deposit_tx_1".to_string(),
+            vout: 0,
         }),
         conversion_details: None,
     };

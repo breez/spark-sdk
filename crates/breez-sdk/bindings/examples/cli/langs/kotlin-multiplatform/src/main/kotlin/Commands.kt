@@ -450,8 +450,12 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
 
     // Show conversion estimate if applicable
     prepareResponse.conversionEstimate?.let { conversionEstimate ->
-        val units = if (conversionEstimate.options.conversionType == ConversionType.FromBitcoin) "sats" else "token base units"
-        println("Estimated conversion of ${conversionEstimate.amountIn} $units → ${conversionEstimate.amountOut} $units with a ${conversionEstimate.fee} $units fee")
+        val (inUnits, outUnits) = if (conversionEstimate.options.conversionType == ConversionType.FromBitcoin) {
+            "sats" to "token base units"
+        } else {
+            "token base units" to "sats"
+        }
+        println("Estimated conversion from ${conversionEstimate.amountIn} $inUnits to ${conversionEstimate.amountOut} $outUnits with a ${conversionEstimate.fee} token base units fee")
         val line = readlineWithDefault(reader, "Do you want to continue (y/n): ", "y").lowercase()
         if (line != "y") {
             println("Payment cancelled")

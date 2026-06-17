@@ -3,9 +3,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::{
-    BitcoinChainService, BreezSdk, Config, Credentials, FiatService, KeySetConfig, PaymentObserver,
-    RestClient, SdkContext, SdkError, Seed, Storage, StorageBackend,
-    chain::rest_client::ChainApiType,
+    BitcoinChainService, BreezSdk, Config, Credentials, FiatService, PaymentObserver, RestClient,
+    SdkContext, SdkError, Seed, Storage, StorageBackend, chain::rest_client::ChainApiType,
 };
 
 /// Builder for creating `BreezSdk` instances with customizable components.
@@ -24,6 +23,28 @@ impl SdkBuilder {
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new(config: Config, seed: Seed) -> Self {
         let inner = crate::sdk_builder::SdkBuilder::new(config, seed);
+        SdkBuilder {
+            inner: Mutex::new(inner),
+        }
+    }
+
+    /// Creates a new `SdkBuilder` with the provided configuration and external
+    /// signers (e.g. from `create_turnkey_signer`), so signer-based SDKs can be
+    /// composed with any storage backend or shared context, unlike
+    /// `connect_with_signer` which is fixed to the default storage.
+    /// Arguments:
+    /// - `config`: The configuration to be used.
+    /// - `breez_signer`: External signer for non-Spark SDK signing (LNURL-auth,
+    ///   sync, message signing, ECIES).
+    /// - `spark_signer`: External high-level Spark signer for the Spark wallet.
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    pub fn new_with_signer(
+        config: Config,
+        breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
+        spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+    ) -> Self {
+        let inner =
+            crate::sdk_builder::SdkBuilder::new_with_signer(config, breez_signer, spark_signer);
         SdkBuilder {
             inner: Mutex::new(inner),
         }
@@ -65,12 +86,15 @@ impl SdkBuilder {
         *builder = builder.clone().with_storage(storage);
     }
 
-    /// Sets the key set type to be used by the SDK.
+    /// Sets the account number for key derivation. All wallet keys derive from
+    /// the seed at `m/8797555'/<account number>'`, so each account number
+    /// yields an independent wallet from the same seed. Defaults to 0 on
+    /// Regtest and 1 on all other networks when unset.
     /// Arguments:
-    /// - `config`: Key set configuration containing the key set type, address index flag, and optional account number.
-    pub async fn with_key_set(&self, config: KeySetConfig) {
+    /// - `account_number`: The account number in the derivation path.
+    pub async fn with_account_number(&self, account_number: u32) {
         let mut builder = self.inner.lock().await;
-        *builder = builder.clone().with_key_set(config);
+        *builder = builder.clone().with_account_number(account_number);
     }
 
     /// Sets the chain service to be used by the SDK.

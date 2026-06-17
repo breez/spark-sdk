@@ -83,13 +83,7 @@ Future<void> runCli({
   builder = builder.withDefaultStorage(storageDir: dataDir);
 
   if (accountNumber != null) {
-    builder = builder.withKeySet(
-      config: KeySetConfig(
-        keySetType: KeySetType.default_,
-        useAddressIndex: false,
-        accountNumber: accountNumber,
-      ),
-    );
+    builder = builder.withAccountNumber(accountNumber: accountNumber);
   }
 
   final sdk = await builder.build();

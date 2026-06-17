@@ -1,5 +1,5 @@
 pub mod byte_padding;
-pub(super) mod frost;
+pub mod frost;
 pub mod htlc_transactions;
 pub(crate) mod leaf_key_tweak;
 pub mod paging;

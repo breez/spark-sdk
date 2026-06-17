@@ -35,7 +35,7 @@ use spark::{
         TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
     },
     session_store::{InMemorySessionStore, SessionStore},
-    signer::Signer,
+    signer::SparkSigner,
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
         InMemoryTokenOutputStore, SelectionStrategy, SynchronousTokenOutputService, TokenMetadata,
@@ -165,15 +165,28 @@ macro_rules! with_leafs_spent_retry {
 }
 
 pub struct SparkWallet {
-    /// Cancellation token sender for internal use. When dropped, background tasks will stop.
-    /// This is `Some` only when no external cancellation token was provided.
+    /// Sender held for lifetime management when no external cancellation token
+    /// was provided to the builder. Dropping it cancels the receiver clones in
+    /// background tasks, so they exit when the wallet is dropped.
     #[allow(dead_code)]
     cancel: Option<watch::Sender<()>>,
+    /// Receiver moved into the background tasks on the first call to
+    /// [`Self::start_background_processing`]. Wrapped in `Mutex<Option<_>>` so
+    /// that first call can `take()` it: keeping a permanent receiver on `self`
+    /// would prevent [`watch::Sender::closed`] (used by the SDK's `disconnect`)
+    /// from ever firing while the wallet is alive. Tied to either the external
+    /// token passed via [`WalletBuilder::with_cancellation_token`] or the
+    /// internal sender in [`Self::cancel`].
+    cancellation_token: tokio::sync::Mutex<Option<watch::Receiver<()>>>,
+    /// Single-flight guard for [`Self::start_background_processing`] so callers
+    /// can invoke it repeatedly without spawning duplicate operator
+    /// subscriptions, refresh tasks, or auto-optimizer loops.
+    background_started: tokio::sync::OnceCell<()>,
     config: SparkWalletConfig,
     deposit_service: Arc<DepositService>,
     event_manager: Arc<EventManager>,
     identity_public_key: PublicKey,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
     tree_service: Arc<dyn TreeService>,
     token_output_service: Arc<dyn TokenOutputService>,
     coop_exit_service: Arc<CoopExitService>,
@@ -199,11 +212,11 @@ pub struct SparkWallet {
 impl SparkWallet {
     pub async fn connect(
         config: SparkWalletConfig,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
     ) -> Result<Self, SparkWalletError> {
         Self::new(
             config,
-            signer,
+            spark_signer,
             Arc::new(InMemorySessionStore::default()),
             Arc::new(InMemoryTreeStore::default()),
             Arc::new(InMemoryTokenOutputStore::default()),
@@ -212,7 +225,6 @@ impl SparkWallet {
             None,
             None,
             None,
-            true,
             None,
         )
         .await
@@ -221,7 +233,7 @@ impl SparkWallet {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         config: SparkWalletConfig,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
         session_store: Arc<dyn SessionStore>,
         tree_store: Arc<dyn TreeStore>,
         token_output_store: Arc<dyn TokenOutputStore>,
@@ -230,24 +242,23 @@ impl SparkWallet {
         transfer_observer: Option<Arc<dyn TransferObserver>>,
         ssp_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
         so_extra_header_provider: Option<Arc<dyn HeaderProvider>>,
-        with_background_processing: bool,
         cancellation_token: Option<watch::Receiver<()>>,
     ) -> Result<Self, SparkWalletError> {
         config.validate()?;
-        let identity_public_key = signer.get_identity_public_key().await?;
+        let identity_public_key = spark_signer.get_identity_public_key().await?;
 
         let bitcoin_service = BitcoinService::new(config.network);
         let service_provider = Arc::new(match ssp_http_client {
             Some(client) => ServiceProvider::new_with_client(
                 config.service_provider_config.clone(),
-                Arc::clone(&signer),
+                Arc::clone(&spark_signer),
                 Arc::clone(&session_store),
                 ssp_extra_header_provider,
                 client,
             ),
             None => ServiceProvider::new(
                 config.service_provider_config.clone(),
-                Arc::clone(&signer),
+                Arc::clone(&spark_signer),
                 Arc::clone(&session_store),
                 ssp_extra_header_provider,
             ),
@@ -258,14 +269,14 @@ impl SparkWallet {
                 &config.operator_pool,
                 connection_manager,
                 Arc::clone(&session_store),
-                Arc::clone(&signer),
+                Arc::clone(&spark_signer),
                 so_extra_header_provider,
             )
             .await?,
         );
 
         let transfer_service = Arc::new(TransferService::new(
-            signer.clone(),
+            Arc::clone(&spark_signer),
             config.network,
             config.split_secret_threshold,
             operator_pool.clone(),
@@ -276,14 +287,14 @@ impl SparkWallet {
             operator_pool.clone(),
             service_provider.clone(),
             config.network,
-            Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             transfer_service.clone(),
             config.split_secret_threshold,
             transfer_observer.clone(),
         ));
 
         let timelock_manager = Arc::new(TimelockManager::new(
-            signer.clone(),
+            Arc::clone(&spark_signer),
             config.network,
             operator_pool.clone(),
         ));
@@ -294,7 +305,7 @@ impl SparkWallet {
             config.network,
             operator_pool.clone(),
             service_provider.clone(),
-            Arc::clone(&signer),
+            Arc::clone(&spark_signer),
         ));
 
         let coop_exit_service = Arc::new(CoopExitService::new(
@@ -302,7 +313,7 @@ impl SparkWallet {
             service_provider.clone(),
             Arc::clone(&transfer_service),
             config.network,
-            Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             transfer_observer.clone(),
         ));
         let unilateral_exit_service = Arc::new(UnilateralExitService::new(
@@ -313,7 +324,7 @@ impl SparkWallet {
         let swap_service = Arc::new(Swap::new(
             config.network,
             operator_pool.clone(),
-            Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             Arc::clone(&service_provider),
             Arc::clone(&transfer_service),
         ));
@@ -324,7 +335,7 @@ impl SparkWallet {
             operator_pool.clone(),
             tree_store.clone(),
             Arc::clone(&timelock_manager),
-            Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             Arc::clone(&swap_service),
         ));
 
@@ -333,12 +344,12 @@ impl SparkWallet {
                 config.network,
                 operator_pool.clone(),
                 token_output_store,
-                Arc::clone(&signer),
+                Arc::clone(&spark_signer),
             ));
 
         let token_service = Arc::new(TokenService::new(
             token_output_service.clone(),
-            Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             operator_pool.clone(),
             config.network,
             config.split_secret_threshold,
@@ -349,7 +360,7 @@ impl SparkWallet {
         let htlc_service = Arc::new(HtlcService::new(
             operator_pool.clone(),
             config.network,
-            Arc::clone(&signer),
+            Arc::clone(&spark_signer),
             Arc::clone(&transfer_service),
             transfer_observer,
         ));
@@ -368,7 +379,8 @@ impl SparkWallet {
             Some(auto_optimization_event_handler),
         ));
 
-        // Use external cancellation token if provided, otherwise create an internal one
+        // Use the external cancellation token if provided, otherwise create an
+        // internal sender we hold for the wallet's lifetime.
         let (cancel, cancellation_token) = match cancellation_token {
             Some(token) => (None, token),
             None => {
@@ -377,34 +389,15 @@ impl SparkWallet {
             }
         };
 
-        if with_background_processing {
-            let reconnect_interval = Duration::from_secs(config.reconnect_interval_seconds);
-            let background_processor = Arc::new(BackgroundProcessor::new(
-                Arc::clone(&operator_pool),
-                Arc::clone(&event_manager),
-                identity_public_key,
-                reconnect_interval,
-                Arc::clone(&tree_service),
-                Arc::clone(&service_provider),
-                Arc::clone(&transfer_service),
-                Arc::clone(&htlc_service),
-                Arc::clone(&leaf_optimizer),
-                config.leaf_auto_optimize_enabled,
-                Arc::clone(&token_service),
-                config.token_outputs_optimization_options.clone(),
-                config.max_concurrent_claims,
-            ));
-            background_processor
-                .run_background_tasks(cancellation_token.clone())
-                .await;
-        }
         Ok(Self {
             cancel,
+            cancellation_token: tokio::sync::Mutex::new(Some(cancellation_token)),
+            background_started: tokio::sync::OnceCell::new(),
             config,
             deposit_service,
             event_manager,
             identity_public_key,
-            signer,
+            spark_signer,
             tree_service,
             token_output_service,
             coop_exit_service,
@@ -730,7 +723,7 @@ impl SparkWallet {
         &self,
     ) -> Result<spark::services::SingleUseDepositAddress, SparkWalletError> {
         let leaf_id = TreeNodeId::generate();
-        let signing_public_key = self.signer.get_public_key_for_node(&leaf_id).await?;
+        let signing_public_key = self.spark_signer.get_public_key_for_leaf(&leaf_id).await?;
         let address = self
             .deposit_service
             .generate_deposit_address(signing_public_key, &leaf_id)
@@ -739,7 +732,7 @@ impl SparkWallet {
     }
 
     pub async fn generate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
-        let signing_public_key = self.signer.static_deposit_signing_key(0).await?;
+        let signing_public_key = self.spark_signer.get_static_deposit_public_key(0).await?;
         let address = self
             .deposit_service
             .generate_static_deposit_address(signing_public_key)
@@ -748,7 +741,7 @@ impl SparkWallet {
     }
 
     pub async fn rotate_static_deposit_address(&self) -> Result<Address, SparkWalletError> {
-        let signing_public_key = self.signer.static_deposit_signing_key(0).await?;
+        let signing_public_key = self.spark_signer.get_static_deposit_public_key(0).await?;
         let new_address = self
             .deposit_service
             .rotate_static_deposit_address(signing_public_key)
@@ -836,7 +829,6 @@ impl SparkWallet {
                 leaves_reservation.leaves.clone(),
                 &receiver_address.identity_public_key,
                 transfer_id.clone(),
-                None,
                 spark_invoice.clone(),
             )
         )?;
@@ -1055,7 +1047,7 @@ impl SparkWallet {
             Some(invoice_fields),
         );
 
-        Ok(invoice.to_invoice_string(&*self.signer).await?)
+        Ok(invoice.to_invoice_string(&*self.spark_signer).await?)
     }
 
     pub async fn get_balance(&self) -> Result<u64, SparkWalletError> {
@@ -1155,10 +1147,7 @@ impl SparkWallet {
     ///
     /// If exposing this, consider adding a prefix to prevent mistakenly signing messages.
     pub async fn sign_message(&self, message: &str) -> Result<Signature, SparkWalletError> {
-        Ok(self
-            .signer
-            .sign_message_ecdsa_with_identity_key(message.as_bytes())
-            .await?)
+        Ok(self.spark_signer.sign_message(message.as_bytes()).await?)
     }
 
     /// Verifies a message was signed by the given public key and the signature is valid.
@@ -1314,6 +1303,50 @@ impl SparkWallet {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<WalletEvent> {
         self.event_manager.listen()
+    }
+
+    /// Spawns the operator event stream, leaf/token refresh, and auto-optimizer.
+    /// Callers must invoke this once their `subscribe_events()` listener is
+    /// attached; the first `WalletEvent::Synced` is otherwise dropped because no
+    /// receiver is connected to the broadcast channel yet. Background tasks run
+    /// until the cancellation token configured via
+    /// [`WalletBuilder::with_cancellation_token`] fires (or, when none was
+    /// provided, until the wallet is dropped).
+    ///
+    /// Subsequent calls are no-ops, so it is safe to call this defensively
+    /// (e.g. before every payment) without spawning duplicate subscriptions.
+    pub async fn start_background_processing(&self) {
+        self.background_started
+            .get_or_init(|| async {
+                // `take()` moves the receiver into the background processor.
+                // Holding it on `self` instead would keep the `watch::Sender`
+                // open and stall `Sender::closed()` (used by the SDK's
+                // `disconnect`) until the wallet itself dropped.
+                let Some(cancellation_token) = self.cancellation_token.lock().await.take() else {
+                    return;
+                };
+                let reconnect_interval =
+                    Duration::from_secs(self.config.reconnect_interval_seconds);
+                let background_processor = Arc::new(BackgroundProcessor::new(
+                    Arc::clone(&self.operator_pool),
+                    Arc::clone(&self.event_manager),
+                    self.identity_public_key,
+                    reconnect_interval,
+                    Arc::clone(&self.tree_service),
+                    Arc::clone(&self.ssp_client),
+                    Arc::clone(&self.transfer_service),
+                    Arc::clone(&self.htlc_service),
+                    Arc::clone(&self.leaf_optimizer),
+                    self.config.leaf_auto_optimize_enabled,
+                    Arc::clone(&self.token_service),
+                    self.config.token_outputs_optimization_options.clone(),
+                    self.config.max_concurrent_claims,
+                ));
+                background_processor
+                    .run_background_tasks(cancellation_token)
+                    .await;
+            })
+            .await;
     }
 
     /// Returns the balances of all tokens in the wallet.

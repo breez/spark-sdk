@@ -5,8 +5,12 @@ use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
-    EventEmitter, error::SdkError, lnurl::LnurlServerClient, persist::Storage,
-    realtime_sync::SyncedStorage, sync_storage::SyncStorageWrapper,
+    EventEmitter,
+    error::SdkError,
+    lnurl::LnurlServerClient,
+    persist::Storage,
+    realtime_sync::{SyncedRecordHandler, SyncedStorage},
+    sync_storage::SyncStorageWrapper,
 };
 
 pub struct RealTimeSyncParams {
@@ -30,12 +34,18 @@ pub async fn init_and_start_real_time_sync(
     let synced_storage = Arc::new(SyncedStorage::new(
         Arc::clone(&params.storage),
         Arc::clone(&sync_service),
-        params.event_emitter,
-        params.lnurl_server_client,
     ));
 
     synced_storage.initial_setup();
-    let storage: Arc<dyn Storage> = synced_storage.clone();
+    let storage: Arc<dyn Storage> = synced_storage;
+
+    // The handler writes to the raw inner storage so applied records are not
+    // echoed back into the outgoing sync queue.
+    let record_handler = Arc::new(SyncedRecordHandler::new(
+        Arc::clone(&params.storage),
+        params.event_emitter,
+        params.lnurl_server_client,
+    ));
     let sync_client: Arc<dyn breez_sdk_common::sync::SyncerClient> = Arc::new(
         BreezSyncerClient::new(
             &params.server_url,
@@ -54,7 +64,7 @@ pub async fn init_and_start_real_time_sync(
     let sync_processor = Arc::new(SyncProcessor::new(
         signing_client.clone(),
         sync_service.get_sync_trigger(),
-        synced_storage,
+        record_handler,
         Arc::clone(&sync_storage),
     ));
 

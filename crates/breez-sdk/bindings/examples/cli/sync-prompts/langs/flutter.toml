@@ -111,6 +111,6 @@ The Dart CLI uses the Flutter/FRB SDK bindings (breez_sdk_spark_flutter). Refere
 - FRB `Config` is immutable. The `breez_sdk_spark_flutter` package provides a `ConfigCopyWith` extension (in `lib/src/config_extensions.dart`) that adds `copyWith`. If Config fields change upstream, update the extension to match.
 - When parsing enum strings from user input, match the Rust `Display`/`FromStr` impl (PascalCase, e.g., `WaitingForPreimage`, `PreimageShared`), not snake_case.
 - Events come from `sdk.addEventListener()` which returns a `Stream<SdkEvent>`, not callbacks.
-- `SdkBuilder` methods that take `self` in Rust (like `withDefaultStorage`, `withKeySet`) **consume** the builder. You MUST capture the return value: `builder = builder.withDefaultStorage(storageDir: dir)`. Ignoring the return value causes a `DroppableDisposedException` at runtime.
+- `SdkBuilder` methods that take `self` in Rust (like `withDefaultStorage`, `withAccountNumber`) **consume** the builder. You MUST capture the return value: `builder = builder.withDefaultStorage(storageDir: dir)`. Ignoring the return value causes a `DroppableDisposedException` at runtime.
 - `BreezSdkSparkLib.init()` requires `externalLibrary: ExternalLibrary.open(path)` when running as a pure Dart CLI (not a Flutter app), because FRB can't find the native library via the Flutter framework loader.
 """

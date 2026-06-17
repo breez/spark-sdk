@@ -192,39 +192,62 @@ impl Drop for PaymentGuard {
     }
 }
 
+/// State and logic shared between the emitter-owned [`StableBalanceMiddleware`]
+/// and the [`StableBalance`] worker/API surface.
+///
+/// The middleware is owned by the `EventEmitter` for its whole lifetime, so
+/// nothing reachable from this struct may hold a strong reference back to the
+/// emitter, or the SDK object graph could never be dropped.
+pub(crate) struct StableBalanceCore {
+    /// Configuration for stable balance behavior (shared across all tokens)
+    pub(super) config: StableBalanceConfig,
+
+    /// The currently active token, or `None` if deactivated
+    pub(super) active_token: RwLock<Option<StableBalanceToken>>,
+
+    /// Reference to the token converter for executing conversions
+    pub(super) token_converter: Arc<dyn TokenConverter>,
+
+    /// Reference to storage for checking existing conversions
+    pub(super) storage: Arc<dyn Storage>,
+
+    /// Cached effective values for auto-conversion (expires after TTL)
+    pub(super) effective_values: ExpiringCell<EffectiveValues>,
+
+    /// Unified conversion queue for per-receive and auto-convert tasks.
+    pub(super) queue: ConversionQueue,
+
+    /// Notify to signal first sync completion (startup gate for the conversion worker).
+    pub(super) synced_notify: Notify,
+}
+
+/// Event middleware that feeds the conversion queue from payment and sync
+/// events. Owned by the `EventEmitter`; never emits and holds no emitter
+/// reference.
+pub(crate) struct StableBalanceMiddleware {
+    core: Arc<StableBalanceCore>,
+}
+
 /// Manages stable balance auto-conversion behavior.
 ///
 /// This struct handles the business logic of when and how much to convert,
 /// while delegating the actual conversion mechanics to a `TokenConverter`.
 /// It coordinates with payment conversion flows to prevent race conditions.
 ///
+/// Held by `BreezSdk` and the conversion worker task (which stops on
+/// shutdown), never by the emitter itself: the emitter owns only the
+/// [`StableBalanceMiddleware`], so the strong emitter reference here cannot
+/// form a cycle.
+///
 /// The active token can be changed at runtime via [`set_active_token`](Self::set_active_token).
 /// When no token is active, all conversion operations are skipped.
 #[derive(Clone)]
 pub(crate) struct StableBalance {
-    /// Configuration for stable balance behavior (shared across all tokens)
-    pub(super) config: StableBalanceConfig,
-
-    /// The currently active token, or `None` if deactivated
-    pub(super) active_token: Arc<RwLock<Option<StableBalanceToken>>>,
-
-    /// Reference to the token converter for executing conversions
-    pub(super) token_converter: Arc<dyn TokenConverter>,
+    /// State shared with the registered [`StableBalanceMiddleware`].
+    pub(super) core: Arc<StableBalanceCore>,
 
     /// Reference to the spark wallet for balance queries
     pub(super) spark_wallet: Arc<SparkWallet>,
-
-    /// Reference to storage for checking existing conversions
-    pub(super) storage: Arc<dyn Storage>,
-
-    /// Cached effective values for auto-conversion (expires after TTL, shared across clones)
-    pub(super) effective_values: Arc<ExpiringCell<EffectiveValues>>,
-
-    /// Unified conversion queue for per-receive and auto-convert tasks.
-    pub(super) queue: Arc<ConversionQueue>,
-
-    /// Notify to signal first sync completion (startup gate for the conversion worker).
-    pub(super) synced_notify: Arc<Notify>,
 
     /// Event emitter used to publish conversion outcomes to the active runtime.
     pub(super) event_emitter: Arc<EventEmitter>,
@@ -243,7 +266,7 @@ impl StableBalance {
     /// Creates a new `StableBalance` instance.
     ///
     /// Resolves the initial active token from the local cache and config,
-    /// and registers itself as an event listener on the provided emitter.
+    /// and registers a [`StableBalanceMiddleware`] on the provided emitter.
     pub async fn new(
         config: StableBalanceConfig,
         token_converter: Arc<dyn TokenConverter>,
@@ -251,10 +274,8 @@ impl StableBalance {
         storage: Arc<dyn Storage>,
         event_emitter: Arc<EventEmitter>,
     ) -> Self {
-        let initial_active_token = Self::resolve_initial_token(&config, &storage).await;
-
-        let queue = Arc::new(ConversionQueue::new(storage.clone()));
-        let synced_notify = Arc::new(Notify::new());
+        let initial_active_token =
+            StableBalanceCore::resolve_initial_token(&config, &storage).await;
 
         if let Some(token) = &initial_active_token {
             info!(
@@ -265,44 +286,44 @@ impl StableBalance {
             info!("Stable balance initialized as inactive");
         }
 
-        let stable_balance = Self {
+        let core = Arc::new(StableBalanceCore {
             config,
-            active_token: Arc::new(RwLock::new(initial_active_token)),
+            active_token: RwLock::new(initial_active_token),
             token_converter,
-            spark_wallet,
-            storage,
-            event_emitter: Arc::clone(&event_emitter),
-            effective_values: Arc::new(ExpiringCell::new()),
-            queue,
-            synced_notify,
-            payment_counter: Arc::new(AtomicUsize::new(0)),
-            payment_lock: Arc::new(Mutex::new(())),
-        };
+            storage: Arc::clone(&storage),
+            effective_values: ExpiringCell::new(),
+            queue: ConversionQueue::new(storage),
+            synced_notify: Notify::new(),
+        });
 
-        // Register as event middleware
         event_emitter
-            .add_middleware(Box::new(stable_balance.clone()))
+            .add_middleware(Box::new(StableBalanceMiddleware {
+                core: Arc::clone(&core),
+            }))
             .await;
 
-        stable_balance
+        Self {
+            core,
+            spark_wallet,
+            event_emitter,
+            payment_counter: Arc::new(AtomicUsize::new(0)),
+            payment_lock: Arc::new(Mutex::new(())),
+        }
     }
 
     /// Returns the `token_identifier` of the currently active token, or `None` if inactive.
     pub(crate) async fn get_active_token_identifier(&self) -> Option<String> {
-        self.active_token
-            .read()
-            .await
-            .as_ref()
-            .map(|t| t.token_identifier.clone())
+        self.core.get_active_token_identifier().await
     }
 
     /// Returns the label of the currently active token, or `None` if inactive.
     pub(crate) async fn get_active_label(&self) -> Option<String> {
-        self.active_token
-            .read()
-            .await
-            .as_ref()
-            .map(|t| t.label.clone())
+        self.core.get_active_label().await
+    }
+
+    /// Sets the active token by label, or deactivates stable balance if `None`.
+    pub(crate) async fn set_active_token(&self, label: Option<String>) -> Result<(), SdkError> {
+        self.core.set_active_token(label).await
     }
 
     /// Acquires a payment guard that suppresses auto-convert while held.
@@ -317,8 +338,28 @@ impl StableBalance {
         self.payment_counter.fetch_add(1, Ordering::Relaxed);
         PaymentGuard {
             counter: self.payment_counter.clone(),
-            notify: self.queue.notify.clone(),
+            notify: self.core.queue.notify.clone(),
         }
+    }
+}
+
+impl StableBalanceCore {
+    /// Returns the `token_identifier` of the currently active token, or `None` if inactive.
+    pub(super) async fn get_active_token_identifier(&self) -> Option<String> {
+        self.active_token
+            .read()
+            .await
+            .as_ref()
+            .map(|t| t.token_identifier.clone())
+    }
+
+    /// Returns the label of the currently active token, or `None` if inactive.
+    async fn get_active_label(&self) -> Option<String> {
+        self.active_token
+            .read()
+            .await
+            .as_ref()
+            .map(|t| t.label.clone())
     }
 
     /// Sets the active token by label, or deactivates stable balance if `None`.
@@ -326,7 +367,7 @@ impl StableBalance {
     /// Validates that the label exists in the configured tokens list.
     /// Clears the conversion queue (pending conversions for the old token are no longer
     /// relevant), marks cleared per-receive tasks as Failed, and caches the choice locally.
-    pub(crate) async fn set_active_token(&self, label: Option<String>) -> Result<(), SdkError> {
+    async fn set_active_token(&self, label: Option<String>) -> Result<(), SdkError> {
         let cache = ObjectCacheRepository::new(self.storage.clone());
 
         // Clear the queue — pending conversions for the old token are no longer relevant
@@ -485,55 +526,6 @@ impl StableBalance {
         Ok((threshold, min_from_amount))
     }
 
-    /// Gets conversion options for a payment if auto-population is needed.
-    ///
-    /// Returns `Some(ConversionOptions)` if:
-    /// - Stable balance is active
-    /// - No explicit options were provided
-    /// - The payment is not a token payment (`token_identifier` is None)
-    /// - The current sats balance is insufficient for the payment amount
-    ///
-    /// In this case, returns options to convert from the active stable token to Bitcoin.
-    pub async fn get_conversion_options(
-        &self,
-        options: Option<&ConversionOptions>,
-        token_identifier: Option<&String>,
-        payment_amount: u128,
-    ) -> Result<Option<ConversionOptions>, ConversionError> {
-        // Use provided options if explicitly set
-        if options.is_some() {
-            return Ok(options.cloned());
-        }
-
-        // Don't auto-convert for token payments
-        if token_identifier.is_some() {
-            return Ok(None);
-        }
-
-        // Don't auto-convert if inactive
-        let Some(active_token_identifier) = self.get_active_token_identifier().await else {
-            return Ok(None);
-        };
-
-        let balance_sats = self.spark_wallet.get_balance().await?;
-
-        // Only auto-populate if the sats balance is insufficient for the payment.
-        if u128::from(balance_sats) >= payment_amount {
-            return Ok(None);
-        }
-
-        info!(
-            "Auto-populating conversion options: balance {balance_sats} sats < payment amount {payment_amount} sats"
-        );
-        Ok(Some(ConversionOptions {
-            conversion_type: ConversionType::ToBitcoin {
-                from_token_identifier: active_token_identifier,
-            },
-            max_slippage_bps: self.config.max_slippage_bps,
-            completion_timeout_secs: None,
-        }))
-    }
-
     /// Checks if a payment should trigger per-receive conversion.
     ///
     /// Returns true if:
@@ -571,6 +563,57 @@ impl StableBalance {
 
         true
     }
+}
+
+impl StableBalance {
+    /// Gets conversion options for a payment if auto-population is needed.
+    ///
+    /// Returns `Some(ConversionOptions)` if:
+    /// - Stable balance is active
+    /// - No explicit options were provided
+    /// - The payment is not a token payment (`token_identifier` is None)
+    /// - The current sats balance is insufficient for the payment amount
+    ///
+    /// In this case, returns options to convert from the active stable token to Bitcoin.
+    pub async fn get_conversion_options(
+        &self,
+        options: Option<&ConversionOptions>,
+        token_identifier: Option<&String>,
+        payment_amount: u128,
+    ) -> Result<Option<ConversionOptions>, ConversionError> {
+        // Use provided options if explicitly set
+        if options.is_some() {
+            return Ok(options.cloned());
+        }
+
+        // Don't auto-convert for token payments
+        if token_identifier.is_some() {
+            return Ok(None);
+        }
+
+        // Don't auto-convert if inactive
+        let Some(active_token_identifier) = self.core.get_active_token_identifier().await else {
+            return Ok(None);
+        };
+
+        let balance_sats = self.spark_wallet.get_balance().await?;
+
+        // Only auto-populate if the sats balance is insufficient for the payment.
+        if u128::from(balance_sats) >= payment_amount {
+            return Ok(None);
+        }
+
+        info!(
+            "Auto-populating conversion options: balance {balance_sats} sats < payment amount {payment_amount} sats"
+        );
+        Ok(Some(ConversionOptions {
+            conversion_type: ConversionType::ToBitcoin {
+                from_token_identifier: active_token_identifier,
+            },
+            max_slippage_bps: self.core.config.max_slippage_bps,
+            completion_timeout_secs: None,
+        }))
+    }
 
     /// Emits the fact that a conversion changed balances and payments.
     pub(super) async fn emit_conversion_completed(&self) {
@@ -581,16 +624,17 @@ impl StableBalance {
 }
 
 #[macros::async_trait]
-impl EventMiddleware for StableBalance {
+impl EventMiddleware for StableBalanceMiddleware {
     async fn process(&self, event: SdkEvent) -> Option<SdkEvent> {
         match event {
             // Sync completed → wake the startup gate, sweep timed-out deferred tasks
             SdkEvent::Synced => {
                 // Clean up deferred tasks that have exceeded the timeout
-                let expired_payment_ids = self.queue.clear_expired_tasks().await;
+                let expired_payment_ids = self.core.queue.clear_expired_tasks().await;
                 for expired_payment_id in expired_payment_ids {
                     warn!("Per-receive conversion timed out for {expired_payment_id}");
                     if let Err(e) = self
+                        .core
                         .storage
                         .insert_payment_metadata(
                             expired_payment_id.clone(),
@@ -605,10 +649,10 @@ impl EventMiddleware for StableBalance {
                     }
                 }
 
-                self.synced_notify.notify_one();
+                self.core.synced_notify.notify_one();
 
                 // Re-assess balance after sync — may have changed due to external activity
-                self.queue.push_auto_convert().await;
+                self.core.queue.push_auto_convert().await;
 
                 Some(SdkEvent::Synced)
             }
@@ -618,7 +662,11 @@ impl EventMiddleware for StableBalance {
             SdkEvent::PaymentSucceeded { mut payment } => {
                 // Check if this payment is a conversion result from another instance
                 // that resolves a deferred per-receive task
-                if let Some(parent_id) = self.queue.resolve_by_conversion_payment(&payment.id).await
+                if let Some(parent_id) = self
+                    .core
+                    .queue
+                    .resolve_by_conversion_payment(&payment.id)
+                    .await
                 {
                     info!(
                         "Conversion payment {} resolved deferred task for {parent_id}",
@@ -627,7 +675,7 @@ impl EventMiddleware for StableBalance {
                     return Some(SdkEvent::PaymentSucceeded { payment });
                 }
 
-                if self.should_trigger_per_receive(&payment).await {
+                if self.core.should_trigger_per_receive(&payment).await {
                     debug!("Queueing per-receive conversion for payment {}", payment.id);
 
                     // Set conversion_details with Pending status so clients know conversion is coming
@@ -638,6 +686,7 @@ impl EventMiddleware for StableBalance {
 
                     // Persist the pending status so it survives restarts
                     if let Err(e) = self
+                        .core
                         .storage
                         .insert_payment_metadata(
                             payment.id.clone(),
@@ -654,11 +703,11 @@ impl EventMiddleware for StableBalance {
                         );
                     }
 
-                    self.queue.push_per_receive(payment.id.clone()).await;
+                    self.core.queue.push_per_receive(payment.id.clone()).await;
                 } else {
                     // Non-per-receive payment — queue auto-convert to handle accumulated balance
                     debug!("Queueing auto-convert after payment {}", payment.id);
-                    self.queue.push_auto_convert().await;
+                    self.core.queue.push_auto_convert().await;
                 }
                 Some(SdkEvent::PaymentSucceeded { payment })
             }

@@ -9,7 +9,7 @@ use crate::{
         OperatorPool,
         rpc::{self, QueryAllTokenOutputsRequest, spark_token::QueryTokenMetadataRequest},
     },
-    signer::Signer,
+    signer::SparkSigner,
     token::{
         GetTokenOutputsFilter, ReservationPurpose, ReservationTarget, SelectionStrategy,
         TokenMetadata, TokenOutputService, TokenOutputStore, TokenOutputWithPrevOut, TokenOutputs,
@@ -24,7 +24,7 @@ pub struct SynchronousTokenOutputService {
     network: Network,
     operator_pool: Arc<OperatorPool>,
     state: Arc<dyn TokenOutputStore>,
-    signer: Arc<dyn Signer>,
+    spark_signer: Arc<dyn SparkSigner>,
 }
 
 #[macros::async_trait]
@@ -53,7 +53,7 @@ impl TokenOutputService for SynchronousTokenOutputService {
             .client
             .query_all_token_outputs(QueryAllTokenOutputsRequest {
                 owner_public_keys: vec![
-                    self.signer
+                    self.spark_signer
                         .get_identity_public_key()
                         .await?
                         .serialize()
@@ -204,13 +204,13 @@ impl SynchronousTokenOutputService {
         network: Network,
         operator_pool: Arc<OperatorPool>,
         state: Arc<dyn TokenOutputStore>,
-        signer: Arc<dyn Signer>,
+        spark_signer: Arc<dyn SparkSigner>,
     ) -> Self {
         Self {
             network,
             operator_pool,
             state,
-            signer,
+            spark_signer,
         }
     }
 

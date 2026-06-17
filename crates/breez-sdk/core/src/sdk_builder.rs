@@ -7,14 +7,16 @@ use std::sync::Arc;
 use breez_sdk_common::breez_server::BreezServer;
 use breez_sdk_common::buy::moonpay::MoonpayProvider;
 
-use spark_wallet::{InMemorySessionStore, SessionStore, Signer, SparkWallet, SparkWalletConfig};
+use spark_wallet::{
+    InMemorySessionStore, SessionStore, SparkSigner, SparkWallet, SparkWalletConfig,
+};
 use tokio::sync::watch;
 use tracing::{debug, info};
 
 use flashnet::{FlashnetConfig, IntegratorConfig};
 
 use crate::{
-    Credentials, EventEmitter, FiatService, FiatServiceWrapper, KeySetType, Network, Seed,
+    Credentials, EventEmitter, FiatService, FiatServiceWrapper, Network, Seed,
     chain::{
         BitcoinChainService,
         rest_client::{BasicAuth, ChainApiType, RestClientChainService},
@@ -27,10 +29,7 @@ use crate::{
     realtime_sync::{RealTimeSyncParams, init_and_start_real_time_sync},
     sdk::{BreezSdk, BreezSdkParams, SyncCoordinator, runtime_from_config},
     sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context},
-    signer::{
-        breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner,
-        spark::SparkSigner,
-    },
+    signer::{breez::BreezSignerImpl, lnurl_auth::LnurlAuthSignerAdapter, rtsync::RTSyncSigner},
     stable_balance::StableBalance,
     token_conversion::TokenConversionMiddleware,
     token_conversion::{
@@ -56,17 +55,18 @@ struct RestChainServiceConfig {
 enum SignerSource {
     Seed {
         seed: Seed,
-        key_set_type: KeySetType,
-        use_address_index: bool,
         account_number: Option<u32>,
     },
-    External(Arc<dyn crate::signer::ExternalSigner>),
+    External {
+        breez: Arc<dyn crate::signer::ExternalBreezSigner>,
+        spark: Arc<dyn crate::signer::ExternalSparkSigner>,
+    },
 }
 
-/// The four signers derived from a single base signer.
+/// The four signers derived from a single signer source.
 struct Signers {
     base: Arc<dyn crate::signer::BreezSigner>,
-    spark: Arc<SparkSigner>,
+    spark: Arc<dyn SparkSigner>,
     rtsync: Arc<RTSyncSigner>,
     lnurl_auth: Arc<LnurlAuthSignerAdapter>,
 }
@@ -74,10 +74,13 @@ struct Signers {
 /// Inputs to [`build_spark_wallet`] — bundled to avoid an >8-argument helper.
 struct BuildSparkWalletParams {
     config: SparkWalletConfig,
-    spark_signer: Arc<SparkSigner>,
+    spark_signer: Arc<dyn SparkSigner>,
     session_store: Arc<dyn SessionStore>,
-    shutdown_receiver: watch::Receiver<()>,
-    background_services_enabled: bool,
+    /// `Some` only in client mode. Wiring it in server mode would leave the
+    /// wallet holding a stored `cancellation_token` receiver that's never
+    /// consumed (server mode never calls `start_background_processing`), which
+    /// would stall `disconnect`'s `Sender::closed()` await forever.
+    shutdown_receiver: Option<watch::Receiver<()>>,
     tree_store: Option<Arc<dyn spark_wallet::TreeStore>>,
     token_output_store: Option<Arc<dyn spark_wallet::TokenOutputStore>>,
     payment_observer: Option<Arc<dyn PaymentObserver>>,
@@ -114,8 +117,6 @@ impl SdkBuilder {
             config,
             signer_source: SignerSource::Seed {
                 seed,
-                key_set_type: KeySetType::Default,
-                use_address_index: false,
                 account_number: None,
             },
             storage: None,
@@ -129,16 +130,25 @@ impl SdkBuilder {
         }
     }
 
-    /// Creates a new `SdkBuilder` with the provided configuration and external signer.
+    /// Creates a new `SdkBuilder` with the provided configuration and external signers.
     ///
     /// # Arguments
     /// - `config`: The configuration to be used.
-    /// - `signer`: An external signer implementation.
+    /// - `breez_signer`: External signer for non-Spark SDK signing (LNURL-auth,
+    ///   real-time sync, message signing, ECIES).
+    /// - `spark_signer`: External high-level Spark signer for the Spark wallet.
     #[allow(clippy::needless_pass_by_value)]
-    pub fn new_with_signer(config: Config, signer: Arc<dyn crate::signer::ExternalSigner>) -> Self {
+    pub fn new_with_signer(
+        config: Config,
+        breez_signer: Arc<dyn crate::signer::ExternalBreezSigner>,
+        spark_signer: Arc<dyn crate::signer::ExternalSparkSigner>,
+    ) -> Self {
         SdkBuilder {
             config,
-            signer_source: SignerSource::External(signer),
+            signer_source: SignerSource::External {
+                breez: breez_signer,
+                spark: spark_signer,
+            },
             storage: None,
             chain_service: None,
             rest_chain_service_config: None,
@@ -150,25 +160,26 @@ impl SdkBuilder {
         }
     }
 
-    /// Sets the key set type to be used by the SDK.
+    /// Sets the account number for key derivation. All wallet keys derive from
+    /// the seed at `m/8797555'/<account number>'`, so each account number
+    /// yields an independent wallet from the same seed.
+    ///
+    /// When unset, the account number defaults to 0 on Regtest and 1 on all
+    /// other networks.
     ///
     /// Note: This only applies when using a seed-based signer. It has no effect
     /// when using an external signer (created with `new_with_signer`).
     ///
     /// # Arguments
-    /// - `config`: Key set configuration containing the key set type, address index flag, and optional account number.
+    /// - `account_number`: The account number in the derivation path.
     #[must_use]
-    pub fn with_key_set(mut self, config: crate::models::KeySetConfig) -> Self {
+    pub fn with_account_number(mut self, account_number: u32) -> Self {
         if let SignerSource::Seed {
-            key_set_type: ref mut kst,
-            use_address_index: ref mut uai,
             account_number: ref mut an,
             ..
         } = self.signer_source
         {
-            *kst = config.key_set_type;
-            *uai = config.use_address_index;
-            *an = config.account_number;
+            *an = Some(account_number);
         }
         self
     }
@@ -419,8 +430,7 @@ impl SdkBuilder {
             config: spark_wallet_config,
             spark_signer: Arc::clone(&signers.spark),
             session_store,
-            shutdown_receiver: shutdown_sender.subscribe(),
-            background_services_enabled,
+            shutdown_receiver: background_services_enabled.then(|| shutdown_sender.subscribe()),
             tree_store: stores.tree_store.clone(),
             token_output_store: stores.token_output_store.clone(),
             payment_observer: self.payment_observer,
@@ -452,13 +462,8 @@ impl SdkBuilder {
         .await?;
 
         let buy_bitcoin_provider = Arc::new(MoonpayProvider::new(context.breez_server.clone()));
-        let token_converter = build_token_converter(
-            &self.config,
-            &storage,
-            &spark_wallet,
-            &event_emitter,
-            &context,
-        );
+        let token_converter =
+            build_token_converter(&self.config, &storage, &spark_wallet, &context);
 
         let sync_coordinator = SyncCoordinator::new();
 
@@ -567,29 +572,38 @@ fn validate_server_mode(
 /// Derives the four signers (base, spark, rtsync, lnurl-auth) from one signer
 /// source.
 fn build_signers(config: &Config, signer_source: SignerSource) -> Result<Signers, SdkError> {
-    let base: Arc<dyn crate::signer::BreezSigner> = match signer_source {
-        SignerSource::Seed {
-            seed,
-            key_set_type,
-            use_address_index,
-            account_number,
-        } => Arc::new(
-            BreezSignerImpl::new(
-                config,
-                &seed,
-                key_set_type.into(),
-                use_address_index,
+    // The SDK-layer `BreezSigner` (`base`) roots at the identity master
+    // (`base/0'`); the high-level Spark signer (the in-process `DefaultSigner`
+    // wrapped in a `SparkSignerAdapter`) roots at the account master (`base`).
+    let (base, spark): (Arc<dyn crate::signer::BreezSigner>, Arc<dyn SparkSigner>) =
+        match signer_source {
+            SignerSource::Seed {
+                seed,
                 account_number,
-            )
-            .map_err(|e| SdkError::Generic(e.to_string()))?,
-        ),
-        SignerSource::External(external_signer) => {
-            use crate::signer::ExternalSignerAdapter;
-            Arc::new(ExternalSignerAdapter::new(external_signer))
-        }
-    };
+            } => {
+                let seed_bytes = seed.to_bytes()?;
+                let network = config.network.into();
+                let base: Arc<dyn crate::signer::BreezSigner> = Arc::new(BreezSignerImpl::new(
+                    spark_wallet::identity_master_key(&seed_bytes, network, account_number)
+                        .map_err(|e| SdkError::Generic(e.to_string()))?,
+                ));
+                let spark: Arc<dyn SparkSigner> = Arc::new(spark_wallet::SparkSignerAdapter::new(
+                    Arc::new(spark_wallet::DefaultSigner::from_master(
+                        spark_wallet::account_master_key(&seed_bytes, network, account_number)
+                            .map_err(|e| SdkError::Generic(e.to_string()))?,
+                    )),
+                ));
+                (base, spark)
+            }
+            SignerSource::External { breez, spark } => {
+                use crate::signer::{ExternalBreezSignerAdapter, ExternalSparkSignerAdapter};
+                let base: Arc<dyn crate::signer::BreezSigner> =
+                    Arc::new(ExternalBreezSignerAdapter::new(breez));
+                let spark: Arc<dyn SparkSigner> = Arc::new(ExternalSparkSignerAdapter::new(spark));
+                (base, spark)
+            }
+        };
 
-    let spark = Arc::new(SparkSigner::new(base.clone()));
     let rtsync = Arc::new(
         RTSyncSigner::new(base.clone(), config.network)
             .map_err(|e| SdkError::Generic(e.to_string()))?,
@@ -633,7 +647,7 @@ async fn resolve_context(
 async fn resolve_storage(
     supplied: Option<Arc<dyn StorageBackend>>,
     context: &SdkContext,
-    spark_signer: &Arc<SparkSigner>,
+    spark_signer: &Arc<dyn SparkSigner>,
     config: &Config,
 ) -> Result<Arc<ResolvedStores>, SdkError> {
     let storage_backend: Arc<dyn StorageBackend> = match (supplied, context.storage_backend.clone())
@@ -764,9 +778,10 @@ fn wrap_session_store(
 /// Builds the [`SparkWallet`] from the assembled config, signers and stores.
 async fn build_spark_wallet(params: BuildSparkWalletParams) -> Result<Arc<SparkWallet>, SdkError> {
     let mut wallet_builder = spark_wallet::WalletBuilder::new(params.config, params.spark_signer)
-        .with_cancellation_token(params.shutdown_receiver)
-        .with_session_store(params.session_store)
-        .with_background_processing(params.background_services_enabled);
+        .with_session_store(params.session_store);
+    if let Some(receiver) = params.shutdown_receiver {
+        wallet_builder = wallet_builder.with_cancellation_token(receiver);
+    }
     if let Some(provider) = &params.context.jwt_header_provider {
         wallet_builder = wallet_builder.with_so_extra_header_provider(
             Arc::clone(provider) as Arc<dyn spark_wallet::HeaderProvider>
@@ -846,7 +861,6 @@ fn build_token_converter(
     config: &Config,
     storage: &Arc<dyn crate::persist::Storage>,
     spark_wallet: &Arc<SparkWallet>,
-    event_emitter: &Arc<EventEmitter>,
     context: &SdkContext,
 ) -> Arc<dyn TokenConverter> {
     let flashnet_config = FlashnetConfig::default_config(
@@ -863,7 +877,6 @@ fn build_token_converter(
         flashnet_config,
         Arc::clone(storage),
         Arc::clone(spark_wallet),
-        Arc::clone(event_emitter),
         config.network,
         context.http_client.clone(),
     ))
@@ -1145,18 +1158,202 @@ mod tests {
         }
     }
 
-    fn test_spark_signer() -> std::sync::Arc<crate::signer::spark::SparkSigner> {
-        use crate::KeySetType;
-        use crate::signer::breez::BreezSignerImpl;
-        use crate::signer::spark::SparkSigner;
+    fn unique_storage_dir(name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("breez-sdk-test-{}-{}", name, uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Waits for the SDK object graph to be released. Background tasks drop
+    /// their `BreezSdk` clones asynchronously after the shutdown signal, so
+    /// poll briefly instead of asserting immediately after `drop`.
+    async fn assert_sdk_graph_freed(
+        event_emitter: std::sync::Weak<crate::EventEmitter>,
+        spark_wallet: std::sync::Weak<spark_wallet::SparkWallet>,
+    ) {
+        for _ in 0..100 {
+            if event_emitter.upgrade().is_none() && spark_wallet.upgrade().is_none() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        panic!(
+            "SDK object graph leaked after drop (EventEmitter alive: {}, SparkWallet alive: {})",
+            event_emitter.upgrade().is_some(),
+            spark_wallet.upgrade().is_some(),
+        );
+    }
+
+    /// Regression test for <https://github.com/breez/spark-sdk/issues/947>:
+    /// each server-mode build → disconnect → drop lifecycle must release the
+    /// whole per-instance object graph.
+    #[tokio::test]
+    async fn server_mode_sdk_graph_is_freed_on_drop() {
+        use crate::default_server_config;
+
+        let config = default_server_config(Network::Regtest);
+        let sdk = SdkBuilder::new(config, test_seed())
+            .with_default_storage(unique_storage_dir("leak-server"))
+            .build()
+            .await
+            .expect("server-mode build should succeed");
+
+        let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
+        let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);
+
+        sdk.disconnect().await.expect("disconnect should succeed");
+        drop(sdk);
+
+        assert_sdk_graph_freed(event_emitter, spark_wallet).await;
+    }
+
+    /// Network-dependent variant of `server_mode_sdk_graph_is_freed_on_drop`
+    /// that runs a real `sync_wallet` against the regtest operators before
+    /// dropping, proving the sync path retains nothing either.
+    #[tokio::test]
+    #[ignore = "requires network access to the regtest operators"]
+    async fn server_mode_sdk_graph_is_freed_on_drop_after_sync() {
+        use crate::{SyncWalletRequest, default_server_config};
+
+        let config = default_server_config(Network::Regtest);
+        let sdk = SdkBuilder::new(config, test_seed())
+            .with_default_storage(unique_storage_dir("leak-server-sync"))
+            .build()
+            .await
+            .expect("server-mode build should succeed");
+
+        let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
+        let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);
+
+        sdk.sync_wallet(SyncWalletRequest {})
+            .await
+            .expect("sync_wallet should succeed");
+
+        sdk.disconnect().await.expect("disconnect should succeed");
+        drop(sdk);
+
+        assert_sdk_graph_freed(event_emitter, spark_wallet).await;
+    }
+
+    /// Client-mode counterpart of the issue #947 regression test: after
+    /// `disconnect`, dropping the SDK must release the whole object graph.
+    #[tokio::test]
+    async fn client_mode_sdk_graph_is_freed_after_disconnect_and_drop() {
+        let mut config = default_config(Network::Regtest);
+        // Keep the build offline: no real-time sync connection and no
+        // network-backed private-mode setup on startup.
+        config.real_time_sync_server_url = None;
+        config.private_enabled_default = false;
+
+        let sdk = SdkBuilder::new(config, test_seed())
+            .with_default_storage(unique_storage_dir("leak-client"))
+            .build()
+            .await
+            .expect("client-mode build should succeed");
+
+        let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
+        let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);
+
+        tokio::time::timeout(std::time::Duration::from_secs(30), sdk.disconnect())
+            .await
+            .expect("disconnect should not hang")
+            .expect("disconnect should succeed");
+        drop(sdk);
+
+        assert_sdk_graph_freed(event_emitter, spark_wallet).await;
+    }
+
+    /// Variant of the client-mode leak regression test with real-time sync
+    /// and stable balance enabled: the sync record handler and the conversion
+    /// worker hold the emitter strongly, so their tasks must release it on
+    /// `disconnect`.
+    #[tokio::test]
+    async fn client_mode_sdk_graph_is_freed_with_real_time_sync_enabled() {
+        use crate::{StableBalanceConfig, StableBalanceToken};
+
+        let mut config = default_config(Network::Regtest);
+        // Unreachable sync server: the gRPC client connects lazily, so the
+        // build succeeds offline and the sync tasks just retry in the
+        // background until shutdown.
+        config.real_time_sync_server_url = Some("http://127.0.0.1:9".to_string());
+        config.private_enabled_default = false;
+        // No active token, so the conversion worker spawns without making
+        // network calls.
+        config.stable_balance_config = Some(StableBalanceConfig {
+            tokens: vec![StableBalanceToken {
+                label: "USDB".to_string(),
+                token_identifier: "btkn1test".to_string(),
+            }],
+            default_active_label: None,
+            threshold_sats: None,
+            max_slippage_bps: None,
+        });
+
+        let sdk = SdkBuilder::new(config, test_seed())
+            .with_default_storage(unique_storage_dir("leak-client-rtsync"))
+            .build()
+            .await
+            .expect("client-mode build with real-time sync should succeed");
+
+        let event_emitter = std::sync::Arc::downgrade(&sdk.event_emitter);
+        let spark_wallet = std::sync::Arc::downgrade(&sdk.spark_wallet);
+
+        tokio::time::timeout(std::time::Duration::from_secs(30), sdk.disconnect())
+            .await
+            .expect("disconnect should not hang")
+            .expect("disconnect should succeed");
+        drop(sdk);
+
+        assert_sdk_graph_freed(event_emitter, spark_wallet).await;
+    }
+
+    /// `disconnect` must unregister event listeners, so a listener that
+    /// references the SDK instance cannot keep it alive afterwards.
+    #[tokio::test]
+    async fn disconnect_unregisters_event_listeners() {
+        use crate::{SdkEvent, default_server_config, events::EventListener};
+
+        struct NoopListener;
+
+        #[macros::async_trait]
+        impl EventListener for NoopListener {
+            async fn on_event(&self, _event: SdkEvent) {}
+        }
+
+        let storage_dir = std::env::temp_dir()
+            .join(format!(
+                "breez-sdk-test-listener-clear-{}",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let sdk = SdkBuilder::new(default_server_config(Network::Regtest), test_seed())
+            .with_default_storage(storage_dir)
+            .build()
+            .await
+            .expect("server-mode build should succeed");
+
+        let id = sdk.add_event_listener(Box::new(NoopListener)).await;
+
+        sdk.disconnect().await.expect("disconnect should succeed");
+
+        assert!(
+            !sdk.remove_event_listener(&id).await,
+            "listener should already be unregistered by disconnect"
+        );
+    }
+
+    fn test_spark_signer() -> std::sync::Arc<dyn spark_wallet::SparkSigner> {
         use std::sync::Arc;
 
-        let config = default_config(Network::Regtest);
         let seed = test_seed();
-        let base: Arc<dyn crate::signer::BreezSigner> = Arc::new(
-            BreezSignerImpl::new(&config, &seed, KeySetType::Default.into(), false, None).unwrap(),
-        );
-        Arc::new(SparkSigner::new(base))
+        let seed_bytes = seed.to_bytes().unwrap();
+        let master =
+            spark_wallet::account_master_key(&seed_bytes, Network::Regtest.into(), None).unwrap();
+        Arc::new(spark_wallet::SparkSignerAdapter::new(Arc::new(
+            spark_wallet::DefaultSigner::from_master(master),
+        )))
     }
 
     // ---- validate_server_mode ----

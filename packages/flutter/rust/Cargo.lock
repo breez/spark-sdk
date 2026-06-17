@@ -2060,6 +2060,7 @@ checksum = "b7ac824320a75a52197e8f2d787f6a38b6718bb6897a35142d749af3c0e8f4fe"
 name = "flashnet"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64",
  "bitcoin",
  "getrandom 0.2.16",

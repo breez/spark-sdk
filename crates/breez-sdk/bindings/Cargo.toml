@@ -23,7 +23,7 @@ name = "breez_sdk_spark_bindings"
 crate-type = ["staticlib", "cdylib", "lib"]
 
 [dependencies]
-breez-sdk-spark = { workspace = true, features = ["uniffi", "passkey", "sqlite"] }
+breez-sdk-spark = { workspace = true, features = ["uniffi", "passkey", "sqlite", "turnkey-p256"] }
 uniffi = { workspace = true, features = ["tokio"] }
 
 [build-dependencies]

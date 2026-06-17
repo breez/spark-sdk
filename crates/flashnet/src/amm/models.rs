@@ -480,32 +480,42 @@ impl Pool {
             ));
         }
 
+        // Helper function for ceiling division: (numerator + denominator - 1) / denominator.
+        //
+        // Reverse-quote contract: the returned amount_in, when forward-quoted, must
+        // deliver AT LEAST `amount_out`. Every fee/slippage scaling here is a
+        // "scale up, then divide by 10_000" and flooring shaves up to 1 unit per
+        // site, which the subsequent forward quote can't recover. Use this helper
+        // at every such site so the round trip is conservative.
+        #[allow(clippy::arithmetic_side_effects)]
+        let div_ceil = |numerator: u128, denominator: u128| -> u128 {
+            numerator
+                .saturating_add(denominator.saturating_sub(1))
+                .saturating_div(denominator)
+        };
+
         // Add slippage buffer to amount_out first
         // amount_out_with_slippage = amount_out * (max_slippage_bps + 10_000) / 10_000
-        let amount_out_with_slippage = amount_out
-            .checked_mul(u128::from(max_slippage_bps).saturating_add(10_000))
-            .ok_or(overflow_err.clone())?
-            .saturating_div(10_000);
+        let amount_out_with_slippage = div_ceil(
+            amount_out
+                .checked_mul(u128::from(max_slippage_bps).saturating_add(10_000))
+                .ok_or(overflow_err.clone())?,
+            10_000,
+        );
 
         // Account for fees on output (only for A to B swaps)
         // amount_out_effective = amount_out × (10_000 + fee_bps) / 10_000
         // Integrator fee is paid in asset B, same as host fee
         let amount_out_before_output_fees = if is_a_to_b {
             let output_fee_bps = self.host_fee_bps.saturating_add(integrator_fee_bps);
-            amount_out_with_slippage
-                .checked_mul(u128::from(output_fee_bps).saturating_add(10_000))
-                .ok_or(overflow_err.clone())?
-                .saturating_div(10_000)
+            div_ceil(
+                amount_out_with_slippage
+                    .checked_mul(u128::from(output_fee_bps).saturating_add(10_000))
+                    .ok_or(overflow_err.clone())?,
+                10_000,
+            )
         } else {
             amount_out_with_slippage
-        };
-
-        // Helper function for ceiling division: (numerator + denominator - 1) / denominator
-        #[allow(clippy::arithmetic_side_effects)]
-        let div_ceil = |numerator: u128, denominator: u128| -> u128 {
-            numerator
-                .saturating_add(denominator.saturating_sub(1))
-                .saturating_div(denominator)
         };
 
         // Calculate amount_in before input fees
@@ -599,10 +609,12 @@ impl Pool {
                 .saturating_add(integrator_fee_bps)
         };
 
-        let amount_in = amount_in_before_input_fees
-            .checked_mul(u128::from(input_fee_bps).saturating_add(10_000))
-            .ok_or(overflow_err)?
-            .saturating_div(10_000);
+        let amount_in = div_ceil(
+            amount_in_before_input_fees
+                .checked_mul(u128::from(input_fee_bps).saturating_add(10_000))
+                .ok_or(overflow_err)?,
+            10_000,
+        );
 
         Ok(amount_in)
     }
@@ -1313,5 +1325,95 @@ mod test {
             amount_with > amount_without,
             "Expected amount_in with integrator fee ({amount_with}) > without ({amount_without})"
         );
+    }
+
+    /// Constant-product forward simulation for A→B with fees, mirroring how a
+    /// server would compute `amount_out` for a given gross `amount_in`. Inverse
+    /// of `calculate_amount_in`'s reserve path. Used by the round-trip
+    /// regression test below.
+    #[allow(clippy::arithmetic_side_effects)] // saturating_div panics on /0; denominators here are non-zero by construction
+    fn forward_quote_a_to_b(
+        amount_in: u128,
+        reserve_a: u128,
+        reserve_b: u128,
+        lp_fee_bps: u32,
+        host_fee_bps: u32,
+        integrator_fee_bps: u32,
+    ) -> u128 {
+        // 1. Strip LP fee from input (reverse grosses-up by *(10000+lp)/10000,
+        //    so forward un-does it with /(10000+lp)*10000). Floor on forward.
+        let in_net = amount_in
+            .saturating_mul(10_000)
+            .saturating_div(u128::from(lp_fee_bps).saturating_add(10_000));
+        // 2. Constant product (floor).
+        let out_gross = in_net
+            .saturating_mul(reserve_b)
+            .saturating_div(reserve_a.saturating_add(in_net));
+        // 3. Strip output fees (host + integrator, A→B only). Floor.
+        let output_fee_bps =
+            u128::from(host_fee_bps).saturating_add(u128::from(integrator_fee_bps));
+        out_gross
+            .saturating_mul(10_000)
+            .saturating_div(output_fee_bps.saturating_add(10_000))
+    }
+
+    /// Regression: the reverse-quote round-trip contract
+    /// `forward(calculate_amount_in(target)) >= target` must hold even for
+    /// small `target` values that don't cleanly divide by `10_000` after the
+    /// slippage/fee scalings. Previously, three "scale up then floor" sites
+    /// could each shave a unit off, so the forward quote came back 1 to 3 units
+    /// short. The fix replaces those with ceiling division; this test pins
+    /// the contract across a range of small targets.
+    #[test]
+    fn test_calculate_amount_in_roundtrip_contract() {
+        // A = BTC (asset_in), B = token (asset_out). Avoiding the BTC-out
+        // 64-multiple round-up keeps the off-by-one observable end-to-end.
+        let asset_a = "020202020202020202020202020202020202020202020202020202020202020202";
+        let asset_b = "3206c93b24a4d18ea19d0a9a213204af2c7e74a6d16c7535cc5d33eca4ad1eca";
+        let host_fee_bps = 25; // 0.25%
+        let lp_fee_bps = 25; // 0.25%
+        let integrator_fee_bps = 5; // 0.05%
+        let reserve_a = 1_000_000_000_u128;
+        let reserve_b = 10_000_000_000_u128;
+        let pool = create_test_pool(
+            host_fee_bps,
+            lp_fee_bps,
+            asset_a,
+            asset_b,
+            Some(reserve_a),
+            Some(reserve_b),
+            None,
+        );
+
+        // Targets sized so the slippage/fee multiplications land off a clean
+        // multiple of 10_000 (where flooring used to shave a unit).
+        for target in [750_u128, 753, 800, 1000, 1234, 2500, 12345] {
+            for slippage_bps in [10_u32, 50, 100] {
+                let amount_in = pool
+                    .calculate_amount_in(
+                        asset_a,
+                        target,
+                        slippage_bps,
+                        integrator_fee_bps,
+                        Network::Regtest,
+                    )
+                    .expect("calculate_amount_in should succeed");
+
+                let actual_out = forward_quote_a_to_b(
+                    amount_in,
+                    reserve_a,
+                    reserve_b,
+                    lp_fee_bps,
+                    host_fee_bps,
+                    integrator_fee_bps,
+                );
+
+                assert!(
+                    actual_out >= target,
+                    "round-trip shortfall: target={target}, slippage_bps={slippage_bps}, \
+                     amount_in={amount_in}, forward(amount_in)={actual_out}"
+                );
+            }
+        }
     }
 }

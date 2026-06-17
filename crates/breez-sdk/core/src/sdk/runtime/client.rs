@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use platform_utils::time::{Duration, SystemTime};
 use platform_utils::tokio;
-use spark_wallet::{WalletEvent, WalletTransfer};
+use spark_wallet::{SparkWallet, WalletEvent, WalletTransfer};
 use tokio::{
     select,
     sync::{broadcast, watch},
@@ -39,6 +39,12 @@ impl RuntimeProfile for ClientRuntime {
         register_client_runtime_event_handler(sdk).await;
         sdk.spawn_spark_private_mode_initialization();
         spawn_client_runtime_loop(sdk, initial_synced_sender);
+
+        // Subscribers are now attached: start the wallet's BackgroundProcessor so
+        // its first `WalletEvent::Synced` (emitted after the operator stream
+        // connects) lands in the runtime loop and drives the initial Full sync.
+        sdk.spark_wallet.start_background_processing().await;
+
         sdk.try_recover_lightning_address();
         spawn_conversion_refunder(
             Arc::clone(&sdk.token_converter),
@@ -180,27 +186,32 @@ async fn on_wallet_event(sdk: &BreezSdk, event: Result<WalletEvent, broadcast::e
 
 async fn register_client_runtime_event_handler(sdk: &BreezSdk) {
     sdk.event_emitter
-        .add_runtime_event_handler(Box::new(ClientRuntimeEventHandler { sdk: sdk.clone() }))
+        .add_runtime_event_handler(Box::new(ClientRuntimeEventHandler {
+            sync_coordinator: sdk.sync_coordinator.clone(),
+            spark_wallet: sdk.spark_wallet.clone(),
+            storage: sdk.storage.clone(),
+        }))
         .await;
 }
 
 struct ClientRuntimeEventHandler {
-    sdk: BreezSdk,
+    sync_coordinator: SyncCoordinator,
+    spark_wallet: Arc<SparkWallet>,
+    storage: Arc<dyn crate::Storage>,
 }
 
 #[macros::async_trait]
 impl crate::events::RuntimeEventHandler for ClientRuntimeEventHandler {
-    async fn handle(&self, event: RuntimeEvent) {
+    async fn handle(&self, _emitter: &crate::EventEmitter, event: RuntimeEvent) {
         match event {
             RuntimeEvent::StableBalanceConversionCompleted => {
-                self.sdk
-                    .sync_coordinator
+                self.sync_coordinator
                     .trigger_sync_no_wait(SyncType::Full, true)
                     .await;
             }
             RuntimeEvent::DepositClaimed { .. } => {
                 if let Err(e) =
-                    update_balances(self.sdk.spark_wallet.clone(), self.sdk.storage.clone()).await
+                    update_balances(self.spark_wallet.clone(), self.storage.clone()).await
                 {
                     error!("Failed to refresh balances after claim_deposit: {e:?}");
                 }

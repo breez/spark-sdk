@@ -198,7 +198,8 @@ impl RestClientChainServiceInner {
                 add_basic_auth_header(&mut headers, &basic_auth.username, &basic_auth.password);
             }
 
-            let HttpResponse { body, status } = client.get(url.to_string(), Some(headers)).await?;
+            let HttpResponse { body, status, .. } =
+                client.get(url.to_string(), Some(headers)).await?;
             match status {
                 status if attempts < self.max_retries && is_status_retryable(status) => {
                     tokio::time::sleep(delay).await;
@@ -227,7 +228,7 @@ impl RestClientChainServiceInner {
             body.clone().unwrap_or_default(),
             headers
         );
-        let HttpResponse { body, status } = self
+        let HttpResponse { body, status, .. } = self
             .client
             .post(url.to_string(), Some(headers), body)
             .await?;

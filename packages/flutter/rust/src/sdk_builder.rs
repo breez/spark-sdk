@@ -29,9 +29,9 @@ impl SdkBuilder {
     }
 
     #[frb(sync)]
-    pub fn with_key_set(self, config: breez_sdk_spark::KeySetConfig) -> Self {
-        let builder =
-            <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner).with_key_set(config);
+    pub fn with_account_number(self, account_number: u32) -> Self {
+        let builder = <breez_sdk_spark::SdkBuilder as Clone>::clone(&self.inner)
+            .with_account_number(account_number);
         Self {
             inner: Arc::new(builder),
         }

@@ -43,7 +43,6 @@ pub(crate) struct FlashnetTokenConverter {
     flashnet_client: Arc<FlashnetClient>,
     storage: Arc<dyn Storage>,
     spark_wallet: Arc<SparkWallet>,
-    event_emitter: Arc<EventEmitter>,
     network: Network,
     refund_trigger: broadcast::Sender<()>,
     integrator_fee_bps: u32,
@@ -55,14 +54,11 @@ impl FlashnetTokenConverter {
     /// # Arguments
     /// * `storage` - Storage for payment lookups and metadata updates
     /// * `spark_wallet` - Spark wallet for transfer/transaction lookups
-    /// * `event_emitter` - Event emitter used when persisting conversion-leg
-    ///   payment records after a successful swap
     /// * `network` - The network configuration
     pub fn new(
         flashnet_config: FlashnetConfig,
         storage: Arc<dyn Storage>,
         spark_wallet: Arc<SparkWallet>,
-        event_emitter: Arc<EventEmitter>,
         network: Network,
         http_client: Arc<dyn platform_utils::HttpClient>,
     ) -> Self {
@@ -84,7 +80,6 @@ impl FlashnetTokenConverter {
             flashnet_client,
             storage,
             spark_wallet,
-            event_emitter,
             network,
             refund_trigger,
             integrator_fee_bps,
@@ -592,6 +587,7 @@ impl FlashnetTokenConverter {
     /// them so the resulting Payment is terminal.
     async fn process_conversion_payments(
         &self,
+        event_emitter: Arc<EventEmitter>,
         outbound_asset_transfer: AssetTransfer,
         sent_payment_id: &str,
         received_payment_id: &str,
@@ -608,7 +604,7 @@ impl FlashnetTokenConverter {
             insert_payment_with_metadata(
                 self.spark_wallet.clone(),
                 self.storage.clone(),
-                self.event_emitter.clone(),
+                event_emitter.clone(),
                 payment,
             )
             .await;
@@ -622,7 +618,7 @@ impl FlashnetTokenConverter {
             insert_payment_with_metadata(
                 self.spark_wallet.clone(),
                 self.storage.clone(),
-                self.event_emitter.clone(),
+                event_emitter,
                 payment,
             )
             .await;
@@ -690,6 +686,7 @@ impl TokenConverter for FlashnetTokenConverter {
     #[allow(clippy::too_many_lines)]
     async fn convert(
         &self,
+        event_emitter: Arc<EventEmitter>,
         options: &ConversionOptions,
         purpose: &ConversionPurpose,
         token_identifier: Option<&String>,
@@ -767,6 +764,7 @@ impl TokenConverter for FlashnetTokenConverter {
                     && flashnet_response.accepted
                 {
                     self.process_conversion_payments(
+                        event_emitter,
                         outbound_asset_transfer,
                         &sent_payment_id,
                         &received_payment_id,

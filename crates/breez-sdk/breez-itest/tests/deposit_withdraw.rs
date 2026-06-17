@@ -117,6 +117,11 @@ async fn test_onchain_withdraw_to_static_address(
     let recv_payment =
         wait_for_payment_succeeded_event(&mut bob.events, PaymentType::Receive, 180).await?;
     assert!(matches!(recv_payment.method, PaymentMethod::Deposit));
+    assert!(
+        matches!(recv_payment.details, Some(PaymentDetails::Deposit { .. })),
+        "Deposit payment must have Deposit details: {:?}",
+        recv_payment.details
+    );
 
     info!("Bob deposit fees after claim: {}", recv_payment.fees);
     assert!(recv_payment.fees > 0);
@@ -207,6 +212,14 @@ async fn test_deposit_fee_manual_claim(
         PaymentType::Receive
     ));
     assert!(matches!(claim_resp.payment.method, PaymentMethod::Deposit));
+    assert!(
+        matches!(
+            &claim_resp.payment.details,
+            Some(PaymentDetails::Deposit { vout: v, .. }) if *v == vout
+        ),
+        "Manual claim payment must carry vout={vout}: {:?}",
+        claim_resp.payment.details
+    );
 
     // After manual claim, deposit should be removed from unclaimed list
     bob.sdk.sync_wallet(SyncWalletRequest {}).await?;

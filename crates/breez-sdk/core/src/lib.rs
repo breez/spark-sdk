@@ -22,6 +22,8 @@ pub mod signer;
 mod stable_balance;
 mod sync;
 pub mod token_conversion;
+#[cfg(feature = "turnkey")]
+pub mod turnkey;
 mod utils;
 
 pub use chain::{
@@ -53,7 +55,8 @@ pub use sdk_builder::SdkBuilder;
 pub use sdk_context::{SdkContext, SdkContextConfig, new_shared_sdk_context};
 pub use session_store::{Session, SessionStore, SessionStoreAdapter, SessionStoreError};
 pub use spark_wallet::{
-    CombinedHeaderProvider, HeaderProvider, HeaderProviderError, KeySet, PublicKey,
+    CombinedHeaderProvider, HeaderProvider, HeaderProviderError, PublicKey, account_master_key,
+    identity_master_key, identity_public_key,
 };
 
 #[cfg(feature = "postgres")]
@@ -74,7 +77,7 @@ pub use {
     sdk::{connect, connect_with_signer},
 };
 
-pub use sdk::default_external_signer;
+pub use sdk::{ExternalSigners, default_external_signers};
 
 #[cfg(feature = "test-utils")]
 pub use persist::tests as storage_tests;

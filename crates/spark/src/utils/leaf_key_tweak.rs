@@ -1,31 +1,17 @@
-use std::sync::Arc;
+use crate::{services::LeafKeyTweak, tree::TreeNode};
 
-use crate::{
-    services::LeafKeyTweak,
-    signer::{SecretSource, Signer, SignerError},
-    tree::TreeNode,
-};
-
-pub async fn prepare_leaf_key_tweaks_to_send(
-    signer: &Arc<dyn Signer>,
-    leaves: Vec<TreeNode>,
-    signing_key_source: Option<SecretSource>,
-) -> Result<Vec<LeafKeyTweak>, SignerError> {
-    // Build leaf key tweaks with new signing keys that we will sent to the receiver
-    let mut tweaks = Vec::with_capacity(leaves.len());
-
-    for leaf in leaves {
-        let our_key = signing_key_source
-            .clone()
-            .unwrap_or(SecretSource::Derived(leaf.id.clone()));
-        let ephemeral_key = signer.generate_random_secret().await?;
-
-        tweaks.push(LeafKeyTweak {
-            node: leaf.clone(),
-            signing_key: our_key,
-            new_signing_key: SecretSource::Encrypted(ephemeral_key),
-        });
-    }
-
-    Ok(tweaks)
+/// Builds the leaf key tweaks to send for a transfer.
+///
+/// Records each leaf's node; its current signing key is derived from the node
+/// id. The *new* signing key for each leaf is generated inside
+/// [`SparkSigner::prepare_transfer`](crate::signer::SparkSigner::prepare_transfer),
+/// so it is not produced here.
+pub fn prepare_leaf_key_tweaks_to_send(leaves: Vec<TreeNode>) -> Vec<LeafKeyTweak> {
+    leaves
+        .into_iter()
+        .map(|leaf| LeafKeyTweak {
+            node: leaf,
+            incoming_key: None,
+        })
+        .collect()
 }
