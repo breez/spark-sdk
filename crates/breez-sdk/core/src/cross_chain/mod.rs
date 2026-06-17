@@ -375,11 +375,6 @@ pub(crate) fn convert_sats_to_destination_amount(
     Ok(target as u128)
 }
 
-/// Both legs must be USD-pegged for the par-value rescale to hold.
-pub(crate) fn is_usd_stable_pair(source_asset: &str, dest_asset: &str) -> bool {
-    is_usd_stable_asset(source_asset) && is_usd_stable_asset(dest_asset)
-}
-
 pub(crate) fn is_usd_stable_asset(asset: &str) -> bool {
     USD_STABLE_ASSETS
         .iter()
@@ -572,15 +567,6 @@ mod tests {
                 "{ticker} should not be a recognized USD-stable"
             );
         }
-    }
-
-    #[test_all]
-    fn is_usd_stable_pair_requires_both_legs_stable() {
-        assert!(is_usd_stable_pair("USDB", "USDC"));
-        assert!(is_usd_stable_pair("USDC", "USDT"));
-        assert!(!is_usd_stable_pair("USDB", "BTC"));
-        assert!(!is_usd_stable_pair("BTC", "USDC"));
-        assert!(!is_usd_stable_pair("BTC", "BTC"));
     }
 
     // ---- compute_terminal_fee_amount ----

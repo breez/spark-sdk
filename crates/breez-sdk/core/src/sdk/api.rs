@@ -106,6 +106,9 @@ impl BreezSdk {
             }
         }
 
+        // Filter to USD-pegged destinations only.
+        all_routes.retain(|r| crate::cross_chain::is_usd_stable_asset(&r.asset));
+
         all_routes.sort_by(|a, b| {
             a.asset
                 .cmp(&b.asset)

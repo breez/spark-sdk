@@ -6,8 +6,7 @@ use crate::{
     cross_chain::{
         DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, DEFAULT_TARGET_OVERPAY_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
         MAX_TARGET_OVERPAY_BPS, MIN_CROSS_CHAIN_SLIPPAGE_BPS, MIN_TARGET_OVERPAY_BPS, SourceAsset,
-        convert_destination_amount_to_sats, fetch_btc_usd_rate, is_usd_stable_pair,
-        rescale_decimals,
+        convert_destination_amount_to_sats, fetch_btc_usd_rate, rescale_decimals,
     },
     error::SdkError,
     models::PrepareSendPaymentResponse,
@@ -336,15 +335,8 @@ async fn prepare_sats_denominated(
     overpay_bps: u32,
     fee_policy: FeePolicy,
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
-    let provider_amount = resolve_direct_overpay_amount(
-        sdk,
-        route,
-        token_identifier.as_ref(),
-        amount,
-        fee_policy,
-        overpay_bps,
-    )
-    .await?;
+    let provider_amount =
+        resolve_direct_overpay_amount(token_identifier.as_ref(), amount, fee_policy, overpay_bps);
 
     let service = sdk.cross_chain_context.get(route.provider)?;
     let prepared = service
@@ -369,31 +361,23 @@ async fn prepare_sats_denominated(
 }
 
 /// Returns the amount to hand the provider on the no-conversion path.
-/// Inflated when (a) the policy is `FeesExcluded`, (b) the user supplied a
-/// `token_identifier`, and (c) both the source token and destination asset
-/// are USD-stable. Other shapes pass through unchanged: BTC-source sends
-/// don't have a fiat target to floor; `FeesIncluded` is "send all" by intent;
-/// non-stable pairs don't have par-value semantics.
-async fn resolve_direct_overpay_amount(
-    sdk: &BreezSdk,
-    route: &CrossChainRoutePair,
+/// Inflated when the policy is `FeesExcluded` and the user supplied a
+/// `token_identifier` (USD-stable source bridging to a USD-stable destination,
+/// which the route filter enforces). BTC-source sends and `FeesIncluded`
+/// ("send all") pass through unchanged.
+fn resolve_direct_overpay_amount(
     token_identifier: Option<&String>,
     amount: u128,
     fee_policy: FeePolicy,
     overpay_bps: u32,
-) -> Result<u128, SdkError> {
-    if overpay_bps == 0 || !matches!(fee_policy, FeePolicy::FeesExcluded) {
-        return Ok(amount);
+) -> u128 {
+    if overpay_bps == 0
+        || !matches!(fee_policy, FeePolicy::FeesExcluded)
+        || token_identifier.is_none()
+    {
+        return amount;
     }
-    let Some(tid) = token_identifier else {
-        return Ok(amount);
-    };
-    let src_meta = src_token_metadata(sdk, tid).await?;
-    if is_usd_stable_pair(&src_meta.ticker, &route.asset) {
-        Ok(inflate_target_amount(amount, overpay_bps))
-    } else {
-        Ok(amount)
-    }
+    inflate_target_amount(amount, overpay_bps)
 }
 
 /// Conversion + `FeesIncluded` ("send all"): `amount` is the user's
@@ -449,7 +433,6 @@ async fn prepare_token_denominated_fees_included(
     let overrides = compute_conversion_overrides(
         conversion_estimate.as_ref(),
         &src_meta,
-        &route.asset,
         route.decimals.into(),
         prepared.estimated_out,
     )?;
@@ -511,27 +494,6 @@ async fn prepare_token_denominated_fees_excluded(
         ));
     };
     let src_meta = src_token_metadata(sdk, from_token_identifier).await?;
-
-    // Non-USD pairs downgrade to FeesIncluded: the fiat-inversion and
-    // par-rescale below assume USD pegs on both legs. Caller observes the
-    // downgrade via `response.fee_policy`.
-    if !is_usd_stable_pair(&src_meta.ticker, &route.asset) {
-        tracing::warn!(
-            src_ticker = %src_meta.ticker,
-            dest_asset = %route.asset,
-            "Non-USD-stable pair; downgrading FeesExcluded to FeesIncluded (recipient receives amount − fees)"
-        );
-        return prepare_token_denominated_fees_included(
-            sdk,
-            address,
-            route,
-            amount,
-            token_identifier,
-            conversion_options,
-            provider_slippage_bps,
-        )
-        .await;
-    }
 
     // Pad the user's target upward so provider slippage doesn't land delivery
     // below the requested amount. Quoted against the inflated value; provider
@@ -620,7 +582,6 @@ async fn prepare_token_denominated_fees_excluded(
     let overrides = compute_conversion_overrides(
         conversion_estimate.as_ref(),
         &src_meta,
-        &route.asset,
         route.decimals.into(),
         prepared.estimated_out,
     )?;
@@ -657,12 +618,13 @@ async fn src_token_metadata(sdk: &BreezSdk, token_id: &str) -> Result<SrcTokenMe
     })
 }
 
-/// Surfaces the token-side debit when the pair is USD-stable; otherwise
-/// passes provider values through. `fee_amount = asset_amount_in - provider_estimated_out`.
+/// Surfaces the token-side debit on the response. Routes are filtered to
+/// USD-pegged destinations at `get_cross_chain_routes`, so the par-rescale
+/// always holds. Missing estimate (no AMM step) defers to provider values.
+/// `fee_amount = asset_amount_in - provider_estimated_out`.
 fn compute_conversion_overrides(
     estimate: Option<&ConversionEstimate>,
     src_meta: &SrcTokenMetadata,
-    dest_asset: &str,
     dest_decimals: u32,
     provider_estimated_out: u128,
 ) -> Result<PrepareResponseOverrides, SdkError> {
@@ -670,14 +632,6 @@ fn compute_conversion_overrides(
         tracing::debug!("Cross-chain dispatcher: no AMM estimate; deferring to provider amounts");
         return Ok(PrepareResponseOverrides::default());
     };
-    if !is_usd_stable_pair(&src_meta.ticker, dest_asset) {
-        tracing::warn!(
-            src_ticker = %src_meta.ticker,
-            dest_asset,
-            "Cross-chain dispatcher: source/dest pair not USD-stable; skipping par rescale, deferring to provider amounts"
-        );
-        return Ok(PrepareResponseOverrides::default());
-    }
     let asset_amount_in = rescale_decimals(estimate.amount_in, src_meta.decimals, dest_decimals)?;
     let fee_amount = asset_amount_in.saturating_sub(provider_estimated_out);
     tracing::debug!(
@@ -1322,8 +1276,8 @@ mod tests {
             ticker: "USDB".to_string(),
             decimals: 6,
         };
-        let overrides = compute_conversion_overrides(None, &src_meta, "USDC", 6, 1_000_000)
-            .expect("pure helper");
+        let overrides =
+            compute_conversion_overrides(None, &src_meta, 6, 1_000_000).expect("pure helper");
         assert!(overrides.amount_in.is_none());
         assert!(overrides.asset_amount_in.is_none());
         assert!(overrides.fee_amount.is_none());
@@ -1336,52 +1290,12 @@ mod tests {
             ticker: "USDB".to_string(),
             decimals: 6,
         };
-        let overrides =
-            compute_conversion_overrides(Some(&est), &src_meta, "USDC", 6, 1_000_000).unwrap();
+        let overrides = compute_conversion_overrides(Some(&est), &src_meta, 6, 1_000_000).unwrap();
         assert_eq!(overrides.amount_in, Some(1_020_434));
         // src/dest both 6 decimals → rescale is identity.
         assert_eq!(overrides.asset_amount_in, Some(1_020_434));
         // fee = asset_amount_in - provider_estimated_out
         assert_eq!(overrides.fee_amount, Some(20_434));
-    }
-
-    #[test_all]
-    fn compute_overrides_non_stable_pair_falls_back_to_defaults() {
-        // Defense-in-depth: the dispatcher's `prepare_token_denominated_fees_excluded`
-        // already gates on `is_usd_stable_pair` and delegates to the
-        // `FeesIncluded` path for non-USD destinations, so the helper should
-        // never be reached with a non-stable pair in practice. This test
-        // verifies that if someone calls it directly anyway (or a future
-        // refactor bypasses the gate), it returns empty overrides instead of
-        // running the par-rescale math against non-USD-pegged assets.
-        let est = estimate_with_amount_in(1_020_434, 1_002_502);
-        let src_meta = SrcTokenMetadata {
-            ticker: "USDB".to_string(),
-            decimals: 6,
-        };
-        let overrides =
-            compute_conversion_overrides(Some(&est), &src_meta, "WETH", 18, 1_000_000_000_000_000)
-                .unwrap();
-        assert!(
-            overrides.amount_in.is_none(),
-            "non-stable dest must not yield an override"
-        );
-        assert!(overrides.asset_amount_in.is_none());
-        assert!(overrides.fee_amount.is_none());
-    }
-
-    #[test_all]
-    fn compute_overrides_non_stable_source_also_falls_back() {
-        let est = estimate_with_amount_in(1_020_434, 1_002_502);
-        let src_meta = SrcTokenMetadata {
-            ticker: "DAI".to_string(),
-            decimals: 18,
-        };
-        let overrides =
-            compute_conversion_overrides(Some(&est), &src_meta, "USDC", 6, 1_000_000).unwrap();
-        assert!(overrides.amount_in.is_none());
-        assert!(overrides.asset_amount_in.is_none());
-        assert!(overrides.fee_amount.is_none());
     }
 
     #[test_all]
@@ -1392,8 +1306,7 @@ mod tests {
             ticker: "USDB".to_string(),
             decimals: 8,
         };
-        let overrides =
-            compute_conversion_overrides(Some(&est), &src_meta, "USDC", 6, 1_000_000).unwrap();
+        let overrides = compute_conversion_overrides(Some(&est), &src_meta, 6, 1_000_000).unwrap();
         // 102_043_400 / 10^2 = 1_020_434
         assert_eq!(overrides.asset_amount_in, Some(1_020_434));
         assert_eq!(overrides.fee_amount, Some(20_434));
@@ -1407,8 +1320,7 @@ mod tests {
             ticker: "USDB".to_string(),
             decimals: 6,
         };
-        let overrides =
-            compute_conversion_overrides(Some(&est), &src_meta, "USDC", 6, 2_000_000).unwrap();
+        let overrides = compute_conversion_overrides(Some(&est), &src_meta, 6, 2_000_000).unwrap();
         assert_eq!(
             overrides.fee_amount,
             Some(0),
@@ -1495,7 +1407,7 @@ mod tests {
             decimals: 6,
         };
         let overrides =
-            compute_conversion_overrides(Some(&est), &src_meta, "USDC", 6, prepared.estimated_out)
+            compute_conversion_overrides(Some(&est), &src_meta, 6, prepared.estimated_out)
                 .expect("pure helper");
         let response_token_identifier =
             conversion::response_token_identifier(Some(&est), Some("USDB".to_string()));
@@ -1531,7 +1443,7 @@ mod tests {
             decimals: 6,
         };
         let overrides =
-            compute_conversion_overrides(Some(&est), &src_meta, "USDC", 6, prepared.estimated_out)
+            compute_conversion_overrides(Some(&est), &src_meta, 6, prepared.estimated_out)
                 .expect("pure helper");
         let response_token_identifier =
             conversion::response_token_identifier(Some(&est), Some("USDB".to_string()));
@@ -1567,7 +1479,7 @@ mod tests {
             decimals: 6,
         };
         let overrides =
-            compute_conversion_overrides(Some(&est), &src_meta, "USDC", 6, prepared.estimated_out)
+            compute_conversion_overrides(Some(&est), &src_meta, 6, prepared.estimated_out)
                 .expect("pure helper");
         let response_token_identifier =
             conversion::response_token_identifier(Some(&est), Some("USDB".to_string()));
@@ -1589,42 +1501,6 @@ mod tests {
         assert_eq!(amount_in, 1_020_000, "amount_in = USDB debit (override)");
         assert_eq!(asset_amount_in, 1_020_000);
         assert_eq!(fee_amount, 1_020_000 - 1_020);
-        assert_eq!(sttf, 25);
-    }
-
-    #[test_all]
-    fn build_response_feesincluded_conversion_non_stable_pair_passes_provider_values() {
-        // Non-stable destination: overrides are empty so payment_method carries
-        // the provider's own values (sats / source-asset units), not a token
-        // debit.
-        let prepared = mk_prepared(1_050, 25);
-        let est = estimate_with_amount_in(1_020_000, 1_075);
-        let src_meta = SrcTokenMetadata {
-            ticker: "USDB".to_string(),
-            decimals: 6,
-        };
-        let overrides =
-            compute_conversion_overrides(Some(&est), &src_meta, "WETH", 18, prepared.estimated_out)
-                .expect("pure helper");
-        let response_token_identifier =
-            conversion::response_token_identifier(Some(&est), Some("USDB".to_string()));
-        let resp = build_response(
-            prepared,
-            1_075,
-            response_token_identifier,
-            Some(est),
-            FeePolicy::FeesIncluded,
-            &overrides,
-        );
-        assert_eq!(resp.amount, 1_075);
-        let (amount_in, asset_amount_in, fee_amount, sttf) =
-            extract_cross_chain(&resp.payment_method);
-        assert_eq!(
-            amount_in, 1_050,
-            "non-stable: provider invoice flows through"
-        );
-        assert_eq!(asset_amount_in, 1_050);
-        assert_eq!(fee_amount, 30, "non-stable: provider fee flows through");
         assert_eq!(sttf, 25);
     }
 }
