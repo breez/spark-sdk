@@ -12,4 +12,4 @@ pub use cache::CacheStore;
 pub use config::*;
 pub use error::FlashnetError;
 pub use models::*;
-pub use orchestra::OrchestraClient;
+pub use orchestra::{OrchestraClient, OrchestraConfigResolver};

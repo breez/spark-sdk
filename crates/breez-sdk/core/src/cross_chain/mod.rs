@@ -9,7 +9,7 @@ pub(crate) mod boltz_storage_adapter;
 mod orchestra;
 
 pub(crate) use boltz::BoltzService;
-pub(crate) use orchestra::OrchestraService;
+pub(crate) use orchestra::{BreezServerOrchestraConfigResolver, OrchestraService};
 
 use std::collections::HashMap;
 use std::str::FromStr;

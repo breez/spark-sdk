@@ -7,13 +7,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use breez_sdk_common::breez_server::BreezServer;
 use breez_sdk_common::input::CrossChainAddressFamily;
 use chrono::DateTime;
-use flashnet::OrchestraClient;
 use flashnet::orchestra::{
     AmountMode, OrderStatus, QuoteRequest, QuoteResponse, Route, RouteAsset, StatusResponse,
     SubmitResponse,
 };
+use flashnet::{FlashnetError, OrchestraClient, OrchestraConfig, OrchestraConfigResolver};
 use platform_utils::time::{Duration, SystemTime, UNIX_EPOCH};
 use platform_utils::tokio;
 use spark_wallet::SparkWallet;
@@ -55,6 +56,40 @@ fn parse_amount(value: &str, field: &str) -> Result<u128, SdkError> {
 /// How often the background monitor polls in-flight orders.
 const MONITOR_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Resolves the Orchestra config from Breez server.
+///
+/// Fetched lazily on first cross-chain use (not at connect) so a slow or down
+/// server never delays startup for what is an optional provider. A missing or
+/// failed config returns an error that is not cached, so the next cross-chain
+/// action retries: there is no bundled fallback key.
+pub(crate) struct BreezServerOrchestraConfigResolver {
+    breez_server: Arc<BreezServer>,
+}
+
+impl BreezServerOrchestraConfigResolver {
+    pub(crate) fn new(breez_server: Arc<BreezServer>) -> Self {
+        Self { breez_server }
+    }
+}
+
+#[macros::async_trait]
+impl OrchestraConfigResolver for BreezServerOrchestraConfigResolver {
+    async fn resolve(&self) -> Result<OrchestraConfig, FlashnetError> {
+        match self.breez_server.fetch_orchestra_config().await {
+            Ok(Some(cfg)) => Ok(OrchestraConfig {
+                base_url: cfg.base_url,
+                api_key: cfg.api_key,
+            }),
+            Ok(None) => Err(FlashnetError::Generic(
+                "Breez server has no Orchestra config".to_string(),
+            )),
+            Err(e) => Err(FlashnetError::Generic(format!(
+                "Failed to fetch Orchestra config from Breez server: {e}"
+            ))),
+        }
+    }
+}
+
 /// Flashnet Orchestra cross-chain provider.
 pub(crate) struct OrchestraService {
     client: Arc<OrchestraClient>,
@@ -65,12 +100,15 @@ pub(crate) struct OrchestraService {
 
 impl OrchestraService {
     pub(crate) fn new(
-        config: flashnet::OrchestraConfig,
+        config_resolver: Arc<dyn OrchestraConfigResolver>,
         spark_wallet: Arc<SparkWallet>,
         storage: Arc<dyn Storage>,
         shutdown_receiver: watch::Receiver<()>,
     ) -> Self {
-        let client = Arc::new(OrchestraClient::new(config, Arc::clone(&spark_wallet)));
+        let client = Arc::new(OrchestraClient::new(
+            config_resolver,
+            Arc::clone(&spark_wallet),
+        ));
         let (monitor_trigger, _) = broadcast::channel(10);
 
         let service = Self {

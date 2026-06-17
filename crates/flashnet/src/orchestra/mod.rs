@@ -7,5 +7,5 @@
 pub mod client;
 pub mod models;
 
-pub use client::OrchestraClient;
+pub use client::{OrchestraClient, OrchestraConfigResolver};
 pub use models::*;

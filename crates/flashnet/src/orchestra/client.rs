@@ -5,6 +5,7 @@ use std::sync::Arc;
 use bitcoin::hashes::{Hash, sha256};
 use platform_utils::{ContentType, HttpClient, add_content_type_header};
 use spark_wallet::{SparkAddress, SparkWallet, TransferId, TransferTokenOutput};
+use tokio::sync::OnceCell;
 use tracing::debug;
 
 use super::models::{
@@ -20,21 +21,44 @@ const ROUTES_CACHE_KEY: &str = "orchestra_routes";
 /// One hour — Orchestra routes are effectively static between deployments.
 const ROUTES_TTL_MS: u128 = 60 * 60 * 1000;
 
+/// Resolves the Orchestra config (base URL + API key) on demand.
+///
+/// The provider is built without a network call: config is resolved lazily on
+/// the first Orchestra request and cached on success. A failed resolution is
+/// not cached, so a transient outage self-heals on the next cross-chain action.
+#[macros::async_trait]
+pub trait OrchestraConfigResolver: Send + Sync {
+    async fn resolve(&self) -> Result<OrchestraConfig, FlashnetError>;
+}
+
 pub struct OrchestraClient {
-    config: OrchestraConfig,
+    config_resolver: Arc<dyn OrchestraConfigResolver>,
+    config: OnceCell<OrchestraConfig>,
     http_client: platform_utils::DefaultHttpClient,
     cache_store: CacheStore,
     spark_wallet: Arc<SparkWallet>,
 }
 
 impl OrchestraClient {
-    pub fn new(config: OrchestraConfig, spark_wallet: Arc<SparkWallet>) -> Self {
+    pub fn new(
+        config_resolver: Arc<dyn OrchestraConfigResolver>,
+        spark_wallet: Arc<SparkWallet>,
+    ) -> Self {
         Self {
-            config,
+            config_resolver,
+            config: OnceCell::new(),
             http_client: platform_utils::DefaultHttpClient::default(),
             cache_store: CacheStore::default(),
             spark_wallet,
         }
+    }
+
+    /// Resolves the config on first use and caches it. Only success is cached:
+    /// a failure is retried on the next call.
+    async fn config(&self) -> Result<&OrchestraConfig, FlashnetError> {
+        self.config
+            .get_or_try_init(|| self.config_resolver.resolve())
+            .await
     }
 
     /// Fetch all supported cross-chain routes. Responses are cached for
@@ -269,14 +293,15 @@ impl OrchestraClient {
             }
             None => String::new(),
         };
-        let url = format!("{}/{}{}", self.config.base_url, endpoint, query_string);
+        let config = self.config().await?;
+        let url = format!("{}/{}{}", config.base_url, endpoint, query_string);
 
         let mut headers = HashMap::new();
         add_content_type_header(&mut headers, ContentType::Json);
         if authed {
             headers.insert(
                 "Authorization".to_string(),
-                format!("Bearer {}", self.config.api_key),
+                format!("Bearer {}", config.api_key),
             );
         }
         if let Some(token) = read_token {
@@ -306,7 +331,8 @@ impl OrchestraClient {
         S: serde::Serialize,
         D: serde::de::DeserializeOwned,
     {
-        let url = format!("{}/{}", self.config.base_url, endpoint);
+        let config = self.config().await?;
+        let url = format!("{}/{}", config.base_url, endpoint);
         let body_json = serde_json::to_string(body).map_err(|e| {
             FlashnetError::Generic(format!("Failed to serialize orchestra body: {e}"))
         })?;
@@ -316,7 +342,7 @@ impl OrchestraClient {
         if authed {
             headers.insert(
                 "Authorization".to_string(),
-                format!("Bearer {}", self.config.api_key),
+                format!("Bearer {}", config.api_key),
             );
         }
         if let Some(idem) = idempotency_key {
