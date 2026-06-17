@@ -335,8 +335,18 @@ async fn prepare_sats_denominated(
     overpay_bps: u32,
     fee_policy: FeePolicy,
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
-    let provider_amount =
-        resolve_direct_overpay_amount(token_identifier.as_ref(), amount, fee_policy, overpay_bps);
+    let provider_amount = resolve_direct_overpay_amount(amount, fee_policy, overpay_bps);
+    tracing::debug!(
+        provider = ?route.provider,
+        chain = %route.chain,
+        asset = %route.asset,
+        amount,
+        token_identifier = ?token_identifier,
+        provider_slippage_bps,
+        overpay_bps,
+        provider_amount,
+        "Cross-chain dispatcher: prepare_sats_denominated start"
+    );
 
     let service = sdk.cross_chain_context.get(route.provider)?;
     let prepared = service
@@ -361,20 +371,14 @@ async fn prepare_sats_denominated(
 }
 
 /// Returns the amount to hand the provider on the no-conversion path.
-/// Inflated when the policy is `FeesExcluded` and the user supplied a
-/// `token_identifier` (USD-stable source bridging to a USD-stable destination,
-/// which the route filter enforces). BTC-source sends and `FeesIncluded`
-/// ("send all") pass through unchanged.
-fn resolve_direct_overpay_amount(
-    token_identifier: Option<&String>,
-    amount: u128,
-    fee_policy: FeePolicy,
-    overpay_bps: u32,
-) -> u128 {
-    if overpay_bps == 0
-        || !matches!(fee_policy, FeePolicy::FeesExcluded)
-        || token_identifier.is_none()
-    {
+/// Inflated when the policy is `FeesExcluded`: the caller asked for delivery
+/// at-or-above target, so we pad the source to absorb provider slippage. The
+/// route filter at the SDK aggregator ensures destinations are USD-pegged,
+/// so the parity assumption holds for both BTC-source (sats fiat-inverted
+/// inside the provider) and stable-token-source (parity rescale). `FeesIncluded`
+/// ("send all") passes through unchanged.
+fn resolve_direct_overpay_amount(amount: u128, fee_policy: FeePolicy, overpay_bps: u32) -> u128 {
+    if overpay_bps == 0 || !matches!(fee_policy, FeePolicy::FeesExcluded) {
         return amount;
     }
     inflate_target_amount(amount, overpay_bps)
