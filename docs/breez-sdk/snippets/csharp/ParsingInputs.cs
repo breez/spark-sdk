@@ -73,6 +73,12 @@ namespace BreezSdkSnippets
                     }
                     break;
 
+                case InputType.CrossChainAddress crossChainAddress:
+                    var crossChainDetails = crossChainAddress.v1;
+                    Console.WriteLine($"Input is cross-chain address {crossChainDetails.address} " +
+                                    $"({crossChainDetails.addressFamily})");
+                    break;
+
                     // Other input types are available
             }
             // ANCHOR_END: parse-inputs

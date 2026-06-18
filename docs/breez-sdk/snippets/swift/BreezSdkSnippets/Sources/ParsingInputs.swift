@@ -49,6 +49,9 @@ func parseInput(sdk: BreezSdk) async throws {
                 print("  Sender public key: \(senderPublicKey)")
             }
 
+        case .crossChainAddress(v1: let details):
+            print("Input is cross-chain address \(details.address) (\(details.addressFamily))")
+
         default:
             break  // Other input types are available
         }

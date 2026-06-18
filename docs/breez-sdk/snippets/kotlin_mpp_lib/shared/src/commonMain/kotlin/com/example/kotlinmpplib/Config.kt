@@ -116,4 +116,19 @@ class Config {
         // ANCHOR_END: config-background-tasks
         println("Config: $config")
     }
+
+    fun configureCrossChain() {
+        // ANCHOR: cross-chain-config
+        val config = defaultConfig(Network.MAINNET)
+        config.apiKey = "<breez api key>"
+
+        // Override the default slippage tolerance (basis points; 10 to 500).
+        // Set crossChainConfig to null to disable the feature.
+        config.crossChainConfig = CrossChainConfig(
+            defaultSlippageBps = 50u,
+            defaultTargetOverpayBps = null,
+        )
+        // ANCHOR_END: cross-chain-config
+        println("Config: $config")
+    }
 }

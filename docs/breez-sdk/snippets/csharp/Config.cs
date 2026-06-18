@@ -133,5 +133,21 @@ namespace BreezSdkSnippets
             };
             // ANCHOR_END: config-background-tasks
         }
+
+        void ConfigureCrossChain()
+        {
+            // ANCHOR: cross-chain-config
+            // Override the default slippage tolerance (basis points; 10 to 500).
+            // Set crossChainConfig to null to disable the feature.
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                apiKey = "<breez api key>",
+                crossChainConfig = new CrossChainConfig(
+                    defaultSlippageBps: 50,
+                    defaultTargetOverpayBps: null)
+            };
+            // ANCHOR_END: cross-chain-config
+            Console.WriteLine($"Config: {config}");
+        }
     }
 }

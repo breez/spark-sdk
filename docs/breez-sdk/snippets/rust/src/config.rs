@@ -134,3 +134,19 @@ pub(crate) fn configure_background_tasks() -> Result<()> {
     info!("Config: {:?}", config);
     Ok(())
 }
+
+pub(crate) fn configure_cross_chain() -> Result<()> {
+    // ANCHOR: cross-chain-config
+    let mut config = default_config(Network::Mainnet);
+    config.api_key = Some("<breez api key>".to_string());
+
+    // Override the default slippage tolerance (basis points; 10 to 500).
+    // Set cross_chain_config to None to disable the feature.
+    config.cross_chain_config = Some(CrossChainConfig {
+        default_slippage_bps: Some(50),
+        default_target_overpay_bps: None,
+    });
+    // ANCHOR_END: cross-chain-config
+    info!("Config: {config:?}");
+    Ok(())
+}

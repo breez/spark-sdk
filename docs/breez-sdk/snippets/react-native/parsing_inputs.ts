@@ -53,6 +53,9 @@ const parseInputs = async (sdk: BreezSdk) => {
     if (invoice.senderPublicKey != null) {
       console.log(`  Sender public key: ${invoice.senderPublicKey}`)
     }
+  } else if (input.tag === InputType_Tags.CrossChainAddress) {
+    const details = input.inner[0]
+    console.log(`Input is cross-chain address ${details.address} (${details.addressFamily})`)
   } else {
     // Other input types are available
   }

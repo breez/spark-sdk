@@ -1,6 +1,7 @@
 mod buying_bitcoin;
 mod config;
 mod contacts;
+mod cross_chain;
 mod external_signer;
 mod fiat_currencies;
 mod getting_started;

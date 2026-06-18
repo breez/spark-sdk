@@ -118,11 +118,27 @@ const exampleConfigureBackgroundTasks = () => {
   console.log('Config:', config)
 }
 
+const exampleConfigureCrossChain = async () => {
+  // ANCHOR: cross-chain-config
+  const config = defaultConfig(Network.Mainnet)
+  config.apiKey = '<breez api key>'
+
+  // Override the default slippage tolerance (basis points; 10 to 500).
+  // Set crossChainConfig to undefined to disable the feature.
+  config.crossChainConfig = {
+    defaultSlippageBps: 50,
+    defaultTargetOverpayBps: undefined
+  }
+  // ANCHOR_END: cross-chain-config
+  console.debug('Config:', config)
+}
+
 export {
   exampleConfigureSdk,
   exampleConfigurePrivateEnabledDefault,
   exampleConfigureOptimizationConfiguration,
   exampleConfigureStableBalance,
   exampleConfigureSparkConfig,
-  exampleConfigureBackgroundTasks
+  exampleConfigureBackgroundTasks,
+  exampleConfigureCrossChain
 }

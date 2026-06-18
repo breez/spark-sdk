@@ -65,6 +65,8 @@ When you [prepare to send a payment](./send_payment.md#preparing-payments) witho
 1. If you have enough bitcoin balance, no conversion is needed
 2. If your bitcoin balance is insufficient, the SDK configures conversion options using your Stable Balance settings (token identifier and slippage)
 
+The same flow extends to [USD stablecoins](./send_payment.md#usd-stablecoins): when paying a recipient on USDC, USDT, or USDT0, the SDK can spend the user's USDB balance directly (Orchestra routes that accept USDB as source) or auto-convert it through bitcoin if the chosen route only accepts sats.
+
 <div class="warning">
 <h4>Developer note</h4>
 

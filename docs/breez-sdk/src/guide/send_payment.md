@@ -57,6 +57,20 @@ Spark invoices may require a token (non-Bitcoin) as the payment asset. To determ
 
 {{#tabs send_payment:prepare-send-payment-spark-invoice}}
 
+## USD stablecoins
+
+Send USD-denominated value from a Spark wallet to a USD-pegged stablecoin (USDC, USDT, USDT0) on one of several supported chains: Ethereum-family chains (Arbitrum, Base, and similar EVM networks), Solana, and Tron. The source on the Spark side is BTC sats or USDB; the destination is always one of the supported USD stablecoins on a supported chain. This feature must be enabled in [the SDK configuration](./config.md#cross-chain-payments) before using. See [USD payments](./cross_chain.md) for provider details and the status lifecycle.
+
+After [parsing](./parse.md) the recipient address into {{#enum InputType::CrossChainAddress}}, call {{#name get_cross_chain_routes}} with {{#enum CrossChainRouteFilter::Send}} carrying the parsed {{#name CrossChainAddressDetails}}. The returned {{#name CrossChainRoutePair}}s name the provider, destination chain and asset, decimals, optional token contract address, and which source assets (BTC sats or USDB) each route accepts.
+
+{{#tabs cross_chain:cross-chain-get-routes}}
+
+Build {{#enum PaymentRequest::CrossChain}} with the recipient address, the chosen route, and an optional {{#name max_slippage_bps}} (10 to 500 basis points). The amount on the prepare request is denominated in the source asset's base units: sats for a BTC source, USDB base units for a USDB source.
+
+The prepare response carries a quote {{#name expires_at}} timestamp. Re-prepare and pick a fresh route if it lapses before send.
+
+{{#tabs cross_chain:cross-chain-prepare}}
+
 ## Fee Policy
 
 By default, fees are added on top of the amount ({{#enum FeePolicy::FeesExcluded}}). Use {{#enum FeePolicy::FeesIncluded}} to deduct fees from the amount instead—the receiver gets the amount minus fees.
@@ -105,6 +119,12 @@ In the optional send payment options for Spark addresses, you can set:
 
 {{#tabs send_payment:send-payment-spark}}
 
+## Cross-chain
+
+Cross-chain has no additional send payment options.
+
+{{#tabs cross_chain:cross-chain-send}}
+
 ## Event Flows
 
 Once a send payment is initiated, you can follow and react to the different payment events using the guide below for each payment method. See [listening to events](/guide/events.html) for how to subscribe to events. 
@@ -131,3 +151,10 @@ The {{#enum SdkEvent::Synced}} event is also emitted as the SDK syncs in the bac
 | Event                | Description                     | UX Suggestion                                    |
 | -------------------- | ------------------------------- | ------------------------------------------------ |
 | **PaymentSucceeded** | The Spark transfer is complete. | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |
+
+#### Cross-chain
+
+| Event                | Description                                                                                              | UX Suggestion                                    |
+| -------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| **PaymentPending**   | The deposit transfer has been submitted to the provider. The cross-chain leg is awaiting settlement.     | Show payment as pending; the bridge leg may take several minutes depending on the provider and destination chain. |
+| **PaymentSucceeded** | The provider reports the cross-chain order terminal. The amount actually delivered to the recipient is carried on the conversion info. | Show the payment as complete and call {{#name get_info}} to read the updated balance. The SDK refreshes the cached balance before emitting this event. See [fetching the balance](/guide/get_info.md). |

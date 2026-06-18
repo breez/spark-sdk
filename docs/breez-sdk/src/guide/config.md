@@ -148,3 +148,18 @@ For server environments or applications that receive a high volume of incoming p
 The SDK can convert Bitcoin to a stable token on receive and vice versa on send, protecting against price volatility. Configure the available tokens, default behavior, conversion threshold, and slippage tolerance. See the [Stable balance](./stable_balance.md) guide for full details.
 
 {{#tabs config:stable-balance-config}}
+
+## Cross-chain payments
+
+Cross-chain USD sends require explicit opt-in: {{#name default_config}} leaves {{#name cross_chain_config}} unset. Set it to a default {{#name CrossChainConfig}} to enable the feature, or to your own to override the slippage default. The SDK only returns routes whose destination is a USD-pegged stablecoin (USDC, USDT, USDT0) on a supported chain.
+
+Constraints:
+
+- **Mainnet only**: {{#name validate}} rejects a set {{#name cross_chain_config}} on any network other than mainnet.
+- **Background tasks required**: both providers run background monitors that reconcile delivery status onto the local payment row, so {{#name cross_chain_config}} is incompatible with {{#name background_tasks_enabled}} disabled. {{#name default_server_config}} leaves the field unset for this reason.
+
+{{#tabs config:cross-chain-config}}
+
+The {{#name default_slippage_bps}} field sets the per-instance slippage default applied when the per-request {{#name max_slippage_bps}} is unset. It must be in the 10 to 500 basis-point range; when {{#name default_slippage_bps}} itself is unset, the SDK falls back to a built-in default of 100 bps (1%).
+
+See [USD payments](./cross_chain.md) for the provider lineup, status lifecycle, retry-safety semantics, and limitations.

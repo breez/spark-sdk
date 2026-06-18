@@ -110,9 +110,14 @@ impl SnippetsProcessor {
         }
     }
 
-    /// Expand {{#name identifier}} to language-aware HTML
+    /// Expand {{#name identifier}} to language-aware HTML.
+    ///
+    /// Supports two dotted shapes:
+    /// - `Type.method` — prefix starts uppercase, treated as a type/class
+    ///   name and emitted verbatim across all languages.
+    /// - `field.subfield` — prefix starts lowercase, treated as a snake_case
+    ///   field path and case-converted alongside the trailing segment.
     fn expand_name(identifier: &str) -> String {
-        // Handle Type.method syntax
         let (type_prefix, method) = identifier
             .split_once('.')
             .map(|(t, m)| (Some(t), m))
@@ -122,24 +127,43 @@ impl SnippetsProcessor {
         let camel = Self::to_camel_case(method);
         let pascal = capitalize_first(method);
 
-        // Generate spans for each language group
-        let variants = [
-            ("rust", &snake),
-            ("python", &snake),
-            ("swift", &camel),
-            ("kotlin", &camel),
-            ("javascript", &camel),
-            ("react-native", &camel),
-            ("flutter", &camel),
-            ("go", &pascal),
-            ("csharp", &pascal),
+        // Pre-compute prefix in each casing flavor. For a Type prefix
+        // (starts uppercase), all three are identical to the original. For a
+        // field prefix (starts lowercase), they follow the method's casing
+        // per language.
+        let prefix_cases = type_prefix.map(|t| {
+            let is_type = t.starts_with(|c: char| c.is_uppercase());
+            if is_type {
+                (t.to_string(), t.to_string(), t.to_string())
+            } else {
+                (
+                    t.to_string(),                     // snake (rust, python)
+                    Self::to_camel_case(t),            // camel (swift, kotlin, js, rn, flutter)
+                    capitalize_first(t),               // pascal (go, csharp)
+                )
+            }
+        });
+
+        // (language tag, method-casing, prefix-casing)
+        let variants: [(&str, &String, Option<&String>); 9] = [
+            ("rust", &snake, prefix_cases.as_ref().map(|p| &p.0)),
+            ("python", &snake, prefix_cases.as_ref().map(|p| &p.0)),
+            ("swift", &camel, prefix_cases.as_ref().map(|p| &p.1)),
+            ("kotlin", &camel, prefix_cases.as_ref().map(|p| &p.1)),
+            ("javascript", &camel, prefix_cases.as_ref().map(|p| &p.1)),
+            ("react-native", &camel, prefix_cases.as_ref().map(|p| &p.1)),
+            ("flutter", &camel, prefix_cases.as_ref().map(|p| &p.1)),
+            ("go", &pascal, prefix_cases.as_ref().map(|p| &p.2)),
+            ("csharp", &pascal, prefix_cases.as_ref().map(|p| &p.2)),
         ];
 
         let spans: String = variants
             .iter()
-            .map(|(lang, variant_name)| {
-                let display =
-                    type_prefix.map_or_else(|| (*variant_name).to_string(), |t| format!("{}.{}", t, variant_name));
+            .map(|(lang, method_name, prefix)| {
+                let display = match prefix {
+                    Some(p) => format!("{}.{}", p, method_name),
+                    None => (*method_name).clone(),
+                };
                 format!("<span class=\"fn-{}\">{}</span>", lang, display)
             })
             .collect();

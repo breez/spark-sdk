@@ -4,6 +4,8 @@ The SDK provides a versatile and extensible parsing module designed to process a
 
 Natively supported formats include: BOLT11 invoices, LNURLs of different types, Bitcoin addresses, Spark addresses, and others. For the complete list, consult the [API documentation](https://breez.github.io/spark-sdk/breez_sdk_spark/enum.InputType.html).
 
+Cross-chain destinations on EVM, Solana, and Tron — bare addresses or chain-prefixed URIs — parse to {{#enum InputType::CrossChainAddress}}, carrying the parsed address family along with any token contract address and amount embedded in the URI. Use the resulting {{#name CrossChainAddressDetails}} to discover available routes; see [USD stablecoins](./send_payment.md#usd-stablecoins) for the send flow.
+
 <div class="warning">
 <h4>Developer note</h4>
 The amounts returned from calling parse on Lightning based inputs (BOLT11, LNURL) are denominated in millisatoshi.

@@ -114,3 +114,18 @@ void configureBackgroundTasks() {
   // ANCHOR_END: config-background-tasks
   print(config);
 }
+
+void configureCrossChain() {
+  // ANCHOR: cross-chain-config
+  // Override the default slippage tolerance (basis points; 10 to 500).
+  // Set crossChainConfig to null to disable the feature.
+  final config = defaultConfig(network: Network.mainnet).copyWith(
+    apiKey: "<breez api key>",
+    crossChainConfig: const CrossChainConfig(
+      defaultSlippageBps: 50,
+      defaultTargetOverpayBps: null,
+    ),
+  );
+  // ANCHOR_END: cross-chain-config
+  print("Config: $config");
+}
