@@ -286,9 +286,8 @@ impl DepositService {
             &quote_signature.serialize_der(),
         );
 
-        // The signer exports the static-deposit secret (the SSP co-signs and
-        // needs it in the clear) and signs the user-statement with the
-        // identity key.
+        // The signer exports the static-deposit secret and signs the
+        // user-statement with the identity key.
         let PreparedStaticDepositClaim {
             deposit_secret_key,
             user_signature,
