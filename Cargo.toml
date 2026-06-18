@@ -226,6 +226,7 @@ tonic = { version = "0.12.3", default-features = false }
 # Cross-platform; only the static-deposit key-export path uses it.
 turnkey_enclave_encrypt = "0.7"
 tonic-build = { version = "0.12.3", features = ["prost"] }
+tonic-types = "0.12.3"
 tonic-web-wasm-client = "0.6"
 tower-service = "0.3.3"
 tracing = "0.1.41"

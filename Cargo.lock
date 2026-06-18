@@ -5237,6 +5237,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tonic",
+ "tonic-types",
  "tracing",
  "uuid",
 ]
@@ -5947,6 +5948,17 @@ dependencies = [
  "prost-types",
  "quote 1.0.45",
  "syn",
+]
+
+[[package]]
+name = "tonic-types"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0081d8ee0847d01271392a5aebe960a4600f5d4da6c67648a6382a0940f8b367"
+dependencies = [
+ "prost",
+ "prost-types",
+ "tonic",
 ]
 
 [[package]]

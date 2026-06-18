@@ -18,6 +18,7 @@ spark.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
 tonic.workspace = true
+tonic-types.workspace = true
 tracing.workspace = true
 
 # Non-Wasm dependencies
