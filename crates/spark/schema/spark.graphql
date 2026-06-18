@@ -95,7 +95,10 @@ input ClaimStaticDepositInput {
   max_fee_sats: Long
 
   """The deposit key of the user."""
-  deposit_secret_key: String!
+  deposit_secret_key: String
+
+  """The ECIES-encrypted deposit key of the user."""
+  encrypted_deposit_secret_key: String
 
   """The signature of the claim provided by the user."""
   signature: String!

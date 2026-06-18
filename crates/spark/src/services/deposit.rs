@@ -300,6 +300,20 @@ impl DepositService {
             })
             .await?;
 
+        // The SSP co-signs the claim and so needs the static-deposit secret.
+        // Send it ECIES-encrypted to the SSP identity public key (same scheme as
+        // transfer leaf secret ciphers) instead of in cleartext over GraphQL.
+        let encrypted_deposit_secret_key = utils::ecies::encrypt(
+            &self
+                .ssp_client
+                .identity_public_key()
+                .serialize_uncompressed(),
+            &deposit_secret_key.secret_bytes(),
+        )
+        .map_err(|e| {
+            ServiceError::Generic(format!("ECIES encryption of deposit key failed: {e}"))
+        })?;
+
         // Call the service provider to claim the static deposit
         let resp = self
             .ssp_client
@@ -310,7 +324,8 @@ impl DepositService {
                 credit_amount_sats: Some(credit_amount_sats),
                 request_type: ClaimStaticDepositRequestType::FixedAmount,
                 max_fee_sats: None,
-                deposit_secret_key: hex::encode(deposit_secret_key.secret_bytes()),
+                deposit_secret_key: None,
+                encrypted_deposit_secret_key: Some(hex::encode(encrypted_deposit_secret_key)),
                 quote_signature: quote_signature.serialize_der().to_string(),
                 signature: user_signature.serialize_der().to_string(),
             })
