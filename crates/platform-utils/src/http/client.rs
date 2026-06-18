@@ -30,21 +30,34 @@ impl ReqwestHttpClient {
     /// Native targets layer HTTP/2 and TCP keepalives on top of reqwest's
     /// defaults (uncapped idle pool, 90s idle timeout, `TCP_NODELAY`) so a
     /// long-lived shared client survives intermediaries that reap idle HTTP/2
-    /// flows. On WASM the browser owns connection management and these knobs
-    /// aren't exposed.
+    /// flows, and apply the caller's user agent.
+    ///
+    /// On WASM both are skipped. The browser owns connection management, and a
+    /// script-set `User-Agent` is not CORS-safelisted, so it turns an otherwise
+    /// simple request into a preflighted one: Chrome silently drops the header
+    /// (crbug.com/571722) while Firefox/Safari send it and then fail the
+    /// preflight against an endpoint that doesn't allow it. The browser sends
+    /// its own `User-Agent` regardless, so omitting it loses nothing.
+    // `user_agent` is intentionally unused on WASM (see above); the signature
+    // stays uniform across targets.
+    #[cfg_attr(
+        all(target_family = "wasm", target_os = "unknown"),
+        expect(clippy::needless_pass_by_value, unused_variables)
+    )]
     pub fn new(user_agent: Option<String>) -> Self {
-        let mut builder = reqwest::Client::builder();
-        if let Some(ua) = user_agent {
-            builder = builder.user_agent(ua);
-        }
+        let builder = reqwest::Client::builder();
         #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-        {
-            builder = builder
+        let builder = {
+            let mut builder = builder;
+            if let Some(ua) = user_agent {
+                builder = builder.user_agent(ua);
+            }
+            builder
                 .tcp_keepalive(Some(Duration::from_mins(1)))
                 .http2_keep_alive_interval(Duration::from_secs(30))
                 .http2_keep_alive_timeout(Duration::from_secs(10))
-                .http2_keep_alive_while_idle(true);
-        }
+                .http2_keep_alive_while_idle(true)
+        };
         let client = match builder.build() {
             Ok(client) => client,
             Err(e) => {
