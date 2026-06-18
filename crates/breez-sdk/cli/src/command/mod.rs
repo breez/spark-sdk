@@ -694,6 +694,7 @@ pub(crate) async fn execute_command(
                         address,
                         route,
                         max_slippage_bps: cross_chain_max_slippage_bps,
+                        target_overpay_bps: None,
                     }
                 }
                 _ => PaymentRequest::Input {
@@ -746,24 +747,28 @@ pub(crate) async fn execute_command(
                 ref route,
                 ref recipient_address,
                 amount_in,
+                asset_amount_in,
                 estimated_out,
                 fee_amount,
-                ref fee_asset,
+                service_fee_amount,
+                ref service_fee_asset,
                 source_transfer_fee_sats,
                 ..
             } = prepare_response.payment_method
             {
-                let fee_denom = fee_asset.as_deref().unwrap_or("sats");
+                let service_fee_denom = service_fee_asset.as_deref().unwrap_or("sats");
                 let denomination = if token_identifier.is_some() {
                     "token base units"
                 } else {
                     "sats"
                 };
                 println!(
-                    "Cross-chain send: {amount_in} {denomination} → ~{estimated_out} {} on {} to {recipient_address}",
-                    route.asset, route.chain,
+                    "Cross-chain send: {amount_in} {denomination} (~{asset_amount_in} {}) \
+                    → ~{estimated_out} {} on {} to {recipient_address}",
+                    route.asset, route.asset, route.chain,
                 );
-                println!("Fee: {fee_amount} {fee_denom}");
+                println!("Fee (total, in {}): {fee_amount}", route.asset);
+                println!("Service fee: {service_fee_amount} {service_fee_denom}");
                 println!("Source transfer fee: {source_transfer_fee_sats} sats");
                 let line = rl
                     .readline_with_initial("Do you want to continue (y/n): ", ("y", ""))?

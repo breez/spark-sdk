@@ -4,15 +4,34 @@ use crate::{
     ConversionEstimate, ConversionOptions, ConversionType, CrossChainFeeMode, CrossChainRoutePair,
     FeePolicy, SendPaymentMethod,
     cross_chain::{
-        DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
-        MIN_CROSS_CHAIN_SLIPPAGE_BPS, SourceAsset,
+        DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS, DEFAULT_TARGET_OVERPAY_BPS, MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+        MAX_TARGET_OVERPAY_BPS, MIN_CROSS_CHAIN_SLIPPAGE_BPS, MIN_TARGET_OVERPAY_BPS, SourceAsset,
+        convert_destination_amount_to_sats, fetch_btc_usd_rate, rescale_decimals,
     },
     error::SdkError,
     models::PrepareSendPaymentResponse,
     sdk::BreezSdk,
+    token_conversion::ConversionAmount,
 };
 
 use super::super::{conversion, validation};
+
+/// Dispatcher-side overrides for response fields. `None` leaves the
+/// provider's value through; `Some` replaces it with a user-facing figure
+/// (e.g. AMM-derived token debit in place of provider-leg sats).
+#[derive(Default)]
+struct PrepareResponseOverrides {
+    amount_in: Option<u128>,
+    asset_amount_in: Option<u128>,
+    fee_amount: Option<u128>,
+}
+
+/// Source-token ticker + decimals from the wallet's balances. Ticker drives
+/// the USD-stable check; decimals drive the par-rescale.
+struct SrcTokenMetadata {
+    ticker: String,
+    decimals: u32,
+}
 
 /// Human-readable label for a [`input::CrossChainAddressFamily`] suitable
 /// for user-facing error messages.
@@ -134,20 +153,35 @@ fn resolve_slippage_bps(
         .unwrap_or(DEFAULT_CROSS_CHAIN_SLIPPAGE_BPS))
 }
 
-/// Decides whether the source path requires the converted-sats budget to be
-/// treated as `FeesIncluded`.
+/// Resolves the target-overpay bps to apply on `FeesExcluded` conversion sends.
 ///
-/// Conversion sends have no coherent partition for `FeesExcluded`: the
-/// wallet's only sats budget comes from the AMM output, so fees can only
-/// come out of that budget. Force `FeesIncluded` regardless of what the
-/// caller passed — keeps the stable-balance illusion intact for callers
-/// that default to `FeesExcluded` for sat sends.
-fn effective_fee_policy(is_conversion: bool, requested: FeePolicy) -> FeePolicy {
-    if is_conversion {
-        FeePolicy::FeesIncluded
-    } else {
-        requested
+/// Same precedence as slippage: caller-supplied value (bounds-checked here),
+/// then the config default, then the built-in default. Config defaults are
+/// validated at SDK startup in `Config::validate`.
+fn resolve_target_overpay_bps(
+    requested: Option<u32>,
+    config_default: Option<u32>,
+) -> Result<u32, SdkError> {
+    if let Some(bps) = requested
+        && !(MIN_TARGET_OVERPAY_BPS..=MAX_TARGET_OVERPAY_BPS).contains(&bps)
+    {
+        return Err(SdkError::InvalidInput(format!(
+            "target_overpay_bps {bps} must be in \
+             {MIN_TARGET_OVERPAY_BPS}..={MAX_TARGET_OVERPAY_BPS}",
+        )));
     }
+    Ok(requested
+        .or(config_default)
+        .unwrap_or(DEFAULT_TARGET_OVERPAY_BPS))
+}
+
+/// Inflates a destination amount by `overpay_bps` so the recipient lands at
+/// or above target despite provider slippage. `overpay_bps == 0` is identity.
+fn inflate_target_amount(amount: u128, overpay_bps: u32) -> u128 {
+    if overpay_bps == 0 {
+        return amount;
+    }
+    amount.saturating_add(amount.saturating_mul(u128::from(overpay_bps)) / 10_000)
 }
 
 /// Runs the token-conversion estimate for the source leg and validates the
@@ -201,6 +235,7 @@ pub(crate) async fn prepare(
     conversion_options: Option<ConversionOptions>,
     fee_policy: FeePolicy,
     max_slippage_bps: Option<u32>,
+    target_overpay_bps: Option<u32>,
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
     validate_request(amount, conversion_options.as_ref())?;
 
@@ -215,6 +250,13 @@ pub(crate) async fn prepare(
             .cross_chain_config
             .as_ref()
             .and_then(|c| c.default_slippage_bps),
+    )?;
+    let overpay_bps = resolve_target_overpay_bps(
+        target_overpay_bps,
+        sdk.config
+            .cross_chain_config
+            .as_ref()
+            .and_then(|c| c.default_target_overpay_bps),
     )?;
 
     // Source-selection decision tree → effective conversion options.
@@ -232,65 +274,418 @@ pub(crate) async fn prepare(
         effective_conversion_options.as_ref(),
     )?;
 
-    let effective_fee_policy =
-        effective_fee_policy(effective_conversion_options.is_some(), fee_policy);
+    match (effective_conversion_options.as_ref(), fee_policy) {
+        (None, _) => {
+            prepare_sats_denominated(
+                sdk,
+                address,
+                route,
+                amount,
+                token_identifier,
+                provider_slippage_bps,
+                overpay_bps,
+                fee_policy,
+            )
+            .await
+        }
+        (Some(opts), FeePolicy::FeesIncluded) => {
+            prepare_token_denominated_fees_included(
+                sdk,
+                address,
+                route,
+                amount,
+                token_identifier.as_ref(),
+                opts,
+                provider_slippage_bps,
+            )
+            .await
+        }
+        (Some(opts), FeePolicy::FeesExcluded) => {
+            prepare_token_denominated_fees_excluded(
+                sdk,
+                address,
+                route,
+                amount,
+                token_identifier.as_ref(),
+                opts,
+                provider_slippage_bps,
+                overpay_bps,
+            )
+            .await
+        }
+    }
+}
 
-    let fee_mode = match effective_fee_policy {
-        FeePolicy::FeesExcluded => CrossChainFeeMode::FeesExcluded,
-        FeePolicy::FeesIncluded => CrossChainFeeMode::FeesIncluded,
-    };
+/// No-conversion path: `amount` is in the route's source-asset units. The
+/// provider's `prepared` flows straight to the response.
+///
+/// For `FeesExcluded` with a USD-stable token source bridging to a USD-stable
+/// destination, inflates `amount` by `overpay_bps` so the provider sizes the
+/// quote against a slightly higher target. `response.amount` keeps the
+/// user's original input; `payment_method.amount_in` reflects the actual
+/// debit after the provider's own fee scaling.
+#[allow(clippy::too_many_arguments)]
+async fn prepare_sats_denominated(
+    sdk: &BreezSdk,
+    address: &str,
+    route: &CrossChainRoutePair,
+    amount: u128,
+    token_identifier: Option<String>,
+    provider_slippage_bps: u32,
+    overpay_bps: u32,
+    fee_policy: FeePolicy,
+) -> Result<PrepareSendPaymentResponse, SdkError> {
+    let provider_amount = resolve_direct_overpay_amount(amount, fee_policy, overpay_bps);
+    tracing::debug!(
+        provider = ?route.provider,
+        chain = %route.chain,
+        asset = %route.asset,
+        amount,
+        token_identifier = ?token_identifier,
+        provider_slippage_bps,
+        overpay_bps,
+        provider_amount,
+        "Cross-chain dispatcher: prepare_sats_denominated start"
+    );
 
-    // Provider-leg amount + conversion-estimate metadata.
-    //
-    // `source_token_identifier` is `None` on the conversion path because the
-    // converted output is sats — both the provider leg and the response use
-    // it directly without a token denomination.
-    let (provider_amount, conversion_estimate, source_token_identifier) =
-        match effective_conversion_options.as_ref() {
-            Some(opts) => {
-                let (sats, estimate) = estimate_and_validate_conversion(
-                    sdk,
-                    opts,
-                    token_identifier.as_ref(),
-                    amount,
-                    effective_fee_policy,
-                )
-                .await?;
-                (sats, estimate, None)
-            }
-            None => (amount, None, token_identifier.clone()),
-        };
-
-    let service = sdk.cross_chain_providers.get(route.provider)?;
+    let service = sdk.cross_chain_context.get(route.provider)?;
     let prepared = service
         .prepare(
             address,
             route,
             provider_amount,
-            source_token_identifier.clone(),
+            token_identifier.clone(),
             provider_slippage_bps,
-            fee_mode,
+            fee_policy.into(),
+        )
+        .await?;
+    let response_token_identifier = conversion::response_token_identifier(None, token_identifier);
+    Ok(build_response(
+        prepared,
+        amount,
+        response_token_identifier,
+        None,
+        fee_policy,
+        &PrepareResponseOverrides::default(),
+    ))
+}
+
+/// Returns the amount to hand the provider on the no-conversion path.
+/// Inflated when the policy is `FeesExcluded`: the caller asked for delivery
+/// at-or-above target, so we pad the source to absorb provider slippage. The
+/// route filter at the SDK aggregator ensures destinations are USD-pegged,
+/// so the parity assumption holds for both BTC-source (sats fiat-inverted
+/// inside the provider) and stable-token-source (parity rescale). `FeesIncluded`
+/// ("send all") passes through unchanged.
+fn resolve_direct_overpay_amount(amount: u128, fee_policy: FeePolicy, overpay_bps: u32) -> u128 {
+    if overpay_bps == 0 || !matches!(fee_policy, FeePolicy::FeesExcluded) {
+        return amount;
+    }
+    inflate_target_amount(amount, overpay_bps)
+}
+
+/// Conversion + `FeesIncluded` ("send all"): `amount` is the user's
+/// source-token budget (USDB base units). The AMM `AmountIn` step converts
+/// it to a sats budget that the provider treats as send-all; the recipient
+/// gets the post-fee remainder.
+async fn prepare_token_denominated_fees_included(
+    sdk: &BreezSdk,
+    address: &str,
+    route: &CrossChainRoutePair,
+    amount: u128,
+    token_identifier: Option<&String>,
+    conversion_options: &ConversionOptions,
+    provider_slippage_bps: u32,
+) -> Result<PrepareSendPaymentResponse, SdkError> {
+    // The conversion path always converts FROM a token; the authoritative id
+    // lives on `conversion_options`. Upstream `validate_request` rejects the
+    // `FromBitcoin` variant, so this match is structurally exhaustive.
+    let ConversionType::ToBitcoin {
+        from_token_identifier,
+    } = &conversion_options.conversion_type
+    else {
+        return Err(SdkError::Generic(
+            "Cross-chain conversion path requires ToBitcoin options".to_string(),
+        ));
+    };
+    // Fetched up front: cheap wallet check before the provider quote.
+    let src_meta = src_token_metadata(sdk, from_token_identifier).await?;
+
+    let (sats, conversion_estimate) = estimate_and_validate_conversion(
+        sdk,
+        conversion_options,
+        token_identifier,
+        amount,
+        FeePolicy::FeesIncluded,
+    )
+    .await?;
+
+    let service = sdk.cross_chain_context.get(route.provider)?;
+    let prepared = service
+        .prepare(
+            address,
+            route,
+            sats,
+            None,
+            provider_slippage_bps,
+            CrossChainFeeMode::FeesIncluded,
         )
         .await?;
 
-    Ok(PrepareSendPaymentResponse {
+    // USD-stable pairs: surface the token-side debit. Non-stable: provider
+    // values flow through.
+    let overrides = compute_conversion_overrides(
+        conversion_estimate.as_ref(),
+        &src_meta,
+        route.decimals.into(),
+        prepared.estimated_out,
+    )?;
+
+    let response_token_identifier = conversion::response_token_identifier(
+        conversion_estimate.as_ref(),
+        token_identifier.cloned(),
+    );
+    Ok(build_response(
+        prepared,
+        sats,
+        response_token_identifier,
+        conversion_estimate,
+        FeePolicy::FeesIncluded,
+        &overrides,
+    ))
+}
+
+/// Conversion + `FeesExcluded` ("fees on top"): `amount` is the user's
+/// source-token budget (USDB base units). USD-stable parity is what lets
+/// the same magnitude double as the destination delivery target — the
+/// math below assumes that, and the non-USD gate enforces it.
+///
+/// Pipeline: fiat-invert the (parity-equivalent) destination target to a
+/// sats target (no AMM spread), get the inflated invoice sats from the
+/// provider, then reverse-estimate the AMM to find the wallet token debit.
+/// Non-USD pairs downgrade to `FeesIncluded`.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+async fn prepare_token_denominated_fees_excluded(
+    sdk: &BreezSdk,
+    address: &str,
+    route: &CrossChainRoutePair,
+    amount: u128,
+    token_identifier: Option<&String>,
+    conversion_options: &ConversionOptions,
+    provider_slippage_bps: u32,
+    overpay_bps: u32,
+) -> Result<PrepareSendPaymentResponse, SdkError> {
+    tracing::debug!(
+        provider = ?route.provider,
+        chain = %route.chain,
+        asset = %route.asset,
+        amount,
+        token_identifier = ?token_identifier,
+        provider_slippage_bps,
+        overpay_bps,
+        "Cross-chain dispatcher: prepare_token_denominated_fees_excluded start"
+    );
+
+    // The conversion path always converts FROM a token; the authoritative id
+    // lives on `conversion_options`. Upstream `validate_request` rejects the
+    // `FromBitcoin` variant, so this match is structurally exhaustive.
+    let ConversionType::ToBitcoin {
+        from_token_identifier,
+    } = &conversion_options.conversion_type
+    else {
+        return Err(SdkError::Generic(
+            "Cross-chain conversion path requires ToBitcoin options".to_string(),
+        ));
+    };
+    let src_meta = src_token_metadata(sdk, from_token_identifier).await?;
+
+    // Pad the user's target upward so provider slippage doesn't land delivery
+    // below the requested amount. Quoted against the inflated value; provider
+    // returns the recipient as `prepared.estimated_out` (which therefore sits
+    // slightly above the user's `amount`).
+    let target_amount = inflate_target_amount(amount, overpay_bps);
+
+    // Read through the cross-chain-scoped cache so this fetch shares the TTL
+    // window with the providers' own rate lookups.
+    let btc_usd = fetch_btc_usd_rate(sdk.cross_chain_context.fiat_service().as_ref()).await?;
+    let sats_for_provider =
+        convert_destination_amount_to_sats(target_amount, btc_usd, route.decimals.into())?;
+    tracing::debug!(
+        btc_usd,
+        target_amount,
+        sats_for_provider,
+        "Cross-chain dispatcher: fiat-inverted to sats_for_provider"
+    );
+
+    let service = sdk.cross_chain_context.get(route.provider)?;
+    let prepared = service
+        .prepare(
+            address,
+            route,
+            sats_for_provider,
+            None,
+            provider_slippage_bps,
+            CrossChainFeeMode::FeesExcluded,
+        )
+        .await?;
+    tracing::debug!(
+        provider_amount_in = prepared.amount_in,
+        provider_asset_amount_in = prepared.asset_amount_in,
+        provider_estimated_out = prepared.estimated_out,
+        provider_fee_amount = prepared.fee_amount,
+        "Cross-chain dispatcher: provider returned"
+    );
+
+    // AMM must produce enough sats to cover the provider invoice AND the
+    // source-leg transfer fee (Boltz LN routing; 0 for Orchestra).
+    let amm_target_sats = prepared
+        .amount_in
+        .saturating_add(u128::from(prepared.source_transfer_fee_sats));
+    let conversion_estimate = conversion::estimate_conversion(
+        sdk,
+        Some(conversion_options),
+        token_identifier,
+        ConversionAmount::MinAmountOut(amm_target_sats),
+    )
+    .await?;
+    tracing::debug!(
+        amm_target_sats,
+        source_transfer_fee_sats = prepared.source_transfer_fee_sats,
+        amm_amount_in = ?conversion_estimate.as_ref().map(|e| e.amount_in),
+        amm_amount_out = ?conversion_estimate.as_ref().map(|e| e.amount_out),
+        amm_fee = ?conversion_estimate.as_ref().map(|e| e.fee),
+        "Cross-chain dispatcher: AMM MinAmountOut reverse-estimate"
+    );
+
+    // Fail fast on insufficient balance: the AMM doesn't gate on user funds.
+    if let Some(estimate) = conversion_estimate.as_ref()
+        && let ConversionType::ToBitcoin {
+            from_token_identifier,
+        } = &estimate.options.conversion_type
+    {
+        let balances = sdk.spark_wallet.get_token_balances().await?;
+        let have = balances
+            .get(from_token_identifier)
+            .map_or(0u128, |b| b.balance);
+        if have < estimate.amount_in {
+            tracing::warn!(
+                token = %from_token_identifier,
+                have,
+                need = estimate.amount_in,
+                "Cross-chain dispatcher: insufficient token balance"
+            );
+            return Err(SdkError::InvalidInput(format!(
+                "Insufficient {from_token_identifier} balance for cross-chain conversion: \
+                 have {have}, need {} (= {amount} target + AMM/provider spread + bridge fees).",
+                estimate.amount_in
+            )));
+        }
+    }
+
+    // Reuse `src_meta` from the stable-pair gate above (avoids a second wallet hit).
+    let overrides = compute_conversion_overrides(
+        conversion_estimate.as_ref(),
+        &src_meta,
+        route.decimals.into(),
+        prepared.estimated_out,
+    )?;
+
+    // response.amount = provider invoice. LN routing lives on
+    // source_transfer_fee_sats; send-side convert_token folds it in.
+    let response_token_identifier = conversion::response_token_identifier(
+        conversion_estimate.as_ref(),
+        token_identifier.cloned(),
+    );
+    let provider_amount_in = prepared.amount_in;
+    Ok(build_response(
+        prepared,
+        provider_amount_in,
+        response_token_identifier,
+        conversion_estimate,
+        FeePolicy::FeesExcluded,
+        &overrides,
+    ))
+}
+
+/// Errors if `token_id` isn't in the wallet's balances — the caller is
+/// proceeding under the assumption that the source token exists.
+async fn src_token_metadata(sdk: &BreezSdk, token_id: &str) -> Result<SrcTokenMetadata, SdkError> {
+    let balances = sdk.spark_wallet.get_token_balances().await?;
+    let tb = balances.get(token_id).ok_or_else(|| {
+        SdkError::InvalidInput(format!(
+            "Source token {token_id} not found in wallet balances"
+        ))
+    })?;
+    Ok(SrcTokenMetadata {
+        ticker: tb.token_metadata.ticker.clone(),
+        decimals: tb.token_metadata.decimals,
+    })
+}
+
+/// Surfaces the token-side debit on the response. Routes are filtered to
+/// USD-pegged destinations at `get_cross_chain_routes`, so the par-rescale
+/// always holds. Missing estimate (no AMM step) defers to provider values.
+/// `fee_amount = asset_amount_in - provider_estimated_out`.
+fn compute_conversion_overrides(
+    estimate: Option<&ConversionEstimate>,
+    src_meta: &SrcTokenMetadata,
+    dest_decimals: u32,
+    provider_estimated_out: u128,
+) -> Result<PrepareResponseOverrides, SdkError> {
+    let Some(estimate) = estimate else {
+        tracing::debug!("Cross-chain dispatcher: no AMM estimate; deferring to provider amounts");
+        return Ok(PrepareResponseOverrides::default());
+    };
+    let asset_amount_in = rescale_decimals(estimate.amount_in, src_meta.decimals, dest_decimals)?;
+    let fee_amount = asset_amount_in.saturating_sub(provider_estimated_out);
+    tracing::debug!(
+        src_ticker = %src_meta.ticker,
+        src_decimals = src_meta.decimals,
+        user_token_amount_in = estimate.amount_in,
+        asset_amount_in,
+        response_fee_amount = fee_amount,
+        "Cross-chain dispatcher: overrides computed"
+    );
+    Ok(PrepareResponseOverrides {
+        amount_in: Some(estimate.amount_in),
+        asset_amount_in: Some(asset_amount_in),
+        fee_amount: Some(fee_amount),
+    })
+}
+
+fn build_response(
+    prepared: crate::cross_chain::CrossChainPrepared,
+    response_amount: u128,
+    response_token_identifier: Option<String>,
+    conversion_estimate: Option<ConversionEstimate>,
+    fee_policy: FeePolicy,
+    overrides: &PrepareResponseOverrides,
+) -> PrepareSendPaymentResponse {
+    let amount_in = overrides.amount_in.unwrap_or(prepared.amount_in);
+    let asset_amount_in = overrides
+        .asset_amount_in
+        .unwrap_or(prepared.asset_amount_in);
+    let fee_amount = overrides.fee_amount.unwrap_or(prepared.fee_amount);
+    PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::CrossChainAddress {
             route: prepared.pair,
             recipient_address: prepared.recipient_address,
-            amount_in: prepared.amount_in,
+            amount_in,
+            asset_amount_in,
             estimated_out: prepared.estimated_out,
-            fee_amount: prepared.fee_amount,
-            fee_asset: prepared.fee_asset,
+            fee_amount,
+            service_fee_amount: prepared.service_fee_amount,
+            service_fee_asset: prepared.service_fee_asset,
             source_transfer_fee_sats: prepared.source_transfer_fee_sats,
             fee_mode: prepared.fee_mode,
             expires_at: prepared.expires_at,
             provider_context: prepared.provider_context,
         },
-        amount: provider_amount,
-        token_identifier: source_token_identifier,
+        amount: response_amount,
+        token_identifier: response_token_identifier,
         conversion_estimate,
-        fee_policy: effective_fee_policy,
-    })
+        fee_policy,
+    }
 }
 
 /// Resolves the effective `conversion_options` for a cross-chain send.
@@ -468,30 +863,58 @@ mod tests {
         ));
     }
 
-    // ---- effective_fee_policy ----
+    // ---- resolve_target_overpay_bps ----
 
     #[test_all]
-    fn effective_fee_policy_forces_fees_included_on_conversion() {
+    fn resolve_overpay_uses_request_when_in_range() {
+        assert_eq!(resolve_target_overpay_bps(Some(50), Some(75)).unwrap(), 50);
+    }
+
+    #[test_all]
+    fn resolve_overpay_falls_back_to_config_when_request_none() {
+        assert_eq!(resolve_target_overpay_bps(None, Some(75)).unwrap(), 75);
+    }
+
+    #[test_all]
+    fn resolve_overpay_falls_back_to_built_in_when_both_none() {
         assert_eq!(
-            effective_fee_policy(true, FeePolicy::FeesExcluded),
-            FeePolicy::FeesIncluded
-        );
-        assert_eq!(
-            effective_fee_policy(true, FeePolicy::FeesIncluded),
-            FeePolicy::FeesIncluded
+            resolve_target_overpay_bps(None, None).unwrap(),
+            DEFAULT_TARGET_OVERPAY_BPS
         );
     }
 
     #[test_all]
-    fn effective_fee_policy_passes_through_without_conversion() {
-        assert_eq!(
-            effective_fee_policy(false, FeePolicy::FeesExcluded),
-            FeePolicy::FeesExcluded
-        );
-        assert_eq!(
-            effective_fee_policy(false, FeePolicy::FeesIncluded),
-            FeePolicy::FeesIncluded
-        );
+    fn resolve_overpay_accepts_zero_to_opt_out() {
+        assert_eq!(resolve_target_overpay_bps(Some(0), Some(50)).unwrap(), 0);
+    }
+
+    #[test_all]
+    fn resolve_overpay_rejects_above_max() {
+        let too_high = MAX_TARGET_OVERPAY_BPS + 1;
+        assert!(matches!(
+            resolve_target_overpay_bps(Some(too_high), None),
+            Err(SdkError::InvalidInput(_))
+        ));
+    }
+
+    // ---- inflate_target_amount ----
+
+    #[test_all]
+    fn inflate_target_amount_zero_bps_is_identity() {
+        assert_eq!(inflate_target_amount(1_000_000, 0), 1_000_000);
+    }
+
+    #[test_all]
+    fn inflate_target_amount_applies_bps_pad() {
+        // 25 bps on 1_000_000 → 1_000_000 + 2_500 = 1_002_500.
+        assert_eq!(inflate_target_amount(1_000_000, 25), 1_002_500);
+    }
+
+    #[test_all]
+    fn inflate_target_amount_truncates_sub_unit_pad() {
+        // 25 bps on 100 → 100 + (100 * 25 / 10_000) = 100 + 0 (integer floor).
+        // Acceptable: pad is sub-unit for tiny amounts.
+        assert_eq!(inflate_target_amount(100, 25), 100);
     }
 
     // ---- validate_request ----
@@ -831,5 +1254,257 @@ mod tests {
         let err = validate_route_supports_effective_source(&route, Some(&token), Some(&opts))
             .unwrap_err();
         assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    // ---- compute_conversion_overrides ----
+
+    fn estimate_with_amount_in(amount_in: u128, amount_out: u128) -> ConversionEstimate {
+        ConversionEstimate {
+            options: ConversionOptions {
+                conversion_type: ConversionType::ToBitcoin {
+                    from_token_identifier: "tok".to_string(),
+                },
+                max_slippage_bps: None,
+                completion_timeout_secs: None,
+            },
+            amount_in,
+            amount_out,
+            fee: 0,
+            amount_adjustment: None,
+        }
+    }
+
+    #[test_all]
+    fn compute_overrides_returns_default_when_estimate_is_none() {
+        let src_meta = SrcTokenMetadata {
+            ticker: "USDB".to_string(),
+            decimals: 6,
+        };
+        let overrides =
+            compute_conversion_overrides(None, &src_meta, 6, 1_000_000).expect("pure helper");
+        assert!(overrides.amount_in.is_none());
+        assert!(overrides.asset_amount_in.is_none());
+        assert!(overrides.fee_amount.is_none());
+    }
+
+    #[test_all]
+    fn compute_overrides_stable_pair_populates_all_three_fields() {
+        let est = estimate_with_amount_in(1_020_434, 1_002_502);
+        let src_meta = SrcTokenMetadata {
+            ticker: "USDB".to_string(),
+            decimals: 6,
+        };
+        let overrides = compute_conversion_overrides(Some(&est), &src_meta, 6, 1_000_000).unwrap();
+        assert_eq!(overrides.amount_in, Some(1_020_434));
+        // src/dest both 6 decimals → rescale is identity.
+        assert_eq!(overrides.asset_amount_in, Some(1_020_434));
+        // fee = asset_amount_in - provider_estimated_out
+        assert_eq!(overrides.fee_amount, Some(20_434));
+    }
+
+    #[test_all]
+    fn compute_overrides_rescales_decimals_when_source_dest_differ() {
+        // Hypothetical USDB at 8 decimals → USDC at 6 decimals.
+        let est = estimate_with_amount_in(102_043_400, 0);
+        let src_meta = SrcTokenMetadata {
+            ticker: "USDB".to_string(),
+            decimals: 8,
+        };
+        let overrides = compute_conversion_overrides(Some(&est), &src_meta, 6, 1_000_000).unwrap();
+        // 102_043_400 / 10^2 = 1_020_434
+        assert_eq!(overrides.asset_amount_in, Some(1_020_434));
+        assert_eq!(overrides.fee_amount, Some(20_434));
+    }
+
+    #[test_all]
+    fn compute_overrides_saturating_sub_clamps_when_delivery_over_input() {
+        // Edge: AMM happens to over-deliver vs provider's estimated_out.
+        let est = estimate_with_amount_in(1_000_000, 0);
+        let src_meta = SrcTokenMetadata {
+            ticker: "USDB".to_string(),
+            decimals: 6,
+        };
+        let overrides = compute_conversion_overrides(Some(&est), &src_meta, 6, 2_000_000).unwrap();
+        assert_eq!(
+            overrides.fee_amount,
+            Some(0),
+            "saturating_sub must clamp at 0 instead of underflowing"
+        );
+    }
+
+    // ---- build_response: ToBitcoin convention ----
+
+    fn mk_prepared(
+        amount_in: u128,
+        source_transfer_fee_sats: u64,
+    ) -> crate::cross_chain::CrossChainPrepared {
+        crate::cross_chain::CrossChainPrepared {
+            amount_in,
+            asset_amount_in: amount_in,
+            estimated_out: amount_in.saturating_sub(30),
+            fee_amount: 30,
+            service_fee_amount: 20,
+            service_fee_asset: None,
+            source_transfer_fee_sats,
+            fee_mode: CrossChainFeeMode::FeesExcluded,
+            expires_at: "2099-01-01T00:00:00Z".to_string(),
+            pair: CrossChainRoutePair {
+                provider: crate::cross_chain::CrossChainProvider::Orchestra,
+                chain: "base".to_string(),
+                chain_id: Some("8453".to_string()),
+                asset: "USDC".to_string(),
+                contract_address: None,
+                decimals: 6,
+                exact_out_eligible: false,
+                supported_sources: vec![],
+            },
+            recipient_address: "0xabc".to_string(),
+            token_identifier: None,
+            provider_context: crate::cross_chain::CrossChainProviderContext::Orchestra {
+                quote_id: "q1".to_string(),
+                deposit_address: "sp1...".to_string(),
+                deposit_amount: amount_in,
+            },
+        }
+    }
+
+    #[test_all]
+    fn response_token_identifier_clears_on_to_bitcoin_for_cross_chain() {
+        // ToBitcoin: cleared (outbound leg is sats). No conversion: passthrough.
+        let est = estimate_with_amount_in(1_015_000, 1_050);
+        let cleared = conversion::response_token_identifier(Some(&est), Some("USDB".to_string()));
+        assert!(cleared.is_none());
+
+        let preserved = conversion::response_token_identifier(None, Some("USDB".to_string()));
+        assert_eq!(preserved, Some("USDB".to_string()));
+    }
+
+    /// Helper for `build_response` assertions: extracts the relevant fields
+    /// off the `CrossChainAddress` variant. Panics if the variant doesn't
+    /// match.
+    fn extract_cross_chain(method: &SendPaymentMethod) -> (u128, u128, u128, u64) {
+        let SendPaymentMethod::CrossChainAddress {
+            amount_in,
+            asset_amount_in,
+            fee_amount,
+            source_transfer_fee_sats,
+            ..
+        } = method
+        else {
+            panic!("expected CrossChainAddress");
+        };
+        (
+            *amount_in,
+            *asset_amount_in,
+            *fee_amount,
+            *source_transfer_fee_sats,
+        )
+    }
+
+    #[test_all]
+    fn build_response_feesexcluded_orchestra_shape_applies_token_debit_override() {
+        // Orchestra shape: source_transfer_fee_sats = 0.
+        let prepared = mk_prepared(1_050, 0);
+        let est = estimate_with_amount_in(1_020_000, 1_050);
+        let src_meta = SrcTokenMetadata {
+            ticker: "USDB".to_string(),
+            decimals: 6,
+        };
+        let overrides =
+            compute_conversion_overrides(Some(&est), &src_meta, 6, prepared.estimated_out)
+                .expect("pure helper");
+        let response_token_identifier =
+            conversion::response_token_identifier(Some(&est), Some("USDB".to_string()));
+        let resp = build_response(
+            prepared,
+            1_050,
+            response_token_identifier,
+            Some(est),
+            FeePolicy::FeesExcluded,
+            &overrides,
+        );
+        assert_eq!(resp.amount, 1_050, "response.amount = provider invoice");
+        assert!(resp.token_identifier.is_none(), "ToBitcoin clears it");
+        let (amount_in, asset_amount_in, fee_amount, sttf) =
+            extract_cross_chain(&resp.payment_method);
+        assert_eq!(amount_in, 1_020_000, "amount_in = USDB debit");
+        assert_eq!(
+            asset_amount_in, 1_020_000,
+            "USDB in USDC base units (parity)"
+        );
+        // fee = USDB_in_USDC_units - provider_estimated_out = 1_020_000 - (1_050 - 30)
+        assert_eq!(fee_amount, 1_020_000 - 1_020);
+        assert_eq!(sttf, 0);
+    }
+
+    #[test_all]
+    fn build_response_feesexcluded_boltz_shape_applies_token_debit_override_and_carries_ln_fee() {
+        // Boltz shape: non-zero source_transfer_fee_sats for LN routing.
+        let prepared = mk_prepared(1_050, 25);
+        let est = estimate_with_amount_in(1_020_000, 1_075);
+        let src_meta = SrcTokenMetadata {
+            ticker: "USDB".to_string(),
+            decimals: 6,
+        };
+        let overrides =
+            compute_conversion_overrides(Some(&est), &src_meta, 6, prepared.estimated_out)
+                .expect("pure helper");
+        let response_token_identifier =
+            conversion::response_token_identifier(Some(&est), Some("USDB".to_string()));
+        let resp = build_response(
+            prepared,
+            1_050,
+            response_token_identifier,
+            Some(est),
+            FeePolicy::FeesExcluded,
+            &overrides,
+        );
+        assert_eq!(resp.amount, 1_050, "response.amount = invoice only");
+        assert!(resp.token_identifier.is_none());
+        let (amount_in, asset_amount_in, fee_amount, sttf) =
+            extract_cross_chain(&resp.payment_method);
+        assert_eq!(amount_in, 1_020_000, "amount_in = USDB debit (override)");
+        assert_eq!(asset_amount_in, 1_020_000);
+        assert_eq!(fee_amount, 1_020_000 - 1_020);
+        assert_eq!(
+            sttf, 25,
+            "LN routing fee carried separately for send-side MinAmountOut expansion"
+        );
+    }
+
+    #[test_all]
+    fn build_response_feesincluded_conversion_applies_token_debit_override_symmetrically() {
+        // FeesIncluded conversion: response.amount is the user's gross sats
+        // budget; payment_method still carries the USDB debit override.
+        let prepared = mk_prepared(1_050, 25);
+        let est = estimate_with_amount_in(1_020_000, 1_075);
+        let src_meta = SrcTokenMetadata {
+            ticker: "USDB".to_string(),
+            decimals: 6,
+        };
+        let overrides =
+            compute_conversion_overrides(Some(&est), &src_meta, 6, prepared.estimated_out)
+                .expect("pure helper");
+        let response_token_identifier =
+            conversion::response_token_identifier(Some(&est), Some("USDB".to_string()));
+        let resp = build_response(
+            prepared,
+            1_075,
+            response_token_identifier,
+            Some(est),
+            FeePolicy::FeesIncluded,
+            &overrides,
+        );
+        assert_eq!(
+            resp.amount, 1_075,
+            "FeesIncluded response.amount = user's gross sats budget"
+        );
+        assert!(resp.token_identifier.is_none());
+        let (amount_in, asset_amount_in, fee_amount, sttf) =
+            extract_cross_chain(&resp.payment_method);
+        assert_eq!(amount_in, 1_020_000, "amount_in = USDB debit (override)");
+        assert_eq!(asset_amount_in, 1_020_000);
+        assert_eq!(fee_amount, 1_020_000 - 1_020);
+        assert_eq!(sttf, 25);
     }
 }

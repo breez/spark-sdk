@@ -50,6 +50,7 @@ pub struct _Config {
 #[frb(mirror(CrossChainConfig))]
 pub struct _CrossChainConfig {
     pub default_slippage_bps: Option<u32>,
+    pub default_target_overpay_bps: Option<u32>,
 }
 
 #[frb(mirror(SparkConfig))]
@@ -284,10 +285,12 @@ pub enum _CrossChainProviderContext {
     Orchestra {
         quote_id: String,
         deposit_address: String,
+        deposit_amount: u128,
     },
     Boltz {
         swap_id: String,
         invoice: String,
+        invoice_amount_sats: u64,
         max_slippage_bps: u32,
     },
 }
@@ -453,6 +456,7 @@ pub enum _PaymentRequest {
         address: String,
         route: CrossChainRoutePair,
         max_slippage_bps: Option<u32>,
+        target_overpay_bps: Option<u32>,
     },
 }
 
@@ -566,9 +570,11 @@ pub enum _SendPaymentMethod {
         route: CrossChainRoutePair,
         recipient_address: String,
         amount_in: u128,
+        asset_amount_in: u128,
         estimated_out: u128,
         fee_amount: u128,
-        fee_asset: Option<String>,
+        service_fee_amount: u128,
+        service_fee_asset: Option<String>,
         source_transfer_fee_sats: u64,
         fee_mode: CrossChainFeeMode,
         expires_at: String,
@@ -1337,10 +1343,13 @@ pub enum _ConversionInfo {
         asset: String,
         asset_contract: Option<String>,
         recipient_address: String,
+        asset_amount_in: Option<u128>,
         estimated_out: u128,
         delivered_amount: Option<u128>,
         status: ConversionStatus,
-        fee: Option<u128>,
+        fee_amount: Option<u128>,
+        service_fee_amount: Option<u128>,
+        service_fee_asset: Option<String>,
         asset_decimals: u32,
         swap_id: String,
         invoice: String,
@@ -1355,10 +1364,13 @@ pub enum _ConversionInfo {
         asset: String,
         asset_contract: Option<String>,
         recipient_address: String,
+        asset_amount_in: Option<u128>,
         estimated_out: u128,
         delivered_amount: Option<u128>,
         status: ConversionStatus,
-        fee: Option<u128>,
+        fee_amount: Option<u128>,
+        service_fee_amount: Option<u128>,
+        service_fee_asset: Option<String>,
         asset_decimals: u32,
         order_id: String,
         quote_id: String,

@@ -2151,10 +2151,13 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
             chain_id: None,
             asset: "USDC".to_string(),
             recipient_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
+            asset_amount_in: Some(100_000_000),
             estimated_out: 99_500_000,
             delivered_amount: None,
             status: crate::ConversionStatus::Pending,
-            fee: Some(500),
+            fee_amount: Some(500_000),
+            service_fee_amount: Some(500),
+            service_fee_asset: Some("USDC".to_string()),
             read_token: Some("rt_test_token".to_string()),
             asset_decimals: 6,
             asset_contract: None,
@@ -2194,10 +2197,13 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
             chain_id: None,
             asset: "USDC".to_string(),
             recipient_address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            asset_amount_in: Some(50_500_000),
             estimated_out: 50_000_000,
             delivered_amount: None,
             status: crate::ConversionStatus::Completed,
-            fee: Some(250),
+            fee_amount: Some(500_000),
+            service_fee_amount: Some(250),
+            service_fee_asset: Some("USDC".to_string()),
             read_token: None,
             asset_decimals: 6,
             asset_contract: None,
@@ -2292,10 +2298,13 @@ pub async fn test_conversion_filtering(storage: Box<dyn Storage>) {
         chain_id: Some("42161".to_string()),
         asset: "USDT".to_string(),
         recipient_address: "0xrecipient".to_string(),
+        asset_amount_in: Some(664_652),
         estimated_out: 656_122,
         delivered_amount: None,
         status,
-        fee: Some(8_530),
+        fee_amount: Some(8_530),
+        service_fee_amount: Some(8_530),
+        service_fee_asset: Some("USDT".to_string()),
         asset_decimals: 6,
         asset_contract: None,
     };
@@ -3542,11 +3551,14 @@ fn boltz_conversion_info(
         recipient_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".to_string(),
         invoice: "lnbc1000n1pexample".to_string(),
         invoice_amount_sats: 100_000,
+        asset_amount_in: Some(71_500_000),
         estimated_out,
         delivered_amount,
         bridge_ref,
         status,
-        fee: Some(1_500),
+        fee_amount: Some(500_000),
+        service_fee_amount: Some(1_500),
+        service_fee_asset: None,
         max_slippage_bps: 100,
         quote_degraded: false,
         asset_decimals: 6,
@@ -3616,7 +3628,8 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
                 delivered_amount,
                 bridge_ref,
                 status,
-                fee,
+                fee_amount,
+                service_fee_amount,
                 max_slippage_bps,
                 quote_degraded,
                 ..
@@ -3638,7 +3651,8 @@ pub async fn test_insert_boltz_conversion_info(storage: Box<dyn Storage>) {
     assert_eq!(delivered_amount, None);
     assert_eq!(bridge_ref, None);
     assert_eq!(status, crate::ConversionStatus::Pending);
-    assert_eq!(fee, Some(1_500));
+    assert_eq!(fee_amount, Some(500_000));
+    assert_eq!(service_fee_amount, Some(1_500));
     assert_eq!(max_slippage_bps, 100);
     assert!(!quote_degraded);
     assert!(fetched.conversion_details.is_none());

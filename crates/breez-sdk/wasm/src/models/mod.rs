@@ -680,6 +680,7 @@ pub struct Config {
 #[macros::extern_wasm_bindgen(breez_sdk_spark::CrossChainConfig)]
 pub struct CrossChainConfig {
     pub default_slippage_bps: Option<u32>,
+    pub default_target_overpay_bps: Option<u32>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SparkConfig)]
@@ -892,10 +893,15 @@ pub enum CrossChainProviderContext {
     Orchestra {
         quote_id: String,
         deposit_address: String,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_u128_as_string")]
+        deposit_amount: u128,
     },
     Boltz {
         swap_id: String,
         invoice: String,
+        #[serde(default)]
+        invoice_amount_sats: u64,
         max_slippage_bps: u32,
     },
 }
@@ -909,6 +915,7 @@ pub enum PaymentRequest {
         address: String,
         route: CrossChainRoutePair,
         max_slippage_bps: Option<u32>,
+        target_overpay_bps: Option<u32>,
     },
 }
 
@@ -945,11 +952,17 @@ pub enum SendPaymentMethod {
         amount_in: u128,
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
+        asset_amount_in: u128,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
         estimated_out: u128,
         #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         fee_amount: u128,
-        fee_asset: Option<String>,
+        #[tsify(type = "string")]
+        #[serde(with = "serde_u128_as_string")]
+        service_fee_amount: u128,
+        service_fee_asset: Option<String>,
         source_transfer_fee_sats: u64,
         fee_mode: CrossChainFeeMode,
         expires_at: String,
@@ -1531,6 +1544,9 @@ pub enum ConversionInfo {
         asset_contract: Option<String>,
         recipient_address: String,
         #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        asset_amount_in: Option<u128>,
+        #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         estimated_out: u128,
         #[tsify(type = "string")]
@@ -1539,7 +1555,12 @@ pub enum ConversionInfo {
         status: ConversionStatus,
         #[tsify(type = "string")]
         #[serde(default, with = "serde_option_u128_as_string")]
-        fee: Option<u128>,
+        fee_amount: Option<u128>,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        service_fee_amount: Option<u128>,
+        #[serde(default)]
+        service_fee_asset: Option<String>,
         asset_decimals: u32,
         order_id: String,
         quote_id: String,
@@ -1556,6 +1577,9 @@ pub enum ConversionInfo {
         asset_contract: Option<String>,
         recipient_address: String,
         #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        asset_amount_in: Option<u128>,
+        #[tsify(type = "string")]
         #[serde(with = "serde_u128_as_string")]
         estimated_out: u128,
         #[tsify(type = "string")]
@@ -1564,7 +1588,12 @@ pub enum ConversionInfo {
         status: ConversionStatus,
         #[tsify(type = "string")]
         #[serde(default, with = "serde_option_u128_as_string")]
-        fee: Option<u128>,
+        fee_amount: Option<u128>,
+        #[tsify(type = "string")]
+        #[serde(default, with = "serde_option_u128_as_string")]
+        service_fee_amount: Option<u128>,
+        #[serde(default)]
+        service_fee_asset: Option<String>,
         asset_decimals: u32,
         swap_id: String,
         invoice: String,

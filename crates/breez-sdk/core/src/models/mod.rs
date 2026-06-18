@@ -691,6 +691,13 @@ pub struct CrossChainConfig {
     /// when this field is `None`.
     #[cfg_attr(feature = "uniffi", uniffi(default = None))]
     pub default_slippage_bps: Option<u32>,
+    /// Default target-overpay pad in basis points applied to the user's
+    /// destination amount on `FeesExcluded` conversion sends. Bumps the
+    /// target upward before quoting so the recipient lands at or above the
+    /// requested amount despite provider slippage. Must be in `0..=500`.
+    /// Falls back to 15 bps when `None`.
+    #[cfg_attr(feature = "uniffi", uniffi(default = None))]
+    pub default_target_overpay_bps: Option<u32>,
 }
 
 /// Configuration for leaf optimization.
@@ -964,6 +971,17 @@ impl Config {
                     "Default cross-chain slippage must be between {} and {} basis points, but got {bps}.",
                     crate::cross_chain::MIN_CROSS_CHAIN_SLIPPAGE_BPS,
                     crate::cross_chain::MAX_CROSS_CHAIN_SLIPPAGE_BPS,
+                )));
+            }
+            if let Some(bps) = cc.default_target_overpay_bps
+                && !(crate::cross_chain::MIN_TARGET_OVERPAY_BPS
+                    ..=crate::cross_chain::MAX_TARGET_OVERPAY_BPS)
+                    .contains(&bps)
+            {
+                return Err(SdkError::InvalidInput(format!(
+                    "Default cross-chain target-overpay must be between {} and {} basis points, but got {bps}.",
+                    crate::cross_chain::MIN_TARGET_OVERPAY_BPS,
+                    crate::cross_chain::MAX_TARGET_OVERPAY_BPS,
                 )));
             }
         }
@@ -1285,41 +1303,35 @@ pub enum SendPaymentMethod {
         route: CrossChainRoutePair,
         /// Raw destination address (e.g. `0xabc...`).
         recipient_address: String,
-        /// Amount routed to the provider (invoice target for Boltz, deposit
-        /// amount for Orchestra). Wallet total cost depends on `fee_mode`:
-        /// - `FeesExcluded`: `amount_in + source_transfer_fee_sats`
-        /// - `FeesIncluded`: the original `amount` on the request (exact
-        ///   when the send-time fee overpayment is not capped; slightly less
-        ///   otherwise).
-        ///
-        /// In `AmountIn` + conversion mode the user transfers tokens (per
-        /// `conversion_estimate.amount_in`) rather than sats on the wallet
-        /// side — `amount_in` still refers to the provider leg in sats.
+        /// Amount routed to the provider, in the route's source-asset units
+        /// (Boltz invoice sats; Orchestra deposit sats/token). On the
+        /// token-conversion path (both `FeesIncluded` and `FeesExcluded`)
+        /// the dispatcher overrides this with the wallet-side token debit
+        /// when the source token and destination asset form a USD-stable pair.
         amount_in: u128,
-        /// Estimated amount the recipient will receive in the destination
-        /// asset's base units. Already nets out any destination-chain costs
-        /// (e.g. gas, bridge messaging fees): those are reflected in the gap
-        /// between `amount_in` and `estimated_out` rather than in `fee_amount`.
+        /// `amount_in` expressed in the cross-chain (destination) asset's
+        /// base units, via the same rate the SDK used at prepare time.
+        asset_amount_in: u128,
+        /// Estimated recipient amount in cross-chain asset base units.
         estimated_out: u128,
-        /// Sender-side service fee charged by the provider, in `fee_asset`
-        /// base units. Does **not** include destination-chain costs (gas,
-        /// bridge messaging, etc.), which are already deducted from
-        /// `estimated_out`.
+        /// Prepare-time total user-visible fee in cross-chain asset base units.
+        /// Covers provider spread + bridge/gas + DEX slippage. On the
+        /// token-conversion path it also rolls in the LN routing budget; on
+        /// the direct path that budget lives separately in
+        /// `source_transfer_fee_sats`.
         fee_amount: u128,
-        /// The asset the fee is denominated in (e.g. "USDC", "USDB"). `None` means BTC (sats).
-        fee_asset: Option<String>,
-        /// Sats cost to the wallet of moving `amount_in` from the wallet to
-        /// the provider. Boltz: LN routing fee budget (a hard cap enforced
-        /// at send time). Orchestra: Spark transfer fee (0 today).
+        /// Provider's own service fee/spread in its native denomination.
+        service_fee_amount: u128,
+        /// Asset which service fee is denominated in. Unset means BTC sats.
+        service_fee_asset: Option<String>,
+        /// Sats budget for moving the amount in from the wallet to the provider.
         source_transfer_fee_sats: u64,
-        /// Fee mode that was used at prepare time, carried through so the
-        /// send stage applies consistent semantics.
+        /// Fee mode the prepare ran under; the send stage matches.
         fee_mode: CrossChainFeeMode,
-        /// ISO8601 timestamp after which this quote is no longer valid.
+        /// ISO8601 timestamp after which the quote is no longer valid.
         expires_at: String,
-        /// Provider-internal state produced by `prepareSendPayment` and
-        /// required by `sendPayment`. Callers should round-trip this value
-        /// as-is.
+        /// Provider-internal state, produced when preparing and consumed
+        /// when sending.
         provider_context: CrossChainProviderContext,
     },
 }
@@ -1534,6 +1546,13 @@ pub enum PaymentRequest {
         /// [`Config::default_slippage_bps`] when `None`, which itself
         /// defaults to 100 bps (1%) when unset.
         max_slippage_bps: Option<u32>,
+        /// Target-overpay pad in basis points applied on `FeesExcluded`
+        /// conversion sends. Inflates the destination target before quoting
+        /// so the recipient lands at or above the user's requested amount
+        /// despite provider slippage. Must be in `0..=500`. Falls back to
+        /// [`CrossChainConfig::default_target_overpay_bps`] when `None`,
+        /// which itself defaults to 15 bps.
+        target_overpay_bps: Option<u32>,
     },
 }
 

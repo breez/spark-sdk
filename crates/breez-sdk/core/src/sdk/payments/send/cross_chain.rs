@@ -21,9 +21,11 @@ pub(in crate::sdk) async fn send(
         route,
         recipient_address,
         amount_in,
+        asset_amount_in,
         estimated_out,
         fee_amount,
-        fee_asset,
+        service_fee_amount,
+        service_fee_asset,
         source_transfer_fee_sats,
         fee_mode,
         expires_at,
@@ -37,9 +39,11 @@ pub(in crate::sdk) async fn send(
 
     let prepared = CrossChainPrepared {
         amount_in: *amount_in,
+        asset_amount_in: *asset_amount_in,
         estimated_out: *estimated_out,
         fee_amount: *fee_amount,
-        fee_asset: fee_asset.clone(),
+        service_fee_amount: *service_fee_amount,
+        service_fee_asset: service_fee_asset.clone(),
         source_transfer_fee_sats: *source_transfer_fee_sats,
         fee_mode: *fee_mode,
         expires_at: expires_at.clone(),
@@ -62,7 +66,7 @@ pub(in crate::sdk) async fn send(
     // returns the corresponding `Payment`. The SDK no longer wraps this with
     // an extra `wait_for_payment` step — the provider owns that.
     let payment = sdk
-        .cross_chain_providers
+        .cross_chain_context
         .get(route.provider)?
         .send(&prepared, idempotency_key)
         .await?;
@@ -70,13 +74,23 @@ pub(in crate::sdk) async fn send(
     Ok(SendPaymentResponse { payment })
 }
 
-/// Runs the AMM token conversion for a cross-chain send.
-///
-/// - **`AmountIn`**: converter's slippage floor is the prepare-time
-///   `estimate.amount_out`. Pass through.
-/// - **`MinAmountOut`**: pass through unchanged — the cross-chain provider's
-///   `amount_in` already encodes the sats-leg target including the
-///   provider-side `source_transfer_fee_sats`.
+/// Folds `source_transfer_fee_sats` into a `MinAmountOut` target so the AMM
+/// covers both the provider invoice and the outbound sats leg. `AmountIn`
+/// passes through.
+fn expand_min_amount_out(
+    conversion_amount: ConversionAmount,
+    source_transfer_fee_sats: u64,
+) -> ConversionAmount {
+    match conversion_amount {
+        ConversionAmount::AmountIn(_) => conversion_amount,
+        ConversionAmount::MinAmountOut(amount) => ConversionAmount::MinAmountOut(
+            amount.saturating_add(u128::from(source_transfer_fee_sats)),
+        ),
+    }
+}
+
+/// Runs the AMM token conversion for a cross-chain send. `MinAmountOut` is
+/// expanded via [`expand_min_amount_out`]; `AmountIn` passes through.
 pub(in crate::sdk::payments) async fn convert_token(
     sdk: &BreezSdk,
     conversion_options: &ConversionOptions,
@@ -84,10 +98,12 @@ pub(in crate::sdk::payments) async fn convert_token(
     token_identifier: Option<&String>,
     conversion_amount: ConversionAmount,
 ) -> Result<(TokenConversionResponse, ConversionPurpose), SdkError> {
-    let recipient_address = match payment_method {
+    let (recipient_address, source_transfer_fee_sats) = match payment_method {
         SendPaymentMethod::CrossChainAddress {
-            recipient_address, ..
-        } => recipient_address.clone(),
+            recipient_address,
+            source_transfer_fee_sats,
+            ..
+        } => (recipient_address.clone(), *source_transfer_fee_sats),
         _ => {
             return Err(SdkError::Generic(
                 "convert_token called with non-cross-chain payment_method".to_string(),
@@ -98,6 +114,8 @@ pub(in crate::sdk::payments) async fn convert_token(
     let purpose = ConversionPurpose::OngoingPayment {
         payment_request: recipient_address,
     };
+
+    let conversion_amount = expand_min_amount_out(conversion_amount, source_transfer_fee_sats);
 
     let response = sdk
         .token_converter
@@ -112,4 +130,46 @@ pub(in crate::sdk::payments) async fn convert_token(
         .await?;
 
     Ok((response, purpose))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
+    fn expand_min_amount_out_adds_source_transfer_fee_for_boltz() {
+        let expanded = expand_min_amount_out(ConversionAmount::MinAmountOut(1_000), 25);
+        match expanded {
+            ConversionAmount::MinAmountOut(v) => assert_eq!(v, 1_025),
+            other @ ConversionAmount::AmountIn(_) => {
+                panic!("expected MinAmountOut, got {other:?}")
+            }
+        }
+    }
+
+    #[test_all]
+    fn expand_min_amount_out_is_identity_when_source_transfer_fee_zero() {
+        let expanded = expand_min_amount_out(ConversionAmount::MinAmountOut(1_000), 0);
+        match expanded {
+            ConversionAmount::MinAmountOut(v) => assert_eq!(v, 1_000),
+            other @ ConversionAmount::AmountIn(_) => {
+                panic!("expected MinAmountOut, got {other:?}")
+            }
+        }
+    }
+
+    #[test_all]
+    fn expand_min_amount_out_passes_amount_in_through() {
+        let expanded = expand_min_amount_out(ConversionAmount::AmountIn(5_000_000), 25);
+        match expanded {
+            ConversionAmount::AmountIn(v) => assert_eq!(v, 5_000_000),
+            other @ ConversionAmount::MinAmountOut(_) => {
+                panic!("expected AmountIn, got {other:?}")
+            }
+        }
+    }
 }
