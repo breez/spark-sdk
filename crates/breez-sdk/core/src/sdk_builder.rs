@@ -352,11 +352,12 @@ impl SdkBuilder {
             .signing_operators
             .iter()
             .map(|op| {
+                let ca_cert = op.ca_cert_pem.as_ref().map(|pem| pem.as_bytes().to_vec());
                 SparkWalletConfig::create_operator_config(
                     op.id as usize,
                     &op.identifier,
                     &op.address,
-                    None,
+                    ca_cert.as_deref(),
                     &op.identity_public_key,
                 )
                 .map_err(|e| SdkError::InvalidInput(e.to_string()))

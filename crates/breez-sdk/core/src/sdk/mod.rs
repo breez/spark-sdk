@@ -285,6 +285,10 @@ fn default_spark_config(network: Network) -> crate::models::SparkConfig {
             identifier: hex::encode(op.identifier.serialize()),
             address: op.address.clone(),
             identity_public_key: hex::encode(op.identity_public_key.serialize()),
+            ca_cert_pem: op
+                .ca_cert
+                .as_ref()
+                .and_then(|b| String::from_utf8(b.clone()).ok()),
         })
         .collect();
 
