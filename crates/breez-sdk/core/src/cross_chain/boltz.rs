@@ -15,6 +15,7 @@ use boltz_client::{
     models::{Asset, PreparedSwap},
 };
 use breez_sdk_common::fiat::FiatService;
+use breez_sdk_common::input::CrossChainAddressFamily;
 use platform_utils::time::{SystemTime, UNIX_EPOCH};
 use spark_wallet::SparkWallet;
 use tracing::{debug, error, info};
@@ -25,7 +26,8 @@ use super::{
     derive_btc_leg_transfer_id,
 };
 use crate::{
-    ConversionInfo, ConversionStatus, Network, PaymentMetadata, PaymentStatus, Storage,
+    ConversionInfo, ConversionStatus, CrossChainAddressDetails, Network, PaymentMetadata,
+    PaymentStatus, Storage,
     error::SdkError,
     sdk::LightningSender,
     utils::{
@@ -573,14 +575,18 @@ impl CrossChainService for BoltzService {
         };
 
         // `destinations_accepting` validates the raw recipient address against
-        // every destination's transport and returns only those whose parser
-        // accepts it. This automatically picks up every supported asset/chain
-        // /bridge combination (USDT0 via OFT, USDC via CCTP, Arbitrum-direct).
+        // every destination's transport and returns every accepting one (USDT0
+        // via OFT, USDC via CCTP, Arbitrum-direct). One EVM `0x` address parses
+        // for every EVM chain/asset, so filter the mapped routes by the URI's
+        // contract address and family, matching Orchestra's `route_passes_filters`:
+        // an unfiltered contract-specific URI would surface unrelated EVM
+        // assets/chains and could deliver the wrong asset irreversibly.
         let routes = self
             .client
             .destinations_accepting(&address_details.address)
             .iter()
             .map(destination_to_route_pair)
+            .filter(|pair| route_matches_address_details(pair, address_details))
             .collect();
         Ok(routes)
     }
@@ -939,6 +945,29 @@ fn destination_to_route_pair(
     }
 }
 
+/// Whether a mapped Boltz route matches the parsed recipient's address family
+/// and, when the URI named one, its contract address.
+///
+/// Mirrors Orchestra's `route_passes_filters`: `destinations_accepting` returns
+/// every destination whose transport parses the raw address, and one EVM `0x`
+/// address parses for every EVM chain/asset, so without this a contract-specific
+/// URI would surface unrelated EVM assets/chains. Contract comparison is
+/// exact-string (as Orchestra); `chain_id` is intentionally not filtered by
+/// either provider today.
+fn route_matches_address_details(
+    pair: &CrossChainRoutePair,
+    address_details: &CrossChainAddressDetails,
+) -> bool {
+    let family: CrossChainAddressFamily = address_details.address_family.into();
+    let contract = pair.contract_address.as_deref();
+    let family_ok = family.matches_chain(&pair.chain, contract);
+    let contract_ok = address_details
+        .contract_address
+        .as_deref()
+        .is_none_or(|wanted| contract == Some(wanted));
+    family_ok && contract_ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1024,6 +1053,79 @@ mod tests {
             pair.chain_id, None,
             "Non-EVM transports (Solana, Tron) expose no chain_id"
         );
+    }
+
+    // ---- route_matches_address_details (contract + family filter) ----
+
+    // Two 0x + 40-hex addresses, both detectable as EVM by `detect_address_family`.
+    const CONTRACT_A: &str = "0x1111111111111111111111111111111111111111";
+    const CONTRACT_B: &str = "0x2222222222222222222222222222222222222222";
+
+    fn route_pair(chain: &str, contract: Option<&str>) -> CrossChainRoutePair {
+        CrossChainRoutePair {
+            provider: CrossChainProvider::Boltz,
+            chain: chain.to_string(),
+            chain_id: None,
+            asset: "USDC".to_string(),
+            contract_address: contract.map(str::to_string),
+            decimals: 6,
+            exact_out_eligible: false,
+            supported_sources: vec![SourceAsset::Bitcoin],
+        }
+    }
+
+    fn send_details(
+        family: crate::CrossChainAddressFamily,
+        contract: Option<&str>,
+    ) -> CrossChainAddressDetails {
+        CrossChainAddressDetails {
+            address: CONTRACT_A.to_string(),
+            address_family: family,
+            contract_address: contract.map(str::to_string),
+            chain_id: None,
+            amount: None,
+        }
+    }
+
+    #[test_all]
+    fn route_filter_keeps_only_matching_contract() {
+        let details = send_details(crate::CrossChainAddressFamily::Evm, Some(CONTRACT_A));
+        assert!(
+            route_matches_address_details(&route_pair("Base", Some(CONTRACT_A)), &details),
+            "route whose contract equals the URI's is kept"
+        );
+        assert!(
+            !route_matches_address_details(&route_pair("Base", Some(CONTRACT_B)), &details),
+            "a different-contract EVM route on the same chain is dropped"
+        );
+    }
+
+    #[test_all]
+    fn route_filter_passes_all_family_matches_when_contract_unset() {
+        let details = send_details(crate::CrossChainAddressFamily::Evm, None);
+        assert!(route_matches_address_details(
+            &route_pair("Base", Some(CONTRACT_A)),
+            &details
+        ));
+        assert!(route_matches_address_details(
+            &route_pair("Base", Some(CONTRACT_B)),
+            &details
+        ));
+    }
+
+    #[test_all]
+    fn route_filter_excludes_family_mismatch() {
+        // Parsed recipient is Solana; an EVM route must not match.
+        let details = send_details(crate::CrossChainAddressFamily::Solana, None);
+        assert!(!route_matches_address_details(
+            &route_pair("Base", Some(CONTRACT_A)),
+            &details
+        ));
+        // And the matching Solana route is kept.
+        assert!(route_matches_address_details(
+            &route_pair("Solana", None),
+            &details
+        ));
     }
 
     #[test_all]
