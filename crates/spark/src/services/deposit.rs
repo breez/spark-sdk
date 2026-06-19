@@ -321,7 +321,7 @@ impl DepositService {
                 output_index: output_index as i64,
                 network: self.network.into(),
                 credit_amount_sats: Some(credit_amount_sats),
-                request_type: ClaimStaticDepositRequestType::FixedAmount,
+                request_type: Some(ClaimStaticDepositRequestType::FixedAmount),
                 max_fee_sats: None,
                 deposit_secret_key: None,
                 encrypted_deposit_secret_key: Some(hex::encode(encrypted_deposit_secret_key)),
