@@ -31,7 +31,7 @@ use crate::{
     error::SdkError,
     sdk::LightningSender,
     utils::{
-        payments::insert_or_cache_payment_metadata,
+        payments::resolve_and_insert_payment_metadata,
         polling::{PollSchedule, poll_until},
     },
 };
@@ -766,7 +766,7 @@ impl CrossChainService for BoltzService {
             ..Default::default()
         };
 
-        let payment_id = insert_or_cache_payment_metadata(
+        let payment_id = resolve_and_insert_payment_metadata(
             &spark_payment_id,
             metadata,
             &self.spark_wallet,

@@ -689,7 +689,7 @@ impl CrossChainService for OrchestraService {
             ..Default::default()
         };
 
-        let payment_id = crate::utils::conversions::insert_or_cache_payment_metadata_for_transfer(
+        let payment_id = crate::utils::conversions::resolve_and_insert_payment_metadata_for_transfer(
             &asset_transfer,
             metadata,
             &self.spark_wallet,
@@ -698,7 +698,11 @@ impl CrossChainService for OrchestraService {
         )
         .await
         .unwrap_or_else(|e| {
-            error!("Failed to persist Orchestra metadata for payment {spark_tx_hash}: {e:?}");
+            // Reached only when both the row insert and the cache fallback
+            // inside the helper failed, so the ConversionInfo is unrecoverable.
+            error!(
+                "Failed to persist or cache Orchestra metadata for payment {spark_tx_hash}: {e:?}"
+            );
             spark_tx_hash
         });
 

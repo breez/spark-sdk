@@ -435,12 +435,47 @@ pub(crate) async fn resolve_payment_id(
         .ok_or_else(|| SdkError::Generic("Payment id not found for token transaction".to_string()))
 }
 
+/// Inserts `metadata` against the payment row for `payment_id`, falling back to
+/// caching it under `cache_key` on a storage write failure so the next sync's
+/// [`SparkSyncService::apply_payment_metadata`] reapplies it into the row.
+///
+/// `cache_key` must be the sync-time lookup identifier (Lightning invoice, token
+/// `tx_hash`, or Spark `payment.id`), not necessarily `payment_id` itself: token
+/// payment ids carry a `:vout` suffix that `apply_payment_metadata` does not key
+/// on. Errors only if both the insert and the cache write fail.
+pub(crate) async fn insert_payment_metadata_with_cache_fallback(
+    storage: &Arc<dyn Storage>,
+    payment_id: String,
+    cache_key: &str,
+    metadata: PaymentMetadata,
+) -> Result<(), SdkError> {
+    if let Err(insert_err) = storage
+        .insert_payment_metadata(payment_id.clone(), metadata.clone())
+        .await
+    {
+        warn!(
+            "Failed to insert payment metadata for {payment_id}: {insert_err}; caching under {cache_key} for reapplication on next sync"
+        );
+        ObjectCacheRepository::new(Arc::clone(storage))
+            .save_payment_metadata(cache_key, &metadata)
+            .await
+            .map_err(|cache_err| {
+                SdkError::Generic(format!(
+                    "Failed to insert payment metadata ({insert_err}) and failed to cache it ({cache_err})"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
 /// Inserts payment metadata by first resolving the identifier to a payment ID.
 /// If the payment ID can't be resolved yet (async sync hasn't processed the
-/// transfer), caches the metadata for later attachment.
+/// transfer), caches the metadata for later attachment. If the id resolves but
+/// the row write fails, also falls back to caching (see
+/// [`insert_payment_metadata_with_cache_fallback`]).
 ///
 /// Returns the resolved payment ID, or the raw identifier if it was cached.
-pub(crate) async fn insert_or_cache_payment_metadata(
+pub(crate) async fn resolve_and_insert_payment_metadata(
     identifier: &str,
     metadata: PaymentMetadata,
     spark_wallet: &SparkWallet,
@@ -450,12 +485,13 @@ pub(crate) async fn insert_or_cache_payment_metadata(
     match resolve_payment_id(identifier, spark_wallet, storage, tx_inputs_are_ours).await {
         Ok(payment_id) => {
             debug!("Resolved payment id {payment_id} for identifier {identifier}");
-            storage
-                .insert_payment_metadata(payment_id.clone(), metadata)
-                .await
-                .map_err(|e| {
-                    SdkError::Generic(format!("Failed to insert payment metadata: {e}"))
-                })?;
+            insert_payment_metadata_with_cache_fallback(
+                storage,
+                payment_id.clone(),
+                identifier,
+                metadata,
+            )
+            .await?;
             Ok(payment_id)
         }
         Err(e) => {

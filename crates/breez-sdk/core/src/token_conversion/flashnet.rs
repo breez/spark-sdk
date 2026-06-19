@@ -398,7 +398,7 @@ impl FlashnetTokenConverter {
         // helper because the SDK never holds those transfers in hand
         // (they're produced by the pool, not by us).
         let sent_fut = async {
-            crate::utils::conversions::insert_or_cache_payment_metadata_for_transfer(
+            crate::utils::conversions::resolve_and_insert_payment_metadata_for_transfer(
                 outbound_asset_transfer,
                 PaymentMetadata {
                     conversion_info: Some(ConversionInfo::Amm {
@@ -421,7 +421,7 @@ impl FlashnetTokenConverter {
 
         let received_fut = async {
             if let Some(identifier) = &inbound_identifier {
-                let payment_id = crate::utils::payments::insert_or_cache_payment_metadata(
+                let payment_id = crate::utils::payments::resolve_and_insert_payment_metadata(
                     identifier,
                     PaymentMetadata {
                         conversion_info: Some(ConversionInfo::Amm {
@@ -459,7 +459,7 @@ impl FlashnetTokenConverter {
                     }),
                     ..Default::default()
                 };
-                crate::utils::payments::insert_or_cache_payment_metadata(
+                crate::utils::payments::resolve_and_insert_payment_metadata(
                     identifier,
                     metadata,
                     &self.spark_wallet,

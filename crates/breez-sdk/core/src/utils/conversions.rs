@@ -64,18 +64,20 @@ pub(crate) async fn payment_from_asset_transfer(
 /// operators.
 ///
 /// The string-identifier variant
-/// [`crate::utils::payments::insert_or_cache_payment_metadata`] calls
+/// [`crate::utils::payments::resolve_and_insert_payment_metadata`] calls
 /// `get_token_transactions_by_hashes` on the token branch to re-fetch the
 /// transaction it needs to derive the payment id; for callers that
 /// already received the [`AssetTransfer`] from `transfer_to_deposit` /
 /// `transfer_asset`, that fetch is wasted work. This helper takes the
 /// transfer by reference and skips the network step.
 ///
-/// Always inserts (never caches): with the [`AssetTransfer`] in hand the
-/// payment id is locally resolvable, so the cache fallback used by the
-/// string-identifier variant for the "not synced yet" case is
-/// unnecessary.
-pub(crate) async fn insert_or_cache_payment_metadata_for_transfer(
+/// The payment id is locally resolvable from the in-hand transfer, so the row
+/// insert is attempted directly. On a storage write failure the `metadata` is
+/// instead cached under `transfer.id()` (the sync-time identifier: the Spark
+/// `payment.id` or the token `tx_hash`), so the next sync's
+/// [`crate::sync::SparkSyncService::apply_payment_metadata`] reapplies it into
+/// the row. Errors only if both the insert and the cache write fail.
+pub(crate) async fn resolve_and_insert_payment_metadata_for_transfer(
     transfer: &AssetTransfer,
     metadata: PaymentMetadata,
     spark_wallet: &SparkWallet,
@@ -101,10 +103,16 @@ pub(crate) async fn insert_or_cache_payment_metadata_for_transfer(
         }
     };
 
-    storage
-        .insert_payment_metadata(payment_id.clone(), metadata)
-        .await
-        .map_err(|e| SdkError::Generic(format!("Failed to insert payment metadata: {e}")))?;
+    // Cache key is the sync-time identifier (`transfer.id()`), not the resolved
+    // `payment_id`: token payment ids carry a `:vout` suffix that
+    // `apply_payment_metadata` does not key on.
+    crate::utils::payments::insert_payment_metadata_with_cache_fallback(
+        storage,
+        payment_id.clone(),
+        &transfer.id(),
+        metadata,
+    )
+    .await?;
 
     Ok(payment_id)
 }
