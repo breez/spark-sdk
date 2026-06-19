@@ -822,6 +822,11 @@ pub struct SparkSigningOperator {
     pub address: String,
     /// Hex-encoded compressed public key of the operator.
     pub identity_public_key: String,
+    /// Optional PEM-encoded CA certificate for TLS verification.
+    /// When set, the SDK uses this CA to verify the operator's TLS certificate
+    /// instead of the system/default roots. Useful for local development with
+    /// self-signed certificates.
+    pub ca_cert_pem: Option<String>,
 }
 
 /// Configuration for the Spark Service Provider (SSP).
