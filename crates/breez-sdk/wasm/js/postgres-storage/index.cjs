@@ -1044,6 +1044,66 @@ class PostgresStorage {
     }
   }
 
+  // ===== Boltz Swap Operations =====
+
+  async setBoltzSwap(swap) {
+    try {
+      await this.pool.query(
+        `INSERT INTO brz_boltz_swaps (user_id, id, is_terminal, updated_at, data, secrets)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT(user_id, id) DO UPDATE SET
+           is_terminal = EXCLUDED.is_terminal,
+           updated_at = EXCLUDED.updated_at,
+           data = EXCLUDED.data,
+           secrets = EXCLUDED.secrets`,
+        [
+          this.identity,
+          swap.id,
+          swap.isTerminal,
+          swap.updatedAt,
+          swap.data,
+          swap.secrets,
+        ]
+      );
+    } catch (error) {
+      throw new StorageError(`Failed to set boltz swap: ${error.message}`, error);
+    }
+  }
+
+  async getBoltzSwap(id) {
+    try {
+      const result = await this.pool.query(
+        `SELECT id, is_terminal, updated_at, data, secrets
+         FROM brz_boltz_swaps
+         WHERE user_id = $1 AND id = $2`,
+        [this.identity, id]
+      );
+      if (result.rows.length === 0) {
+        return null;
+      }
+      return boltzSwapFromRow(result.rows[0]);
+    } catch (error) {
+      throw new StorageError(`Failed to get boltz swap: ${error.message}`, error);
+    }
+  }
+
+  async listActiveBoltzSwaps() {
+    try {
+      const result = await this.pool.query(
+        `SELECT id, is_terminal, updated_at, data, secrets
+         FROM brz_boltz_swaps
+         WHERE user_id = $1 AND is_terminal = FALSE`,
+        [this.identity]
+      );
+      return result.rows.map(boltzSwapFromRow);
+    } catch (error) {
+      throw new StorageError(
+        `Failed to list active boltz swaps: ${error.message}`,
+        error
+      );
+    }
+  }
+
   // ===== Sync Operations =====
 
   async syncAddOutgoingChange(record) {
@@ -1468,6 +1528,20 @@ class PostgresStorage {
       );
     }
   }
+}
+
+/**
+ * Maps a brz_boltz_swaps row to the camelCase StoredBoltzSwap shape the SDK
+ * expects, parsing the `data` JSON.
+ */
+function boltzSwapFromRow(row) {
+  return {
+    id: row.id,
+    isTerminal: row.is_terminal,
+    updatedAt: Number(row.updated_at),
+    data: row.data,
+    secrets: row.secrets,
+  };
 }
 
 /**

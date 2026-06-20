@@ -14,7 +14,7 @@ use crate::{
     error::DepositClaimError,
     persist::{
         PaymentMetadata, SetLnurlMetadataItem, StorageListPaymentsRequest,
-        StoragePaymentDetailsFilter, UpdateDepositPayload, parse_payment_status,
+        StoragePaymentDetailsFilter, StoredBoltzSwap, UpdateDepositPayload, parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -354,8 +354,30 @@ impl SqliteStorage {
              SET conversion_info = json_set(conversion_info, '$.type', 'amm')
              WHERE conversion_info IS NOT NULL
                AND json_extract(conversion_info, '$.type') IS NULL;",
+            // Boltz cross-chain swap rows, synced for cross-instance recovery.
+            // `data` is the BoltzSwap JSON with `key_source` lifted out; the
+            // lifted secrets are ECIES-encrypted into `secrets` by the adapter.
+            "CREATE TABLE boltz_swaps (
+                id TEXT PRIMARY KEY,
+                is_terminal INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                data TEXT NOT NULL,
+                secrets TEXT NOT NULL
+            );
+            CREATE INDEX idx_boltz_swaps_is_terminal ON boltz_swaps(is_terminal);",
         ]
     }
+}
+
+/// Maps a `boltz_swaps` row to a [`StoredBoltzSwap`].
+fn parse_boltz_swap_row(row: &Row) -> rusqlite::Result<StoredBoltzSwap> {
+    Ok(StoredBoltzSwap {
+        id: row.get(0)?,
+        is_terminal: row.get(1)?,
+        updated_at: row.get(2)?,
+        data: row.get(3)?,
+        secrets: row.get(4)?,
+    })
 }
 
 /// Maps a rusqlite error to the appropriate `StorageError`.
@@ -1081,6 +1103,50 @@ impl Storage for SqliteStorage {
         let connection = self.get_connection()?;
         connection.execute("DELETE FROM contacts WHERE id = ?", params![id])?;
         Ok(())
+    }
+
+    async fn set_boltz_swap(&self, swap: StoredBoltzSwap) -> Result<(), StorageError> {
+        let connection = self.get_connection()?;
+        connection.execute(
+            "INSERT INTO boltz_swaps (id, is_terminal, updated_at, data, secrets)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               is_terminal = excluded.is_terminal,
+               updated_at = excluded.updated_at,
+               data = excluded.data,
+               secrets = excluded.secrets",
+            params![
+                swap.id,
+                swap.is_terminal,
+                swap.updated_at,
+                swap.data,
+                swap.secrets
+            ],
+        )?;
+        Ok(())
+    }
+
+    async fn get_boltz_swap(&self, id: String) -> Result<Option<StoredBoltzSwap>, StorageError> {
+        let connection = self.get_connection()?;
+        let mut stmt = connection.prepare(
+            "SELECT id, is_terminal, updated_at, data, secrets FROM boltz_swaps WHERE id = ?",
+        )?;
+        match stmt.query_row(params![id], parse_boltz_swap_row) {
+            Ok(swap) => Ok(Some(swap)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn list_active_boltz_swaps(&self) -> Result<Vec<StoredBoltzSwap>, StorageError> {
+        let connection = self.get_connection()?;
+        let mut stmt = connection.prepare(
+            "SELECT id, is_terminal, updated_at, data, secrets FROM boltz_swaps WHERE is_terminal = 0",
+        )?;
+        let swaps = stmt
+            .query_map([], parse_boltz_swap_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(swaps)
     }
 
     async fn add_outgoing_change(
@@ -2392,6 +2458,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_boltz_swaps_crud() {
+        let temp_dir = create_temp_dir("boltz_swaps_crud");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        crate::persist::tests::test_boltz_swaps_crud(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_contacts_crud() {
         let temp_dir = create_temp_dir("contacts_crud");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
@@ -2415,7 +2489,12 @@ mod tests {
         // Step 1: bring the database up to the state before the discriminator
         // backfill — the conversion_info column exists, but no `"type"` tag has
         // been backfilled yet.
-        let backfill_index = SqliteStorage::current_migrations().len() - 1;
+        // Locate the backfill by content so later appended migrations (e.g. the
+        // boltz_swaps table) don't shift this off the end.
+        let backfill_index = SqliteStorage::current_migrations()
+            .iter()
+            .position(|s| s.contains("'$.type', 'amm'"))
+            .expect("conversion_info backfill migration present");
         {
             let mut conn = Connection::open(&db_path).unwrap();
             let migrations_before_backfill: Vec<_> = SqliteStorage::current_migrations()

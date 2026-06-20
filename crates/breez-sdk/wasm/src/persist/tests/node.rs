@@ -185,6 +185,13 @@ async fn test_contacts_crud() {
 }
 
 #[wasm_bindgen_test]
+async fn test_boltz_swaps_crud() {
+    let storage = create_test_storage("boltz_swaps_crud").await;
+
+    breez_sdk_spark::storage_tests::test_boltz_swaps_crud(Box::new(storage)).await;
+}
+
+#[wasm_bindgen_test]
 async fn test_conversion_status_persistence() {
     let storage = create_test_storage("conversion_status_persistence").await;
 

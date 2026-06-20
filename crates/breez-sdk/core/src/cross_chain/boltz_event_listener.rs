@@ -363,7 +363,7 @@ pub(crate) async fn reconcile_pending_boltz_conversions(
 
 #[cfg(test)]
 mod tests {
-    use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind};
+    use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind, SwapKeySource};
 
     use super::*;
     use macros::test_all;
@@ -376,7 +376,7 @@ mod tests {
             id: id.to_string(),
             status,
             bridge_kind: BridgeKind::Direct,
-            claim_key_index: 0,
+            key_source: SwapKeySource::Derived { claim_key_index: 0 },
             chain_id: 42161,
             claim_address: "0xclaim".to_string(),
             destination_address: "0xdest".to_string(),
@@ -526,7 +526,7 @@ mod tests {
         use std::path::PathBuf;
         use std::sync::Arc;
 
-        use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind};
+        use boltz_client::models::{Asset, BoltzSwap, BoltzSwapStatus, BridgeKind, SwapKeySource};
 
         use super::super::*;
         use crate::persist::sqlite::SqliteStorage;
@@ -543,7 +543,7 @@ mod tests {
                 id: id.to_string(),
                 status,
                 bridge_kind: BridgeKind::Oft,
-                claim_key_index: 0,
+                key_source: SwapKeySource::Derived { claim_key_index: 0 },
                 chain_id: 42161,
                 claim_address: "0xclaim".to_string(),
                 destination_address: "0xdest".to_string(),

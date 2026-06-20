@@ -340,6 +340,39 @@ where
     }
 }
 
+/// A Boltz cross-chain swap row as persisted and synced.
+///
+/// The money-critical secrets (preimage + per-swap gas key) never reach this
+/// struct in cleartext: the adapter lifts `key_source` out of the swap JSON,
+/// ECIES-encrypts it, and carries only the ciphertext in [`secrets`]. The
+/// storage layer treats this as opaque, so it needs no signer. The same
+/// representation is what the realtime-sync layer ships (re-wrapped in transit),
+/// so a second instance restores the swap by decrypting [`secrets`] with the
+/// shared identity key.
+///
+/// [`secrets`]: Self::secrets
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[serde(rename_all = "camelCase")]
+pub struct StoredBoltzSwap {
+    /// Boltz swap id (primary key).
+    pub id: String,
+    /// `swap.status.is_terminal()`, lifted into an indexed column so
+    /// `list_active_boltz_swaps` filters without parsing `data`.
+    pub is_terminal: bool,
+    /// `swap.updated_at`, used for ordering and last-writer-wins.
+    pub updated_at: u64,
+    /// The full `BoltzSwap` serialized to a JSON string with `key_source`
+    /// removed. Stored verbatim so unknown fields survive across versions. A
+    /// plain string (not a structured value) so the row crosses every backend,
+    /// the WASM boundary, and the foreign-language FFI uniformly as TEXT.
+    pub data: String,
+    /// Base64 of the ECIES ciphertext of the lifted `key_source` value.
+    /// Base64 (not raw bytes) so it marshals uniformly as TEXT across every
+    /// backend and across the WASM boundary.
+    pub secrets: String,
+}
+
 /// Trait for persistent storage
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 #[async_trait]
@@ -497,6 +530,15 @@ pub trait Storage: Send + Sync {
 
     /// Deletes a contact by its ID
     async fn delete_contact(&self, id: String) -> Result<(), StorageError>;
+
+    /// Inserts or overwrites a Boltz swap row (upsert by id).
+    async fn set_boltz_swap(&self, swap: StoredBoltzSwap) -> Result<(), StorageError>;
+
+    /// Gets a single Boltz swap row by its id, or `None` if absent.
+    async fn get_boltz_swap(&self, id: String) -> Result<Option<StoredBoltzSwap>, StorageError>;
+
+    /// Lists all non-terminal Boltz swap rows (`is_terminal = false`).
+    async fn list_active_boltz_swaps(&self) -> Result<Vec<StoredBoltzSwap>, StorageError>;
 
     // Sync storage methods
     async fn add_outgoing_change(

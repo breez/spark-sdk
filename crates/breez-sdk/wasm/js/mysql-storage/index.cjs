@@ -105,6 +105,20 @@ function toBool(value) {
   return value === 1 || value === "1" || value === true;
 }
 
+/**
+ * Maps a brz_boltz_swaps row to the camelCase StoredBoltzSwap shape the SDK
+ * expects, coercing TINYINT(1) to a boolean and parsing the `data` JSON.
+ */
+function boltzSwapFromRow(row) {
+  return {
+    id: row.id,
+    isTerminal: toBool(row.is_terminal),
+    updatedAt: Number(row.updated_at),
+    data: row.data,
+    secrets: row.secrets,
+  };
+}
+
 class MysqlStorage {
   /**
    * @param {import('mysql2/promise').Pool} pool - Connection pool (may be shared with other tenants).
@@ -1057,6 +1071,66 @@ class MysqlStorage {
     } catch (error) {
       throw new StorageError(
         `Failed to delete contact: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  // ===== Boltz Swap Operations =====
+
+  async setBoltzSwap(swap) {
+    try {
+      await this.pool.query(
+        `INSERT INTO brz_boltz_swaps (user_id, id, is_terminal, updated_at, data, secrets)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           is_terminal = VALUES(is_terminal),
+           updated_at = VALUES(updated_at),
+           data = VALUES(data),
+           secrets = VALUES(secrets)`,
+        [
+          this.identity,
+          swap.id,
+          swap.isTerminal ? 1 : 0,
+          swap.updatedAt,
+          swap.data,
+          swap.secrets,
+        ]
+      );
+    } catch (error) {
+      throw new StorageError(`Failed to set boltz swap: ${error.message}`, error);
+    }
+  }
+
+  async getBoltzSwap(id) {
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT id, is_terminal, updated_at, data, secrets
+         FROM brz_boltz_swaps
+         WHERE user_id = ? AND id = ?`,
+        [this.identity, id]
+      );
+      if (rows.length === 0) {
+        return null;
+      }
+      return boltzSwapFromRow(rows[0]);
+    } catch (error) {
+      throw new StorageError(`Failed to get boltz swap: ${error.message}`, error);
+    }
+  }
+
+  async listActiveBoltzSwaps() {
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT id, is_terminal, updated_at, data, secrets
+         FROM brz_boltz_swaps
+         WHERE user_id = ? AND is_terminal = FALSE`,
+        [this.identity]
+      );
+      return rows.map(boltzSwapFromRow);
+    } catch (error) {
+      throw new StorageError(
+        `Failed to list active boltz swaps: ${error.message}`,
         error
       );
     }

@@ -575,6 +575,19 @@ class MigrationManager {
           }
         },
       },
+      {
+        // Boltz cross-chain swap rows, synced for cross-instance recovery.
+        // `data` is the BoltzSwap JSON with `key_source` lifted out; the lifted
+        // secrets are ECIES-encrypted (base64) into `secrets` by the adapter.
+        // No index on isTerminal: IndexedDB can't key on a boolean, so
+        // listActiveBoltzSwaps scans and filters (swap volume is low).
+        name: "Create boltz_swaps store",
+        upgrade: (db) => {
+          if (!db.objectStoreNames.contains("boltz_swaps")) {
+            db.createObjectStore("boltz_swaps", { keyPath: "id" });
+          }
+        },
+      },
     ];
   }
 }
@@ -603,7 +616,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 19; // Current schema version (= migration count)
+    this.dbVersion = 20; // Current schema version (= migration count)
   }
 
   /**
@@ -2213,6 +2226,75 @@ class IndexedDBStorage {
         reject(
           new StorageError(
             `Failed to delete contact '${id}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  // ===== Boltz Swap Operations =====
+
+  async setBoltzSwap(swap) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("boltz_swaps", "readwrite");
+      const store = transaction.objectStore("boltz_swaps");
+      // IndexedDB stores nested objects natively, so `data` is kept as-is.
+      const request = store.put(swap);
+      request.onsuccess = () => resolve();
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to set boltz swap '${swap.id}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async getBoltzSwap(id) {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("boltz_swaps", "readonly");
+      const store = transaction.objectStore("boltz_swaps");
+      const request = store.get(id);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to get boltz swap '${id}': ${request.error?.message || "Unknown error"}`,
+            request.error
+          )
+        );
+      };
+    });
+  }
+
+  async listActiveBoltzSwaps() {
+    if (!this.db) {
+      throw new StorageError("Database not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction("boltz_swaps", "readonly");
+      const store = transaction.objectStore("boltz_swaps");
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const all = request.result || [];
+        resolve(all.filter((swap) => !swap.isTerminal));
+      };
+      request.onerror = () => {
+        reject(
+          new StorageError(
+            `Failed to list active boltz swaps: ${request.error?.message || "Unknown error"}`,
             request.error
           )
         );

@@ -1412,6 +1412,74 @@ class SqliteStorage {
       );
     }
   }
+
+  // ===== Boltz Swap Operations =====
+
+  setBoltzSwap(swap) {
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO boltz_swaps (id, is_terminal, updated_at, data, secrets)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          is_terminal = excluded.is_terminal,
+          updated_at = excluded.updated_at,
+          data = excluded.data,
+          secrets = excluded.secrets
+      `);
+      stmt.run(
+        swap.id,
+        swap.isTerminal ? 1 : 0,
+        swap.updatedAt,
+        swap.data,
+        swap.secrets
+      );
+      return Promise.resolve();
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to set boltz swap: ${error.message}`, error)
+      );
+    }
+  }
+
+  getBoltzSwap(id) {
+    try {
+      const stmt = this.db.prepare(
+        "SELECT id, is_terminal, updated_at, data, secrets FROM boltz_swaps WHERE id = ?"
+      );
+      const row = stmt.get(id);
+      return Promise.resolve(row ? boltzSwapFromRow(row) : null);
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to get boltz swap: ${error.message}`, error)
+      );
+    }
+  }
+
+  listActiveBoltzSwaps() {
+    try {
+      const stmt = this.db.prepare(
+        "SELECT id, is_terminal, updated_at, data, secrets FROM boltz_swaps WHERE is_terminal = 0"
+      );
+      const rows = stmt.all();
+      return Promise.resolve(rows.map(boltzSwapFromRow));
+    } catch (error) {
+      return Promise.reject(
+        new StorageError(`Failed to list active boltz swaps: ${error.message}`, error)
+      );
+    }
+  }
+}
+
+/// Maps a `boltz_swaps` row to a StoredBoltzSwap, parsing `data` and the
+/// is_terminal flag back into the camelCase shape the SDK expects.
+function boltzSwapFromRow(row) {
+  return {
+    id: row.id,
+    isTerminal: row.is_terminal !== 0,
+    updatedAt: Number(row.updated_at),
+    data: row.data,
+    secrets: row.secrets,
+  };
 }
 
 async function createDefaultStorage(dataDir, logger = null) {

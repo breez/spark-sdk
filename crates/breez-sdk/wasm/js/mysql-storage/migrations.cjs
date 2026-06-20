@@ -541,6 +541,25 @@ class MysqlMigrationManager {
           `UPDATE brz_payment_metadata SET conversion_info = JSON_SET(conversion_info, '$.type', 'amm') WHERE conversion_info IS NOT NULL AND JSON_EXTRACT(conversion_info, '$.type') IS NULL`,
         ],
       },
+      {
+        // Boltz cross-chain swap rows, synced for cross-instance recovery.
+        // Born multi-tenant (user_id in the PK). `data` is the BoltzSwap JSON
+        // with `key_source` lifted out; the lifted secrets are ECIES-encrypted
+        // (base64) into `secrets` by the adapter.
+        name: "Create brz_boltz_swaps table",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS brz_boltz_swaps (
+              user_id VARBINARY(33) NOT NULL,
+              id VARCHAR(255) NOT NULL,
+              is_terminal TINYINT(1) NOT NULL,
+              updated_at BIGINT NOT NULL,
+              data LONGTEXT NOT NULL,
+              secrets LONGTEXT NOT NULL,
+              PRIMARY KEY (user_id, id),
+              INDEX brz_idx_boltz_swaps_user_is_terminal (user_id, is_terminal)
+          )`,
+        ],
+      },
     ];
   }
 }

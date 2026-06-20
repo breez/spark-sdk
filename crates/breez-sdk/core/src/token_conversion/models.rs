@@ -218,9 +218,10 @@ pub enum ConversionInfo {
     },
     /// Boltz reverse swap — cross-chain conversion via Lightning hold invoice.
     ///
-    /// `instance_id` and `claim_key_index` are intentionally not stored on
-    /// the payment row in v1: they would only be needed for cross-device
-    /// re-derivation of the preimage, which v1 does not support.
+    /// The swap's secrets and full lifecycle state live on the separate, synced
+    /// Boltz swap row keyed by `swap_id`, not here. This payment-row metadata
+    /// carries only what the UI and reconciliation need; recovery on another
+    /// instance is driven from that synced swap row.
     #[serde(rename = "boltz")]
     Boltz {
         /// The Boltz swap id returned by `POST /swap/reverse`.

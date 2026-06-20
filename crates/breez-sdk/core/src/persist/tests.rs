@@ -3393,6 +3393,81 @@ pub async fn test_contacts_crud(storage: Box<dyn Storage>) {
     assert_ne!(page1[0].id, page2[0].id);
 }
 
+/// Storage-layer CRUD for Boltz swap rows. Exercises the opaque
+/// [`StoredBoltzSwap`] shape; the encrypt/lift logic is the adapter's job and is
+/// tested there.
+pub async fn test_boltz_swaps_crud(storage: Box<dyn Storage>) {
+    use crate::persist::StoredBoltzSwap;
+
+    let make = |id: &str, is_terminal: bool, updated_at: u64| StoredBoltzSwap {
+        id: id.to_string(),
+        is_terminal,
+        updated_at,
+        data: format!(r#"{{"id":"{id}","status":"Created","extra":1}}"#),
+        secrets: format!("c2VjcmV0-{id}"),
+    };
+
+    // Insert + get round-trip.
+    storage
+        .set_boltz_swap(make("s1", false, 1000))
+        .await
+        .unwrap();
+    let fetched = storage
+        .get_boltz_swap("s1".to_string())
+        .await
+        .unwrap()
+        .expect("s1 present");
+    assert_eq!(fetched.id, "s1");
+    assert!(!fetched.is_terminal);
+    assert_eq!(fetched.updated_at, 1000);
+    assert_eq!(fetched.data, r#"{"id":"s1","status":"Created","extra":1}"#);
+    assert_eq!(fetched.secrets, "c2VjcmV0-s1");
+
+    // Missing id returns None (not an error).
+    assert!(
+        storage
+            .get_boltz_swap("nope".to_string())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Upsert overwrites every mutable column.
+    storage
+        .set_boltz_swap(make("s1", true, 2000))
+        .await
+        .unwrap();
+    let updated = storage
+        .get_boltz_swap("s1".to_string())
+        .await
+        .unwrap()
+        .expect("s1 still present");
+    assert!(updated.is_terminal);
+    assert_eq!(updated.updated_at, 2000);
+
+    // list_active filters out terminal rows.
+    storage
+        .set_boltz_swap(make("s2", false, 1500))
+        .await
+        .unwrap();
+    storage
+        .set_boltz_swap(make("s3", true, 1500))
+        .await
+        .unwrap();
+    let mut active = storage.list_active_boltz_swaps().await.unwrap();
+    active.sort_by(|a, b| a.id.cmp(&b.id));
+    let active_ids: Vec<_> = active.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(active_ids, vec!["s2"], "only non-terminal rows are active");
+
+    // Terminal rows stay queryable by id.
+    let s3 = storage
+        .get_boltz_swap("s3".to_string())
+        .await
+        .unwrap()
+        .expect("terminal row retained");
+    assert!(s3.is_terminal);
+}
+
 /// Tests that `conversion_status` in `PaymentMetadata` is correctly persisted and
 /// read back as `conversion_details` on the `Payment`. Also verifies COALESCE
 /// behavior preserves it across partial metadata updates, and that all

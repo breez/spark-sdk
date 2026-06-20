@@ -20,8 +20,8 @@ use crate::{
     error::DepositClaimError,
     persist::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
-        StorageListPaymentsRequest, StoragePaymentDetailsFilter, UpdateDepositPayload,
-        parse_payment_status,
+        StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredBoltzSwap,
+        UpdateDepositPayload, parse_payment_status,
     },
     sync_storage::{
         IncomingChange, OutgoingChange, Record, RecordChange, RecordId, UnversionedRecordChange,
@@ -512,8 +512,38 @@ impl MysqlStorage {
                  WHERE conversion_info IS NOT NULL \
                    AND JSON_EXTRACT(conversion_info, '$.type') IS NULL",
             )],
+            // Migration 20: Boltz cross-chain swap rows, synced for cross-instance
+            // recovery. `data` is the BoltzSwap JSON with `key_source` lifted out;
+            // the lifted secrets are ECIES-encrypted into `secrets` by the adapter.
+            vec![Migration::sql(
+                "CREATE TABLE IF NOT EXISTS brz_boltz_swaps (
+                    user_id VARBINARY(33) NOT NULL,
+                    id VARCHAR(255) NOT NULL,
+                    is_terminal BOOLEAN NOT NULL,
+                    updated_at BIGINT NOT NULL,
+                    data LONGTEXT NOT NULL,
+                    secrets LONGTEXT NOT NULL,
+                    PRIMARY KEY (user_id, id),
+                    INDEX brz_idx_boltz_swaps_user_is_terminal (user_id, is_terminal)
+                )",
+            )],
         ]
     }
+}
+
+/// Maps a `brz_boltz_swaps` row tuple `(id, is_terminal, updated_at, data,
+/// secrets)` to a [`StoredBoltzSwap`].
+fn boltz_swap_from_parts(
+    parts: (String, bool, i64, String, String),
+) -> Result<StoredBoltzSwap, StorageError> {
+    let (id, is_terminal, updated_at, data, secrets) = parts;
+    Ok(StoredBoltzSwap {
+        id,
+        is_terminal,
+        updated_at: u64::try_from(updated_at)?,
+        data,
+        secrets,
+    })
 }
 
 /// Builds the multi-tenant scoping migration. The `identity` is a 33-byte
@@ -1511,6 +1541,59 @@ impl Storage for MysqlStorage {
         Ok(())
     }
 
+    async fn set_boltz_swap(&self, swap: StoredBoltzSwap) -> Result<(), StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        conn.exec_drop(
+            "INSERT INTO brz_boltz_swaps (user_id, id, is_terminal, updated_at, data, secrets)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               is_terminal = VALUES(is_terminal),
+               updated_at = VALUES(updated_at),
+               data = VALUES(data),
+               secrets = VALUES(secrets)",
+            (
+                self.identity.clone(),
+                swap.id,
+                swap.is_terminal,
+                i64::try_from(swap.updated_at)?,
+                swap.data,
+                swap.secrets,
+            ),
+        )
+        .await
+        .map_err(map_db_error)?;
+        Ok(())
+    }
+
+    async fn get_boltz_swap(&self, id: String) -> Result<Option<StoredBoltzSwap>, StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        let row: Option<(String, bool, i64, String, String)> = conn
+            .exec_first(
+                "SELECT id, is_terminal, updated_at, data, secrets
+                 FROM brz_boltz_swaps WHERE user_id = ? AND id = ?",
+                (self.identity.clone(), id),
+            )
+            .await
+            .map_err(map_db_error)?;
+        match row {
+            Some(parts) => Ok(Some(boltz_swap_from_parts(parts)?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn list_active_boltz_swaps(&self) -> Result<Vec<StoredBoltzSwap>, StorageError> {
+        let mut conn = self.pool.get_conn().await.map_err(map_db_error)?;
+        let rows: Vec<(String, bool, i64, String, String)> = conn
+            .exec(
+                "SELECT id, is_terminal, updated_at, data, secrets
+                 FROM brz_boltz_swaps WHERE user_id = ? AND is_terminal = FALSE",
+                (self.identity.clone(),),
+            )
+            .await
+            .map_err(map_db_error)?;
+        rows.into_iter().map(boltz_swap_from_parts).collect()
+    }
+
     async fn add_outgoing_change(
         &self,
         record: UnversionedRecordChange,
@@ -2235,6 +2318,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_boltz_swaps_crud() {
+        let fixture = MysqlTestFixture::new().await;
+        crate::persist::tests::test_boltz_swaps_crud(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
     async fn test_payment_asset_filtering() {
         let fixture = MysqlTestFixture::new().await;
         crate::persist::tests::test_asset_filtering(Box::new(fixture.storage)).await;
@@ -2345,9 +2434,17 @@ mod tests {
             .expect("Failed to get host port");
         let connection_string = format!("mysql://root@127.0.0.1:{host_port}/test");
 
-        // Apply all migrations except the discriminator backfill (the last one).
+        // Apply all migrations up to (but not including) the discriminator
+        // backfill. Locate it by content so later appended migrations (e.g. the
+        // brz_boltz_swaps table) don't shift this off the end.
         let migrations = MysqlStorage::migrations(&TEST_IDENTITY_A);
-        let backfill_index = migrations.len() - 1;
+        let backfill_index = migrations
+            .iter()
+            .position(|m| {
+                m.iter()
+                    .any(|step| matches!(step, Migration::Sql(s) if s.contains("'$.type', 'amm'")))
+            })
+            .expect("conversion_info backfill migration present");
         let pool = create_pool(&MysqlStorageConfig::with_defaults(
             connection_string.clone(),
         ))
@@ -2879,11 +2976,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             version,
-            Some(19),
-            "migration version must advance to 19 (the legacy fixture starts at 16; \
+            Some(20),
+            "migration version must advance to 20 (the legacy fixture starts at 16; \
              migration 17 pins applied_at default to UTC; migration 18 moves deposit \
              details into the brz_payment_details_deposit table; migration 19 backfills \
-             the conversion_info type discriminator)"
+             the conversion_info type discriminator; migration 20 adds brz_boltz_swaps)"
         );
 
         let payment_count: Option<i64> = conn
@@ -3156,7 +3253,7 @@ mod tests {
             .exec_first("SELECT MAX(version) FROM brz_schema_migrations", ())
             .await
             .unwrap();
-        assert_eq!(version, Some(19), "migration must advance to 19");
+        assert_eq!(version, Some(20), "migration must advance to 20");
 
         let payment_count: Option<i64> = conn
             .exec_first("SELECT COUNT(*) FROM brz_payments WHERE id = 'p1'", ())

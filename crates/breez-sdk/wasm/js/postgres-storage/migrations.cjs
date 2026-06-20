@@ -497,6 +497,26 @@ class PostgresMigrationManager {
           `UPDATE brz_payment_metadata SET conversion_info = conversion_info::jsonb || '{"type": "amm"}'::jsonb WHERE conversion_info IS NOT NULL AND conversion_info::jsonb->>'type' IS NULL`,
         ],
       },
+      {
+        // Boltz cross-chain swap rows, synced for cross-instance recovery.
+        // Born multi-tenant (user_id in the PK). `data` is the BoltzSwap JSON
+        // with `key_source` lifted out; the lifted secrets are ECIES-encrypted
+        // (base64) into `secrets` by the adapter.
+        name: "Create brz_boltz_swaps table",
+        sql: [
+          `CREATE TABLE IF NOT EXISTS brz_boltz_swaps (
+              user_id BYTEA NOT NULL,
+              id TEXT NOT NULL,
+              is_terminal BOOLEAN NOT NULL,
+              updated_at BIGINT NOT NULL,
+              data TEXT NOT NULL,
+              secrets TEXT NOT NULL,
+              PRIMARY KEY (user_id, id)
+          )`,
+          `CREATE INDEX brz_idx_boltz_swaps_user_is_terminal
+             ON brz_boltz_swaps(user_id, is_terminal)`,
+        ],
+      },
     ];
   }
 }
