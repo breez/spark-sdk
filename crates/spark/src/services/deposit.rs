@@ -286,9 +286,8 @@ impl DepositService {
             &quote_signature.serialize_der(),
         );
 
-        // The signer exports the static-deposit secret (the SSP co-signs and
-        // needs it in the clear) and signs the user-statement with the
-        // identity key.
+        // The signer exports the static-deposit secret and signs the
+        // user-statement with the identity key.
         let PreparedStaticDepositClaim {
             deposit_secret_key,
             user_signature,
@@ -300,6 +299,20 @@ impl DepositService {
             })
             .await?;
 
+        // The SSP co-signs the claim and so needs the static-deposit secret.
+        // Send it ECIES-encrypted to the SSP identity public key (same scheme as
+        // transfer leaf secret ciphers) instead of in cleartext over GraphQL.
+        let encrypted_deposit_secret_key = utils::ecies::encrypt(
+            &self
+                .ssp_client
+                .identity_public_key()
+                .serialize_uncompressed(),
+            &deposit_secret_key.secret_bytes(),
+        )
+        .map_err(|e| {
+            ServiceError::Generic(format!("ECIES encryption of deposit key failed: {e}"))
+        })?;
+
         // Call the service provider to claim the static deposit
         let resp = self
             .ssp_client
@@ -308,9 +321,10 @@ impl DepositService {
                 output_index: output_index as i64,
                 network: self.network.into(),
                 credit_amount_sats: Some(credit_amount_sats),
-                request_type: ClaimStaticDepositRequestType::FixedAmount,
+                request_type: Some(ClaimStaticDepositRequestType::FixedAmount),
                 max_fee_sats: None,
-                deposit_secret_key: hex::encode(deposit_secret_key.secret_bytes()),
+                deposit_secret_key: None,
+                encrypted_deposit_secret_key: Some(hex::encode(encrypted_deposit_secret_key)),
                 quote_signature: quote_signature.serialize_der().to_string(),
                 signature: user_signature.serialize_der().to_string(),
             })
