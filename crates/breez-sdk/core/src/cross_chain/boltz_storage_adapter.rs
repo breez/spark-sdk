@@ -25,6 +25,7 @@ use std::sync::Arc;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use bitcoin::bip32::DerivationPath;
 use boltz_client::{BoltzError, BoltzStorage, models::BoltzSwap};
+use tracing::warn;
 
 use crate::{Storage, persist::StoredBoltzSwap, signer::BreezSigner};
 
@@ -144,7 +145,12 @@ impl BoltzStorage for BoltzStorageAdapter {
             .map_err(|e| BoltzError::Store(format!("Failed to list active swaps: {e}")))?;
         let mut swaps = Vec::with_capacity(rows.len());
         for stored in rows {
-            swaps.push(self.swap_from_stored(stored).await?);
+            let id = stored.id.clone();
+            // Skip row on error (bad base64/json, decryption).
+            match self.swap_from_stored(stored).await {
+                Ok(swap) => swaps.push(swap),
+                Err(e) => warn!("Skipping Boltz swap '{id}': failed to load from storage: {e}"),
+            }
         }
         Ok(swaps)
     }

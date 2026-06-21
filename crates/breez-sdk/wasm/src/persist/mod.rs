@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use crate::models::{
     Contact, DepositInfo, IncomingChange, ListContactsRequest, OutgoingChange, Payment,
-    PaymentMetadata, Record, SetLnurlMetadataItem, StorageListPaymentsRequest,
+    PaymentMetadata, Record, SetLnurlMetadataItem, StorageListPaymentsRequest, StoredBoltzSwap,
     UnversionedRecordChange, UpdateDepositPayload,
 };
 
@@ -354,8 +354,7 @@ impl breez_sdk_spark::Storage for WasmStorage {
         &self,
         swap: breez_sdk_spark::StoredBoltzSwap,
     ) -> Result<(), StorageError> {
-        let swap = serde_wasm_bindgen::to_value(&swap)
-            .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        let swap: StoredBoltzSwap = swap.into();
         let promise = self
             .storage
             .set_boltz_swap(swap)
@@ -380,9 +379,9 @@ impl breez_sdk_spark::Storage for WasmStorage {
         if result.is_null() || result.is_undefined() {
             return Ok(None);
         }
-        let swap = serde_wasm_bindgen::from_value(result)
+        let swap: StoredBoltzSwap = serde_wasm_bindgen::from_value(result)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        Ok(Some(swap))
+        Ok(Some(swap.into()))
     }
 
     async fn list_active_boltz_swaps(
@@ -395,9 +394,9 @@ impl breez_sdk_spark::Storage for WasmStorage {
         let result = JsFuture::from(promise)
             .await
             .map_err(js_error_to_storage_error)?;
-        let swaps = serde_wasm_bindgen::from_value(result)
+        let swaps: Vec<StoredBoltzSwap> = serde_wasm_bindgen::from_value(result)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        Ok(swaps)
+        Ok(swaps.into_iter().map(|s| s.into()).collect())
     }
 
     async fn add_outgoing_change(
@@ -536,15 +535,6 @@ impl breez_sdk_spark::Storage for WasmStorage {
 }
 
 #[wasm_bindgen(typescript_custom_section)]
-const STORED_BOLTZ_SWAP_INTERFACE: &'static str = r#"export interface StoredBoltzSwap {
-    id: string;
-    isTerminal: boolean;
-    updatedAt: number;
-    data: string;
-    secrets: string;
-}"#;
-
-#[wasm_bindgen(typescript_custom_section)]
 const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     getCachedItem: (key: string) => Promise<string | null>;
     setCachedItem: (key: string, value: string) => Promise<void>;
@@ -670,7 +660,7 @@ extern "C" {
     pub fn delete_contact(this: &Storage, id: String) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = setBoltzSwap, catch)]
-    pub fn set_boltz_swap(this: &Storage, swap: JsValue) -> Result<Promise, JsValue>;
+    pub fn set_boltz_swap(this: &Storage, swap: StoredBoltzSwap) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = getBoltzSwap, catch)]
     pub fn get_boltz_swap(this: &Storage, id: String) -> Result<Promise, JsValue>;

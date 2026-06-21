@@ -360,7 +360,8 @@ pub struct StoredBoltzSwap {
     /// `swap.status.is_terminal()`, lifted into an indexed column so
     /// `list_active_boltz_swaps` filters without parsing `data`.
     pub is_terminal: bool,
-    /// `swap.updated_at`, used for ordering and last-writer-wins.
+    /// `swap.updated_at`, lifted into a column so the row's freshness is
+    /// inspectable without parsing `data`.
     pub updated_at: u64,
     /// The full `BoltzSwap` serialized to a JSON string with `key_source`
     /// removed. Stored verbatim so unknown fields survive across versions. A

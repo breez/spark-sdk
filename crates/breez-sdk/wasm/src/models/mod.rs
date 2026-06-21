@@ -1690,6 +1690,15 @@ pub struct ListContactsRequest {
     pub limit: Option<u32>,
 }
 
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StoredBoltzSwap)]
+pub struct StoredBoltzSwap {
+    pub id: String,
+    pub is_terminal: bool,
+    pub updated_at: u64,
+    pub data: String,
+    pub secrets: String,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[macros::extern_wasm_bindgen(breez_sdk_spark::WebhookEventType)]
 pub enum WebhookEventType {

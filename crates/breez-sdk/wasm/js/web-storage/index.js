@@ -580,7 +580,7 @@ class MigrationManager {
         // `data` is the BoltzSwap JSON with `key_source` lifted out; the lifted
         // secrets are ECIES-encrypted (base64) into `secrets` by the adapter.
         // No index on isTerminal: IndexedDB can't key on a boolean, so
-        // listActiveBoltzSwaps scans and filters (swap volume is low).
+        // listActiveBoltzSwaps scans and filters.
         name: "Create boltz_swaps store",
         upgrade: (db) => {
           if (!db.objectStoreNames.contains("boltz_swaps")) {
