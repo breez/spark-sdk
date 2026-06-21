@@ -260,6 +260,17 @@ class MysqlStorage {
         for (const paymentDetailsFilter of request.paymentDetailsFilter) {
           const paymentDetailsClauses = [];
 
+          // Base type check: ensure payment type matches the filter type.
+          // Token payments are identified by spark = NULL AND a token row
+          // joined in via t.tx_hash.
+          if (paymentDetailsFilter.type === "spark") {
+            paymentDetailsClauses.push("p.spark = 1");
+          } else if (paymentDetailsFilter.type === "token") {
+            paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
+          } else if (paymentDetailsFilter.type === "lightning") {
+            paymentDetailsClauses.push("l.htlc_status IS NOT NULL");
+          }
+
           const htlcAlias =
             paymentDetailsFilter.type === "spark"
               ? "s"
@@ -284,23 +295,40 @@ class MysqlStorage {
             params.push(...paymentDetailsFilter.htlcStatus);
           }
 
+          // Conversion filter — same enum shape as the Rust storage backend:
+          //   "ammRefundNeeded"   → AMM conversion that needs a clawback
+          //   "orchestraPending"  → Orchestra order not yet terminal
+          //   "boltzPending"      → Boltz reverse swap not yet terminal
+          //                         (lives on the Lightning hold-invoice leg)
           if (
             (paymentDetailsFilter.type === "spark" ||
-              paymentDetailsFilter.type === "token") &&
-            paymentDetailsFilter.conversionRefundNeeded !== undefined
+              paymentDetailsFilter.type === "token" ||
+              paymentDetailsFilter.type === "lightning") &&
+            paymentDetailsFilter.conversionFilter !== undefined
           ) {
-            const typeCheck =
-              paymentDetailsFilter.type === "spark"
-                ? "p.spark = 1"
-                : "p.spark IS NULL";
-            const refundNeeded =
-              paymentDetailsFilter.conversionRefundNeeded === true
-                ? "= 'refundNeeded'"
-                : "!= 'refundNeeded'";
-            paymentDetailsClauses.push(
-              `${typeCheck} AND pm.conversion_info IS NOT NULL AND
-               JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.status')) ${refundNeeded}`
-            );
+            let statusClause;
+            if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
+              statusClause =
+                "JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.type')) = 'amm' AND \
+                 JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.status')) = 'refundNeeded'";
+            } else if (
+              paymentDetailsFilter.conversionFilter === "orchestraPending"
+            ) {
+              statusClause =
+                "JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.type')) = 'orchestra' AND \
+                 JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.status')) NOT IN ('completed', 'failed', 'refunded')";
+            } else if (
+              paymentDetailsFilter.conversionFilter === "boltzPending"
+            ) {
+              statusClause =
+                "JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.type')) = 'boltz' AND \
+                 JSON_UNQUOTE(JSON_EXTRACT(pm.conversion_info, '$.status')) NOT IN ('completed', 'failed', 'refunded')";
+            }
+            if (statusClause) {
+              paymentDetailsClauses.push(
+                `pm.conversion_info IS NOT NULL AND ${statusClause}`
+              );
+            }
           }
 
           if (
@@ -876,6 +904,10 @@ class MysqlStorage {
           nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
         };
+      }
+
+      if (row.conversion_info) {
+        details.conversionInfo = parseJson(row.conversion_info);
       }
     } else if (row.withdraw_tx_id) {
       details = {

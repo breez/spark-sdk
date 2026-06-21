@@ -1,5 +1,6 @@
 pub(super) mod bitcoin_address;
 pub(in crate::sdk) mod bolt11;
+pub(in crate::sdk::payments) mod cross_chain;
 pub(super) mod spark_address;
 pub(super) mod spark_invoice;
 
@@ -36,10 +37,15 @@ pub(in crate::sdk) async fn orchestrate_send(
 ) -> Result<SendPaymentResponse, SdkError> {
     let token_identifier = request.prepare_response.token_identifier.clone();
 
-    // Check the idempotency key is valid and payment doesn't already exist
-    if request.idempotency_key.is_some() && token_identifier.is_some() {
+    // Token transfers have no idempotency hook; retrying would re-spend the
+    // source. Sats-only sends are covered by the provider's TransferId.
+    let has_token_leg =
+        token_identifier.is_some() || request.prepare_response.conversion_estimate.is_some();
+    if request.idempotency_key.is_some() && has_token_leg {
         return Err(SdkError::InvalidInput(
-            "Idempotency key is not supported for token payments".to_string(),
+            "Idempotency key is not supported for payments with a token \
+             transfer leg (direct token send or AMM conversion)."
+                .to_string(),
         ));
     }
     if let Some(idempotency_key) = &request.idempotency_key {
@@ -130,6 +136,15 @@ pub(super) async fn send_internal(
         }
         SendPaymentMethod::BitcoinAddress { address, fee_quote } => {
             bitcoin_address::send(sdk, address, fee_quote, request, amount_override).await
+        }
+        method @ SendPaymentMethod::CrossChainAddress { .. } => {
+            cross_chain::send(
+                sdk,
+                method,
+                token_identifier,
+                request.idempotency_key.clone(),
+            )
+            .await
         }
     }
 }

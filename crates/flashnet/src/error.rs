@@ -2,16 +2,25 @@ use spark::signer::SignerError;
 use spark_wallet::SessionStoreError;
 use thiserror::Error;
 
+use crate::AssetTransfer;
+
 #[derive(Error, Debug, Clone)]
 pub enum FlashnetError {
-    #[error("Network error: {reason} (code: {code:?})")]
+    #[error("{reason}")]
     Network { reason: String, code: Option<u16> },
 
+    /// A pool execution failed after the outbound asset transfer was already
+    /// made. `outbound_asset_transfer` carries the rich wallet-side object
+    /// so the SDK can persist a `Payment` row + `ConversionInfo` for the
+    /// stranded transfer without re-fetching it from the operators.
+    /// Boxed because [`AssetTransfer`] (a `WalletTransfer` or
+    /// `TokenTransaction` payload) is large enough to bloat every
+    /// `Result<_, FlashnetError>` if inlined.
     #[error("Execution error: {source}")]
     Execution {
         #[source]
         source: Box<FlashnetError>,
-        transaction_identifier: Option<String>,
+        outbound_asset_transfer: Option<Box<AssetTransfer>>,
     },
 
     #[error("Session: {0}")]
@@ -28,10 +37,13 @@ pub enum FlashnetError {
 }
 
 impl FlashnetError {
-    pub fn execution(source: FlashnetError, transaction_identifier: Option<String>) -> Self {
+    pub fn execution(
+        source: FlashnetError,
+        outbound_asset_transfer: Option<AssetTransfer>,
+    ) -> Self {
         FlashnetError::Execution {
             source: Box::new(source),
-            transaction_identifier,
+            outbound_asset_transfer: outbound_asset_transfer.map(Box::new),
         }
     }
 }

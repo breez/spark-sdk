@@ -96,7 +96,9 @@ pub(super) async fn prepare(
 
     let prepare_response = sdk
         .prepare_send_payment(crate::PrepareSendPaymentRequest {
-            payment_request: success_data.pr,
+            payment_request: crate::PaymentRequest::Input {
+                input: success_data.pr,
+            },
             amount: Some(u128::from(amount_sats)),
             token_identifier: request.token_identifier.clone(),
             conversion_options: request.conversion_options.clone(),
@@ -261,7 +263,7 @@ pub(super) async fn send(
 
         // Reconcile the prepare-time fee against the re-estimated fee, overpaying
         // by the difference to respect the prepared amount.
-        let overpayment = send::bolt11::fee_overpayment(fees_included_fee, current_fee)?;
+        let overpayment = crate::utils::fees::fee_overpayment(fees_included_fee, current_fee)?;
 
         if overpayment > 0 {
             tracing::info!(

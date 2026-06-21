@@ -128,21 +128,36 @@ impl From<std::num::TryFromIntError> for StorageError {
     }
 }
 
+/// Selects payments by conversion type + status for background tasks.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum ConversionFilter {
+    /// AMM conversions that need a refund (clawback).
+    AmmRefundNeeded,
+    /// Orchestra orders that have not yet reached a terminal state.
+    OrchestraPending,
+    /// Boltz reverse swaps that have not yet reached a terminal state. Lives on
+    /// the Lightning leg (the hold-invoice pay), so it is selected via the
+    /// [`StoragePaymentDetailsFilter::Lightning`] filter.
+    BoltzPending,
+}
+
 /// Storage-internal variant of [`PaymentDetailsFilter`].
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum StoragePaymentDetailsFilter {
     Spark {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
-        conversion_refund_needed: Option<bool>,
+        conversion_filter: Option<ConversionFilter>,
     },
     Token {
-        conversion_refund_needed: Option<bool>,
+        conversion_filter: Option<ConversionFilter>,
         tx_hash: Option<String>,
         tx_type: Option<TokenTransactionType>,
     },
     Lightning {
         htlc_status: Option<Vec<SparkHtlcStatus>>,
+        conversion_filter: Option<ConversionFilter>,
     },
 }
 
@@ -154,19 +169,24 @@ impl From<PaymentDetailsFilter> for StoragePaymentDetailsFilter {
                 conversion_refund_needed,
             } => StoragePaymentDetailsFilter::Spark {
                 htlc_status,
-                conversion_refund_needed,
+                conversion_filter: conversion_refund_needed
+                    .and_then(|v| v.then_some(ConversionFilter::AmmRefundNeeded)),
             },
             PaymentDetailsFilter::Token {
                 conversion_refund_needed,
                 tx_hash,
                 tx_type,
             } => StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed,
+                conversion_filter: conversion_refund_needed
+                    .and_then(|v| v.then_some(ConversionFilter::AmmRefundNeeded)),
                 tx_hash,
                 tx_type,
             },
             PaymentDetailsFilter::Lightning { htlc_status } => {
-                StoragePaymentDetailsFilter::Lightning { htlc_status }
+                StoragePaymentDetailsFilter::Lightning {
+                    htlc_status,
+                    conversion_filter: None,
+                }
             }
         }
     }
@@ -177,21 +197,23 @@ impl From<StoragePaymentDetailsFilter> for PaymentDetailsFilter {
         match filter {
             StoragePaymentDetailsFilter::Spark {
                 htlc_status,
-                conversion_refund_needed,
+                conversion_filter,
             } => PaymentDetailsFilter::Spark {
                 htlc_status,
-                conversion_refund_needed,
+                conversion_refund_needed: conversion_filter
+                    .map(|f| matches!(f, ConversionFilter::AmmRefundNeeded)),
             },
             StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed,
+                conversion_filter,
                 tx_hash,
                 tx_type,
             } => PaymentDetailsFilter::Token {
-                conversion_refund_needed,
+                conversion_refund_needed: conversion_filter
+                    .map(|f| matches!(f, ConversionFilter::AmmRefundNeeded)),
                 tx_hash,
                 tx_type,
             },
-            StoragePaymentDetailsFilter::Lightning { htlc_status } => {
+            StoragePaymentDetailsFilter::Lightning { htlc_status, .. } => {
                 PaymentDetailsFilter::Lightning { htlc_status }
             }
         }
@@ -271,7 +293,13 @@ pub struct PaymentMetadata {
     pub lnurl_withdraw_info: Option<LnurlWithdrawInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lnurl_description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Conversion info for this payment. Defaults `"type"` to `"amm"` when the
+    /// tag is missing (pre-migration sync records).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_conversion_info_with_default_type",
+        default
+    )]
     pub conversion_info: Option<ConversionInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversion_status: Option<ConversionStatus>,
@@ -282,6 +310,34 @@ pub(crate) fn parse_payment_status(value: &str) -> Result<PaymentStatus, Storage
     value
         .parse()
         .map_err(|e| StorageError::Implementation(format!("invalid payment status: {e}")))
+}
+
+/// Deserializes `ConversionInfo` leniently — ensures the `"type"` tag exists
+/// (defaulting to `"amm"` for pre-migration sync records), then deserializes.
+/// The `entry().or_insert_with()` is a no-op hash lookup when the tag already
+/// exists, so the happy path has minimal overhead beyond the `Value` intermediary.
+fn deserialize_conversion_info_with_default_type<'de, D>(
+    deserializer: D,
+) -> Result<Option<ConversionInfo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Deserialize;
+
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(mut v) => {
+            if let Some(obj) = v.as_object_mut() {
+                obj.entry("type")
+                    .or_insert_with(|| serde_json::Value::String("amm".to_string()));
+            }
+            match serde_json::from_value::<ConversionInfo>(v) {
+                Ok(info) => Ok(Some(info)),
+                Err(_) => Ok(None),
+            }
+        }
+    }
 }
 
 /// Trait for persistent storage

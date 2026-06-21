@@ -121,7 +121,9 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
         let prepare = bob
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: alice_addr.clone(),
+                payment_request: PaymentRequest::Input {
+                    input: alice_addr.clone(),
+                },
                 amount: Some(bob_token_balance),
                 token_identifier: Some(token_id.clone()),
                 conversion_options: Some(ConversionOptions {
@@ -161,9 +163,13 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
             .conversion_details
             .expect("Drain should include conversion details");
         assert_eq!(
-            details.from.as_ref().unwrap().method,
-            PaymentMethod::Token,
-            "From step should be a token payment"
+            details.conversions.len(),
+            1,
+            "Should have exactly one conversion (AMM)"
+        );
+        assert_ne!(
+            details.conversions[0].from.asset.ticker, "BTC",
+            "From asset should be a token"
         );
 
         // Confirm Alice receives the converted sats.
@@ -186,7 +192,9 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
         let prepare = bob
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: alice_addr.clone(),
+                payment_request: PaymentRequest::Input {
+                    input: alice_addr.clone(),
+                },
                 amount: Some(u128::from(remaining_sats)),
                 token_identifier: None,
                 conversion_options: None,

@@ -19,8 +19,8 @@ use breez_sdk_itest::{
     PostgresTreeStore, RegtestFaucet, build_sdk_with_tree_store_config, drop_postgres_database,
 };
 use breez_sdk_spark::{
-    BreezSdk, GetInfoRequest, ListPaymentsRequest, Network, PaymentStatus, PaymentType,
-    PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent,
+    BreezSdk, GetInfoRequest, ListPaymentsRequest, Network, PaymentRequest, PaymentStatus,
+    PaymentType, PrepareSendPaymentRequest, ReceivePaymentMethod, ReceivePaymentRequest, SdkEvent,
     SendPaymentRequest, SyncWalletRequest, default_config,
 };
 
@@ -244,7 +244,7 @@ async fn run_single_claim_benchmark(
             async move {
                 let prepare = sdk
                     .prepare_send_payment(PrepareSendPaymentRequest {
-                        payment_request: address,
+                        payment_request: PaymentRequest::Input { input: address },
                         amount: Some(u128::from(amount)),
                         token_identifier: None,
                         conversion_options: None,

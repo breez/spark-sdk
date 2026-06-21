@@ -4,12 +4,14 @@ mod deposits;
 mod helpers;
 mod init;
 mod lightning_address;
+mod lightning_sender;
 mod lnurl;
 mod payments;
 mod runtime;
 mod sync;
 mod sync_coordinator;
 
+pub(crate) use lightning_sender::LightningSender;
 pub(crate) use runtime::{RuntimeEvent, SdkRuntime, runtime_from_config};
 pub(crate) use sync_coordinator::SyncCoordinator;
 
@@ -96,6 +98,12 @@ pub struct BreezSdk {
     pub(crate) token_converter: Arc<dyn TokenConverter>,
     pub(crate) stable_balance: Option<Arc<StableBalance>>,
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
+    pub(crate) cross_chain_context: crate::cross_chain::CrossChainContext,
+    /// Shared helper for paying LN invoices and persisting the resulting
+    /// payment rows. Reused by cross-chain providers (e.g. Boltz) that
+    /// need to pay an LN invoice as part of a larger flow.
+    #[allow(dead_code)]
+    pub(crate) lightning_sender: Arc<LightningSender>,
 }
 
 pub(crate) struct BreezSdkParams {
@@ -114,6 +122,8 @@ pub(crate) struct BreezSdkParams {
     pub token_converter: Arc<dyn TokenConverter>,
     pub stable_balance: Option<Arc<StableBalance>>,
     pub sync_coordinator: SyncCoordinator,
+    pub cross_chain_context: crate::cross_chain::CrossChainContext,
+    pub lightning_sender: Arc<LightningSender>,
 }
 
 pub async fn parse_input(
@@ -213,6 +223,7 @@ pub fn default_config(network: Network) -> Config {
         max_concurrent_claims: 4,
         spark_config: Some(default_spark_config(network)),
         background_tasks_enabled: true,
+        cross_chain_config: None,
     }
 }
 
@@ -225,8 +236,8 @@ pub fn default_config(network: Network) -> Config {
 /// explicitly, so an ephemeral SDK instance stays cheap and predictable.
 ///
 /// Config fields whose background services are gated off are reset to their
-/// inactive shape: `real_time_sync_server_url` is set to `None`, and both
-/// `leaf_optimization_config.auto_enabled` and
+/// inactive shape: `real_time_sync_server_url` and `cross_chain_config` are
+/// set to `None`, and both `leaf_optimization_config.auto_enabled` and
 /// `token_optimization_config.auto_enabled` are set to `false`. The SDK
 /// rejects builds where `background_tasks_enabled` is `false` and any of
 /// those fields is left in its active shape, so flip the flag via this
@@ -256,6 +267,7 @@ pub fn default_server_config(network: Network) -> Config {
     config.real_time_sync_server_url = None;
     config.leaf_optimization_config.auto_enabled = false;
     config.token_optimization_config.auto_enabled = false;
+    config.cross_chain_config = None;
     config
 }
 

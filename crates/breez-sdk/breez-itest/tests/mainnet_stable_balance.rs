@@ -136,7 +136,9 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
     let prepare_small = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(u128::from(half_payment)),
             token_identifier: None,
             conversion_options: None,
@@ -202,7 +204,9 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
     let prepare_large = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(u128::from(half_payment)),
             token_identifier: None,
             conversion_options: None,
@@ -298,7 +302,9 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
     let prepare_spend = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: alice_invoice.clone(),
+            payment_request: PaymentRequest::Input {
+                input: alice_invoice.clone(),
+            },
             amount: None, // from invoice
             token_identifier: None,
             conversion_options: None,
@@ -342,9 +348,17 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
         .conversion_details
         .expect("Spend should include conversion details");
     assert_eq!(
-        conversion_details.from.as_ref().unwrap().method,
-        PaymentMethod::Token,
-        "From step should be a token payment"
+        conversion_details.conversions.len(),
+        1,
+        "Should have exactly one conversion (AMM)"
+    );
+    assert_ne!(
+        conversion_details.conversions[0].from.asset.ticker, "BTC",
+        "From asset should be a token"
+    );
+    assert!(
+        conversion_details.conversions[0].from.asset.decimals > 0,
+        "From side (token) should have decimals > 0"
     );
 
     // Wait for Bob to send and Alice to receive
@@ -457,7 +471,9 @@ async fn test_stable_balance_per_receive_conversion() -> Result<()> {
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address,
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address,
+            },
             amount: Some(u128::from(payment_sats)),
             token_identifier: None,
             conversion_options: None,
@@ -646,33 +662,40 @@ async fn test_stable_balance_send_lightning_address() -> Result<()> {
         .payment
         .conversion_details
         .expect("conversion details on LNURL-pay Token→BTC");
-    let from = details.from.as_ref().expect("conversion 'from' step");
-    let to = details.to.as_ref().expect("conversion 'to' step");
     assert_eq!(
-        from.method,
-        PaymentMethod::Token,
-        "From step should be a token payment"
+        details.conversions.len(),
+        1,
+        "Should have exactly one conversion (AMM)"
+    );
+    let conv = &details.conversions[0];
+    assert_ne!(
+        conv.from.asset.ticker, "BTC",
+        "From asset should be a token"
     );
     assert!(
-        from.token_metadata.is_some(),
-        "From step should have token metadata"
+        conv.from.asset.decimals > 0,
+        "From side (token) should have decimals > 0"
     );
     assert_eq!(
-        to.method,
-        PaymentMethod::Spark,
-        "To step should be a spark payment (swap pool's sats delivery; the outer \
+        conv.to.chain,
+        ConversionChain::Spark,
+        "To chain should be spark (swap pool's sats delivery; the outer \
          payment's `method` is Lightning)"
     );
-    assert!(
-        to.token_metadata.is_none(),
-        "To step should have no token metadata"
+    assert_eq!(conv.to.asset.ticker, "BTC", "To asset should be BTC");
+    assert_eq!(
+        conv.to.asset.decimals, 0,
+        "To side (BTC/sats) should report decimals=0"
     );
     assert_eq!(
         resp.payment.method,
         PaymentMethod::Lightning,
         "Outer payment method should be Lightning"
     );
-    assert!(from.fee + to.fee > 0, "Conversion should charge a fee");
+    assert!(
+        conv.from.fee + conv.to.fee > 0,
+        "Conversion should charge a fee"
+    );
 
     info!("Waiting for Alice to receive lightning payment...");
     wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 120).await?;

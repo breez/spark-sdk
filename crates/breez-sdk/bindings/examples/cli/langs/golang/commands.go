@@ -406,7 +406,7 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 	}
 
 	req := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest: *paymentRequest,
+		PaymentRequest: breez_sdk_spark.PaymentRequestInput{Input: *paymentRequest},
 	}
 
 	if *amountStr != "" {

@@ -472,7 +472,7 @@ class PostgresMigrationManager {
         // the schema matches brz_payment_details_lightning / _token / _spark. We
         // can't safely backfill the new table from the dropped deposit_tx_id
         // column: we never stored the original SSP output_index, and vout=0 is a
-        // valid output index — defaulting would silently mislabel. Drop the
+        // valid output index, so defaulting would silently mislabel. Drop the
         // column and leave the brz_payments row in place. The read path sees an
         // unjoined deposit row as `details: None` until the resync re-fetches the
         // SSP user_request and the upsert inserts the new details row.
@@ -489,6 +489,12 @@ class PostgresMigrationManager {
           `UPDATE brz_settings
            SET value = jsonb_set(value::jsonb, '{offset}', '0')::text
            WHERE key = 'sync_offset' AND value IS NOT NULL`,
+        ],
+      },
+      {
+        name: "Backfill conversion_info type discriminator",
+        sql: [
+          `UPDATE brz_payment_metadata SET conversion_info = conversion_info::jsonb || '{"type": "amm"}'::jsonb WHERE conversion_info IS NOT NULL AND conversion_info::jsonb->>'type' IS NULL`,
         ],
       },
     ];

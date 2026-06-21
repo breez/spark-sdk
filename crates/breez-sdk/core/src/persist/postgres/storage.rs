@@ -425,7 +425,7 @@ impl PostgresStorage {
             // NOT NULL and the schema matches brz_payment_details_lightning / _token /
             // _spark. We can't safely backfill the new table from the dropped
             // deposit_tx_id column: we never stored the original SSP output_index,
-            // and vout=0 is a valid output index — defaulting would silently
+            // and vout=0 is a valid output index, so defaulting would silently
             // mislabel. Drop the column and leave the brz_payments row in place.
             // The read path sees an unjoined deposit row as `details: None` until
             // the resync re-fetches the SSP user_request and the upsert inserts the
@@ -443,6 +443,12 @@ impl PostgresStorage {
                  SET value = jsonb_set(value::jsonb, '{offset}', '0')::text
                  WHERE key = 'sync_offset' AND value IS NOT NULL".to_string(),
             ],
+            // Migration 18: Backfill type discriminator on conversion_info for
+            // the ConversionInfo enum refactor. All existing rows are AMM.
+            vec!["UPDATE brz_payment_metadata
+               SET conversion_info = conversion_info::jsonb || '{\"type\": \"amm\"}'::jsonb
+               WHERE conversion_info IS NOT NULL
+                 AND (conversion_info::jsonb->>'type') IS NULL".to_string()],
         ]
     }
 }
@@ -862,27 +868,50 @@ impl Storage for PostgresStorage {
                         params.push(Box::new(htlc_status.to_string()));
                     }
                 }
-                // Filter by conversion info presence
+                // Payment type discriminator
+                match payment_details_filter {
+                    StoragePaymentDetailsFilter::Spark { .. } => {
+                        payment_details_clauses.push("p.spark = true".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Token { .. } => {
+                        payment_details_clauses.push("p.spark IS NULL".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Lightning { .. } => {}
+                }
+
+                // Filter by conversion info type + status
                 let conversion_filter = match payment_details_filter {
                     StoragePaymentDetailsFilter::Spark {
-                        conversion_refund_needed: Some(v),
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark = true")),
-                    StoragePaymentDetailsFilter::Token {
-                        conversion_refund_needed: Some(v),
+                    }
+                    | StoragePaymentDetailsFilter::Token {
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark IS NULL")),
+                    }
+                    | StoragePaymentDetailsFilter::Lightning {
+                        conversion_filter: Some(cf),
+                        ..
+                    } => Some(cf),
                     _ => None,
                 };
-                if let Some((conversion_refund_needed, type_check)) = conversion_filter {
-                    let refund_needed = if *conversion_refund_needed {
-                        "= 'RefundNeeded'"
-                    } else {
-                        "!= 'RefundNeeded'"
+                if let Some(cf) = conversion_filter {
+                    let status_clause = match cf {
+                        crate::persist::ConversionFilter::AmmRefundNeeded => {
+                            "pm.conversion_info::jsonb->>'type' = 'amm' AND \
+                             pm.conversion_info::jsonb->>'status' = 'RefundNeeded'"
+                        }
+                        crate::persist::ConversionFilter::OrchestraPending => {
+                            "pm.conversion_info::jsonb->>'type' = 'orchestra' AND \
+                             pm.conversion_info::jsonb->>'status' NOT IN ('Completed', 'Failed', 'Refunded')"
+                        }
+                        crate::persist::ConversionFilter::BoltzPending => {
+                            "pm.conversion_info::jsonb->>'type' = 'boltz' AND \
+                             pm.conversion_info::jsonb->>'status' NOT IN ('Completed', 'Failed', 'Refunded')"
+                        }
                     };
                     payment_details_clauses.push(format!(
-                        "{type_check} AND pm.conversion_info IS NOT NULL AND
-                         pm.conversion_info::jsonb->>'status' {refund_needed}"
+                        "pm.conversion_info IS NOT NULL AND {status_clause}"
                     ));
                 }
                 // Filter by token transaction hash
@@ -1848,6 +1877,8 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
             } else {
                 None
             };
+            let conversion_info_json: Option<serde_json::Value> = row.get(20);
+            let conversion_info: Option<ConversionInfo> = from_json_opt(conversion_info_json)?;
             Some(PaymentDetails::Lightning {
                 invoice,
                 destination_pubkey,
@@ -1856,6 +1887,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                 lnurl_pay_info,
                 lnurl_withdraw_info,
                 lnurl_receive_metadata,
+                conversion_info,
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
@@ -1939,8 +1971,7 @@ fn map_payment(row: &Row) -> Result<Payment, StorageError> {
                     s.parse::<ConversionStatus>()
                         .map(|status| ConversionDetails {
                             status,
-                            from: None,
-                            to: None,
+                            conversions: vec![],
                         })
                         .map_err(StorageError::Serialization)
                 })
@@ -2063,10 +2094,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_conversion_refund_needed_filtering() {
+    async fn test_conversion_filtering() {
         let fixture = PostgresTestFixture::new().await;
-        crate::persist::tests::test_conversion_refund_needed_filtering(Box::new(fixture.storage))
-            .await;
+        crate::persist::tests::test_conversion_filtering(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -2275,6 +2305,7 @@ mod tests {
                 lnurl_pay_info: None,
                 lnurl_withdraw_info: None,
                 lnurl_receive_metadata: None,
+                conversion_info: None,
             }),
             conversion_details: None,
         };
@@ -2522,6 +2553,19 @@ mod tests {
         assert_eq!(list_b_final[0].id, "pmt_shared_id");
     }
 
+    #[tokio::test]
+    async fn test_insert_boltz_conversion_info() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_insert_boltz_conversion_info(Box::new(fixture.storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_boltz_status_to_completed() {
+        let fixture = PostgresTestFixture::new().await;
+        crate::persist::tests::test_update_boltz_status_to_completed(Box::new(fixture.storage))
+            .await;
+    }
+
     /// Generates a self-signed CA certificate in PEM format for testing.
     fn generate_test_ca_pem(common_name: &str) -> String {
         let mut params = rcgen::CertificateParams::new(vec![]).expect("valid params");
@@ -2754,6 +2798,7 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                    conversion_filter: None,
                 }]),
                 ..Default::default()
             })
@@ -2766,6 +2811,7 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::PreimageShared]),
+                    conversion_filter: None,
                 }]),
                 ..Default::default()
             })
@@ -2778,6 +2824,7 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::Returned]),
+                    conversion_filter: None,
                 }]),
                 ..Default::default()
             })
@@ -2785,6 +2832,142 @@ mod tests {
             .unwrap();
         assert_eq!(returned.len(), 1);
         assert_eq!(returned[0].id, "ln-failed");
+    }
+
+    /// Migration backfill: an untyped (pre-migration) AMM `conversion_info`
+    /// row is upgraded to a tagged enum and reads back via the strict
+    /// `from_json_string_opt::<ConversionInfo>` path that `list_payments` /
+    /// `get_payment_by_id` use.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn test_migration_conversion_info_type_discriminator() {
+        use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
+
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start PostgreSQL container");
+        let host_port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get host port");
+        let connection_string = format!(
+            "host=127.0.0.1 port={host_port} user=postgres password=postgres dbname=postgres"
+        );
+
+        // Bring the DB up to the state right before the discriminator backfill.
+        let migrations = PostgresStorage::migrations(&TEST_IDENTITY_A);
+        let backfill_index = migrations.len() - 1;
+        {
+            let (client, conn) = tokio_postgres::connect(&connection_string, tokio_postgres::NoTls)
+                .await
+                .expect("Failed to connect");
+            tokio::spawn(async move {
+                if let Err(e) = conn.await {
+                    eprintln!("connection error: {e}");
+                }
+            });
+            client
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS brz_schema_migrations (
+                        version INTEGER PRIMARY KEY,
+                        applied_at TIMESTAMPTZ DEFAULT NOW()
+                    )",
+                    &[],
+                )
+                .await
+                .unwrap();
+            for (i, migration) in migrations.iter().take(backfill_index).enumerate() {
+                let version = i32::try_from(i + 1).unwrap();
+                for statement in migration {
+                    client.execute(statement.as_str(), &[]).await.unwrap();
+                }
+                client
+                    .execute(
+                        "INSERT INTO brz_schema_migrations (version) VALUES ($1)",
+                        &[&version],
+                    )
+                    .await
+                    .unwrap();
+            }
+
+            // Insert a Spark payment + an untyped (pre-migration) AMM row.
+            // user_id is required (multi-tenant scoping migration is in the
+            // applied set above).
+            let user_id_bytes: &[u8] = &TEST_IDENTITY_A;
+            client
+                .execute(
+                    "INSERT INTO brz_payments (user_id, id, payment_type, status, amount, fees, timestamp, method, spark)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                    &[
+                        &user_id_bytes,
+                        &"conv-migration-test",
+                        &"send",
+                        &"completed",
+                        &"5000",
+                        &"10",
+                        &1_700_000_001_i64,
+                        &"\"spark\"",
+                        &true,
+                    ],
+                )
+                .await
+                .unwrap();
+            client
+                .execute(
+                    "INSERT INTO brz_payment_details_spark (user_id, payment_id) VALUES ($1, $2)",
+                    &[&user_id_bytes, &"conv-migration-test"],
+                )
+                .await
+                .unwrap();
+            let untyped = serde_json::json!({
+                "pool_id": "pool-pre",
+                "conversion_id": "conv-pre",
+                "status": "Completed",
+                "fee": "42",
+                "purpose": null,
+            });
+            client
+                .execute(
+                    "INSERT INTO brz_payment_metadata (user_id, payment_id, conversion_info)
+                     VALUES ($1, $2, $3)",
+                    &[&user_id_bytes, &"conv-migration-test", &untyped],
+                )
+                .await
+                .unwrap();
+        }
+
+        // Now open via PostgresStorage to trigger the remaining backfill migration.
+        let config = PostgresStorageConfig::with_defaults(connection_string);
+        let storage = PostgresStorage::new(config, &TEST_IDENTITY_A)
+            .await
+            .unwrap();
+
+        let payment = storage
+            .get_payment_by_id("conv-migration-test".to_string())
+            .await
+            .unwrap();
+        let Some(PaymentDetails::Spark {
+            conversion_info, ..
+        }) = payment.details
+        else {
+            panic!("Expected Spark payment details");
+        };
+        match conversion_info.expect("conversion_info should be set") {
+            ConversionInfo::Amm {
+                pool_id,
+                conversion_id,
+                status,
+                fee,
+                ..
+            } => {
+                assert_eq!(pool_id, "pool-pre");
+                assert_eq!(conversion_id, "conv-pre");
+                assert_eq!(status, ConversionStatus::Completed);
+                assert_eq!(fee, Some(42));
+            }
+            other => panic!("Expected ConversionInfo::Amm, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2892,7 +3075,7 @@ mod tests {
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 17, "migration version must advance to 17");
+        assert_eq!(version, 18, "migration version must advance to 18");
 
         // Seed payment row is preserved on the renamed table — proves the
         // table + PK constraint rename worked and the columns line up.
@@ -3180,14 +3363,15 @@ mod tests {
             "found orphan unprefixed indexes after upgrade: {orphans:?}"
         );
 
-        // Migration version advanced from 15 to 17 (16 = multi-tenant,
-        // 17 = brz_payment_details_deposit table).
+        // Migration version advanced from 15 through 18 (16: multi-tenant scope,
+        // 17: brz_payment_details_deposit table, 18: conversion_info
+        // type-discriminator backfill).
         let version: i32 = client
             .query_one("SELECT MAX(version) FROM brz_schema_migrations", &[])
             .await
             .unwrap()
             .get(0);
-        assert_eq!(version, 17, "migration must advance to 17");
+        assert_eq!(version, 18, "migration must advance to 18");
 
         // Seed data preserved (multi-tenant backfilled user_id to current tenant).
         let payment_count: i64 = client

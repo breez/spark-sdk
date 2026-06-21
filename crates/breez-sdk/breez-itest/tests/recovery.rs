@@ -254,7 +254,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(10_000),
             token_identifier: None,
             conversion_options: None,
@@ -286,7 +288,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let prepare = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: alice_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: alice_spark_address.clone(),
+            },
             amount: Some(3_000),
             token_identifier: None,
             conversion_options: None,
@@ -311,7 +315,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(2_000),
             token_identifier: None,
             conversion_options: None,
@@ -351,7 +357,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let prepare = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: alice_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: alice_spark_address.clone(),
+            },
             amount: Some(1_500),
             token_identifier: None,
             conversion_options: None,
@@ -402,7 +410,7 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_invoice,
+            payment_request: PaymentRequest::Input { input: bob_invoice },
             amount: None,
             token_identifier: None,
             conversion_options: None,
@@ -442,7 +450,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let prepare = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: alice_invoice,
+            payment_request: PaymentRequest::Input {
+                input: alice_invoice,
+            },
             amount: None,
             token_identifier: None,
             conversion_options: None,
@@ -471,7 +481,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address.clone(),
+            },
             amount: Some(100),
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
@@ -496,7 +508,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let prepare = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: alice_spark_address.clone(),
+            payment_request: PaymentRequest::Input {
+                input: alice_spark_address.clone(),
+            },
             amount: Some(50),
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
@@ -525,7 +539,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         let prepare = alice
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: bob_spark_address.clone(),
+                payment_request: PaymentRequest::Input {
+                    input: bob_spark_address.clone(),
+                },
                 amount: Some(1000),
                 token_identifier: Some(token_metadata.identifier.clone()),
                 conversion_options: None,
@@ -550,7 +566,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
         let prepare = bob
             .sdk
             .prepare_send_payment(PrepareSendPaymentRequest {
-                payment_request: alice_spark_address.clone(),
+                payment_request: PaymentRequest::Input {
+                    input: alice_spark_address.clone(),
+                },
                 amount: Some(1000),
                 token_identifier: Some(token_metadata.identifier.clone()),
                 conversion_options: None,
@@ -590,7 +608,9 @@ async fn test_setup_recovery_wallet() -> Result<()> {
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: withdraw_address,
+            payment_request: PaymentRequest::Input {
+                input: withdraw_address,
+            },
             amount: Some(10_000),
             token_identifier: None,
             conversion_options: None,

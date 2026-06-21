@@ -90,7 +90,9 @@ async fn test_server_mode_bitcoin_to_token() -> Result<()> {
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address,
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address,
+            },
             amount: Some(target_token_amount),
             token_identifier: Some(token_id.clone()),
             conversion_options: Some(ConversionOptions {
@@ -149,19 +151,23 @@ async fn test_server_mode_bitcoin_to_token() -> Result<()> {
         .payment
         .conversion_details
         .expect("Conversion-send payment should carry conversion_details");
-    let from = details.from.as_ref().expect("conversion 'from' step");
-    let to = details.to.as_ref().expect("conversion 'to' step");
     assert_eq!(
-        from.method,
-        PaymentMethod::Spark,
-        "From step should be a spark payment"
+        details.conversions.len(),
+        1,
+        "Should have exactly one conversion (AMM)"
     );
+    let conv = &details.conversions[0];
     assert_eq!(
-        to.method,
-        PaymentMethod::Token,
-        "To step should be a token payment"
+        conv.from.chain,
+        ConversionChain::Spark,
+        "From chain should be spark"
     );
-    assert!(from.fee + to.fee > 0, "Conversion should charge a fee");
+    assert_eq!(conv.from.asset.ticker, "BTC", "From asset should be BTC");
+    assert_ne!(conv.to.asset.ticker, "BTC", "To asset should be a token");
+    assert!(
+        conv.from.fee + conv.to.fee > 0,
+        "Conversion should charge a fee"
+    );
 
     // Server-mode Bob has no background sync — poll via sync_wallet + get_info.
     let bob_token_after =
@@ -262,7 +268,9 @@ async fn test_server_mode_token_to_bitcoin() -> Result<()> {
     let prepare = bob
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: alice_invoice,
+            payment_request: PaymentRequest::Input {
+                input: alice_invoice,
+            },
             amount: None,
             token_identifier: None,
             conversion_options: Some(ConversionOptions {
@@ -308,19 +316,26 @@ async fn test_server_mode_token_to_bitcoin() -> Result<()> {
         .payment
         .conversion_details
         .expect("Conversion-send payment should carry conversion_details");
-    let from = details.from.as_ref().expect("conversion 'from' step");
-    let to = details.to.as_ref().expect("conversion 'to' step");
     assert_eq!(
-        from.method,
-        PaymentMethod::Token,
-        "From step should be a token payment"
+        details.conversions.len(),
+        1,
+        "Should have exactly one conversion (AMM)"
+    );
+    let conv = &details.conversions[0];
+    assert_ne!(
+        conv.from.asset.ticker, "BTC",
+        "From asset should be a token"
     );
     assert_eq!(
-        to.method,
-        PaymentMethod::Spark,
-        "To step should be a spark payment"
+        conv.to.chain,
+        ConversionChain::Spark,
+        "To chain should be spark"
     );
-    assert!(from.fee + to.fee > 0, "Conversion should charge a fee");
+    assert_eq!(conv.to.asset.ticker, "BTC", "To asset should be BTC");
+    assert!(
+        conv.from.fee + conv.to.fee > 0,
+        "Conversion should charge a fee"
+    );
 
     // Server-mode Alice has no background sync — poll for the inbound sats.
     let alice_sats_after = wait_for_balance(

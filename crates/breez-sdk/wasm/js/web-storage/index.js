@@ -490,7 +490,7 @@ class MigrationManager {
         // Add deposit_vout to distinguish deposits sharing a funding tx. The
         // new field is carried inside the JSON `details` blob. We can't safely
         // backfill vout on the existing blobs: we never stored the original SSP
-        // output_index, and vout=0 is a valid output index — defaulting would
+        // output_index, and vout=0 is a valid output index, so defaulting would
         // silently mislabel. Instead we clear `details` on legacy deposit blobs
         // so the read path returns `details: None` (matches what the SQL
         // backends do by leaving the payments row but having no matching
@@ -545,6 +545,36 @@ class MigrationManager {
           }
         },
       },
+      {
+        name: "Backfill conversion_info type discriminator for serde tagged enum",
+        upgrade: (db, transaction) => {
+          if (db.objectStoreNames.contains("payment_metadata")) {
+            const store = transaction.objectStore("payment_metadata");
+            const request = store.openCursor();
+            request.onsuccess = (event) => {
+              const cursor = event.target.result;
+              if (cursor) {
+                const record = cursor.value;
+                if (record.conversionInfo) {
+                  try {
+                    const ci = typeof record.conversionInfo === "string"
+                      ? JSON.parse(record.conversionInfo)
+                      : record.conversionInfo;
+                    if (!ci.type) {
+                      ci.type = "amm";
+                      record.conversionInfo = JSON.stringify(ci);
+                      cursor.update(record);
+                    }
+                  } catch (e) {
+                    // Skip unparseable records
+                  }
+                }
+                cursor.continue();
+              }
+            };
+          }
+        },
+      },
     ];
   }
 }
@@ -573,7 +603,7 @@ class IndexedDBStorage {
     // so existing databases depend on indices never shifting. Never insert,
     // reorder, or delete a migration — only append. dbVersion MUST equal the
     // number of migrations (enforced by the guard in initialize()).
-    this.dbVersion = 18; // Current schema version (= migration count)
+    this.dbVersion = 19; // Current schema version (= migration count)
   }
 
   /**
@@ -2265,6 +2295,10 @@ class IndexedDBStorage {
       // Filter by payment details. If any filter matches, we include the payment
       let paymentDetailsFilterMatches = false;
       for (const paymentDetailsFilter of request.paymentDetailsFilter) {
+        // Base type check: the payment's details type must match the filter type
+        if (details.type !== paymentDetailsFilter.type) {
+          continue;
+        }
         // Filter by HTLC status (Spark or Lightning)
         if (
           (paymentDetailsFilter.type === "spark" ||
@@ -2282,11 +2316,12 @@ class IndexedDBStorage {
             continue;
           }
         }
-        // Filter by token conversion info presence
+        // Filter by conversion type + status
         if (
           (paymentDetailsFilter.type === "spark" ||
-            paymentDetailsFilter.type === "token") &&
-          paymentDetailsFilter.conversionRefundNeeded != null
+            paymentDetailsFilter.type === "token" ||
+            paymentDetailsFilter.type === "lightning") &&
+          paymentDetailsFilter.conversionFilter != null
         ) {
           if (
             details.type !== paymentDetailsFilter.type ||
@@ -2295,11 +2330,20 @@ class IndexedDBStorage {
             continue;
           }
 
-          if (
-            paymentDetailsFilter.conversionRefundNeeded ===
-            (details.conversionInfo.status !== "refundNeeded")
-          ) {
-            continue;
+          const ci = details.conversionInfo;
+          if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
+            if (ci.type !== "amm" || ci.status !== "refundNeeded") {
+              continue;
+            }
+          } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
+            if (ci.type !== "orchestra" || ["completed", "failed", "refunded"].includes(ci.status)) {
+              continue;
+            }
+          } else if (paymentDetailsFilter.conversionFilter === "boltzPending") {
+            // Boltz conversion lives on the Lightning leg.
+            if (ci.type !== "boltz" || ["completed", "failed", "refunded"].includes(ci.status)) {
+              continue;
+            }
           }
         }
         // Filter by token transaction hash
@@ -2440,17 +2484,23 @@ class IndexedDBStorage {
             );
           }
         }
-      } else if (details.type == "spark" || details.type == "token") {
-        // If conversionInfo exists, parse and add to details
-        if (metadata.conversionInfo) {
-          try {
-            details.conversionInfo = JSON.parse(metadata.conversionInfo);
-          } catch (e) {
-            throw new StorageError(
-              `Failed to parse conversionInfo JSON for payment ${payment.id}: ${e.message}`,
-              e
-            );
-          }
+      }
+
+      // conversionInfo is surfaced on Lightning (Boltz hold-invoice pay),
+      // Spark, and Token details — every variant that can carry a conversion.
+      if (
+        (details.type == "lightning" ||
+          details.type == "spark" ||
+          details.type == "token") &&
+        metadata.conversionInfo
+      ) {
+        try {
+          details.conversionInfo = JSON.parse(metadata.conversionInfo);
+        } catch (e) {
+          throw new StorageError(
+            `Failed to parse conversionInfo JSON for payment ${payment.id}: ${e.message}`,
+            e
+          );
         }
       }
     }

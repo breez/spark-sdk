@@ -8,7 +8,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentLightningBolt11(
   BigInt? optionalAmountSats = BigInt.from(5000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
+      paymentRequest: PaymentRequest.input(input: paymentRequest),
       amount: optionalAmountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -37,7 +37,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentOnchain(
   BigInt? amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
+      paymentRequest: PaymentRequest.input(input: paymentRequest),
       amount: amountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -67,7 +67,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkAddress(
   BigInt? amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
+      paymentRequest: PaymentRequest.input(input: paymentRequest),
       amount: amountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -92,7 +92,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSparkInvoice(
   BigInt? optionalAmountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
+      paymentRequest: PaymentRequest.input(input: paymentRequest),
       amount: optionalAmountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -125,7 +125,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentTokenConversion(
   );
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
+      paymentRequest: PaymentRequest.input(input: paymentRequest),
       amount: null,
       tokenIdentifier: null,
       conversionOptions: conversionOptions,
@@ -202,7 +202,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentFeesIncluded(
   BigInt? amountSats = BigInt.from(50000);
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
+      paymentRequest: PaymentRequest.input(input: paymentRequest),
       amount: amountSats,
       tokenIdentifier: null,
       conversionOptions: null,
@@ -236,7 +236,7 @@ Future<PrepareSendPaymentResponse> prepareSendPaymentSendAll(
   );
 
   final request = PrepareSendPaymentRequest(
-      paymentRequest: paymentRequest,
+      paymentRequest: PaymentRequest.input(input: paymentRequest),
       amount: tokenBalance.balance,
       tokenIdentifier: tokenIdentifier,
       conversionOptions: conversionOptions,

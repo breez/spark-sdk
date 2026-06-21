@@ -1,12 +1,13 @@
 mod bitcoin_address;
 mod bolt11;
+pub(in crate::sdk::payments) mod cross_chain;
 mod spark_address;
 mod spark_invoice;
 
 use crate::{
     InputType,
     error::SdkError,
-    models::{PrepareSendPaymentRequest, PrepareSendPaymentResponse},
+    models::{PaymentRequest, PrepareSendPaymentRequest, PrepareSendPaymentResponse},
     sdk::BreezSdk,
 };
 
@@ -14,7 +15,17 @@ pub(super) async fn prepare(
     sdk: &BreezSdk,
     request: PrepareSendPaymentRequest,
 ) -> Result<PrepareSendPaymentResponse, SdkError> {
-    let parsed_input = sdk.parse(&request.payment_request).await?;
+    let input = match &request.payment_request {
+        PaymentRequest::Input { input } => input.clone(),
+        PaymentRequest::CrossChain { .. } => {
+            return Err(SdkError::Generic(
+                "prepare::prepare called with PaymentRequest::CrossChain — \
+                 this variant must be dispatched at payments::mod.rs::prepare_send_payment"
+                    .to_string(),
+            ));
+        }
+    };
+    let parsed_input = sdk.parse(&input).await?;
 
     let fee_policy = request.fee_policy.unwrap_or_default();
     let token_identifier = request.token_identifier.clone();
@@ -27,11 +38,16 @@ pub(super) async fn prepare(
             spark_invoice::prepare(sdk, &request, details, fee_policy, token_identifier).await
         }
         InputType::Bolt11Invoice(details) => {
-            bolt11::prepare(sdk, &request, details, fee_policy, token_identifier).await
+            bolt11::prepare(sdk, &input, &request, details, fee_policy, token_identifier).await
         }
         InputType::BitcoinAddress(details) => {
             bitcoin_address::prepare(sdk, &request, details, fee_policy, token_identifier).await
         }
+        InputType::CrossChainAddress(_) => Err(SdkError::InvalidInput(
+            "Cross-chain address detected. Use get_cross_chain_routes() to discover \
+             routes, then PaymentRequest::CrossChain { address, route }."
+                .to_string(),
+        )),
         _ => Err(SdkError::InvalidInput(
             "Unsupported payment method".to_string(),
         )),
@@ -45,7 +61,9 @@ pub(crate) mod test_helpers {
 
     pub(crate) fn create_test_request() -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
-            payment_request: "test_request".to_string(),
+            payment_request: crate::models::PaymentRequest::Input {
+                input: "test_request".to_string(),
+            },
             amount: None,
             token_identifier: None,
             conversion_options: None,
@@ -55,7 +73,9 @@ pub(crate) mod test_helpers {
 
     pub(crate) fn create_bitcoin_amount_request(amount_sats: u64) -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
-            payment_request: "test_request".to_string(),
+            payment_request: crate::models::PaymentRequest::Input {
+                input: "test_request".to_string(),
+            },
             amount: Some(u128::from(amount_sats)),
             token_identifier: None,
             conversion_options: None,
@@ -68,7 +88,9 @@ pub(crate) mod test_helpers {
         token_identifier: &str,
     ) -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
-            payment_request: "test_request".to_string(),
+            payment_request: crate::models::PaymentRequest::Input {
+                input: "test_request".to_string(),
+            },
             amount: Some(amount),
             token_identifier: Some(token_identifier.to_string()),
             conversion_options: None,
@@ -78,7 +100,9 @@ pub(crate) mod test_helpers {
 
     pub(crate) fn create_fees_included_request(amount: u128) -> PrepareSendPaymentRequest {
         PrepareSendPaymentRequest {
-            payment_request: "test_request".to_string(),
+            payment_request: crate::models::PaymentRequest::Input {
+                input: "test_request".to_string(),
+            },
             amount: Some(amount),
             token_identifier: None,
             conversion_options: None,

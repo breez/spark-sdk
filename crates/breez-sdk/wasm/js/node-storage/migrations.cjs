@@ -438,7 +438,7 @@ class MigrationManager {
         // the schema matches payment_details_lightning / _token / _spark. We can't
         // safely backfill the new table from the dropped deposit_tx_id column: we
         // never stored the original SSP output_index, and vout=0 is a valid output
-        // index — defaulting would silently mislabel. Drop the column and leave
+        // index, so defaulting would silently mislabel. Drop the column and leave
         // the payments row in place. The read path sees an unjoined deposit row
         // as `details: None` until the resync re-fetches the SSP user_request and
         // the upsert inserts the new details row.
@@ -455,6 +455,10 @@ class MigrationManager {
            SET value = json_set(value, '$.offset', 0)
            WHERE key = 'sync_offset' AND json_valid(value)`,
         ],
+      },
+      {
+        name: "Backfill conversion_info type discriminator",
+        sql: `UPDATE payment_metadata SET conversion_info = json_set(conversion_info, '$.type', 'amm') WHERE conversion_info IS NOT NULL AND json_extract(conversion_info, '$.type') IS NULL`,
       },
     ];
   }

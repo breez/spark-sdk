@@ -280,7 +280,9 @@ pub async fn estimate_tobtc_sats_out(
 ) -> Result<u128> {
     let prepared = sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: dest.to_string(),
+            payment_request: PaymentRequest::Input {
+                input: dest.to_string(),
+            },
             amount: Some(token_amount),
             token_identifier: Some(token_id.to_string()),
             conversion_options: Some(ConversionOptions {
@@ -546,7 +548,7 @@ pub async fn ensure_bob_has_tokens(
     let seed_prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark,
+            payment_request: PaymentRequest::Input { input: bob_spark },
             amount: Some(seed_amount),
             token_identifier: Some(token_id.to_string()),
             conversion_options: Some(ConversionOptions {

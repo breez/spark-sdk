@@ -119,7 +119,7 @@ async fn send_receive_spark(
     let prepare = tx
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: rx_address,
+            payment_request: PaymentRequest::Input { input: rx_address },
             amount: Some(100),
             token_identifier: None,
             conversion_options: None,
@@ -171,7 +171,7 @@ async fn lightning_receive(#[case] backend: SignerBackend) -> Result<()> {
     let prepare = sender
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: invoice,
+            payment_request: PaymentRequest::Input { input: invoice },
             amount: None,
             token_identifier: None,
             conversion_options: None,

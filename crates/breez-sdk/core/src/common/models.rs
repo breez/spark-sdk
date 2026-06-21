@@ -276,6 +276,30 @@ pub enum InputType {
     LnurlWithdraw(LnurlWithdrawRequestDetails),
     SparkAddress(SparkAddressDetails),
     SparkInvoice(SparkInvoiceDetails),
+    CrossChainAddress(CrossChainAddressDetails),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[macros::derive_from(breez_sdk_common::input::CrossChainAddressFamily)]
+#[macros::derive_into(breez_sdk_common::input::CrossChainAddressFamily)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[serde(rename_all = "snake_case")]
+pub enum CrossChainAddressFamily {
+    Evm,
+    Solana,
+    Tron,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[macros::derive_from(breez_sdk_common::input::CrossChainAddressDetails)]
+#[macros::derive_into(breez_sdk_common::input::CrossChainAddressDetails)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct CrossChainAddressDetails {
+    pub address: String,
+    pub address_family: CrossChainAddressFamily,
+    pub contract_address: Option<String>,
+    pub chain_id: Option<u64>,
+    pub amount: Option<u128>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

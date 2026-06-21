@@ -239,6 +239,15 @@ class PostgresStorage {
         for (const paymentDetailsFilter of request.paymentDetailsFilter) {
           const paymentDetailsClauses = [];
 
+          // Base type check: ensure payment type matches the filter type
+          if (paymentDetailsFilter.type === "spark") {
+            paymentDetailsClauses.push("p.spark = true");
+          } else if (paymentDetailsFilter.type === "token") {
+            paymentDetailsClauses.push("p.spark IS NULL AND t.tx_hash IS NOT NULL");
+          } else if (paymentDetailsFilter.type === "lightning") {
+            paymentDetailsClauses.push("l.htlc_status IS NOT NULL");
+          }
+
           // Filter by HTLC status (Spark or Lightning)
           const htlcAlias =
             paymentDetailsFilter.type === "spark"
@@ -266,24 +275,35 @@ class PostgresStorage {
             params.push(...paymentDetailsFilter.htlcStatus);
           }
 
-          // Filter by conversion refund needed
+          // Filter by conversion type + status
           if (
             (paymentDetailsFilter.type === "spark" ||
-              paymentDetailsFilter.type === "token") &&
-            paymentDetailsFilter.conversionRefundNeeded !== undefined
+              paymentDetailsFilter.type === "token" ||
+              paymentDetailsFilter.type === "lightning") &&
+            paymentDetailsFilter.conversionFilter !== undefined
           ) {
+            // Lightning carries the Boltz conversion; its `conversion_info.type`
+            // is the authoritative discriminator, so no payment-type column check.
             const typeCheck =
               paymentDetailsFilter.type === "spark"
                 ? "p.spark = true"
-                : "p.spark IS NULL";
-            const refundNeeded =
-              paymentDetailsFilter.conversionRefundNeeded === true
-                ? "= 'refundNeeded'"
-                : "!= 'refundNeeded'";
-            paymentDetailsClauses.push(
-              `${typeCheck} AND pm.conversion_info IS NOT NULL AND
-               pm.conversion_info::jsonb->>'status' ${refundNeeded}`
-            );
+                : paymentDetailsFilter.type === "token"
+                  ? "p.spark IS NULL"
+                  : null;
+            let statusClause;
+            if (paymentDetailsFilter.conversionFilter === "ammRefundNeeded") {
+              statusClause = "pm.conversion_info::jsonb->>'type' = 'amm' AND pm.conversion_info::jsonb->>'status' = 'refundNeeded'";
+            } else if (paymentDetailsFilter.conversionFilter === "orchestraPending") {
+              statusClause = "pm.conversion_info::jsonb->>'type' = 'orchestra' AND pm.conversion_info::jsonb->>'status' NOT IN ('completed', 'failed', 'refunded')";
+            } else if (paymentDetailsFilter.conversionFilter === "boltzPending") {
+              statusClause = "pm.conversion_info::jsonb->>'type' = 'boltz' AND pm.conversion_info::jsonb->>'status' NOT IN ('completed', 'failed', 'refunded')";
+            }
+            if (statusClause) {
+              const prefix = typeCheck ? `${typeCheck} AND ` : "";
+              paymentDetailsClauses.push(
+                `${prefix}pm.conversion_info IS NOT NULL AND ${statusClause}`
+              );
+            }
           }
 
           // Filter by token transaction hash
@@ -834,6 +854,13 @@ class PostgresStorage {
           nostrZapReceipt: row.lnurl_nostr_zap_receipt || null,
           senderComment: row.lnurl_sender_comment || null,
         };
+      }
+
+      if (row.conversion_info) {
+        details.conversionInfo =
+          typeof row.conversion_info === "string"
+            ? JSON.parse(row.conversion_info)
+            : row.conversion_info;
       }
     } else if (row.withdraw_tx_id) {
       details = {

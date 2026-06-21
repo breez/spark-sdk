@@ -85,7 +85,9 @@ async fn test_shared_ssp_connection_manager_spark_transfer() -> Result<()> {
     let prepare = alice
         .sdk
         .prepare_send_payment(PrepareSendPaymentRequest {
-            payment_request: bob_spark_address,
+            payment_request: PaymentRequest::Input {
+                input: bob_spark_address,
+            },
             amount: Some(5),
             token_identifier: None,
             conversion_options: None,

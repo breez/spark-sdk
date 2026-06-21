@@ -360,6 +360,17 @@ async fn execute_pre_send_conversion(
             .await?;
             Ok((response, purpose, uses_amount_in))
         }
+        SendPaymentMethod::CrossChainAddress { .. } => {
+            let (response, purpose) = send::cross_chain::convert_token(
+                sdk,
+                conversion_options,
+                &request.prepare_response.payment_method,
+                from_token_identifier.as_ref(),
+                conversion_amount,
+            )
+            .await?;
+            Ok((response, purpose, uses_amount_in))
+        }
     }
 }
 

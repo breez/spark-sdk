@@ -332,7 +332,7 @@ impl SqliteStorage {
             // the schema matches payment_details_lightning / _token / _spark. We
             // can't safely backfill the new table from the dropped deposit_tx_id
             // column: we never stored the original SSP output_index, and vout=0
-            // is a valid output index — defaulting would silently mislabel. Drop
+            // is a valid output index, so defaulting would silently mislabel. Drop
             // the column and leave the payments row in place. The read path sees
             // an unjoined deposit row as `details: None` until the resync re-fetches
             // the SSP user_request and the upsert inserts the new details row.
@@ -346,6 +346,14 @@ impl SqliteStorage {
              UPDATE settings
              SET value = json_set(value, '$.offset', 0)
              WHERE key = 'sync_offset' AND json_valid(value);",
+            // Backfill the `type` discriminator on existing conversion_info
+            // rows so the new `ConversionInfo` enum (tagged with
+            // `#[serde(tag = "type")]`) deserializes correctly. All existing
+            // rows are AMM conversions.
+            "UPDATE payment_metadata
+             SET conversion_info = json_set(conversion_info, '$.type', 'amm')
+             WHERE conversion_info IS NOT NULL
+               AND json_extract(conversion_info, '$.type') IS NULL;",
         ]
     }
 }
@@ -630,27 +638,52 @@ impl Storage for SqliteStorage {
                         params.push(Box::new(htlc_status.to_string()));
                     }
                 }
-                // Filter by conversion info presence
+                // Payment type discriminator — always added so the filter
+                // restricts to the correct payment kind even when no
+                // conversion-specific sub-filter is set.
+                match payment_details_filter {
+                    StoragePaymentDetailsFilter::Spark { .. } => {
+                        payment_details_clauses.push("p.spark = 1".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Token { .. } => {
+                        payment_details_clauses.push("p.spark IS NULL".to_string());
+                    }
+                    StoragePaymentDetailsFilter::Lightning { .. } => {}
+                }
+
+                // Filter by conversion info type + status
                 let conversion_filter = match payment_details_filter {
                     StoragePaymentDetailsFilter::Spark {
-                        conversion_refund_needed: Some(v),
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark = 1")),
-                    StoragePaymentDetailsFilter::Token {
-                        conversion_refund_needed: Some(v),
+                    }
+                    | StoragePaymentDetailsFilter::Token {
+                        conversion_filter: Some(cf),
                         ..
-                    } => Some((v, "p.spark IS NULL")),
+                    }
+                    | StoragePaymentDetailsFilter::Lightning {
+                        conversion_filter: Some(cf),
+                        ..
+                    } => Some(cf),
                     _ => None,
                 };
-                if let Some((conversion_refund_needed, type_check)) = conversion_filter {
-                    let refund_needed = if *conversion_refund_needed {
-                        "= 'RefundNeeded'"
-                    } else {
-                        "!= 'RefundNeeded'"
+                if let Some(cf) = conversion_filter {
+                    let status_clause = match cf {
+                        crate::persist::ConversionFilter::AmmRefundNeeded => {
+                            "json_extract(pm.conversion_info, '$.type') = 'amm' AND \
+                             json_extract(pm.conversion_info, '$.status') = 'RefundNeeded'"
+                        }
+                        crate::persist::ConversionFilter::OrchestraPending => {
+                            "json_extract(pm.conversion_info, '$.type') = 'orchestra' AND \
+                             json_extract(pm.conversion_info, '$.status') NOT IN ('Completed', 'Failed', 'Refunded')"
+                        }
+                        crate::persist::ConversionFilter::BoltzPending => {
+                            "json_extract(pm.conversion_info, '$.type') = 'boltz' AND \
+                             json_extract(pm.conversion_info, '$.status') NOT IN ('Completed', 'Failed', 'Refunded')"
+                        }
                     };
                     payment_details_clauses.push(format!(
-                        "{type_check} AND pm.conversion_info IS NOT NULL AND
-                         json_extract(pm.conversion_info, '$.status') {refund_needed}"
+                        "pm.conversion_info IS NOT NULL AND {status_clause}"
                     ));
                 }
                 // Filter by token transaction hash
@@ -1511,6 +1544,10 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
             } else {
                 None
             };
+            let conversion_info_str: Option<String> = row.get(20)?;
+            let conversion_info: Option<ConversionInfo> = conversion_info_str
+                .map(|s: String| serde_json_from_str(&s, 20))
+                .transpose()?;
             Some(PaymentDetails::Lightning {
                 invoice,
                 destination_pubkey,
@@ -1519,6 +1556,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
                 lnurl_pay_info,
                 lnurl_withdraw_info,
                 lnurl_receive_metadata,
+                conversion_info,
             })
         }
         (_, Some(tx_id), _, _, _) => Some(PaymentDetails::Withdraw { tx_id }),
@@ -1575,8 +1613,7 @@ fn map_payment(row: &Row<'_>) -> Result<Payment, rusqlite::Error> {
     let conversion_status: Option<ConversionStatus> = row.get(31)?;
     let conversion_details = conversion_status.map(|status| ConversionDetails {
         status,
-        from: None,
-        to: None,
+        conversions: vec![],
     });
 
     Ok(Payment {
@@ -1872,11 +1909,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_conversion_refund_needed_filtering() {
+    async fn test_conversion_filtering() {
         let temp_dir = create_temp_dir("sqlite_storage_conversion_refund_needed_filter");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
-        crate::persist::tests::test_conversion_refund_needed_filtering(Box::new(storage)).await;
+        crate::persist::tests::test_conversion_filtering(Box::new(storage)).await;
     }
 
     #[tokio::test]
@@ -2127,7 +2164,7 @@ mod tests {
             status_filter: None,
             asset_filter: None,
             payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Token {
-                conversion_refund_needed: None,
+                conversion_filter: None,
                 tx_hash: None,
                 tx_type: Some(TokenTransactionType::Transfer),
             }]),
@@ -2318,6 +2355,7 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::WaitingForPreimage]),
+                    conversion_filter: None,
                 }]),
                 ..Default::default()
             })
@@ -2330,6 +2368,7 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::PreimageShared]),
+                    conversion_filter: None,
                 }]),
                 ..Default::default()
             })
@@ -2342,6 +2381,7 @@ mod tests {
             .list_payments(StorageListPaymentsRequest {
                 payment_details_filter: Some(vec![StoragePaymentDetailsFilter::Lightning {
                     htlc_status: Some(vec![SparkHtlcStatus::Returned]),
+                    conversion_filter: None,
                 }]),
                 ..Default::default()
             })
@@ -2359,12 +2399,125 @@ mod tests {
         crate::persist::tests::test_contacts_crud(Box::new(storage)).await;
     }
 
+    /// Migration backfill: an untyped (pre-migration) AMM `conversion_info`
+    /// row is upgraded to a tagged enum and reads back via the strict
+    /// `from_json_string_opt::<ConversionInfo>` path that `list_payments` /
+    /// `get_payment_by_id` use.
+    #[tokio::test]
+    async fn test_migration_conversion_info_type_discriminator() {
+        use crate::{ConversionInfo, ConversionStatus, PaymentDetails, Storage};
+        use rusqlite::{Connection, params};
+        use rusqlite_migration::{M, Migrations};
+
+        let temp_dir = create_temp_dir("sqlite_migration_conversion_info_discriminator");
+        let db_path = temp_dir.join(super::DEFAULT_DB_FILENAME);
+
+        // Step 1: bring the database up to the state before the discriminator
+        // backfill — the conversion_info column exists, but no `"type"` tag has
+        // been backfilled yet.
+        let backfill_index = SqliteStorage::current_migrations().len() - 1;
+        {
+            let mut conn = Connection::open(&db_path).unwrap();
+            let migrations_before_backfill: Vec<_> = SqliteStorage::current_migrations()
+                .iter()
+                .take(backfill_index)
+                .map(|s| M::up(s))
+                .collect();
+            let migrations = Migrations::new(migrations_before_backfill);
+            migrations.to_latest(&mut conn).unwrap();
+        }
+
+        // Step 2: insert a payment + a pre-migration conversion_info row
+        // (no `"type"` tag — the shape an older SDK would have written).
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO payments (id, payment_type, status, amount, fees, timestamp, method, spark)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    "conv-migration-test",
+                    "send",
+                    "completed",
+                    "5000",
+                    "10",
+                    1_234_567_890_i64,
+                    "\"spark\"",
+                    1_i32
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO payment_details_spark (payment_id) VALUES (?)",
+                params!["conv-migration-test"],
+            )
+            .unwrap();
+
+            let untyped_conversion_info = serde_json::json!({
+                "pool_id": "pool-pre",
+                "conversion_id": "conv-pre",
+                "status": "Completed",
+                "fee": "42",
+                "purpose": null,
+            });
+            conn.execute(
+                "INSERT INTO payment_metadata (payment_id, conversion_info)
+                 VALUES (?, ?)",
+                params!["conv-migration-test", untyped_conversion_info.to_string()],
+            )
+            .unwrap();
+        }
+
+        // Step 3: open with `SqliteStorage` so the backfill migration runs.
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+
+        // Step 4: read back via the strict tagged-enum path.
+        let payment = storage
+            .get_payment_by_id("conv-migration-test".to_string())
+            .await
+            .unwrap();
+        let Some(PaymentDetails::Spark {
+            conversion_info, ..
+        }) = payment.details
+        else {
+            panic!("Expected Spark payment details");
+        };
+        match conversion_info.expect("conversion_info should be set") {
+            ConversionInfo::Amm {
+                pool_id,
+                conversion_id,
+                status,
+                fee,
+                ..
+            } => {
+                assert_eq!(pool_id, "pool-pre");
+                assert_eq!(conversion_id, "conv-pre");
+                assert_eq!(status, ConversionStatus::Completed);
+                assert_eq!(fee, Some(42));
+            }
+            other => panic!("Expected ConversionInfo::Amm, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn test_conversion_status_persistence() {
         let temp_dir = create_temp_dir("sqlite_conversion_status_persistence");
         let storage = SqliteStorage::new(&temp_dir).unwrap();
 
         crate::persist::tests::test_conversion_status_persistence(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_insert_boltz_conversion_info() {
+        let temp_dir = create_temp_dir("sqlite_insert_boltz_conversion_info");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+        crate::persist::tests::test_insert_boltz_conversion_info(Box::new(storage)).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_boltz_status_to_completed() {
+        let temp_dir = create_temp_dir("sqlite_update_boltz_status_to_completed");
+        let storage = SqliteStorage::new(&temp_dir).unwrap();
+        crate::persist::tests::test_update_boltz_status_to_completed(Box::new(storage)).await;
     }
 
     /// Simulates the post-migration state for a legacy deposit: a row exists in

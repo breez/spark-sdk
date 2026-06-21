@@ -4,6 +4,7 @@
 )]
 use std::sync::Arc;
 
+use breez_sdk_common::breez_server::BreezServer;
 use breez_sdk_common::buy::moonpay::MoonpayProvider;
 
 use spark_wallet::{
@@ -466,6 +467,29 @@ impl SdkBuilder {
             build_token_converter(&self.config, &storage, &spark_wallet, &context);
 
         let sync_coordinator = SyncCoordinator::new();
+
+        // Shared lightning-send helper used by `send_bolt11_invoice` and
+        // by cross-chain providers that pay LN invoices (currently: Boltz
+        // reverse swap).
+        let lightning_sender = Arc::new(crate::sdk::LightningSender::new(
+            Arc::clone(&spark_wallet),
+            Arc::clone(&storage),
+            Arc::clone(&event_emitter),
+            shutdown_sender.clone(),
+        ));
+
+        let cross_chain_context = build_cross_chain_context(
+            &self.config,
+            &context.breez_server,
+            &spark_wallet,
+            &storage,
+            &signers.base,
+            &lightning_sender,
+            Arc::clone(&fiat_service),
+            shutdown_sender.subscribe(),
+        )
+        .await;
+
         let stable_balance = build_stable_balance(
             &self.config,
             &token_converter,
@@ -497,6 +521,8 @@ impl SdkBuilder {
             token_converter,
             stable_balance,
             sync_coordinator,
+            cross_chain_context,
+            lightning_sender,
         })
         .await?;
         debug!("Initialized and started breez sdk.");
@@ -535,6 +561,11 @@ fn validate_server_mode(
         return Err(SdkError::InvalidInput(
             "token_optimization_config.auto_enabled must be false when background_tasks_enabled is false"
                 .to_string(),
+        ));
+    }
+    if config.cross_chain_config.is_some() {
+        return Err(SdkError::InvalidInput(
+            "Cross-chain config must be unset when background tasks are disabled".to_string(),
         ));
     }
     Ok(())
@@ -875,6 +906,77 @@ async fn build_stable_balance(
     ))
 }
 
+/// Builds the cross-chain context: provider registry + shared cached fiat
+/// service. Returns an empty registry when `config.cross_chain_config` is unset.
+#[allow(clippy::too_many_arguments)]
+async fn build_cross_chain_context(
+    config: &Config,
+    breez_server: &Arc<BreezServer>,
+    spark_wallet: &Arc<SparkWallet>,
+    storage: &Arc<dyn crate::persist::Storage>,
+    signer: &Arc<dyn crate::signer::BreezSigner>,
+    lightning_sender: &Arc<crate::sdk::LightningSender>,
+    fiat_service: Arc<dyn breez_sdk_common::fiat::FiatService>,
+    shutdown_receiver: watch::Receiver<()>,
+) -> crate::cross_chain::CrossChainContext {
+    // Cache scoped to cross-chain: providers + dispatcher share one TTL window.
+    let cached_fiat: Arc<dyn breez_sdk_common::fiat::FiatService> =
+        Arc::new(crate::cross_chain::CachedFiatService::new(
+            fiat_service,
+            crate::cross_chain::DEFAULT_FIAT_CACHE_TTL,
+        ));
+    let mut providers = crate::cross_chain::CrossChainContext::new(Arc::clone(&cached_fiat));
+    if config.cross_chain_config.is_none() {
+        return providers;
+    }
+
+    // Orchestra cross-chain is mainnet-only. Its base URL and API key are
+    // fetched from Breez server (so the key can be rotated and revoked without
+    // an SDK release) lazily on first cross-chain use, not at connect: see
+    // `BreezServerOrchestraConfigResolver`. There is no bundled fallback key.
+    if matches!(config.network, Network::Mainnet) {
+        let config_resolver = Arc::new(
+            crate::cross_chain::BreezServerOrchestraConfigResolver::new(Arc::clone(breez_server)),
+        );
+        providers.insert(
+            crate::cross_chain::CrossChainProvider::Orchestra,
+            Arc::new(crate::cross_chain::OrchestraService::new(
+                config_resolver,
+                Arc::clone(spark_wallet),
+                Arc::clone(storage),
+                Arc::clone(&cached_fiat),
+                shutdown_receiver,
+            )),
+        );
+    }
+
+    match crate::cross_chain::BoltzService::build(
+        config.network,
+        Arc::clone(spark_wallet),
+        Arc::clone(storage),
+        Arc::clone(signer),
+        cached_fiat,
+        Arc::clone(lightning_sender),
+    )
+    .await
+    {
+        Ok(Some(service)) => {
+            providers.insert(crate::cross_chain::CrossChainProvider::Boltz, service);
+        }
+        Ok(None) => {
+            info!(
+                "Boltz provider skipped: no default configuration for network {:?}",
+                config.network
+            );
+        }
+        Err(e) => {
+            tracing::error!("Failed to initialize Boltz provider: {e:?}");
+        }
+    }
+
+    providers
+}
+
 #[cfg(test)]
 #[cfg(feature = "sqlite")]
 mod tests {
@@ -976,6 +1078,30 @@ mod tests {
             }
             Err(err) => panic!("expected InvalidInput error, got {err:?}"),
             Ok(_) => panic!("expected server mode with optimization auto_enabled to fail"),
+        }
+    }
+
+    /// Regtest + `cross_chain_config` trips the Mainnet-only gate in
+    /// `Config::validate` before reaching the server-mode reject in
+    /// `build`. The server-mode gate is still in place (verified by the
+    /// inline check in `build`); this test pins the more specific failure.
+    #[tokio::test]
+    async fn build_rejects_cross_chain_config_on_regtest() {
+        use crate::{CrossChainConfig, SdkError, default_config};
+        let mut config = default_config(Network::Regtest);
+        config.cross_chain_config = Some(CrossChainConfig::default());
+
+        let seed = test_seed();
+        let result = SdkBuilder::new(config, seed).build().await;
+        match result {
+            Err(SdkError::InvalidInput(m)) => {
+                assert!(
+                    m.contains("only available on Mainnet"),
+                    "expected mainnet-only rejection, got: {m}"
+                );
+            }
+            Err(err) => panic!("expected InvalidInput error, got {err:?}"),
+            Ok(_) => panic!("expected regtest with cross_chain_config to fail"),
         }
     }
 
@@ -1322,6 +1448,17 @@ mod tests {
             Err(SdkError::InvalidInput(m)) => {
                 assert!(m.contains("token_optimization_config.auto_enabled"));
             }
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_server_mode_rejects_cross_chain_directly() {
+        use crate::{CrossChainConfig, default_server_config};
+        let mut config = default_server_config(Network::Regtest);
+        config.cross_chain_config = Some(CrossChainConfig::default());
+        match super::validate_server_mode(&config, false) {
+            Err(SdkError::InvalidInput(m)) => assert!(m.contains("Cross-chain config")),
             other => panic!("expected InvalidInput, got {other:?}"),
         }
     }
