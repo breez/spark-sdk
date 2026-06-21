@@ -299,6 +299,7 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
     .option('--from-bitcoin', 'Convert from Bitcoin to fulfill the payment')
     .option('--from-token <identifier>', 'Convert from the specified token to Bitcoin')
     .option('-s, --convert-max-slippage-bps <bps>', 'Max slippage in basis points for conversion', parseInt)
+    .option('--cross-chain-max-slippage-bps <bps>', 'Max slippage in basis points for cross-chain sends (10..500)', parseInt)
     .option('--fees-included', 'Deduct fees from the specified amount', false)
     .action(async (options) => {
       const sdk = getSdk()
@@ -321,8 +322,25 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
 
       const feePolicy = options.feesIncluded ? 'feesIncluded' : undefined
 
+      // Check if the input is a cross-chain address
+      let paymentRequest
+      const parsed = await sdk.parse(options.paymentRequest).catch(() => null)
+      if (parsed && parsed.type === 'crossChainAddress') {
+        const address = parsed.address
+        const route = await selectCrossChainRoute(sdk, rl, parsed)
+        paymentRequest = {
+          type: 'crossChain',
+          address,
+          route,
+          maxSlippageBps: options.crossChainMaxSlippageBps,
+          targetOverpayBps: undefined
+        }
+      } else {
+        paymentRequest = { type: 'input', input: options.paymentRequest }
+      }
+
       const prepareResponse = await sdk.prepareSendPayment({
-        paymentRequest: { input: options.paymentRequest },
+        paymentRequest,
         amount: options.amount != null ? BigInt(options.amount) : undefined,
         tokenIdentifier: options.tokenIdentifier,
         conversionOptions,
@@ -337,6 +355,24 @@ function buildProgram(getSdk, getTokenIssuer, getGetSparkStatus, rl) {
           ? ['sats', 'token base units']
           : ['token base units', 'sats']
         console.log(`Estimated conversion from ${estimate.amountIn} ${inUnits} to ${estimate.amountOut} ${outUnits} with a ${estimate.fee} token base units fee`)
+        const answer = await questionWithDefault(rl, 'Do you want to continue (y/n): ', 'y')
+        if (answer.toLowerCase() !== 'y') {
+          throw new Error('Payment cancelled')
+        }
+      }
+
+      // Show cross-chain quote details before confirming
+      if (prepareResponse.paymentMethod && prepareResponse.paymentMethod.type === 'crossChainAddress') {
+        const pm = prepareResponse.paymentMethod
+        const serviceFeeDenom = pm.serviceFeeAsset || 'sats'
+        const denomination = options.tokenIdentifier ? 'token base units' : 'sats'
+        console.log(
+          `Cross-chain send: ${pm.amountIn} ${denomination} (~${pm.assetAmountIn} ${pm.route.asset})` +
+          ` -> ~${pm.estimatedOut} ${pm.route.asset} on ${pm.route.chain} to ${pm.recipientAddress}`
+        )
+        console.log(`Fee (total, in ${pm.route.asset}): ${pm.feeAmount}`)
+        console.log(`Service fee: ${pm.serviceFeeAmount} ${serviceFeeDenom}`)
+        console.log(`Source transfer fee: ${pm.sourceTransferFeeSats} sats`)
         const answer = await questionWithDefault(rl, 'Do you want to continue (y/n): ', 'y')
         if (answer.toLowerCase() !== 'y') {
           throw new Error('Payment cancelled')
@@ -917,13 +953,61 @@ async function readPaymentOptions(paymentMethod, rl) {
       }
     }
 
-    case 'sparkInvoice': {
+    case 'sparkInvoice':
+    case 'crossChainAddress': {
       return undefined
     }
 
     default:
       return undefined
   }
+}
+
+/**
+ * Fetch cross-chain routes for an address and prompt the user to select one.
+ * Auto-selects if only a single route is available.
+ */
+async function selectCrossChainRoute(sdk, rl, addressDetails) {
+  const filter = { type: 'send', addressDetails }
+  const routes = await sdk.getCrossChainRoutes(filter)
+
+  if (!routes || routes.length === 0) {
+    throw new Error('No cross-chain routes available for this address')
+  }
+
+  if (routes.length === 1) {
+    const route = routes[0]
+    console.log(
+      `Auto-selected route: ${route.asset} on ${route.chain}` +
+      `${maybeTruncateAddress(route.contractAddress)} [${route.provider}]`
+    )
+    return route
+  }
+
+  console.log('Available cross-chain routes:')
+  for (let i = 0; i < routes.length; i++) {
+    const route = routes[i]
+    console.log(
+      `  ${i + 1}. ${route.asset} on ${route.chain}` +
+      `${maybeTruncateAddress(route.contractAddress)} [${route.provider}]`
+    )
+  }
+
+  const line = await question(rl, 'Select route: ')
+  const choice = parseInt(line.trim(), 10)
+  if (isNaN(choice) || choice < 1 || choice > routes.length) {
+    throw new Error('Selection out of range')
+  }
+
+  return routes[choice - 1]
+}
+
+function maybeTruncateAddress(addr) {
+  if (!addr) return ''
+  if (addr.length > 12) {
+    return ` (${addr.slice(0, 6)}...${addr.slice(-6)})`
+  }
+  return ` (${addr})`
 }
 
 module.exports = { buildProgram, COMMAND_NAMES }

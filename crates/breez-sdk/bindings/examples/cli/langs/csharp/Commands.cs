@@ -575,16 +575,17 @@ public static class Commands
 
     private static async Task HandlePay(BreezSdk sdk, Func<string, string?> readline, string[] args)
     {
-        var paymentRequest = GetFlag(args, "-r", "--payment-request");
+        var paymentRequestStr = GetFlag(args, "-r", "--payment-request");
         var amountStr = GetFlag(args, "-a", "--amount");
         var tokenIdentifier = GetFlag(args, "-t", "--token-identifier");
         var idempotencyKey = GetFlag(args, "-i", "--idempotency-key");
         var fromBitcoin = HasFlag(args, "--from-bitcoin");
         var fromTokenId = GetFlag(args, "--from-token");
         var maxSlippageStr = GetFlag(args, "-s", "--convert-max-slippage-bps");
+        var crossChainMaxSlippageStr = GetFlag(args, "--cross-chain-max-slippage-bps");
         var feesIncluded = HasFlag(args, "--fees-included");
 
-        if (paymentRequest == null)
+        if (paymentRequestStr == null)
         {
             Console.WriteLine("Usage: pay -r <payment_request> [-a <amount>] [-t <token_identifier>]");
             return;
@@ -611,8 +612,27 @@ public static class Commands
 
         FeePolicy? feePolicy = feesIncluded ? FeePolicy.FeesIncluded : null;
 
+        PaymentRequest paymentRequest;
+        var parsed = await sdk.Parse(paymentRequestStr);
+        if (parsed is InputType.CrossChainAddress crossChainAddr)
+        {
+            var address = crossChainAddr.v1.address;
+            var route = await SelectCrossChainRoute(sdk, readline, crossChainAddr.v1);
+            if (route == null) return;
+            paymentRequest = new PaymentRequest.CrossChain(
+                address: address,
+                route: route,
+                maxSlippageBps: ParseOptionalUint(crossChainMaxSlippageStr),
+                targetOverpayBps: null
+            );
+        }
+        else
+        {
+            paymentRequest = new PaymentRequest.Input(input: paymentRequestStr);
+        }
+
         var prepareResponse = await sdk.PrepareSendPayment(request: new PrepareSendPaymentRequest(
-            paymentRequest: new PaymentRequest.Input(input: paymentRequest),
+            paymentRequest: paymentRequest,
             amount: ParseOptionalUlong(amountStr),
             tokenIdentifier: tokenIdentifier,
             conversionOptions: conversionOptions,
@@ -624,6 +644,27 @@ public static class Commands
         {
             var est = prepareResponse.conversionEstimate;
             Console.WriteLine($"Estimated conversion of {est.amountIn} → {est.amountOut} with a {est.fee} fee");
+            var line = readline("Do you want to continue (y/n) [y]: ");
+            if (line != null && line.Trim().ToLower() != "" && line.Trim().ToLower() != "y")
+            {
+                Console.WriteLine("Payment cancelled");
+                return;
+            }
+        }
+
+        // Show cross-chain quote details before confirming
+        if (prepareResponse.paymentMethod is SendPaymentMethod.CrossChainAddress ccMethod)
+        {
+            var serviceFeeDenom = ccMethod.serviceFeeAsset ?? "sats";
+            var denomination = tokenIdentifier != null ? "token base units" : "sats";
+            Console.WriteLine(
+                $"Cross-chain send: {ccMethod.amountIn} {denomination} " +
+                $"(~{ccMethod.assetAmountIn} {ccMethod.route.asset}) " +
+                $"→ ~{ccMethod.estimatedOut} {ccMethod.route.asset} " +
+                $"on {ccMethod.route.chain} to {ccMethod.recipientAddress}");
+            Console.WriteLine($"Fee (total, in {ccMethod.route.asset}): {ccMethod.feeAmount}");
+            Console.WriteLine($"Service fee: {ccMethod.serviceFeeAmount} {serviceFeeDenom}");
+            Console.WriteLine($"Source transfer fee: {ccMethod.sourceTransferFeeSats} sats");
             var line = readline("Do you want to continue (y/n) [y]: ");
             if (line != null && line.Trim().ToLower() != "" && line.Trim().ToLower() != "y")
             {
@@ -1293,13 +1334,64 @@ public static class Commands
             );
         }
 
-        // SparkInvoice -> no options
+        // SparkInvoice / CrossChainAddress -> no options
         return null;
     }
 
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    private static async Task<CrossChainRoutePair?> SelectCrossChainRoute(
+        BreezSdk sdk,
+        Func<string, string?> readline,
+        CrossChainAddressDetails addressDetails)
+    {
+        var filter = new CrossChainRouteFilter.Send(addressDetails: addressDetails);
+        var routes = await sdk.GetCrossChainRoutes(filter: filter);
+        if (routes.Length == 0)
+        {
+            Console.WriteLine("No cross-chain routes available for this address");
+            return null;
+        }
+
+        if (routes.Length == 1)
+        {
+            var route = routes[0];
+            Console.WriteLine(
+                $"Auto-selected route: {route.asset} on {route.chain}" +
+                $"{MaybeTruncateAddress(route.contractAddress)} [{route.provider}]");
+            return route;
+        }
+
+        Console.WriteLine("Available cross-chain routes:");
+        for (int i = 0; i < routes.Length; i++)
+        {
+            var r = routes[i];
+            Console.WriteLine(
+                $"  {i + 1}. {r.asset} on {r.chain}" +
+                $"{MaybeTruncateAddress(r.contractAddress)} [{r.provider}]");
+        }
+
+        var line = readline("Select route: ");
+        if (line == null || !int.TryParse(line.Trim(), out int choice) || choice < 1 || choice > routes.Length)
+        {
+            Console.WriteLine("Invalid selection");
+            return null;
+        }
+
+        return routes[choice - 1];
+    }
+
+    private static string MaybeTruncateAddress(string? addr)
+    {
+        if (addr == null) return "";
+        if (addr.Length > 12)
+        {
+            return $" ({addr[..6]}...{addr[^6..]})";
+        }
+        return $" ({addr})";
+    }
 
     private static string ComputeSha256Hex(byte[] data)
     {

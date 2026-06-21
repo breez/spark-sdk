@@ -125,6 +125,14 @@ func main() {
 		config.ApiKey = &apiKey
 	}
 
+	// Cross-chain sends are opt-in by the caller and mainnet-only (enabling on
+	// other networks fails config validation). Enable with default slippage so
+	// `pay` can route cross-chain destinations.
+	if networkEnum == breez_sdk_spark.NetworkMainnet {
+		crossChainConfig := breez_sdk_spark.CrossChainConfig{}
+		config.CrossChainConfig = &crossChainConfig
+	}
+
 	// Stable balance config
 	if len(stableBalanceTokens) > 0 {
 		var tokens []breez_sdk_spark.StableBalanceToken

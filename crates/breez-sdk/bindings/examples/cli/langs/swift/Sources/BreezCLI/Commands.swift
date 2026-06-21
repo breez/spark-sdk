@@ -423,8 +423,8 @@ func handleReceive(_ sdk: BreezSdk, _ args: [String]) async throws {
 
 func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fp = FlagParser(args)
-    guard let paymentRequest = fp.get("r", "payment-request") else {
-        print("Usage: pay -r <payment_request> [-a <amount>] [-t <token_identifier>] [--from-bitcoin] [--from-token <id>] [-s <slippage_bps>] [--fees-included]")
+    guard let paymentRequestStr = fp.get("r", "payment-request") else {
+        print("Usage: pay -r <payment_request> [-a <amount>] [-t <token_identifier>] [--from-bitcoin] [--from-token <id>] [-s <slippage_bps>] [--cross-chain-max-slippage-bps <bps>] [--fees-included]")
         return
     }
 
@@ -434,6 +434,7 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
     let fromBitcoin = fp.has("from-bitcoin")
     let fromTokenId = fp.get("from-token")
     let maxSlippageBps = fp.get("s", "convert-max-slippage-bps").flatMap { UInt32($0) }
+    let crossChainMaxSlippageBps = fp.get("cross-chain-max-slippage-bps").flatMap { UInt32($0) }
     let feesIncluded = fp.has("fees-included")
 
     let conversionOptions: ConversionOptions?
@@ -455,8 +456,23 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
 
     let feePolicy: FeePolicy? = feesIncluded ? .feesIncluded : nil
 
+    let paymentRequest: PaymentRequest
+    let parsed = try? await sdk.parse(input: paymentRequestStr)
+    if case let .crossChainAddress(v1) = parsed {
+        let address = v1.address
+        let route = try await selectCrossChainRoute(sdk: sdk, addressDetails: v1)
+        paymentRequest = .crossChain(
+            address: address,
+            route: route,
+            maxSlippageBps: crossChainMaxSlippageBps,
+            targetOverpayBps: nil
+        )
+    } else {
+        paymentRequest = .input(input: paymentRequestStr)
+    }
+
     let prepareResponse = try await sdk.prepareSendPayment(request: PrepareSendPaymentRequest(
-        paymentRequest: .input(input: paymentRequest),
+        paymentRequest: paymentRequest,
         amount: amount,
         tokenIdentifier: tokenIdentifier,
         conversionOptions: conversionOptions,
@@ -470,7 +486,21 @@ func handlePay(_ sdk: BreezSdk, _ args: [String]) async throws {
         } else {
             units = "token base units"
         }
-        print("Estimated conversion of \(estimate.amountIn) \(units) → \(estimate.amountOut) \(units) with a \(estimate.fee) \(units) fee")
+        print("Estimated conversion of \(estimate.amountIn) \(units) -> \(estimate.amountOut) \(units) with a \(estimate.fee) \(units) fee")
+        let line = readlineWithDefault("Do you want to continue (y/n): ", defaultValue: "y")
+        if line.trimmingCharacters(in: .whitespaces).lowercased() != "y" {
+            print("Payment cancelled")
+            return
+        }
+    }
+
+    if case let .crossChainAddress(route, recipientAddress, amountIn, assetAmountIn, estimatedOut, feeAmount, serviceFeeAmount, serviceFeeAsset, sourceTransferFeeSats, _, _, _) = prepareResponse.paymentMethod {
+        let serviceFeeDenom = serviceFeeAsset ?? "sats"
+        let denomination = tokenIdentifier != nil ? "token base units" : "sats"
+        print("Cross-chain send: \(amountIn) \(denomination) (~\(assetAmountIn) \(route.asset)) -> ~\(estimatedOut) \(route.asset) on \(route.chain) to \(recipientAddress)")
+        print("Fee (total, in \(route.asset)): \(feeAmount)")
+        print("Service fee: \(serviceFeeAmount) \(serviceFeeDenom)")
+        print("Source transfer fee: \(sourceTransferFeeSats) sats")
         let line = readlineWithDefault("Do you want to continue (y/n): ", defaultValue: "y")
         if line.trimmingCharacters(in: .whitespaces).lowercased() != "y" {
             print("Payment cancelled")
@@ -961,4 +991,51 @@ func handleSetUserSettings(_ sdk: BreezSdk, _ args: [String]) async throws {
 func handleGetSparkStatus(_ sdk: BreezSdk, _ args: [String]) async throws {
     let result = try await getSparkStatus()
     printValue(result)
+}
+
+// MARK: - Cross-chain route selection
+
+func selectCrossChainRoute(
+    sdk: BreezSdk,
+    addressDetails: CrossChainAddressDetails
+) async throws -> CrossChainRoutePair {
+    let filter = CrossChainRouteFilter.send(addressDetails: addressDetails)
+    let routes = try await sdk.getCrossChainRoutes(filter: filter)
+    if routes.isEmpty {
+        throw NSError(domain: "BreezCLI", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "No cross-chain routes available for this address",
+        ])
+    }
+
+    if routes.count == 1 {
+        let route = routes[0]
+        print("Auto-selected route: \(route.asset) on \(route.chain)\(maybeTruncateAddress(route.contractAddress)) [\(route.provider)]")
+        return route
+    }
+
+    print("Available cross-chain routes:")
+    for (i, route) in routes.enumerated() {
+        let idx = i + 1
+        print("  \(idx). \(route.asset) on \(route.chain)\(maybeTruncateAddress(route.contractAddress)) [\(route.provider)]")
+    }
+
+    guard let line = readlinePrompt("Select route: "),
+          let choice = Int(line.trimmingCharacters(in: .whitespaces)),
+          choice >= 1, choice <= routes.count else {
+        throw NSError(domain: "BreezCLI", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "Invalid selection",
+        ])
+    }
+
+    return routes[choice - 1]
+}
+
+private func maybeTruncateAddress(_ addr: String?) -> String {
+    guard let c = addr else { return "" }
+    if c.count > 12 {
+        let prefix = c.prefix(6)
+        let suffix = c.suffix(6)
+        return " (\(prefix)...\(suffix))"
+    }
+    return " (\(c))"
 }

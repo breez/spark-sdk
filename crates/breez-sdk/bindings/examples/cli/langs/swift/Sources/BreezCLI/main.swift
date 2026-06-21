@@ -221,6 +221,9 @@ let breezApiKey: String? = {
     return nil
 }()
 config.apiKey = breezApiKey
+if network == .mainnet {
+    config.crossChainConfig = CrossChainConfig()
+}
 if !opts.stableBalanceTokens.isEmpty {
     let tokens: [StableBalanceToken] = opts.stableBalanceTokens.map { s in
         let parts = s.split(separator: ":", maxSplits: 1)

@@ -391,25 +391,27 @@ suspend fun handleReceive(sdk: BreezSdk, reader: LineReader, args: List<String>)
 
 suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
     val fp = FlagParser(args)
-    val paymentRequest = fp.getString("r", "payment-request")
+    val paymentRequestStr = fp.getString("r", "payment-request")
     val amountStr = fp.getString("a", "amount")
     val tokenId = fp.getString("t", "token-identifier")
     val idempotencyKey = fp.getString("i", "idempotency-key")
     val convertFromBitcoin = fp.hasFlag("from-bitcoin")
     val convertFromToken = fp.getString("from-token")
     val maxSlippageBps = fp.getUInt("s", "convert-max-slippage-bps")
+    val crossChainMaxSlippageBps = fp.getUInt("cross-chain-max-slippage-bps")
     val feesIncluded = fp.hasFlag("fees-included")
 
-    if (paymentRequest == null) {
+    if (paymentRequestStr == null) {
         println("Usage: pay -r <payment_request> [options]")
         println("Options:")
-        println("  -a, --amount <amount>            Optional amount")
-        println("  -t, --token-identifier <id>      Optional token identifier")
-        println("  -i, --idempotency-key <key>      Optional idempotency key")
-        println("  --from-bitcoin                   Convert from Bitcoin")
-        println("  --from-token <token_id>          Convert from token to Bitcoin")
-        println("  -s, --convert-max-slippage-bps   Max slippage in basis points")
-        println("  --fees-included                  Deduct fees from amount")
+        println("  -a, --amount <amount>                  Optional amount")
+        println("  -t, --token-identifier <id>            Optional token identifier")
+        println("  -i, --idempotency-key <key>            Optional idempotency key")
+        println("  --from-bitcoin                         Convert from Bitcoin")
+        println("  --from-token <token_id>                Convert from token to Bitcoin")
+        println("  -s, --convert-max-slippage-bps <bps>   Max slippage in basis points")
+        println("  --cross-chain-max-slippage-bps <bps>   Max slippage for cross-chain sends (10..500)")
+        println("  --fees-included                        Deduct fees from amount")
         return
     }
 
@@ -438,9 +440,24 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
 
     val feePolicy = if (feesIncluded) FeePolicy.FEES_INCLUDED else null
 
+    val paymentRequest = when (val parsed = sdk.parse(paymentRequestStr)) {
+        is InputType.CrossChainAddress -> {
+            val addressDetails = parsed.v1
+            val address = addressDetails.address
+            val route = selectCrossChainRoute(sdk, reader, addressDetails)
+            PaymentRequest.CrossChain(
+                address = address,
+                route = route,
+                maxSlippageBps = crossChainMaxSlippageBps,
+                targetOverpayBps = null,
+            )
+        }
+        else -> PaymentRequest.Input(input = paymentRequestStr)
+    }
+
     val prepareResponse = sdk.prepareSendPayment(
         PrepareSendPaymentRequest(
-            paymentRequest = PaymentRequest.Input(input = paymentRequest),
+            paymentRequest = paymentRequest,
             amount = amount,
             tokenIdentifier = tokenId,
             conversionOptions = conversionOptions,
@@ -456,6 +473,27 @@ suspend fun handlePay(sdk: BreezSdk, reader: LineReader, args: List<String>) {
             "token base units" to "sats"
         }
         println("Estimated conversion from ${conversionEstimate.amountIn} $inUnits to ${conversionEstimate.amountOut} $outUnits with a ${conversionEstimate.fee} token base units fee")
+        val line = readlineWithDefault(reader, "Do you want to continue (y/n): ", "y").lowercase()
+        if (line != "y") {
+            println("Payment cancelled")
+            return
+        }
+    }
+
+    // Show cross-chain quote details before confirming
+    val method = prepareResponse.paymentMethod
+    if (method is SendPaymentMethod.CrossChainAddress) {
+        val serviceFeeDenom = method.serviceFeeAsset ?: "sats"
+        val denomination = if (tokenId != null) "token base units" else "sats"
+        println(
+            "Cross-chain send: ${method.amountIn} $denomination " +
+            "(~${method.assetAmountIn} ${method.route.asset}) " +
+            "-> ~${method.estimatedOut} ${method.route.asset} " +
+            "on ${method.route.chain} to ${method.recipientAddress}"
+        )
+        println("Fee (total, in ${method.route.asset}): ${method.feeAmount}")
+        println("Service fee: ${method.serviceFeeAmount} $serviceFeeDenom")
+        println("Source transfer fee: ${method.sourceTransferFeeSats} sats")
         val line = readlineWithDefault(reader, "Do you want to continue (y/n): ", "y").lowercase()
         if (line != "y") {
             println("Payment cancelled")
@@ -984,6 +1022,57 @@ suspend fun handleGetSparkStatus(sdk: BreezSdk, reader: LineReader, args: List<S
 }
 
 // ---------------------------------------------------------------------------
+// Cross-chain route selection
+// ---------------------------------------------------------------------------
+
+suspend fun selectCrossChainRoute(
+    sdk: BreezSdk,
+    reader: LineReader,
+    addressDetails: CrossChainAddressDetails,
+): CrossChainRoutePair {
+    val filter = CrossChainRouteFilter.Send(addressDetails = addressDetails)
+    val routes = sdk.getCrossChainRoutes(filter)
+    if (routes.isEmpty()) {
+        throw Exception("No cross-chain routes available for this address")
+    }
+
+    if (routes.size == 1) {
+        val route = routes[0]
+        println(
+            "Auto-selected route: ${route.asset} on ${route.chain}" +
+            "${maybeTruncateAddress(route.contractAddress)} [${route.provider}]"
+        )
+        return route
+    }
+
+    println("Available cross-chain routes:")
+    for ((i, route) in routes.withIndex()) {
+        val idx = i + 1
+        println(
+            "  $idx. ${route.asset} on ${route.chain}" +
+            "${maybeTruncateAddress(route.contractAddress)} [${route.provider}]"
+        )
+    }
+
+    val line = readlinePrompt(reader, "Select route: ")
+    val choice = line.toIntOrNull() ?: throw Exception("Invalid selection")
+    val index = choice - 1
+    if (index < 0 || index >= routes.size) {
+        throw Exception("Selection out of range")
+    }
+    return routes[index]
+}
+
+fun maybeTruncateAddress(addr: String?): String {
+    if (addr == null) return ""
+    return if (addr.length > 12) {
+        " (${addr.take(6)}...${addr.takeLast(6)})"
+    } else {
+        " ($addr)"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // readPaymentOptions -- interactive fee/option selection
 // ---------------------------------------------------------------------------
 
@@ -1078,7 +1167,8 @@ suspend fun readPaymentOptions(
             )
         }
 
-        is SendPaymentMethod.SparkInvoice -> null
+        is SendPaymentMethod.SparkInvoice,
+        is SendPaymentMethod.CrossChainAddress -> null
 
         else -> null
     }

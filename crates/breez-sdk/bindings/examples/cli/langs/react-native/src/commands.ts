@@ -32,10 +32,15 @@ import {
   TokenTransactionType,
   BuyBitcoinRequest,
   getSparkStatus,
+  PaymentRequest,
+  CrossChainRouteFilter,
+  CrossChainProvider,
 } from '@breeztech/breez-sdk-spark-react-native'
 import type {
   BreezSdkInterface,
   TokenIssuerInterface,
+  CrossChainRoutePair,
+  CrossChainAddressDetails,
 } from '@breeztech/breez-sdk-spark-react-native'
 import { generateRandomBytes, sha256Hash, bytesToHex } from './crypto_utils'
 import { formatValue } from './serialization'
@@ -534,9 +539,9 @@ async function handleReceive(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerIn
 // --- pay ---
 
 async function handlePay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
-  const paymentRequest = parseFlag(args, '--payment-request', '-r')
-  if (!paymentRequest) {
-    return 'Usage: pay -r <payment_request> [-a <amount>] [-t <token_identifier>] [-i <idempotency_key>] [--from-bitcoin] [--from-token <token_id>] [-s <max_slippage_bps>] [--fees-included]'
+  const paymentRequestInput = parseFlag(args, '--payment-request', '-r')
+  if (!paymentRequestInput) {
+    return 'Usage: pay -r <payment_request> [-a <amount>] [-t <token_identifier>] [-i <idempotency_key>] [--from-bitcoin] [--from-token <token_id>] [-s <max_slippage_bps>] [--cross-chain-max-slippage-bps <bps>] [--fees-included]'
   }
 
   const amount = parseBigIntFlag(args, '--amount', '-a')
@@ -545,6 +550,8 @@ async function handlePay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterf
   const convertFromBitcoin = hasFlag(args, '--from-bitcoin')
   const convertFromTokenIdentifier = parseFlag(args, '--from-token')
   const maxSlippageBps = parseNumericFlag(args, '--convert-max-slippage-bps', '-s')
+  const crossChainMaxSlippageBps = parseNumericFlag(args, '--cross-chain-max-slippage-bps')
+  const routeIndex = parseNumericFlag(args, '--route')
   const feesIncluded = hasFlag(args, '--fees-included')
 
   // Build conversion options
@@ -568,15 +575,34 @@ async function handlePay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterf
 
   const feePolicy = feesIncluded ? FeePolicy.FeesIncluded : undefined
 
+  const lines: string[] = []
+
+  // Check if the input is a cross-chain address. If so, we need
+  // route selection before we can prepare.
+  let paymentRequest: InstanceType<typeof PaymentRequest.Input>
+    | InstanceType<typeof PaymentRequest.CrossChain>
+  const parsed = await sdk.parse(paymentRequestInput)
+  if (parsed.tag === InputType_Tags.CrossChainAddress) {
+    const addressDetails: CrossChainAddressDetails = parsed.inner[0]
+    const routeResult = await selectCrossChainRoute(sdk, addressDetails, routeIndex)
+    lines.push(routeResult.message)
+    paymentRequest = new PaymentRequest.CrossChain({
+      address: addressDetails.address,
+      route: routeResult.route,
+      maxSlippageBps: crossChainMaxSlippageBps,
+      targetOverpayBps: undefined,
+    })
+  } else {
+    paymentRequest = new PaymentRequest.Input({ input: paymentRequestInput })
+  }
+
   const prepareResponse = await sdk.prepareSendPayment({
-    paymentRequest: { input: paymentRequest },
+    paymentRequest,
     amount,
     tokenIdentifier,
     conversionOptions,
     feePolicy,
   })
-
-  const lines: string[] = []
 
   // Show conversion estimate if present
   if (prepareResponse.conversionEstimate) {
@@ -584,6 +610,20 @@ async function handlePay(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterf
     const isFromBitcoin = est.options?.conversionType?.tag === 'FromBitcoin'
     const units = isFromBitcoin ? 'sats' : 'token base units'
     lines.push(`Estimated conversion of ${est.amount} ${units} with a ${est.fee} ${units} fee`)
+  }
+
+  // Show cross-chain quote details
+  if (prepareResponse.paymentMethod?.tag === SendPaymentMethod_Tags.CrossChainAddress) {
+    const pm = prepareResponse.paymentMethod.inner
+    const serviceFeeAsset = pm.serviceFeeAsset ?? 'sats'
+    const denomination = tokenIdentifier ? 'token base units' : 'sats'
+    lines.push(
+      `Cross-chain send: ${pm.amountIn} ${denomination} (~${pm.assetAmountIn} ${pm.route.asset})` +
+      ` -> ~${pm.estimatedOut} ${pm.route.asset} on ${pm.route.chain} to ${pm.recipientAddress}`
+    )
+    lines.push(`Fee (total, in ${pm.route.asset}): ${pm.feeAmount}`)
+    lines.push(`Service fee: ${pm.serviceFeeAmount} ${serviceFeeAsset}`)
+    lines.push(`Source transfer fee: ${pm.sourceTransferFeeSats} sats`)
   }
 
   // Determine payment options based on the payment method type
@@ -1151,4 +1191,54 @@ async function handleWebhooks(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerI
 
 async function handleStableBalance(sdk: BreezSdkInterface, _tokenIssuer: TokenIssuerInterface, args: string[]): Promise<string> {
   return dispatchStableBalanceCommand(args, sdk)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-chain helpers
+// ---------------------------------------------------------------------------
+
+function maybeTruncateAddress(addr: string | undefined | null): string {
+  if (!addr) return ''
+  if (addr.length > 12) {
+    return ` (${addr.slice(0, 6)}...${addr.slice(-6)})`
+  }
+  return ` (${addr})`
+}
+
+async function selectCrossChainRoute(
+  sdk: BreezSdkInterface,
+  addressDetails: CrossChainAddressDetails,
+  preferredIndex: number | undefined,
+): Promise<{ route: CrossChainRoutePair; message: string }> {
+  const filter = new CrossChainRouteFilter.Send({ addressDetails })
+  const routes: CrossChainRoutePair[] = await sdk.getCrossChainRoutes(filter)
+
+  if (routes.length === 0) {
+    throw new Error('No cross-chain routes available for this address')
+  }
+
+  if (routes.length === 1) {
+    const route = routes[0]
+    const message = `Auto-selected route: ${route.asset} on ${route.chain}` +
+      `${maybeTruncateAddress(route.contractAddress)} [${CrossChainProvider[route.provider] ?? route.provider}]`
+    return { route, message }
+  }
+
+  const routeLines = ['Available cross-chain routes:']
+  for (let i = 0; i < routes.length; i++) {
+    const r = routes[i]
+    routeLines.push(
+      `  ${i + 1}. ${r.asset} on ${r.chain}` +
+      `${maybeTruncateAddress(r.contractAddress)} [${CrossChainProvider[r.provider] ?? r.provider}]`
+    )
+  }
+
+  const idx = (preferredIndex ?? 1) - 1
+  if (idx < 0 || idx >= routes.length) {
+    throw new Error(`Route selection out of range (1 to ${routes.length}). Use --route <n> to choose.`)
+  }
+
+  const route = routes[idx]
+  routeLines.push(`Selected route ${idx + 1}. Use --route <n> to choose a different route.`)
+  return { route, message: routeLines.join('\n') }
 }

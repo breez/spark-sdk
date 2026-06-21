@@ -72,6 +72,11 @@ declare module '@breeztech/breez-sdk-spark-react-native' {
   export const SendPaymentOptions: any;
   export const OnchainConfirmationSpeed: any;
   export const getSparkStatus: any;
+  export const PaymentRequest: any;
+  export const CrossChainRouteFilter: any;
+  export const CrossChainProvider: any;
+  export type CrossChainRoutePair = any;
+  export type CrossChainAddressDetails = any;
 
   // --- passkey ---
   // Note: PasskeyProvider (concrete class) ships at the
