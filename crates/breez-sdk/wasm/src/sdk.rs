@@ -184,6 +184,18 @@ impl BreezSdk {
         Ok(self.sdk.prepare_send_payment(request.into()).await?.into())
     }
 
+    #[wasm_bindgen(js_name = "buildTransferAuthorizationRequest")]
+    pub async fn build_transfer_authorization_request(
+        &self,
+        transfer_context: TransferContext,
+    ) -> WasmResult<crate::signer::ExternalPrepareTransferRequest> {
+        Ok(self
+            .sdk
+            .build_transfer_authorization_request(transfer_context.into())
+            .await?
+            .into())
+    }
+
     #[wasm_bindgen(js_name = "prepareLnurlPay")]
     pub async fn prepare_lnurl_pay(
         &self,

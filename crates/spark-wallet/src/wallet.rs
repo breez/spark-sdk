@@ -35,7 +35,7 @@ use spark::{
         TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
     },
     session_store::{InMemorySessionStore, SessionStore},
-    signer::SparkSigner,
+    signer::{PrepareTransferRequest, SparkSigner},
     ssp::{ServiceProvider, SspTransfer, SspUserRequest},
     token::{
         InMemoryTokenOutputStore, SelectionStrategy, SynchronousTokenOutputService, TokenMetadata,
@@ -675,6 +675,45 @@ impl SparkWallet {
         )
         .await;
         self.build_pay_lightning_result(result?).await
+    }
+
+    /// Builds the deterministic `prepare_transfer` request for a prepared
+    /// lightning send so it can be authorized out-of-band (e.g. on a remote
+    /// signer) before the send is resumed. Given the same pinned leaves, this
+    /// is byte-identical to the request the resumed send issues, which lets a
+    /// pre-authorized signing request match the one the send produces.
+    ///
+    /// The pinned leaves are looked up by id (read-only, no reservation) in the
+    /// order given, matching the order the resumed send reserves them in.
+    pub async fn build_lightning_send_prepare_transfer_request(
+        &self,
+        transfer_id: &TransferId,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<PrepareTransferRequest, SparkWalletError> {
+        let leaves = self.tree_service.list_leaves().await?;
+        let by_id: HashMap<TreeNodeId, TreeNode> = leaves
+            .available
+            .into_iter()
+            .chain(leaves.reserved_for_payment)
+            .chain(leaves.reserved_for_swap)
+            .chain(leaves.not_available)
+            .chain(leaves.available_missing_from_operators)
+            .map(|node| (node.id.clone(), node))
+            .collect();
+        let nodes = leaf_ids
+            .iter()
+            .map(|id| {
+                by_id.get(id).cloned().ok_or_else(|| {
+                    SparkWalletError::Generic(format!(
+                        "Leaf {id} from transfer context is not in the wallet"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let receiver = self.ssp_client.identity_public_key();
+        Ok(self
+            .transfer_service
+            .build_prepare_transfer_request(transfer_id, &nodes, &receiver)?)
     }
 
     /// Builds the [`PayLightningInvoiceResult`] from a lightning send result,

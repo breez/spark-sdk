@@ -295,26 +295,14 @@ impl TransferService {
         // Key-tweak / Feldman-split / ECIES / transfer-payload signing. The
         // signer generates the new receiver key and produces the per-operator
         // encrypted key-tweak packages plus the transfer-package signature.
+        let leaf_nodes: Vec<TreeNode> = leaf_key_tweaks.iter().map(|l| l.node.clone()).collect();
         let prepared = self
             .spark_signer
-            .prepare_transfer(PrepareTransferRequest {
-                transfer_id: transfer_id.clone(),
-                receiver_public_key: *receiver_public_key,
-                leaves: leaf_key_tweaks
-                    .iter()
-                    .map(|l| {
-                        Ok::<_, ServiceError>(TransferLeafInput {
-                            node: l.node.clone(),
-                            new_signing_key_path: crate::signer::new_key_path(
-                                transfer_id,
-                                &l.node.id,
-                            )?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-                operator_recipients: self.operator_recipients(),
-                threshold: self.split_secret_threshold,
-            })
+            .prepare_transfer(self.build_prepare_transfer_request(
+                transfer_id,
+                &leaf_nodes,
+                receiver_public_key,
+            )?)
             .await?;
 
         let transfer_package = operator_rpc::spark::TransferPackage {
@@ -365,6 +353,36 @@ impl TransferService {
                 public_key: op.identity_public_key,
             })
             .collect()
+    }
+
+    /// Builds the `prepare_transfer` (key-tweak signing) payload for a transfer.
+    ///
+    /// Deterministic in `transfer_id`, the leaf nodes, and the receiver: the new
+    /// per-leaf signing keys derive from the transfer and leaf ids, and the
+    /// operator set and threshold come from configuration. This lets a prepared
+    /// send be reconstructed for out-of-band signer authorization (a remote
+    /// signer can pre-authorize the identical request before the send runs).
+    pub fn build_prepare_transfer_request(
+        &self,
+        transfer_id: &TransferId,
+        leaf_nodes: &[TreeNode],
+        receiver_public_key: &PublicKey,
+    ) -> Result<PrepareTransferRequest, ServiceError> {
+        Ok(PrepareTransferRequest {
+            transfer_id: transfer_id.clone(),
+            receiver_public_key: *receiver_public_key,
+            leaves: leaf_nodes
+                .iter()
+                .map(|node| {
+                    Ok::<_, ServiceError>(TransferLeafInput {
+                        node: node.clone(),
+                        new_signing_key_path: crate::signer::new_key_path(transfer_id, &node.id)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            operator_recipients: self.operator_recipients(),
+            threshold: self.split_secret_threshold,
+        })
     }
 
     pub async fn prepare_transfer_request(

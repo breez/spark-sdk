@@ -8,8 +8,9 @@ use crate::{
     models::{
         ListPaymentsRequest, ListPaymentsResponse, Payment, PrepareSendPaymentRequest,
         PrepareSendPaymentResponse, ReceivePaymentRequest, ReceivePaymentResponse,
-        SendPaymentRequest, SendPaymentResponse, conversion_steps_from_payments,
+        SendPaymentRequest, SendPaymentResponse, TransferContext, conversion_steps_from_payments,
     },
+    signer::external_spark_types::ExternalPrepareTransferRequest,
     utils::payments::get_payment_with_conversion_details,
 };
 
@@ -44,6 +45,36 @@ impl BreezSdk {
         request: PrepareSendPaymentRequest,
     ) -> Result<PrepareSendPaymentResponse, SdkError> {
         prepare::prepare(self, request).await
+    }
+
+    /// Builds the signer authorization request for a prepared lightning send.
+    ///
+    /// Pass the [`TransferContext`] returned on a prepare response (when
+    /// requested via `include_transfer_context`). The returned request is the
+    /// exact `prepare_transfer` payload the send issues, so a remote signer can
+    /// authorize it out-of-band before `send_payment` resumes the send with the
+    /// same context.
+    pub async fn build_transfer_authorization_request(
+        &self,
+        transfer_context: TransferContext,
+    ) -> Result<ExternalPrepareTransferRequest, SdkError> {
+        let transfer_id = transfer_context
+            .transfer_id
+            .parse::<spark_wallet::TransferId>()
+            .map_err(|e| {
+                SdkError::Generic(format!("invalid transfer id in transfer context: {e}"))
+            })?;
+        let leaf_ids = transfer_context
+            .leaf_ids
+            .iter()
+            .map(|id| id.parse::<spark_wallet::TreeNodeId>())
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(|e| SdkError::Generic(format!("invalid leaf id in transfer context: {e}")))?;
+        let request = self
+            .spark_wallet
+            .build_lightning_send_prepare_transfer_request(&transfer_id, &leaf_ids)
+            .await?;
+        ExternalPrepareTransferRequest::from_prepare_transfer_request(&request)
     }
 
     #[instrument(
