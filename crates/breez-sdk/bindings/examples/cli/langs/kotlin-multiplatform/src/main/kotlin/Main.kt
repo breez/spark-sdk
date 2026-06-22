@@ -274,6 +274,9 @@ suspend fun runInteractiveMode(
         config.apiKey = apiKey
     }
     config.stableBalanceConfig = stableBalanceConfig
+    if (network == Network.MAINNET) {
+        config.crossChainConfig = CrossChainConfig()
+    }
 
     // Resolve seed: passkey or mnemonic
     val seed: Seed = if (passkeyConfig != null) {

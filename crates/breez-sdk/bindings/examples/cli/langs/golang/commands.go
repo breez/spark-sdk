@@ -395,18 +395,51 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 	fromToken := fs.String("from-token", "", "Convert from token to Bitcoin to fulfill payment")
 	maxSlippage := fs.String("s", "", "Max slippage in basis points for conversion")
 	fs.StringVar(maxSlippage, "convert-max-slippage-bps", "", "Max slippage in basis points")
+	crossChainMaxSlippageStr := fs.String("cross-chain-max-slippage-bps", "", "Max slippage in basis points for cross-chain sends (10..500)")
 	feesIncluded := fs.Bool("fees-included", false, "Deduct fees from amount instead of adding on top")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	if *paymentRequest == "" {
-		fmt.Println("Usage: pay -r <payment_request> [-a <amount>] [-t <token_identifier>] [--from-bitcoin | --from-token <id>] [-s <slippage_bps>] [--fees-included] [-i <idempotency_key>]")
+		fmt.Println("Usage: pay -r <payment_request> [-a <amount>] [-t <token_identifier>] [--from-bitcoin | --from-token <id>] [-s <slippage_bps>] [--cross-chain-max-slippage-bps <bps>] [--fees-included] [-i <idempotency_key>]")
 		return nil
 	}
 
+	// Check if the input is a cross-chain address; if so, we need
+	// route selection before we can prepare.
+	var payReq breez_sdk_spark.PaymentRequest
+	parsed, parseErr := sdk.Parse(*paymentRequest)
+	parseErr = liftError(parseErr)
+	if parseErr == nil {
+		if ccAddr, ok := parsed.(breez_sdk_spark.InputTypeCrossChainAddress); ok {
+			address := ccAddr.Field0.Address
+			route, err := selectCrossChainRoute(sdk, rl, ccAddr.Field0)
+			if err != nil {
+				return err
+			}
+			ccReq := breez_sdk_spark.PaymentRequestCrossChain{
+				Address: address,
+				Route:   route,
+			}
+			if *crossChainMaxSlippageStr != "" {
+				val, err := strconv.ParseUint(*crossChainMaxSlippageStr, 10, 32)
+				if err != nil {
+					return fmt.Errorf("invalid cross-chain max slippage: %s", *crossChainMaxSlippageStr)
+				}
+				val32 := uint32(val)
+				ccReq.MaxSlippageBps = &val32
+			}
+			payReq = ccReq
+		} else {
+			payReq = breez_sdk_spark.PaymentRequestInput{Input: *paymentRequest}
+		}
+	} else {
+		payReq = breez_sdk_spark.PaymentRequestInput{Input: *paymentRequest}
+	}
+
 	req := breez_sdk_spark.PrepareSendPaymentRequest{
-		PaymentRequest: breez_sdk_spark.PaymentRequestInput{Input: *paymentRequest},
+		PaymentRequest: payReq,
 	}
 
 	if *amountStr != "" {
@@ -467,6 +500,31 @@ func handlePay(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, args []stri
 			outUnits = "token base units"
 		}
 		fmt.Printf("Estimated conversion from %v %s to %v %s with a %v token base units fee\n", est.AmountIn, inUnits, est.AmountOut, outUnits, est.Fee)
+		line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
+		if err != nil {
+			return err
+		}
+		if strings.ToLower(strings.TrimSpace(line)) != "y" {
+			return fmt.Errorf("payment cancelled")
+		}
+	}
+
+	// Show cross-chain quote details before confirming
+	if ccMethod, ok := prepareResponse.PaymentMethod.(breez_sdk_spark.SendPaymentMethodCrossChainAddress); ok {
+		serviceFeeDenom := "sats"
+		if ccMethod.ServiceFeeAsset != nil {
+			serviceFeeDenom = *ccMethod.ServiceFeeAsset
+		}
+		denomination := "sats"
+		if *tokenId != "" {
+			denomination = "token base units"
+		}
+		fmt.Printf("Cross-chain send: %v %s (~%v %s) -> ~%v %s on %s to %s\n",
+			ccMethod.AmountIn, denomination, ccMethod.AssetAmountIn, ccMethod.Route.Asset,
+			ccMethod.EstimatedOut, ccMethod.Route.Asset, ccMethod.Route.Chain, ccMethod.RecipientAddress)
+		fmt.Printf("Fee (total, in %s): %v\n", ccMethod.Route.Asset, ccMethod.FeeAmount)
+		fmt.Printf("Service fee: %v %s\n", ccMethod.ServiceFeeAmount, serviceFeeDenom)
+		fmt.Printf("Source transfer fee: %d sats\n", ccMethod.SourceTransferFeeSats)
 		line, err := readlineWithDefault(rl, "Do you want to continue (y/n): ", "y")
 		if err != nil {
 			return err
@@ -1189,6 +1247,59 @@ func handleGetSparkStatus(sdk *breez_sdk_spark.BreezSdk, _ *readline.Instance, _
 	}
 	printValue(result)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// selectCrossChainRoute — fetch routes and prompt the user to pick one
+// ---------------------------------------------------------------------------
+
+func selectCrossChainRoute(sdk *breez_sdk_spark.BreezSdk, rl *readline.Instance, addressDetails breez_sdk_spark.CrossChainAddressDetails) (breez_sdk_spark.CrossChainRoutePair, error) {
+	var filter breez_sdk_spark.CrossChainRouteFilter = breez_sdk_spark.CrossChainRouteFilterSend{AddressDetails: addressDetails}
+	routes, err := sdk.GetCrossChainRoutes(filter)
+	if err = liftError(err); err != nil {
+		return breez_sdk_spark.CrossChainRoutePair{}, err
+	}
+	if len(routes) == 0 {
+		return breez_sdk_spark.CrossChainRoutePair{}, fmt.Errorf("no cross-chain routes available for this address")
+	}
+
+	if len(routes) == 1 {
+		route := routes[0]
+		fmt.Printf("Auto-selected route: %s on %s%s [%v]\n",
+			route.Asset, route.Chain, maybeTruncateAddress(route.ContractAddress), route.Provider)
+		return route, nil
+	}
+
+	fmt.Println("Available cross-chain routes:")
+	for i, route := range routes {
+		fmt.Printf("  %d. %s on %s%s [%v]\n",
+			i+1, route.Asset, route.Chain, maybeTruncateAddress(route.ContractAddress), route.Provider)
+	}
+
+	line, err := readlinePrompt(rl, "Select route: ")
+	if err != nil {
+		return breez_sdk_spark.CrossChainRoutePair{}, err
+	}
+	choice, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		return breez_sdk_spark.CrossChainRoutePair{}, fmt.Errorf("invalid selection")
+	}
+	idx := choice - 1
+	if idx < 0 || idx >= len(routes) {
+		return breez_sdk_spark.CrossChainRoutePair{}, fmt.Errorf("selection out of range")
+	}
+	return routes[idx], nil
+}
+
+func maybeTruncateAddress(addr *string) string {
+	if addr == nil {
+		return ""
+	}
+	c := *addr
+	if len(c) > 12 {
+		return fmt.Sprintf(" (%s...%s)", c[:6], c[len(c)-6:])
+	}
+	return fmt.Sprintf(" (%s)", c)
 }
 
 // ---------------------------------------------------------------------------

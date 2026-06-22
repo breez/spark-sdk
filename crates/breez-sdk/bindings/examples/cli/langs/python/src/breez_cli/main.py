@@ -10,6 +10,7 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 
 from breez_sdk_spark import (
+    CrossChainConfig,
     EventListener,
     Network,
     SdkBuilder,
@@ -114,6 +115,8 @@ async def main(data_dir, network, account_number, postgres_connection_string,
     else:
         config = default_config(network=network_enum)
     config.api_key = breez_api_key
+    if network_enum == Network.MAINNET:
+        config.cross_chain_config = CrossChainConfig()
 
     if stable_balance_tokens:
         tokens = []

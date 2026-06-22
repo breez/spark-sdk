@@ -279,6 +279,10 @@ static async Task RunInteractiveMode(
     {
         config = config with { stableBalanceConfig = stableBalanceConfig };
     }
+    if (network == Network.Mainnet)
+    {
+        config = config with { crossChainConfig = new CrossChainConfig() };
+    }
 
     // Resolve seed: passkey or mnemonic
     Seed seed;

@@ -385,11 +385,12 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
         ..addFlag('from-bitcoin', defaultsTo: false)
         ..addOption('from-token')
         ..addOption('convert-max-slippage-bps', abbr: 's')
+        ..addOption('cross-chain-max-slippage-bps')
         ..addFlag('fees-included', defaultsTo: false);
   final results = _parseArgs(parser, args, 'pay -r <request> [options]');
   if (results == null) return;
 
-  final paymentRequest = results.option('payment-request')!;
+  final paymentRequestInput = results.option('payment-request')!;
   final amountStr = results.option('amount');
   final amount = amountStr != null ? BigInt.parse(amountStr) : null;
   final tokenIdentifier = results.option('token-identifier');
@@ -398,6 +399,8 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
   final fromToken = results.option('from-token');
   final slippageStr = results.option('convert-max-slippage-bps');
   final slippage = slippageStr != null ? int.parse(slippageStr) : null;
+  final crossChainSlippageStr = results.option('cross-chain-max-slippage-bps');
+  final crossChainSlippage = crossChainSlippageStr != null ? int.parse(crossChainSlippageStr) : null;
   final feesIncluded = results.flag('fees-included');
 
   ConversionOptions? conversionOptions;
@@ -417,9 +420,26 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
 
   final feePolicy = feesIncluded ? FeePolicy.feesIncluded : null;
 
+  PaymentRequest paymentRequest;
+  final parsed = await sdk.parse(input: paymentRequestInput);
+  if (parsed is InputType_CrossChainAddress) {
+    final addressDetails = parsed.field0;
+    final address = addressDetails.address;
+    final route = await _selectCrossChainRoute(sdk, addressDetails);
+    if (route == null) return;
+    paymentRequest = PaymentRequest.crossChain(
+      address: address,
+      route: route,
+      maxSlippageBps: crossChainSlippage,
+      targetOverpayBps: null,
+    );
+  } else {
+    paymentRequest = PaymentRequest.input(input: paymentRequestInput);
+  }
+
   final prepareResponse = await sdk.prepareSendPayment(
     request: PrepareSendPaymentRequest(
-      paymentRequest: PaymentRequest.input(input: paymentRequest),
+      paymentRequest: paymentRequest,
       amount: amount,
       tokenIdentifier: tokenIdentifier,
       conversionOptions: conversionOptions,
@@ -435,6 +455,26 @@ Future<void> _handlePay(BreezSdk sdk, TokenIssuer tokenIssuer, List<String> args
       'Estimated conversion from ${est.amountIn} $inUnits to ${est.amountOut} $outUnits '
       'with a ${est.fee} token base units fee',
     );
+    final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
+    if (answer.toLowerCase() != 'y') {
+      print('Payment cancelled');
+      return;
+    }
+  }
+
+  if (prepareResponse.paymentMethod is SendPaymentMethod_CrossChainAddress) {
+    final cc = prepareResponse.paymentMethod as SendPaymentMethod_CrossChainAddress;
+    final serviceFeeDenom = cc.serviceFeeAsset ?? 'sats';
+    final denomination = tokenIdentifier != null ? 'token base units' : 'sats';
+    print(
+      'Cross-chain send: ${cc.amountIn} $denomination '
+      '(~${cc.assetAmountIn} ${cc.route.asset}) '
+      '-> ~${cc.estimatedOut} ${cc.route.asset} on ${cc.route.chain} '
+      'to ${cc.recipientAddress}',
+    );
+    print('Fee (total, in ${cc.route.asset}): ${cc.feeAmount}');
+    print('Service fee: ${cc.serviceFeeAmount} $serviceFeeDenom');
+    print('Source transfer fee: ${cc.sourceTransferFeeSats} sats');
     final answer = prompt('Do you want to continue (y/n): ', defaultValue: 'y');
     if (answer.toLowerCase() != 'y') {
       print('Payment cancelled');
@@ -1027,8 +1067,58 @@ SendPaymentOptions? _readPaymentOptions(SendPaymentMethod paymentMethod) {
     );
   }
 
-  // SendPaymentMethod_SparkInvoice
+  // SendPaymentMethod_SparkInvoice, SendPaymentMethod_CrossChainAddress
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-chain route selection
+// ---------------------------------------------------------------------------
+
+Future<CrossChainRoutePair?> _selectCrossChainRoute(
+  BreezSdk sdk,
+  CrossChainAddressDetails addressDetails,
+) async {
+  final filter = CrossChainRouteFilter.send(addressDetails: addressDetails);
+  final routes = await sdk.getCrossChainRoutes(filter: filter);
+  if (routes.isEmpty) {
+    print('No cross-chain routes available for this address');
+    return null;
+  }
+
+  if (routes.length == 1) {
+    final route = routes.first;
+    print(
+      'Auto-selected route: ${route.asset} on ${route.chain}'
+      '${_maybeTruncateAddress(route.contractAddress)} [${route.provider}]',
+    );
+    return route;
+  }
+
+  print('Available cross-chain routes:');
+  for (var i = 0; i < routes.length; i++) {
+    final route = routes[i];
+    print(
+      '  ${i + 1}. ${route.asset} on ${route.chain}'
+      '${_maybeTruncateAddress(route.contractAddress)} [${route.provider}]',
+    );
+  }
+
+  final line = prompt('Select route: ');
+  final choice = int.tryParse(line.trim());
+  if (choice == null || choice < 1 || choice > routes.length) {
+    print('Invalid selection');
+    return null;
+  }
+  return routes[choice - 1];
+}
+
+String _maybeTruncateAddress(String? addr) {
+  if (addr == null) return '';
+  if (addr.length > 12) {
+    return ' (${addr.substring(0, 6)}...${addr.substring(addr.length - 6)})';
+  }
+  return ' ($addr)';
 }
 
 // ---------------------------------------------------------------------------

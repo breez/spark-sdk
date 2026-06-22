@@ -413,6 +413,13 @@ const CliScreen: React.FC<CliScreenProps> = ({ config, onDisconnect }) => {
           appendLog('Warning: No API key found. Create secrets.json with { "apiKey": "..." }')
         }
 
+        if (config.network === Network.Mainnet) {
+          sdkConfig.crossChainConfig = {
+            defaultSlippageBps: undefined,
+            defaultTargetOverpayBps: undefined,
+          }
+        }
+
         let seed: Seed
 
         if (config.passkeyConfig) {

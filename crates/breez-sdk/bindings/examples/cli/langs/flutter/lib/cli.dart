@@ -59,6 +59,10 @@ Future<void> runCli({
     );
   }
 
+  if (networkEnum == Network.mainnet) {
+    config = config.copyWith(crossChainConfig: CrossChainConfig());
+  }
+
   Seed seed;
   if (passkeyConfig != null) {
     seed = await resolvePasskeySeed(passkeyConfig, dataDir, apiKey);

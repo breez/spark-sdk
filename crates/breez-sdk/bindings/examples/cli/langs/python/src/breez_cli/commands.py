@@ -15,6 +15,7 @@ from breez_sdk_spark import (
     ClaimTransferRequest,
     ConversionOptions,
     ConversionType,
+    CrossChainRouteFilter,
     Fee,
     FeePolicy,
     FetchConversionLimitsRequest,
@@ -316,6 +317,8 @@ def _build_pay_parser():
     p.add_argument("--from-bitcoin", action="store_true", default=False)
     p.add_argument("--from-token", default=None)
     p.add_argument("-s", "--convert-max-slippage-bps", type=int, default=None)
+    p.add_argument("--cross-chain-max-slippage-bps", type=int, default=None,
+                   help="Max slippage in basis points for cross-chain sends (10..500)")
     p.add_argument("--fees-included", action="store_true", default=False)
     return p
 
@@ -336,9 +339,23 @@ async def _handle_pay(sdk, _token_issuer, session, args):
 
     fee_policy = FeePolicy.FEES_INCLUDED if args.fees_included else None
 
+    parsed = await sdk.parse(input=args.payment_request)
+    if isinstance(parsed, InputType.CROSS_CHAIN_ADDRESS):
+        address_details = parsed[0]
+        address = address_details.address
+        route = await _select_cross_chain_route(sdk, session, address_details)
+        payment_request = PaymentRequest.CROSS_CHAIN(
+            address=address,
+            route=route,
+            max_slippage_bps=args.cross_chain_max_slippage_bps,
+            target_overpay_bps=None,
+        )
+    else:
+        payment_request = PaymentRequest.INPUT(input=args.payment_request)
+
     prepare_response = await sdk.prepare_send_payment(
         request=PrepareSendPaymentRequest(
-            payment_request=PaymentRequest.INPUT(input=args.payment_request),
+            payment_request=payment_request,
             amount=args.amount,
             token_identifier=args.token_identifier,
             conversion_options=conversion_options,
@@ -357,6 +374,24 @@ async def _handle_pay(sdk, _token_issuer, session, args):
             f"to {est.amount_out} {out_units} "
             f"with a {est.fee} token base units fee"
         )
+        line = await session.prompt_async("Do you want to continue (y/n): ", default="y")
+        if line.strip().lower() != "y":
+            print("Payment cancelled")
+            return
+
+    if isinstance(prepare_response.payment_method, SendPaymentMethod.CROSS_CHAIN_ADDRESS):
+        m = prepare_response.payment_method
+        service_fee_denom = m.service_fee_asset if m.service_fee_asset else "sats"
+        denomination = "token base units" if args.token_identifier else "sats"
+        print(
+            f"Cross-chain send: {m.amount_in} {denomination} "
+            f"(~{m.asset_amount_in} {m.route.asset}) "
+            f"-> ~{m.estimated_out} {m.route.asset} "
+            f"on {m.route.chain} to {m.recipient_address}"
+        )
+        print(f"Fee (total, in {m.route.asset}): {m.fee_amount}")
+        print(f"Service fee: {m.service_fee_amount} {service_fee_denom}")
+        print(f"Source transfer fee: {m.source_transfer_fee_sats} sats")
         line = await session.prompt_async("Do you want to continue (y/n): ", default="y")
         if line.strip().lower() != "y":
             print("Payment cancelled")
@@ -853,6 +888,52 @@ async def _handle_get_spark_status(_sdk, _token_issuer, _session, _args):
 
 
 # ---------------------------------------------------------------------------
+# Cross-chain route selection
+# ---------------------------------------------------------------------------
+
+def _maybe_truncate_address(addr):
+    if addr is None:
+        return ""
+    if len(addr) > 12:
+        return f" ({addr[:6]}...{addr[-6:]})"
+    return f" ({addr})"
+
+
+async def _select_cross_chain_route(sdk, session, address_details):
+    """Fetch cross-chain routes and prompt the user to select one."""
+    route_filter = CrossChainRouteFilter.SEND(address_details=address_details)
+    routes = await sdk.get_cross_chain_routes(filter=route_filter)
+    if not routes:
+        raise ValueError("No cross-chain routes available for this address")
+
+    if len(routes) == 1:
+        route = routes[0]
+        print(
+            f"Auto-selected route: {route.asset} on {route.chain}"
+            f"{_maybe_truncate_address(route.contract_address)}"
+            f" [{route.provider}]"
+        )
+        return route
+
+    print("Available cross-chain routes:")
+    for i, route in enumerate(routes, 1):
+        print(
+            f"  {i}. {route.asset} on {route.chain}"
+            f"{_maybe_truncate_address(route.contract_address)}"
+            f" [{route.provider}]"
+        )
+
+    line = await session.prompt_async("Select route: ")
+    try:
+        choice = int(line.strip())
+    except ValueError:
+        raise ValueError("Invalid selection")
+    if choice < 1 or choice > len(routes):
+        raise ValueError("Selection out of range")
+    return routes[choice - 1]
+
+
+# ---------------------------------------------------------------------------
 # read_payment_options — interactive fee/option selection
 # ---------------------------------------------------------------------------
 
@@ -926,7 +1007,7 @@ async def read_payment_options(payment_method, session):
             )
         )
 
-    # SendPaymentMethod.SPARK_INVOICE
+    # SendPaymentMethod.SPARK_INVOICE or SendPaymentMethod.CROSS_CHAIN_ADDRESS
     return None
 
 

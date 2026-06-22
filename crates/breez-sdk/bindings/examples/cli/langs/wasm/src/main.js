@@ -241,6 +241,10 @@ async function main() {
     config.apiKey = breezApiKey
   }
 
+  if (network === 'mainnet') {
+    config.crossChainConfig = {}
+  }
+
   // Stable balance config
   if (opts.stableBalanceTokens.length > 0) {
     const tokens = opts.stableBalanceTokens.map((s) => {
