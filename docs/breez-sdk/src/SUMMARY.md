@@ -58,7 +58,7 @@
   - [Using an External Signer](guide/external_signer.md)
   - [Managing webhooks](guide/webhooks.md)
   - [Server mode](guide/server_mode.md)
-  - [USD stablecoin payments](guide/cross_chain.md)
+  - [Send USDC/USDT](guide/cross_chain.md)
 - [Moving to production](guide/moving_to_production.md)
 
 ---

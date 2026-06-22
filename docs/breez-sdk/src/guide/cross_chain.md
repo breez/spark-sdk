@@ -1,8 +1,8 @@
-# USD payments
+# Send USDC/USDT
 
-The SDK can send USD-denominated value from a Spark wallet to a USD-pegged stablecoin (USDC, USDT, or USDT0) on any of several supported chains: Ethereum-family chains (Arbitrum, Base, and similar EVM networks), Solana, and Tron. The source on the Spark side is either BTC sats or USDB; the destination is always one of the supported USD stablecoins on a supported chain. The SDK orchestrates two legs — a Spark-side transfer to a provider-controlled deposit and the provider-driven delivery of the destination asset — and reconciles both onto a single {{#name Payment}} row.
+The SDK can send USDC or USDT from a Spark wallet to a recipient on any of several supported chains: Ethereum-family chains (Arbitrum, Base, and similar EVM networks), Solana, and Tron. The source on the Spark side is either BTC sats or USDB. The SDK orchestrates two legs — a Spark-side transfer to a provider-controlled deposit and the provider-driven delivery of the destination asset — and reconciles both onto a single {{#name Payment}} row.
 
-The send flow itself lives in the [Sending payments](./send_payment.md#usd-stablecoins) page. This page covers how it works under the hood: the providers, the lifecycle, retry semantics, and limitations.
+The send flow itself lives in the [Sending payments](./send_payment.md#send-usdc-usdt) page. This page covers how it works under the hood: the providers, the lifecycle, retry semantics, and limitations.
 
 ## Supported address formats
 
@@ -51,7 +51,7 @@ The SDK ships with two cross-chain providers. {{#name get_cross_chain_routes}} r
 
 | Provider     | Source assets    | Destinations                                                | Mechanism                            |
 | ------------ | ---------------- | ----------------------------------------------------------- | ------------------------------------ |
-| **Orchestra** (Flashnet) | BTC sats + USDB | USDC / USDT / USDT0 on Ethereum chains (Arbitrum, Base), Solana, Tron | Spark transfer to a deposit address, then provider bridges to the destination chain |
+| **Orchestra** (Flashnet) | BTC sats + USDB | USDC / USDT on Ethereum chains (Arbitrum, Base), Solana, Tron | Spark transfer to a deposit address, then provider bridges to the destination chain |
 | **Boltz**    | BTC sats only    | USDC / USDT on Ethereum chains (Arbitrum, Base), Solana, Tron                 | Lightning reverse swap: SDK pays a hold invoice, provider claims the on-chain leg |
 
 The provider tag on each {{#name CrossChainRoutePair}} is the source of truth. When the same destination is offered by multiple providers, both routes are returned; the caller picks one based on supported source assets, fees, or other preferences.

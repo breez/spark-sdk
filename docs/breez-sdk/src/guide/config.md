@@ -151,7 +151,7 @@ The SDK can convert Bitcoin to a stable token on receive and vice versa on send,
 
 ## Cross-chain payments
 
-Cross-chain USD sends require explicit opt-in: {{#name default_config}} leaves {{#name cross_chain_config}} unset. Set it to a default {{#name CrossChainConfig}} to enable the feature, or to your own to override the slippage default. The SDK only returns routes whose destination is a USD-pegged stablecoin (USDC, USDT, USDT0) on a supported chain.
+USDC/USDT sends require explicit opt-in: {{#name default_config}} leaves {{#name cross_chain_config}} unset. Set it to a default {{#name CrossChainConfig}} to enable the feature, or to your own to override the slippage default. The SDK only returns routes whose destination is USDC or USDT on a supported chain.
 
 Constraints:
 
@@ -162,4 +162,4 @@ Constraints:
 
 The {{#name default_slippage_bps}} field sets the per-instance slippage default applied when the per-request {{#name max_slippage_bps}} is unset. It must be in the 10 to 500 basis-point range; when {{#name default_slippage_bps}} itself is unset, the SDK falls back to a built-in default of 100 bps (1%).
 
-See [USD payments](./cross_chain.md) for the provider lineup, status lifecycle, retry-safety semantics, and limitations.
+See [Send USDC/USDT](./cross_chain.md) for the provider lineup, status lifecycle, retry-safety semantics, and limitations.
