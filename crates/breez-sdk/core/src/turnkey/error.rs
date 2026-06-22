@@ -35,4 +35,7 @@ pub enum TurnkeyError {
 
     #[error("unexpected Turnkey response shape: {0}")]
     UnexpectedResponse(String),
+
+    #[error("activity timestamp store error: {0}")]
+    ActivityStore(String),
 }

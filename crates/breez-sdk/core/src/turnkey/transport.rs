@@ -337,7 +337,7 @@ impl TurnkeyClient {
         let timestamp_ms = self
             .activity_store
             .timestamp_ms(&key, current_timestamp_ms())
-            .await;
+            .await?;
         let envelope = ActivityEnvelope {
             activity_type,
             timestamp_ms: timestamp_ms.to_string(),

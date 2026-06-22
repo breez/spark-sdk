@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use super::error::TurnkeyError;
+
 /// Records and returns the `timestampMs` to stamp a Turnkey activity with, keyed
 /// by a hash of its content.
 #[macros::async_trait]
@@ -17,7 +19,10 @@ pub trait TurnkeyActivityStore: Send + Sync {
     /// Returns the timestamp (ms since epoch) for the activity identified by
     /// `key`. The first call for a given `key` records and returns
     /// `fallback_now_ms`; later calls return that same recorded value.
-    async fn timestamp_ms(&self, key: &str, fallback_now_ms: u64) -> u64;
+    ///
+    /// An error aborts the activity submission: better to fail than to submit
+    /// with a fresh timestamp the recorded one can no longer be reproduced from.
+    async fn timestamp_ms(&self, key: &str, fallback_now_ms: u64) -> Result<u64, TurnkeyError>;
 }
 
 /// Process-local [`TurnkeyActivityStore`]. Enough when the approval-trigger
@@ -30,11 +35,11 @@ pub struct InMemoryTurnkeyActivityStore {
 
 #[macros::async_trait]
 impl TurnkeyActivityStore for InMemoryTurnkeyActivityStore {
-    async fn timestamp_ms(&self, key: &str, fallback_now_ms: u64) -> u64 {
+    async fn timestamp_ms(&self, key: &str, fallback_now_ms: u64) -> Result<u64, TurnkeyError> {
         let mut timestamps = self
             .timestamps
             .lock()
             .expect("turnkey activity store mutex poisoned");
-        *timestamps.entry(key.to_string()).or_insert(fallback_now_ms)
+        Ok(*timestamps.entry(key.to_string()).or_insert(fallback_now_ms))
     }
 }

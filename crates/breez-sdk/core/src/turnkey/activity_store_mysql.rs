@@ -12,6 +12,7 @@ use spark_mysql::{
 };
 
 use super::activity_store::TurnkeyActivityStore;
+use super::error::TurnkeyError;
 
 /// Tracks which migrations have been applied. `brz_`-prefixed to stay clear of
 /// customer tables sharing the database.
@@ -91,20 +92,10 @@ impl MysqlTurnkeyActivityStore {
 
 #[macros::async_trait]
 impl TurnkeyActivityStore for MysqlTurnkeyActivityStore {
-    async fn timestamp_ms(&self, key: &str, fallback_now_ms: u64) -> u64 {
-        // The trait is infallible, so a database failure degrades to the
-        // current time: best effort. A re-submission then risks a fresh
-        // timestamp (a new activity needing approval) rather than reusing the
-        // recorded one, so failures are logged.
-        match self.record_or_get(key, fallback_now_ms).await {
-            Ok(timestamp_ms) => timestamp_ms,
-            Err(e) => {
-                tracing::warn!(
-                    "MySQL turnkey activity store failed for key {key}: {e}; using current time"
-                );
-                fallback_now_ms
-            }
-        }
+    async fn timestamp_ms(&self, key: &str, fallback_now_ms: u64) -> Result<u64, TurnkeyError> {
+        self.record_or_get(key, fallback_now_ms)
+            .await
+            .map_err(|e| TurnkeyError::ActivityStore(e.to_string()))
     }
 }
 
@@ -131,17 +122,20 @@ mod tests {
             .expect("create store");
 
         // First sight of a key records the fallback.
-        assert_eq!(store.timestamp_ms("activity-a", 1000).await, 1000);
+        assert_eq!(store.timestamp_ms("activity-a", 1000).await.unwrap(), 1000);
         // A later submission of the same activity reuses it, ignoring the new now.
-        assert_eq!(store.timestamp_ms("activity-a", 9999).await, 1000);
+        assert_eq!(store.timestamp_ms("activity-a", 9999).await.unwrap(), 1000);
         // A different activity gets its own timestamp.
-        assert_eq!(store.timestamp_ms("activity-b", 2000).await, 2000);
+        assert_eq!(store.timestamp_ms("activity-b", 2000).await.unwrap(), 2000);
 
         // A fresh store over the same database still sees the recorded value:
         // the whole point of persistence is to bridge separate processes.
         let reopened = MysqlTurnkeyActivityStore::new(config(port))
             .await
             .expect("reopen store");
-        assert_eq!(reopened.timestamp_ms("activity-a", 5555).await, 1000);
+        assert_eq!(
+            reopened.timestamp_ms("activity-a", 5555).await.unwrap(),
+            1000
+        );
     }
 }
