@@ -27,7 +27,7 @@ use mysql_async::{Conn, Params, Pool, Value};
 use platform_utils::time::{Instant, SystemTime};
 use spark_wallet::{
     LeafLike, Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
-    TargetAmounts, TreeNode, TreeNodeStatus, TreeServiceError, TreeStore,
+    TargetAmounts, TreeNode, TreeNodeId, TreeNodeStatus, TreeServiceError, TreeStore,
     select_leaves_by_minimum_amount, select_leaves_by_target_amounts,
 };
 use tokio::sync::watch;
@@ -513,6 +513,28 @@ impl TreeStore for MysqlTreeStore {
             self.notify_balance_change();
         }
         Ok(reserve_result)
+    }
+
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        if leaf_ids.is_empty() {
+            return Err(TreeServiceError::NonReservableLeaves);
+        }
+        let reservation_id = Uuid::now_v7().to_string();
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+
+        let mut conn = self.pool.get_conn().await.map_err(map_err)?;
+        self.acquire_write_lock(&mut conn).await?;
+        let result = self
+            .reserve_leaves_by_ids_inner(&mut conn, &reservation_id, &ids, purpose)
+            .await;
+        self.release_write_lock_quiet(&mut conn).await;
+        let leaves = result?;
+        self.notify_balance_change();
+        Ok(LeavesReservation::new(leaves, reservation_id))
     }
 
     async fn now(&self) -> Result<SystemTime, TreeServiceError> {
@@ -1243,6 +1265,48 @@ impl MysqlTreeStore {
         Ok(ordered)
     }
 
+    /// Reserves exactly the leaves named by `ids` (in that order) within one
+    /// transaction. Resolves only the reservable leaves (present, available, not
+    /// already reserved); any id that is missing or unavailable drops out, so the
+    /// length check rejects the whole request rather than reserving a subset.
+    async fn reserve_leaves_by_ids_inner(
+        &self,
+        conn: &mut Conn,
+        reservation_id: &str,
+        ids: &[String],
+        purpose: ReservationPurpose,
+    ) -> Result<Vec<TreeNode>, TreeServiceError> {
+        let mut tx = conn.start_transaction(tx_opts()).await.map_err(map_err)?;
+
+        let placeholders = build_placeholders(ids.len());
+        let sql = format!(
+            "SELECT id, data FROM brz_tree_leaves \
+             WHERE user_id = ? AND id IN ({placeholders}) \
+               AND status = 'Available' AND is_missing_from_operators = 0 \
+               AND reservation_id IS NULL"
+        );
+        let mut params: Vec<Value> = Vec::with_capacity(ids.len().saturating_add(1));
+        params.push(Value::from(self.identity.clone()));
+        params.extend(ids.iter().cloned().map(Value::from));
+        let rows: Vec<(String, String)> = tx
+            .exec(&sql, Params::Positional(params))
+            .await
+            .map_err(map_err)?;
+        let mut by_id: HashMap<String, TreeNode> = HashMap::with_capacity(rows.len());
+        for (id, data) in rows {
+            by_id.insert(id, Self::deserialize_node(&data)?);
+        }
+        let leaves: Vec<TreeNode> = ids.iter().filter_map(|id| by_id.remove(id)).collect();
+        if leaves.len() != ids.len() {
+            return Err(TreeServiceError::NonReservableLeaves);
+        }
+
+        self.create_reservation(&mut tx, reservation_id, &leaves, purpose, 0)
+            .await?;
+        tx.commit().await.map_err(map_err)?;
+        Ok(leaves)
+    }
+
     async fn update_reservation_inner(
         &self,
         conn: &mut Conn,
@@ -1819,6 +1883,12 @@ mod tests {
     async fn test_reserve_leaves() {
         let fixture = MysqlTreeStoreTestFixture::new().await;
         shared_tests::test_reserve_leaves(&fixture.store).await;
+    }
+
+    #[tokio::test]
+    async fn test_reserve_leaves_by_ids_preserves_input_order() {
+        let fixture = MysqlTreeStoreTestFixture::new().await;
+        shared_tests::test_reserve_leaves_by_ids_preserves_input_order(&fixture.store).await;
     }
 
     #[tokio::test]

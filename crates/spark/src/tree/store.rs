@@ -1042,33 +1042,10 @@ mod tests {
         shared_tests::test_reserve_leaves(&InMemoryTreeStore::new()).await;
     }
 
-    // reserve_leaves_by_ids has a default-erroring body on the trait, so only the
-    // in-memory store implements it; this test is in-memory-specific rather than
-    // part of the shared suite.
     #[async_test_all]
     async fn test_reserve_leaves_by_ids_preserves_input_order() {
-        let store = InMemoryTreeStore::new();
-        let leaves = vec![
-            shared_tests::create_test_tree_node("node1", 100),
-            shared_tests::create_test_tree_node("node2", 200),
-            shared_tests::create_test_tree_node("node3", 300),
-        ];
-        store.add_leaves(&leaves).await.unwrap();
-
-        // A resumed (gated) send reserves its pinned leaves in the order the
-        // transfer context lists them, and the rebuilt prepare_transfer request
-        // must match byte-for-byte, so the reservation has to echo that order.
-        let order = vec![
-            leaves[2].id.clone(),
-            leaves[0].id.clone(),
-            leaves[1].id.clone(),
-        ];
-        let reservation = store
-            .reserve_leaves_by_ids(&order, ReservationPurpose::Payment)
-            .await
-            .unwrap();
-        let got: Vec<_> = reservation.leaves.iter().map(|n| n.id.clone()).collect();
-        assert_eq!(got, order);
+        shared_tests::test_reserve_leaves_by_ids_preserves_input_order(&InMemoryTreeStore::new())
+            .await;
     }
 
     #[async_test_all]

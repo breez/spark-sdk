@@ -9,7 +9,7 @@ use platform_utils::tokio::sync::watch;
 use serde::{Deserialize, Serialize};
 use spark_wallet::{
     Leaves, LeavesReservation, LeavesReservationId, ReservationPurpose, ReserveResult,
-    TargetAmounts, TreeNode, TreeServiceError, TreeStore,
+    TargetAmounts, TreeNode, TreeNodeId, TreeServiceError, TreeStore,
 };
 use tracing::info;
 use wasm_bindgen::prelude::*;
@@ -394,6 +394,27 @@ impl TreeStore for WasmTreeStore {
         self.notify_balance_change();
         Ok(wasm_reservation.into())
     }
+
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let ids: Vec<String> = leaf_ids.iter().map(ToString::to_string).collect();
+        let ids_js = serde_wasm_bindgen::to_value(&ids)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        let promise = self
+            .tree_store
+            .reserve_leaves_by_ids(ids_js, purpose.to_string())
+            .map_err(js_error_to_tree_error)?;
+        let result = JsFuture::from(promise)
+            .await
+            .map_err(js_error_to_tree_error)?;
+        let wasm_reservation: WasmLeavesReservation = serde_wasm_bindgen::from_value(result)
+            .map_err(|e| TreeServiceError::Generic(e.to_string()))?;
+        self.notify_balance_change();
+        Ok(wasm_reservation.into())
+    }
 }
 
 // ===== TypeScript interface =====
@@ -439,6 +460,7 @@ export interface TreeStore {
     cancelReservation: (id: string, leavesToKeep: TreeNode[]) => Promise<void>;
     finalizeReservation: (id: string, newLeaves: TreeNode[] | null) => Promise<void>;
     tryReserveLeaves: (targetAmounts: TargetAmounts | null, exactOnly: boolean, purpose: string) => Promise<ReserveResult>;
+    reserveLeavesByIds: (leafIds: string[], purpose: string) => Promise<LeavesReservation>;
     now: () => Promise<number>;
     updateReservation: (reservationId: string, reservedLeaves: TreeNode[], changeLeaves: TreeNode[]) => Promise<LeavesReservation>;
 }"#;
@@ -484,6 +506,13 @@ extern "C" {
         this: &TreeStoreJs,
         target_amounts: JsValue,
         exact_only: bool,
+        purpose: String,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(structural, method, js_name = reserveLeavesByIds, catch)]
+    pub fn reserve_leaves_by_ids(
+        this: &TreeStoreJs,
+        leaf_ids: JsValue,
         purpose: String,
     ) -> Result<Promise, JsValue>;
 

@@ -594,6 +594,55 @@ class PostgresTreeStore {
     }
   }
 
+  /**
+   * Reserves exactly the leaves named by `leafIds`, in that order, failing if
+   * any is not currently reservable (missing, not available, or already
+   * reserved). Used to resume a prepared send against its pinned leaves.
+   * @param {string[]} leafIds
+   * @param {string} purpose
+   * @returns {Promise<Object>} the reservation { id, leaves }
+   */
+  async reserveLeavesByIds(leafIds, purpose) {
+    try {
+      return await this._withWriteTransaction(async (client) => {
+        if (!leafIds || leafIds.length === 0) {
+          throw new TreeStoreError("NonReservableLeaves");
+        }
+        // Resolve only the reservable leaves named by id; any id that is missing
+        // or unavailable drops out, so the ordered rebuild below rejects the
+        // whole request rather than reserving a subset.
+        const result = await client.query(
+          `
+          SELECT id, data FROM brz_tree_leaves
+          WHERE user_id = $2 AND id = ANY($1)
+            AND status = 'Available'
+            AND is_missing_from_operators = FALSE
+            AND reservation_id IS NULL
+        `,
+          [leafIds, this.identity]
+        );
+        const byId = new Map(result.rows.map((r) => [r.id, r.data]));
+        const leaves = [];
+        for (const id of leafIds) {
+          const data = byId.get(id);
+          if (data === undefined) {
+            throw new TreeStoreError("NonReservableLeaves");
+          }
+          leaves.push(data);
+        }
+        const reservationId = this._generateId();
+        await this._createReservation(client, reservationId, leaves, purpose, 0);
+        return { id: reservationId, leaves };
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to reserve leaves by ids: ${error.message}`,
+        error
+      );
+    }
+  }
+
   _maxTargetForPrefilter(targetAmounts) {
     if (!targetAmounts) return Number.MAX_SAFE_INTEGER;
     if (targetAmounts.type === "amountAndFee") {

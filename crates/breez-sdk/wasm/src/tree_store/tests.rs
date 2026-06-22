@@ -93,6 +93,13 @@ async fn test_reserve_leaves() {
 }
 
 #[wasm_bindgen_test]
+async fn test_reserve_leaves_by_ids_preserves_input_order() {
+    let store = create_test_tree_store("pg_tree_reserve_by_ids").await;
+    breez_sdk_spark::tree_store_tests::test_reserve_leaves_by_ids_preserves_input_order(&store)
+        .await;
+}
+
+#[wasm_bindgen_test]
 async fn test_cancel_reservation() {
     let store = create_test_tree_store("pg_tree_cancel_res").await;
     breez_sdk_spark::tree_store_tests::test_cancel_reservation(&store).await;

@@ -282,6 +282,32 @@ pub async fn test_reserve_leaves(store: &dyn TreeStore) {
     assert!(!reservation.id.is_empty());
 }
 
+/// Reserving by explicit ids returns exactly those leaves, in the requested
+/// order. A resumed (gated) send reserves its pinned leaves in the order the
+/// transfer context lists them, and the rebuilt `prepare_transfer` request must
+/// match byte-for-byte, so the reservation has to echo that order.
+pub async fn test_reserve_leaves_by_ids_preserves_input_order(store: &dyn TreeStore) {
+    let leaves = vec![
+        create_test_tree_node("node1", 100),
+        create_test_tree_node("node2", 200),
+        create_test_tree_node("node3", 300),
+    ];
+    store.add_leaves(&leaves).await.unwrap();
+
+    // Reserve in a deliberately non-sorted order.
+    let order = vec![
+        leaves[2].id.clone(),
+        leaves[0].id.clone(),
+        leaves[1].id.clone(),
+    ];
+    let reservation = store
+        .reserve_leaves_by_ids(&order, ReservationPurpose::Payment)
+        .await
+        .unwrap();
+    let got: Vec<_> = reservation.leaves.iter().map(|n| n.id.clone()).collect();
+    assert_eq!(got, order);
+}
+
 pub async fn test_cancel_reservation(store: &dyn TreeStore) {
     let leaves = vec![
         create_test_tree_node("node1", 100),

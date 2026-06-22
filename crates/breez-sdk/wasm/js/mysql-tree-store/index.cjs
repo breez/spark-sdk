@@ -579,6 +579,54 @@ class MysqlTreeStore {
     }
   }
 
+  /**
+   * Reserves exactly the leaves named by `leafIds`, in that order, failing if
+   * any is not currently reservable (missing, not available, or already
+   * reserved). Used to resume a prepared send against its pinned leaves.
+   * @param {string[]} leafIds
+   * @param {string} purpose
+   * @returns {Promise<Object>} the reservation { id, leaves }
+   */
+  async reserveLeavesByIds(leafIds, purpose) {
+    try {
+      return await this._withWriteTransaction(async (conn) => {
+        if (!leafIds || leafIds.length === 0) {
+          throw new TreeStoreError("NonReservableLeaves");
+        }
+        // Resolve only the reservable leaves named by id; any id that is missing
+        // or unavailable drops out, so the ordered rebuild below rejects the
+        // whole request rather than reserving a subset.
+        const placeholders = leafIds.map(() => "?").join(", ");
+        const [rows] = await conn.query(
+          `SELECT id, data FROM brz_tree_leaves
+           WHERE user_id = ? AND id IN (${placeholders})
+             AND status = 'Available'
+             AND is_missing_from_operators = 0
+             AND reservation_id IS NULL`,
+          [this.identity, ...leafIds]
+        );
+        const byId = new Map(rows.map((r) => [r.id, parseJson(r.data)]));
+        const leaves = [];
+        for (const id of leafIds) {
+          const data = byId.get(id);
+          if (data === undefined) {
+            throw new TreeStoreError("NonReservableLeaves");
+          }
+          leaves.push(data);
+        }
+        const reservationId = this._generateId();
+        await this._createReservation(conn, reservationId, leaves, purpose, 0);
+        return { id: reservationId, leaves };
+      });
+    } catch (error) {
+      if (error instanceof TreeStoreError) throw error;
+      throw new TreeStoreError(
+        `Failed to reserve leaves by ids: ${error.message}`,
+        error
+      );
+    }
+  }
+
   async now() {
     try {
       const [rows] = await this.pool.query("SELECT UTC_TIMESTAMP(6) AS now");
