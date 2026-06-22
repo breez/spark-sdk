@@ -14,8 +14,10 @@ use rand::RngCore;
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
+pub mod cross_chain_evm;
 pub mod mainnet;
 pub mod regtest;
+pub use cross_chain_evm::*;
 pub use mainnet::*;
 pub use regtest::*;
 
