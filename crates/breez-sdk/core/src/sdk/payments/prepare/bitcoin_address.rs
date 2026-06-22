@@ -162,6 +162,7 @@ async fn prepare_sats_denominated(
         token_identifier,
         conversion_estimate,
         fee_policy,
+        transfer_context: None,
     })
 }
 
@@ -234,6 +235,7 @@ async fn prepare_token_denominated(
         token_identifier: None,
         conversion_estimate,
         fee_policy,
+        transfer_context: None,
     })
 }
 

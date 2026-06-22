@@ -175,6 +175,7 @@ where
             token_identifier: None,
             fee_policy: None,
             conversion_options: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -183,6 +184,7 @@ where
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         }),
         instance_1.sdk.sync_wallet(SyncWalletRequest {}),
         instance_2.sdk.sync_wallet(SyncWalletRequest {})
@@ -263,6 +265,7 @@ where
             token_identifier: None,
             fee_policy: None,
             conversion_options: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -272,6 +275,7 @@ where
             prepare_response: prepare_return,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     expected_payment_count += 1;
@@ -351,6 +355,7 @@ where
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
+                include_transfer_context: None,
             })
             .await?;
 
@@ -361,6 +366,7 @@ where
                         prepare_response: prepare,
                         options: None,
                         idempotency_key: None,
+                        transfer_context: None,
                     }),
                     instances[1].sdk.sync_wallet(SyncWalletRequest {}),
                     instances[2].sdk.sync_wallet(SyncWalletRequest {})
@@ -376,6 +382,7 @@ where
                         prepare_response: prepare,
                         options: None,
                         idempotency_key: None,
+                        transfer_context: None,
                     }),
                     instances[2].sdk.sync_wallet(SyncWalletRequest {})
                 );
@@ -391,6 +398,7 @@ where
                         prepare_response: prepare,
                         options: None,
                         idempotency_key: None,
+                        transfer_context: None,
                     })
                 );
                 s0?;
@@ -547,6 +555,7 @@ where
             token_identifier: Some(token_id.clone()),
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -556,6 +565,7 @@ where
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -642,6 +652,7 @@ where
                     token_identifier: Some(token_id.clone()),
                     conversion_options: None,
                     fee_policy: None,
+                    include_transfer_context: None,
                 })
                 .await?;
 
@@ -653,6 +664,7 @@ where
                             prepare_response: prepare,
                             options: None,
                             idempotency_key: None,
+                            transfer_context: None,
                         }),
                         instances[syncer_idxs[0]]
                             .sdk
@@ -674,6 +686,7 @@ where
                             prepare_response: prepare,
                             options: None,
                             idempotency_key: None,
+                            transfer_context: None,
                         }),
                         instances[syncer_idxs[1]]
                             .sdk
@@ -695,6 +708,7 @@ where
                             prepare_response: prepare,
                             options: None,
                             idempotency_key: None,
+                            transfer_context: None,
                         })
                     );
                     s0?;
@@ -736,6 +750,7 @@ where
                     token_identifier: Some(token_id.clone()),
                     conversion_options: None,
                     fee_policy: None,
+                    include_transfer_context: None,
                 })
                 .await?;
 
@@ -744,6 +759,7 @@ where
                     prepare_response: prepare,
                     options: None,
                     idempotency_key: None,
+                    transfer_context: None,
                 }),
                 instances[0].sdk.sync_wallet(SyncWalletRequest {}),
                 instances[1].sdk.sync_wallet(SyncWalletRequest {}),

@@ -79,6 +79,7 @@ async fn test_send_bolt11_invoice_server_mode(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -92,6 +93,7 @@ async fn test_send_bolt11_invoice_server_mode(
                 completion_timeout_secs: Some(completion_timeout_secs),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     let elapsed = start.elapsed();

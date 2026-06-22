@@ -249,6 +249,7 @@ async fn run_single_claim_benchmark(
                         token_identifier: None,
                         conversion_options: None,
                         fee_policy: None,
+                        include_transfer_context: None,
                     })
                     .await?;
 
@@ -256,6 +257,7 @@ async fn run_single_claim_benchmark(
                     prepare_response: prepare,
                     options: None,
                     idempotency_key: None,
+                    transfer_context: None,
                 })
                 .await?;
 

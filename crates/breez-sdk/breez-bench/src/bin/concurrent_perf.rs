@@ -402,6 +402,7 @@ async fn execute_single_payment(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -410,6 +411,7 @@ async fn execute_single_payment(
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 

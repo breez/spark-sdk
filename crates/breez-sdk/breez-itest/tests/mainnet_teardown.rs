@@ -132,6 +132,7 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
                     completion_timeout_secs: None,
                 }),
                 fee_policy: Some(FeePolicy::FeesIncluded),
+                include_transfer_context: None,
             })
             .await?;
 
@@ -154,6 +155,7 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
                 prepare_response: prepare,
                 options: None,
                 idempotency_key: None,
+                transfer_context: None,
             })
             .await?;
         let details = resp
@@ -191,6 +193,7 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: Some(FeePolicy::FeesIncluded),
+                include_transfer_context: None,
             })
             .await?;
         bob.sdk
@@ -198,6 +201,7 @@ async fn test_mainnet_teardown_drain_bob_to_alice() -> Result<()> {
                 prepare_response: prepare,
                 options: None,
                 idempotency_key: None,
+                transfer_context: None,
             })
             .await?;
         wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Receive, 60).await?;

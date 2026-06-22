@@ -141,6 +141,7 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -150,6 +151,7 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
             prepare_response: prepare_small,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -207,6 +209,7 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -216,6 +219,7 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
             prepare_response: prepare_large,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -303,6 +307,7 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -328,6 +333,7 @@ async fn test_stable_balance_auto_conversion() -> Result<()> {
             prepare_response: prepare_spend,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -462,6 +468,7 @@ async fn test_stable_balance_per_receive_conversion() -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
     alice
@@ -470,6 +477,7 @@ async fn test_stable_balance_per_receive_conversion() -> Result<()> {
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     wait_for_payment_succeeded_event(&mut alice.events, PaymentType::Send, 60).await?;

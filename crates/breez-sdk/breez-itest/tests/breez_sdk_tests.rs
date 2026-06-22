@@ -64,6 +64,7 @@ async fn test_01_spark_transfer(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -75,6 +76,7 @@ async fn test_01_spark_transfer(
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -308,6 +310,7 @@ async fn test_03_lightning_invoice_payment(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -333,6 +336,7 @@ async fn test_03_lightning_invoice_payment(
                 completion_timeout_secs: Some(10),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -569,6 +573,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -602,6 +607,7 @@ async fn test_05_lightning_invoice_prefer_spark_fee_path(
                 completion_timeout_secs: Some(10),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -664,6 +670,7 @@ async fn test_06_lightning_timeout_and_wait(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -677,6 +684,7 @@ async fn test_06_lightning_timeout_and_wait(
                 completion_timeout_secs: Some(1),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     info!("Immediate return status: {:?}", send_resp.payment.status);
@@ -774,6 +782,7 @@ async fn test_07_spark_invoice(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -785,6 +794,7 @@ async fn test_07_spark_invoice(
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -938,6 +948,7 @@ async fn test_08_lightning_invoice_expiry_secs(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -958,6 +969,7 @@ async fn test_08_lightning_invoice_expiry_secs(
                 completion_timeout_secs: Some(10),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -1068,6 +1080,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
+                include_transfer_context: None,
             })
             .await?;
         match prepare.payment_method {
@@ -1170,6 +1183,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
+                include_transfer_context: None,
             })
             .await?;
 
@@ -1179,6 +1193,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 prepare_response: prepare,
                 options: None,
                 idempotency_key: None,
+                transfer_context: None,
             })
             .await?;
 
@@ -1217,6 +1232,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
             token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
+            include_transfer_context: None,
         })
         .await?;
 
@@ -1247,6 +1263,7 @@ async fn test_09_bolt11_send_all_with_fee_overpayment(
                 completion_timeout_secs: Some(30),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -1343,6 +1360,7 @@ async fn test_10_lightning_completion_timeout_resolves_to_completed(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -1356,6 +1374,7 @@ async fn test_10_lightning_completion_timeout_resolves_to_completed(
                 completion_timeout_secs: Some(completion_timeout_secs),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     let elapsed = start.elapsed();

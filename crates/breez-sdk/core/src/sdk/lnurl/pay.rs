@@ -101,6 +101,7 @@ pub(super) async fn prepare(
             token_identifier: request.token_identifier.clone(),
             conversion_options: request.conversion_options.clone(),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -310,9 +311,11 @@ pub(super) async fn send(
                 token_identifier: None,
                 conversion_estimate: request.prepare_response.conversion_estimate,
                 fee_policy: internal_fee_policy,
+                transfer_context: None,
             },
             options: None,
             idempotency_key: request.idempotency_key,
+            transfer_context: None,
         },
         true,
         // For conversions, don't pass amount_override — let

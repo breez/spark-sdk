@@ -50,6 +50,7 @@ pub(crate) mod test_helpers {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         }
     }
 
@@ -60,6 +61,7 @@ pub(crate) mod test_helpers {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         }
     }
 
@@ -73,6 +75,7 @@ pub(crate) mod test_helpers {
             token_identifier: Some(token_identifier.to_string()),
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         }
     }
 
@@ -83,6 +86,7 @@ pub(crate) mod test_helpers {
             token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
+            include_transfer_context: None,
         }
     }
 

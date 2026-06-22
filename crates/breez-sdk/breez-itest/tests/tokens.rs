@@ -101,6 +101,7 @@ async fn test_01_token_transfer(
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
     info!("Prepare response amount: {:?}", prepare.amount);
@@ -111,6 +112,7 @@ async fn test_01_token_transfer(
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -305,6 +307,7 @@ async fn test_02_token_invoice(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -323,6 +326,7 @@ async fn test_02_token_invoice(
             prepare_response,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -586,6 +590,7 @@ async fn test_04_token_freeze_unfreeze(
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -595,6 +600,7 @@ async fn test_04_token_freeze_unfreeze(
             prepare_response: prepare_send,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -665,6 +671,7 @@ async fn test_04_token_freeze_unfreeze(
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await;
 
@@ -676,6 +683,7 @@ async fn test_04_token_freeze_unfreeze(
                 prepare_response: bob_prepare,
                 options: None,
                 idempotency_key: None,
+                transfer_context: None,
             })
             .await;
 
@@ -725,6 +733,7 @@ async fn test_04_token_freeze_unfreeze(
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -734,6 +743,7 @@ async fn test_04_token_freeze_unfreeze(
             prepare_response: bob_prepare_after_unfreeze,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -800,6 +810,7 @@ async fn test_05_invoice_expiry(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -817,6 +828,7 @@ async fn test_05_invoice_expiry(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await;
 
@@ -834,6 +846,7 @@ async fn test_05_invoice_expiry(
             prepare_response: alice_prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await;
 
@@ -1010,6 +1023,7 @@ async fn test_07_token_payment_realtime_event() -> Result<()> {
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -1019,6 +1033,7 @@ async fn test_07_token_payment_realtime_event() -> Result<()> {
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -1138,6 +1153,7 @@ async fn test_07_token_payment_realtime_event() -> Result<()> {
             token_identifier: Some(token_metadata.identifier.clone()),
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -1146,6 +1162,7 @@ async fn test_07_token_payment_realtime_event() -> Result<()> {
             prepare_response: prepare2,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 

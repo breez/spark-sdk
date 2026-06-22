@@ -13,6 +13,7 @@ async fn send_htlc_payment(sdk: &BreezSdk) -> Result<()> {
         token_identifier: None,
         conversion_options: None,
         fee_policy: None,
+        include_transfer_context: None,
     };
     let prepare_response = sdk.prepare_send_payment(prepare_request).await?;
 
@@ -38,6 +39,7 @@ async fn send_htlc_payment(sdk: &BreezSdk) -> Result<()> {
         prepare_response,
         options: Some(options),
         idempotency_key: None,
+        transfer_context: None,
     };
     let send_response = sdk.send_payment(request).await?;
     let payment = send_response.payment;

@@ -46,6 +46,7 @@ async fn test_01_lightning_hodl_success(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -60,6 +61,7 @@ async fn test_01_lightning_hodl_success(
                 completion_timeout_secs: Some(1),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 

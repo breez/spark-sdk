@@ -291,6 +291,7 @@ pub async fn estimate_tobtc_sats_out(
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
     Ok(prepared
@@ -555,6 +556,7 @@ pub async fn ensure_bob_has_tokens(
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
     let estimate = seed_prepare
@@ -581,6 +583,7 @@ pub async fn ensure_bob_has_tokens(
             prepare_response: seed_prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     wait_for_token_balance_increase(&bob.sdk, token_id, bob_tokens_before, 120).await?;

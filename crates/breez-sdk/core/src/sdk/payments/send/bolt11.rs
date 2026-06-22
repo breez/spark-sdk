@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use platform_utils::time::Duration;
 use platform_utils::tokio;
-use spark_wallet::TransferId;
+use spark_wallet::{LightningSendContext, TransferId};
 use tokio::sync::oneshot;
 use tracing::{Instrument, error, info};
 
@@ -10,12 +10,35 @@ use crate::{
     Bolt11InvoiceDetails, ConversionOptions, ConversionPurpose, FeePolicy, PaymentStatus,
     SendPaymentOptions,
     error::SdkError,
-    models::{Payment, PaymentDetails, SendPaymentRequest, SendPaymentResponse},
+    models::{Payment, PaymentDetails, SendPaymentRequest, SendPaymentResponse, TransferContext},
     sdk::BreezSdk,
     token_conversion::{ConversionAmount, TokenConversionResponse},
     utils::payments::record_payment_update,
 };
 
+/// Reconstructs the spark-wallet send context from the public [`TransferContext`]
+/// so `complete_lightning_send` can resume the prepared (Lightning) send.
+fn lightning_send_context_from(tc: &TransferContext) -> Result<LightningSendContext, SdkError> {
+    let transfer_id: TransferId = tc
+        .transfer_id
+        .parse()
+        .map_err(|e| SdkError::Generic(format!("invalid transfer id in transfer context: {e}")))?;
+    let leaf_ids = tc
+        .leaf_ids
+        .iter()
+        .map(|id| id.parse::<spark_wallet::TreeNodeId>())
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|e| SdkError::Generic(format!("invalid leaf id in transfer context: {e}")))?;
+    Ok(LightningSendContext::Lightning {
+        invoice: tc.invoice.clone(),
+        amount_to_send: tc.amount_to_send_sats,
+        total_amount_sat: tc.total_amount_sats,
+        transfer_id,
+        leaf_ids: Some(leaf_ids),
+    })
+}
+
+#[allow(clippy::too_many_lines)]
 pub(super) async fn send(
     sdk: &BreezSdk,
     invoice_details: &Bolt11InvoiceDetails,
@@ -82,18 +105,28 @@ pub(super) async fn send(
         .map(|idempotency_key| TransferId::from_str(idempotency_key))
         .transpose()?;
 
-    let payment_response = Box::pin(
-        sdk.spark_wallet.pay_lightning_invoice(
-            &invoice_details.invoice.bolt11,
-            amount_to_send
-                .map(|a| Ok::<u64, SdkError>(a.try_into()?))
-                .transpose()?,
-            Some(fee_sats),
-            prefer_spark,
-            transfer_id,
-        ),
-    )
-    .await?;
+    let payment_response = if let Some(transfer_context) = &request.transfer_context {
+        // Resume a gated send: complete from the pinned context (re-reserving its
+        // exact leaves) rather than preparing afresh.
+        Box::pin(
+            sdk.spark_wallet
+                .complete_lightning_send(lightning_send_context_from(transfer_context)?),
+        )
+        .await?
+    } else {
+        Box::pin(
+            sdk.spark_wallet.pay_lightning_invoice(
+                &invoice_details.invoice.bolt11,
+                amount_to_send
+                    .map(|a| Ok::<u64, SdkError>(a.try_into()?))
+                    .transpose()?,
+                Some(fee_sats),
+                prefer_spark,
+                transfer_id,
+            ),
+        )
+        .await?
+    };
     let completion_timeout_secs = completion_timeout_secs.unwrap_or(0);
     let payment = match payment_response.lightning_payment {
         Some(lightning_payment) => {

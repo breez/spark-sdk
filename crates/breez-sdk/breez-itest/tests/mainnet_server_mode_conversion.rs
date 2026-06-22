@@ -99,6 +99,7 @@ async fn test_server_mode_bitcoin_to_token() -> Result<()> {
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -131,6 +132,7 @@ async fn test_server_mode_bitcoin_to_token() -> Result<()> {
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     info!(
@@ -273,6 +275,7 @@ async fn test_server_mode_token_to_bitcoin() -> Result<()> {
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
     let estimate = prepare
@@ -290,6 +293,7 @@ async fn test_server_mode_token_to_bitcoin() -> Result<()> {
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     info!(

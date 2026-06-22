@@ -83,6 +83,7 @@ async fn test_onchain_withdraw_to_static_address(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -92,6 +93,7 @@ async fn test_onchain_withdraw_to_static_address(
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -290,6 +292,7 @@ async fn test_send_all_to_bitcoin_address(
             token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
+            include_transfer_context: None,
         })
         .await?;
 
@@ -323,6 +326,7 @@ async fn test_send_all_to_bitcoin_address(
                 confirmation_speed: OnchainConfirmationSpeed::Fast,
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -479,6 +483,7 @@ async fn test_deposit_low_amount_refund_fee_rate(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -490,6 +495,7 @@ async fn test_deposit_low_amount_refund_fee_rate(
                 confirmation_speed: OnchainConfirmationSpeed::Fast,
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     info!(

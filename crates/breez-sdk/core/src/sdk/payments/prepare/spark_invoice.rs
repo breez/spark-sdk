@@ -156,6 +156,7 @@ pub(super) async fn prepare(
         token_identifier: response_token_identifier,
         conversion_estimate,
         fee_policy,
+        transfer_context: None,
     })
 }
 

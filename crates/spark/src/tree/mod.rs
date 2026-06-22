@@ -651,11 +651,21 @@ pub trait TreeStore: Send + Sync {
     /// Reserves the exact leaves named by `leaf_ids`, failing if any is not
     /// currently available. Unlike [`try_reserve_leaves`](Self::try_reserve_leaves)
     /// (which selects by amount), this reserves a specific, caller-chosen set.
+    ///
+    /// Needed to resume a prepared (gated) send against its pinned leaves. The
+    /// default returns an error; only the in-memory store implements it so far, so
+    /// the resumable-send flow is unsupported on the Postgres/MySQL/wasm tree
+    /// stores until they add a real implementation.
     async fn reserve_leaves_by_ids(
         &self,
         leaf_ids: &[TreeNodeId],
         purpose: ReservationPurpose,
-    ) -> Result<LeavesReservation, TreeServiceError>;
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let _ = (leaf_ids, purpose);
+        Err(TreeServiceError::Generic(
+            "reserve_leaves_by_ids is not supported by this tree store".to_string(),
+        ))
+    }
 
     /// Attempts to reserve leaves. Returns `ReserveResult` indicating:
     /// - `Success`: reservation completed

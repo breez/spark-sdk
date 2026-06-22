@@ -766,6 +766,7 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
                 token_identifier: None,
                 conversion_options: None,
                 fee_policy: None,
+                include_transfer_context: None,
             })
             .await?;
 
@@ -775,6 +776,7 @@ async fn test_08_lnurl_send_all_with_fee_overpayment(
                 prepare_response: prepare,
                 options: None,
                 idempotency_key: None,
+                transfer_context: None,
             })
             .await?;
 

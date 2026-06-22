@@ -1411,6 +1411,26 @@ pub enum OnchainConfirmationSpeed {
     Slow,
 }
 
+/// Resumable context for a prepared bolt11 send (the "transfer context"). Returned
+/// by `prepare_send_payment` when `include_transfer_context` is set, and passed back
+/// to `send_payment` to complete the send without re-selecting leaves. SDK-created
+/// and signer-agnostic: it pins the transfer id and the selected leaf ids that a
+/// signer needs to build the transfer package.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TransferContext {
+    /// The bolt11 invoice being paid.
+    pub invoice: String,
+    /// Amount to send in sats; unset when the invoice carries a fixed amount.
+    pub amount_to_send_sats: Option<u64>,
+    /// Total amount the leaves were selected for, in sats.
+    pub total_amount_sats: u64,
+    /// The pinned transfer id (UUID).
+    pub transfer_id: String,
+    /// The selected leaf ids (UUIDs) to send.
+    pub leaf_ids: Vec<String>,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PrepareSendPaymentRequest {
     pub payment_request: String,
@@ -1430,6 +1450,11 @@ pub struct PrepareSendPaymentRequest {
     /// How fees should be handled. Defaults to `FeesExcluded` (fees added on top).
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub fee_policy: Option<FeePolicy>,
+    /// When set, `prepare_send_payment` also runs everything up to the transfer
+    /// signing (leaf selection and any swap) and returns a [`TransferContext`] in
+    /// the response, so the caller can gate the send. Bolt11 lightning sends only.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub include_transfer_context: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1448,6 +1473,9 @@ pub struct PrepareSendPaymentResponse {
     pub conversion_estimate: Option<ConversionEstimate>,
     /// How fees are handled for this payment.
     pub fee_policy: FeePolicy,
+    /// Present when `include_transfer_context` was requested and the payment is a
+    /// gateable bolt11 lightning send. Pass it back to `send_payment` to complete.
+    pub transfer_context: Option<TransferContext>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
@@ -1490,6 +1518,10 @@ pub struct SendPaymentRequest {
     /// The idempotency key must be a valid UUID.
     #[cfg_attr(feature = "uniffi", uniffi(default=None))]
     pub idempotency_key: Option<String>,
+    /// When set, resumes a send prepared with `include_transfer_context` instead of
+    /// preparing afresh, reusing the pinned transfer id and leaves.
+    #[cfg_attr(feature = "uniffi", uniffi(default=None))]
+    pub transfer_context: Option<TransferContext>,
 }
 
 #[derive(Debug, Clone, Serialize)]

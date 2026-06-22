@@ -30,6 +30,7 @@ async fn send_htlc_alice_to_bob(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -46,6 +47,7 @@ async fn send_htlc_alice_to_bob(
                 }),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -349,6 +351,7 @@ async fn test_03_reconcile_stale_pending_payment(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -363,6 +366,7 @@ async fn test_03_reconcile_stale_pending_payment(
                 }),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -387,6 +391,7 @@ async fn test_03_reconcile_stale_pending_payment(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -396,6 +401,7 @@ async fn test_03_reconcile_stale_pending_payment(
             prepare_response: prepare2,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 

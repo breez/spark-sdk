@@ -124,6 +124,7 @@ async fn send_receive_spark(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
     let send = tx
@@ -132,6 +133,7 @@ async fn send_receive_spark(
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     assert_eq!(send.payment.payment_type, PaymentType::Send);
@@ -176,6 +178,7 @@ async fn lightning_receive(#[case] backend: SignerBackend) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
     sender
@@ -187,6 +190,7 @@ async fn lightning_receive(#[case] backend: SignerBackend) -> Result<()> {
                 completion_timeout_secs: Some(10),
             }),
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 

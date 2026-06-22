@@ -97,6 +97,7 @@ async fn test_shared_connection_manager_spark_transfer(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -106,6 +107,7 @@ async fn test_shared_connection_manager_spark_transfer(
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     assert!(matches!(

@@ -15,6 +15,7 @@ async fn prepare_send_payment_lightning_bolt11(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -47,6 +48,7 @@ async fn prepare_send_payment_onchain(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -76,6 +78,7 @@ async fn prepare_send_payment_spark_address(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -100,6 +103,7 @@ async fn prepare_send_payment_spark_invoice(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -132,6 +136,7 @@ async fn prepare_send_payment_token_conversion(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -165,6 +170,7 @@ async fn send_payment_lightning_bolt11(
             prepare_response,
             options,
             idempotency_key: optional_idempotency_key,
+            transfer_context: None,
         })
         .await?;
     let payment = send_response.payment;
@@ -188,6 +194,7 @@ async fn send_payment_onchain(
             prepare_response,
             options,
             idempotency_key: optional_idempotency_key,
+            transfer_context: None,
         })
         .await?;
     let payment = send_response.payment;
@@ -207,6 +214,7 @@ async fn send_payment_spark(
             prepare_response,
             options: None,
             idempotency_key: optional_idempotency_key,
+            transfer_context: None,
         })
         .await?;
     let payment = send_response.payment;
@@ -230,6 +238,7 @@ async fn prepare_send_payment_fees_included(sdk: &BreezSdk) -> Result<()> {
             token_identifier: None,
             conversion_options: None,
             fee_policy: Some(FeePolicy::FeesIncluded),
+            include_transfer_context: None,
         })
         .await?;
 
@@ -272,6 +281,7 @@ async fn prepare_send_payment_send_all(sdk: &BreezSdk) -> Result<()> {
             token_identifier: Some(token_identifier),
             conversion_options,
             fee_policy: Some(FeePolicy::FeesIncluded),
+            include_transfer_context: None,
         })
         .await?;
 

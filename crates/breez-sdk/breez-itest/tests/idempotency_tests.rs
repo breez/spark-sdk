@@ -61,6 +61,7 @@ async fn test_01_spark_idempotency_key(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -75,6 +76,7 @@ async fn test_01_spark_idempotency_key(
             prepare_response: prepare.clone(),
             options: None,
             idempotency_key: Some(idempotency_key.clone()),
+            transfer_context: None,
         })
         .await?;
 
@@ -91,6 +93,7 @@ async fn test_01_spark_idempotency_key(
             prepare_response: prepare.clone(),
             options: None,
             idempotency_key: Some(idempotency_key.clone()),
+            transfer_context: None,
         })
         .await?;
     assert_eq!(
@@ -118,6 +121,7 @@ async fn test_01_spark_idempotency_key(
             prepare_response: prepare,
             options: None,
             idempotency_key: Some(idempotency_key.clone()),
+            transfer_context: None,
         })
         .await?;
     assert_eq!(
@@ -229,6 +233,7 @@ async fn test_02_lightning_idempotency_key(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -243,6 +248,7 @@ async fn test_02_lightning_idempotency_key(
             prepare_response: prepare.clone(),
             options: None,
             idempotency_key: Some(idempotency_key.clone()),
+            transfer_context: None,
         })
         .await?;
 
@@ -259,6 +265,7 @@ async fn test_02_lightning_idempotency_key(
             prepare_response: prepare.clone(),
             options: None,
             idempotency_key: Some(idempotency_key.clone()),
+            transfer_context: None,
         })
         .await?;
     assert_eq!(
@@ -286,6 +293,7 @@ async fn test_02_lightning_idempotency_key(
             prepare_response: prepare,
             options: None,
             idempotency_key: Some(idempotency_key.clone()),
+            transfer_context: None,
         })
         .await?;
     assert_eq!(
@@ -381,6 +389,7 @@ async fn test_03_bitcoin_idempotency_key(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -393,6 +402,7 @@ async fn test_03_bitcoin_idempotency_key(
             prepare_response: prepare.clone(),
             options: None,
             idempotency_key: Some(idempotency_key.clone()),
+            transfer_context: None,
         })
         .await?;
 
@@ -409,6 +419,7 @@ async fn test_03_bitcoin_idempotency_key(
             prepare_response: prepare.clone(),
             options: None,
             idempotency_key: Some(idempotency_key.clone()),
+            transfer_context: None,
         })
         .await?;
     assert_eq!(
@@ -433,6 +444,7 @@ async fn test_03_bitcoin_idempotency_key(
             prepare_response: prepare,
             options: None,
             idempotency_key: Some(idempotency_key),
+            transfer_context: None,
         })
         .await?;
     assert_eq!(
@@ -525,6 +537,7 @@ async fn test_04_spark_htlc_idempotency_key(
             token_identifier: None,
             conversion_options: None,
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -546,6 +559,7 @@ async fn test_04_spark_htlc_idempotency_key(
                 }),
             }),
             idempotency_key: Some(idempotency_key.clone()),
+            transfer_context: None,
         })
         .await?;
 
@@ -567,6 +581,7 @@ async fn test_04_spark_htlc_idempotency_key(
                 }),
             }),
             idempotency_key: Some(idempotency_key.clone()),
+            transfer_context: None,
         })
         .await?;
     assert_eq!(

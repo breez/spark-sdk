@@ -684,6 +684,7 @@ pub(crate) async fn execute_command(
                     token_identifier,
                     conversion_options,
                     fee_policy,
+                    include_transfer_context: None,
                 })
                 .await;
 
@@ -724,6 +725,7 @@ pub(crate) async fn execute_command(
                 prepare_response,
                 options: payment_options,
                 idempotency_key,
+                transfer_context: None,
             }))
             .await?;
 

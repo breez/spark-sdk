@@ -3,7 +3,7 @@ use spark_wallet::SparkAddress;
 use crate::{
     Bolt11InvoiceDetails, ConversionOptions, ConversionType, FeePolicy, SendPaymentMethod,
     error::SdkError,
-    models::{PrepareSendPaymentRequest, PrepareSendPaymentResponse},
+    models::{PrepareSendPaymentRequest, PrepareSendPaymentResponse, TransferContext},
     sdk::BreezSdk,
     token_conversion::ConversionAmount,
 };
@@ -73,6 +73,34 @@ fn validate_request(
     }
 
     Ok(())
+}
+
+/// Maps a prepared spark-wallet send context into the public [`TransferContext`].
+/// Only the Lightning route is gateable; a spark-routed context yields `None`
+/// (the caller falls back to a one-shot `send_payment`).
+fn transfer_context_from_lightning_send(
+    context: spark_wallet::LightningSendContext,
+) -> Option<TransferContext> {
+    match context {
+        spark_wallet::LightningSendContext::Lightning {
+            invoice,
+            amount_to_send,
+            total_amount_sat,
+            transfer_id,
+            leaf_ids,
+        } => Some(TransferContext {
+            invoice,
+            amount_to_send_sats: amount_to_send,
+            total_amount_sats: total_amount_sat,
+            transfer_id: transfer_id.to_string(),
+            leaf_ids: leaf_ids
+                .unwrap_or_default()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        }),
+        spark_wallet::LightningSendContext::SparkTransfer { .. } => None,
+    }
 }
 
 pub(super) async fn prepare(
@@ -163,6 +191,35 @@ async fn prepare_sats_denominated(
     )
     .await?;
 
+    // When requested, run leaf selection (and any swap) now and return a context the
+    // caller can gate, then resume via send_payment. Only the plain, fees-excluded
+    // lightning send is gateable here; conversions, tokens, and FeesIncluded fall
+    // back to a one-shot send (transfer_context stays None).
+    let transfer_context = if request.include_transfer_context == Some(true)
+        && conversion_estimate.is_none()
+        && token_identifier.is_none()
+        && fee_policy == FeePolicy::FeesExcluded
+    {
+        let amount_to_send = if invoice.amount_msat.is_some() {
+            None
+        } else {
+            Some(amount.try_into()?)
+        };
+        let context = sdk
+            .spark_wallet
+            .prepare_lightning_send(
+                &request.payment_request,
+                amount_to_send,
+                Some(lightning_fee_sats),
+                sdk.config.prefer_spark_over_lightning,
+                None,
+            )
+            .await?;
+        transfer_context_from_lightning_send(context)
+    } else {
+        None
+    };
+
     Ok(PrepareSendPaymentResponse {
         payment_method: SendPaymentMethod::Bolt11Invoice {
             invoice_details: invoice.clone(),
@@ -173,6 +230,7 @@ async fn prepare_sats_denominated(
         token_identifier,
         conversion_estimate,
         fee_policy,
+        transfer_context,
     })
 }
 
@@ -245,6 +303,7 @@ async fn prepare_token_denominated(
         token_identifier: None,
         conversion_estimate,
         fee_policy,
+        transfer_context: None,
     })
 }
 

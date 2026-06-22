@@ -90,6 +90,7 @@ async fn test_token_conversion_success() -> Result<()> {
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
     let conversion_estimate = prepare_btc_to_token
@@ -126,6 +127,7 @@ async fn test_token_conversion_success() -> Result<()> {
             prepare_response: prepare_btc_to_token,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -276,6 +278,7 @@ async fn test_token_conversion_success() -> Result<()> {
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -294,6 +297,7 @@ async fn test_token_conversion_success() -> Result<()> {
             prepare_response: prepare_token_to_btc,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
 
@@ -460,6 +464,7 @@ async fn test_token_conversion_failure() -> Result<()> {
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await;
     assert!(
@@ -505,6 +510,7 @@ async fn test_token_conversion_failure() -> Result<()> {
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?
         .conversion_estimate
@@ -533,6 +539,7 @@ async fn test_token_conversion_failure() -> Result<()> {
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
     let oversize_amount_in = prepare_oversize
@@ -552,6 +559,7 @@ async fn test_token_conversion_failure() -> Result<()> {
             prepare_response: prepare_oversize,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await;
     info!("Insufficient-funds send rejected: {}", send_result.is_err());
@@ -637,6 +645,7 @@ async fn test_token_conversion_spark_invoice_success() -> Result<()> {
                 completion_timeout_secs: None,
             }),
             fee_policy: None,
+            include_transfer_context: None,
         })
         .await?;
 
@@ -676,6 +685,7 @@ async fn test_token_conversion_spark_invoice_success() -> Result<()> {
             prepare_response: prepare,
             options: None,
             idempotency_key: None,
+            transfer_context: None,
         })
         .await?;
     info!(
