@@ -134,3 +134,19 @@ func ConfigureBackgroundTasks() {
 	// ANCHOR_END: config-background-tasks
 	log.Printf("Config: %+v", config)
 }
+
+func ConfigureCrossChain() {
+	// ANCHOR: cross-chain-config
+	config := breez_sdk_spark.DefaultConfig(breez_sdk_spark.NetworkMainnet)
+	apiKey := "<breez api key>"
+	config.ApiKey = &apiKey
+
+	// Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
+	defaultSlippageBps := uint32(50)
+	config.CrossChainConfig = &breez_sdk_spark.CrossChainConfig{
+		DefaultSlippageBps:       &defaultSlippageBps,
+		DefaultTargetOverpayBps:  nil,
+	}
+	// ANCHOR_END: cross-chain-config
+	log.Printf("Config: %v", config)
+}

@@ -70,3 +70,17 @@ func configureBackgroundTasks() {
     // ANCHOR_END: config-background-tasks
     print("Config: \(config)")
 }
+
+func configureCrossChain() {
+    // ANCHOR: cross-chain-config
+    var config = defaultConfig(network: Network.mainnet)
+    config.apiKey = "<breez api key>"
+
+    // Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
+    config.crossChainConfig = CrossChainConfig(
+        defaultSlippageBps: 50,
+        defaultTargetOverpayBps: nil
+    )
+    // ANCHOR_END: cross-chain-config
+    print("Config: \(config)")
+}

@@ -136,5 +136,20 @@ namespace BreezSdkSnippets
             };
             // ANCHOR_END: config-background-tasks
         }
+
+        void ConfigureCrossChain()
+        {
+            // ANCHOR: cross-chain-config
+            // Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
+            var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
+            {
+                apiKey = "<breez api key>",
+                crossChainConfig = new CrossChainConfig(
+                    defaultSlippageBps: 50,
+                    defaultTargetOverpayBps: null)
+            };
+            // ANCHOR_END: cross-chain-config
+            Console.WriteLine($"Config: {config}");
+        }
     }
 }

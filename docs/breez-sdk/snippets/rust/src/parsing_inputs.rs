@@ -55,6 +55,12 @@ async fn parse_input(sdk: &BreezSdk) -> Result<()> {
                 println!("  Sender public key: {}", sender_public_key);
             }
         }
+        InputType::CrossChainAddress(details) => {
+            println!(
+                "Input is cross-chain address {} ({:?})",
+                details.address, details.address_family
+            );
+        }
         // Other input types are available
         _ => {}
     }

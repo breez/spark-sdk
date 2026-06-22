@@ -56,6 +56,13 @@ class ParsingInputs {
                         println("  Sender public key: ${invoice.senderPublicKey}")
                     }
                 }
+                is InputType.CrossChainAddress -> {
+                    val details = inputType.v1
+                    println(
+                            "Input is cross-chain address ${details.address} " +
+                                    "(${details.addressFamily})"
+                    )
+                }
                 else -> {
                     // Handle other input types
                 }

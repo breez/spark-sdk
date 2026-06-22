@@ -117,3 +117,17 @@ void configureBackgroundTasks() {
   // ANCHOR_END: config-background-tasks
   print(config);
 }
+
+void configureCrossChain() {
+  // ANCHOR: cross-chain-config
+  // Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
+  final config = defaultConfig(network: Network.mainnet).copyWith(
+    apiKey: "<breez api key>",
+    crossChainConfig: const CrossChainConfig(
+      defaultSlippageBps: 50,
+      defaultTargetOverpayBps: null,
+    ),
+  );
+  // ANCHOR_END: cross-chain-config
+  print("Config: $config");
+}

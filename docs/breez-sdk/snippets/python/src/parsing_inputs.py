@@ -50,6 +50,11 @@ async def parse_input(sdk: BreezSdk):
 
             if invoice.sender_public_key:
                 logging.debug(f"  Sender public key: {invoice.sender_public_key}")
+        elif isinstance(parsed_input, InputType.CROSS_CHAIN_ADDRESS):
+            details = parsed_input[0]
+            logging.debug(
+                f"Input is cross-chain address {details.address} ({details.address_family})"
+            )
         # Other input types are available
     except Exception as error:
         logging.error(error)

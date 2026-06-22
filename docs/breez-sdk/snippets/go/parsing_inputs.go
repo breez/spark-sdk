@@ -70,6 +70,14 @@ func ParseInput(sdk *breez_sdk_spark.BreezSdk) (*breez_sdk_spark.InputType, erro
 			log.Printf("  Sender public key: %s", *invoice.SenderPublicKey)
 		}
 
+	case breez_sdk_spark.InputTypeCrossChainAddress:
+		details := inputType.Field0
+		log.Printf(
+			"Input is cross-chain address %s (%v)",
+			details.Address,
+			details.AddressFamily,
+		)
+
 	default:
 		// Other input types are available
 	}

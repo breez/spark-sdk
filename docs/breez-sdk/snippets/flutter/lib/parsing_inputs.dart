@@ -28,19 +28,22 @@ Future<void> parseInput(BreezSdk sdk) async {
     } else {
       print("  Amount: ${invoice.amount} sats");
     }
-    
+
     if (invoice.description != null) {
       print("  Description: ${invoice.description}");
     }
-    
+
     if (invoice.expiryTime != null) {
       print("  Expiry time: "
           "${DateTime.fromMillisecondsSinceEpoch(invoice.expiryTime!.toInt() * 1000)}");
     }
-    
+
     if (invoice.senderPublicKey != null) {
       print("  Sender public key: ${invoice.senderPublicKey}");
     }
+  } else if (inputType is InputType_CrossChainAddress) {
+    var details = inputType.field0;
+    print("Input is cross-chain address ${details.address} (${details.addressFamily})");
   } else {
     // Other input types are available
   }

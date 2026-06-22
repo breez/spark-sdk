@@ -60,6 +60,10 @@ const parseInputs = async (sdk: BreezSdk) => {
       }
       break
 
+    case 'crossChainAddress':
+      console.log(`Input is cross-chain address ${parsed.address} (${parsed.addressFamily})`)
+      break
+
     default:
       // Other input types are available
       break
