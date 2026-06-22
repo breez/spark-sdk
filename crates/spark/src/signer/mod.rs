@@ -18,6 +18,7 @@ pub use error::SignerError;
 pub use models::*;
 pub use spark_signer::*;
 pub use spark_signer_adapter::SparkSignerAdapter;
+pub(crate) use spark_signer_adapter::new_key_path;
 
 #[cfg(test)]
 pub(crate) use default_signer::tests::create_test_signer;

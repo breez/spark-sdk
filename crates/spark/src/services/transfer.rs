@@ -302,11 +302,16 @@ impl TransferService {
                 receiver_public_key: *receiver_public_key,
                 leaves: leaf_key_tweaks
                     .iter()
-                    .map(|l| TransferLeafInput {
-                        node: l.node.clone(),
-                        new_leaf_id: TreeNodeId::generate(),
+                    .map(|l| {
+                        Ok::<_, ServiceError>(TransferLeafInput {
+                            node: l.node.clone(),
+                            new_signing_key_path: crate::signer::new_key_path(
+                                transfer_id,
+                                &l.node.id,
+                            )?,
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>, _>>()?,
                 operator_recipients: self.operator_recipients(),
                 threshold: self.split_secret_threshold,
             })

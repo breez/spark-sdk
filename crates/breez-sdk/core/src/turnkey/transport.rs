@@ -9,11 +9,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bitcoin::hashes::{Hash, sha256};
 use platform_utils::tokio::time::sleep;
 use platform_utils::{HttpClient, HttpResponse};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use super::activity_store::{InMemoryTurnkeyActivityStore, TurnkeyActivityStore};
 use super::config::{TurnkeyConfig, TurnkeyRetryConfig};
 use super::error::TurnkeyError;
 use super::stamp::ApiKeyStamper;
@@ -78,11 +80,26 @@ struct ActivityEnvelope<'a, P> {
     parameters: P,
 }
 
-fn current_timestamp_ms() -> String {
+fn current_timestamp_ms() -> u64 {
     platform_utils::time::SystemTime::now()
         .duration_since(platform_utils::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis())
-        .to_string()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+/// Content key for an activity: a hash over everything in the submitted body
+/// except `timestampMs`. Two submissions with the same key get the same stored
+/// timestamp, hence the same Turnkey fingerprint and the same activity.
+fn activity_key<P: Serialize>(
+    activity_type: &str,
+    organization_id: &str,
+    parameters: &P,
+) -> Result<String, TurnkeyError> {
+    let params =
+        serde_json::to_string(parameters).map_err(|e| TurnkeyError::Serialize(e.to_string()))?;
+    let preimage = format!("{activity_type}\u{0}{organization_id}\u{0}{params}");
+    Ok(sha256::Hash::hash(preimage.as_bytes()).to_string())
 }
 
 /// Whether a retry whose wait takes `delay` still fits the request's time
@@ -124,6 +141,7 @@ pub(crate) struct TurnkeyClient {
     pub(crate) wallet_id: String,
     stamper: ApiKeyStamper,
     retry: TurnkeyRetryConfig,
+    activity_store: Arc<dyn TurnkeyActivityStore>,
 }
 
 impl TurnkeyClient {
@@ -143,7 +161,14 @@ impl TurnkeyClient {
             wallet_id: config.wallet_id.clone(),
             stamper: ApiKeyStamper::from_hex(&config.api_private_key, &config.api_public_key)?,
             retry: config.retry.clone().unwrap_or_default(),
+            activity_store: Arc::new(InMemoryTurnkeyActivityStore::default()),
         })
+    }
+
+    /// Replaces the activity-timestamp store (default: in-memory, process-local).
+    pub(crate) fn with_activity_store(mut self, store: Arc<dyn TurnkeyActivityStore>) -> Self {
+        self.activity_store = store;
+        self
     }
 
     /// Serializes `request`, stamps it, POSTs to `{base_url}{path}`, and
@@ -305,9 +330,17 @@ impl TurnkeyClient {
         P: Serialize,
         R: DeserializeOwned,
     {
+        // Reuse the timestamp recorded for this activity's content, so a
+        // re-submission (e.g. after out-of-band approval) keeps the same
+        // fingerprint and resolves to the existing activity rather than a new one.
+        let key = activity_key(activity_type, &self.organization_id, &parameters)?;
+        let timestamp_ms = self
+            .activity_store
+            .timestamp_ms(&key, current_timestamp_ms())
+            .await;
         let envelope = ActivityEnvelope {
             activity_type,
-            timestamp_ms: current_timestamp_ms(),
+            timestamp_ms: timestamp_ms.to_string(),
             organization_id: &self.organization_id,
             parameters,
         };

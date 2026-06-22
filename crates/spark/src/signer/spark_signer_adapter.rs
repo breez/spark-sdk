@@ -170,6 +170,31 @@ fn signing_path(node_id: &crate::tree::TreeNodeId) -> Result<DerivationPath, Sig
     ]))
 }
 
+/// Derivation path for a transfer's fresh per-leaf signing key: a hardened path
+/// whose components are the 31-bit chunks of `SHA256(transfer_id ‖ source_leaf_id)`.
+/// Deterministic in its inputs (so a re-prepared transfer reproduces the key) and,
+/// being hardened, unguessable without the master key. Replaces a random new-leaf
+/// id so a re-prepared transfer package is byte-identical.
+pub(crate) fn new_key_path(
+    transfer_id: &crate::services::TransferId,
+    source_leaf_id: &crate::tree::TreeNodeId,
+) -> Result<DerivationPath, SignerError> {
+    let mut data = transfer_id.to_string().into_bytes();
+    data.extend_from_slice(source_leaf_id.to_string().as_bytes());
+    let hash = sha256::Hash::hash(&data);
+    let children = hash
+        .as_byte_array()
+        .chunks(4)
+        .map(|chunk| {
+            let mut bytes = [0u8; 4];
+            bytes[..chunk.len()].copy_from_slice(chunk);
+            let index = u32::from_be_bytes(bytes) % 0x8000_0000;
+            ChildNumber::from_hardened_idx(index).map_err(|_| SignerError::InvalidHash)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(DerivationPath::from(children))
+}
+
 /// Derivation path for a static-deposit key at `index`: the `3'` static-deposit
 /// purpose followed by the index as a hardened child.
 fn static_deposit_path(index: u32) -> Result<DerivationPath, SignerError> {
@@ -263,7 +288,7 @@ impl SparkSigner for SparkSignerAdapter {
 
         for leaf in &leaves {
             let signing_key = SecretSource::Derived(signing_path(&leaf.node.id)?);
-            let new_signing_key = SecretSource::Derived(signing_path(&leaf.new_leaf_id)?);
+            let new_signing_key = SecretSource::Derived(leaf.new_signing_key_path.clone());
 
             new_leaf_keys.push(NewLeafKey {
                 node_id: leaf.node.id.clone(),
@@ -621,5 +646,36 @@ impl SparkSigner for SparkSignerAdapter {
             .sign_hash_schnorr(&identity_path()?, &request.digest)
             .await?;
         Ok(PreparedTokenTransaction { signature })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::new_key_path;
+    use crate::services::TransferId;
+    use crate::tree::TreeNodeId;
+    use macros::test_all;
+
+    #[cfg(feature = "browser-tests")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[test_all]
+    fn new_key_path_is_deterministic_and_input_bound() {
+        let tid = TransferId::from_name("transfer-a");
+        let other_tid = TransferId::from_name("transfer-b");
+        let leaf = TreeNodeId::generate();
+        let other_leaf = TreeNodeId::generate();
+
+        let path = new_key_path(&tid, &leaf).unwrap();
+
+        // Same inputs reproduce the same path: this is what lets a re-prepared
+        // transfer produce a byte-identical package.
+        assert_eq!(path, new_key_path(&tid, &leaf).unwrap());
+        // Bound to both the transfer id and the leaf id.
+        assert_ne!(path, new_key_path(&other_tid, &leaf).unwrap());
+        assert_ne!(path, new_key_path(&tid, &other_leaf).unwrap());
+
+        // Full 256-bit digest spread over 8 components (hardened by construction).
+        assert_eq!(path.len(), 8);
     }
 }

@@ -509,7 +509,7 @@ pub struct ExternalOperatorPackage {
 )]
 pub struct ExternalTransferLeafInput {
     pub node_id: ExternalTreeNodeId,
-    pub new_leaf_id: ExternalTreeNodeId,
+    pub new_signing_key_path: String,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::signer::external_spark_types::ExternalNewLeafKey)]

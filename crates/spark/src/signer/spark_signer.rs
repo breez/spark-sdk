@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use bitcoin::bip32::DerivationPath;
 use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::{Identifier, round1::SigningCommitments, round2::SignatureShare};
 
@@ -85,14 +86,17 @@ pub struct FrostShareResult {
 // ─── prepare_transfer ─────────────────────────────────────────────────────
 
 /// A single leaf being sent in an outbound transfer. The signer derives the old
-/// leaf key from `node.id` and the new (post-transfer) leaf key from
-/// `new_leaf_id`: a freshly generated id supplied per send, so the new key is a
-/// deterministic HD derivation distinct from the old one (a key-addressed
-/// signer backend cannot use a random key).
+/// leaf key from `node.id` and a fresh per-transfer signing key from the transfer
+/// id and `node.id` (a hardened HD derivation), so the new key is deterministic,
+/// secret, and distinct from the old one. Determinism lets a re-prepared transfer
+/// reproduce an identical package.
 #[derive(Debug, Clone)]
 pub struct TransferLeafInput {
     pub node: TreeNode,
-    pub new_leaf_id: TreeNodeId,
+    /// Hardened derivation path for this leaf's fresh signing key, computed by the
+    /// caller from the transfer id and `node.id`. The signer derives the key at
+    /// this path; an id-addressed backend seeds its leaf id from it instead.
+    pub new_signing_key_path: DerivationPath,
 }
 
 #[derive(Debug, Clone)]

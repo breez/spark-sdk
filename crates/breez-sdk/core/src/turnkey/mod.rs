@@ -7,6 +7,7 @@
 //! (static-deposit refund and the SDK-layer encryption/HMAC key).
 
 mod accounts;
+mod activity_store;
 mod breez_signer;
 mod config;
 mod error;
@@ -18,8 +19,9 @@ mod stamp;
 mod transport;
 mod types;
 
+pub use activity_store::{InMemoryTurnkeyActivityStore, TurnkeyActivityStore};
 pub use config::{TurnkeyConfig, TurnkeyRetryConfig};
 pub use error::TurnkeyError;
-pub use factory::create_turnkey_signer;
+pub use factory::{TurnkeySignerBuilder, create_turnkey_signer};
 #[cfg(feature = "test-utils")]
 pub use management::{TurnkeyWalletInfo, TurnkeyWalletManager};

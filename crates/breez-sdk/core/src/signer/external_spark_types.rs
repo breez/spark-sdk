@@ -238,7 +238,8 @@ fn sighash_32(bytes: &[u8]) -> Result<[u8; 32], SdkError> {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct ExternalTransferLeafInput {
     pub node_id: ExternalTreeNodeId,
-    pub new_leaf_id: ExternalTreeNodeId,
+    /// Bip32 derivation path (hardened) for the leaf's fresh signing key.
+    pub new_signing_key_path: String,
 }
 
 impl ExternalTransferLeafInput {
@@ -247,7 +248,7 @@ impl ExternalTransferLeafInput {
     ) -> Result<Self, SdkError> {
         Ok(Self {
             node_id: ExternalTreeNodeId::from_tree_node_id(&leaf.node.id)?,
-            new_leaf_id: ExternalTreeNodeId::from_tree_node_id(&leaf.new_leaf_id)?,
+            new_signing_key_path: leaf.new_signing_key_path.to_string(),
         })
     }
 }

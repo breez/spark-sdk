@@ -10,6 +10,7 @@ use crate::signer::breez::BreezSignerImpl;
 use crate::signer::{ExternalBreezSigner, ExternalSparkSigner};
 
 use super::accounts::xpriv_from_secret;
+use super::activity_store::{InMemoryTurnkeyActivityStore, TurnkeyActivityStore};
 use super::breez_signer::TurnkeyBreezSigner;
 use super::config::TurnkeyConfig;
 use super::spark_signer::TurnkeySparkSigner;
@@ -41,20 +42,66 @@ fn encryption_key_path(account: u32) -> String {
     format!("m/8797555'/{account}'/2147483647'")
 }
 
+/// Builds the Turnkey-backed Breez and Spark signers from `config`, with control
+/// over the activity-timestamp store.
+///
+/// Defaults to an in-memory store. Inject a persistent one to bridge the
+/// approval-trigger submission and the later re-submission across processes.
+pub struct TurnkeySignerBuilder {
+    config: TurnkeyConfig,
+    activity_store: Option<Arc<dyn TurnkeyActivityStore>>,
+}
+
+impl TurnkeySignerBuilder {
+    pub fn new(config: TurnkeyConfig) -> Self {
+        Self {
+            config,
+            activity_store: None,
+        }
+    }
+
+    /// Replaces the activity-timestamp store (default: in-memory, process-local).
+    #[must_use]
+    pub fn activity_store(mut self, store: Arc<dyn TurnkeyActivityStore>) -> Self {
+        self.activity_store = Some(store);
+        self
+    }
+
+    pub async fn build(self) -> Result<ExternalSigners, SignerError> {
+        let store = self
+            .activity_store
+            .unwrap_or_else(|| Arc::new(InMemoryTurnkeyActivityStore::default()));
+        build_turnkey_signers(self.config, store).await
+    }
+}
+
+/// Builds the Turnkey-backed signers with the default (in-memory) activity store.
+/// Use [`TurnkeySignerBuilder`] to inject a custom store.
+#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
+pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<ExternalSigners, SignerError> {
+    TurnkeySignerBuilder::new(config).build().await
+}
+
 /// Builds the Turnkey-backed Breez and Spark signers from `config`, sharing one
-/// Turnkey client.
+/// Turnkey client backed by `activity_store`.
 ///
 /// The Spark signer keeps every signing operation in the Turnkey enclave; the
 /// Breez signer does too, except ECIES and HMAC, which run locally against a
 /// dedicated, non-Spark key exported once here. Exporting a non-Spark key keeps
 /// every Spark key (the identity key included) in the enclave; ECIES/HMAC only
 /// need a stable key, not a Spark one.
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
-pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<ExternalSigners, SignerError> {
+async fn build_turnkey_signers(
+    config: TurnkeyConfig,
+    activity_store: Arc<dyn TurnkeyActivityStore>,
+) -> Result<ExternalSigners, SignerError> {
     let network = config.network;
     let account = account_number(&config);
     let http = create_http_client(Some("breez-sdk-spark-turnkey"));
-    let client = Arc::new(TurnkeyClient::new(&config, http).map_err(to_signer_err)?);
+    let client = Arc::new(
+        TurnkeyClient::new(&config, http)
+            .map_err(to_signer_err)?
+            .with_activity_store(activity_store),
+    );
     // Materialize the compressed identity account so ECDSA identity signing
     // (operator auth, messages) can use it as signWith; the key stays in the
     // enclave (the Spark signer adds the Spark-format account at the same path).
@@ -68,15 +115,20 @@ pub async fn create_turnkey_signer(config: TurnkeyConfig) -> Result<ExternalSign
         .export_secret_key(encryption_key_path(account), ADDRESS_FORMAT_COMPRESSED)
         .await
         .map_err(to_signer_err)?;
-    let encryption = BreezSignerImpl::new(xpriv_from_secret(encryption_key, network));
+    let encryption_xpriv = xpriv_from_secret(encryption_key, network);
+    let encryption = BreezSignerImpl::new(encryption_xpriv);
     let breez_signer: Arc<dyn ExternalBreezSigner> = Arc::new(TurnkeyBreezSigner::new(
         client.clone(),
         network,
         account,
         encryption,
     ));
-    let spark_signer: Arc<dyn ExternalSparkSigner> =
-        Arc::new(TurnkeySparkSigner::new(client, network, account));
+    let spark_signer: Arc<dyn ExternalSparkSigner> = Arc::new(TurnkeySparkSigner::new(
+        client,
+        network,
+        account,
+        encryption_xpriv,
+    ));
     Ok(ExternalSigners {
         breez_signer,
         spark_signer,

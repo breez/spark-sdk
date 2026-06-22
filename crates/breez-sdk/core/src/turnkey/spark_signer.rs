@@ -27,9 +27,9 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use bitcoin::bip32::DerivationPath;
+use bitcoin::bip32::{DerivationPath, Xpriv};
 use bitcoin::hashes::{Hash, sha256};
-use bitcoin::secp256k1::{PublicKey, SecretKey, ecdsa, schnorr};
+use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey, ecdsa, schnorr};
 use frost_secp256k1_tr::Identifier;
 use frost_secp256k1_tr::round1::{NonceCommitment, SigningCommitments};
 use frost_secp256k1_tr::round2::SignatureShare;
@@ -171,6 +171,15 @@ fn operator_package_from(
     })
 }
 
+/// Builds a well-formed (version-8) GUID from 16 bytes, so a leaf id satisfies
+/// `signing_leaf`'s UUID contract even if its structure is enforced.
+fn guid_from_bytes(seed: &[u8; 16]) -> String {
+    let mut bytes = *seed;
+    bytes[6] = (bytes[6] & 0x0f) | 0x80; // version 8
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+    uuid::Uuid::from_bytes(bytes).to_string()
+}
+
 fn new_leaf_keys_from(leaves: &[SparkLeafPublicKey]) -> Result<Vec<NewLeafKey>, SignerError> {
     leaves
         .iter()
@@ -281,10 +290,19 @@ pub(crate) struct TurnkeySparkSigner {
     // start/sign pair need not re-export. Exportable by design (the SSP co-signs
     // with them); in-memory only, never persisted.
     static_deposit_secret_keys: Mutex<HashMap<u32, SecretKey>>,
+    // The SDK-layer encryption key (exported once in the factory), used only to
+    // derive an unpredictable, deterministic leaf id per transfer leaf.
+    encryption_xpriv: Xpriv,
+    secp: Secp256k1<bitcoin::secp256k1::All>,
 }
 
 impl TurnkeySparkSigner {
-    pub(crate) fn new(client: Arc<TurnkeyClient>, network: Network, account: u32) -> Self {
+    pub(crate) fn new(
+        client: Arc<TurnkeyClient>,
+        network: Network,
+        account: u32,
+        encryption_xpriv: Xpriv,
+    ) -> Self {
         Self {
             client,
             account,
@@ -294,7 +312,27 @@ impl TurnkeySparkSigner {
             leaf_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_pubkeys: Mutex::new(HashMap::new()),
             static_deposit_secret_keys: Mutex::new(HashMap::new()),
+            encryption_xpriv,
+            secp: Secp256k1::new(),
         }
+    }
+
+    /// Deterministic GUID for a transfer leaf: derive a key at `path` under the
+    /// exported encryption key and fingerprint its private key. The key is secret
+    /// (only we hold the encryption key), so the leaf id is unpredictable to
+    /// outsiders; the derivation is deterministic, so a re-prepared transfer
+    /// reproduces the same id. Fed to `signing_leaf`, which derives the actual
+    /// signing key from it in the enclave.
+    fn leaf_id_for_path(&self, path: &str) -> Result<String, SignerError> {
+        let path = DerivationPath::from_str(path).map_err(to_spark_err)?;
+        let child = self
+            .encryption_xpriv
+            .derive_priv(&self.secp, &path)
+            .map_err(to_spark_err)?;
+        let digest = sha256::Hash::hash(&child.private_key.secret_bytes());
+        let mut seed = [0u8; 16];
+        seed.copy_from_slice(&digest.as_byte_array()[..16]);
+        Ok(guid_from_bytes(&seed))
     }
 
     fn base_path(&self) -> String {
@@ -568,11 +606,12 @@ impl ExternalSparkSigner for TurnkeySparkSigner {
             .iter()
             .map(|leaf| {
                 let node_id = leaf.node_id.to_tree_node_id().map_err(to_spark_err)?;
-                let new_leaf_id = leaf.new_leaf_id.to_tree_node_id().map_err(to_spark_err)?;
                 Ok(SparkTransferLeaf {
                     leaf_id: node_id.to_string(),
                     old_leaf_derivation: SparkKeyDerivation::signing_leaf(node_id.to_string()),
-                    new_leaf_derivation: SparkKeyDerivation::signing_leaf(new_leaf_id.to_string()),
+                    new_leaf_derivation: SparkKeyDerivation::signing_leaf(
+                        self.leaf_id_for_path(&leaf.new_signing_key_path)?,
+                    ),
                     refund_signature: None,
                     direct_refund_signature: None,
                     direct_from_cpfp_refund_signature: None,

@@ -202,7 +202,7 @@ impl ExternalSparkSigner for DefaultExternalSparkSigner {
                 .map(|l| {
                     Ok(TransferLeafInput {
                         node: node_with_id(l.node_id.to_tree_node_id().map_err(err)?),
-                        new_leaf_id: l.new_leaf_id.to_tree_node_id().map_err(err)?,
+                        new_signing_key_path: l.new_signing_key_path.parse().map_err(err)?,
                     })
                 })
                 .collect::<Result<Vec<_>, SignerError>>()?,
