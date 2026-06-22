@@ -648,6 +648,15 @@ pub trait TreeStore: Send + Sync {
         new_leaves: Option<&[TreeNode]>,
     ) -> Result<(), TreeServiceError>;
 
+    /// Reserves the exact leaves named by `leaf_ids`, failing if any is not
+    /// currently available. Unlike [`try_reserve_leaves`](Self::try_reserve_leaves)
+    /// (which selects by amount), this reserves a specific, caller-chosen set.
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+
     /// Attempts to reserve leaves. Returns `ReserveResult` indicating:
     /// - `Success`: reservation completed
     /// - `InsufficientFunds`: not enough even with pending
@@ -887,6 +896,14 @@ pub trait TreeService: Send + Sync {
         target_amounts: Option<&TargetAmounts>,
         purpose: ReservationPurpose,
         options: SelectLeavesOptions,
+    ) -> Result<LeavesReservation, TreeServiceError>;
+
+    /// Reserves the exact leaves named by `leaf_ids`, failing if any is no longer
+    /// available. Used to re-reserve the leaves pinned by a prepared send before
+    /// completing it, so the completed transfer uses exactly those leaves.
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
     ) -> Result<LeavesReservation, TreeServiceError>;
 
     /// Cancels a leaf reservation and returns the reserved leaves to the available pool.

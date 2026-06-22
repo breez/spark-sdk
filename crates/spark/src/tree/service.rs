@@ -92,6 +92,15 @@ impl TreeService for SynchronousTreeService {
     /// Uses notification-based waiting: if balance is insufficient but pending
     /// balance from in-flight swaps would help, waits for balance changes
     /// instead of failing immediately (unless `options.max_wait_for_pending` is `Duration::ZERO`).
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        self.state
+            .reserve_leaves_by_ids(leaf_ids, ReservationPurpose::Payment)
+            .await
+    }
+
     async fn select_leaves(
         &self,
         target_amounts: Option<&TargetAmounts>,

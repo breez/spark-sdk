@@ -28,8 +28,8 @@ use spark::{
     services::{
         CoopExitFeeQuote, CoopExitParams, CoopExitService, CpfpUtxo, DepositService, ExitSpeed,
         Fee, FreezeIssuerTokenResponse, HtlcService, InvoiceDescription, LeafTxCpfpPsbts,
-        LightningReceivePayment, LightningSendPayment, LightningService, Preimage,
-        PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
+        LightningReceivePayment, LightningSendPayment, LightningService, PayLightningResult,
+        Preimage, PreimageRequestStatus, PreimageRequestWithTransfer, QueryHtlcFilter,
         QueryTokenTransactionsFilter, ServiceError, StaticDepositQuote, Swap, TimelockManager,
         TokenTransaction, Transfer, TransferId, TransferObserver, TransferService, TransferStatus,
         TransferTokenOutput, TransferType, UnilateralExitService, Utxo,
@@ -447,6 +447,31 @@ impl SparkWallet {
     }
 }
 
+/// Everything needed to resume a bolt11 payment after `prepare_lightning_send`
+/// without re-running validation or leaf selection, so `complete_lightning_send`
+/// reproduces the same transfer (hence the same signing request) it would have
+/// made in one shot.
+#[derive(Debug, Clone)]
+pub enum LightningSendContext {
+    /// The invoice embeds a Spark address and Spark routing is preferred, so the
+    /// payment is a plain Spark transfer rather than a Lightning send.
+    SparkTransfer {
+        receiver: Box<SparkAddress>,
+        amount_sat: u64,
+        transfer_id: Option<TransferId>,
+    },
+    /// Routed over Lightning. `leaf_ids` pins the exact leaves to send (re-reserved
+    /// in `complete`); `None` (the one-shot path) makes `complete` select fresh
+    /// against `total_amount_sat`.
+    Lightning {
+        invoice: String,
+        amount_to_send: Option<u64>,
+        total_amount_sat: u64,
+        transfer_id: TransferId,
+        leaf_ids: Option<Vec<TreeNodeId>>,
+    },
+}
+
 impl SparkWallet {
     pub fn get_identity_public_key(&self) -> PublicKey {
         self.identity_public_key
@@ -477,37 +502,187 @@ impl SparkWallet {
             .validate_payment(invoice, max_fee_sat, amount_to_send, prefer_spark)
             .await?;
 
-        // In case the invoice is for a spark address, we can just transfer the amount to the receiver.
-        if let Some(receiver_spark_address) = receiver_spark_address {
+        // Spark-routed invoice: send as a Spark transfer (its own retry lives in `transfer`).
+        if let Some(receiver) = receiver_spark_address {
             if !self.config.self_payment_allowed
-                && receiver_spark_address.identity_public_key == self.identity_public_key
+                && receiver.identity_public_key == self.identity_public_key
             {
                 return Err(SparkWalletError::SelfPaymentNotAllowed);
             }
+            return self
+                .complete_lightning_send(LightningSendContext::SparkTransfer {
+                    receiver: Box::new(receiver),
+                    amount_sat: total_amount_sat,
+                    transfer_id,
+                })
+                .await;
+        }
 
-            return Ok(PayLightningInvoiceResult {
-                transfer: self
-                    .transfer(total_amount_sat, &receiver_spark_address, transfer_id)
-                    .await?,
-                lightning_payment: None,
+        // Lightning route: keep the with_leafs_spent_retry dynamic by letting
+        // `complete` fresh-select each attempt (leaf_ids = None), re-selecting on a
+        // concurrent leaf-spend and backing off on transient operator errors.
+        let mut attempt = 0;
+        let mut backoff_attempt: u32 = 0;
+        loop {
+            if attempt > 0 {
+                if attempt >= MAX_LEAF_SPENT_RETRIES {
+                    break Err(SparkWalletError::Generic(format!(
+                        "Lightning payment failed after {MAX_LEAF_SPENT_RETRIES} retries due to leaf spending errors"
+                    )));
+                }
+                info!(
+                    "Lightning payment hit a leaf spending error (attempt {attempt}/{MAX_LEAF_SPENT_RETRIES}), refreshing leaves and retrying"
+                );
+                self.tree_service.refresh_leaves().await?;
+            }
+            let context = LightningSendContext::Lightning {
+                invoice: invoice.to_string(),
+                amount_to_send,
+                total_amount_sat,
+                transfer_id: transfer_id.clone().unwrap_or_else(TransferId::generate),
+                leaf_ids: None,
+            };
+            match self.complete_lightning_send(context).await {
+                Ok(result) => break Ok(result),
+                Err(SparkWalletError::ServiceError(ServiceError::ServiceConnectionError(e)))
+                    if is_backoff_retryable_error(&e) =>
+                {
+                    backoff_attempt += 1;
+                    if backoff_attempt > MAX_BACKOFF_RETRIES {
+                        break Err(ServiceError::ServiceConnectionError(e).into());
+                    }
+                    let delay_ms = (BACKOFF_BASE_DELAY_MS * 2u64.pow(backoff_attempt - 1))
+                        .min(BACKOFF_MAX_DELAY_MS);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                }
+                Err(SparkWalletError::ServiceError(ServiceError::ServiceConnectionError(e)))
+                    if is_leafs_spent_error(&e) =>
+                {
+                    warn!("Lightning payment got leaf spending error: {e:?}");
+                    attempt += 1;
+                }
+                Err(e) => break Err(e),
+            }
+        }
+    }
+
+    /// Selects (and, if needed, swaps) leaves for a Lightning send and pins them,
+    /// returning a [`LightningSendContext`] that `complete_lightning_send` resumes
+    /// from. Runs everything up to the transfer signing, so the caller can gate the
+    /// actual send out of band. A Spark-routed invoice is captured as a
+    /// [`LightningSendContext::SparkTransfer`] instead.
+    pub async fn prepare_lightning_send(
+        &self,
+        invoice: &str,
+        amount_to_send: Option<u64>,
+        max_fee_sat: Option<u64>,
+        prefer_spark: bool,
+        transfer_id: Option<TransferId>,
+    ) -> Result<LightningSendContext, SparkWalletError> {
+        let (total_amount_sat, receiver_spark_address) = self
+            .lightning_service
+            .validate_payment(invoice, max_fee_sat, amount_to_send, prefer_spark)
+            .await?;
+
+        // The invoice embeds a Spark address and Spark routing is preferred: pay it
+        // as a Spark transfer rather than over Lightning.
+        if let Some(receiver) = receiver_spark_address {
+            if !self.config.self_payment_allowed
+                && receiver.identity_public_key == self.identity_public_key
+            {
+                return Err(SparkWalletError::SelfPaymentNotAllowed);
+            }
+            return Ok(LightningSendContext::SparkTransfer {
+                receiver: Box::new(receiver),
+                amount_sat: total_amount_sat,
+                transfer_id,
             });
         }
 
+        let transfer_id = transfer_id.unwrap_or_else(TransferId::generate);
         let target_amounts = TargetAmounts::new_amount_and_fee(total_amount_sat, None);
+        let reservation = self.select_leaves_with_retry(Some(&target_amounts)).await?;
+        let leaf_ids = reservation.leaves.iter().map(|l| l.id.clone()).collect();
+        // Release the reservation: the gated flow does not hold leaves across the
+        // prepare/complete boundary; `complete` re-reserves these exact ids.
+        self.tree_service.cancel_reservation(reservation).await?;
 
-        // Start the lightning swap with the operator, with retry logic for concurrent leaf spending
-        let lightning_payment = with_leafs_spent_retry!(
-            self,
-            Some(&target_amounts),
-            "Lightning payment",
-            |leaves_reservation| self.lightning_service.pay_lightning_invoice(
+        Ok(LightningSendContext::Lightning {
+            invoice: invoice.to_string(),
+            amount_to_send,
+            total_amount_sat,
+            transfer_id,
+            leaf_ids: Some(leaf_ids),
+        })
+    }
+
+    /// Completes a bolt11 payment from a [`LightningSendContext`] produced by
+    /// [`prepare_lightning_send`](Self::prepare_lightning_send). A Spark-routed
+    /// context is sent as a transfer; a Lightning context re-hydrates the pinned
+    /// leaves by id (preserving order, so the transfer reproduces exactly) and runs
+    /// the send, failing if a pinned leaf is no longer available.
+    pub async fn complete_lightning_send(
+        &self,
+        context: LightningSendContext,
+    ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
+        let (invoice, amount_to_send, total_amount_sat, transfer_id, leaf_ids) = match context {
+            LightningSendContext::SparkTransfer {
+                receiver,
+                amount_sat,
+                transfer_id,
+            } => {
+                return Ok(PayLightningInvoiceResult {
+                    transfer: self.transfer(amount_sat, &receiver, transfer_id).await?,
+                    lightning_payment: None,
+                });
+            }
+            LightningSendContext::Lightning {
                 invoice,
                 amount_to_send,
-                &leaves_reservation.leaves,
-                transfer_id.clone(),
-            )
-        )?;
+                total_amount_sat,
+                transfer_id,
+                leaf_ids,
+            } => (
+                invoice,
+                amount_to_send,
+                total_amount_sat,
+                transfer_id,
+                leaf_ids,
+            ),
+        };
 
+        // Reserve the exact pinned leaves (gated path, hard-fails if one was spent),
+        // or select fresh (one-shot path).
+        let reservation = match leaf_ids {
+            Some(leaf_ids) => self.tree_service.reserve_leaves_by_ids(&leaf_ids).await?,
+            None => {
+                let target_amounts = TargetAmounts::new_amount_and_fee(total_amount_sat, None);
+                self.select_leaves_with_retry(Some(&target_amounts)).await?
+            }
+        };
+
+        // Run the send with the leaves reserved, finalizing (or releasing) the
+        // reservation when it completes, exactly as the one-shot path did.
+        let result = with_reserved_leaves(
+            self.tree_service.as_ref(),
+            self.lightning_service.pay_lightning_invoice(
+                &invoice,
+                amount_to_send,
+                &reservation.leaves,
+                Some(transfer_id),
+            ),
+            &reservation,
+        )
+        .await;
+        self.build_pay_lightning_result(result?).await
+    }
+
+    /// Builds the [`PayLightningInvoiceResult`] from a lightning send result,
+    /// shared by the one-shot and prepare/complete paths.
+    async fn build_pay_lightning_result(
+        &self,
+        lightning_payment: PayLightningResult,
+    ) -> Result<PayLightningInvoiceResult, SparkWalletError> {
         // Collect the wallet transfer information from the lightning send payment result. If
         // not present, we need to query for the SSP user request to get the transfer details.
         let payment_hash = lightning_payment.payment_hash;

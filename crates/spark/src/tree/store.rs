@@ -97,6 +97,12 @@ enum StoreCommand {
         permit: OwnedSemaphorePermit,
         response_tx: oneshot::Sender<Result<ReserveResult, TreeServiceError>>,
     },
+    ReserveSpecificLeaves {
+        leaf_ids: Vec<TreeNodeId>,
+        purpose: ReservationPurpose,
+        permit: OwnedSemaphorePermit,
+        response_tx: oneshot::Sender<Result<LeavesReservation, TreeServiceError>>,
+    },
     CancelReservation {
         id: LeavesReservationId,
         leaves_to_keep: Vec<TreeNode>,
@@ -234,6 +240,17 @@ impl InMemoryTreeStore {
                         exact_only,
                         purpose,
                         permit,
+                    );
+                    let _ = response_tx.send(result);
+                }
+                StoreCommand::ReserveSpecificLeaves {
+                    leaf_ids,
+                    purpose,
+                    permit,
+                    response_tx,
+                } => {
+                    let result = Self::process_reserve_specific_leaves(
+                        &mut state, &leaf_ids, purpose, permit,
                     );
                     let _ = response_tx.send(result);
                 }
@@ -741,6 +758,26 @@ impl InMemoryTreeStore {
         ))
     }
 
+    /// Reserves the exact leaves named by `leaf_ids`, failing if any is no longer
+    /// in the available pool. Atomic within the store processor.
+    fn process_reserve_specific_leaves(
+        state: &mut LeavesState,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let mut nodes = Vec::with_capacity(leaf_ids.len());
+        for id in leaf_ids {
+            let stored = state
+                .leaves
+                .get(id)
+                .ok_or(TreeServiceError::NonReservableLeaves)?;
+            nodes.push(stored.node.clone());
+        }
+        let id = Self::reserve_internal(state, &nodes, purpose, permit, 0)?;
+        Ok(LeavesReservation::new(nodes, id))
+    }
+
     /// Internal helper to reserve leaves (moves them from main pool to reservations).
     /// The permit is stored in the reservation entry and released when the entry is dropped.
     fn reserve_internal(
@@ -896,6 +933,32 @@ impl TreeStore for InMemoryTreeStore {
         self.send_command(|tx| StoreCommand::TryReserveLeaves {
             target_amounts,
             exact_only,
+            purpose,
+            permit,
+            response_tx: tx,
+        })
+        .await
+    }
+
+    async fn reserve_leaves_by_ids(
+        &self,
+        leaf_ids: &[TreeNodeId],
+        purpose: ReservationPurpose,
+    ) -> Result<LeavesReservation, TreeServiceError> {
+        let permit = platform_utils::tokio::time::timeout(
+            self.reservation_timeout,
+            self.reservation_semaphore.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| TreeServiceError::ResourceBusy {
+            max_concurrent: self.max_concurrent_reservations,
+            timeout: self.reservation_timeout,
+        })?
+        .map_err(|_| TreeServiceError::ProcessorShutdown)?;
+
+        let leaf_ids = leaf_ids.to_vec();
+        self.send_command(|tx| StoreCommand::ReserveSpecificLeaves {
+            leaf_ids,
             purpose,
             permit,
             response_tx: tx,
