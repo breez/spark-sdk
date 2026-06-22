@@ -76,8 +76,7 @@ func configureCrossChain() {
     var config = defaultConfig(network: Network.mainnet)
     config.apiKey = "<breez api key>"
 
-    // Override the default slippage tolerance (basis points; 10 to 500).
-    // Set crossChainConfig to nil to disable the feature.
+    // Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
     config.crossChainConfig = CrossChainConfig(
         defaultSlippageBps: 50,
         defaultTargetOverpayBps: nil

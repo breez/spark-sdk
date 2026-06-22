@@ -149,7 +149,10 @@ The SDK can convert Bitcoin to a stable token on receive and vice versa on send,
 
 {{#tabs config:stable-balance-config}}
 
-## Cross-chain payments
+<h2 id="send-usdc-usdt">
+    <a class="header" href="#send-usdc-usdt">Send USDC/USDT</a>
+    <a class="tag" target="_blank" href="https://breez.github.io/spark-sdk/breez_sdk_spark/struct.CrossChainConfig.html">API docs</a>
+</h2>
 
 USDC/USDT sends require explicit opt-in: {{#name default_config}} leaves {{#name cross_chain_config}} unset. Set it to a default {{#name CrossChainConfig}} to enable the feature, or to your own to override the slippage default. The SDK only returns routes whose destination is USDC or USDT on a supported chain.
 

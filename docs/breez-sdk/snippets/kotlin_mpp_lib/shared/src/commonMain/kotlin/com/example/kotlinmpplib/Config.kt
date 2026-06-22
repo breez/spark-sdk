@@ -122,8 +122,7 @@ class Config {
         val config = defaultConfig(Network.MAINNET)
         config.apiKey = "<breez api key>"
 
-        // Override the default slippage tolerance (basis points; 10 to 500).
-        // Set crossChainConfig to null to disable the feature.
+        // Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
         config.crossChainConfig = CrossChainConfig(
             defaultSlippageBps = 50u,
             defaultTargetOverpayBps = null,

@@ -116,8 +116,7 @@ const exampleConfigureCrossChain = async () => {
   const config = defaultConfig('mainnet')
   config.apiKey = '<breez api key>'
 
-  // Override the default slippage tolerance (basis points; 10 to 500).
-  // Set crossChainConfig to undefined to disable the feature.
+  // Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
   config.crossChainConfig = { defaultSlippageBps: 50 }
   // ANCHOR_END: cross-chain-config
   console.debug('Config:', config)

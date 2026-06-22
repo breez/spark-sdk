@@ -82,6 +82,7 @@ func SendPaymentCrossChain(
 	prepareResponse breez_sdk_spark.PrepareSendPaymentResponse,
 ) (*breez_sdk_spark.SendPaymentResponse, error) {
 	// ANCHOR: cross-chain-send
+	// Only valid for sends with no token leg (see Retry safety).
 	optionalIdempotencyKey := "<idempotency key uuid>"
 	request := breez_sdk_spark.SendPaymentRequest{
 		PrepareResponse: prepareResponse,

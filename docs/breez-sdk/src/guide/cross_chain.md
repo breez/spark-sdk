@@ -2,7 +2,7 @@
 
 The SDK can send USDC or USDT from a Spark wallet to a recipient on any of several supported chains: Ethereum-family chains (Arbitrum, Base, and similar EVM networks), Solana, and Tron. The source on the Spark side is either BTC sats or USDB. The SDK orchestrates two legs — a Spark-side transfer to a provider-controlled deposit and the provider-driven delivery of the destination asset — and reconciles both onto a single {{#name Payment}} row.
 
-The send flow itself lives in the [Sending payments](./send_payment.md#send-usdc-usdt) page. This page covers how it works under the hood: the providers, the lifecycle, retry semantics, and limitations.
+The send flow itself lives in the [Sending payments](./send_payment.md#usdc-usdt) page. This page covers how it works under the hood: the providers, the lifecycle, retry semantics, and limitations.
 
 ## Supported address formats
 
@@ -63,7 +63,7 @@ Cross-chain slippage protects the recipient from price movement between quote an
 Resolution at prepare time:
 
 1. The per-request {{#name max_slippage_bps}} on {{#enum PaymentRequest::CrossChain}} wins if set.
-2. Otherwise, the SDK falls back to {{#name default_slippage_bps}} on {{#name CrossChainConfig}} from [the SDK configuration](./config.md#cross-chain-payments).
+2. Otherwise, the SDK falls back to {{#name default_slippage_bps}} on {{#name CrossChainConfig}} from [the SDK configuration](./config.md#send-usdc-usdt).
 3. Otherwise, the built-in default of 100 bps (1%) is used.
 
 Values outside 10 to 500 are rejected at both config validation and per-request validation.
@@ -94,28 +94,33 @@ A background monitor runs while the SDK is active and reconciles {{#enum Convers
 
 <h2 id="retry-safety">Retry safety</h2>
 
-Calling {{#name send_payment}} is safe to retry on transient errors, **with one caveat that depends on the source asset.**
+Calling {{#name send_payment}} is safe to retry on transient errors **only when the send has no token-transfer leg.** Whether the source asset displayed on the route is BTC or USDB is not the determinant — what matters is the actual first leg the SDK executes.
 
-### BTC-source sends
+### Sends with no token leg
 
-For sends where the source is BTC sats (Boltz reverse swap, or Orchestra with BTC source), the SDK threads a deterministic transfer id through to the underlying Spark transfer. Retrying with the same {{#name PrepareSendPaymentResponse}} produces the same transfer id, and the Spark protocol returns the original transfer instead of firing a new one — no double-deposit.
+When the first leg is a Spark sats transfer (Orchestra with BTC source, or Boltz funded directly from the sats balance), the SDK threads a deterministic transfer id through to the underlying Spark transfer. Retrying with the same {{#name PrepareSendPaymentResponse}} produces the same transfer id, and the Spark protocol returns the original transfer instead of firing a new one — no double-deposit.
 
 Two ways to drive idempotency:
 
 1. **Pass a caller-supplied {{#name idempotency_key}}** on {{#name SendPaymentRequest}}. The top-level dispatcher first looks for an existing payment with that id and short-circuits the retry if found; otherwise the key is used as the Spark transfer id.
 2. **Omit {{#name idempotency_key}}** — the SDK derives a deterministic UUIDv5 from the provider's quote/swap id. Re-sending the same prepared shape produces the same id and dedupes at the Spark protocol layer even if the first attempt's persistence step never completed.
 
-### USDB-source sends
+### Sends with a token leg
 
-For sends where the source is USDB (Orchestra), the underlying token transfer does not accept an idempotency token at the Spark protocol layer. There is no upstream dedup. Callers that retry on transient errors can fire a second deposit and overpay.
+When the first leg is a token transfer at the Spark protocol layer, there is no upstream idempotency hook. The dispatcher rejects a caller-supplied {{#name idempotency_key}} with {{#enum SdkError::InvalidInput}}, and a retry can fire a second token transfer and overpay.
+
+This arises in two ways for a cross-chain send:
+
+- **Direct token send** — USDB source on Orchestra. The first leg is a USDB transfer to the provider deposit address.
+- **Token conversion** — USDB balance routed through a sats-only provider (e.g. Boltz). The SDK auto-converts USDB → BTC via the [stable-balance](./stable_balance.md) flow before the provider leg; that conversion is itself a token transfer.
 
 This matches the existing contract for direct token sends.
 
-If you need at-most-once semantics for a USDB-source cross-chain send, debounce retries at the application layer until the SDK either returns a payment or a terminal error.
+If you need at-most-once semantics in either of these cases, debounce retries at the application layer until the SDK either returns a payment or a terminal error.
 
 ## Limitations
 
 - **Mainnet only.** Cross-chain providers operate against live external networks; there is no testnet equivalent in the SDK today.
 - **Background tasks required.** Both providers depend on background monitors to reconcile delivery status. {{#name cross_chain_config}} is incompatible with {{#name background_tasks_enabled}} disabled.
-- **USDB-source retries have no idempotency guarantee.** See [Retry safety](#retry-safety) above.
+- **Token-leg sends have no idempotency guarantee.** Applies to a direct USDB send and to any USDB-funded send that auto-converts through bitcoin. See [Retry safety](#retry-safety) above.
 

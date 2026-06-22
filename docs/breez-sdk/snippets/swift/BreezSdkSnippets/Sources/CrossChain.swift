@@ -56,6 +56,7 @@ func prepareSendPaymentCrossChain(
 func sendPaymentCrossChain(sdk: BreezSdk, prepareResponse: PrepareSendPaymentResponse) async throws
 {
     // ANCHOR: cross-chain-send
+    // Only valid for sends with no token leg (see Retry safety).
     let optionalIdempotencyKey = "<idempotency key uuid>"
     let sendResponse = try await sdk.sendPayment(
         request: SendPaymentRequest(

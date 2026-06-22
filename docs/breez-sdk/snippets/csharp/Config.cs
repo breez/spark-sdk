@@ -137,8 +137,7 @@ namespace BreezSdkSnippets
         void ConfigureCrossChain()
         {
             // ANCHOR: cross-chain-config
-            // Override the default slippage tolerance (basis points; 10 to 500).
-            // Set crossChainConfig to null to disable the feature.
+            // Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
             var config = BreezSdkSparkMethods.DefaultConfig(Network.Mainnet) with
             {
                 apiKey = "<breez api key>",

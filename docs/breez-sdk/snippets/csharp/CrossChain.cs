@@ -61,6 +61,7 @@ namespace BreezSdkSnippets
         async Task SendPaymentCrossChain(BreezSdk sdk, PrepareSendPaymentResponse prepareResponse)
         {
             // ANCHOR: cross-chain-send
+            // Only valid for sends with no token leg (see Retry safety).
             var optionalIdempotencyKey = "<idempotency key uuid>";
             var request = new SendPaymentRequest(
                 prepareResponse: prepareResponse,

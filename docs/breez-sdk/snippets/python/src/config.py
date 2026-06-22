@@ -133,8 +133,7 @@ async def configure_cross_chain():
     config = default_config(network=Network.MAINNET)
     config.api_key = "<breez api key>"
 
-    # Override the default slippage tolerance (basis points; 10 to 500).
-    # Set cross_chain_config to None to disable the feature.
+    # Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
     config.cross_chain_config = CrossChainConfig(
         default_slippage_bps=50,
         default_target_overpay_bps=None,

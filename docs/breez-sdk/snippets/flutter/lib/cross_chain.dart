@@ -59,6 +59,7 @@ Future<SendPaymentResponse> sendPaymentCrossChain(
   PrepareSendPaymentResponse prepareResponse,
 ) async {
   // ANCHOR: cross-chain-send
+  // Only valid for sends with no token leg (see Retry safety).
   String? optionalIdempotencyKey = "<idempotency key uuid>";
   final request = SendPaymentRequest(
     prepareResponse: prepareResponse,

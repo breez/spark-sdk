@@ -78,6 +78,7 @@ async def send_payment_cross_chain(
     prepare_response: PrepareSendPaymentResponse,
 ):
     # ANCHOR: cross-chain-send
+    # Only valid for sends with no token leg (see Retry safety).
     optional_idempotency_key = "<idempotency key uuid>"
     try:
         request = SendPaymentRequest(

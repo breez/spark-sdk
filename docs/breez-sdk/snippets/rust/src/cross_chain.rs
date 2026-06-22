@@ -71,6 +71,7 @@ async fn send_payment_cross_chain(
     prepare_response: PrepareSendPaymentResponse,
 ) -> Result<()> {
     // ANCHOR: cross-chain-send
+    // Only valid for sends with no token leg (see Retry safety).
     let optional_idempotency_key = Some("<idempotency key uuid>".to_string());
     let send_response = sdk
         .send_payment(SendPaymentRequest {

@@ -61,6 +61,7 @@ const exampleSendPaymentCrossChain = async (
   prepareResponse: PrepareSendPaymentResponse
 ) => {
   // ANCHOR: cross-chain-send
+  // Only valid for sends with no token leg (see Retry safety).
   const optionalIdempotencyKey = '<idempotency key uuid>'
   const sendResponse = await sdk.sendPayment({
     prepareResponse,

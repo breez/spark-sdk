@@ -74,6 +74,7 @@ class CrossChain {
         prepareResponse: PrepareSendPaymentResponse,
     ) {
         // ANCHOR: cross-chain-send
+        // Only valid for sends with no token leg (see Retry safety).
         val optionalIdempotencyKey = "<idempotency key uuid>"
         try {
             val req = SendPaymentRequest(

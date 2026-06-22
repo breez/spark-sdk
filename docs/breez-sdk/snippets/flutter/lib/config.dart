@@ -117,8 +117,7 @@ void configureBackgroundTasks() {
 
 void configureCrossChain() {
   // ANCHOR: cross-chain-config
-  // Override the default slippage tolerance (basis points; 10 to 500).
-  // Set crossChainConfig to null to disable the feature.
+  // Set to enable cross-chain payments. Slippage override is optional (10 to 500 bps).
   final config = defaultConfig(network: Network.mainnet).copyWith(
     apiKey: "<breez api key>",
     crossChainConfig: const CrossChainConfig(
