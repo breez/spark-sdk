@@ -345,6 +345,13 @@ impl TurnkeyClient {
             parameters,
         };
         let activity = self.process_activity(path, &envelope, on_conflict).await?;
+        // The content key and resulting activity id let a re-submission be
+        // matched against its first submission: identical key + identical id
+        // means Turnkey folded the resubmit into the same (deduplicated) activity.
+        tracing::info!(
+            "Turnkey activity submitted: type={activity_type} key={key} id={}",
+            activity.id
+        );
         let value = activity.result.get(result_field).ok_or_else(|| {
             TurnkeyError::UnexpectedResponse(format!("missing {result_field} in activity result"))
         })?;

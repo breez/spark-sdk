@@ -2,9 +2,13 @@
 //! construction. Compiled only with the `turnkey` feature (gated at the module
 //! declaration in `lib.rs`), so everything here can assume the backend exists.
 
+use std::sync::Arc;
+
 use anyhow::Result;
+use breez_sdk_spark::signer::ExternalSparkSigner;
 use breez_sdk_spark::turnkey::{TurnkeyConfig, TurnkeyWalletManager};
-use breez_sdk_spark::{Config, GetInfoRequest, Network, SdkBuilder};
+use breez_sdk_spark::{Config, GetInfoRequest, Network, SdkBuilder, default_config};
+use rstest::fixture;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -168,12 +172,30 @@ pub async fn build_sdk_with_turnkey(
     storage_dir: String,
     temp_dir: Option<TempDir>,
 ) -> Result<SdkInstance> {
+    let (sdk, _spark_signer) =
+        build_sdk_with_turnkey_returning_signer(config, storage_dir, temp_dir).await?;
+    Ok(sdk)
+}
+
+/// Like [`build_sdk_with_turnkey`], but also returns the Turnkey Spark signer
+/// the SDK was built with, so a test can call `prepare_transfer` on it directly.
+/// It is the same `Arc` the SDK uses, so manual calls and the SDK's own calls
+/// share one Turnkey activity-timestamp store (key to reproducing an activity).
+pub async fn build_sdk_with_turnkey_returning_signer(
+    config: Config,
+    storage_dir: String,
+    temp_dir: Option<TempDir>,
+) -> Result<(
+    SdkInstance,
+    std::sync::Arc<dyn breez_sdk_spark::signer::ExternalSparkSigner>,
+)> {
     let (turnkey_config, guard) = provision_turnkey_wallet().await?;
     let turnkey_guard = Some(guard);
 
     let signers = breez_sdk_spark::turnkey::create_turnkey_signer(turnkey_config)
         .await
         .map_err(|e| anyhow::anyhow!("create_turnkey_signer failed: {e}"))?;
+    let spark_signer = signers.spark_signer.clone();
 
     let builder = SdkBuilder::new_with_signer(config, signers.breez_signer, signers.spark_signer);
     let builder = apply_storage(builder, storage_dir).await?;
@@ -189,13 +211,34 @@ pub async fn build_sdk_with_turnkey(
         })
         .await?;
 
-    Ok(SdkInstance {
-        sdk,
-        events: rx,
-        span: tracing::Span::current(),
-        temp_dir,
-        data_sync_fixture: None,
-        lnurl_fixture: None,
-        turnkey_guard,
-    })
+    Ok((
+        SdkInstance {
+            sdk,
+            events: rx,
+            span: tracing::Span::current(),
+            temp_dir,
+            data_sync_fixture: None,
+            lnurl_fixture: None,
+            turnkey_guard,
+        },
+        spark_signer,
+    ))
+}
+
+/// Fixture: a Turnkey-backed Alice routed over Lightning (so a bolt11 prepare
+/// yields a transfer context), returned alongside the Spark signer the SDK uses
+/// so a test can submit `prepare_transfer` activities on it directly.
+#[fixture]
+pub async fn alice_turnkey_lightning_sdk() -> Result<(SdkInstance, Arc<dyn ExternalSparkSigner>)> {
+    let alice_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-turnkey")
+        .tempdir()?;
+    let path = alice_dir.path().to_string_lossy().to_string();
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = false;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+    build_sdk_with_turnkey_returning_signer(config, path, Some(alice_dir)).await
 }
