@@ -383,6 +383,7 @@ pub struct _PrepareSendPaymentRequest {
     pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
     pub fee_policy: Option<FeePolicy>,
+    pub include_transfer_context: Option<bool>,
 }
 
 #[frb(mirror(PrepareSendPaymentResponse))]
@@ -392,6 +393,16 @@ pub struct _PrepareSendPaymentResponse {
     pub token_identifier: Option<String>,
     pub conversion_estimate: Option<ConversionEstimate>,
     pub fee_policy: FeePolicy,
+    pub transfer_context: Option<TransferContext>,
+}
+
+#[frb(mirror(TransferContext))]
+pub struct _TransferContext {
+    pub invoice: String,
+    pub amount_to_send_sats: Option<u64>,
+    pub total_amount_sats: u64,
+    pub transfer_id: String,
+    pub leaf_ids: Vec<String>,
 }
 
 #[frb(mirror(ReceivePaymentMethod))]
@@ -503,6 +514,7 @@ pub struct _SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     pub options: Option<SendPaymentOptions>,
     pub idempotency_key: Option<String>,
+    pub transfer_context: Option<TransferContext>,
 }
 
 #[frb(mirror(SendPaymentResponse))]

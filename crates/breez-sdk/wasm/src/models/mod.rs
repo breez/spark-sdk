@@ -887,6 +887,7 @@ pub struct PrepareSendPaymentRequest {
     pub token_identifier: Option<String>,
     pub conversion_options: Option<ConversionOptions>,
     pub fee_policy: Option<FeePolicy>,
+    pub include_transfer_context: Option<bool>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::PrepareSendPaymentResponse)]
@@ -896,6 +897,16 @@ pub struct PrepareSendPaymentResponse {
     pub token_identifier: Option<String>,
     pub conversion_estimate: Option<ConversionEstimate>,
     pub fee_policy: FeePolicy,
+    pub transfer_context: Option<TransferContext>,
+}
+
+#[macros::extern_wasm_bindgen(breez_sdk_spark::TransferContext)]
+pub struct TransferContext {
+    pub invoice: String,
+    pub amount_to_send_sats: Option<u64>,
+    pub total_amount_sats: u64,
+    pub transfer_id: String,
+    pub leaf_ids: Vec<String>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::OnchainConfirmationSpeed)]
@@ -930,6 +941,7 @@ pub struct SendPaymentRequest {
     pub prepare_response: PrepareSendPaymentResponse,
     pub options: Option<SendPaymentOptions>,
     pub idempotency_key: Option<String>,
+    pub transfer_context: Option<TransferContext>,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::SendPaymentResponse)]
