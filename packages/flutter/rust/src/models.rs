@@ -1424,6 +1424,7 @@ pub struct _BuyBitcoinResponse {
 pub struct _RefundPendingConversionsResponse {
     pub refunded: u32,
     pub skipped: u32,
+    pub failed: u32,
 }
 
 #[frb(mirror(ServiceStatus))]

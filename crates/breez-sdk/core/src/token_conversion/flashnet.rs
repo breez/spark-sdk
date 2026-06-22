@@ -47,18 +47,27 @@ const RECONCILE_MIN_AGE_SECS: u64 = 300;
 /// overflow.
 const RECONCILE_LISTING_LIMIT: u32 = 100;
 
-/// Missing/unparseable timestamps fall back to old-enough/recent respectively.
+/// Returns true when the transfer is older than `cutoff_secs`, i.e. eligible
+/// for clawback. Backend emits RFC 3339; missing or unparseable timestamps
+/// fall back to eligible so reconcile trusts Flashnet's clawback-eligibility
+/// verdict instead of silently no-op'ing on an unexpected format. The
+/// unparseable branch logs at `warn` so operators see format drift.
 fn transfer_is_older_than(transfer: &ClawbackTransfer, cutoff_secs: u64) -> bool {
     let Some(created_at) = transfer.created_at.as_deref() else {
         return true;
     };
-    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(created_at) else {
-        return false;
-    };
-    let Ok(secs) = u64::try_from(parsed.timestamp()) else {
-        return false;
-    };
-    secs < cutoff_secs
+    if let Some(secs) = chrono::DateTime::parse_from_rfc3339(created_at)
+        .ok()
+        .and_then(|dt| u64::try_from(dt.timestamp()).ok())
+    {
+        secs < cutoff_secs
+    } else {
+        warn!(
+            "Reconcile: unparseable created_at {created_at:?} on clawback transfer {}; treating as eligible",
+            transfer.id
+        );
+        true
+    }
 }
 
 /// Flashnet-based implementation of the `TokenConverter` trait.
@@ -144,13 +153,13 @@ impl FlashnetTokenConverter {
         for payment in payments {
             match self.refund_payment(&payment).await {
                 Ok(true) => report.refunded = report.refunded.saturating_add(1),
-                Ok(false) => report.skipped = report.skipped.saturating_add(1),
+                Ok(false) => report.failed = report.failed.saturating_add(1),
                 Err(e) => {
                     error!(
                         "Failed to refund conversion for payment {}: {e:?}",
                         payment.id
                     );
-                    report.skipped = report.skipped.saturating_add(1);
+                    report.failed = report.failed.saturating_add(1);
                 }
             }
         }
@@ -220,7 +229,6 @@ impl FlashnetTokenConverter {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs())
             .saturating_sub(RECONCILE_MIN_AGE_SECS);
-        // Skip breakdown kept internal; public response collapses to one count.
         let mut res = RefundPendingConversionsResponse::default();
         for transfer in clawback_transfers.transfers {
             if !transfer_is_older_than(&transfer, cutoff_secs) {
@@ -233,28 +241,30 @@ impl FlashnetTokenConverter {
                 .await
             {
                 Ok(true) => res.refunded = res.refunded.saturating_add(1),
-                _ => res.skipped = res.skipped.saturating_add(1),
+                Ok(false) | Err(_) => res.failed = res.failed.saturating_add(1),
             }
         }
-        if res.refunded > 0 || res.skipped > 0 {
+        if res.refunded > 0 || res.skipped > 0 || res.failed > 0 {
             info!(
-                "Reconcile pass complete: refunded={}, skipped={}",
-                res.refunded, res.skipped
+                "Reconcile pass complete: refunded={}, skipped={}, failed={}",
+                res.refunded, res.skipped, res.failed
             );
         }
         Ok(res)
     }
 
-    /// Claws back one transfer and writes `Refunded` metadata. `Ok(false)`
-    /// also writes metadata so a prior write-failure can recover. Pass
-    /// `payment_id` when known to skip the operator resolution.
+    /// Claws back one transfer. `Ok(true)` = Flashnet accepted and the
+    /// local `Refunded` metadata write was attempted (the write itself
+    /// propagates as `Err` on failure; resolution misses are silent).
+    /// `Ok(false)` = Flashnet rejected, local state untouched so the next
+    /// pass retries. Pass `payment_id` when known to skip resolution.
     async fn clawback_and_record_refunded(
         &self,
         clawback_id: &str,
         pool_id: PublicKey,
         payment_id: Option<String>,
     ) -> Result<bool, ConversionError> {
-        let outcome = match self
+        match self
             .flashnet_client
             .clawback(ClawbackRequest {
                 pool_id,
@@ -267,41 +277,30 @@ impl FlashnetTokenConverter {
                     "Clawback accepted for {clawback_id}: tracking_id={}",
                     r.spark_status_tracking_id
                 );
-                true
             }
             Ok(r) => {
                 warn!("Clawback for {clawback_id} not accepted: {:?}", r.error);
-                false
+                return Ok(false);
             }
             Err(e) => {
                 error!("Clawback for {clawback_id} failed: {e}");
                 return Err(e.into());
             }
-        };
+        }
 
         // Preserve the prior ConversionInfo::Amm fields when we can read it;
         // fall back to a placeholder when storage has nothing (reconcile path
         // recovering a row whose original metadata write never landed).
-        let prev_amm =
-            self.storage
-                .get_payment_by_id(
-                    payment_id
-                        .clone()
-                        .unwrap_or_else(|| clawback_id.to_string()),
-                )
-                .await
-                .ok()
-                .and_then(|p| match p.details {
-                    Some(
-                        PaymentDetails::Spark {
-                            conversion_info, ..
-                        }
-                        | PaymentDetails::Token {
-                            conversion_info, ..
-                        },
-                    ) => conversion_info,
-                    _ => None,
-                });
+        let prev_amm = self
+            .storage
+            .get_payment_by_id(
+                payment_id
+                    .clone()
+                    .unwrap_or_else(|| clawback_id.to_string()),
+            )
+            .await
+            .ok()
+            .and_then(|p| crate::utils::conversions::extract_conversion_info(p.details));
         let conversion_info = match prev_amm {
             Some(ConversionInfo::Amm {
                 pool_id: prev_pool_id,
@@ -359,7 +358,7 @@ impl FlashnetTokenConverter {
                 .map_err(ConversionError::Sdk)?;
             }
         }
-        Ok(outcome)
+        Ok(true)
     }
 
     /// Gets the best conversion pool for the given conversion options and amount.
@@ -495,7 +494,7 @@ impl FlashnetTokenConverter {
     ///
     /// Arguments:
     /// * `pool_id` - The pool id used for the conversion.
-    /// * `outbound_payment_id` - Pre-derived storage `payment_id` for the sent leg.
+    /// * `outbound_asset_transfer` - The outbound `AssetTransfer` for the sent leg.
     /// * `inbound_identifier` - The inbound spark transfer id or token transaction hash if the conversion was successful.
     /// * `refund_identifier` - The inbound refund spark transfer id or token transaction hash if the conversion was refunded.
     /// * `fee_split` - The fee split between sent and received sides of the conversion.
@@ -1038,33 +1037,52 @@ impl TokenConverter for FlashnetTokenConverter {
     }
 
     async fn refund_pending(&self) -> Result<RefundPendingConversionsResponse, ConversionError> {
+        let mut local_failed = false;
         let local = match self.refund_failed_conversions().await {
             Ok(r) => r,
             Err(e) => {
                 warn!("Local refund pass failed: {e}");
-                RefundPendingConversionsResponse::default()
+                local_failed = true;
+                RefundPendingConversionsResponse {
+                    failed: 1,
+                    ..Default::default()
+                }
             }
         };
         let remote = match self.reconcile_with_flashnet().await {
             Ok(r) => r,
             Err(e) => {
                 warn!("Reconcile with Flashnet failed: {e}");
-                RefundPendingConversionsResponse::default()
+                // Both passes errored: surface via Err instead of masking
+                // with Ok. Single-pass error stays Ok with `failed += 1`,
+                // since the other pass still produced counts.
+                if local_failed {
+                    return Err(e);
+                }
+                RefundPendingConversionsResponse {
+                    failed: 1,
+                    ..Default::default()
+                }
             }
         };
+
         let combined = RefundPendingConversionsResponse {
             refunded: local.refunded.saturating_add(remote.refunded),
             skipped: local.skipped.saturating_add(remote.skipped),
+            failed: local.failed.saturating_add(remote.failed),
         };
-        if combined.refunded > 0 || combined.skipped > 0 {
+        if combined.refunded > 0 || combined.skipped > 0 || combined.failed > 0 {
             info!(
-                "Refund-pending pass: refunded={} (local={}, remote={}), skipped={} (local={}, remote={})",
+                "Refund-pending pass: refunded={} (local={}, remote={}), skipped={} (local={}, remote={}), failed={} (local={}, remote={})",
                 combined.refunded,
                 local.refunded,
                 remote.refunded,
                 combined.skipped,
                 local.skipped,
                 remote.skipped,
+                combined.failed,
+                local.failed,
+                remote.failed,
             );
         }
         Ok(combined)
@@ -1078,5 +1096,55 @@ impl TokenConverter for FlashnetTokenConverter {
 
     fn subscribe_refund_requests(&self) -> Option<broadcast::Receiver<()>> {
         Some(self.refund_trigger.subscribe())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn transfer(id: &str, created_at: Option<&str>) -> ClawbackTransfer {
+        ClawbackTransfer {
+            id: id.to_string(),
+            lp_identity_public_key: PublicKey::from_str(
+                "02894808873b896e21d29856a6d7bb346fb13c019739adb9bf0b6a8b7e28da53da",
+            )
+            .unwrap(),
+            created_at: created_at.map(str::to_string),
+        }
+    }
+
+    /// Unix seconds for `2025-09-22T19:09:36Z`.
+    const SAMPLE_UNIX_SECS: u64 = 1_758_568_176;
+
+    #[test]
+    fn missing_created_at_is_eligible() {
+        assert!(transfer_is_older_than(&transfer("id-1", None), 0));
+    }
+
+    /// Fail-loud, not-quiet: an unrecognised timestamp must still let the
+    /// clawback proceed (with a warn log) instead of being silently bucketed
+    /// as `skipped`. That silent-skip is the exact class of failure this PR
+    /// exists to prevent.
+    #[test]
+    fn unparseable_created_at_is_eligible() {
+        assert!(transfer_is_older_than(
+            &transfer("id-2", Some("not-a-timestamp")),
+            u64::MAX,
+        ));
+    }
+
+    #[test]
+    fn rfc3339_z_respects_cutoff() {
+        let t = transfer("id-3", Some("2025-09-22T19:09:36.661269Z"));
+        assert!(transfer_is_older_than(&t, SAMPLE_UNIX_SECS + 1));
+        assert!(!transfer_is_older_than(&t, SAMPLE_UNIX_SECS - 1));
+    }
+
+    #[test]
+    fn rfc3339_offset_respects_cutoff() {
+        let t = transfer("id-4", Some("2025-09-22T19:09:36.661269+00:00"));
+        assert!(transfer_is_older_than(&t, SAMPLE_UNIX_SECS + 1));
+        assert!(!transfer_is_older_than(&t, SAMPLE_UNIX_SECS - 1));
     }
 }

@@ -96,7 +96,7 @@ pub struct ClawbackTransfer {
     pub id: String,
     #[serde_as(as = "DisplayFromStr")]
     pub lp_identity_public_key: PublicKey,
-    /// RFC3339 timestamp; absent for some older rows.
+    /// Optional RFC 3339 timestamp emitted by the Flashnet backend.
     pub created_at: Option<String>,
 }
 
@@ -456,7 +456,9 @@ pub struct Pool {
     pub bonding_progress_percent: Option<f64>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub graduation_threshold_amount: Option<u64>,
+    /// RFC 3339 timestamp emitted by the Flashnet backend.
     pub created_at: String,
+    /// RFC 3339 timestamp emitted by the Flashnet backend.
     pub updated_at: String,
 }
 
@@ -840,8 +842,8 @@ mod test {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2025-09-22 19:09:36.661269 +00:00:00".to_string(),
-            updated_at: "2025-12-03 12:43:53.903531 +00:00:00".to_string(),
+            created_at: "2025-09-22T19:09:36.661269Z".to_string(),
+            updated_at: "2025-12-03T12:43:53.903531Z".to_string(),
         }
     }
 

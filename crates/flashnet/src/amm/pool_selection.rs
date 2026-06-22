@@ -278,8 +278,8 @@ mod tests {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2024-01-01".to_string(),
-            updated_at: "2024-01-01".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
         }
     }
 
@@ -308,8 +308,8 @@ mod tests {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2024-01-01".to_string(),
-            updated_at: "2024-01-01".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
         };
 
         let score = score_pool(&pool, 1_000, 1_000, 1_000, Some(1_000_000));
@@ -346,8 +346,8 @@ mod tests {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2024-01-01".to_string(),
-            updated_at: "2024-01-01".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
         };
 
         // Pool requires 1_500 when min is 1_000 and max is 2_000
@@ -381,8 +381,8 @@ mod tests {
             initial_reserve_a: None,
             bonding_progress_percent: None,
             graduation_threshold_amount: None,
-            created_at: "2024-01-01".to_string(),
-            updated_at: "2024-01-01".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
         };
 
         let score = score_pool(&pool, 1_000, 1_000, 2_000, None);

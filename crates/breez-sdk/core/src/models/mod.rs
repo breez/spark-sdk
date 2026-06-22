@@ -1166,10 +1166,14 @@ pub struct BuyBitcoinResponse {
 #[derive(Debug, Clone, Serialize, Default)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct RefundPendingConversionsResponse {
-    /// Pending conversions refunded.
+    /// Conversions successfully refunded this pass.
     pub refunded: u32,
-    /// Pending conversions skipped.
+    /// Conversions intentionally deferred (eligible but held back by a
+    /// safety window). The next pass will retry them.
     pub skipped: u32,
+    /// Conversions that did not refund this pass. The next pass will
+    /// retry them.
+    pub failed: u32,
 }
 
 impl std::fmt::Display for MaxFee {

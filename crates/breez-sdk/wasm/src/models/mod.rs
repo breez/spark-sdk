@@ -1667,6 +1667,7 @@ pub struct BuyBitcoinResponse {
 pub struct RefundPendingConversionsResponse {
     pub refunded: u32,
     pub skipped: u32,
+    pub failed: u32,
 }
 
 #[macros::extern_wasm_bindgen(breez_sdk_spark::Contact)]
