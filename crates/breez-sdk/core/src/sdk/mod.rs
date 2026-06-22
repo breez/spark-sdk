@@ -98,6 +98,16 @@ pub struct BreezSdk {
     pub(crate) buy_bitcoin_provider: Arc<MoonpayProvider>,
 }
 
+#[cfg(feature = "test-utils")]
+impl BreezSdk {
+    /// The underlying Spark wallet, for tests that drive lower-level wallet
+    /// operations directly (e.g. rebuilding a transfer authorization request).
+    /// Test-only: gated behind `test-utils` and not part of the public API.
+    pub fn spark_wallet(&self) -> &Arc<SparkWallet> {
+        &self.spark_wallet
+    }
+}
+
 pub(crate) struct BreezSdkParams {
     pub config: Config,
     pub storage: Arc<dyn Storage>,

@@ -17,6 +17,8 @@ turnkey = ["breez-sdk-spark/turnkey", "breez-sdk-spark/turnkey-p256"]
 # Breez SDK under test (enable test-utils for direct helpers)
 breez-sdk-spark = { workspace = true, features = ["test-utils", "sqlite", "postgres", "mysql"] }
 breez-sdk-common = { workspace = true }
+# Low-level wallet types for test helpers (e.g. rebuilding a transfer authorization request)
+spark-wallet = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres", "mysql"] }
 
 # PostgreSQL for database creation utilities

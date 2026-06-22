@@ -5,6 +5,7 @@ pub mod helpers;
 mod log;
 pub mod recording_signer;
 pub mod session_store_scenarios;
+pub mod transfer_authorization;
 #[cfg(feature = "turnkey")]
 pub mod turnkey;
 
@@ -22,6 +23,7 @@ pub use rand;
 pub use recording_signer::{RecordedPrepareTransfers, RecordingSparkSigner};
 pub use session_store_scenarios::{SessionRow, run_session_persistence_across_restart};
 pub use tempfile;
+pub use transfer_authorization::build_transfer_authorization_request;
 
 use anyhow::Result;
 use breez_sdk_spark::{BreezSdk, Config, SdkEvent};

@@ -70,10 +70,7 @@ async fn test_resumed_send_matches_authorization_request(
     let context = prepare.transfer_context.clone().expect("transfer context");
 
     // The request a caller would hand to its signer to authorize out of band.
-    let authorization = alice
-        .sdk
-        .build_transfer_authorization_request(context.clone())
-        .await?;
+    let authorization = build_transfer_authorization_request(&alice.sdk, context.clone()).await?;
 
     // Drop anything recorded during prepare; capture only the resumed send.
     recorded.lock().unwrap().clear();

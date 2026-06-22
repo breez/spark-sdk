@@ -65,10 +65,7 @@ async fn test_send_reuses_manual_prepare_transfer_activity(
 
     // Submit the prepare_transfer activity manually, on the same signer the SDK
     // uses (so they share the activity-timestamp store). This logs its id.
-    let authorization = alice
-        .sdk
-        .build_transfer_authorization_request(context.clone())
-        .await?;
+    let authorization = build_transfer_authorization_request(&alice.sdk, context.clone()).await?;
     spark_signer.prepare_transfer(authorization).await?;
 
     // Resume the send. Its prepare_transfer re-submits the identical body and
