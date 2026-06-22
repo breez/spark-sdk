@@ -849,6 +849,58 @@ pub async fn build_sdk_with_external_signer(
         turnkey_guard: None,
     })
 }
+
+/// Builds a Regtest SDK whose Spark signer is wrapped by
+/// [`RecordingSparkSigner`], returning the instance and a handle to the
+/// `prepare_transfer` requests it records. `prefer_spark_over_lightning` is off
+/// so a bolt11 send routes over Lightning and `prepare_send_payment` produces a
+/// gateable transfer context (the Spark route yields no context).
+pub async fn build_sdk_with_recording_signer(
+    storage_dir: String,
+    mnemonic: String,
+    temp_dir: Option<TempDir>,
+) -> Result<(
+    SdkInstance,
+    crate::recording_signer::RecordedPrepareTransfers,
+)> {
+    let mut config = default_config(Network::Regtest);
+    config.api_key = None;
+    config.lnurl_domain = None;
+    config.prefer_spark_over_lightning = false;
+    config.sync_interval_secs = 5;
+    config.real_time_sync_server_url = None;
+
+    let signers = default_external_signers(mnemonic, None, Network::Regtest, None)?;
+    let (recording_signer, recorded) =
+        crate::recording_signer::RecordingSparkSigner::new(signers.spark_signer);
+    let builder = SdkBuilder::new_with_signer(config, signers.breez_signer, recording_signer);
+    let builder = apply_storage(builder, storage_dir).await?;
+    let sdk = builder.build().await?;
+
+    let (tx, rx) = mpsc::channel(100);
+    let event_listener = Box::new(ChannelEventListener { tx });
+    let _listener_id = sdk.add_event_listener(event_listener).await;
+
+    let _ = sdk
+        .get_info(GetInfoRequest {
+            ensure_synced: Some(true),
+        })
+        .await?;
+
+    Ok((
+        SdkInstance {
+            sdk,
+            events: rx,
+            span: tracing::Span::current(),
+            temp_dir,
+            data_sync_fixture: None,
+            lnurl_fixture: None,
+            turnkey_guard: None,
+        },
+        recorded,
+    ))
+}
+
 /// Which signer backend an SDK is built with, for backend-parametrized tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SignerBackend {

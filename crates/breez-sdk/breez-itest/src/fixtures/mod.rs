@@ -12,7 +12,8 @@ use rstest::fixture;
 use tracing::info;
 
 use crate::{
-    SdkInstance, build_sdk_with_custom_config, build_sdk_with_dir, build_sdk_with_external_signer,
+    RecordedPrepareTransfers, SdkInstance, build_sdk_with_custom_config, build_sdk_with_dir,
+    build_sdk_with_external_signer, build_sdk_with_recording_signer,
 };
 
 /// Token identifiers for regtest
@@ -157,6 +158,25 @@ fn random_mnemonic() -> Result<String> {
     let mut entropy = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut entropy);
     Ok(bip39::Mnemonic::from_entropy(&entropy)?.to_string())
+}
+
+/// Fixture: Alice's SDK whose Spark signer records `prepare_transfer` requests,
+/// with the Lightning route forced so bolt11 sends produce a transfer context.
+/// Yields the instance alongside the recorded-request handle.
+#[fixture]
+pub async fn alice_recording_signer_sdk() -> Result<(SdkInstance, RecordedPrepareTransfers)> {
+    let alice_dir = tempfile::Builder::new()
+        .prefix("breez-sdk-alice-recording")
+        .tempdir()?;
+    let path = alice_dir.path().to_string_lossy().to_string();
+
+    let mnemonic = random_mnemonic()?;
+
+    info!(
+        "Initializing Alice's SDK with recording signer at: {}",
+        path
+    );
+    build_sdk_with_recording_signer(path, mnemonic, Some(alice_dir)).await
 }
 
 /// Fixture: Alice's SDK with stable balance config

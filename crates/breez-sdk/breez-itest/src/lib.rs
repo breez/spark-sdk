@@ -3,6 +3,7 @@ pub mod faucet;
 pub mod fixtures;
 pub mod helpers;
 mod log;
+pub mod recording_signer;
 pub mod session_store_scenarios;
 #[cfg(feature = "turnkey")]
 pub mod turnkey;
@@ -18,6 +19,7 @@ pub use fixtures::lnurl::{LnurlFixture, LnurlImageConfig};
 pub use fixtures::*;
 pub use helpers::*;
 pub use rand;
+pub use recording_signer::{RecordedPrepareTransfers, RecordingSparkSigner};
 pub use session_store_scenarios::{SessionRow, run_session_persistence_across_restart};
 pub use tempfile;
 
