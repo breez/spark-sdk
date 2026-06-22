@@ -8,6 +8,8 @@
 
 mod accounts;
 mod activity_store;
+#[cfg(feature = "mysql")]
+mod activity_store_mysql;
 mod breez_signer;
 mod config;
 mod error;
@@ -20,6 +22,8 @@ mod transport;
 mod types;
 
 pub use activity_store::{InMemoryTurnkeyActivityStore, TurnkeyActivityStore};
+#[cfg(feature = "mysql")]
+pub use activity_store_mysql::MysqlTurnkeyActivityStore;
 pub use config::{TurnkeyConfig, TurnkeyRetryConfig};
 pub use error::TurnkeyError;
 pub use factory::{TurnkeySignerBuilder, create_turnkey_signer};
