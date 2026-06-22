@@ -498,23 +498,25 @@ class PostgresMigrationManager {
         ],
       },
       {
-        // Boltz cross-chain swap rows, synced for cross-instance recovery.
-        // Born multi-tenant (user_id in the PK). `data` is the BoltzSwap JSON
-        // with `key_source` lifted out; the lifted secrets are ECIES-encrypted
-        // (base64) into `secrets` by the adapter.
-        name: "Create brz_boltz_swaps table",
+        // Cross-chain swap rows, synced for cross-instance recovery. Shared
+        // across providers, discriminated by `provider`. Born multi-tenant
+        // (user_id in the PK). `data` is provider-opaque JSON; `secrets` is
+        // provider-opaque ciphertext (empty when the provider has no
+        // money-critical secrets).
+        name: "Create brz_cross_chain_swaps table",
         sql: [
-          `CREATE TABLE IF NOT EXISTS brz_boltz_swaps (
+          `CREATE TABLE IF NOT EXISTS brz_cross_chain_swaps (
               user_id BYTEA NOT NULL,
+              provider TEXT NOT NULL,
               id TEXT NOT NULL,
               is_terminal BOOLEAN NOT NULL,
               updated_at BIGINT NOT NULL,
               data TEXT NOT NULL,
               secrets TEXT NOT NULL,
-              PRIMARY KEY (user_id, id)
+              PRIMARY KEY (user_id, provider, id)
           )`,
-          `CREATE INDEX brz_idx_boltz_swaps_user_is_terminal
-             ON brz_boltz_swaps(user_id, is_terminal)`,
+          `CREATE INDEX brz_idx_cross_chain_swaps_user_provider_is_terminal
+             ON brz_cross_chain_swaps(user_id, provider, is_terminal)`,
         ],
       },
     ];

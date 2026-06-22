@@ -1,18 +1,22 @@
 //! Adapter exposing the SDK [`Storage`] as a [`boltz_client::BoltzStorage`].
 //!
+//! Boltz rows live in the provider-agnostic `cross_chain_swaps` table under
+//! `provider = "boltz"`.
+//!
 //! boltz-client runs in seedless mode: each swap carries its own random preimage
 //! and gas/claim key under `key_source` ([`boltz_client::models::SwapKeySource::Stored`]).
 //! Those secrets are money-critical, so before a swap row reaches local storage
 //! this adapter lifts `key_source` out of the swap JSON, ECIES-encrypts it via
 //! the SDK signer, and persists only the ciphertext in
-//! [`StoredBoltzSwap::secrets`]. The rest of the swap is stored as plaintext
-//! JSON in [`StoredBoltzSwap::data`]. On read the ciphertext is decrypted and
-//! `key_source` spliced back, reconstructing the full [`BoltzSwap`].
+//! [`StoredCrossChainSwap::secrets`]. The rest of the swap is stored as
+//! plaintext JSON in [`StoredCrossChainSwap::data`]. On read the ciphertext is
+//! decrypted and `key_source` spliced back, reconstructing the full
+//! [`BoltzSwap`].
 //!
 //! The encryption key is derived from the wallet identity at a fixed path, so it
 //! is deterministic across every instance restored from the same mnemonic. That
 //! is what lets a second instance decrypt a swap synced to it and drive it to
-//! terminal (see the realtime-sync `BoltzSwap` record). Correctness and
+//! terminal (see the realtime-sync `CrossChainSwap` record). Correctness and
 //! cross-instance convergence are boltz-client's job: the SDK just persists and
 //! syncs rows with plain last-writer-wins.
 //!
@@ -27,7 +31,10 @@ use bitcoin::bip32::DerivationPath;
 use boltz_client::{BoltzError, BoltzStorage, models::BoltzSwap};
 use tracing::warn;
 
-use crate::{Storage, persist::StoredBoltzSwap, signer::BreezSigner};
+use crate::{Storage, persist::StoredCrossChainSwap, signer::BreezSigner};
+
+/// Provider tag this adapter writes into `StoredCrossChainSwap::provider`.
+const PROVIDER_TAG_BOLTZ: &str = "boltz";
 
 /// JSON key under which a swap's secrets live before they are lifted out.
 const KEY_SOURCE_FIELD: &str = "key_source";
@@ -66,7 +73,7 @@ impl BoltzStorageAdapter {
 
     /// Lifts `key_source` out of the swap JSON, encrypts it, and assembles the
     /// persisted row.
-    async fn to_stored(&self, swap: &BoltzSwap) -> Result<StoredBoltzSwap, BoltzError> {
+    async fn to_stored(&self, swap: &BoltzSwap) -> Result<StoredCrossChainSwap, BoltzError> {
         let mut value = serde_json::to_value(swap)
             .map_err(|e| BoltzError::Store(format!("Failed to serialize swap: {e}")))?;
         let key_source = value
@@ -82,7 +89,8 @@ impl BoltzStorageAdapter {
             .map_err(|e| BoltzError::Store(format!("Failed to encrypt swap secrets: {e}")))?;
         let data = serde_json::to_string(&value)
             .map_err(|e| BoltzError::Store(format!("Failed to serialize swap data: {e}")))?;
-        Ok(StoredBoltzSwap {
+        Ok(StoredCrossChainSwap {
+            provider: PROVIDER_TAG_BOLTZ.to_string(),
             id: swap.id.clone(),
             is_terminal: swap.status.is_terminal(),
             updated_at: swap.updated_at,
@@ -93,7 +101,10 @@ impl BoltzStorageAdapter {
 
     /// Decrypts the secrets, splices `key_source` back into the data JSON, and
     /// deserializes the full swap.
-    async fn swap_from_stored(&self, stored: StoredBoltzSwap) -> Result<BoltzSwap, BoltzError> {
+    async fn swap_from_stored(
+        &self,
+        stored: StoredCrossChainSwap,
+    ) -> Result<BoltzSwap, BoltzError> {
         let ciphertext = BASE64
             .decode(stored.secrets.as_bytes())
             .map_err(|e| BoltzError::Store(format!("Invalid base64 swap secrets: {e}")))?;
@@ -120,7 +131,7 @@ impl BoltzStorage for BoltzStorageAdapter {
     async fn upsert_swap(&self, swap: &BoltzSwap) -> Result<(), BoltzError> {
         let stored = self.to_stored(swap).await?;
         self.storage
-            .set_boltz_swap(stored)
+            .set_cross_chain_swap(stored)
             .await
             .map_err(|e| BoltzError::Store(format!("Failed to persist swap row: {e}")))
     }
@@ -128,7 +139,7 @@ impl BoltzStorage for BoltzStorageAdapter {
     async fn get_swap(&self, id: &str) -> Result<Option<BoltzSwap>, BoltzError> {
         let stored = self
             .storage
-            .get_boltz_swap(id.to_string())
+            .get_cross_chain_swap(PROVIDER_TAG_BOLTZ.to_string(), id.to_string())
             .await
             .map_err(|e| BoltzError::Store(format!("Failed to read swap row: {e}")))?;
         match stored {
@@ -140,7 +151,7 @@ impl BoltzStorage for BoltzStorageAdapter {
     async fn list_active_swaps(&self) -> Result<Vec<BoltzSwap>, BoltzError> {
         let rows = self
             .storage
-            .list_active_boltz_swaps()
+            .list_active_cross_chain_swaps(PROVIDER_TAG_BOLTZ.to_string())
             .await
             .map_err(|e| BoltzError::Store(format!("Failed to list active swaps: {e}")))?;
         let mut swaps = Vec::with_capacity(rows.len());
@@ -247,10 +258,11 @@ mod tests {
             .unwrap();
 
         let stored = storage
-            .get_boltz_swap("s1".to_string())
+            .get_cross_chain_swap(PROVIDER_TAG_BOLTZ.to_string(), "s1".to_string())
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(stored.provider, PROVIDER_TAG_BOLTZ);
         // key_source was lifted out of the plaintext data.
         assert!(
             !stored.data.contains("key_source"),

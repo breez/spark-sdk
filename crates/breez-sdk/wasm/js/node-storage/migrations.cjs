@@ -461,19 +461,23 @@ class MigrationManager {
         sql: `UPDATE payment_metadata SET conversion_info = json_set(conversion_info, '$.type', 'amm') WHERE conversion_info IS NOT NULL AND json_extract(conversion_info, '$.type') IS NULL`,
       },
       {
-        // Boltz cross-chain swap rows, synced for cross-instance recovery.
-        // `data` is the BoltzSwap JSON with `key_source` lifted out; the lifted
-        // secrets are ECIES-encrypted (base64) into `secrets` by the adapter.
-        name: "Create boltz_swaps table",
+        // Cross-chain swap rows, synced for cross-instance recovery. Shared
+        // across providers, discriminated by `provider`. `data` is
+        // provider-opaque JSON; `secrets` is provider-opaque ciphertext (empty
+        // when the provider has no money-critical secrets).
+        name: "Create cross_chain_swaps table",
         sql: [
-          `CREATE TABLE boltz_swaps (
-              id TEXT PRIMARY KEY,
+          `CREATE TABLE cross_chain_swaps (
+              provider TEXT NOT NULL,
+              id TEXT NOT NULL,
               is_terminal INTEGER NOT NULL,
               updated_at INTEGER NOT NULL,
               data TEXT NOT NULL,
-              secrets TEXT NOT NULL
+              secrets TEXT NOT NULL,
+              PRIMARY KEY (provider, id)
           )`,
-          `CREATE INDEX idx_boltz_swaps_is_terminal ON boltz_swaps(is_terminal)`,
+          `CREATE INDEX idx_cross_chain_swaps_provider_is_terminal
+            ON cross_chain_swaps(provider, is_terminal)`,
         ],
       },
     ];

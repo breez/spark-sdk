@@ -1690,8 +1690,9 @@ pub struct ListContactsRequest {
     pub limit: Option<u32>,
 }
 
-#[macros::extern_wasm_bindgen(breez_sdk_spark::StoredBoltzSwap)]
-pub struct StoredBoltzSwap {
+#[macros::extern_wasm_bindgen(breez_sdk_spark::StoredCrossChainSwap)]
+pub struct StoredCrossChainSwap {
+    pub provider: String,
     pub id: String,
     pub is_terminal: bool,
     pub updated_at: u64,

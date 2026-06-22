@@ -1044,20 +1044,22 @@ class PostgresStorage {
     }
   }
 
-  // ===== Boltz Swap Operations =====
+  // ===== Cross-Chain Swap Operations =====
 
-  async setBoltzSwap(swap) {
+  async setCrossChainSwap(swap) {
     try {
       await this.pool.query(
-        `INSERT INTO brz_boltz_swaps (user_id, id, is_terminal, updated_at, data, secrets)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT(user_id, id) DO UPDATE SET
+        `INSERT INTO brz_cross_chain_swaps
+           (user_id, provider, id, is_terminal, updated_at, data, secrets)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT(user_id, provider, id) DO UPDATE SET
            is_terminal = EXCLUDED.is_terminal,
            updated_at = EXCLUDED.updated_at,
            data = EXCLUDED.data,
            secrets = EXCLUDED.secrets`,
         [
           this.identity,
+          swap.provider,
           swap.id,
           swap.isTerminal,
           swap.updatedAt,
@@ -1066,39 +1068,45 @@ class PostgresStorage {
         ]
       );
     } catch (error) {
-      throw new StorageError(`Failed to set boltz swap: ${error.message}`, error);
+      throw new StorageError(
+        `Failed to set cross-chain swap: ${error.message}`,
+        error
+      );
     }
   }
 
-  async getBoltzSwap(id) {
+  async getCrossChainSwap(provider, id) {
     try {
       const result = await this.pool.query(
-        `SELECT id, is_terminal, updated_at, data, secrets
-         FROM brz_boltz_swaps
-         WHERE user_id = $1 AND id = $2`,
-        [this.identity, id]
+        `SELECT provider, id, is_terminal, updated_at, data, secrets
+         FROM brz_cross_chain_swaps
+         WHERE user_id = $1 AND provider = $2 AND id = $3`,
+        [this.identity, provider, id]
       );
       if (result.rows.length === 0) {
         return null;
       }
-      return boltzSwapFromRow(result.rows[0]);
+      return crossChainSwapFromRow(result.rows[0]);
     } catch (error) {
-      throw new StorageError(`Failed to get boltz swap: ${error.message}`, error);
+      throw new StorageError(
+        `Failed to get cross-chain swap: ${error.message}`,
+        error
+      );
     }
   }
 
-  async listActiveBoltzSwaps() {
+  async listActiveCrossChainSwaps(provider) {
     try {
       const result = await this.pool.query(
-        `SELECT id, is_terminal, updated_at, data, secrets
-         FROM brz_boltz_swaps
-         WHERE user_id = $1 AND is_terminal = FALSE`,
-        [this.identity]
+        `SELECT provider, id, is_terminal, updated_at, data, secrets
+         FROM brz_cross_chain_swaps
+         WHERE user_id = $1 AND provider = $2 AND is_terminal = FALSE`,
+        [this.identity, provider]
       );
-      return result.rows.map(boltzSwapFromRow);
+      return result.rows.map(crossChainSwapFromRow);
     } catch (error) {
       throw new StorageError(
-        `Failed to list active boltz swaps: ${error.message}`,
+        `Failed to list active cross-chain swaps: ${error.message}`,
         error
       );
     }
@@ -1531,11 +1539,12 @@ class PostgresStorage {
 }
 
 /**
- * Maps a brz_boltz_swaps row to the camelCase StoredBoltzSwap shape the SDK
- * expects, parsing the `data` JSON.
+ * Maps a brz_cross_chain_swaps row to the camelCase StoredCrossChainSwap shape
+ * the SDK expects.
  */
-function boltzSwapFromRow(row) {
+function crossChainSwapFromRow(row) {
   return {
+    provider: row.provider,
     id: row.id,
     isTerminal: row.is_terminal,
     updatedAt: Number(row.updated_at),

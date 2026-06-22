@@ -14,8 +14,8 @@ use std::collections::HashMap;
 
 use crate::models::{
     Contact, DepositInfo, IncomingChange, ListContactsRequest, OutgoingChange, Payment,
-    PaymentMetadata, Record, SetLnurlMetadataItem, StorageListPaymentsRequest, StoredBoltzSwap,
-    UnversionedRecordChange, UpdateDepositPayload,
+    PaymentMetadata, Record, SetLnurlMetadataItem, StorageListPaymentsRequest,
+    StoredCrossChainSwap, UnversionedRecordChange, UpdateDepositPayload,
 };
 
 pub struct WasmStorage {
@@ -350,14 +350,14 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(())
     }
 
-    async fn set_boltz_swap(
+    async fn set_cross_chain_swap(
         &self,
-        swap: breez_sdk_spark::StoredBoltzSwap,
+        swap: breez_sdk_spark::StoredCrossChainSwap,
     ) -> Result<(), StorageError> {
-        let swap: StoredBoltzSwap = swap.into();
+        let swap: StoredCrossChainSwap = swap.into();
         let promise = self
             .storage
-            .set_boltz_swap(swap)
+            .set_cross_chain_swap(swap)
             .map_err(js_error_to_storage_error)?;
         JsFuture::from(promise)
             .await
@@ -365,13 +365,14 @@ impl breez_sdk_spark::Storage for WasmStorage {
         Ok(())
     }
 
-    async fn get_boltz_swap(
+    async fn get_cross_chain_swap(
         &self,
+        provider: String,
         id: String,
-    ) -> Result<Option<breez_sdk_spark::StoredBoltzSwap>, StorageError> {
+    ) -> Result<Option<breez_sdk_spark::StoredCrossChainSwap>, StorageError> {
         let promise = self
             .storage
-            .get_boltz_swap(id)
+            .get_cross_chain_swap(provider, id)
             .map_err(js_error_to_storage_error)?;
         let result = JsFuture::from(promise)
             .await
@@ -379,22 +380,23 @@ impl breez_sdk_spark::Storage for WasmStorage {
         if result.is_null() || result.is_undefined() {
             return Ok(None);
         }
-        let swap: StoredBoltzSwap = serde_wasm_bindgen::from_value(result)
+        let swap: StoredCrossChainSwap = serde_wasm_bindgen::from_value(result)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
         Ok(Some(swap.into()))
     }
 
-    async fn list_active_boltz_swaps(
+    async fn list_active_cross_chain_swaps(
         &self,
-    ) -> Result<Vec<breez_sdk_spark::StoredBoltzSwap>, StorageError> {
+        provider: String,
+    ) -> Result<Vec<breez_sdk_spark::StoredCrossChainSwap>, StorageError> {
         let promise = self
             .storage
-            .list_active_boltz_swaps()
+            .list_active_cross_chain_swaps(provider)
             .map_err(js_error_to_storage_error)?;
         let result = JsFuture::from(promise)
             .await
             .map_err(js_error_to_storage_error)?;
-        let swaps: Vec<StoredBoltzSwap> = serde_wasm_bindgen::from_value(result)
+        let swaps: Vec<StoredCrossChainSwap> = serde_wasm_bindgen::from_value(result)
             .map_err(|e| StorageError::Serialization(e.to_string()))?;
         Ok(swaps.into_iter().map(|s| s.into()).collect())
     }
@@ -562,9 +564,9 @@ const STORAGE_INTERFACE: &'static str = r#"export interface Storage {
     getContact: (id: string) => Promise<Contact>;
     insertContact: (contact: Contact) => Promise<void>;
     deleteContact: (id: string) => Promise<void>;
-    setBoltzSwap: (swap: StoredBoltzSwap) => Promise<void>;
-    getBoltzSwap: (id: string) => Promise<StoredBoltzSwap | null>;
-    listActiveBoltzSwaps: () => Promise<StoredBoltzSwap[]>;
+    setCrossChainSwap: (swap: StoredCrossChainSwap) => Promise<void>;
+    getCrossChainSwap: (provider: string, id: string) => Promise<StoredCrossChainSwap | null>;
+    listActiveCrossChainSwaps: (provider: string) => Promise<StoredCrossChainSwap[]>;
     syncAddOutgoingChange: (record: UnversionedRecordChange) => Promise<number>;
     syncCompleteOutgoingSync: (record: Record) => Promise<void>;
     syncGetPendingOutgoingChanges: (limit: number) => Promise<OutgoingChange[]>;
@@ -659,14 +661,24 @@ extern "C" {
     #[wasm_bindgen(structural, method, js_name = deleteContact, catch)]
     pub fn delete_contact(this: &Storage, id: String) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = setBoltzSwap, catch)]
-    pub fn set_boltz_swap(this: &Storage, swap: StoredBoltzSwap) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(structural, method, js_name = setCrossChainSwap, catch)]
+    pub fn set_cross_chain_swap(
+        this: &Storage,
+        swap: StoredCrossChainSwap,
+    ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = getBoltzSwap, catch)]
-    pub fn get_boltz_swap(this: &Storage, id: String) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(structural, method, js_name = getCrossChainSwap, catch)]
+    pub fn get_cross_chain_swap(
+        this: &Storage,
+        provider: String,
+        id: String,
+    ) -> Result<Promise, JsValue>;
 
-    #[wasm_bindgen(structural, method, js_name = listActiveBoltzSwaps, catch)]
-    pub fn list_active_boltz_swaps(this: &Storage) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(structural, method, js_name = listActiveCrossChainSwaps, catch)]
+    pub fn list_active_cross_chain_swaps(
+        this: &Storage,
+        provider: String,
+    ) -> Result<Promise, JsValue>;
 
     #[wasm_bindgen(structural, method, js_name = syncAddOutgoingChange, catch)]
     pub fn sync_add_outgoing_change(

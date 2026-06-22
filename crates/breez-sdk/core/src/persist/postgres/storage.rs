@@ -21,7 +21,7 @@ use crate::{
     error::DepositClaimError,
     persist::{
         Payment, PaymentMetadata, SetLnurlMetadataItem, Storage, StorageError,
-        StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredBoltzSwap,
+        StorageListPaymentsRequest, StoragePaymentDetailsFilter, StoredCrossChainSwap,
         UpdateDepositPayload, parse_payment_status,
     },
     sync_storage::{
@@ -449,35 +449,39 @@ impl PostgresStorage {
                SET conversion_info = conversion_info::jsonb || '{\"type\": \"amm\"}'::jsonb
                WHERE conversion_info IS NOT NULL
                  AND (conversion_info::jsonb->>'type') IS NULL".to_string()],
-            // Migration 19: Boltz cross-chain swap rows, synced for cross-instance
-            // recovery. `data` is the BoltzSwap JSON with `key_source` lifted out;
-            // the lifted secrets are ECIES-encrypted into `secrets` by the adapter.
+            // Migration 19: Cross-chain swap rows, synced for cross-instance
+            // recovery. Shared across providers, discriminated by `provider`.
+            // `data` is provider-opaque JSON; `secrets` is provider-opaque
+            // ciphertext (empty when the provider has no money-critical
+            // secrets).
             vec![
-                "CREATE TABLE IF NOT EXISTS brz_boltz_swaps (
+                "CREATE TABLE IF NOT EXISTS brz_cross_chain_swaps (
                     user_id BYTEA NOT NULL,
+                    provider TEXT NOT NULL,
                     id TEXT NOT NULL,
                     is_terminal BOOLEAN NOT NULL,
                     updated_at BIGINT NOT NULL,
                     data TEXT NOT NULL,
                     secrets TEXT NOT NULL,
-                    PRIMARY KEY (user_id, id)
+                    PRIMARY KEY (user_id, provider, id)
                  )".to_string(),
-                "CREATE INDEX IF NOT EXISTS brz_idx_boltz_swaps_user_is_terminal
-                    ON brz_boltz_swaps (user_id, is_terminal)".to_string(),
+                "CREATE INDEX IF NOT EXISTS brz_idx_cross_chain_swaps_user_provider_is_terminal
+                    ON brz_cross_chain_swaps (user_id, provider, is_terminal)".to_string(),
             ],
         ]
     }
 }
 
-/// Maps a `brz_boltz_swaps` row (columns `id, is_terminal, updated_at, data,
-/// secrets`) to a [`StoredBoltzSwap`].
-fn boltz_swap_from_row(row: &Row) -> Result<StoredBoltzSwap, StorageError> {
-    Ok(StoredBoltzSwap {
-        id: row.get(0),
-        is_terminal: row.get(1),
-        updated_at: u64::try_from(row.get::<_, i64>(2))?,
-        data: row.get(3),
-        secrets: row.get(4),
+/// Maps a `brz_cross_chain_swaps` row (columns `provider, id, is_terminal,
+/// updated_at, data, secrets`) to a [`StoredCrossChainSwap`].
+fn cross_chain_swap_from_row(row: &Row) -> Result<StoredCrossChainSwap, StorageError> {
+    Ok(StoredCrossChainSwap {
+        provider: row.get(0),
+        id: row.get(1),
+        is_terminal: row.get(2),
+        updated_at: u64::try_from(row.get::<_, i64>(3))?,
+        data: row.get(4),
+        secrets: row.get(5),
     })
 }
 
@@ -1422,19 +1426,21 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
-    async fn set_boltz_swap(&self, swap: StoredBoltzSwap) -> Result<(), StorageError> {
+    async fn set_cross_chain_swap(&self, swap: StoredCrossChainSwap) -> Result<(), StorageError> {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let result = client
             .execute(
-                "INSERT INTO brz_boltz_swaps (user_id, id, is_terminal, updated_at, data, secrets)
-                 VALUES ($1, $2, $3, $4, $5, $6)
-                 ON CONFLICT (user_id, id) DO UPDATE SET
+                "INSERT INTO brz_cross_chain_swaps
+                   (user_id, provider, id, is_terminal, updated_at, data, secrets)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 ON CONFLICT (user_id, provider, id) DO UPDATE SET
                    is_terminal = EXCLUDED.is_terminal,
                    updated_at = EXCLUDED.updated_at,
                    data = EXCLUDED.data,
                    secrets = EXCLUDED.secrets",
                 &[
                     &self.identity,
+                    &swap.provider,
                     &swap.id,
                     &swap.is_terminal,
                     &i64::try_from(swap.updated_at)?,
@@ -1450,33 +1456,42 @@ impl Storage for PostgresStorage {
         }
     }
 
-    async fn get_boltz_swap(&self, id: String) -> Result<Option<StoredBoltzSwap>, StorageError> {
+    async fn get_cross_chain_swap(
+        &self,
+        provider: String,
+        id: String,
+    ) -> Result<Option<StoredCrossChainSwap>, StorageError> {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let row = client
             .query_opt(
-                "SELECT id, is_terminal, updated_at, data, secrets
-                 FROM brz_boltz_swaps WHERE user_id = $1 AND id = $2",
-                &[&self.identity, &id],
+                "SELECT provider, id, is_terminal, updated_at, data, secrets
+                 FROM brz_cross_chain_swaps
+                 WHERE user_id = $1 AND provider = $2 AND id = $3",
+                &[&self.identity, &provider, &id],
             )
             .await?;
         match row {
-            Some(row) => Ok(Some(boltz_swap_from_row(&row)?)),
+            Some(row) => Ok(Some(cross_chain_swap_from_row(&row)?)),
             None => Ok(None),
         }
     }
 
-    async fn list_active_boltz_swaps(&self) -> Result<Vec<StoredBoltzSwap>, StorageError> {
+    async fn list_active_cross_chain_swaps(
+        &self,
+        provider: String,
+    ) -> Result<Vec<StoredCrossChainSwap>, StorageError> {
         let client = self.pool.get().await.map_err(map_pool_error)?;
         let rows = client
             .query(
-                "SELECT id, is_terminal, updated_at, data, secrets
-                 FROM brz_boltz_swaps WHERE user_id = $1 AND is_terminal = FALSE",
-                &[&self.identity],
+                "SELECT provider, id, is_terminal, updated_at, data, secrets
+                 FROM brz_cross_chain_swaps
+                 WHERE user_id = $1 AND provider = $2 AND is_terminal = FALSE",
+                &[&self.identity, &provider],
             )
             .await?;
         let mut swaps = Vec::with_capacity(rows.len());
         for row in rows {
-            swaps.push(boltz_swap_from_row(&row)?);
+            swaps.push(cross_chain_swap_from_row(&row)?);
         }
         Ok(swaps)
     }
@@ -2246,9 +2261,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_boltz_swaps_crud() {
+    async fn test_cross_chain_swaps_crud() {
         let fixture = PostgresTestFixture::new().await;
-        crate::persist::tests::test_boltz_swaps_crud(Box::new(fixture.storage)).await;
+        crate::persist::tests::test_cross_chain_swaps_crud(Box::new(fixture.storage)).await;
     }
 
     #[tokio::test]
@@ -2949,8 +2964,8 @@ mod tests {
         );
 
         // Bring the DB up to the state right before the discriminator backfill.
-        // Locate the backfill by content so later appended migrations (e.g. the
-        // brz_boltz_swaps table) don't shift this off the end.
+        // Locate it by content so later appended migrations don't shift it off
+        // the end.
         let migrations = PostgresStorage::migrations(&TEST_IDENTITY_A);
         let backfill_index = migrations
             .iter()
@@ -3463,7 +3478,7 @@ mod tests {
 
         // Migration version advanced from 15 through 18 (16: multi-tenant scope,
         // 17: brz_payment_details_deposit table, 18: conversion_info
-        // type-discriminator backfill, 19: brz_boltz_swaps table).
+        // type-discriminator backfill, 19: brz_cross_chain_swaps table).
         let version: i32 = client
             .query_one("SELECT MAX(version) FROM brz_schema_migrations", &[])
             .await

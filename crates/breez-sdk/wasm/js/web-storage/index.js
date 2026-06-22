@@ -576,15 +576,13 @@ class MigrationManager {
         },
       },
       {
-        // Boltz cross-chain swap rows, synced for cross-instance recovery.
-        // `data` is the BoltzSwap JSON with `key_source` lifted out; the lifted
-        // secrets are ECIES-encrypted (base64) into `secrets` by the adapter.
-        // No index on isTerminal: IndexedDB can't key on a boolean, so
-        // listActiveBoltzSwaps scans and filters.
-        name: "Create boltz_swaps store",
+        // listActiveCrossChainSwaps scans and filters.
+        name: "Create cross_chain_swaps store",
         upgrade: (db) => {
-          if (!db.objectStoreNames.contains("boltz_swaps")) {
-            db.createObjectStore("boltz_swaps", { keyPath: "id" });
+          if (!db.objectStoreNames.contains("cross_chain_swaps")) {
+            db.createObjectStore("cross_chain_swaps", {
+              keyPath: ["provider", "id"],
+            });
           }
         },
       },
@@ -2233,23 +2231,23 @@ class IndexedDBStorage {
     });
   }
 
-  // ===== Boltz Swap Operations =====
+  // ===== Cross-Chain Swap Operations =====
 
-  async setBoltzSwap(swap) {
+  async setCrossChainSwap(swap) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
 
     return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction("boltz_swaps", "readwrite");
-      const store = transaction.objectStore("boltz_swaps");
+      const transaction = this.db.transaction("cross_chain_swaps", "readwrite");
+      const store = transaction.objectStore("cross_chain_swaps");
       // IndexedDB stores nested objects natively, so `data` is kept as-is.
       const request = store.put(swap);
       request.onsuccess = () => resolve();
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to set boltz swap '${swap.id}': ${request.error?.message || "Unknown error"}`,
+            `Failed to set cross-chain swap '${swap.provider}:${swap.id}': ${request.error?.message || "Unknown error"}`,
             request.error
           )
         );
@@ -2257,20 +2255,20 @@ class IndexedDBStorage {
     });
   }
 
-  async getBoltzSwap(id) {
+  async getCrossChainSwap(provider, id) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
 
     return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction("boltz_swaps", "readonly");
-      const store = transaction.objectStore("boltz_swaps");
-      const request = store.get(id);
+      const transaction = this.db.transaction("cross_chain_swaps", "readonly");
+      const store = transaction.objectStore("cross_chain_swaps");
+      const request = store.get([provider, id]);
       request.onsuccess = () => resolve(request.result || null);
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to get boltz swap '${id}': ${request.error?.message || "Unknown error"}`,
+            `Failed to get cross-chain swap '${provider}:${id}': ${request.error?.message || "Unknown error"}`,
             request.error
           )
         );
@@ -2278,23 +2276,25 @@ class IndexedDBStorage {
     });
   }
 
-  async listActiveBoltzSwaps() {
+  async listActiveCrossChainSwaps(provider) {
     if (!this.db) {
       throw new StorageError("Database not initialized");
     }
 
     return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction("boltz_swaps", "readonly");
-      const store = transaction.objectStore("boltz_swaps");
+      const transaction = this.db.transaction("cross_chain_swaps", "readonly");
+      const store = transaction.objectStore("cross_chain_swaps");
       const request = store.getAll();
       request.onsuccess = () => {
         const all = request.result || [];
-        resolve(all.filter((swap) => !swap.isTerminal));
+        resolve(
+          all.filter((swap) => swap.provider === provider && !swap.isTerminal)
+        );
       };
       request.onerror = () => {
         reject(
           new StorageError(
-            `Failed to list active boltz swaps: ${request.error?.message || "Unknown error"}`,
+            `Failed to list active cross-chain swaps for '${provider}': ${request.error?.message || "Unknown error"}`,
             request.error
           )
         );

@@ -1413,20 +1413,21 @@ class SqliteStorage {
     }
   }
 
-  // ===== Boltz Swap Operations =====
+  // ===== Cross-Chain Swap Operations =====
 
-  setBoltzSwap(swap) {
+  setCrossChainSwap(swap) {
     try {
       const stmt = this.db.prepare(`
-        INSERT INTO boltz_swaps (id, is_terminal, updated_at, data, secrets)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
+        INSERT INTO cross_chain_swaps (provider, id, is_terminal, updated_at, data, secrets)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(provider, id) DO UPDATE SET
           is_terminal = excluded.is_terminal,
           updated_at = excluded.updated_at,
           data = excluded.data,
           secrets = excluded.secrets
       `);
       stmt.run(
+        swap.provider,
         swap.id,
         swap.isTerminal ? 1 : 0,
         swap.updatedAt,
@@ -1436,44 +1437,47 @@ class SqliteStorage {
       return Promise.resolve();
     } catch (error) {
       return Promise.reject(
-        new StorageError(`Failed to set boltz swap: ${error.message}`, error)
+        new StorageError(`Failed to set cross-chain swap: ${error.message}`, error)
       );
     }
   }
 
-  getBoltzSwap(id) {
+  getCrossChainSwap(provider, id) {
     try {
       const stmt = this.db.prepare(
-        "SELECT id, is_terminal, updated_at, data, secrets FROM boltz_swaps WHERE id = ?"
+        `SELECT provider, id, is_terminal, updated_at, data, secrets
+         FROM cross_chain_swaps WHERE provider = ? AND id = ?`
       );
-      const row = stmt.get(id);
-      return Promise.resolve(row ? boltzSwapFromRow(row) : null);
+      const row = stmt.get(provider, id);
+      return Promise.resolve(row ? crossChainSwapFromRow(row) : null);
     } catch (error) {
       return Promise.reject(
-        new StorageError(`Failed to get boltz swap: ${error.message}`, error)
+        new StorageError(`Failed to get cross-chain swap: ${error.message}`, error)
       );
     }
   }
 
-  listActiveBoltzSwaps() {
+  listActiveCrossChainSwaps(provider) {
     try {
       const stmt = this.db.prepare(
-        "SELECT id, is_terminal, updated_at, data, secrets FROM boltz_swaps WHERE is_terminal = 0"
+        `SELECT provider, id, is_terminal, updated_at, data, secrets
+         FROM cross_chain_swaps WHERE provider = ? AND is_terminal = 0`
       );
-      const rows = stmt.all();
-      return Promise.resolve(rows.map(boltzSwapFromRow));
+      const rows = stmt.all(provider);
+      return Promise.resolve(rows.map(crossChainSwapFromRow));
     } catch (error) {
       return Promise.reject(
-        new StorageError(`Failed to list active boltz swaps: ${error.message}`, error)
+        new StorageError(`Failed to list active cross-chain swaps: ${error.message}`, error)
       );
     }
   }
 }
 
-/// Maps a `boltz_swaps` row to a StoredBoltzSwap, parsing `data` and the
-/// is_terminal flag back into the camelCase shape the SDK expects.
-function boltzSwapFromRow(row) {
+/// Maps a `cross_chain_swaps` row to a StoredCrossChainSwap, parsing `data` and
+/// the is_terminal flag back into the camelCase shape the SDK expects.
+function crossChainSwapFromRow(row) {
   return {
+    provider: row.provider,
     id: row.id,
     isTerminal: row.is_terminal !== 0,
     updatedAt: Number(row.updated_at),

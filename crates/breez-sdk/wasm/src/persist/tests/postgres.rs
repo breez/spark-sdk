@@ -162,9 +162,9 @@ async fn test_contacts_crud() {
 }
 
 #[wasm_bindgen_test]
-async fn test_boltz_swaps_crud() {
-    let storage = create_test_storage("pg_boltz_swaps_crud").await;
-    breez_sdk_spark::storage_tests::test_boltz_swaps_crud(Box::new(storage)).await;
+async fn test_cross_chain_swaps_crud() {
+    let storage = create_test_storage("pg_cross_chain_swaps_crud").await;
+    breez_sdk_spark::storage_tests::test_cross_chain_swaps_crud(Box::new(storage)).await;
 }
 
 #[wasm_bindgen_test]

@@ -19,8 +19,8 @@ use crate::{
     events::{InternalSyncedEvent, SdkEvent},
     lnurl::LnurlServerClient,
     persist::{
-        LIGHTNING_ADDRESS_KEY, ObjectCacheRepository, StorageListPaymentsRequest, StoredBoltzSwap,
-        parse_cached_lightning_address,
+        LIGHTNING_ADDRESS_KEY, ObjectCacheRepository, StorageListPaymentsRequest,
+        StoredCrossChainSwap, parse_cached_lightning_address,
     },
     sync_storage::{IncomingChange, OutgoingChange, Record, UnversionedRecordChange},
 };
@@ -33,7 +33,7 @@ enum RecordType {
     PaymentMetadata,
     Contact,
     LightningAddress,
-    BoltzSwap,
+    CrossChainSwap,
 }
 
 impl RecordType {
@@ -43,7 +43,7 @@ impl RecordType {
             Self::PaymentMetadata => SchemaVersion::new(1, 0, 0),
             Self::Contact => SchemaVersion::new(1, 0, 0),
             Self::LightningAddress => SchemaVersion::new(1, 0, 0),
-            Self::BoltzSwap => SchemaVersion::new(1, 0, 0),
+            Self::CrossChainSwap => SchemaVersion::new(1, 0, 0),
         }
     }
 }
@@ -54,7 +54,7 @@ impl Display for RecordType {
             RecordType::PaymentMetadata => "PaymentMetadata",
             RecordType::Contact => "Contact",
             RecordType::LightningAddress => "LightningAddress",
-            RecordType::BoltzSwap => "BoltzSwap",
+            RecordType::CrossChainSwap => "CrossChainSwap",
         };
         write!(f, "{s}")
     }
@@ -68,7 +68,7 @@ impl FromStr for RecordType {
             "PaymentMetadata" => Ok(RecordType::PaymentMetadata),
             "Contact" => Ok(RecordType::Contact),
             "LightningAddress" => Ok(RecordType::LightningAddress),
-            "BoltzSwap" => Ok(RecordType::BoltzSwap),
+            "CrossChainSwap" => Ok(RecordType::CrossChainSwap),
             _ => Err(format!("Unknown record type: {s}")),
         }
     }
@@ -324,7 +324,10 @@ impl SyncedRecordHandler {
             RecordType::LightningAddress => {
                 return Ok(self.handle_lightning_address_change());
             }
-            RecordType::BoltzSwap => self.handle_boltz_swap_change(change.new_state.data).await,
+            RecordType::CrossChainSwap => {
+                self.handle_cross_chain_swap_change(change.new_state.data)
+                    .await
+            }
         }?;
         Ok(RecordOutcome::Completed)
     }
@@ -360,8 +363,8 @@ impl SyncedRecordHandler {
                     .await
             }
             RecordType::LightningAddress => Ok(()),
-            RecordType::BoltzSwap => {
-                self.handle_boltz_swap_change(change.change.updated_fields)
+            RecordType::CrossChainSwap => {
+                self.handle_cross_chain_swap_change(change.change.updated_fields)
                     .await
             }
         }
@@ -413,17 +416,21 @@ impl SyncedRecordHandler {
         Ok(())
     }
 
-    /// Applies a synced-in Boltz swap row via the inner store (bypassing the
-    /// outgoing-emit wrapper). Plain last-writer-wins: the boltz-client
-    /// convergence logic, not the SDK, owns correctness. `data_id` equals the
-    /// swap id, which is already carried inside the serialized fields.
-    async fn handle_boltz_swap_change(&self, fields: HashMap<String, Value>) -> anyhow::Result<()> {
-        let swap: StoredBoltzSwap = serde_json::from_value(
+    /// Applies a synced-in cross-chain swap row via the inner store (bypassing
+    /// the outgoing-emit wrapper). Plain last-writer-wins: each provider's
+    /// convergence logic, not the SDK, owns correctness. `data_id` is
+    /// `"{provider}:{id}"`, which is already carried inside the serialized
+    /// fields.
+    async fn handle_cross_chain_swap_change(
+        &self,
+        fields: HashMap<String, Value>,
+    ) -> anyhow::Result<()> {
+        let swap: StoredCrossChainSwap = serde_json::from_value(
             serde_json::to_value(&fields)
                 .map_err(|e| StorageError::Serialization(e.to_string()))?,
         )
         .map_err(|e| StorageError::Serialization(e.to_string()))?;
-        self.storage.set_boltz_swap(swap).await?;
+        self.storage.set_cross_chain_swap(swap).await?;
         Ok(())
     }
 
@@ -662,11 +669,12 @@ impl Storage for SyncedStorage {
         self.inner.delete_contact(id).await
     }
 
-    async fn set_boltz_swap(&self, swap: StoredBoltzSwap) -> Result<(), StorageError> {
+    async fn set_cross_chain_swap(&self, swap: StoredCrossChainSwap) -> Result<(), StorageError> {
+        let data_id = format!("{}:{}", swap.provider, swap.id);
         self.sync_service
             .set_outgoing_record(&RecordChangeRequest {
-                id: RecordId::new(RecordType::BoltzSwap.to_string(), &swap.id),
-                schema_version: RecordType::BoltzSwap.schema_version(),
+                id: RecordId::new(RecordType::CrossChainSwap.to_string(), &data_id),
+                schema_version: RecordType::CrossChainSwap.schema_version(),
                 updated_fields: serde_json::from_value(
                     serde_json::to_value(&swap)
                         .map_err(|e| StorageError::Serialization(e.to_string()))?,
@@ -675,15 +683,22 @@ impl Storage for SyncedStorage {
             })
             .await
             .map_err(|e| StorageError::Implementation(e.to_string()))?;
-        self.inner.set_boltz_swap(swap).await
+        self.inner.set_cross_chain_swap(swap).await
     }
 
-    async fn get_boltz_swap(&self, id: String) -> Result<Option<StoredBoltzSwap>, StorageError> {
-        self.inner.get_boltz_swap(id).await
+    async fn get_cross_chain_swap(
+        &self,
+        provider: String,
+        id: String,
+    ) -> Result<Option<StoredCrossChainSwap>, StorageError> {
+        self.inner.get_cross_chain_swap(provider, id).await
     }
 
-    async fn list_active_boltz_swaps(&self) -> Result<Vec<StoredBoltzSwap>, StorageError> {
-        self.inner.list_active_boltz_swaps().await
+    async fn list_active_cross_chain_swaps(
+        &self,
+        provider: String,
+    ) -> Result<Vec<StoredCrossChainSwap>, StorageError> {
+        self.inner.list_active_cross_chain_swaps(provider).await
     }
 
     async fn add_outgoing_change(
@@ -1188,25 +1203,40 @@ mod tests {
         assert!(storage.get_contact("c3".to_string()).await.is_err());
     }
 
-    /// Plumbing round-trip for the `BoltzSwap` record: a swap set on one instance
-    /// is serialized into an outgoing record, then applied as an incoming change
-    /// on a second instance's store, reconstructing an identical row. No real
-    /// swap or cross-chain infra involved.
+    /// Plumbing round-trip for the `CrossChainSwap` record: a swap set on one
+    /// instance is serialized into an outgoing record, then applied as an
+    /// incoming change on a second instance's store, reconstructing an
+    /// identical row. Exercised for both provider tags so any hard-coded
+    /// "boltz" / "orchestra" in the emit or apply path is caught. No real swap
+    /// or cross-chain infra involved.
     #[tokio::test]
-    async fn test_boltz_swap_sync_round_trip() {
-        // Instance A: set_boltz_swap emits an outgoing record and writes locally.
-        let writer_dir = create_temp_dir("boltz_sync_writer");
+    async fn test_cross_chain_swap_sync_round_trip_boltz() {
+        run_cross_chain_swap_round_trip("boltz", "swap-1").await;
+    }
+
+    #[tokio::test]
+    async fn test_cross_chain_swap_sync_round_trip_orchestra() {
+        run_cross_chain_swap_round_trip("orchestra", "quote-1").await;
+    }
+
+    async fn run_cross_chain_swap_round_trip(provider: &str, id: &str) {
+        // Instance A: set_cross_chain_swap emits an outgoing record and writes
+        // locally.
+        let writer_dir = create_temp_dir(&format!("cross_chain_sync_writer_{provider}"));
         let writer_inner: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&writer_dir).unwrap());
         let synced = create_test_synced_storage(Arc::clone(&writer_inner));
 
-        let stored = StoredBoltzSwap {
-            id: "swap-1".to_string(),
+        let stored = StoredCrossChainSwap {
+            provider: provider.to_string(),
+            id: id.to_string(),
             is_terminal: false,
             updated_at: 1700,
-            data: r#"{"id":"swap-1","status":"Created"}"#.to_string(),
+            data: format!(r#"{{"id":"{id}","status":"Created"}}"#),
             secrets: "c2VjcmV0".to_string(),
         };
-        synced.set_boltz_swap(stored.clone()).await.unwrap();
+        synced.set_cross_chain_swap(stored.clone()).await.unwrap();
+
+        let expected_data_id = format!("{provider}:{id}");
 
         // Exactly the fields the writer emitted are replayed (not re-serialized
         // here), so the test catches any emit/apply field mismatch.
@@ -1216,10 +1246,10 @@ mod tests {
             .unwrap()
             .into_iter()
             .find(|c| {
-                c.change.id.r#type == RecordType::BoltzSwap.to_string()
-                    && c.change.id.data_id == "swap-1"
+                c.change.id.r#type == RecordType::CrossChainSwap.to_string()
+                    && c.change.id.data_id == expected_data_id
             })
-            .expect("set_boltz_swap must queue a BoltzSwap outgoing record");
+            .expect("set_cross_chain_swap must queue a CrossChainSwap outgoing record");
         let fields: HashMap<String, Value> = emitted
             .change
             .updated_fields
@@ -1228,14 +1258,14 @@ mod tests {
             .collect();
 
         // Instance B: apply the emitted record as an incoming change.
-        let reader_dir = create_temp_dir("boltz_sync_reader");
+        let reader_dir = create_temp_dir(&format!("cross_chain_sync_reader_{provider}"));
         let reader_inner: Arc<dyn Storage> = Arc::new(SqliteStorage::new(&reader_dir).unwrap());
         let handler = create_test_record_handler(Arc::clone(&reader_inner));
 
         let change = make_incoming_change(
-            &RecordType::BoltzSwap.to_string(),
-            "swap-1",
-            RecordType::BoltzSwap.schema_version(),
+            &RecordType::CrossChainSwap.to_string(),
+            &expected_data_id,
+            RecordType::CrossChainSwap.schema_version(),
             fields,
         );
         let outcome = handler.handle_incoming_change(change).await.unwrap();
@@ -1243,10 +1273,11 @@ mod tests {
 
         // Instance B's local store now holds an identical row.
         let fetched = reader_inner
-            .get_boltz_swap("swap-1".to_string())
+            .get_cross_chain_swap(provider.to_string(), id.to_string())
             .await
             .unwrap()
             .expect("swap applied to reader store");
+        assert_eq!(fetched.provider, stored.provider);
         assert_eq!(fetched.id, stored.id);
         assert_eq!(fetched.is_terminal, stored.is_terminal);
         assert_eq!(fetched.updated_at, stored.updated_at);
