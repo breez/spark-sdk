@@ -87,15 +87,12 @@ impl BoltzService {
         }
     }
 
-    /// Initializes the Boltz reverse-swap cross-chain provider: constructs the
-    /// inner seedless [`BoltzClient`], registers the event listener, resumes any
-    /// active swaps, and returns an SDK-side wrapper ready to be inserted into
-    /// the provider registry. Returns `None` when the network has no default
-    /// configuration.
+    /// Builds the Boltz reverse-swap cross-chain provider, or `None` when the
+    /// network has no default configuration.
     ///
-    /// Seedless: each swap carries its own random secrets, persisted (encrypted)
-    /// and synced by the adapter, so a swap is recoverable on any instance of the
-    /// same wallet without a shared seed.
+    /// Runs boltz-client in seedless mode: each swap carries its own secrets,
+    /// persisted and synced by the storage adapter, so it is recoverable on any
+    /// instance of the same wallet without a shared seed.
     pub(crate) async fn build(
         network: Network,
         spark_wallet: Arc<SparkWallet>,

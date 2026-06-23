@@ -13,16 +13,16 @@
 //! decrypted and `key_source` spliced back, reconstructing the full
 //! [`BoltzSwap`].
 //!
-//! The encryption key is derived from the wallet identity at a fixed path, so it
-//! is deterministic across every instance restored from the same mnemonic. That
-//! is what lets a second instance decrypt a swap synced to it and drive it to
-//! terminal (see the realtime-sync `CrossChainSwap` record). Correctness and
-//! cross-instance convergence are boltz-client's job: the SDK just persists and
-//! syncs rows with plain last-writer-wins.
+//! The encryption key is derived from the wallet identity at a fixed path (see
+//! [`BOLTZ_SECRETS_ENCRYPTION_PATH`]), so it is deterministic across every
+//! instance restored from the same mnemonic. That is what lets a second instance
+//! decrypt a swap synced to it and drive it to terminal (see the realtime-sync
+//! `CrossChainSwap` record). Correctness and cross-instance convergence are
+//! boltz-client's job: the SDK just persists and syncs rows with plain
+//! last-writer-wins.
 //!
 //! Terminal swap rows are retained (only excluded from `list_active_swaps`),
-//! keeping a completed swap queryable by id for the wallet's lifetime. Growth is
-//! bounded by swap volume; no TTL in v1.
+//! keeping a completed swap queryable by id for the wallet's lifetime.
 
 use std::sync::Arc;
 

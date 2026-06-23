@@ -515,8 +515,7 @@ impl MysqlStorage {
             // Migration 20: Cross-chain swap rows, synced for cross-instance
             // recovery. Shared across providers, discriminated by `provider`.
             // `data` is provider-opaque JSON; `secrets` is provider-opaque
-            // ciphertext (empty when the provider has no money-critical
-            // secrets).
+            // ciphertext (empty when the provider has none).
             vec![Migration::sql(
                 "CREATE TABLE IF NOT EXISTS brz_cross_chain_swaps (
                     user_id VARBINARY(33) NOT NULL,

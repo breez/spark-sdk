@@ -358,8 +358,7 @@ impl SqliteStorage {
             // Cross-chain swap rows, synced for cross-instance recovery. Shared
             // across providers, discriminated by the `provider` column. `data`
             // is provider-opaque JSON; `secrets` is provider-opaque ciphertext
-            // (empty when the provider has no money-critical secrets to protect
-            // at rest).
+            // (empty when the provider has none).
             "CREATE TABLE cross_chain_swaps (
                 provider TEXT NOT NULL,
                 id TEXT NOT NULL,

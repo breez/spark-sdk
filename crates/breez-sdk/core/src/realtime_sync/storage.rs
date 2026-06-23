@@ -416,11 +416,6 @@ impl SyncedRecordHandler {
         Ok(())
     }
 
-    /// Applies a synced-in cross-chain swap row via the inner store (bypassing
-    /// the outgoing-emit wrapper). Plain last-writer-wins: each provider's
-    /// convergence logic, not the SDK, owns correctness. `data_id` is
-    /// `"{provider}:{id}"`, which is already carried inside the serialized
-    /// fields.
     async fn handle_cross_chain_swap_change(
         &self,
         fields: HashMap<String, Value>,
@@ -1203,12 +1198,6 @@ mod tests {
         assert!(storage.get_contact("c3".to_string()).await.is_err());
     }
 
-    /// Plumbing round-trip for the `CrossChainSwap` record: a swap set on one
-    /// instance is serialized into an outgoing record, then applied as an
-    /// incoming change on a second instance's store, reconstructing an
-    /// identical row. Exercised for both provider tags so any hard-coded
-    /// "boltz" / "orchestra" in the emit or apply path is caught. No real swap
-    /// or cross-chain infra involved.
     #[tokio::test]
     async fn test_cross_chain_swap_sync_round_trip_boltz() {
         run_cross_chain_swap_round_trip("boltz", "swap-1").await;

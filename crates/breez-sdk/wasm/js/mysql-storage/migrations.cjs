@@ -545,8 +545,7 @@ class MysqlMigrationManager {
         // Cross-chain swap rows, synced for cross-instance recovery. Shared
         // across providers, discriminated by `provider`. Born multi-tenant
         // (user_id in the PK). `data` is provider-opaque JSON; `secrets` is
-        // provider-opaque ciphertext (empty when the provider has no
-        // money-critical secrets).
+        // provider-opaque ciphertext (empty when the provider has none).
         name: "Create brz_cross_chain_swaps table",
         sql: [
           `CREATE TABLE IF NOT EXISTS brz_cross_chain_swaps (

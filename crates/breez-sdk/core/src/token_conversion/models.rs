@@ -216,12 +216,10 @@ pub enum ConversionInfo {
         #[serde(default)]
         asset_contract: Option<String>,
     },
-    /// Boltz reverse swap — cross-chain conversion via Lightning hold invoice.
+    /// Boltz reverse swap: cross-chain conversion via Lightning hold invoice.
     ///
-    /// The swap's secrets and full lifecycle state live on the separate, synced
-    /// Boltz swap row keyed by `swap_id`, not here. This payment-row metadata
-    /// carries only what the UI and reconciliation need; recovery on another
-    /// instance is driven from that synced swap row.
+    /// The swap's secrets and lifecycle state live on the synced Boltz swap row
+    /// keyed by `swap_id`, which also drives cross-instance recovery.
     #[serde(rename = "boltz")]
     Boltz {
         /// The Boltz swap id returned by `POST /swap/reverse`.

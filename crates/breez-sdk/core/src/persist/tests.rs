@@ -3409,7 +3409,6 @@ pub async fn test_cross_chain_swaps_crud(storage: Box<dyn Storage>) {
             secrets: format!("c2VjcmV0-{provider}-{id}"),
         };
 
-    // Insert + get round-trip.
     storage
         .set_cross_chain_swap(make("boltz", "s1", false, 1000))
         .await
@@ -3465,7 +3464,6 @@ pub async fn test_cross_chain_swaps_crud(storage: Box<dyn Storage>) {
     let active_ids: Vec<_> = active.iter().map(|s| s.id.as_str()).collect();
     assert_eq!(active_ids, vec!["s2"], "only non-terminal rows are active");
 
-    // Terminal rows stay queryable by id.
     let s3 = storage
         .get_cross_chain_swap("boltz".to_string(), "s3".to_string())
         .await
@@ -3474,7 +3472,7 @@ pub async fn test_cross_chain_swaps_crud(storage: Box<dyn Storage>) {
     assert!(s3.is_terminal);
 
     // Composite primary key: same id under a different provider is a distinct
-    // row, not a collision. Locks in the (provider, id) PK contract.
+    // row, not a collision.
     storage
         .set_cross_chain_swap(make("orchestra", "s1", false, 3000))
         .await
